@@ -82,10 +82,19 @@ async function closeWakeGateAndCleanup(page: Page, playwright: Parameters<Parame
       // Close the wake gate before deleting: a Session that can still start
       // runs on its own keeps its Project deletion waiting behind them.
       await api.post(`/api/sessions/${encodeURIComponent(fixture.session.id)}/runs/current/cancel`, { data: {} }).catch(() => undefined);
+      await expect.poll(async () => {
+        // Cancellation settles asynchronously. Retry only the active-run
+        // conflict; a single best-effort DELETE can leave the Project behind.
+        const response = await api.delete(`/api/projects/${encodeURIComponent(fixture.project.id)}`, {
+          data: { confirmationId: fixture.project.id },
+        });
+        expect([200, 404, 409], "Project cleanup must succeed or still be cancelling").toContain(response.status());
+        return response.status();
+      }, { message: "cancelled runs should release Project deletion", timeout: 30_000 }).not.toBe(409);
       await cleanupJourney(page, fixture);
       await expect.poll(async () => {
         const response = await api.get("/api/projects");
-        if (!response.ok()) return true;
+        expect(response.ok(), "Project list should remain available during cleanup").toBe(true);
         return ((await response.json()) as Array<{ id: string }>).some((project) => project.id === fixture.project.id);
       }, { message: "the Project should be gone before the next journey starts", timeout: 30_000 }).toBe(false);
     }
@@ -150,7 +159,7 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
       const run = await sendUserMessage(page, fixture!.session.id, "把两条检查命令交给助手在前台跑完，再跑一条主命令，然后总结。");
       const card = page.locator("section[aria-label='Subagent 活动'] article.subagent-card.running").first();
       await expect(card).toBeVisible({ timeout: 60_000 });
-      await expect(card.locator("small")).toContainText(/当前：/, { timeout: 10_000 });
+      await expect(card.locator("small")).toContainText(/run_shell|FG-/, { timeout: 10_000 });
       await expect(card.locator("small")).not.toContainText("正在启动");
       expect((await waitForRunTerminal(page, fixture!.session.id, run.id)).status).toBe("completed");
     });
@@ -184,8 +193,8 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
       expect((await runs(page, fixture!.session.id)).filter((run) => run.automaticWake)).toEqual([]);
     });
   } finally {
-    await closeWakeGateAndCleanup(page, playwright, fixture);
-    await stub.stop();
+    try { await closeWakeGateAndCleanup(page, playwright, fixture); }
+    finally { await stub.stop(); }
   }
 });
 
@@ -265,8 +274,8 @@ test("后台执行仍会唤醒一次，运行时提示是可读摘要并能跳�
       await expect(record).toContainText("completed");
     });
   } finally {
-    await closeWakeGateAndCleanup(page, playwright, fixture);
-    await stub.stop();
+    try { await closeWakeGateAndCleanup(page, playwright, fixture); }
+    finally { await stub.stop(); }
   }
 });
 
@@ -360,8 +369,8 @@ test("已完成的助手仍会被它没看过的后台结果唤醒，且不改�
       await expect(page.locator("article.subagent-card.running")).toHaveCount(0);
     });
   } finally {
-    await closeWakeGateAndCleanup(page, playwright, fixture);
-    await stub.stop();
+    try { await closeWakeGateAndCleanup(page, playwright, fixture); }
+    finally { await stub.stop(); }
   }
 });
 

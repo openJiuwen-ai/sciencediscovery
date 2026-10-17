@@ -24,7 +24,7 @@ export interface AgentTool<S extends TSchema = TSchema> {
   name: string;
   parameters: S;
   routing?: { keywords: string[]; mode: "off" | "prefer"; priority: number };
-  execute(toolCallId: string, params: Static<S>, signal?: AbortSignal): Promise<AgentToolResult>;
+  execute(toolCallId: string, params: Static<S>, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<AgentToolResult>;
   /** Only an exact true permits overlap; omitted or throwing classifiers are exclusive. */
   isConcurrencySafe?(params: Static<S>): boolean;
 }

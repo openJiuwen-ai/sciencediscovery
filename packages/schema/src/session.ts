@@ -349,6 +349,10 @@ export interface ToolTrace {
   /** Child stream holding the full tool output, e.g. "tool-<toolCallId>". */
   outputStream?: string;
   outputTruncated?: boolean;
+  /** Bounded final-result evidence retained in the main stream for collapsed replay. */
+  preview?: string;
+  /** Actual returned literature records for this result, never provider total hits. */
+  paperCount?: number;
   status: "completed" | "failed" | "running";
   summary?: string;
 }
@@ -445,7 +449,7 @@ export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
   | { nodeId?: string; phase: IdeaTreePhase; treeId?: string; type: "idea_tree.phase" }
   | { trace: ToolTrace; type: "tool.started" }
   | { trace: ToolTrace; type: "tool.completed" }
-  | { chunk: string; toolCallId: string; type: "tool.output" }
+  | { chunk: string; toolCallId: string; type: "tool.output"; progress?: boolean }
   | { changedPaths: string[]; files: WorkspaceFile[]; type: "workspace.changed" }
   | { artifact: ScientificArtifact; type: "artifact.upserted"; version?: ScientificArtifactVersion }
   | { plan: PlanSnapshot; type: "plan.updated" }

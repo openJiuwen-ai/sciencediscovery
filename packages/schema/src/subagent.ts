@@ -71,6 +71,8 @@ export interface SubagentUsage {
 
 export interface SubagentStep {
   content: string;
+  /** Intermediate tool output retained alongside the terminal result. */
+  progress?: string;
   createdAt: string;
   /** Full structured tool result details, when the step records a completed tool call. */
   details?: unknown;

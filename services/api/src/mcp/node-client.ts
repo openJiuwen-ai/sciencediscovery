@@ -436,7 +436,7 @@ export class McpNodeClient {
     return this.catalog();
   }
 
-  async invoke(request: McpInvokeRequest, signal?: AbortSignal): Promise<McpInvokeResponse> {
+  async invoke(request: McpInvokeRequest, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<McpInvokeResponse> {
     const started = Date.now();
     if (request.proxy) {
       // Self-healing: a proxy change (or restart that lost the overlays)
@@ -483,7 +483,11 @@ export class McpNodeClient {
           const result = await client.callTool(
             { arguments: request.arguments as Record<string, unknown>, name: request.toolName },
             undefined,
-            { ...(signal ? { signal } : {}), timeout },
+            { ...(signal ? { signal } : {}), timeout,
+              ...(onProgress ? { onprogress: (progress: { message?: string; progress: number; total?: number }) => {
+                onProgress(`${progress.message ?? `Progress: ${progress.progress}${progress.total === undefined ? "" : `/${progress.total}`}`}\n`);
+              } } : {}),
+            },
           ) as Record<string, unknown>;
           const { blocks, structured } = contentBlocks(result);
           const responseBytes = Buffer.byteLength(JSON.stringify({ content: blocks, structuredContent: structured ?? null }), "utf8");
@@ -514,6 +518,7 @@ export class McpNodeClient {
         } catch (error) {
           signal?.throwIfAborted();
           finalError = error instanceof Error ? error.message : String(error);
+          onProgress?.(`Error: ${finalError}\n`);
           const classified = classifyError(finalError);
           finalStatus = classified.status;
           retryAfterMs = classified.retryAfterMs;

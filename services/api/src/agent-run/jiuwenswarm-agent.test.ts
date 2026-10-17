@@ -1999,3 +1999,31 @@ test("idle cancellation does not wait for the trajectory finish queue", { timeou
     assert.equal(finish.mock.callCount(), 1);
   } finally { release(); await adapter.close(); }
 });
+
+
+test("bridge forwards producer progress before the tool response", async () => {
+  const order: string[] = [];
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    response.write(line({ event: { type: "tool.started", trace: { id: "live", name: "live_probe", args: {}, status: "running" } } }));
+    const result = await fetch(body.bridge.url, {
+      method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+      body: JSON.stringify({ name: "live_probe", arguments: {} }),
+    });
+    assert.equal(result.status, 200);
+    response.end(line({ done: { finalText: "done" } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ extraTools: [{
+      label: "Live", name: "live_probe", description: "Progress", parameters: Type.Object({}),
+      async execute(_id, _params, _signal, onProgress) {
+        onProgress?.("Error: source unavailable\n");
+        assert.deepEqual(order, ["tool_execution_start", "tool_execution_progress"]);
+        return { content: [{ type: "text", text: "recovered" }] };
+      },
+    }] }));
+    agent.subscribe(event => { if (event.type.startsWith("tool_execution")) order.push(event.type); });
+    await agent.execute("go");
+    assert.deepEqual(order, ["tool_execution_start", "tool_execution_progress", "tool_execution_end"]);
+  } finally { await adapter.close(); }
+});

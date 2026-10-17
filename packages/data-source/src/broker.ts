@@ -57,6 +57,7 @@ export interface McpBrokerStore {
 }
 
 export interface InvokeMcpToolRequest {
+  onProgress?: (chunk: string) => void;
   allowedSourceIds?: string[];
   authorize?: (
     action: PermissionAction,
@@ -626,7 +627,7 @@ export class McpGovernanceBroker {
         requestId: randomUUID(),
         serverId,
         toolName,
-      }, request.signal);
+      }, request.signal, request.onProgress);
       attempts = response.attempts;
       // Feed upstream throttling back into the limiter so queued peers slow
       // down instead of hitting the same 429 wall.

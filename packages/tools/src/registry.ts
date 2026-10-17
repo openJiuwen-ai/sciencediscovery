@@ -42,6 +42,7 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
   /** Run-scoped observation hook. It cannot alter the result returned to Runtime Core. */
+  onProgress?(call: RuntimeToolCall, chunk: string): void;
   onResult?(input: {
     call: RuntimeToolCall;
     content: string;
@@ -418,8 +419,12 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       };
     }
     const tool = this.tools.get(call.name)!;
+    let active = true;
     try {
-      const result = await tool.execute(call.id || randomUUID(), call.args as never, signal);
+      const result = await tool.execute(call.id || randomUUID(), call.args as never, signal, (chunk) => {
+        if (!active || signal.aborted || !chunk) return;
+        try { this.options.onProgress?.(call, isRemoteContentTool(call.name) ? neutralizeUntrustedTags(chunk) : chunk); } catch { /* Observers cannot fail tools. */ }
+      });
       const text = result.content.map((item) => item.text).join("\n");
       return {
         content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text,
@@ -440,6 +445,8 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         retryable: invocation?.error?.retryable ?? false,
       } };
       return { content: JSON.stringify(details), details, isError: true, selfBounded: true };
+    } finally {
+      active = false;
     }
   }
 }

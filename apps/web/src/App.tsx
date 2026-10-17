@@ -248,6 +248,7 @@ import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
 import { ToastViewport, useToasts } from "./Toasts.js";
+import { watchLocalAccessToken } from "./local-access-token.js";
 import { createAuthTokenPromptGate } from "./auth-token-prompt.js";
 import { InlineErrorAlert, updateInlineErrors } from "./InlineErrorAlert.js";
 import { createSettingsErrorRouter } from "./settings-error-routing.js";
@@ -1281,6 +1282,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const authPromptGate = useRef(createAuthTokenPromptGate());
   const activeTokenRef = useRef(token);
   activeTokenRef.current = token;
+  useEffect(() => watchLocalAccessToken(window, (nextToken) => {
+    activeTokenRef.current = nextToken;
+    setToken(nextToken);
+  }), []);
   const promptForToken = useCallback(() => {
     if (activeTokenRef.current !== token) return; // Ignore a late verdict on the previous credential.
     setTokenRejected(Boolean(token));
@@ -3295,9 +3300,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   ): Promise<string | undefined> {
     if (!runId || !trace.outputStream) return undefined;
     const records = await client.listRunStreamEvents(sessionId, runId, trace.outputStream);
-    return records
-      .flatMap((record) => record.event.type === "tool.output" ? [record.event.chunk] : [])
-      .join("") || undefined;
+    const outputs = records.flatMap(record => record.event.type === "tool.output" ? [record.event] : []);
+    const progress = outputs.filter(event => event.progress).map(event => event.chunk).join("");
+    const result = outputs.filter(event => !event.progress).map(event => event.chunk).join("");
+    return (progress && result ? `${progress}\n\n---\n\n${result}` : progress || result) || undefined;
   }
 
   function resumeSessionRun(

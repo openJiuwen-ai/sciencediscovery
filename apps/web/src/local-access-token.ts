@@ -33,3 +33,21 @@ export function loadLocalAccessToken(
   }
   return token || readRenamedStorageItem(storage, TOKEN_STORAGE_KEY) || "";
 }
+
+
+/** A startup link can navigate only the fragment of an already mounted app. */
+export function watchLocalAccessToken(
+  browser: Pick<Window, "addEventListener" | "removeEventListener"> & {
+    location: Pick<Location, "href">;
+    history: Pick<History, "replaceState" | "state">;
+    localStorage: ReadableStorage;
+  },
+  onToken: (token: string) => void,
+): () => void {
+  const consume = () => {
+    if (!new URLSearchParams(new URL(browser.location.href).hash.slice(1)).has("token")) return;
+    onToken(loadLocalAccessToken(browser.localStorage, browser.location, browser.history));
+  };
+  browser.addEventListener("hashchange", consume);
+  return () => browser.removeEventListener("hashchange", consume);
+}

@@ -115,8 +115,9 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
             ...adapter.manifest.prompt.caveats,
           ].filter(Boolean).join(" "),
           displayName: `${adapter.manifest.displayName}: ${tool.displayName}`,
-          execute: async (toolCallId: string, input: JsonValue, signal?: AbortSignal) => {
+          execute: async (toolCallId: string, input: JsonValue, signal?: AbortSignal, onProgress?: (chunk: string) => void) => {
             const response = await options.broker.invoke({
+              onProgress,
               allowedSourceIds: [...enabledSourceIds],
               authorize: (action, resource, summary, permissionSignal) => {
                 if (action !== "connector") {

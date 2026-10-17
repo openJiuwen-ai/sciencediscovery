@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { compactStatus, evidencePreview, isExploration, reasoningStatus, reportedFailure, researchLabel, returnedPaperCount } from "./research-label.js";
 import type {
   ApprovalMode,
   ArtifactReviewRun,
@@ -81,6 +82,9 @@ export type RunTimelineEntry =
       expanded: boolean;
       id: string;
       trace: ToolTrace;
+      preview?: string;
+      paperCount?: number;
+      liveFailure?: string;
       userExpanded?: boolean;
       type: "tool";
     }
@@ -362,12 +366,12 @@ export function reduceRunTimeline(
     // the same run), and that attempt keeps its own completed card.
     if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return finished.map((entry, index) => index === finished.length - 1 && entry.type === "thinking"
-        ? { ...entry, expanded: entry.userExpanded ?? true, status: "running" }
+        ? { ...entry, expanded: entry.userExpanded ?? false, status: "running" }
         : entry);
     }
     return [...finished, {
       content: "",
-      expanded: true,
+      expanded: false,
       id: nextThinkingId(finished, event.turn),
       status: "running",
       turn: event.turn,
@@ -380,12 +384,12 @@ export function reduceRunTimeline(
       const index = findThinkingByResponseId(entries, event.responseId);
       if (index >= 0) {
         return replaceEntry(entries, index, (entry) => entry.type === "thinking"
-          ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
+          ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? false, status: "running" }
           : entry);
       }
       return [...entries, {
         content: event.delta,
-        expanded: true,
+        expanded: false,
         id: nextThinkingId(entries, event.turn),
         responseId: event.responseId,
         status: "running",
@@ -396,13 +400,13 @@ export function reduceRunTimeline(
     const last = entries.at(-1);
     if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return entries.map((entry, entryIndex) => entryIndex === entries.length - 1 && entry.type === "thinking"
-        ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
+        ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? false, status: "running" }
         : entry);
     }
     const finished = finishThinking(entries);
     return [...finished, {
       content: event.delta,
-      expanded: true,
+      expanded: false,
       id: nextThinkingId(finished, event.turn),
       status: "running",
       turn: event.turn,
@@ -505,11 +509,21 @@ export function reduceRunTimeline(
         : entry);
     }
     return [...finished, {
-      expanded: true,
+      expanded: false,
       id: `tool-${event.trace.id}`,
       trace: event.trace,
       type: "tool",
     }];
+  }
+
+  if (event.type === "tool.output") {
+    return entries.map(entry => entry.type === "tool" && entry.trace.id === event.toolCallId
+      ? { ...entry, trace: { ...entry.trace, outputStream: entry.trace.outputStream ?? `tool-${event.toolCallId}`, outputChars: (entry.trace.outputChars ?? 0) + event.chunk.length },
+          preview: evidencePreview((entry.preview ?? "") + event.chunk),
+          paperCount: returnedPaperCount(event.chunk) ?? entry.paperCount,
+          liveFailure: entry.trace.status === "completed" ? undefined
+            : reportedFailure((entry.preview ?? "") + event.chunk) ?? entry.liveFailure }
+      : entry);
   }
 
   if (event.type === "tool.completed") {
@@ -529,6 +543,8 @@ export function reduceRunTimeline(
       ? {
           ...entry,
           expanded: entry.userExpanded ?? false,
+          // Completion is authoritative; output keywords may just be file contents.
+          liveFailure: event.trace.status === "completed" ? undefined : entry.liveFailure,
           trace: {
             ...(entry.trace.args !== undefined ? { args: entry.trace.args } : {}),
             ...(entry.trace.input !== undefined
@@ -740,6 +756,19 @@ export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
   }
 }
 
+/** Only adjacent successful/running exploration is grouped; failures and approvals stay visible. */
+export function explorationGroups(entries: RunTimelineEntry[]): RunTimelineEntry[][] {
+  const groups: RunTimelineEntry[][] = [];
+  const eligible = (entry: RunTimelineEntry) => entry.type === "tool" && isExploration(entry.trace.name)
+    && entry.trace.status !== "failed" && !entry.liveFailure && !entry.userExpanded;
+  for (const entry of entries) {
+    const previous = groups.at(-1);
+    if (eligible(entry) && previous && previous.every(eligible)) previous.push(entry);
+    else groups.push([entry]);
+  }
+  return groups;
+}
+
 export function RunTimeline({
   agentLabel = "ScienceDiscovery",
   artifactReviews = [],
@@ -795,20 +824,39 @@ export function RunTimeline({
   const [decidingPermissionMatchers, setDecidingPermissionMatchers] = useState<string[]>([]);
   const [toolOutputs, setToolOutputs] = useState<Record<string, string>>({});
   const loadingToolIds = useRef(new Set<string>());
+  const loadedToolRevisions = useRef(new Map<string, string>());
+  const toolLoadTimes = useRef(new Map<string, number>());
+  const [refreshTick, setRefreshTick] = useState(0);
   useEffect(() => {
     if (!onLoadToolOutput) return;
+    let refreshDelay = Infinity;
     for (const entry of entries) {
-      if (entry.type !== "tool" || (!entry.expanded && entry.trace.name !== "create_skill") || entry.trace.status === "running") continue;
+      if (entry.type !== "tool" || (!entry.expanded && entry.trace.name !== "create_skill")) continue;
       const trace = entry.trace;
       if (!trace.outputStream || trace.output !== undefined) continue;
-      if (toolOutputs[trace.id] !== undefined || loadingToolIds.current.has(trace.id)) continue;
+      const revision = `${trace.status}:${trace.outputChars ?? 0}`;
+      if (loadedToolRevisions.current.get(trace.id) === revision || loadingToolIds.current.has(trace.id)) continue;
+      // Coalesce live revisions without delaying the first load or terminal result.
+      const delay = 1000 - (Date.now() - (toolLoadTimes.current.get(trace.id) ?? -Infinity));
+      if (trace.status === "running" && delay > 0) {
+        refreshDelay = Math.min(refreshDelay, delay);
+        continue;
+      }
+      toolLoadTimes.current.set(trace.id, Date.now());
       loadingToolIds.current.add(trace.id);
       void onLoadToolOutput(trace)
-        .then((output) => setToolOutputs((current) => ({ ...current, [trace.id]: output ?? "" })))
+        .then((output) => {
+          loadedToolRevisions.current.set(trace.id, revision);
+          setToolOutputs((current) => ({ ...current, [trace.id]: output ?? "" }));
+        })
         .catch(() => { /* Keep the existing summary when loading the full result fails. */ })
         .finally(() => loadingToolIds.current.delete(trace.id));
     }
-  }, [entries, onLoadToolOutput, toolOutputs]);
+    if (Number.isFinite(refreshDelay)) {
+      const timer = setTimeout(() => setRefreshTick(tick => tick + 1), refreshDelay);
+      return () => clearTimeout(timer);
+    }
+  }, [entries, onLoadToolOutput, toolOutputs, refreshTick]);
   if (!entries.length || (!footer && entries.every((entry) => entry.type === "permission" && entry.request.state !== "pending"))) return null;
   const reviewTraces = entries.filter((entry): entry is Extract<RunTimelineEntry, { type: "tool" }> =>
     entry.type === "tool"
@@ -831,13 +879,7 @@ export function RunTimeline({
       }
     }
   }
-  return (
-    <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
-      <header className="message assistant run-identity">
-        <div className="avatar"><BrandIcon size={19} /></div>
-        <div><span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span></div>
-      </header>
-      {entries.map((entry) => {
+  function renderEntry(entry: RunTimelineEntry): ReactNode {
         if (entry.type === "idea-research") {
           return <IdeaResearchTimelineCard client={ideaResearchClient} key={entry.id} researchId={entry.researchId} sessionId={ideaResearchSessionId} />;
         }
@@ -943,7 +985,8 @@ export function RunTimeline({
         }
 
         if (entry.type === "thinking") {
-          const label = entry.status === "running" ? t("timeline.thinking") : t("timeline.thoughtTurn", { turn: entry.turn });
+          const label = reasoningStatus(entry.content) ?? (entry.status === "running"
+            ? t("timeline.thinking") : t("timeline.thoughtTurn", { turn: entry.turn }));
           return (
             <details
               className={`timeline-disclosure thinking ${entry.status}${entry.status !== "running" ? " process-record" : ""}`}
@@ -989,8 +1032,14 @@ export function RunTimeline({
           if (entry.trace.status !== "failed") return null;
         }
 
+        const label = researchLabel(entry.trace);
+        const failure = entry.trace.status === "failed" && entry.trace.summary ? compactStatus(entry.trace.summary) : entry.liveFailure;
         const outputText = entry.trace.output ?? toolOutputs[entry.trace.id] ?? entry.trace.summary;
 
+        const paperCount = entry.trace.paperCount ?? entry.paperCount;
+        const preview = paperCount !== undefined ? t("timeline.papersReturned", { count: paperCount }) : entry.trace.name === "task" ? "" : evidencePreview(entry.trace.preview ?? entry.preview ?? entry.trace.output ?? (failure ? "" : entry.trace.summary) ?? "");
+        const command = entry.trace.name === "run_shell" && typeof entry.trace.args?.command === "string"
+          ? compactStatus(entry.trace.args.command) : undefined;
         return (
           <details
             className={`timeline-disclosure tool ${entry.trace.status}${entry.trace.status !== "running" ? " process-record" : ""}`}
@@ -1008,7 +1057,7 @@ export function RunTimeline({
             }}>
               <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
               <span className="timeline-icon">{statusIcon(entry.trace.status)}</span>
-              <span className="timeline-label"><strong>{entry.trace.status === "running" ? entry.trace.name : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: entry.trace.name })}</strong><small>{t("timeline.toolCall")}</small></span>
+              <span className="timeline-label"><strong><span className="timeline-title-text">{entry.trace.status === "running" ? label : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: label })}</span></strong><small>{entry.trace.name}</small>{failure ? <span className="timeline-failure-summary">{failure}</span> : null}{command ? <code className="timeline-command">{t(entry.trace.status === "running" ? "timeline.runningCommand" : "timeline.ranCommand")} · {command}</code> : null}{preview ? <pre className="timeline-evidence">{preview}</pre> : null}</span>
               {(entry.trace.status === "running" || entry.expanded) && entries.some((candidate) => candidate.type === "permission" && candidate.request.state === "allowed" && candidate.request.toolCallId === entry.trace.id) ? <small className="tool-authorization">{t("record.authorized")}</small> : null}
               <span className={`timeline-status ${entry.trace.status}`}>{entry.trace.status}</span>
             </summary>
@@ -1017,7 +1066,26 @@ export function RunTimeline({
             </div>
           </details>
         );
-      })}
+  }
+  return (
+    <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
+      <header className="message assistant run-identity">
+        <div className="avatar"><BrandIcon size={19} /></div>
+        <div><span className="message-role">{agentLabel}</span>{modelName ? <details className="run-model-details"><summary>{t("timeline.details")}</summary>{modelName}</details> : null}</div>
+      </header>
+      {explorationGroups(entries).map(group => {
+        const latest = group.findLast(entry => entry.type === "tool" && (entry.trace.preview || entry.preview || entry.trace.summary || entry.trace.paperCount !== undefined || entry.paperCount !== undefined));
+        const paperCount = latest?.type === "tool" ? latest.trace.paperCount ?? latest.paperCount : undefined;
+        const preview = latest?.type === "tool" ? paperCount !== undefined ? t("timeline.papersReturned", { count: paperCount }) : evidencePreview(latest.trace.preview ?? latest.preview ?? latest.trace.summary ?? "") : "";
+        return group.length === 1 ? renderEntry(group[0]!) : (
+        <details className="timeline-exploration process-record" key={group[0]!.id}>
+          <summary><strong>{t(group.some(entry => entry.type === "tool" && entry.trace.status === "running") ? "timeline.exploring" : "timeline.explored", { count: group.length })}</strong>
+            <span> · {group.filter(entry => entry.type === "tool").map(entry => researchLabel(entry.trace)).slice(-2).join(" · ")}</span>
+            {preview ? <pre className="timeline-evidence">{preview}</pre> : null}
+          </summary>
+          {group.map(renderEntry)}
+        </details>
+      ); })}
       {footer}
       {reviewTraces.length && onOpenSkillReviews ? <SkillReviewRecords listDrafts={onListSkillDrafts} onOpen={onOpenSkillReviews}
         traces={reviewTraces.map(({ trace }) => ({ ...trace, output: trace.output ?? toolOutputs[trace.id] }))} /> : null}

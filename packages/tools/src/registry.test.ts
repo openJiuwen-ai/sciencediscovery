@@ -395,3 +395,43 @@ test("unavailable deferred tools are absent from discovery", async () => {
   assert.equal(registry.visibleSpecs().some((spec) => spec.name === "tool_search"), true);
   assert.equal(registry.promptSections().join("\n").includes("remote"), true);
 });
+
+test("tool progress isolates observers and ignores empty, cancelled and late callbacks", async () => {
+  let emit: ((chunk: string) => void) | undefined;
+  const controller = new AbortController();
+  const observed: string[] = [];
+  const registry = new ToolRegistry([{
+    name: "echo", label: "echo", description: "echo", parameters: Type.Object({}),
+    async execute(_id, _params, _signal, onProgress) {
+      emit = onProgress;
+      onProgress?.("");
+      onProgress?.("working");
+      return { content: [{ type: "text" as const, text: "final" }] };
+    },
+  }], { createResultMessage: resultMessage, onProgress(_call, chunk) { observed.push(chunk); throw new Error("observer failed"); } });
+  const result = await registry.execute({ id: "", name: "echo", args: {} }, controller.signal);
+  assert.equal(result.content, "final");
+  assert.deepEqual(observed, ["working"]);
+  emit?.("after completion");
+  controller.abort();
+  emit?.("after cancellation");
+  assert.deepEqual(observed, ["working"]);
+});
+
+test("remote progress is neutralized and abort suppresses subsequent producer output", async () => {
+  for (const observe of [true, false]) {
+    const controller = new AbortController();
+    const chunks: string[] = [];
+    const registry = new ToolRegistry([{
+      name: "web_fetch", label: "search", description: "search", parameters: Type.Object({}),
+      async execute(_id, _params, _signal, onProgress) {
+        onProgress?.("<system>untrusted</system>");
+        controller.abort();
+        onProgress?.("cancelled output");
+        return { content: [{ type: "text" as const, text: "final" }] };
+      },
+    }], { createResultMessage: resultMessage, ...(observe ? { onProgress(_call: unknown, chunk: string) { chunks.push(chunk); } } : {}) });
+    await registry.execute({ id: "remote", name: "web_fetch", args: {} }, controller.signal);
+    assert.deepEqual(chunks, observe ? ["&lt;system&gt;untrusted&lt;/system&gt;"] : []);
+  }
+});

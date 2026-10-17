@@ -54,6 +54,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const text = String(request.params.arguments?.text ?? "");
+  if (text === "progress") {
+    await server.notification({ method: "notifications/progress", params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2, message: "Searching PubMed" } });
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (text === "progress-count" || text === "progress-total") {
+    await server.notification({ method: "notifications/progress", params: { progressToken: request.params._meta.progressToken, progress: 2, ...(text === "progress-total" ? { total: 5 } : {}) } });
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
   if (text === "explode") return { content: [{ type: "text", text: "synthetic failure" }], isError: true };
   if (text === "large-error") return { content: [{ type: "text", text: "x".repeat(5_000) }], isError: true };
   return {
@@ -420,4 +428,33 @@ test("bundled python MCP servers resolve to a configured interpreter", () => {
   // With nothing configured and no provisioned environment, the bare command
   // is the documented last resort rather than a hard failure.
   assert.equal(resolveMcpPython({}), "python");
+});
+
+
+test("MCP notifications and attempt failures reach progress observers", async () => {
+  const { client } = fixtureClient();
+  const chunks: string[] = [];
+  let finished = false;
+  try {
+    const response = await client.invoke(invokeRequest({ text: "progress" }), undefined, (chunk) => {
+      assert.equal(finished, false);
+      chunks.push(chunk);
+    });
+    finished = true;
+    assert.equal(response.isError, false);
+    assert.deepEqual(chunks, ["Searching PubMed\n"]);
+    await client.invoke(invokeRequest({ text: "explode" }), undefined, (chunk) => chunks.push(chunk));
+    assert.match(chunks.at(-1)!, /Error: synthetic failure/);
+  } finally { await client.close(); }
+});
+
+test("MCP numeric progress reports only producer counts with optional totals", async () => {
+  const { client } = fixtureClient();
+  const chunks: string[] = [];
+  const controller = new AbortController();
+  try {
+    await client.invoke(invokeRequest({ text: "progress-count" }), controller.signal, chunk => chunks.push(chunk));
+    await client.invoke(invokeRequest({ text: "progress-total" }), controller.signal, chunk => chunks.push(chunk));
+    assert.deepEqual(chunks, ["Progress: 2\n", "Progress: 2/5\n"]);
+  } finally { await client.close(); }
 });

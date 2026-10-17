@@ -1134,3 +1134,41 @@ test("an oversized execution result enters history as a head/tail preview the mo
     restore();
   }
 });
+
+
+test("native tool progress arrives before completion and ignores late callbacks", { timeout: 10_000 }, async () => {
+  const events: AgentEvent[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let observed!: () => void;
+  const progress = new Promise<void>((resolve) => { observed = resolve; });
+  let late: ((chunk: string) => void) | undefined;
+  const { streamer } = scriptStreamer([() => toolTurn("progress_probe", {}), () => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), extraTools: [{
+      name: "progress_probe", label: "Probe", description: "Probe", parameters: { type: "object", properties: {} } as never,
+      async execute(_id, _args, _signal, onProgress) {
+        late = onProgress;
+        onProgress?.("Searching PubMed\n");
+        onProgress?.("Error: source unavailable\n");
+        await gate;
+        return { content: [{ type: "text", text: "Recovered: 5 papers" }] };
+      },
+    }] } as NativeAgentOptions);
+    agent.subscribe((event) => { events.push(event); if (event.type === "tool_execution_progress" && event.chunk.includes("Error:")) observed(); });
+    const execution = agent.execute("search");
+    await progress;
+    assert.equal(events.some((event) => event.type === "tool_execution_end"), false);
+    assert.deepEqual(events.filter((event) => event.type === "tool_execution_progress").map((event) => event.chunk),
+      ["Searching PubMed\n", "Error: source unavailable\n"]);
+    release();
+    await execution;
+    const end = events.find((event) => event.type === "tool_execution_end");
+    assert.ok(end && end.type === "tool_execution_end");
+    assert.equal(end.result.content[0]?.text, "Recovered: 5 papers");
+    const count = events.length;
+    late?.("late");
+    assert.equal(events.length, count);
+  } finally { release(); restore(); }
+});

@@ -153,7 +153,39 @@ test("tools parse arguments, retain invalid JSON and show results, MCP payloads 
   assert.deepEqual(sections("mcp", { payloads: { request: { arguments: { query: "protein" } }, rawResponse: { content: [{ text: "result" }] } } }).map(s => s.value), [{ query: "protein" }, [{ text: "result" }]]);
 });
 
+test("command transcripts separate progress from final output without dropping either", () => {
+  for (const wrapped of [false, true]) {
+    const packets = [
+      { chunk: "searching ", progress: true }, { chunk: "papers", progress: true },
+      { chunk: '{"papers":' }, { chunk: "5}" },
+    ];
+    const render = (values: typeof packets) => sections("tool", { type: "tool.output",
+      packets: values.map(event => wrapped ? { event } : event) });
+    assert.equal(render(packets)[0]!.value, 'searching papers\n\n---\n\n{"papers":5}');
+    assert.equal(render(packets.slice(0, 2))[0]!.value, "searching papers");
+    assert.equal(render(packets.slice(2))[0]!.value, '{"papers":5}');
+    assert.equal(render([{ chunk: "", progress: true }, ...packets.slice(2)])[0]!.value, '{"papers":5}');
+  }
+});
+
 test("input and state summaries use frozen data, not an inferred current state", () => {
   assert.deepEqual(sections("input", { input: { systemPrompt: "rules", history: [{ role: "user", content: "question" }], tools: [] } }).map(s => s.value), ["rules", "question", []]);
   assert.deepEqual(sections("state", { phase: "completed", turn: 2, history: [], checkpoint: { components: [{ id: "plan", revision: "frozen", fidelity: "exact" }] } })[1]!.value, [{ id: "plan", revision: "frozen", fidelity: "exact" }]);
+});
+
+test("command transcript tolerates legacy packet fields without inventing output", () => {
+  const values = sections("tool", { type: "tool.output", packets: [
+    { text: "searching", progress: true }, { content: "results" }, { delta: " done" }, {},
+  ] });
+  assert.equal(values[0]!.value, "searching\n\n---\n\nresults done");
+});
+
+test("legacy single command chunks stay readable without a packet array", () => {
+  assert.equal(sections("tool", { type: "tool.output", chunk: "legacy output" })[0]!.value, "legacy output");
+});
+
+test("single command output accepts legacy text and delta without a packet list", () => {
+  assert.equal(sections("tool", {type:"tool.output",text:"legacy text"})[0]!.value,"legacy text");
+  assert.equal(sections("tool", {type:"tool.output",delta:"legacy delta"})[0]!.value,"legacy delta");
+  assert.deepEqual(sections("tool", {type:"tool.output"}),[]);
 });

@@ -133,7 +133,7 @@ export async function openSessionTrajectory(dataDir: string, source: SessionTraj
           const { type, trace } = toolRecord(item.event);
           if (type !== "tool.completed" || trace.id !== call.id || trace.name !== call.name
             || trace.status !== (event.isError ? "failed" : "completed") || !isDeepStrictEqual(trace.details, event.details)) return false;
-          const outputs = scoped.filter(output => object(output.event).type === "tool.output" && object(output.event).toolCallId === call.id);
+          const outputs = scoped.filter(output => object(output.event).type === "tool.output" && object(output.event).progress !== true && object(output.event).toolCallId === call.id);
           const content = trace.output ?? (outputs.length ? outputs.map(output => String(object(output.event).chunk ?? "")).join("") : undefined);
           return content === event.content;
         }) : starts;

@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 
 import type { ArtifactReviewRun, RunStreamEvent, Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { LocaleProvider } from "../src/i18n/index.js";
@@ -240,7 +241,7 @@ test("renders completed activity as collapsible disclosures", () => {
   // completion, plus the tool card's I/O section disclosures which default closed.
   assert.match(html, /<details class="timeline-disclosure thinking completed process-record">/);
   assert.match(html, /<details class="timeline-disclosure tool completed process-record">/);
-  assert.equal((html.match(/<details/g) ?? []).length, 3);
+  assert.equal((html.match(/<details/g) ?? []).length, 4);
   assert.match(html, /<details class="tool-io-section">/);
   assert.match(html, /Thought process · turn 1/);
   assert.match(html, /run_python/);
@@ -1076,4 +1077,241 @@ test("legacy snapshots keep one answer and a cursor across repeated approval swi
   assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "approval-mode", "approval-mode"]);
   assert.equal(entries[0]?.type === "assistant" && entries[0].content, "Complete");
   assert.match(renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle: () => undefined })), /class="cursor"/);
+});
+
+
+test("research task headers stay concise, collapsed, and retain explicit expansion", () => {
+  const trace = { id: "clinical", name: "task", status: "running" as const,
+    args: { description: "PubMed search: CRISPR SCD clinical", prompt: "PRIVATE_LONG_PROMPT subagents/uuid" } };
+  const entries = apply([{ type: "tool.started", trace }]);
+  assert.equal(entries[0]?.type === "tool" && entries[0].expanded, false);
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle() {} }));
+  const header = html.match(/<summary[^>]*>([\s\S]*?)<\/summary>/)?.[1] ?? "";
+  assert.match(header, /PubMed search: CRISPR SCD clinical/);
+  assert.doesNotMatch(header, /PRIVATE_LONG_PROMPT|subagents/);
+  const expanded = entries.map(entry => entry.type === "tool" ? { ...entry, expanded: true, userExpanded: true } : entry);
+  const failed = reduceRunTimeline(expanded, { type: "tool.completed",
+    trace: { id: trace.id, name: trace.name, status: "failed", summary: "PubMed source unavailable: network denied" } });
+  assert.equal(failed[0]?.type === "tool" && failed[0].expanded, true);
+  const failedHtml = renderToStaticMarkup(createElement(RunTimeline, { entries: failed, isRunning: false, onToggle() {} }));
+  assert.match(failedHtml, /timeline-failure-summary">PubMed source unavailable: network denied/);
+  assert.match(failedHtml, /PubMed search: CRISPR SCD clinical/);
+});
+
+
+test("live output is bounded and failures remain visible before tool completion", () => {
+  let entries = apply([{ type: "tool.started", trace: { id: "shell", name: "run_shell", args: { command: "collect papers" }, status: "running" } }]);
+  entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "shell", chunk: "first\nsecond\n" + "middle\n".repeat(100) + "Error: source unavailable\n" });
+  entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "shell", chunk: "Trying another source" });
+  const tool = entries[0];
+  assert.ok(tool?.type === "tool");
+  assert.equal(tool.trace.status, "running");
+  assert.equal(tool.trace.outputStream, "tool-shell");
+  assert.ok(tool.trace.outputChars! > tool.preview!.length);
+  assert.ok(tool.preview!.split("\n").length <= 5);
+  assert.match(tool.preview!, /first/);
+  assert.match(tool.preview!, /Trying another source/);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  const summary = html.slice(html.indexOf('<summary>'), html.indexOf('</summary>'));
+  assert.match(summary, /Error: source unavailable/);
+  assert.match(summary, /collect papers/);
+  assert.doesNotMatch(html, /<details[^>]* open/);
+});
+
+test("reasoning status changes headings without expanding the full deliberation", () => {
+  let entries = apply([{ type: "assistant.thinking.delta", turn: 1, delta: "**Searching PubMed**\nPrivate reasoning text" }]);
+  entries = reduceRunTimeline(entries, { type: "assistant.thinking.delta", turn: 1, delta: "\n**Synthesizing 5 papers**\nMore reasoning" });
+  const entry = entries[0];
+  assert.ok(entry?.type === "thinking");
+  assert.equal(entry.expanded, false);
+  assert.match(entry.content, /Private reasoning text/);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  const summary = html.slice(html.indexOf('<summary>'), html.indexOf('</summary>'));
+  assert.match(summary, /Synthesizing 5 papers/);
+  assert.doesNotMatch(summary, /Private reasoning|More reasoning/);
+});
+
+test("exploration bursts coalesce while failures and narrative keep their own positions", () => {
+  const entries = apply([
+    { type: "tool.started", trace: { id: "a", name: "search_pubmed", args: { query: "clinical CRISPR" }, status: "running" } },
+    { type: "tool.completed", trace: { id: "a", name: "search_pubmed", status: "completed", summary: "5 papers found" } },
+    { type: "tool.started", trace: { id: "b", name: "read_file", status: "running" } },
+    { type: "tool.started", trace: { id: "c", name: "search_arxiv", status: "running" } },
+    { type: "tool.completed", trace: { id: "c", name: "search_arxiv", status: "failed", summary: "Network unavailable" } },
+    { type: "assistant.delta", delta: "Synthesizing the available evidence" },
+  ]);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  assert.match(html, /Exploring · 2 activities/);
+  assert.equal((html.match(/timeline-exploration/g) ?? []).length, 1);
+  assert.ok(html.indexOf('Network unavailable') > html.indexOf('timeline-exploration'));
+  assert.match(html, /Synthesizing the available evidence/);
+  assert.match(html, /5 papers found/);
+});
+
+
+test("expanded live tools load the full child transcript and refresh it on completion", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let entries = apply([
+    { type: "tool.started", trace: { id: "live", name: "run_shell", status: "running" } },
+    { type: "tool.output", toolCallId: "live", chunk: "short preview" },
+  ]).map(entry => entry.type === "tool" ? { ...entry, expanded: true, userExpanded: true } : entry);
+  const loads: string[] = [];
+  const onLoadToolOutput = async (trace: { status: string }) => {
+    loads.push(trace.status);
+    return trace.status === "running" ? "full live transcript" : "full final transcript";
+  };
+  const view = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {}, onLoadToolOutput }));
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view()); });
+  assert.deepEqual(loads, ["running"]);
+  assert.match(JSON.stringify(renderer!.toJSON()), /full live transcript/);
+  entries = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "live", name: "run_shell", status: "completed", outputStream: "tool-live", outputChars: 100 } });
+  await act(async () => { renderer!.update(view()); });
+  assert.deepEqual(loads, ["running", "completed"]);
+  assert.match(JSON.stringify(renderer!.toJSON()), /full final transcript/);
+  await act(async () => { renderer!.unmount(); });
+});
+
+
+test("successful tools clear output keyword warnings and rejoin exploration", () => {
+  for (const name of ["read_file", "search_pubmed", "run_shell"]) {
+    let entries = apply([
+      { type: "tool.started", trace: { id: "a", name: "read_file", status: "running" } },
+      { type: "tool.completed", trace: { id: "a", name: "read_file", status: "completed" } },
+      { type: "tool.started", trace: { id: "b", name, status: "running" } },
+      { type: "tool.output", toolCallId: "b", chunk: "Error: quoted log contents" },
+      { type: "tool.completed", trace: { id: "b", name, status: "completed" } },
+    ]);
+    // Late output must not override a successful terminal status either.
+    entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "b", chunk: "\nFailed to converge: quoted paper" });
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: false, onToggle() {} })));
+    assert.doesNotMatch(html, /timeline-failure-summary/);
+    assert.match(html, /quoted log contents/);
+    if (name !== "run_shell") assert.match(html, /Explored · 2 activities/);
+    const failed = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "b", name, status: "failed", summary: "Source unavailable" } });
+    const failedHtml = renderToStaticMarkup(createElement(RunTimeline, { entries: failed, isRunning: false, onToggle() {} }));
+    assert.match(failedHtml, /timeline-failure-summary">Source unavailable/);
+  }
+});
+
+test("plain reasoning uses a finished fallback after its response closes", () => {
+  for (const locale of ["en", "zh-CN"] as const) {
+    let entries = apply([{ type: "assistant.thinking.delta", turn: 2, delta: "Plain private reasoning" }]);
+    const render = () => renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+    assert.match(render(), locale === "en" ? /Thinking/ : /思考中/);
+    entries = reduceRunTimeline(entries, { type: "assistant.delta", delta: "Research complete" });
+    const html = render();
+    assert.match(html, locale === "en" ? /Thought process · turn 2/ : /思考过程 · 第 2 轮/);
+    assert.doesNotMatch(html, locale === "en" ? />Thinking</ : /思考中/);
+    assert.doesNotMatch(html, /<details[^>]* open/);
+  }
+});
+
+
+test("expanded streaming transcripts coalesce bursts, flush trailing output and cancel on collapse", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let entries = apply([
+    { type: "tool.started", trace: { id: "burst", name: "run_shell", status: "running" } },
+    { type: "tool.output", toolCallId: "burst", chunk: "first" },
+  ]).map(entry => entry.type === "tool" ? { ...entry, expanded: true } : entry);
+  const loads: number[] = [];
+  const onLoadToolOutput = async (trace: { outputChars?: number }) => { loads.push(trace.outputChars ?? 0); return "transcript"; };
+  const view = () => createElement(RunTimeline, { entries, isRunning: true, onToggle() {}, onLoadToolOutput });
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view()); });
+  for (let i = 0; i < 20; i++) {
+    entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "burst", chunk: "x" });
+    await act(async () => { renderer!.update(view()); });
+  }
+  assert.deepEqual(loads, [5]);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+  assert.deepEqual(loads, [5, 25], "last revision loads even after the producer goes quiet");
+  entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "burst", chunk: "pending" });
+  await act(async () => { renderer!.update(view()); });
+  entries = entries.map(entry => entry.type === "tool" ? { ...entry, expanded: false } : entry);
+  await act(async () => { renderer!.update(view()); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+  assert.equal(loads.length, 2);
+  await act(async () => { renderer!.unmount(); });
+});
+
+test("a failed summary without output appears only once in the collapsed card", () => {
+  const entries = apply([{ type: "tool.completed", trace: { id: "failed", name: "search", status: "failed", summary: "Source unavailable" } }]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle() {} }));
+  assert.equal((html.split("</summary>")[0]!.match(/Source unavailable/g) ?? []).length, 1);
+});
+
+test("restarted and identified reasoning retain explicit disclosure choices", () => {
+  const phase = { type: "agent.phase", phase: "thinking", turn: 1 } as const;
+  let entries = apply([phase, { type: "assistant.thinking.delta", turn: 1, delta: "**Searching**" }]);
+  entries = reduceRunTimeline(entries, phase);
+  assert.equal(entries[0]?.type === "thinking" && entries[0].expanded, false);
+  entries = entries.map(entry => entry.type === "thinking" ? { ...entry, expanded: true, userExpanded: true } : entry);
+  entries = reduceRunTimeline(entries, phase);
+  assert.equal(entries[0]?.type === "thinking" && entries[0].expanded, true);
+  let identified = apply([{ type: "assistant.thinking.delta", turn: 2, responseId: "r", delta: "**Searching**" }]);
+  assert.equal(identified[0]?.type === "thinking" && identified[0].expanded, false);
+  identified = reduceRunTimeline(identified, { type: "assistant.thinking.delta", turn: 2, responseId: "r", delta: " more" });
+  assert.equal(identified[0]?.type === "thinking" && identified[0].content, "**Searching** more");
+  assert.equal(identified[0]?.type === "thinking" && identified[0].expanded, false);
+});
+
+test("cancellation retains source warnings while success alone clears them", () => {
+  const running = apply([
+    { type: "tool.started", trace: { id: "cancel", name: "run_shell", status: "running", args: { command: "search" } } },
+    { type: "tool.output", toolCallId: "cancel", chunk: "Error: connector unavailable" },
+  ]);
+  let entries = reduceRunTimeline(running, { type: "run.cancelled", runId: "fixture", reason: "Cancelled by user" });
+  assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, "Error: connector unavailable");
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle() {} }));
+  assert.match(html, /timeline-failure-summary/);
+  entries = reduceRunTimeline(running, { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "completed" } });
+  assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, undefined);
+});
+
+test("exploration summaries handle empty evidence and zero returned papers", () => {
+  const render = (entries: RunTimelineEntry[]) => renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle() {} }));
+  const entries = apply([
+    { type: "tool.started", trace: { id: "one", name: "read_file", status: "running" } },
+    { type: "tool.started", trace: { id: "two", name: "search_pubmed", status: "running" } },
+  ]);
+  assert.doesNotMatch(render(entries), /timeline-evidence/);
+  const count = entries.map(entry => entry.type === "tool" && entry.trace.id === "two" ? { ...entry, paperCount: 0 } : entry);
+  assert.match(render(count), /0 papers returned/);
+  const summary = entries.map(entry => entry.type === "tool" && entry.trace.id === "two" ? { ...entry, trace: { ...entry.trace, summary: "Search accepted" } } : entry);
+  assert.match(render(summary), /Search accepted/);
+  const emptyTask = apply([{ type: "tool.started", trace: { id: "task", name: "task", status: "running" } }]);
+  assert.doesNotMatch(render(emptyTask), /timeline-evidence/);
+});
+
+test("an expanded stream with no recorded length tolerates an absent full transcript", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const entries: RunTimelineEntry[] = [{ id: "tool-empty", type: "tool", expanded: true,
+    trace: { id: "empty", name: "run_shell", status: "running", outputStream: "tool-empty" } }];
+  let loads = 0;
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(RunTimeline, { entries, isRunning: true, onToggle() {},
+    onLoadToolOutput: async () => { loads++; return undefined; },
+  })); });
+  assert.equal(loads, 1, "an empty result records the revision instead of creating a refetch loop");
+  await act(async () => { renderer!.unmount(); });
+});
+
+test("persisted evidence and counts render identically in standalone cards and Explored groups", () => {
+  const render=(entries:RunTimelineEntry[])=>renderToStaticMarkup(createElement(RunTimeline,{entries,isRunning:false,onToggle(){}}));
+  const shell=apply([{type:"tool.completed",trace:{id:"shell",name:"run_shell",status:"completed",preview:"first\nsecond\n…\nlast",outputStream:"tool-shell"}}]);
+  assert.match(render(shell),/first\nsecond\n…\nlast/);
+  const search=(id:string,paperCount?:number,preview?:string):RunStreamEvent=>({type:"tool.completed",trace:{id,name:"search_pubmed",status:"completed",...(paperCount!==undefined?{paperCount}:{}),...(preview!==undefined?{preview}:{}),outputStream:`tool-${id}`}});
+  assert.match(render(apply([search("one",0)])),/0 papers returned/);
+  const grouped=render(apply([search("one",2),search("two",0)]));
+  assert.match(grouped,/Explored/);
+  assert.match(grouped.split("<\/summary>")[0]!,/0 papers returned/);
+  assert.match(render(apply([search("one"),search("two",undefined,"Retrieved clinical evidence")])),/Retrieved clinical evidence/);
+});
+
+test("reopening a reasoning placeholder preserves earlier narrative and expansion choices", () => {
+  let entries=apply([{type:"assistant.delta",delta:"Research begins"},{type:"agent.phase",phase:"thinking",turn:1},{type:"assistant.thinking.delta",turn:1,delta:"**Searching**"}]);
+  entries=reduceRunTimeline(entries,{type:"agent.phase",phase:"thinking",turn:1});
+  assert.equal(entries[0]?.type==="assistant"&&entries[0].content,"Research begins");
+  assert.equal(entries[1]?.type==="thinking"&&entries[1].expanded,false);
 });

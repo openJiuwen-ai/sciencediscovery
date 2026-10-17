@@ -277,21 +277,41 @@ function clonedDetailsEntry(details: unknown): { details?: unknown } {
   return cloned !== undefined ? { details: cloned } : {};
 }
 
+/** Small replay metadata; full text continues to live in tool streams. */
+function completedToolEvidence(text: string): Pick<ToolTrace, "preview" | "paperCount"> {
+  const lines = text.split("\n").map(line => line.length > 160 ? line.slice(0, 80) + "…" + line.slice(-77) : line);
+  const preview = (lines.length > 5 ? [...lines.slice(0, 2), "…", ...lines.slice(-2)] : lines).join("\n");
+  let paperCount: number | undefined;
+  try {
+    const result = JSON.parse(text);
+    if (result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
+      && result.toolId === "search" && Array.isArray(result.records)) paperCount = result.records.length;
+  } catch { /* Plain tool text is still useful bounded evidence. */ }
+  return { preview, ...(paperCount !== undefined ? { paperCount } : {}) };
+}
+
 export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = aggregateToolText(event.result)): ToolTrace {
   return {
     id: event.toolCallId,
     name: event.toolName,
     ...clonedDetailsEntry(event.result.details),
     ...(text !== undefined
-      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId) }
+      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId), ...completedToolEvidence(text) }
       : {}),
     status: event.isError ? "failed" : "completed",
   };
 }
 
+/** Bounded head/tail snapshot; full main-tool transcripts remain delta streams. */
+export function appendToolProgress(previous: string, chunk: string): string {
+  const text = previous + chunk;
+  return text.length <= 16384 ? text : text.slice(0, 8192) + "\n…\n" + text.slice(-8189);
+}
+
 export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningStep?: SubagentStep): SubagentStep {
   return {
     content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
+    ...(runningStep?.progress ? { progress: runningStep.progress } : {}),
     createdAt: runningStep?.createdAt ?? new Date().toISOString(),
     ...clonedDetailsEntry(event.result.details),
     id: event.toolCallId,
@@ -1621,10 +1641,30 @@ async function executeAgentRun(
           void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(liveMessageEvidence ? { evidence: liveMessageEvidence } : {}) });
           liveMessageEvidence = undefined;
         };
-        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence) => {
+        const progressBroadcastAt = new Map<string, number>();
+        const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence, transient = false) => {
           recordStep(step);
           finalizeMessageStep();
-          void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) });
+          const broadcast = (current: SubagentStep) => {
+            if (transient) progressBroadcastAt.set(step.id, Date.now());
+            void emit({ step: current, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) }, { transient });
+          };
+          if (!transient) {
+            clearTimeout(progressTimers.get(step.id));
+            progressTimers.delete(step.id);
+            broadcast(step);
+          } else {
+            const delay = 250 - (Date.now() - (progressBroadcastAt.get(step.id) ?? -Infinity));
+            if (delay <= 0) broadcast(step);
+            else if (!progressTimers.has(step.id)) {
+              progressTimers.set(step.id, setTimeout(() => {
+                progressTimers.delete(step.id);
+                const latest = steps.find(candidate => candidate.id === step.id);
+                if (latest?.status === "running") broadcast(latest);
+              }, delay));
+            }
+          }
           scheduleProgressFlush();
         };
         const publishMessageDelta = (
@@ -1946,6 +1986,13 @@ async function executeAgentRun(
               toolName: event.toolName,
             }, event.evidence);
           }
+          if (event.type === "tool_execution_progress") {
+            const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool" && step.status === "running");
+            if (runningStep) {
+              const progress = appendToolProgress(runningStep.progress ?? "", event.chunk);
+              publishStep({ ...runningStep, content: progress, progress }, event.evidence, true);
+            }
+          }
           if (event.type === "tool_execution_end") {
             activeMessageStep = undefined;
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
@@ -2040,6 +2087,8 @@ async function executeAgentRun(
             steps,
           };
         } finally {
+          for (const timer of progressTimers.values()) clearTimeout(timer);
+          progressTimers.clear();
           releaseParentWait?.();
         }
         externalWaitByExecution.delete(subagent.id);
@@ -2162,6 +2211,9 @@ async function executeAgentRun(
       };
       traces.set(trace.id, trace);
       void publish({ trace, type: "tool.started" });
+    }
+    if (event.type === "tool_execution_progress") {
+      void publish({ chunk: event.chunk, toolCallId: event.toolCallId, type: "tool.output", progress: true });
     }
     if (event.type === "tool_execution_end") {
       const text = aggregateToolText(event.result);

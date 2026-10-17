@@ -257,7 +257,7 @@ export function createToolRegistry(
   options: NativeAgentOptions,
   plugins: Awaited<ReturnType<typeof startPluginScope>>,
   durable: DurableContextStore,
-  hooks: { recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
+  hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
   // Retained per Session, not per AgentRun: a bounded result stays in the
@@ -285,6 +285,7 @@ export function createToolRegistry(
       }
     },
     recordResult: hooks.recordResult,
+    onProgress: hooks.onProgress,
     outputGuard: new ToolOutputGuard({
       maxBytes: toolOutputSettings.maxBytes,
       maxLines: toolOutputSettings.maxLines,
@@ -368,6 +369,7 @@ class NativeAgent implements NativeAgentHandle {
       return result;
     } : undefined);
     this.toolRegistry = createToolRegistry(options, this.plugins, this.durableContext, {
+      onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       recordResult: options.versioning ? async (input) => { await this.versionRecorder?.recordObservation(input); } : undefined,
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));

@@ -28,8 +28,9 @@ test.describe("journey-compact-process.spec", { tag: ["@isolation:fresh", "@cate
  *   1. Open a local Project and check default-open workspace folders and closed secondary sections.
  *   2. Collapse Files, send a request, verify streaming updates keep it closed, then grant permission and observe the running tool.
  *   3. Check completed records, copyable output and the unchanged declared Artifact card.
+ *      Inspect the trajectory transcript with a boundary between live progress and the final result.
  *   4. Run a failing tool and verify its compact error record.
- *   5. Reload on a narrow viewport and inspect persisted records and workspace files.
+ *   5. Reload on a narrow viewport and verify the same bounded evidence, persisted records and workspace files.
  * Environment: Isolated API/Runner on E2E_BASE_URL with a run-owned data directory.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible scripted model.
@@ -48,8 +49,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
     preconditions: ["隔离 API/Runner 已启动", "只调用本地脚本模型，不使用真实模型密钥"] });
   const stub = await scriptedModel([
     [
-      { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "先生成一个可核对的本地报告。", delayMs: 7000,
-        arguments: { command: "sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK" } },
+      { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "**先生成一个可核对的本地报告**\n完整内部推理仅供展开查看。", delayMs: 7000,
+        arguments: { command: "echo LIVE_EVIDENCE; echo 'Error: source unavailable, retrying' >&2; sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK; echo 'Error: quoted log contents'" } },
       { tool: "declare_artifact", arguments: { path: "results/report.md" } },
       { text: "报告已生成，内容是 CARD_OK。" },
     ],
@@ -97,7 +98,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await expect(files.locator(".physical-files")).toHaveCount(0);
     });
     let runId = "";
-    await journey.step("思考中保留原卡片，文件分区保持收起", "流式更新后文件分区不会自动打开，思考仍有边框、底色和完整文本。",
+    await journey.step("思考状态简洁，文件分区保持收起", "流式更新后文件分区不会自动打开，思考只显示阶段标题，完整推理默认收起。",
       async () => {
         const files = page.locator('[data-folder="files"]');
         await files.locator(":scope > summary").click();
@@ -112,6 +113,9 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         // text rather than as the clock it actually is. The card keeps `running` through the tool's
         // own sleep, so waiting longer still observes the state this step is about.
         await expect(thinking).toContainText("先生成一个可核对的本地报告", { timeout: 30_000 });
+        await expect(thinking).not.toHaveAttribute("open", "");
+        await expect(thinking.locator(".reasoning-content")).toBeHidden();
+        await expect(thinking.locator(":scope > summary")).not.toContainText("完整内部推理");
         await expect(thinking).not.toHaveClass(/process-record/);
         await expect(thinking).not.toHaveCSS("border-top-width", "0px");
         const identity = page.locator(".run-timeline > .run-identity");
@@ -132,6 +136,16 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(page.locator(".permission-card")).toHaveCount(0);
         const tool = page.locator(".timeline-disclosure.tool.running").first();
         await expect(tool).toBeVisible();
+        await expect(tool).not.toHaveAttribute("open", "");
+        await expect(tool.locator(".tool-content")).toBeHidden();
+        await expect(tool.locator(".timeline-command")).toContainText("sleep 6");
+        await expect(tool.locator(".timeline-evidence")).toContainText("LIVE_EVIDENCE");
+        await expect(tool.locator(".timeline-failure-summary")).toContainText("source unavailable");
+        await tool.locator(":scope > summary").click();
+        await expect(tool.locator(".tool-content")).toContainText("LIVE_EVIDENCE");
+        await expect(tool).toHaveClass(/running/);
+        await tool.locator(":scope > summary").click();
+        await expect(tool).not.toHaveAttribute("open", "");
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;
@@ -144,6 +158,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         expect((await waitForRunTerminal(page, fixture!.session.id, runId)).status).toBe("completed");
         const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
         await expect(tool).toHaveClass(/process-record/);
+        await expect(tool.locator(".timeline-failure-summary")).toHaveCount(0);
         await expect(tool).not.toHaveAttribute("open", "");
         await expect(tool).toHaveCSS("border-top-width", "0px");
         const timeline = tool.locator("xpath=..");
@@ -178,9 +193,10 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(tool).not.toHaveAttribute("open", "");
         await tool.locator(":scope > summary").click();
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
-        const stdout = tool.locator(".tool-io-section").filter({ hasText: "stdout" });
-        await stdout.locator(":scope > summary").click();
-        await expect(stdout.locator("pre")).toContainText("CARD_OK");
+        const output = tool.locator(".tool-io-section").filter({ hasText: "CARD_OK" }).filter({ hasNotText: "mkdir -p" });
+        await output.locator(":scope > summary").click();
+        await expect(output.locator("pre")).toContainText("CARD_OK");
+        await expect(output.locator("pre")).toContainText("LIVE_EVIDENCE");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const artifact = page.getByRole("region", { name: "本轮产物", exact: true });
         await expect(artifact).toBeVisible();
@@ -229,11 +245,38 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await physical.locator(":scope > summary").click();
       await expect(physical.locator(":scope > summary button")).toHaveCount(0);
     });
+    await journey.step("轨迹保留进度与最终结果的边界", "命令输出完整保留实时证据，并与最终 JSON 结果分隔。", async () => {
+      const base = `${apiBaseUrl()}/api/sessions/${fixture!.session.id}/trajectory`;
+      const response = await page.request.get(base, { headers: authorizationHeader() });
+      expect(response.ok()).toBe(true);
+      const index = await response.json() as { entries: Array<{ id: string; eventType?: string }> };
+      let target: { id: string; progress: string; result: string } | undefined;
+      for (const entry of index.entries.filter(entry => entry.eventType === "tool.output")) {
+        const detailResponse = await page.request.get(`${base}/detail?id=${encodeURIComponent(entry.id)}`, { headers: authorizationHeader() });
+        expect(detailResponse.ok()).toBe(true);
+        const detail = await detailResponse.json() as { value: { packets?: Array<{ event: { chunk?: string; progress?: boolean } }> } };
+        const packets = detail.value.packets ?? [];
+        const progress = packets.filter(p => p.event.progress === true).map(p => p.event.chunk ?? "").join("");
+        const result = packets.filter(p => p.event.progress !== true).map(p => p.event.chunk ?? "").join("");
+        if (progress.includes("LIVE_EVIDENCE") && result) { target = { id: entry.id, progress, result }; break; }
+      }
+      expect(target).toBeDefined();
+      await page.getByRole("button", { name: "轨迹", exact: true }).click();
+      const viewer = page.getByRole("region", { name: "Session 轨迹" });
+      await viewer.locator(`.trajectory-event-list [data-entry-id="${target!.id}"]`).click();
+      const output = viewer.locator(".trajectory-readable section").filter({ has: page.getByRole("heading", { name: "命令输出", exact: true }) }).locator("pre");
+      await expect(output).toHaveText(`${target!.progress}\n\n---\n\n${target!.result}`);
+      expect(JSON.parse(target!.result)).toBeTruthy();
+      await viewer.getByRole("button", { name: "返回对话", exact: true }).click();
+      await expect(viewer).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "轨迹", exact: true })).toBeVisible();
+    });
     await journey.step("失败也去框并保留错误", "失败工具有红点和失败文字，展开后错误原文可见。",
       async () => {
         const run = await sendUserMessage(page, fixture!.session.id, "执行一次受控的失败命令，保留错误。");
         await waitForRunTerminal(page, fixture!.session.id, run.id);
         const failed = page.locator(".timeline-disclosure.tool.failed");
+        await expect(page.locator(".timeline-disclosure.thinking.completed").last().locator(":scope > summary")).toContainText("思考过程");
         await expect(failed).toHaveClass(/process-record/);
         await expect(failed.locator(":scope > summary")).toContainText("失败");
         await expect(failed).toHaveCSS("border-top-width", "0px");
@@ -246,7 +289,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect.poll(() => failed.locator(":scope > summary").evaluate((el) => {
           const card = el.closest("details");
           if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
-          return getComputedStyle(el, "::after").width;
+          return getComputedStyle(el.querySelector(".timeline-label > strong")!, "::after").width;
         })).toBe("6px");
         await failed.locator(":scope > summary").click();
         await expect(failed).not.toHaveCSS("border-top-width", "0px");
@@ -264,28 +307,53 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       // Same settling hazard as the dot width above: judge the whole collapsed
       // failure layout from a single frame, and keep polling until that frame
       // draws the dot next to the text. The expected values are the settled
-      // layout's own: label hugging its text, 8px flex gap, no dot margin,
-      // and a label that does not grow.
+      // layout's own: title hugging its text plus the 8px gap and 6px dot,
+      // no dot margin, and a title that does not grow.
       await expect.poll(() => failed.locator(":scope > summary").evaluate((el) => {
         const card = el.closest("details");
         if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
-        const label = el.querySelector(".timeline-label")!;
+        const label = el.querySelector(".timeline-label > strong")!;
         const range = document.createRange();
-        range.selectNodeContents(label.querySelector("strong")!);
-        const dot = getComputedStyle(el, "::after");
+        range.selectNodeContents(label.querySelector(".timeline-title-text")!);
+        if (getComputedStyle(el, "::after").display !== "none") return "duplicate summary dot";
+        const dot = getComputedStyle(label, "::after");
         const flexGrow = getComputedStyle(label).flexGrow;
-        const gap = getComputedStyle(el).columnGap;
+        const gap = getComputedStyle(label).columnGap;
         const hug = Math.abs(label.getBoundingClientRect().right - range.getBoundingClientRect().right);
-        if (dot.width === "6px" && dot.marginLeft === "0px" && gap === "8px" && flexGrow === "0" && hug < 2) return "settled";
+        if (dot.width === "6px" && dot.marginLeft === "0px" && gap === "8px" && flexGrow === "0" && Math.abs(hug - 14) < 2) return "settled";
         return `dot ${dot.width || "absent"}/${dot.marginLeft || "absent"}, gap ${gap}, flexGrow ${flexGrow}, text-to-label gap ${hug.toFixed(2)}px`;
       })).toBe("settled");
+      // Exercise the same collapsed record with a long research title at both
+      // widths; keep its full text available while reserving space for the dot.
+      const title = failed.locator(".timeline-title-text");
+      const originalTitle = await title.textContent();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await title.evaluate((el) => { el.textContent = "Call failed: " + "Searching clinical CRISPR literature ".repeat(12); });
+        await expect.poll(() => title.evaluate((el) => {
+          const text = el as HTMLElement;
+          const label = text.parentElement!;
+          const dot = getComputedStyle(label, "::after");
+          const style = getComputedStyle(text);
+          const rightSpace = label.getBoundingClientRect().right - text.getBoundingClientRect().right;
+          return text.scrollWidth > text.clientWidth && style.textOverflow === "ellipsis"
+            && style.overflow === "hidden" && dot.width === "6px"
+            && Math.abs(rightSpace - 14) < 2;
+        })).toBe(true);
+      }
+      await title.evaluate((el, value) => { el.textContent = value; }, originalTitle);
       await page.mouse.move(0, 0);
     });
     await journey.step("窄屏刷新后访问原文件", "历史权限卡不会回来，目录仍默认关闭，文件可以从工作区入口访问且页面不横向溢出。",
       async () => {
         await page.setViewportSize({ width: 390, height: 844 });
+        const completed = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
+        const evidence = completed.locator(":scope > summary .timeline-evidence");
+        await expect(evidence).not.toBeEmpty();
+        const retainedEvidence = await evidence.innerText();
         await page.reload();
         await expect(page.locator(".timeline-disclosure.tool.failed")).toBeVisible();
+        await expect(page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" }).locator(":scope > summary .timeline-evidence")).toHaveText(retainedEvidence);
         await expect(page.locator(".permission-card")).toHaveCount(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         // On mobile the existing workspace drawer must be opened first.
