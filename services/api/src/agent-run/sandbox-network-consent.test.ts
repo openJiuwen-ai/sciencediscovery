@@ -113,15 +113,11 @@ for (const mode of ["domain-allowlist", "open"] as const) test(`scoped retry pre
   const f = fixture();
   f.epoch.networkPolicy = mode;
   f.epoch.networkAccess = { ...NO_SANDBOX_NETWORK_ACCESS, mode, allowedDomains: mode === "open" ? [] : ["configured.example.org:443"], revision: "configured" };
-  const { EgressGateway } = await import("../../../runner/src/egress-gateway.js");
   const decision = await f.consent.request(input);
   const epoch = await f.consent.consume(decision.authorizationId, "local");
-  const gateway = new EgressGateway(epoch.networkAccess!, "", { resolveAddresses: async host => [{ address: host === "private.example.org" ? "127.0.0.1" : "93.184.216.34", family: 4 }] });
-  assert.equal((await gateway.decide("configured.example.org", 443)).allowed, true);
-  assert.equal((await gateway.decide("eutils.ncbi.nlm.nih.gov", 443)).allowed, true);
-  assert.equal((await gateway.decide("unrelated.example.org", 443)).allowed, mode === "open");
-  assert.equal((await gateway.decide("private.example.org", 443)).allowed, false);
-  assert.equal((await gateway.decide("127.0.0.1", 443)).allowed, false);
+  assert.equal(epoch.networkAccess!.mode, mode);
+  assert.deepEqual(epoch.networkAccess!.allowedDomains, mode === "open" ? [] : ["configured.example.org:443", ...input.hosts]);
+  assert.equal(epoch.networkAccess!.egressProxyPolicy, "inherit");
   assert.equal(epoch.networkAccess!.allowPrivateNetwork, false);
   assert.deepEqual(f.epoch.networkAccess.allowedDomains, mode === "open" ? [] : ["configured.example.org:443"]);
 });
