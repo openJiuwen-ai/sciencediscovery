@@ -409,7 +409,7 @@ test("tool progress isolates observers and ignores empty, cancelled and late cal
       return { content: [{ type: "text" as const, text: "final" }] };
     },
   }], { createResultMessage: resultMessage, onProgress(_call, chunk) { observed.push(chunk); throw new Error("observer failed"); } });
-  const result = await registry.execute({ id: "progress", name: "echo", args: {} }, controller.signal);
+  const result = await registry.execute({ id: "", name: "echo", args: {} }, controller.signal);
   assert.equal(result.content, "final");
   assert.deepEqual(observed, ["working"]);
   emit?.("after completion");

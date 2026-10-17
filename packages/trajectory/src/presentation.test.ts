@@ -179,3 +179,7 @@ test("command transcript tolerates legacy packet fields without inventing output
   ] });
   assert.equal(values[0]!.value, "searching\n\n---\n\nresults done");
 });
+
+test("legacy single command chunks stay readable without a packet array", () => {
+  assert.equal(sections("tool", { type: "tool.output", chunk: "legacy output" })[0]!.value, "legacy output");
+});

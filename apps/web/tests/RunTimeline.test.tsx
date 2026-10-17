@@ -1268,3 +1268,31 @@ test("cancellation retains source warnings while success alone clears them", () 
   entries = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "completed" } });
   assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, undefined);
 });
+
+test("exploration summaries handle empty evidence and zero returned papers", () => {
+  const render = (entries: RunTimelineEntry[]) => renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle() {} }));
+  const entries = apply([
+    { type: "tool.started", trace: { id: "one", name: "read_file", status: "running" } },
+    { type: "tool.started", trace: { id: "two", name: "search_pubmed", status: "running" } },
+  ]);
+  assert.doesNotMatch(render(entries), /timeline-evidence/);
+  const count = entries.map(entry => entry.type === "tool" && entry.trace.id === "two" ? { ...entry, paperCount: 0 } : entry);
+  assert.match(render(count), /0 papers returned/);
+  const summary = entries.map(entry => entry.type === "tool" && entry.trace.id === "two" ? { ...entry, trace: { ...entry.trace, summary: "Search accepted" } } : entry);
+  assert.match(render(summary), /Search accepted/);
+  const emptyTask = apply([{ type: "tool.started", trace: { id: "task", name: "task", status: "running" } }]);
+  assert.doesNotMatch(render(emptyTask), /timeline-evidence/);
+});
+
+test("an expanded stream with no recorded length tolerates an absent full transcript", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const entries: RunTimelineEntry[] = [{ id: "tool-empty", type: "tool", expanded: true,
+    trace: { id: "empty", name: "run_shell", status: "running", outputStream: "tool-empty" } }];
+  let loads = 0;
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(RunTimeline, { entries, isRunning: true, onToggle() {},
+    onLoadToolOutput: async () => { loads++; return undefined; },
+  })); });
+  assert.equal(loads, 1, "an empty result records the revision instead of creating a refetch loop");
+  await act(async () => { renderer!.unmount(); });
+});
