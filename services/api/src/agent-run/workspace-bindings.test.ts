@@ -897,10 +897,16 @@ async function directBindingFixture(t: TestContext, machine = "local") {
   const resources: string[] = [];
   const dispatches: Array<Record<string, unknown>> = [];
   let workspaceKey = "session/main";
+  let capabilityOverride: Record<string, unknown> = {};
+  let onProbe = () => {};
+  let onConsent = () => {};
   const runnerClient = {
     executionCapability: async () => { if (!connected) throw new Error("Disconnected"); return { ready }; },
-    directExecutionCapability: async (_signal: unknown, scope: { runnerWorkspaceKey?: string; cwd: string }) => ({ available: true, target, account,
-      workspaceRoot: scope.runnerWorkspaceKey ? `/remote/${scope.runnerWorkspaceKey}` : root, cwd: scope.cwd }),
+    directExecutionCapability: async (_signal: unknown, scope: { runnerWorkspaceKey?: string; cwd: string }) => {
+      onProbe();
+      return { available: true, target, account,
+        workspaceRoot: scope.runnerWorkspaceKey ? `/remote/${scope.runnerWorkspaceKey}` : root, cwd: scope.cwd, ...capabilityOverride };
+    },
   } as unknown as RunnerClient;
   const store = {
     assertSessionWritable() {}, assertSessionAllowsRunner() { if (!selected) throw new Error("Runner removed"); },
@@ -916,6 +922,7 @@ async function directBindingFixture(t: TestContext, machine = "local") {
     if (request.action === "direct_code") {
       resources.push(request.resource);
       if (!allowed) throw new Error("Permission denied");
+      onConsent();
     }
     return { id: `authorization-${++grants}-${randomUUID()}`, action: request.action, outcome: "allowed", resource: request.resource, permissionGrantId: "grant" };
   } } as unknown as AgentPermissionRuntime;
@@ -934,6 +941,9 @@ async function directBindingFixture(t: TestContext, machine = "local") {
     authorizationId: string; command: string; cwd: string; target: string; account: string; dispatched: boolean;
   }>;
   return { binding, make, consent, operationId, resources, dispatches, submissions: () => submissions,
+    capability: (value: Record<string, unknown>) => { capabilityOverride = value; },
+    duringProbe: (callback: () => void) => { onProbe = callback; },
+    duringConsent: (callback: () => void) => { onConsent = callback; },
     deny: () => { allowed = false; }, disconnect: () => { connected = false; }, end: () => { active = false; },
     uncertain: () => { unknown = true; }, revoke: () => { revoked = true; },
     remove: () => { selected = false; }, recover: () => { ready = true; }, changeWorkspace: () => { workspaceKey = "other/main"; },
@@ -1008,3 +1018,30 @@ test("matching direct consent resources differ between local and remote targets"
   await assert.rejects(remote.binding.directExecution!.start(consent), /Missing|mismatched/);
   assert.equal(remote.submissions(), 0);
 });
+
+for (const machine of ["local", "remote-1"]) {
+  for (const response of [{ available: false }, { workspaceRoot: undefined }, { cwd: undefined }]) {
+    test(`${machine}: incomplete direct capability ${Object.keys(response)[0]} fails before consent`, async t => {
+      const f = await directBindingFixture(t, machine); f.capability(response);
+      await assert.rejects(f.consent(), /workspace capability is unavailable/);
+      assert.equal(f.resources.length, 0); assert.equal(f.submissions(), 0);
+    });
+  }
+  test(`${machine}: removal while probing revokes access before consent`, async t => {
+    const f = await directBindingFixture(t, machine); f.duringProbe(f.remove);
+    await assert.rejects(f.consent(), /Runner removed/);
+    assert.equal(f.resources.length, 0); assert.equal(f.submissions(), 0);
+  });
+  test(`${machine}: target replacement during consent invalidates the approval`, async t => {
+    const f = await directBindingFixture(t, machine); f.duringConsent(f.changeTarget);
+    await assert.rejects(f.consent(), /changed during consent/);
+    assert.equal(f.resources.length, 1); assert.equal(f.submissions(), 0);
+  });
+  test(`${machine}: target cwd changes consume approval before dispatch`, async t => {
+    const f = await directBindingFixture(t, machine); const consent = await f.consent();
+    f.capability({ cwd: "redirected" });
+    await assert.rejects(f.binding.directExecution!.start(consent), /changed/);
+    await assert.rejects(f.binding.directExecution!.start(consent), /consumed/);
+    assert.equal(f.submissions(), 0);
+  });
+}

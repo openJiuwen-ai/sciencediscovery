@@ -15,7 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, readFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
@@ -129,8 +129,19 @@ async function remoteFixture(t: TestContext) {
       await new Promise(done => setTimeout(done, 10));
     }
   };
-  return { ...f, client, request, owner, wait, remoteRoot: scope.workspaceRoot };
+  return { ...f, client, request, owner, wait, remoteRoot: scope.workspaceRoot, json };
 }
+
+test("direct HTTP capability validates local roots, rejects ambiguous identity and requires directory cwd", async t => {
+  const f = await remoteFixture(t);
+  const unscoped = await f.json<DirectExecutionCapability>("/direct-execution-capability");
+  assert.equal(unscoped.available, true); assert.equal(unscoped.workspaceRoot, undefined);
+  const local = await f.json<DirectExecutionCapability>(`/direct-execution-capability?${new URLSearchParams({ workspaceRoot: f.workspaceRoot })}`);
+  assert.equal(local.workspaceRoot, f.workspaceRoot); assert.equal(local.cwd, "");
+  await assert.rejects(f.json(`/direct-execution-capability?${new URLSearchParams({ workspaceRoot: f.workspaceRoot, runnerWorkspaceKey: "session/main" })}`), /Choose one/);
+  await writeFile(resolve(f.remoteRoot, "file.txt"), "not a directory");
+  await assert.rejects(f.client.directExecutionCapability(undefined, { runnerWorkspaceKey: "session/main", cwd: "file.txt" }), /inside the approved workspace/);
+});
 
 test("remote direct Shell/Python retains durable output, workspace version and exact target audit", async t => {
   const f = await remoteFixture(t);
