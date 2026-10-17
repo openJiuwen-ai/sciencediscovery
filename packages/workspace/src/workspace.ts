@@ -1981,6 +1981,10 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
           details: result,
         };
       },
+      // Only these built-in metadata searches are known to be read-only. Other MCP
+      // tools remain exclusive; the broker still applies each source's rate limits.
+      isConcurrencySafe: (mcpTool.sourceId === "pubmed" || mcpTool.sourceId === "europe-pmc")
+        && mcpTool.toolId === "search" ? () => true : undefined,
       label: mcpTool.displayName,
       mcp: { sourceId: mcpTool.sourceId, toolId: mcpTool.toolId },
       name: mcpTool.name,
