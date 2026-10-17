@@ -17,11 +17,11 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ConnectorManifest } from "@sciencediscovery/schema";
+import type { ConnectorManifest, RuntimeSettingsDetails } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { ConnectorPicker as McpPicker } from "@sciencediscovery/mcp/web";
+import { ConnectorPicker as McpPicker, McpSettingsSection } from "@sciencediscovery/mcp/web";
 import type { ApiClient } from "../src/api.js";
 import { PluginWebHost } from "../src/plugins/host.js";
 
@@ -112,4 +112,55 @@ test("disables the checkboxes but keeps the list readable while a run is active"
   assert.match(markup, /connector-picker-popover/);
   const disabled = markup.match(/disabled/g) ?? [];
   assert.equal(disabled.length, 2);
+});
+
+const failedPubmed = {
+  ...connectors[0],
+  connectionError: { checkedAt: "2026-01-01T00:00:00Z", message: "MCP connection timeout" },
+} as ConnectorManifest;
+
+test("a connector whose MCP server failed to connect shows the failure and stays selectable", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors: [failedPubmed, connectors[1]!],
+    defaultOpen: true,
+    enabledIds: ["pubmed"],
+    onToggle: () => undefined,
+  }));
+  assert.match(markup, /<small class="connector-picker-error" title="MCP connection timeout">Connection failed: MCP connection timeout<\/small>/);
+  assert.equal((markup.match(/connector-picker-error/g) ?? []).length, 1, "only the failed server's connector is flagged");
+  assert.equal((markup.match(/type="checkbox"/g) ?? []).length, 2);
+  assert.doesNotMatch(markup, /disabled=""/);
+});
+
+test("the closed trigger flags a failed connector only when the Session enables it", () => {
+  const enabled = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors: [failedPubmed, connectors[1]!],
+    enabledIds: ["pubmed", "uniprot"],
+    onToggle: () => undefined,
+  }));
+  assert.match(enabled, /connector-picker-trigger has-enabled has-error/);
+  assert.match(enabled, /aria-label="Data connectors: 2 of 2 enabled · 1 failed to connect"/);
+
+  const notEnabled = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors: [failedPubmed, connectors[1]!],
+    enabledIds: ["uniprot"],
+    onToggle: () => undefined,
+  }));
+  assert.doesNotMatch(notEnabled, /has-error/);
+  assert.match(notEnabled, /aria-label="Data connectors: 1 of 2 enabled"/);
+});
+
+test("connector settings show the failure next to the failed connector", () => {
+  const markup = renderToStaticMarkup(createElement(McpSettingsSection, {
+    allowInheritance: false,
+    connectors: [failedPubmed, connectors[1]!],
+    details: { effective: { enabledConnectorIds: [] } } as unknown as RuntimeSettingsDetails,
+    disabled: false,
+    draft: { enabledConnectorIds: ["pubmed"] },
+    renderSource: () => null,
+    setDraft: () => undefined,
+    t: (key, variables) => key === "connectors.connectionFailed" ? `Connection failed: ${variables?.message}` : key,
+  }));
+  assert.match(markup, /<small class="connector-connection-error" title="MCP connection timeout">Connection failed: MCP connection timeout<\/small>/);
+  assert.equal((markup.match(/connector-connection-error/g) ?? []).length, 1);
 });

@@ -23,9 +23,10 @@ import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { PaperService } from "../papers.js";
 import type { SessionStore } from "../store.js";
 import type { GovernedDownloadManager } from "@sciencediscovery/artifact-manager";
-import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
-import type { McpSourceCatalog } from "@sciencediscovery/data-source";
+import type { McpGovernanceBroker, McpTransportClient } from "@sciencediscovery/data-source";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
 import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
+import type { McpCatalogServer } from "@sciencediscovery/schema";
 
 test("paper extraction stays in the owning Workspace even when another job ID is known", async () => {
   for (const [prefix, path, allowed] of [
@@ -290,4 +291,38 @@ test("artifact download scopes subagent workspace paths to the private prefix", 
 
   assert.equal(preparedPath, "subagents/subagent-1/downloads/paper.pdf");
   assert.equal(result.finalPath, "downloads/paper.pdf");
+});
+
+test("a Session that still enables connectors of an off or failed MCP server gets none of their tools", async () => {
+  const registry = createBuiltinMcpSourceRegistry();
+  const uniprot: McpCatalogServer = {
+    enabled: true,
+    id: "uniprot",
+    tools: Object.values(registry.get("uniprot").manifest.tools).map((tool) => ({
+      description: tool.description, inputSchema: tool.inputSchema, name: tool.mcpToolName ?? tool.id, schemaHash: tool.id,
+    })),
+    transport: "stdio",
+  };
+  for (const biomed of [
+    [],
+    [{ enabled: true, error: "MCP connection timeout", id: "biomed", tools: [], transport: "stdio" as const }],
+  ]) {
+    const catalog = new McpSourceCatalog(registry, {
+      async catalog() { return { loadedAt: "2026-01-01T00:00:00Z", revision: "rev", servers: [...biomed, uniprot] }; },
+    } as unknown as McpTransportClient);
+    await catalog.refresh();
+    const tools = createMcpWorkspaceTools({
+      artifactManager: {} as GovernedDownloadManager,
+      broker: {} as McpGovernanceBroker, catalog,
+      // arXiv and PubMed share the biomed server; the Session still lists them.
+      enabledSourceIds: ["arxiv", "pubmed", "uniprot", "web"],
+      emitPermissionRequest() {}, pauseExternalWait: () => () => undefined,
+      paperService: {} as PaperService,
+      permission: {} as AgentPermissionRuntime, projectId: "project", sessionId: "session", turnId: "turn",
+      registry, store: {} as SessionStore,
+    });
+    const names = tools.mcpTools?.map((tool) => tool.name) ?? [];
+    assert.ok(names.length > 0);
+    assert.ok(names.every((name) => name.startsWith("mcp__uniprot__")), names.join(", "));
+  }
 });

@@ -14,6 +14,7 @@
 
 import { formatExternalUrl } from "@sciencediscovery/external-urls";
 
+import type { McpConnectionError } from "./mcp-source.js";
 import type { CasObjectRef } from "./provenance.js";
 
 export type ConnectorId = string;
@@ -41,6 +42,8 @@ export interface ConnectorManifest {
   citationTemplate: string;
   codeHash: string;
   commercialUseConstraints: string;
+  /** Set by the connector listing when the connector's MCP server is enabled but failed to connect. */
+  connectionError?: McpConnectionError;
   dataClassification: "public" | string;
   enabledByDefault: boolean;
   id: ConnectorId;

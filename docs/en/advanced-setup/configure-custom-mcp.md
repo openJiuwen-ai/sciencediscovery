@@ -90,6 +90,8 @@ Enable the MCP in the target Session's connector selection. Global server enable
 
 The Agent decides whether a task needs a tool, so selection does not force a call on every message. Manual Inspector execution does not change the Session's connector selection or authorize its Agent to use every tool.
 
+While a server is disabled, its connector is not offered in any connector selection and its tools are not given to the Agent, even in a Session that selected it earlier; enabling the server again brings the connector back with that selection. An enabled server that fails to connect or list its tools stays in the selection with a **Connection failed** note and the error, and its tools are unavailable until the connection succeeds.
+
 ## Troubleshooting
 
 | Symptom | Check |

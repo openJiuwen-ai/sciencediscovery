@@ -19,8 +19,7 @@ import type {
   McpInspectorRequest,
   McpInspectorResult,
   McpAuthorizationStart,
-  McpSourceManifest,
-  McpSourceStatus,
+  McpSourceDetails,
   UpdateWebSettingsRequest,
   WebSettingsDetails,
   WebUsageSummary,
@@ -64,7 +63,7 @@ export class WebApiClient extends EvolveApiClient {
     return this.request("/api/mcp/servers/import", { method: "POST", body: JSON.stringify(body) });
   }
 
-  listMcpSources(): Promise<Array<{ manifest: McpSourceManifest; status: McpSourceStatus }>> {
+  listMcpSources(): Promise<McpSourceDetails[]> {
     return this.request("/api/mcp/sources");
   }
 

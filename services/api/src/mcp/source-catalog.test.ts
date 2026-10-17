@@ -125,3 +125,65 @@ test("source catalog marks missing MCP tools as degraded", async () => {
   assert.equal(catalog.getStatus("demo").status, "degraded");
   assert.deepEqual(catalog.getStatus("demo").missingTools, ["search"]);
 });
+
+function catalogWith(servers: McpCatalog["servers"]): McpCatalog {
+  return { loadedAt: "2026-01-01T00:00:00Z", revision: "rev", servers };
+}
+
+function catalogFor(remoteCatalog: McpCatalog, registry = createMcpSourceRegistry().register(adapter(manifest()))) {
+  return new McpSourceCatalog(registry, { async catalog() { return remoteCatalog; } } as McpTransportClient);
+}
+
+test("a source whose MCP server is off or not configured is disabled, not failing", async () => {
+  for (const servers of [
+    [],
+    [{ enabled: false, id: "demo-server", tools: [], transport: "stdio" as const }],
+  ]) {
+    const catalog = catalogFor(catalogWith(servers));
+    await catalog.refresh();
+    assert.equal(catalog.getStatus("demo").status, "disabled");
+    assert.deepEqual(catalog.getStatus("demo").availableTools, []);
+    assert.equal(catalog.connectionError("demo"), undefined);
+  }
+});
+
+test("an enabled server that failed to connect reports its failure for its sources", async () => {
+  const catalog = catalogFor(catalogWith([
+    { enabled: true, error: "spawn python ENOENT", id: "demo-server", tools: [], transport: "stdio" },
+  ]));
+  await catalog.refresh();
+
+  assert.equal(catalog.getStatus("demo").status, "unavailable");
+  assert.equal(catalog.getStatus("demo").error, "spawn python ENOENT");
+  assert.deepEqual(catalog.connectionError("demo"), { checkedAt: "2026-01-01T00:00:00Z", message: "spawn python ENOENT" });
+});
+
+test("incompatible tools on a connected server are not a connection failure", async () => {
+  const catalog = catalogFor(catalogWith([{ enabled: true, id: "demo-server", tools: [], transport: "stdio" }]));
+  await catalog.refresh();
+
+  assert.equal(catalog.getStatus("demo").status, "degraded");
+  assert.equal(catalog.connectionError("demo"), undefined);
+});
+
+test("without an applied catalog nothing is reported as off or failed", async () => {
+  const registry = createMcpSourceRegistry().register(adapter(manifest()));
+  const catalog = new McpSourceCatalog(registry, {
+    async catalog() { throw new Error("extensions config is not valid JSON"); },
+  } as unknown as McpTransportClient);
+  await assert.rejects(catalog.refresh(), /not valid JSON/);
+
+  assert.equal(catalog.getStatus("demo").status, "unavailable");
+  assert.equal(catalog.getStatus("demo").error, "MCP catalog has not been refreshed");
+  assert.equal(catalog.connectionError("demo"), undefined);
+});
+
+test("a source registered after the last refresh is judged by the applied catalog", async () => {
+  const registry = createMcpSourceRegistry().register(adapter(manifest()));
+  const catalog = catalogFor(catalogWith([]), registry);
+  await catalog.refresh();
+  // An imported custom server registers its source without refreshing the catalog.
+  registry.upsert(adapter({ ...manifest(), id: "late", transport: { mcpServerId: "late-server", type: "mcp" } }));
+
+  assert.equal(catalog.getStatus("late").status, "disabled");
+});

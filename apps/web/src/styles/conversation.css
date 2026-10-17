@@ -138,6 +138,8 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-trigger.has-enabled { color: var(--accent-ink); }
 .connector-picker-count { min-width: 16px; border-radius: var(--radius-pill); background: var(--surface-track); padding: 1px 5px; font-size: 10px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: center; }
 .connector-picker-trigger.has-enabled .connector-picker-count { background: var(--accent-tint); color: var(--accent-deep); }
+.connector-picker-trigger.has-error { position: relative; }
+.connector-picker-trigger.has-error::after { content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border: 2px solid var(--surface); border-radius: 50%; background: var(--danger-bright); }
 .approval-mode-toggle, .automatic-review-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 30px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); padding: 4px 9px; color: var(--accent-ink); cursor: pointer; font-size: 11px; }
 .approval-mode-toggle:hover, .automatic-review-toggle:hover { border-color: var(--accent-border); background: var(--accent-soft); }
 .approval-mode-toggle.always-allow { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning-strong); }
@@ -155,6 +157,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-popover label > span { min-width: 0; display: grid; }
 .connector-picker-popover label strong { color: var(--text-heading); font-size: 13px; }
 .connector-picker-popover label small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+/* Long transport errors wrap a few lines; the full text stays in the title.
+   The picker row inherits the composer controls' uppercase, which would alter paths in the message. */
+.connector-picker-popover label small.connector-picker-error { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: var(--danger); white-space: normal; overflow-wrap: anywhere; text-transform: none; }
 .connector-picker-popover a { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--text-faint); }
 .connector-picker-popover a:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .connector-picker-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

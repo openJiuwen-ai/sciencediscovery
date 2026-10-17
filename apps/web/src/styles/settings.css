@@ -535,6 +535,7 @@
 .skill-library-diff ul { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 16px; color: var(--text-secondary); font-size: 12px; }
 .skill-library-diff p { margin: 8px 0 0; color: var(--text-faint); font-size: 12px; }
 .settings-choices label > span small { display: block; margin-top: 3px; color: var(--text-faint); font-size: 10px; font-weight: 500; }
+.settings-choices label > span small.connector-connection-error { color: var(--danger); overflow-wrap: anywhere; }
 .proxy-settings-editor { display: grid; gap: 16px; }
 .proxy-page-header { margin-bottom: 0; }
 .proxy-default-section, .proxy-server-section, .proxy-module-section { display: grid; gap: 12px; min-width: 0; }

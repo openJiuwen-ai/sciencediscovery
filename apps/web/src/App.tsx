@@ -40,6 +40,7 @@ import type {
   EvidenceLink,
   McpProxyPolicies,
   McpInvocation,
+  McpSourceDetails,
   McpSourceManifest,
   ModelProfile,
   ModelProvider,
@@ -1159,7 +1160,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sandboxNetworkSettings, setSandboxNetworkSettings] = useState<SandboxNetworkSettings>();
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
-  const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
+  const [mcpSources, setMcpSources] = useState<McpSourceDetails[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
   const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
@@ -1836,7 +1837,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       sandboxNetwork: setSandboxNetworkSettings,
       proxies: setProxySettings,
       mcpPolicies: (details) => setMcpProxyPolicies(details.policies),
-      mcpSources: (details) => setMcpSources(details.map((item) => item.manifest)),
+      mcpSources: setMcpSources,
       web: setWebSettings,
       memoryGraph: setMemoryGraphSettings,
       ideaTree: setIdeaTreeSettings,
@@ -5061,13 +5062,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               {systemSettingsGroup === "mcp" ? <McpServerSettings client={client} sources={mcpSources} sessionId={activeSessionId || undefined} sessionTitle={session?.title} onChanged={async () => {
                 const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
                 setConnectors(items);
-                setMcpSources(sourceDetails.map((item) => item.manifest));
+                setMcpSources(sourceDetails);
               }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings
                   ? <ProxySettingsEditor
                       mcpPolicies={mcpProxyPolicies}
-                      mcpServers={proxyMcpServers(mcpSources)}
+                      mcpServers={proxyMcpServers(mcpSources.map((item) => item.manifest))}
                       onCreate={createProxyServer}
                       onDefaultPolicyChange={updateDefaultProxyPolicy}
                       onDelete={deleteProxyServer}

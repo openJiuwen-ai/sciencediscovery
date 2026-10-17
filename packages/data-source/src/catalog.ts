@@ -16,7 +16,9 @@ import { createHash } from "node:crypto";
 
 import type {
   McpCatalog,
+  McpCatalogServer,
   McpCatalogTool,
+  McpConnectionError,
   McpSourceManifest,
   McpSourceStatus,
   ResolvedProxy,
@@ -65,14 +67,31 @@ export function inputSchemasCompatible(
   return true;
 }
 
+function catalogServer(manifest: McpSourceManifest, catalog: McpCatalog): McpCatalogServer | undefined {
+  return catalog.servers.find((candidate) => candidate.id === manifest.transport.mcpServerId);
+}
+
 function statusFor(manifest: McpSourceManifest, catalog: McpCatalog): McpSourceStatus {
   const toolIds = Object.keys(manifest.tools);
-  const server = catalog.servers.find((candidate) => candidate.id === manifest.transport.mcpServerId);
-  if (!server || server.error || !server.enabled) {
+  const server = catalogServer(manifest, catalog);
+  // The client only lists enabled servers, so a server missing from an applied
+  // catalog was switched off or never configured: the source is off, not broken.
+  if (!server || !server.enabled) {
     return {
       availableTools: [],
       catalogRevision: catalog.revision,
-      error: server?.error ?? `MCP server is not available: ${manifest.transport.mcpServerId ?? "(missing id)"}`,
+      error: `MCP server is disabled or not configured: ${manifest.transport.mcpServerId ?? "(missing id)"}`,
+      lastCheckedAt: catalog.loadedAt,
+      missingTools: toolIds,
+      sourceId: manifest.id,
+      status: "disabled",
+    };
+  }
+  if (server.error) {
+    return {
+      availableTools: [],
+      catalogRevision: catalog.revision,
+      error: server.error,
       lastCheckedAt: catalog.loadedAt,
       missingTools: toolIds,
       sourceId: manifest.id,
@@ -136,6 +155,9 @@ export class McpSourceCatalog {
     const status = this.statuses.get(sourceId);
     if (status) return structuredClone(status);
     const source = this.registry.get(sourceId);
+    // A source registered after the last refresh (an imported custom server)
+    // is judged against the catalog already applied.
+    if (this.catalog) return statusFor(source.manifest, this.catalog);
     return {
       availableTools: [],
       error: "MCP catalog has not been refreshed",
@@ -148,5 +170,15 @@ export class McpSourceCatalog {
 
   listStatuses(): McpSourceStatus[] {
     return this.registry.list().map((source) => this.getStatus(source.manifest.id));
+  }
+
+  /** Why the source's enabled MCP server could not be connected or could not list
+   *  its tools in the last applied catalog. Off servers, partial tool mismatches and
+   *  a catalog that was never refreshed are not connection failures. */
+  connectionError(sourceId: string): McpConnectionError | undefined {
+    if (!this.catalog) return undefined;
+    const server = catalogServer(this.registry.get(sourceId).manifest, this.catalog);
+    if (!server?.enabled || !server.error) return undefined;
+    return { checkedAt: this.catalog.loadedAt, message: server.error };
   }
 }
