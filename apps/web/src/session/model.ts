@@ -14,7 +14,6 @@
 
 import type {
   ChatMessage,
-  Project,
   Session,
   SessionRun,
 } from "@sciencediscovery/schema";
@@ -58,14 +57,6 @@ export async function followSessionTitleRefinement(options: {
     if (current.archivedAt) return current;
   }
   return undefined;
-}
-
-export function getVisibleProjects(
-  projects: Project[],
-  activeProjectId: string | undefined,
-  expanded: boolean,
-): Project[] {
-  return expanded ? projects : projects.filter((project) => project.id === activeProjectId);
 }
 
 export type ConversationBlock =
