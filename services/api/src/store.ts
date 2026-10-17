@@ -1662,6 +1662,7 @@ export class SessionStore {
         else if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
+        else if (field === "defaultApprovalMode") effective.defaultApprovalMode = value as Session["approvalMode"];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
@@ -2271,6 +2272,7 @@ export class SessionStore {
       assertCurrent?.();
       const session = this.assertSessionWritable(sessionId);
       const normalized = this.normalizeSettings(value);
+      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       session.settingsOverrides = normalized;
       session.updatedAt = new Date().toISOString();
       this.syncSessionCompatibility(session);
@@ -2754,6 +2756,7 @@ export class SessionStore {
     const settingsOverrides = this.normalizeSettings(typeof input === "string"
       ? { modelId: input, reviewModelId: input }
       : input);
+    if (settingsOverrides.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
     const resolved = this.resolveSettingsLayers([
       ...this.projectSettingsLayers(project),
       { overrides: settingsOverrides, source: "session" },
@@ -2774,13 +2777,13 @@ export class SessionStore {
     const sessionId = randomUUID();
     const permissionEpoch = createPermissionEpoch(
       sessionId,
-      "Session created",
+      `Session created; approval mode from ${governance.approvalMode !== undefined ? "explicit Session choice" : resolved.sources.defaultApprovalMode === "unset" ? "built-in Ask" : `${resolved.sources.defaultApprovalMode} default`}`,
       undefined,
       undefined,
       this.currentSandboxNetworkAccess(),
     );
     const session: Session = {
-      approvalMode: governance.approvalMode ?? "ask_for_dangerous",
+      approvalMode: governance.approvalMode ?? resolved.effective.defaultApprovalMode ?? "ask_for_dangerous",
       createdAt: now,
       enabledConnectorIds: [...resolved.effective.enabledConnectorIds],
       enabledSkillIds: [...resolved.effective.enabledSkillIds],
@@ -4314,6 +4317,7 @@ export class SessionStore {
       const { approvalMode, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
       const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
       const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+      if (nextSettings.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       const nextModel = this.getModel(nextSettings.modelId);
       if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {
         const constrained = constrainCatalogThinking(

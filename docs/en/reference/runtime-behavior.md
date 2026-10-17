@@ -74,3 +74,11 @@ There are no compute tiers or CPU/memory quotas. Guardrails are a configurable e
 PDFs are limited to 50 MiB and 200 pages; extraction caps are 20 million text characters, 256 tables, 128 figures, and 24 page previews. There is **no OCR**. Pages with little embedded text may be marked for a vision-capable model, which analyzes at most four images. Vision output is model interpretation, not authoritative transcription.
 
 Article-level license constraints are reused. The Europe PMC open-access PDF path still uses the legacy PMC OA Web Service/HTTPS layout scheduled for retirement in August 2026.
+
+## Approval defaults for new sessions
+
+System configuration → Global defaults and Project settings offer **Approval mode for new sessions**. Choose Ask or Always allow and explicitly save the settings. Clear a Project override to use the global default; clearing the global choice restores the built-in Ask fallback. Always allow skips approval prompts.
+
+Creation resolves an explicit Session mode, then the Project default, then the global default, then Ask. This includes the first Session created with a Project. Defaults are copied at creation: changing them never rewrites existing Sessions. The composer approval switch changes only the current Session and never saves a Project or global default. Sibling activity does not affect inheritance. The creation permission epoch records the source.
+
+New CLI Sessions explicitly use Ask when no approval flag is supplied, including the first Session of a CLI-created Project. When `--session` reuses an existing Session, omitting an approval option preserves its stored mode and reports `approval=preserve_session`; an explicit option overrides it. Non-interactive runs still require `--auto-approve` or `--approval always_allow`; a saved default does not authorize unattended CLI execution. Internal plugin experiment Sessions explicitly keep Ask.

@@ -7821,3 +7821,193 @@ test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", asy
   assert.equal(response.status, 502);
   assert.match((await response.json() as { error?: string }).error ?? "", /memory graph unreachable/);
 });
+
+
+test("approval defaults API covers implicit first Sessions and explicit Session overrides", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `approval-defaults-api-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const model = await createTestModel(origin, { model: "approval-fixture", name: "Approval fixture" });
+  const request = <T>(path: string, body: unknown, method = "PUT") => jsonRequest<T>(origin + path, {
+    method, headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const global = await request<RuntimeSettingsDetails>("/api/settings", { modelId: model.id, defaultApprovalMode: "always_allow" });
+  assert.equal(global.response.status, 200);
+  const project = await request<CreateProjectResponse>("/api/projects", { name: "Inherits global" }, "POST");
+  assert.equal(project.response.status, 201);
+  assert.equal(project.body.firstSession.approvalMode, "always_allow");
+  const projectId = project.body.project.id;
+  const updated = await request<RuntimeSettingsDetails>(`/api/projects/${projectId}/settings`, { defaultApprovalMode: "ask_for_dangerous" });
+  assert.equal(updated.response.status, 200);
+  const inherited = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Project default"}, "POST");
+  assert.equal(inherited.response.status, 201);
+  assert.equal(inherited.body.approvalMode, "ask_for_dangerous");
+  const explicit = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Explicit override", approvalMode:"always_allow"}, "POST");
+  assert.equal(explicit.body.approvalMode, "always_allow");
+  await request(`/api/sessions/${explicit.body.id}`, {approvalMode:"ask_for_dangerous"}, "PATCH");
+  const current = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${projectId}/settings`, {headers:authorization});
+  assert.equal(current.body.overrides.defaultApprovalMode, "ask_for_dangerous");
+  const first = await jsonRequest<Session>(`${origin}/api/sessions/${project.body.firstSession.id}`, {headers:authorization});
+  assert.equal(first.body.approvalMode, "always_allow");
+  const invalid = await request("/api/settings", {defaultApprovalMode:"invalid"});
+  assert.equal(invalid.response.status, 400);
+  const invalidSessionDefault = await request(`/api/sessions/${explicit.body.id}`, {defaultApprovalMode:"always_allow"}, "PATCH");
+  assert.equal(invalidSessionDefault.response.status, 400);
+  const sessionSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${explicit.body.id}/settings`, {headers:authorization});
+  assert.equal(sessionSettings.body.overrides.defaultApprovalMode, undefined);
+  const stillEditable = await request(`/api/sessions/${explicit.body.id}`, {title:"Still editable"}, "PATCH");
+  assert.equal(stillEditable.response.status, 200);
+});
+
+test("Session-only approval defaults are HTTP client errors without mutations", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `approval-scope-http-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const request = <T>(path: string, body: unknown, method = "PUT") => jsonRequest<T>(origin + path, {
+    method, headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const project = await request<CreateProjectResponse>("/api/projects", { name: "Approval scope fixture" }, "POST");
+  const projectId = project.body.project.id;
+  const sessionId = project.body.firstSession.id;
+  const before = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {headers:authorization});
+  const invalidPut = await request(`/api/sessions/${sessionId}/settings`, {defaultApprovalMode:"always_allow"});
+  const invalidPost = await request(`/api/projects/${projectId}/sessions`, {title:"Denied creation", settingsOverrides:{defaultApprovalMode:"always_allow"}}, "POST");
+  console.log("Approval-scope HTTP probe", JSON.stringify({put:{status:invalidPut.response.status, body:invalidPut.body}, post:{status:invalidPost.response.status, body:invalidPost.body}}));
+  assert.deepEqual([invalidPut.response.status, invalidPost.response.status], [400, 400]);
+  for (const result of [invalidPut, invalidPost]) {
+    assert.match((result.body as {error:string}).error, /only supported at Global and Project scope/);
+  }
+  const after = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {headers:authorization});
+  assert.deepEqual(after.body.overrides, before.body.overrides);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${projectId}/sessions`, {headers:authorization});
+  assert.deepEqual(sessions.body.map(session => session.id), [sessionId]);
+  const validPut = await request<RuntimeSettingsDetails>(`/api/sessions/${sessionId}/settings`, {semanticReviewEnabled:false});
+  assert.equal(validPut.response.status, 200);
+  assert.equal(validPut.body.overrides.semanticReviewEnabled, false);
+  const validPost = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Valid creation"}, "POST");
+  assert.equal(validPost.response.status, 201);
+  assert.equal(validPost.body.approvalMode, "ask_for_dangerous");
+  assert.equal(validPost.body.settingsOverrides.defaultApprovalMode, undefined);
+
+});
+
+test("CLI auto-created first Session honors explicit Ask despite global Always allow", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `cli-approval-intent-${Date.now()}-${process.pid}`);
+  await mkdir(root, {recursive:true});
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const { parseInvocation } = await import("@sciencediscovery/launcher/cli-options");
+  const { runCommand } = await import("@sciencediscovery/launcher/run");
+  const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, {
+    method:"PUT", headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify({defaultApprovalMode:"always_allow"}),
+  });
+  assert.equal(global.response.status, 200);
+  const invocation = parseInvocation(["run", "--port", new URL(origin).port, "--host", "127.0.0.1", "--data-dir", root, "--token", "test-token", "--output", "text", "Synthetic CLI boundary probe"], {}, root);
+  const printed: string[] = [];
+  const requests: Array<{method:string; path:string; body?:unknown}> = [];
+  const originalFetch = globalThis.fetch;
+  const trackedFetch = context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const target = new URL(String(input));
+    if (target.origin === origin) requests.push({method:init?.method ?? "GET", path:target.pathname, ...(typeof init?.body === "string" ? {body:JSON.parse(init.body)} : {})});
+    return originalFetch(input, init);
+  });
+  const originalTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", {value:true, configurable:true});
+  try {
+    // Actual Run creation/streaming fails at the missing-model boundary, before any paid/model/tool call.
+    const result = await runCommand({settings:invocation.settings, runSettings:invocation.runSettings!, baseEnv:{}}, line => printed.push(line));
+    assert.equal(result.exitCode, 1);
+  } finally {
+    trackedFetch.mock.restore();
+    if (originalTty) Object.defineProperty(process.stdout, "isTTY", originalTty);
+    else delete (process.stdout as {isTTY?:boolean}).isTTY;
+  }
+  const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, {headers:authorization});
+  assert.equal(projects.body.length, 1);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${projects.body[0]!.id}/sessions`, {headers:authorization});
+  assert.equal(sessions.body.length, 1);
+  console.log("CLI actual HTTP/store probe", JSON.stringify({tty:true, global:global.body.overrides.defaultApprovalMode, printed, requests, storedMode:sessions.body[0]!.approvalMode, expectedMode:"ask_for_dangerous", stoppedAt:"unconfigured-model Run failure"}));
+  assert.equal(sessions.body[0]!.approvalMode, "ask_for_dangerous");
+  assert.match(printed.join("\n"), /approval=ask_for_dangerous interactive=true/);
+});
+
+test("CLI approval flags, explicit Projects and existing Sessions preserve intentional modes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `cli-approval-cases-${Date.now()}-${process.pid}`);
+  await mkdir(root, {recursive:true});
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const { parseInvocation } = await import("@sciencediscovery/launcher/cli-options");
+  const { runCommand } = await import("@sciencediscovery/launcher/run");
+  const request = <T>(path:string, body:unknown, method = "PUT") => jsonRequest<T>(origin+path, {method, headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify(body)});
+  await request("/api/settings", {defaultApprovalMode:"always_allow"});
+  const fixture = await request<CreateProjectResponse>("/api/projects", {name:"Existing CLI target"}, "POST");
+  const projectId = fixture.body.project.id;
+  const sessionId = fixture.body.firstSession.id;
+  const cases: Array<{name:string; flags:string[]; tty:boolean; output:"text"|"jsonl"; expected:"always_allow"|"ask_for_dangerous"|"refused"; input?:string; summary?:"preserve_session"}> = [
+    {name:"auto-approve new Project", flags:["--auto-approve"], tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"explicit Always allow new Project", flags:["--approval","always_allow"], tty:true, output:"text", expected:"always_allow"},
+    {name:"explicit Ask new Project", flags:["--approval","ask_for_dangerous"], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"JSON explicit mode", flags:[], input:JSON.stringify({content:"Synthetic input mode",approvalMode:"always_allow"}), tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"explicit Project creates Ask", flags:["--project",projectId], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"existing Session no flag", flags:["--session",sessionId], tty:true, output:"text", expected:"always_allow", summary:"preserve_session"},
+    {name:"JSON existing Session no flag", flags:[], input:JSON.stringify({content:"Synthetic existing input",sessionId}), tty:true, output:"jsonl", expected:"always_allow", summary:"preserve_session"},
+    {name:"existing Session explicit Ask", flags:["--session",sessionId,"--approval","ask_for_dangerous"], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"existing Session explicit auto-approve", flags:["--session",sessionId,"--auto-approve"], tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"noninteractive refusal", flags:[], tty:false, output:"jsonl", expected:"refused"},
+  ];
+  for (const scenario of cases) {
+    const invocation = parseInvocation(["run","--host","127.0.0.1","--port",new URL(origin).port,"--data-dir",root,"--token","test-token","--output",scenario.output,"--content",scenario.input ?? "Synthetic CLI case",...scenario.flags], {}, root);
+    const printed: string[] = [];
+    const requests: Array<{method:string; path:string; body?:Record<string,unknown>}> = [];
+    const originalFetch = globalThis.fetch;
+    const tracked = context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?:RequestInit) => {
+      const target = new URL(String(input));
+      if (target.origin === origin) requests.push({method:init?.method ?? "GET",path:target.pathname,...(typeof init?.body === "string" ? {body:JSON.parse(init.body)} : {})});
+      return originalFetch(input, init);
+    });
+    const originalTty = Object.getOwnPropertyDescriptor(process.stdout,"isTTY");
+    const originalWrite = process.stdout.write;
+    Object.defineProperty(process.stdout,"isTTY",{value:scenario.tty,configurable:true});
+    if (scenario.output === "jsonl") process.stdout.write = ((chunk:string|Uint8Array) => { printed.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    try {
+      const result = await runCommand({settings:invocation.settings, runSettings:invocation.runSettings!, baseEnv:{}}, line => printed.push(line));
+      assert.equal(result.exitCode,1, scenario.name+": synthetic Run stops at the missing-model boundary");
+    } finally {
+      tracked.mock.restore();
+      process.stdout.write = originalWrite;
+      if (originalTty) Object.defineProperty(process.stdout,"isTTY",originalTty);
+      else delete (process.stdout as {isTTY?:boolean}).isTTY;
+    }
+    if (scenario.expected === "refused") {
+      assert.deepEqual(requests, [], "guard must refuse before contacting HTTP or creating data");
+      assert.match(printed.join(""), /NON_INTERACTIVE_NO_AUTO_APPROVE/);
+      continue;
+    }
+    const runRequest = requests.find(row => row.method === "POST" && /^\/api\/sessions\/[^/]+\/runs$/.test(row.path));
+    assert.ok(runRequest, scenario.name+": actual Run request reached HTTP");
+    const targetId = runRequest.path.split("/")[3]!;
+    const saved = await jsonRequest<Session>(`${origin}/api/sessions/${targetId}`,{headers:authorization});
+    assert.equal(saved.body.approvalMode,scenario.expected,scenario.name);
+    const summary = scenario.summary ?? scenario.expected;
+    if (scenario.output === "jsonl") {
+      const meta = printed.flatMap(line => line.split("\n")).filter(Boolean).map(line => JSON.parse(line)).find(row => row.type === "meta");
+      assert.equal(meta.approvalMode,summary,scenario.name+": JSON metadata matches approval intent");
+    } else assert.match(printed.join("\n"),new RegExp(`approval=${summary} interactive=${scenario.expected !== "always_allow" || scenario.summary === "preserve_session"}`),scenario.name);
+    if (scenario.summary === "preserve_session") {
+      assert.ok(!requests.some(row => row.method === "PATCH"),scenario.name+": no implicit policy reset");
+    } else if (scenario.flags.includes("--project")) {
+      const created = requests.find(row => row.method === "POST" && row.path.endsWith("/sessions"));
+      assert.equal(created?.body?.approvalMode,scenario.expected,"explicit Project creation sends the CLI mode");
+    } else {
+      const patched = requests.find(row => row.method === "PATCH");
+      assert.deepEqual(patched?.body,{approvalMode:scenario.expected},scenario.name+": separate intentional mode PATCH before Run");
+    }
+    console.log("CLI real HTTP matrix", JSON.stringify({scenario:scenario.name,tty:scenario.tty,storedMode:saved.body.approvalMode,reportedIntent:summary}));
+  }
+  const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`,{headers:authorization});
+  const project = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${projectId}/settings`,{headers:authorization});
+  assert.equal(global.body.overrides.defaultApprovalMode,"always_allow");
+  assert.equal(project.body.overrides.defaultApprovalMode,undefined);
+});

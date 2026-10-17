@@ -168,21 +168,26 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     return { exitCode: 1 };
   }
 
+  const explicitApproval = autoApprove || runSettings.approval || input.approvalMode;
+  const approvalSummary = (runSettings.sessionId ?? input.sessionId) && !explicitApproval ? "preserve_session" : approvalMode;
+
   // 元信息行
   if (outputMode === "text") {
-    log(`[run] serve=${baseUrl} approval=${approvalMode} interactive=${interactive}`);
+    log(`[run] serve=${baseUrl} approval=${approvalSummary} interactive=${interactive}`);
   } else {
-    process.stdout.write(JSON.stringify({ type: "meta", baseUrl, approvalMode, interactive }) + "\n");
+    process.stdout.write(JSON.stringify({ type: "meta", baseUrl, approvalMode: approvalSummary, interactive }) + "\n");
   }
 
   // 5. 建/复用项目与会话
   let projectId = runSettings.projectId ?? input.projectId;
   let sessionId = runSettings.sessionId ?? input.sessionId;
+  let createdFirstSession = false;
 
   if (!projectId && !sessionId) {
     const created = await client.createProject({ name: "cli" });
     projectId = String(created.id ?? created.project?.id ?? "");
     sessionId = String(created.firstSession?.id ?? "");
+    createdFirstSession = Boolean(sessionId);
   }
   if (!sessionId && projectId) {
     const session = await client.createSession(projectId, buildSessionBody(input, approvalMode, runSettings));
@@ -193,7 +198,8 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     if (Object.keys(overrides).length) {
       await client.replaceSessionSettings(sessionId, overrides);
     }
-    if (autoApprove || runSettings.approval || input.approvalMode) {
+    // A first Session created for this invocation must honor CLI intent, not saved defaults.
+    if (createdFirstSession || explicitApproval) {
       await client.updateSession(sessionId, { approvalMode });
     }
     const review = runSettings.review ?? input.reviewMode;
