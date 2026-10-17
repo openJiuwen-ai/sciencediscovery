@@ -226,6 +226,16 @@ workspace, command and loss of isolation. Declining executes nothing. Approval
 returns a decision only: the Agent must confirm the returned scope in a new
 `run_direct_shell` call. Python is available through the system shell.
 
+The direct shell starts with `PATH=/usr/bin:/bin` and does not load shell startup
+profiles or inherit an activated conda environment. For Homebrew or conda Python,
+include the installed interpreter's absolute path in the command submitted for
+consent, for example `/opt/homebrew/bin/python3 -c 'print(42)'` or
+`/usr/local/bin/python3 -c 'print(42)'` when that interpreter exists on the target.
+For conda, use the absolute path to the intended environment's `bin/python`.
+Bare `python3` only searches the minimal PATH; on macOS it may select the system
+stub or fail instead of using the intended installation. Changing the interpreter
+changes the command and requires matching direct-execution consent.
+
 Sandbox Always Allow and JiuwenSwarm's normal tool authorization cannot grant this
 permission. Allow matching covers only the exact command, target instance,
 account, workspace/cwd, Session, Agent and run. There is no fixed TTL. Grants can

@@ -253,6 +253,14 @@ Runner 实例、OS 账号、工作区、命令及失去隔离的影响。拒绝�
 只返回决策，Agent 必须用新的 `run_direct_shell` 调用确认返回的范围再执行。
 系统 Shell 可以调用 Python，不会自动提升权限。
 
+直执 Shell 启动时使用 `PATH=/usr/bin:/bin`，不加载 Shell 启动配置，也不继承
+已激活的 conda 环境。使用 Homebrew 或 conda Python 时，应在提交授权的命令中
+写明已安装解释器的绝对路径，例如目标机器上存在相应解释器时使用
+`/opt/homebrew/bin/python3 -c 'print(42)'` 或
+`/usr/local/bin/python3 -c 'print(42)'`。conda 应使用目标环境中 `bin/python`
+的绝对路径。裸命令 `python3` 只搜索最小 PATH；在 macOS 上可能选中系统占位
+程序或失败，而不是使用预期的安装。更换解释器会改变命令，需要匹配的直执授权。
+
 沙箱的 Always Allow 和 JiuwenSwarm 普通工具授权不包含直执许可。“允许匹配”仅
 覆盖当前 Session、Agent、run、目标实例、账号、工作区/目录及完全相同的命令。
 不设固定 TTL；可通过现有权限管理撤销，run 结束或取消后不可继续使用，也不会
