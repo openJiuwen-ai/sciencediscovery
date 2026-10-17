@@ -11,9 +11,9 @@ import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 import { profiles } from '../test/support/tagged/profiles.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
-import { dataset, manifestHash, evaluateSuite, projectMetrics } from './biomni-gate.mjs';
+import { dataset, manifestHash, evaluateSuite, projectMetrics, validateMetrics } from './biomni-gate.mjs';
 import { generationTokens, judgeTokens, toolMetrics, settled, selectedProcesses, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
-const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
+const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64', 'arch:arm64'] });
 const catalog = dataset.tasks.map(t => ({ id: `playwright:test/biomnibench-da-swarm.spec.ts::BiomniBench-${t.id}%20analysis`,
   source: 'test/biomnibench-da-swarm.spec.ts', sourceHash: 'a'.repeat(64), runner: 'playwright',
   tags: ['category:e2e','model:real','judge:llm','os:linux','arch:amd64','tier:l5','status:external'] }));
@@ -96,7 +96,13 @@ test('tokens include all invocation attempts and judge retries without double co
   assert.throws(() => generationTokens({invocations:[invocation,invocation]}), /DUPLICATE/);
   const attempt = {usage:{prompt_tokens:10,completion_tokens:2,total_tokens:12}};
   assert.equal(judgeTokens([attempt,attempt]).total,24);
-  assert.throws(() => judgeTokens([attempt,{usage:null}]), /UNREPORTED/);
+  const partial = judgeTokens([attempt,{usage:null}]);
+  assert.equal(partial.total,12);
+  assert.equal(partial.complete,false);
+  assert.equal(partial.unknown_attempts,1);
+  assert.equal(partial.reported_attempts,1);
+  const docs = documents(); docs[0].judge_usage = partial;
+  assert.match(evaluateSuite(plan,docs,policy).problems.join(),/UNREPORTED_JUDGE_TOKENS/);
 });
 
 test('tool rounds deduplicate lifecycle events, group parallel calls and include child streams', () => {
@@ -164,4 +170,24 @@ test('matrix, score packaging and suite accounting preserve all metrics and reje
   assert.equal(run().status,1);
   assert.equal(existsSync(candidate),false);
   assert.match(JSON.parse(readFileSync(join(root,'verdict.json'))).problems.join(),/MISSING_OR_DUPLICATE/);
+});
+
+// The frozen execution target must agree with the measured host architecture.
+test('ARM64 metrics keep their actual architecture and reject a mismatched host', () => {
+  const entry = { ...plan.entries[0], target: { os: 'linux', arch: 'arm64' } };
+  const doc = documents()[0];
+  doc.identity.machine.arch = 'arm64';
+  assert.equal(validateMetrics(doc, entry, plan).identity.machine.arch, 'arm64');
+  doc.identity.machine.arch = 'x64';
+  assert.throws(() => validateMetrics(doc, entry, plan), /METRIC_CONFIGURATION/);
+});
+
+test('default release stays AMD64 and explicit ARM64 selects exactly fifty Biomni cases', () => {
+  assert.deepEqual(profiles.release.targets, [{ os: 'linux', arch: 'amd64' }]);
+  const portable = catalog.map(e => ({ ...e, tags: [...e.tags, 'arch:arm64'] }));
+  const arm = createPlan(portable, { revision: 'candidate', profile: 'release',
+    selector: profiles.release.selector, targets: [{ os: 'linux', arch: 'arm64' }],
+    execution: { backend: 'jiuwenswarm', model: 'generator', judge: 'judge' } });
+  assert.equal(arm.entries.length, 50);
+  assert.ok(arm.entries.every(e => e.target.arch === 'arm64'));
 });

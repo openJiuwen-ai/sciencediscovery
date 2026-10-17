@@ -210,3 +210,26 @@ test("process death inside the SQLite transaction retains the old complete head"
     assert.deepEqual(refs.head("head"), next);
   } finally { refs.close(); }
 }));
+
+
+test("unchanged workspace snapshots reuse verified bytes but mutations and CAS tampering invalidate reuse", async (t) => fixture(async (store, root) => {
+  const workspace = resolve(root, "reuse");
+  await mkdir(workspace);
+  const path = resolve(workspace, "matrix");
+  await writeFile(path, "large-input");
+  const writes = t.mock.method(store, "putStream");
+  const first = await snapshotWorkspace(store, workspace);
+  assert.equal(writes.mock.callCount(), 1);
+  assert.deepEqual(await snapshotWorkspace(store, workspace), first);
+  assert.equal(writes.mock.callCount(), 1, "do not stream and republish unchanged large inputs");
+  await writeFile(path, "other-input");
+  const changed = await snapshotWorkspace(store, workspace);
+  assert.notEqual(changed.digest, first.digest);
+  assert.equal(writes.mock.callCount(), 2);
+  const tree = (await store.readRecord<WorkspaceTree>(changed)).value;
+  const entry = tree.entries[0]!;
+  assert.equal(entry.type, "file");
+  if (entry.type !== "file") throw new Error("file expected");
+  await writeFile(store.objectPath(entry.content), "tampered!!!");
+  await assert.rejects(snapshotWorkspace(store, workspace), /integrity/);
+}));

@@ -21,9 +21,13 @@ export function generationTokens(usage, beforeIds = []) {
 
 export function judgeTokens(attempts) {
   if (!Array.isArray(attempts) || !attempts.length) throw new Error('MISSING_JUDGE_ATTEMPTS');
-  const totals = { input: 0, output: 0, total: 0, invocations: attempts.length };
+  const totals = { input: 0, output: 0, total: 0, invocations: attempts.length,
+    complete: true, unknown_attempts: 0, reported_attempts: 0 };
   for (const { usage } of attempts) {
-    if (![usage?.prompt_tokens, usage?.completion_tokens, usage?.total_tokens].every(count)) throw new Error('UNREPORTED_JUDGE_TOKENS');
+    if (![usage?.prompt_tokens, usage?.completion_tokens, usage?.total_tokens].every(count)) {
+      totals.complete = false; totals.unknown_attempts++; continue;
+    }
+    totals.reported_attempts++;
     totals.input += usage.prompt_tokens; totals.output += usage.completion_tokens; totals.total += usage.total_tokens;
   }
   return totals;

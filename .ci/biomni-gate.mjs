@@ -22,10 +22,12 @@ export function projectMetrics(doc) {
   out.identity.machine = pick(doc.identity?.machine, ['os', 'arch', 'kernel', 'cpu', 'cores', 'memory_bytes', 'node']);
   out.measurements = pick(doc.measurements, ['score', ...resourceKeys, 'memory_samples', 'memory_interval_ms', 'memory_scope', 'judge_ms', 'generation_input_tokens', 'generation_output_tokens', 'judge_input_tokens', 'judge_output_tokens']);
   out.evaluation = pick(doc.evaluation, ['status', 'score', 'gating']);
+  if (doc.judge_usage) out.judge_usage = pick(doc.judge_usage, ['complete', 'unknown_attempts', 'reported_attempts', 'scope']);
   return out;
 }
 
 export function validateMetrics(doc, entry, plan) {
+  if (doc?.judge_usage?.complete === false) throw new Error('UNREPORTED_JUDGE_TOKENS');
   if (doc?.schema_version !== 2 || doc.benchmark !== 'biomnibench-da' || doc.case_id !== biomniCase(entry)
       || doc.key !== entry.key || doc.revision !== plan.revision || doc.integration_status !== 'passed') throw new Error('METRIC_IDENTITY_OR_DELIVERY');
   const id = doc.identity, m = doc.measurements;
@@ -33,7 +35,7 @@ export function validateMetrics(doc, entry, plan) {
       || id.evaluator_revision !== plan.evaluatorRevision || id.backend !== plan.execution?.backend
       || !id.generator_model || id.generator_model !== plan.execution?.model || !id.judge_model || id.judge_model !== plan.execution?.judge
       || !positive(id.run_budget_ms) || !positive(id.workspace_budget_bytes) || !positive(id.machine?.memory_bytes) || !positive(id.machine?.cores)
-      || id.machine.os !== 'linux' || id.machine.arch !== 'x64' || !id.machine.cpu || !id.machine.kernel || !id.machine.node) throw new Error('METRIC_CONFIGURATION');
+      || id.machine.os !== 'linux' || id.machine.arch !== ({ amd64: 'x64', arm64: 'arm64' }[entry.target.arch]) || !id.machine.cpu || !id.machine.kernel || !id.machine.node) throw new Error('METRIC_CONFIGURATION');
   if (doc.evaluation?.status !== 'scored' || doc.evaluation.gating !== true || typeof m?.score !== 'number' || !Number.isFinite(m.score)
       || m.score < 0 || m.score > 100 || doc.evaluation.score !== m.score) throw new Error('MISSING_VALID_SCORE');
   if (resourceKeys.some(k => !positive(m[k])) || !positive(m.memory_samples) || !positive(m.memory_interval_ms)

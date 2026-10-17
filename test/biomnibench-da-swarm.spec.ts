@@ -71,7 +71,7 @@ for (const sample of cases) {
  * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN, BIOMNI_JUDGE_BASE_URL/BIOMNI_JUDGE_MODEL/BIOMNI_JUDGE_API_KEY.
  * CostSideEffects: Billable generation/judging; temporary sessions; L5 full-public baseline candidate, not a PR default.
  */
-  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@judge:llm", "@sandbox:bubblewrap", "@status:external", "@tier:l5"], annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, testInfo) => {
+  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@arch:arm64", "@model:real", "@judge:llm", "@sandbox:bubblewrap", "@status:external", "@tier:l5"], annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, testInfo) => {
     const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 10_800_000);
     const workspaceBudget = positiveNumber("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 * 1024 ** 3);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
@@ -160,14 +160,18 @@ for (const sample of cases) {
           "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: evaluationBudget });
         metrics.evaluation = { ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8")), gating: true };
         const tokens = judgeTokens(JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.attempts", "attempts.json"), "utf8")));
+        metrics.judge_usage = { complete: tokens.complete, unknown_attempts: tokens.unknown_attempts,
+          reported_attempts: tokens.reported_attempts, scope: "all-evaluation-attempts" };
         Object.assign(metrics.measurements, { score: metrics.evaluation.score, judge_ms: performance.now() - judgeStart,
           judge_tokens: tokens.total, judge_input_tokens: tokens.input, judge_output_tokens: tokens.output,
           total_tokens: metrics.measurements.generation_tokens + tokens.total });
+        if (!tokens.complete) throw new Error("UNREPORTED_JUDGE_TOKENS");
         validateMetrics(metrics, entry, plan);
         completed = true;
       });
     } catch (error) {
-      metrics.integration_status = "failed";
+      // A scored delivery with incomplete billing is not a failed analysis.
+      if (metrics.integration_status !== "passed") metrics.integration_status = "failed";
       metrics.error = error instanceof Error ? error.message : String(error);
       throw error;
     } finally {

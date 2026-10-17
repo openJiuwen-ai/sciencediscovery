@@ -6,6 +6,59 @@ addition to L4. The other 50 upstream tasks are private and are not covered.
 The former `da-13-3` and `da-14-1` smoke cases are included in this corpus.
 L1–L4 do not select these paid benchmark tasks.
 
+## Resumable serial execution on a shared host
+
+Prepare and build an isolated, committed checkout first, including the pinned
+Playwright installation and JiuwenSwarm. Configure the documented model and
+dataset credentials in the process environment; do not put them in scripts or
+reports. Select unused stack ports and a task-owned Python/uv cache. Then run:
+
+```bash
+CI_ALLOW_REAL=1 python test/benchmarks/biomnibench-da/suite.py \
+  --results /path/to/owned-results --runtime /path/to/owned-runtime \
+  --data-root /path/to/verified-dataset --python /path/to/benchmark-python
+```
+
+The driver freezes the release plan, derives exactly the pinned public 50 from
+its source identities, and runs one case at a time. AMD64 remains the default
+release target; this driver explicitly selects the actual Linux AMD64 or ARM64
+host using `--target-arch`. Actual measured architecture must match the frozen
+identity. No machine restriction is disabled, and the 50 cases are not doubled.
+
+Failures are retained and deferred until every previously unattempted case has
+run. The suite disables immediate judge retries for both passes; standalone
+judges keep their existing default. A second pass retries each failed case at most once. Scored analysis with
+missing judge accounting uses saved evidence for evaluation-only recovery;
+generation is not repeated. Reports distinguish this from a full E2E rerun.
+Successful cases are skipped on resume, which requires the same candidate SHA.
+Partial evidence from a killed driver is never overwritten automatically.
+
+Before starting a case, the driver requires 64 GiB of runtime storage and
+150,000 free inodes, plus 5 GiB and 10,000 inodes for reports. Thresholds can be
+raised with the command-line options. Analysis with no recorded event progress
+for 20 minutes is terminated and deferred; a completed analysis receives the
+separate bounded judging budget. Only verified descendants of the driver are
+terminated. After exit, only inactive environments below the suite-owned
+runtime are removed. Inputs, CAS records, artifacts and reports are retained.
+The operator must still provide enough memory and disk for these retained
+records and other host workloads. A low-resource preflight stops the suite
+rather than consuming the remaining capacity.
+
+For manual evaluation-only recovery:
+
+```bash
+python test/benchmarks/biomnibench-da/rescore.py \
+  --evidence /path/to/original-test-results \
+  --rubric /path/to/verified-task/tests/rubric.txt \
+  --output /path/to/new-evaluation-directory
+```
+
+The original evidence is immutable. A valid score is retained even if an
+earlier request timed out without usage. Reported token counts are known costs,
+not a claim that an unknown-cost request was free. Missing usage remains an
+accounting failure for the resource baseline; independent scoring never turns
+the original failed E2E into a pass. Neither driver approves a baseline.
+
 ## Pinned inputs and preparation
 
 [manifest.json](manifest.json) fixes dataset revision

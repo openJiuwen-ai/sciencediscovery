@@ -782,3 +782,9 @@ test("model proxy policy selects the right dispatcher", () => {
   assert.notEqual(proxyDispatcher({ mode: "url", url: "http://pinned.test:3128" }), undefined);
   assert.throws(() => proxyDispatcher({ mode: "url" } as ResolvedProxy), /requires a proxy URL/);
 });
+
+
+test("OpenAI usage aliases with zero placeholders do not erase reported token counts", () => {
+  assert.deepEqual(normalizeUsage({ input_tokens: 0, output_tokens: 0, prompt_tokens: 15, completion_tokens: 64, total_tokens: 79 }),
+    { inputTokens: 15, outputTokens: 64, totalTokens: 79, cacheReadTokens: null, cacheWriteTokens: null });
+});
