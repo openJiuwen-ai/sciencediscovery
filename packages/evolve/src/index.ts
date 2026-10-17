@@ -44,7 +44,7 @@ export interface EvolveToolRuntime {
    *  is the user's, so the tool has to say which one they will see. */
   approvalMode?: "always_allow" | "ask_for_dangerous";
   /** Validate the proposal, run the discrimination probe, start the run. */
-  createEvolveRun(input: EvolveRunProposal, signal?: AbortSignal): Promise<EvolveRunProposalResult>;
+  createEvolveRun(input: EvolveRunProposal, signal?: AbortSignal, toolCallId?: string): Promise<EvolveRunProposalResult>;
   /** Read one finished or running search back into the conversation. */
   getEvolveRun(runId?: string): Promise<EvolveRunSummary>;
   getIdeaResearch?(researchId?: string): Promise<unknown>;
@@ -244,6 +244,17 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     description:
       "Start an evolution search: repeatedly rewrite a program (or a piece of writing) "
       + "and keep what scores better on a held-out split. "
+      + "Recommend it when the user asks in natural language to improve a program, code, "
+      + "algorithm, model, result or performance against a measurable target — not only "
+      + "when they type /evolve-design. Phrase the recommendation as a plain suggestion "
+      + "(\"this looks like a search-shaped problem; want me to run an automated search that "
+      + "keeps the best-scoring variant?\") and start only after the user confirms, because "
+      + "a search spends real budget. A detailed task description is NOT confirmation: the "
+      + "user who spells out the evaluator, starting point and expansion counts has described "
+      + "the search they want, but has not approved spending budget — wait for an explicit "
+      + "go-ahead in their own words before designing or calling this tool. Do not use it for "
+      + "a single fix, a refactor, or a "
+      + "question about existing code. "
       + `${runtime.approvalMode === "always_allow" ? "Starts immediately." : "Creates an approval card the user confirms."} `
       + "You design the whole run — read the workspace and the conversation, then run your evaluator "
       + "**once** with run_shell, against the starting point, to confirm it executes and emits a "
@@ -261,7 +272,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       + "hold out.",
     execute: async (_toolCallId, params, signal) => {
       const proposal = params as unknown as EvolveRunProposal;
-      const result = await runtime.createEvolveRun(proposal, signal);
+      const result = await runtime.createEvolveRun(proposal, signal, _toolCallId);
       // A refusal is data, not an exception: the probe is *meant* to catch a
       // scoring scheme that cannot rank, and throwing would make the agent
       // treat its own design mistake as a broken tool.
@@ -324,4 +335,25 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     tools.push(getIdeaResearch);
   }
   return tools;
+}
+
+/**
+ * A system-prompt section, injected only when the evolve capability is present,
+ * that tells the agent when to *recommend* an evolution search — the natural
+ * language semantic recognition that keyword matching on the frontend cannot
+ * cover. Users rarely type `/evolve-design`; they say "this program is too
+ * slow" or "make the result more accurate". The agent is the reliable
+ * recognizer: it understands intent, recommends the search as a plain
+ * suggestion, and starts only after the user confirms (the approval card does
+ * that in ask mode, and the budget spend is why confirmation is mandatory).
+ */
+export function evolvePromptSection(): string {
+  return [
+    "When the user asks to improve, optimize, speed up, fix, or make more accurate or robust a program, code, function, script, model, or a measurable result — in any wording, with or without /evolve-design — consider an evolution search.",
+    "An evolution search repeatedly rewrites the thing and keeps what scores better on a held-out split. It is the right tool when there is something to score and a starting point to rewrite; it is the wrong tool for a single fix, a refactor, or a question about existing code.",
+    "Recommend it as a plain suggestion, in one or two sentences: \"this looks like a search-shaped problem; want me to run an automated search that keeps the best-scoring variant?\" Note that it spends budget (mutations plus sandboxed evaluations).",
+    "When you recommend, mention the two algorithm options so the user can choose in the same reply: PUCT (tree search, focused deep improvement) and OpenEvolve (MAP-Elites islands, broad coverage). If the user does not choose, use PUCT and say so.",
+    "**A detailed task description is NOT confirmation.** A user who spells out the objective, the evaluator, the starting point, or expansion/worker counts has described the search they want — they have not approved spending budget on it. The user confirming means an explicit go-ahead in their own words: \"yes\", \"run it\", \"go ahead\", \"确认\", \"开始\", \"运行\". Until they say so, do not start designing the run, do not write evaluator files, and do not call create_evolve_run — stop after the recommendation and wait for their answer.",
+    "Do not start it without confirmation. In ask mode the approval card is also a confirmation gate, so even after the user says \"run it\", create_evolve_run raises a permission card unless a matching grant is already approved. After starting, report the discrimination-probe numbers and end the turn — the run card streams progress on its own.",
+  ].join("\n\n");
 }

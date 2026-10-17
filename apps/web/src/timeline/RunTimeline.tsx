@@ -875,13 +875,16 @@ export function RunTimeline({
         if (entry.type === "permission") {
           if (entry.request.state !== "pending") return null;
           const pending = entry.request.state === "pending";
-          const status = t("permissions.required");
+          const isEvolve = entry.request.resource.startsWith("evolve-search:");
+          const status = isEvolve ? t("permissions.evolveRequired") : t("permissions.required");
+          const summary = isEvolve ? t("permissions.evolveSummary") : entry.request.summary;
+          const resourceLabel = isEvolve ? t("permissions.evolveResource") : entry.request.resource;
           return (
             <article className={`permission-card timeline-permission ${entry.request.state}`} key={entry.id}>
               <div>
                 <span className="eyebrow">{status}</span>
-                <h4>{entry.request.summary}</h4>
-                <code>{entry.request.resource}</code>
+                <h4>{summary}</h4>
+                <code>{resourceLabel}</code>
                 {!pending && entry.request.decidedAt ? <small>{t("timeline.decided")} {new Date(entry.request.decidedAt).toLocaleString(locale)}</small> : null}
                 <details className="permission-details">
                   <summary>{t("timeline.details")}</summary>

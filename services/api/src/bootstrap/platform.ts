@@ -368,8 +368,26 @@ export function createPlatformServices(
    */
   const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => ({
     approvalMode: turn.approvalMode,
-    createEvolveRun: async (input: EvolveRunProposal) => {
+    createEvolveRun: async (input: EvolveRunProposal, _signal, toolCallId) => {
       store.assertSessionWritable(turn.sessionId);
+      // A search spends real budget (mutations + sandboxed evaluations), so no
+      // path may start one without explicit user confirmation. The permission
+      // gate does exactly that: always_allow short-circuits, ask mode raises a
+      // `permission.required` card and blocks the run until the user decides.
+      const confirmed = turn.requestConfirmation
+        ? await turn.requestConfirmation({
+            resource: `evolve-search:${turn.sessionId}`,
+            summary: `Start an evolution search (${input.expansions} expansions) to improve "${
+              typeof input.howScored === "string" ? input.howScored.slice(0, 120) : "the target"
+            }"? It runs mutations and sandboxed evaluations and spends budget.`,
+            toolCallId,
+          })
+        : turn.approvalMode !== "ask_for_dangerous";
+      if (!confirmed) {
+        return {
+          refusedBecause: "the evolution search was not confirmed by the user",
+        };
+      }
       // The probe runs real evaluations in the sandbox — two or three, each
       // with the candidate timeout as its ceiling. That is minutes, and the
       // agent's idle clock is four: without pausing it the turn dies with "no

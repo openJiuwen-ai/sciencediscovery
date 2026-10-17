@@ -62,15 +62,19 @@ export function PermissionCards({
   return <section aria-label={t("permissions.cards")} className="permission-cards">
     <div className="track-list-heading"><strong>{t("permissions.required")}</strong><span>{t("permissions.paused", { count: pending.length })}</span></div>
     {pending.map((request) => {
+      const isEvolve = request.resource.startsWith("evolve-search:");
       const cardId = activityCardId("permission", request.id);
       const expanded = Boolean(expandedCards[cardId]);
+      const eyebrow = isEvolve ? t("permissions.evolveRequired") : t(ACTION_LABELS[request.action]);
+      const summary = isEvolve ? t("permissions.evolveSummary") : request.summary;
+      const resourceLabel = isEvolve ? t("permissions.evolveResource") : request.resource;
       return <article className="permission-card" key={request.id}>
         <button aria-expanded={expanded} className="permission-card-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
           <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4>{request.summary}</h4></span>
+          <span><span className="eyebrow">{eyebrow}</span><h4>{summary}</h4></span>
         </button>
         {expanded ? <div className="permission-card-body">
-          <code>{request.resource}</code>
+          <code>{resourceLabel}</code>
         </div> : null}
         <PermissionDecisionActions busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
       </article>;
