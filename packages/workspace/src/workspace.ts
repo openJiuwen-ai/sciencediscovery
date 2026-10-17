@@ -1497,7 +1497,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const cwd = workspaceRelativeCwd(workspaceRoot, params.cwd);
         if (options.shellExecutions) {
           let execution = await options.shellExecutions.start(code, {
-            environmentId: params.environment_id, cwd, networkAuthorizationId: params.network_authorization_id,
+            environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
           }, signal, toolCallId, params.runner_id);
           if (!params.background) {
             const deadline = Date.now() + (params.wait_ms ?? 10_000);
@@ -1528,7 +1528,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         if (params.background || params.wait_ms !== undefined) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
-          environmentId: params.environment_id, cwd, networkAuthorizationId: params.network_authorization_id,
+          environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
         });
         return {
           isError: result.exitCode !== 0 || Boolean(result.networkDeniedHosts?.length),
