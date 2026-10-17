@@ -7892,3 +7892,122 @@ test("Session-only approval defaults are HTTP client errors without mutations", 
   assert.equal(validPost.body.settingsOverrides.defaultApprovalMode, undefined);
 
 });
+
+test("CLI auto-created first Session honors explicit Ask despite global Always allow", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `cli-approval-intent-${Date.now()}-${process.pid}`);
+  await mkdir(root, {recursive:true});
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const { parseInvocation } = await import("../../launcher/src/cli-options.js");
+  const { runCommand } = await import("../../launcher/src/run.js");
+  const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, {
+    method:"PUT", headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify({defaultApprovalMode:"always_allow"}),
+  });
+  assert.equal(global.response.status, 200);
+  const invocation = parseInvocation(["run", "--port", new URL(origin).port, "--host", "127.0.0.1", "--data-dir", root, "--token", "test-token", "--output", "text", "Synthetic CLI boundary probe"], {}, root);
+  const printed: string[] = [];
+  const requests: Array<{method:string; path:string; body?:unknown}> = [];
+  const originalFetch = globalThis.fetch;
+  const trackedFetch = context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const target = new URL(String(input));
+    if (target.origin === origin) requests.push({method:init?.method ?? "GET", path:target.pathname, ...(typeof init?.body === "string" ? {body:JSON.parse(init.body)} : {})});
+    return originalFetch(input, init);
+  });
+  const originalTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", {value:true, configurable:true});
+  try {
+    // Actual Run creation/streaming fails at the missing-model boundary, before any paid/model/tool call.
+    const result = await runCommand({settings:invocation.settings, runSettings:invocation.runSettings!, baseEnv:{}}, line => printed.push(line));
+    assert.equal(result.exitCode, 1);
+  } finally {
+    trackedFetch.mock.restore();
+    if (originalTty) Object.defineProperty(process.stdout, "isTTY", originalTty);
+    else delete (process.stdout as {isTTY?:boolean}).isTTY;
+  }
+  const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, {headers:authorization});
+  assert.equal(projects.body.length, 1);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${projects.body[0]!.id}/sessions`, {headers:authorization});
+  assert.equal(sessions.body.length, 1);
+  console.log("CLI actual HTTP/store probe", JSON.stringify({tty:true, global:global.body.overrides.defaultApprovalMode, printed, requests, storedMode:sessions.body[0]!.approvalMode, expectedMode:"ask_for_dangerous", stoppedAt:"unconfigured-model Run failure"}));
+  assert.equal(sessions.body[0]!.approvalMode, "ask_for_dangerous");
+  assert.match(printed.join("\n"), /approval=ask_for_dangerous interactive=true/);
+});
+
+test("CLI approval flags, explicit Projects and existing Sessions preserve intentional modes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `cli-approval-cases-${Date.now()}-${process.pid}`);
+  await mkdir(root, {recursive:true});
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const { parseInvocation } = await import("../../launcher/src/cli-options.js");
+  const { runCommand } = await import("../../launcher/src/run.js");
+  const request = <T>(path:string, body:unknown, method = "PUT") => jsonRequest<T>(origin+path, {method, headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify(body)});
+  await request("/api/settings", {defaultApprovalMode:"always_allow"});
+  const fixture = await request<CreateProjectResponse>("/api/projects", {name:"Existing CLI target"}, "POST");
+  const projectId = fixture.body.project.id;
+  const sessionId = fixture.body.firstSession.id;
+  const cases: Array<{name:string; flags:string[]; tty:boolean; output:"text"|"jsonl"; expected:"always_allow"|"ask_for_dangerous"|"refused"; input?:string; summary?:"preserve_session"}> = [
+    {name:"auto-approve new Project", flags:["--auto-approve"], tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"explicit Always allow new Project", flags:["--approval","always_allow"], tty:true, output:"text", expected:"always_allow"},
+    {name:"explicit Ask new Project", flags:["--approval","ask_for_dangerous"], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"JSON explicit mode", flags:[], input:JSON.stringify({content:"Synthetic input mode",approvalMode:"always_allow"}), tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"explicit Project creates Ask", flags:["--project",projectId], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"existing Session no flag", flags:["--session",sessionId], tty:true, output:"text", expected:"always_allow", summary:"preserve_session"},
+    {name:"JSON existing Session no flag", flags:[], input:JSON.stringify({content:"Synthetic existing input",sessionId}), tty:true, output:"jsonl", expected:"always_allow", summary:"preserve_session"},
+    {name:"existing Session explicit Ask", flags:["--session",sessionId,"--approval","ask_for_dangerous"], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"existing Session explicit auto-approve", flags:["--session",sessionId,"--auto-approve"], tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"noninteractive refusal", flags:[], tty:false, output:"jsonl", expected:"refused"},
+  ];
+  for (const scenario of cases) {
+    const invocation = parseInvocation(["run","--host","127.0.0.1","--port",new URL(origin).port,"--data-dir",root,"--token","test-token","--output",scenario.output,"--content",scenario.input ?? "Synthetic CLI case",...scenario.flags], {}, root);
+    const printed: string[] = [];
+    const requests: Array<{method:string; path:string; body?:Record<string,unknown>}> = [];
+    const originalFetch = globalThis.fetch;
+    const tracked = context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?:RequestInit) => {
+      const target = new URL(String(input));
+      if (target.origin === origin) requests.push({method:init?.method ?? "GET",path:target.pathname,...(typeof init?.body === "string" ? {body:JSON.parse(init.body)} : {})});
+      return originalFetch(input, init);
+    });
+    const originalTty = Object.getOwnPropertyDescriptor(process.stdout,"isTTY");
+    const originalWrite = process.stdout.write;
+    Object.defineProperty(process.stdout,"isTTY",{value:scenario.tty,configurable:true});
+    if (scenario.output === "jsonl") process.stdout.write = ((chunk:string|Uint8Array) => { printed.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    try {
+      const result = await runCommand({settings:invocation.settings, runSettings:invocation.runSettings!, baseEnv:{}}, line => printed.push(line));
+      assert.equal(result.exitCode,1, scenario.name+": synthetic Run stops at the missing-model boundary");
+    } finally {
+      tracked.mock.restore();
+      process.stdout.write = originalWrite;
+      if (originalTty) Object.defineProperty(process.stdout,"isTTY",originalTty);
+      else delete (process.stdout as {isTTY?:boolean}).isTTY;
+    }
+    if (scenario.expected === "refused") {
+      assert.deepEqual(requests, [], "guard must refuse before contacting HTTP or creating data");
+      assert.match(printed.join(""), /NON_INTERACTIVE_NO_AUTO_APPROVE/);
+      continue;
+    }
+    const runRequest = requests.find(row => row.method === "POST" && /^\/api\/sessions\/[^/]+\/runs$/.test(row.path));
+    assert.ok(runRequest, scenario.name+": actual Run request reached HTTP");
+    const targetId = runRequest.path.split("/")[3]!;
+    const saved = await jsonRequest<Session>(`${origin}/api/sessions/${targetId}`,{headers:authorization});
+    assert.equal(saved.body.approvalMode,scenario.expected,scenario.name);
+    const summary = scenario.summary ?? scenario.expected;
+    if (scenario.output === "jsonl") {
+      const meta = printed.flatMap(line => line.split("\n")).filter(Boolean).map(line => JSON.parse(line)).find(row => row.type === "meta");
+      assert.equal(meta.approvalMode,summary,scenario.name+": JSON metadata matches approval intent");
+    } else assert.match(printed.join("\n"),new RegExp(`approval=${summary} interactive=${scenario.expected !== "always_allow" || scenario.summary === "preserve_session"}`),scenario.name);
+    if (scenario.summary === "preserve_session") {
+      assert.ok(!requests.some(row => row.method === "PATCH"),scenario.name+": no implicit policy reset");
+    } else if (scenario.flags.includes("--project")) {
+      const created = requests.find(row => row.method === "POST" && row.path.endsWith("/sessions"));
+      assert.equal(created?.body?.approvalMode,scenario.expected,"explicit Project creation sends the CLI mode");
+    } else {
+      const patched = requests.find(row => row.method === "PATCH");
+      assert.deepEqual(patched?.body,{approvalMode:scenario.expected},scenario.name+": separate intentional mode PATCH before Run");
+    }
+    console.log("CLI real HTTP matrix", JSON.stringify({scenario:scenario.name,tty:scenario.tty,storedMode:saved.body.approvalMode,reportedIntent:summary}));
+  }
+  const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`,{headers:authorization});
+  const project = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${projectId}/settings`,{headers:authorization});
+  assert.equal(global.body.overrides.defaultApprovalMode,"always_allow");
+  assert.equal(project.body.overrides.defaultApprovalMode,undefined);
+});
