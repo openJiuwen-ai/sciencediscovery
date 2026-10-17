@@ -194,6 +194,26 @@ test("timeline readiness lists only unhealthy sources while model diagnostics re
   assert.match(reports[1]!, /arxiv:.*\npubmed:/);
 });
 
+test("repair card explains omitted and undiscovered tools consistently with the timeline", async () => {
+  const { options } = fixture();
+  const original = options.registry.get("arxiv");
+  options.registry.upsert({ ...original, manifest: { ...original.manifest, tools: {} } });
+  const reports: string[] = [];
+  let cardReason: string | undefined;
+  options.reportReadiness = summary => reports.push(summary);
+  options.pauseExternalWait = () => () => {};
+  options.store = { listMcpInvocations: async () => [], executionBlocks: {
+    wait: async input => { cardReason = input.reason; return { action: "cancel" }; },
+  } };
+  const readiness = createMcpWorkspaceTools(options).mcpReadiness!;
+  await readiness.decide("wait", "Both sources are required", ["arxiv", "pubmed"]);
+  assert.match(cardReason!, /arxiv: unavailable; no tools injected; tool list unavailable until discovery succeeds\./);
+  assert.match(cardReason!, /pubmed: unavailable; omitted tools: .*search/);
+  assert.equal(cardReason, reports[0]);
+  await readiness.decide("wait", "Only arXiv is required", ["arxiv"]);
+  assert.equal(cardReason, reports[0]!.split("\n")[0]);
+});
+
 test("repair discovers tools absent from the initial manifest without expanding source selection", async () => {
   const { options, catalog } = fixture();
   const original = options.registry.get("arxiv");

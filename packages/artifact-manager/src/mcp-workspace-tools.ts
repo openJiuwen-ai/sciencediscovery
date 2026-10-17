@@ -163,10 +163,11 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
     });
 
   const initiallyUnhealthy = new Set(unhealthy().map(status => status.sourceId));
-  if (initiallyUnhealthy.size) options.reportReadiness?.(unhealthy().map(status =>
+  const formatReadiness = (status: ReturnType<McpSourceCatalog["getStatus"]>) =>
     `${status.sourceId}: ${status.status}; ${status.missingTools.length
       ? `omitted tools: ${status.missingTools.join(", ")}`
-      : "no tools injected; tool list unavailable until discovery succeeds"}.`).join("\n"));
+      : "no tools injected; tool list unavailable until discovery succeeds"}.`;
+  if (initiallyUnhealthy.size) options.reportReadiness?.(unhealthy().map(formatReadiness).join("\n"));
   const mcpTools = buildTools().filter(tool => options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId));
   // Custom servers can have no manifest tools at setup. Rebuild from discovery
   // after repair, but never expand beyond the initially affected source selection
@@ -191,7 +192,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
                 kind: "mcp", sessionId: options.sessionId, executionId: options.turnId,
                 runnerId: "MCP", operationId: toolCallId, toolCallId,
                 agentId: options.parentSubagentId ?? "main", summary: reason,
-                reason: affected.map(status => `${status.sourceId}: ${status.status}; omitted tools: ${status.missingTools.join(", ")}`).join("; "),
+                reason: affected.map(formatReadiness).join("\n"),
                 suggestions: [guidance], alternatives: [],
               }, signal);
               signal?.throwIfAborted();
