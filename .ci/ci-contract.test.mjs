@@ -492,3 +492,65 @@ test("missing or diagnostic-only real E2E results leave an empty score directory
   assert.doesNotMatch(run.stderr + run.stdout, /PRIVATE_FIXTURE/);
   assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), []);
 });
+
+for (const [name, review, expected] of [
+  ["scored", { evaluator: "puct-artifact-review-v1", status: "scored", total_score: 86.25, gating: false }, "scored | 86.25 | false"],
+  ["zero score", { status: "scored", total_score: 0, gating: false }, "scored | 0 | false"],
+  ["judge timeout", { status: "error", total_score: null, gating: false }, "error | N/A | false"],
+  ["review not reached", undefined, "not_run | N/A | false"],
+  ["invalid fields", { status: "PRIVATE_FIXTURE\n| response", total_score: "PRIVATE_FIXTURE", gating: "PRIVATE_FIXTURE" }, "unknown | N/A | false"],
+]) {
+  test(`PUCT worker summary reports ${name} without exposing judge evidence`, async (t) => {
+    await mkdir(testRoot, { recursive: true });
+    const root = await mkdtemp(join(testRoot, "puct-summary-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const relative = "e2e-real/test-results/puct/evolve-metrics.json";
+    const source = join(root, ".ci-results", relative);
+    const summaryPath = join(root, "step-summary.md");
+    const privateFields = { error: "PRIVATE_FIXTURE error", prompt: "PRIVATE_FIXTURE prompt",
+      request: { token: "PRIVATE_FIXTURE credential" }, response: "PRIVATE_FIXTURE model response" };
+    const scorecard = review ? { ...privateFields, evaluator: "PRIVATE_FIXTURE evaluator", ...review } : undefined;
+    const metrics = { case: "PUCT-COMPRESS", integration_status: "passed", ...privateFields,
+      ...(scorecard ? { llm_evaluation: scorecard } : {}) };
+    await mkdir(dirname(source), { recursive: true });
+    await writeFile(source, JSON.stringify(metrics));
+    if (scorecard) await writeFile(join(dirname(source), "llm-scorecard.json"), JSON.stringify(scorecard));
+    const priorSummary = "### Real E2E\n\nplanned: 1, passed: 1\n\n";
+    await writeFile(summaryPath, priorSummary);
+    const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], {
+      cwd: root, encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const summary = await readFile(summaryPath, "utf8");
+    assert.ok(summary.startsWith(priorSummary), "keep the existing case accounting summary");
+    assert.match(summary, /\| evaluator \| status \| total_score \| gating \|/);
+    assert.ok(summary.includes(`| puct-artifact-review-v1 | ${expected} |`), summary);
+    assert.match(summary, /Unofficial, non-gating/);
+    assert.doesNotMatch(summary + run.stdout + run.stderr, /PRIVATE_FIXTURE/);
+    assert.ok(!summary.includes(root), "do not expose local evidence paths");
+    const staged = JSON.parse(await readFile(join(root, scoreUploadPath, relative), "utf8"));
+    assert.equal(staged.integration_status, "passed", "judge outcome does not change delivery outcome");
+    if (review && typeof review.total_score !== "string") {
+      assert.equal(staged.llm_evaluation.total_score, review.total_score);
+      assert.equal(staged.llm_evaluation.gating, false);
+    }
+    assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), [relative]);
+    assert.deepEqual(JSON.parse(await readFile(source, "utf8")), metrics);
+    if (scorecard) assert.deepEqual(JSON.parse(await readFile(join(dirname(source), "llm-scorecard.json"), "utf8")), scorecard);
+  });
+}
+
+test("other real workers do not get a PUCT review summary", async (t) => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "other-review-summary-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const summaryPath = join(root, "step-summary.md");
+  await writeFile(summaryPath, "Existing summary\n");
+  await prepareRealE2EResults(root, { summaryPath });
+  await mkdir(join(root, ".ci-results"), { recursive: true });
+  await writeFile(join(root, ".ci-results", "team-metrics.json"), JSON.stringify({
+    case: "TC-E2E-01", llm_evaluation: { status: "scored", total_score: 92, gating: false },
+  }));
+  await prepareRealE2EResults(root, { summaryPath });
+  assert.equal(await readFile(summaryPath, "utf8"), "Existing summary\n");
+});
