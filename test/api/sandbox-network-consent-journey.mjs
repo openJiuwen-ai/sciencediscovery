@@ -24,7 +24,7 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim(), "", "Commit candidate before E2E");
-const root = resolve(".tmp", `sandbox-network-${randomUUID()}`);
+const root = resolve(".tmp", `sn-${randomUUID().slice(0, 8)}`);
 await mkdir(root, { recursive: true });
 const dataDir = resolve(root, "data"), token = randomUUID(), processes = [], steps = [];
 let api, logs = "", calls = 0;
