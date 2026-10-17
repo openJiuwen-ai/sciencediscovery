@@ -174,3 +174,16 @@ test("direct consent is visibly unsandboxed and retains exact command whitespace
   assert.match(html, /Deny/);
   assert.notEqual(permissionMatchingKey(request), permissionMatchingKey({ ...request, resource: "direct:other-run" }));
 });
+
+test("network consent names hosts and purpose in the conversation without expanding details", () => {
+  const html = renderToStaticMarkup(createElement(PermissionCards, {
+    expandedCards: {}, onToggleCard: noopToggle, onDecision: async () => {},
+    requests: [{ action: "sandbox_network", createdAt: "2026-10-18T00:00:00Z", id: "network",
+      sessionId: "s", resource: "sandbox-network:scoped-digest", state: "pending",
+      summary: "Sandbox network on local: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records. Approval does not replay code." }],
+  }));
+  assert.match(html, /Sandbox network access/);
+  assert.match(html, /eutils.ncbi.nlm.nih.gov:443/);
+  assert.match(html, /Retrieve requested PubMed records/);
+  assert.match(html, /Allow once/); assert.match(html, /Deny/);
+});

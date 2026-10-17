@@ -616,3 +616,23 @@ test("open mode passes IP literal targets through the private-address filter", a
     await allowed.close();
   }
 });
+
+test("execution gateways attribute only their own policy denials, without DNS, and release them", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "eg-consent-"));
+  let resolutions = 0;
+  const registry = new EgressGatewayRegistry(directory, undefined, async () => { resolutions++; return [{ address: "127.0.0.1", family: 4 }]; });
+  try {
+    const first = await registry.acquire(access({ revision: "execution-one" }));
+    const second = await registry.acquire(access({ revision: "execution-two" }));
+    assert.match(await overSocket(first.socketPath, "CONNECT pubmed.ncbi.nlm.nih.gov:443 HTTP/1.1\r\n\r\n"), /403/);
+    assert.deepEqual(await registry.deniedHosts("execution-one"), ["pubmed.ncbi.nlm.nih.gov:443"]);
+    assert.deepEqual(await registry.deniedHosts("execution-two"), []);
+    assert.equal(resolutions, 0, "a denied target must never reach DNS");
+    // Allowed domain resolving private is a different security boundary, not consentable here.
+    assert.match(await overSocket(second.socketPath, "CONNECT example.org:443 HTTP/1.1\r\n\r\n"), /403/);
+    assert.deepEqual(await registry.deniedHosts("execution-two"), []);
+    await registry.release("execution-one");
+    assert.deepEqual(await registry.deniedHosts("execution-one"), []);
+    await assert.rejects(stat(first.socketPath));
+  } finally { await registry.close(); await rm(directory, { recursive: true, force: true }); }
+});

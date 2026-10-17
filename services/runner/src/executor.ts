@@ -1019,7 +1019,12 @@ export async function executePython(
   if (!request.code.trim()) throw new Error(`${language === "python" ? "Python" : "R"} code is required`);
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
   if (kernelMode !== "ephemeral") throw new Error("Persistent execution requires the kernel manager");
-  const networkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
+  const baseNetworkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
+  // One execution owns this gateway. A shared policy gateway cannot attribute denials.
+  const networkAccess = baseNetworkAccess.mode === "none" ? baseNetworkAccess : {
+    ...baseNetworkAccess, revision: `${baseNetworkAccess.revision}:execution:${randomUUID()}`,
+  };
+  try {
   if (request.permissionEpoch.mounts.length !== 1
     || request.permissionEpoch.mounts[0]?.source !== "workspace"
     || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
@@ -1135,13 +1140,17 @@ export async function executePython(
     kernelId: `ephemeral:${request.executionId}`,
     kernelMode,
     language,
-    networkAccessRevision: networkAccess.revision,
+    networkDeniedHosts: await gateways?.deniedHosts(networkAccess.revision),
+    networkAccessRevision: baseNetworkAccess.revision,
     networkPolicy: networkAccess.mode,
     runnerVersion: RUNNER_VERSION,
     sandbox,
     startedAt,
     workingDirectory: launch.chdir,
   };
+  } finally {
+    if (networkAccess.mode !== "none") await gateways?.release(networkAccess.revision);
+  }
 }
 
 export async function executeShell(
@@ -1155,7 +1164,12 @@ export async function executeShell(
 ): Promise<ShellExecutionResult> {
   if (!request.code.trim()) throw new Error("Shell code is required");
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
-  const networkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
+  const baseNetworkAccess = epochSandboxNetworkAccess(request.permissionEpoch);
+  // One execution owns this gateway. A shared policy gateway cannot attribute denials.
+  const networkAccess = baseNetworkAccess.mode === "none" ? baseNetworkAccess : {
+    ...baseNetworkAccess, revision: `${baseNetworkAccess.revision}:execution:${randomUUID()}`,
+  };
+  try {
   if (request.permissionEpoch.mounts.length !== 1
     || request.permissionEpoch.mounts[0]?.source !== "workspace"
     || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
@@ -1257,13 +1271,17 @@ export async function executeShell(
     kernelMode: "ephemeral",
     language: "shell",
     modifiedFiles: shellModifiedFiles.toSorted(),
-    networkAccessRevision: networkAccess.revision,
+    networkDeniedHosts: await gateways?.deniedHosts(networkAccess.revision),
+    networkAccessRevision: baseNetworkAccess.revision,
     networkPolicy: networkAccess.mode,
     runnerVersion: RUNNER_VERSION,
     sandbox,
     startedAt,
     workingDirectory: launch.chdir,
   };
+  } finally {
+    if (networkAccess.mode !== "none") await gateways?.release(networkAccess.revision);
+  }
 }
 
 

@@ -85,7 +85,7 @@ export class ExecutionManager {
         this.save(execution);
         changed = true;
         execution.result = await operation(controller.signal, log);
-        execution.state = controller.signal.aborted ? "cancelled" : execution.result.exitCode === 0 ? "completed" : "failed";
+        execution.state = controller.signal.aborted ? "cancelled" : execution.result.exitCode === 0 && !execution.result.networkDeniedHosts?.length ? "completed" : "failed";
       } catch (error) {
         execution.state = controller.signal.aborted ? "cancelled" : "failed";
         execution.error = error instanceof Error ? error.message : "Execution failed";

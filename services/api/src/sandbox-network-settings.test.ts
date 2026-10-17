@@ -320,3 +320,26 @@ test("open mode snapshots into the epoch, keeps a stable revision and still rout
   assert.equal(epochSandboxNetworkAccess(epoch).mode, "open");
   assert.equal(epochSandboxNetworkAccess(epoch).revision, differentRevision);
 });
+
+test("scoped network permission decisions never change global or session network access", async t => {
+  const store = await scratchStore("network-consent-lifecycle", t.after.bind(t));
+  const project = await store.createProject("Network consent");
+  const session = await store.createSession(project.id, "Consent", {}, {}, { allowUnconfiguredModel: true });
+  await store.setApprovalMode(session.id, "ask_for_dangerous");
+  const context = { executionId: "owned-run", toolCallId: "network-call" };
+  const first = await store.requestPermission(session.id, "sandbox_network", "sandbox-network:run-agent-target-hosts", "Retrieve PubMed", context);
+  assert.equal(first.allowed, false); if (first.allowed) throw Error("Expected card");
+  const decision = await store.decidePermissionRequest(first.request.id, "allow_matching");
+  assert.equal(decision.authorization.action, "sandbox_network");
+  assert.equal(decision.permissionEpoch.networkPolicy, "none");
+  assert.equal(store.getSandboxNetworkSettings().mode, "none");
+  assert.equal((await store.requestPermission(session.id, "sandbox_network", first.request.resource, "Same scoped request", context)).allowed, true);
+  const unrelated = await store.requestPermission(session.id, "sandbox_network", "sandbox-network:other-run", "Different run", { executionId: "other" });
+  assert.equal(unrelated.allowed, false);
+  await store.revokePermissionGrant(decision.grant!.id);
+  assert.equal((await store.requestPermission(session.id, "sandbox_network", first.request.resource, "Revoked", context)).allowed, false);
+  await store.setApprovalMode(session.id, "always_allow");
+  const automatic = await store.requestPermission(session.id, "sandbox_network", "sandbox-network:new-exact-scope", "Explicit scope", context);
+  assert.equal(automatic.allowed, true);
+  assert.equal(store.getSessionPermissionEpoch(session.id)?.networkPolicy, "none");
+});
