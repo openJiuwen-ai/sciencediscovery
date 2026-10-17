@@ -281,6 +281,7 @@ import {
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
+import { requestsResearchNetwork, SandboxNetworkPreflight, selectedResearchHosts } from "./composer/SandboxNetworkPreflight.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -1128,6 +1129,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
+  // The choice is per Session and per network/connector configuration.  A
+  // different Session or altered allowlist requirement must ask again.
+  const [networkPreflightApprovals, setNetworkPreflightApprovals] = useState<Readonly<Record<string, string>>>({});
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
   const showEvolveAlgorithmPicker =
     /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
@@ -3398,6 +3402,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return;
     }
     const content = message.trim();
+    const researchHosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
+    const preflightKey = `${sandboxNetworkSettings?.mode ?? "unknown"}:${researchHosts.join(",")}`;
+    if (sandboxNetworkSettings?.mode === "none" && networkPreflightApprovals[session.id] !== preflightKey
+      && requestsResearchNetwork(content, researchHosts)) {
+      return;
+    }
     const autoNameFirstMessage = session.title === UNTITLED_SESSION_TITLE
       && !session.messages.some((item) => item.role === "user");
     const titleRefinementStartedAt = Date.now();
@@ -4625,6 +4635,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
+                  {(() => {
+                    const hosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
+                    const key = `${sandboxNetworkSettings?.mode ?? "unknown"}:${hosts.join(",")}`;
+                    return sandboxNetworkSettings?.mode === "none" && networkPreflightApprovals[session.id] !== key
+                      && requestsResearchNetwork(message, hosts) ? <SandboxNetworkPreflight
+                      hosts={hosts}
+                      onConfigure={() => openSystemSettings("sandbox-network")}
+                      onContinue={() => setNetworkPreflightApprovals((current) => ({ ...current, [session.id]: key }))}
+                    /> : null;
+                  })()}
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
