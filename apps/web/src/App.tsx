@@ -1129,7 +1129,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
-  const [networkPreflightApproved, setNetworkPreflightApproved] = useState(false);
+  // The choice is per Session and per network/connector configuration.  A
+  // different Session or altered allowlist requirement must ask again.
+  const [networkPreflightApprovals, setNetworkPreflightApprovals] = useState<Readonly<Record<string, string>>>({});
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
 
 
@@ -3356,7 +3358,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
     const content = message.trim();
     const researchHosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
-    if (sandboxNetworkSettings?.mode === "none" && !networkPreflightApproved
+    const preflightKey = `${sandboxNetworkSettings?.mode ?? "unknown"}:${researchHosts.join(",")}`;
+    if (sandboxNetworkSettings?.mode === "none" && networkPreflightApprovals[session.id] !== preflightKey
       && requestsResearchNetwork(content, researchHosts)) {
       return;
     }
@@ -4574,7 +4577,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
-                    setNetworkPreflightApproved(false);
                     if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
                   }} onKeyDown={(event) => {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
@@ -4590,12 +4592,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
-                  {sandboxNetworkSettings?.mode === "none" && !networkPreflightApproved
-                    && requestsResearchNetwork(message, selectedResearchHosts(connectors, session.enabledConnectorIds)) ? <SandboxNetworkPreflight
-                      hosts={selectedResearchHosts(connectors, session.enabledConnectorIds)}
+                  {(() => {
+                    const hosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
+                    const key = `${sandboxNetworkSettings?.mode ?? "unknown"}:${hosts.join(",")}`;
+                    return sandboxNetworkSettings?.mode === "none" && networkPreflightApprovals[session.id] !== key
+                      && requestsResearchNetwork(message, hosts) ? <SandboxNetworkPreflight
+                      hosts={hosts}
                       onConfigure={() => openSystemSettings("sandbox-network")}
-                      onContinue={() => setNetworkPreflightApproved(true)}
-                    /> : null}
+                      onContinue={() => setNetworkPreflightApprovals((current) => ({ ...current, [session.id]: key }))}
+                    /> : null;
+                  })()}
                   {reviewerSpecialistSettings && !reviewerSpecialistSettings.enabled && session.reviewerAutomaticReviewEnabled
                     ? <div className="composer-thinking-notice" role="status">{t("reviewer.automaticUnavailable")}</div>
                     : null}

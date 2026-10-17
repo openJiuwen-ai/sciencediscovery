@@ -23,7 +23,9 @@ const connectors = [
 
 test("preflights enabled research connector hosts and explicit literature requests", () => {
   assert.deepEqual(selectedResearchHosts(connectors, ["pubmed"]), ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov"]);
-  assert.equal(requestsResearchNetwork("summarize CRISPR", selectedResearchHosts(connectors, ["pubmed"])), true);
+  assert.equal(requestsResearchNetwork("research CRISPR", selectedResearchHosts(connectors, ["pubmed"])), true);
   assert.equal(requestsResearchNetwork("search PubMed for CRISPR", []), true);
+  assert.equal(requestsResearchNetwork("", selectedResearchHosts(connectors, ["pubmed"])), false);
+  assert.equal(requestsResearchNetwork("thanks", selectedResearchHosts(connectors, ["pubmed"])), false);
   assert.equal(requestsResearchNetwork("summarize the uploaded CSV", []), false);
 });

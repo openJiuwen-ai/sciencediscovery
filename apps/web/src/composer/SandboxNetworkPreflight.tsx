@@ -27,7 +27,10 @@ export function selectedResearchHosts(
 
 /** Explicit source requests need a warning even before the source is selected. */
 export function requestsResearchNetwork(prompt: string, hosts: readonly string[]): boolean {
-  return hosts.length > 0 || /\b(arxiv|biorxiv|medrxiv|pubmed|ncbi|europe\s*pmc|uniprot)\b/i.test(prompt);
+  if (!prompt.trim()) return false;
+  const namesResearchSource = /\b(arxiv|biorxiv|medrxiv|pubmed|ncbi|europe\s*pmc|uniprot)\b/i.test(prompt);
+  const requestsLiteratureWork = /\b(literature|paper|papers|publication|publications|research|citation|citations)\b/i.test(prompt);
+  return namesResearchSource || (hosts.length > 0 && requestsLiteratureWork);
 }
 
 export function SandboxNetworkPreflight({
