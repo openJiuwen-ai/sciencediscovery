@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 
 import type { ArtifactReviewRun, RunStreamEvent, Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { LocaleProvider } from "../src/i18n/index.js";
@@ -242,7 +243,7 @@ test("renders completed activity as collapsible disclosures", () => {
   assert.match(html, /<details class="timeline-disclosure tool completed process-record">/);
   assert.equal((html.match(/<details/g) ?? []).length, 4);
   assert.match(html, /<details class="tool-io-section">/);
-  assert.match(html, /Thought process · turn 1/);
+  assert.match(html, /Thinking/);
   assert.match(html, /run_python/);
   assert.match(html, /<strong>Answer:<\/strong> 42/);
 });
@@ -1095,4 +1096,78 @@ test("research task headers stay concise, collapsed, and retain explicit expansi
   const failedHtml = renderToStaticMarkup(createElement(RunTimeline, { entries: failed, isRunning: false, onToggle() {} }));
   assert.match(failedHtml, /timeline-failure-summary">PubMed source unavailable: network denied/);
   assert.match(failedHtml, /PubMed search: CRISPR SCD clinical/);
+});
+
+
+test("live output is bounded and failures remain visible before tool completion", () => {
+  let entries = apply([{ type: "tool.started", trace: { id: "shell", name: "run_shell", args: { command: "collect papers" }, status: "running" } }]);
+  entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "shell", chunk: "first\nsecond\n" + "middle\n".repeat(100) + "Error: source unavailable\n" });
+  entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "shell", chunk: "Trying another source" });
+  const tool = entries[0];
+  assert.ok(tool?.type === "tool");
+  assert.equal(tool.trace.status, "running");
+  assert.equal(tool.trace.outputStream, "tool-shell");
+  assert.ok(tool.trace.outputChars! > tool.preview!.length);
+  assert.ok(tool.preview!.split("\n").length <= 5);
+  assert.match(tool.preview!, /first/);
+  assert.match(tool.preview!, /Trying another source/);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  const summary = html.slice(html.indexOf('<summary>'), html.indexOf('</summary>'));
+  assert.match(summary, /Error: source unavailable/);
+  assert.match(summary, /collect papers/);
+  assert.doesNotMatch(html, /<details[^>]* open/);
+});
+
+test("reasoning status changes headings without expanding the full deliberation", () => {
+  let entries = apply([{ type: "assistant.thinking.delta", turn: 1, delta: "**Searching PubMed**\nPrivate reasoning text" }]);
+  entries = reduceRunTimeline(entries, { type: "assistant.thinking.delta", turn: 1, delta: "\n**Synthesizing 5 papers**\nMore reasoning" });
+  const entry = entries[0];
+  assert.ok(entry?.type === "thinking");
+  assert.equal(entry.expanded, false);
+  assert.match(entry.content, /Private reasoning text/);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  const summary = html.slice(html.indexOf('<summary>'), html.indexOf('</summary>'));
+  assert.match(summary, /Synthesizing 5 papers/);
+  assert.doesNotMatch(summary, /Private reasoning|More reasoning/);
+});
+
+test("exploration bursts coalesce while failures and narrative keep their own positions", () => {
+  const entries = apply([
+    { type: "tool.started", trace: { id: "a", name: "search_pubmed", args: { query: "clinical CRISPR" }, status: "running" } },
+    { type: "tool.completed", trace: { id: "a", name: "search_pubmed", status: "completed", summary: "5 papers found" } },
+    { type: "tool.started", trace: { id: "b", name: "read_file", status: "running" } },
+    { type: "tool.started", trace: { id: "c", name: "search_arxiv", status: "running" } },
+    { type: "tool.completed", trace: { id: "c", name: "search_arxiv", status: "failed", summary: "Network unavailable" } },
+    { type: "assistant.delta", delta: "Synthesizing the available evidence" },
+  ]);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  assert.match(html, /Exploring · 2 activities/);
+  assert.equal((html.match(/timeline-exploration/g) ?? []).length, 1);
+  assert.ok(html.indexOf('Network unavailable') > html.indexOf('timeline-exploration'));
+  assert.match(html, /Synthesizing the available evidence/);
+  assert.match(html, /5 papers found/);
+});
+
+
+test("expanded live tools load the full child transcript and refresh it on completion", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let entries = apply([
+    { type: "tool.started", trace: { id: "live", name: "run_shell", status: "running" } },
+    { type: "tool.output", toolCallId: "live", chunk: "short preview" },
+  ]).map(entry => entry.type === "tool" ? { ...entry, expanded: true, userExpanded: true } : entry);
+  const loads: string[] = [];
+  const onLoadToolOutput = async (trace: { status: string }) => {
+    loads.push(trace.status);
+    return trace.status === "running" ? "full live transcript" : "full final transcript";
+  };
+  const view = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {}, onLoadToolOutput }));
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view()); });
+  assert.deepEqual(loads, ["running"]);
+  assert.match(JSON.stringify(renderer!.toJSON()), /full live transcript/);
+  entries = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "live", name: "run_shell", status: "completed", outputStream: "tool-live", outputChars: 100 } });
+  await act(async () => { renderer!.update(view()); });
+  assert.deepEqual(loads, ["running", "completed"]);
+  assert.match(JSON.stringify(renderer!.toJSON()), /full final transcript/);
+  await act(async () => { renderer!.unmount(); });
 });

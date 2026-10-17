@@ -31,3 +31,35 @@ export function compactStatus(value: string): string {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > 160 ? text.slice(0, 157) + "…" : text;
 }
+
+/** Five physical lines, with head/tail retained; never a replacement for stored output. */
+export function evidencePreview(value: string): string {
+  const lines = value.split("\n").map(line => line.length > 160 ? line.slice(0, 80) + "…" + line.slice(-77) : line);
+  return (lines.length > 5 ? [...lines.slice(0, 2), "…", ...lines.slice(-2)] : lines).join("\n");
+}
+
+/** Only deliberate Markdown headings become reasoning status, never deliberation prose. */
+export function reasoningStatus(value: string): string | undefined {
+  const headings = [...value.matchAll(/(?:^|\n)\s*(?:\*\*([^*\n]+)\*\*|#{1,6}\s+([^\n]+))/g)];
+  const last = headings.at(-1);
+  return last ? compactStatus(last[1] ?? last[2] ?? "") : undefined;
+}
+
+export function isExploration(name: string): boolean {
+  return /(?:^|[_.-])(?:read|search|list|find|glob|grep)(?:$|[_.-])/i.test(name);
+}
+
+/** Explicit failure text is evidence, not an inferred tool lifecycle transition. */
+export function reportedFailure(value: string): string | undefined {
+  const line = value.split("\n").find(line => /^(?:error|failed|failure|source unavailable|network error|connection refused|permission denied)\b/i.test(line.trim()));
+  return line ? compactStatus(line) : undefined;
+}
+
+/** Count returned literature records, never a provider's total-hit estimate or duplicate calls. */
+export function returnedPaperCount(value: string): number | undefined {
+  try {
+    const result = JSON.parse(value) as { sourceId?: unknown; toolId?: unknown; records?: unknown } | null;
+    return result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
+      && result.toolId === "search" && Array.isArray(result.records) ? result.records.length : undefined;
+  } catch { return undefined; }
+}

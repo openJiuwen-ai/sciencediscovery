@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { compactStatus, researchLabel } from "./timeline/research-label.js";
+import { compactStatus, reasoningStatus, researchLabel, returnedPaperCount } from "./timeline/research-label.js";
 import { ProjectRecordSlot } from "./plugins/project-views.js";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -52,11 +52,14 @@ function subagentSummary(subagent: Subagent, t: Translate): string {
   const step = subagent.steps.at(-1);
   if (subagent.error) return compactStatus(subagent.error);
   if (step?.status === "failed") return compactStatus(step.content);
+  if (subagent.status === "running" && step?.kind === "thinking") return reasoningStatus(step.content) ?? t("timeline.thinking");
   if (subagent.status === "running" && step?.kind === "assistant") return compactStatus(step.content);
   if (subagent.status === "running" && step?.kind === "tool") {
-    return researchLabel({ name: step.toolName ?? t("subagent.step.tool"), args: step.args, input: step.input });
+    const count = step.status === "completed" ? returnedPaperCount(step.content) : undefined;
+    if (count !== undefined) return t("timeline.papersReturned", { count });
+    return (step.status === "completed" && step.content ? compactStatus(step.content) : undefined) ?? researchLabel({ name: step.toolName ?? t("subagent.step.tool"), args: step.args, input: step.input });
   }
-  return subagentStatusLabel(t, subagent.status);
+  return "";
 }
 
 const SUBAGENT_STATUS_KEYS: Record<Subagent["status"], MessageKey> = {
@@ -96,13 +99,15 @@ export function SubagentCards({
     {subagents.map((subagent) => {
       const summary = subagentSummary(subagent, t);
       const statusLabel = subagentStatusLabel(t, subagent.status);
+      const failureText = subagent.error ?? subagent.steps.findLast(step => step.status === "failed")?.content;
+      const failure = failureText ? compactStatus(failureText) : undefined;
       return <ProcessRecord active={subagent.status === "running"} className={`process-agent-record ${subagent.status}`}
         expanded={expandedCards ? expandedCards[activityCardId("subagent", subagent.id)] ?? false : undefined}
         onExpandedChange={onToggleCard ? (expanded) => onToggleCard(activityCardId("subagent", subagent.id), expanded) : undefined}
         failed={subagent.status === "failed" || subagent.status === "timed_out"}
-        key={subagent.id} label={`${subagent.input.description} · ${statusLabel}${subagent.error ? ` · ${compactStatus(subagent.error)}` : ""}`}>
+        key={subagent.id} label={`${subagent.input.description} · ${statusLabel}${failure ? ` · ${failure}` : ""}`}>
         <article className={`subagent-card ${subagent.status}`}>
-        <button aria-label={t("subagent.openAria", { description: subagent.input.description })} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${statusLabel}\n${summary}`}><i /><span><strong>{subagent.input.description}{subagent.status !== "running" ? ` · ${statusLabel}` : ""}</strong><small>{summary}</small></span><em>{statusLabel}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
+        <button aria-label={t("subagent.openAria", { description: subagent.input.description })} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${statusLabel}\n${summary}`}><i /><span><strong>{subagent.input.description}</strong>{summary && summary !== failure ? <small>{summary}</small> : null}{failure ? <small className="timeline-failure-summary">{failure}</small> : null}</span><em>{statusLabel}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
         </article>
       </ProcessRecord>;
     })}

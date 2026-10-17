@@ -295,6 +295,23 @@ test("parallel research lanes expose a source failure without prompts or telemet
   }));
   assert.match(html, /Clinical CRISPR evidence/);
   assert.match(html, /Mechanism evidence/);
-  assert.match(html, /<small>PubMed source unavailable: network denied<\/small>/);
+  assert.match(html, /<small class="timeline-failure-summary">PubMed source unavailable: network denied<\/small>/);
   assert.doesNotMatch(html, /LONG_PRIVATE_PROMPT|subagents\/uuid|150 tokens|2\/300 turns/);
+});
+
+
+test("research branch progress advances through search, results and synthesis, retaining source failures", () => {
+  const branch = buildSubagent({ status: "running", steps: [] });
+  const render = () => renderToStaticMarkup(createElement(SubagentCards, { subagents: [branch], onOpenSubagent() {} }));
+  branch.steps.push({ id: "search", createdAt: timestamp, kind: "tool", toolName: "search_pubmed", args: { query: "CRISPR clinical trials" }, status: "running", content: "" });
+  assert.match(render(), /CRISPR clinical trials/);
+  branch.steps[0] = { ...branch.steps[0]!, status: "completed", content: JSON.stringify({ sourceId: "pubmed", toolId: "search", records: [{}, {}, {}, {}, {}] }) };
+  assert.match(render(), /5 papers returned by this search/);
+  branch.steps.push({ id: "synthesis", createdAt: timestamp, kind: "thinking", content: "**Synthesizing 5 papers**\nInternal deliberation" });
+  assert.match(render(), /Synthesizing 5 papers/);
+  assert.doesNotMatch(render(), /Internal deliberation/);
+  branch.steps.push({ id: "failure", createdAt: timestamp, kind: "tool", status: "failed", content: "Source unavailable: network denied" });
+  branch.steps.push({ id: "retry", createdAt: timestamp, kind: "thinking", content: "**Trying another source**" });
+  assert.match(render(), /Source unavailable: network denied/);
+  assert.match(render(), /Trying another source/);
 });

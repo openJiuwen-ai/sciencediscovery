@@ -48,7 +48,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
     preconditions: ["隔离 API/Runner 已启动", "只调用本地脚本模型，不使用真实模型密钥"] });
   const stub = await scriptedModel([
     [
-      { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "先生成一个可核对的本地报告。", delayMs: 7000,
+      { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "**先生成一个可核对的本地报告**\n完整内部推理仅供展开查看。", delayMs: 7000,
         arguments: { command: "sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK" } },
       { tool: "declare_artifact", arguments: { path: "results/report.md" } },
       { text: "报告已生成，内容是 CARD_OK。" },
@@ -94,7 +94,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await expect(files.locator(".physical-files")).toHaveCount(0);
     });
     let runId = "";
-    await journey.step("思考中保留原卡片，文件分区保持收起", "流式更新后文件分区不会自动打开，思考仍有边框、底色和完整文本。",
+    await journey.step("思考状态简洁，文件分区保持收起", "流式更新后文件分区不会自动打开，思考只显示阶段标题，完整推理默认收起。",
       async () => {
         const files = page.locator('[data-folder="files"]');
         await files.locator(":scope > summary").click();
@@ -109,6 +109,9 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         // text rather than as the clock it actually is. The card keeps `running` through the tool's
         // own sleep, so waiting longer still observes the state this step is about.
         await expect(thinking).toContainText("先生成一个可核对的本地报告", { timeout: 30_000 });
+        await expect(thinking).not.toHaveAttribute("open", "");
+        await expect(thinking.locator(".reasoning-content")).toBeHidden();
+        await expect(thinking.locator(":scope > summary")).not.toContainText("完整内部推理");
         await expect(thinking).not.toHaveClass(/process-record/);
         await expect(thinking).not.toHaveCSS("border-top-width", "0px");
         const identity = page.locator(".run-timeline > .run-identity");
@@ -131,6 +134,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(tool).toBeVisible();
         await expect(tool).not.toHaveAttribute("open", "");
         await expect(tool.locator(".tool-content")).toBeHidden();
+        await expect(tool.locator(".timeline-command")).toContainText("sleep 6");
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;
