@@ -71,6 +71,18 @@ The first `serve` prepares some runtime dependencies and therefore needs network
 
 For offline hosts, prepare the data directory on a connected machine or configure reachable package mirrors. See the [configuration reference](../reference/configuration.md).
 
+### Commands
+
+```text
+ScienceDiscovery serve [options]        Start the Web UI, control API, and sandbox runner
+ScienceDiscovery run [input] [options]  Run an Agent task against a running serve
+ScienceDiscovery extract --to <dir>     Unpack the embedded runtime without starting it
+ScienceDiscovery version                Print the release and bundled runtime versions
+ScienceDiscovery help                   Show every command and option
+```
+
+`run` is the command-line client for scripts and pipelines. It prints text on a terminal and JSONL when piped, and a non-interactive run must pass `--auto-approve`. See the [CLI reference](../reference/cli.md#run) for its options and output modes. In local source mode, the same client is `node services/launcher/dist/main.js run`.
+
 ### Common startup options
 
 ```text
