@@ -1383,7 +1383,7 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
 }
 
 const AUTO_NAMING_RESPONSE_TITLE = "Refined TP53 expression study";
-const AUTO_NAMING_STORED_TITLE = createLocalSessionTitle(AUTO_NAMING_RESPONSE_TITLE);
+const AUTO_NAMING_STORED_TITLE = AUTO_NAMING_RESPONSE_TITLE;
 
 async function startAutoNamingModel(
   context: TestContext,
