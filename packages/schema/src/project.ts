@@ -14,8 +14,11 @@
 
 import type { RuntimeSettingsOverrides } from "./runtime-settings.js";
 import type { Session } from "./session.js";
+import type { ApprovalMode } from "./plan.js";
 
 export interface Project {
+  /** Last approval policy explicitly selected in this Project. */
+  approvalMode?: ApprovalMode;
   createdAt: string;
   id: string;
   name: string;

@@ -4402,6 +4402,23 @@ test("with every skill everywhere (the JiuwenSwarm backend) a Session's skill se
   assert.deepEqual([...effective.enabledSkillIds].sort(), ["code-engineer", "evolve-design"]);
 });
 
+test("new Sessions inherit only the Project approval policy explicitly selected by the user", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-approval-${randomUUID()}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Project approvals");
+  const first = await store.createSession(project.id, "First", {}, {}, { allowUnconfiguredModel: true });
+  assert.equal(first.approvalMode, "ask_for_dangerous");
+  await store.setApprovalMode(first.id, "always_allow");
+  const second = await store.createSession(project.id, "Second", {}, {}, { allowUnconfiguredModel: true });
+  assert.equal(second.approvalMode, "always_allow");
+  await store.setApprovalMode(second.id, "ask_for_dangerous");
+  await store.appendMessage(first.id, "user", "Unrelated activity must not change the Project default");
+  const third = await store.createSession(project.id, "Third", {}, {}, { allowUnconfiguredModel: true });
+  assert.equal(third.approvalMode, "ask_for_dangerous");
+});
+
 test("an action JiuwenSwarm's permission engine let through is allowed and recorded as its decision", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `jw-authorize-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));
