@@ -186,7 +186,8 @@ test("multi-step persistent R executions create separate runs and an artifact de
     "completed execution must still be recorded when environment snapshot synchronization fails");
 });
 
-test("shell execution records authoritative code, logs, environment, and generated files", async (context) => {
+for (const direct of [false, true]) {
+test(`${direct ? "direct" : "sandboxed"} shell execution records authoritative code, logs, environment, and generated files`, async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `shell-provenance-${process.pid}-${Date.now()}`);
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const store = new SessionStore(dataDir);
@@ -229,8 +230,21 @@ test("shell execution records authoritative code, logs, environment, and generat
       };
     },
   } as unknown as RunnerClient;
-  const recorder = new ProvenanceRecorder(dataDir, store);
+  const executions: Array<{ toolName?: string; tool: string }> = [];
+  class CapturingClient extends MemoryGraphClient {
+    async observeExecution(payload: Parameters<MemoryGraphClient["observeExecution"]>[0]): Promise<void> {
+      executions.push(payload);
+    }
+  }
+  const sink = new MemoryGraphSink(new CapturingClient({ url: "http://127.0.0.1:1" }), () => true);
+  const recorder = new ProvenanceRecorder(dataDir, store, sink);
+  const toolName = direct ? "run_direct_shell" : "run_shell";
+  const directAuthorization = direct ? {
+    authorizationId: "consent", runId: "run", agentId: "main", target: "local:test",
+    account: "test", cwd: "", workspaceRoot,
+  } : undefined;
   await recorder.executeShell({
+    directAuthorization,
     agentId: "main",
     code: "/usr/bin/bash run_all.sh",
     permissionEpoch,
@@ -242,7 +256,10 @@ test("shell execution records authoritative code, logs, environment, and generat
   });
 
   const [run] = await store.listExecutionRuns(session.id);
-  assert.equal(run?.tool, "run_shell");
+  assert.equal(run?.tool, toolName);
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0]?.tool, toolName);
+  assert.equal(executions[0]?.toolName, toolName);
   assert.equal(run?.language, "shell");
   assert.equal(run?.environmentRevisionId, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID);
   assert.equal(await recorder.cas.verify(run!.code.hash), true);
@@ -264,7 +281,7 @@ test("shell execution records authoritative code, logs, environment, and generat
   assert.equal(fileProvenance.currentRevision.executionRunId, run!.id);
   assert.equal(fileProvenance.currentRevision.runId, "turn-shell");
   assert.equal(fileProvenance.currentRevision.toolCallId, "shell-tool-call");
-  assert.equal(fileProvenance.currentRevision.toolName, "run_shell");
+  assert.equal(fileProvenance.currentRevision.toolName, toolName);
   const executeWithReceipt = runnerClient.executeShell.bind(runnerClient);
   runnerClient.executeShell = async (request) => {
     const result = await executeWithReceipt(request);
@@ -277,6 +294,8 @@ test("shell execution records authoritative code, logs, environment, and generat
   }), /committed Workspace snapshot/);
   assert.equal((await store.listArtifactDerivations(session.id)).length, 1, "missing receipt must not infer file provenance from the live path");
 });
+
+}
 
 test("execution provenance distinguishes runs by working directory and env snapshot", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `env-provenance-${process.pid}-${Date.now()}`);

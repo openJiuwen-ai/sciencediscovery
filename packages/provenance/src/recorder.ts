@@ -573,7 +573,7 @@ export class ProvenanceRecorder {
     parentSubagentId?: string;
     sessionId: string;
     toolCallId?: string;
-    toolName: "run_python" | "run_r" | "run_shell";
+    toolName: "run_python" | "run_r" | "run_shell" | "run_direct_shell";
     turnId: string;
     workspaceRoot: string;
     workspaceSnapshot?: AgentStateRef;
@@ -892,7 +892,7 @@ export class ProvenanceRecorder {
         parentSubagentId: options.parentSubagentId,
         sessionId: options.sessionId,
         toolCallId: options.toolCallId,
-        toolName: "run_shell",
+        toolName: options.directAuthorization ? "run_direct_shell" : "run_shell",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
         workspaceSnapshot: result.workspaceSnapshot,
@@ -905,7 +905,7 @@ export class ProvenanceRecorder {
       sessionId: options.sessionId,
       turnId: options.turnId,
       tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
-      toolName: "run_shell",
+      toolName: options.directAuthorization ? "run_direct_shell" : "run_shell",
       language: null,
       codeHash: code.hash,
       exitCode: result.exitCode,

@@ -159,6 +159,10 @@ try {
       assert.equal(recorded.length, 1); assert.equal(recorded[0].exitCode, 0);
       assert.equal(recorded[0].sandbox, "none"); assert.equal(recorded[0].networkPolicy, "host");
       assert.ok(recorded[0].directAuthorization.authorizationId);
+      assert.equal(recorded[0].tool, "run_direct_shell");
+      const provenance = await json(`/api/sessions/${session.id}/workspace/provenance?path=execution-count.txt`);
+      assert.equal(provenance.currentRevision.toolName, "run_direct_shell");
+      assert.equal(provenance.currentRevision.executionRunId, recorded[0].id);
       const output = await json(`/api/sessions/${session.id}/agent-activity/executions/${activity.executions[0].id}/logs`);
       assert.match(output.chunks.map(chunk => chunk.text).join(""), /42/);
       const listing = await json(`/api/runners/local/workspaces/${session.id}/files`);
