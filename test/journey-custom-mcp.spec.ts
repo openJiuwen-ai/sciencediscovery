@@ -214,7 +214,7 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
     expect(toolsResponse.ok()).toBe(true);
     const tools = await toolsResponse.json() as Array<{ id: string; mcpToolName: string }>;
     const tool = tools.find((item) => item.mcpToolName === "echo")!;
-    return { id: saved.id, name: serverName, toolName: `mcp__${saved.id}__${tool.id}` };
+    return { id: saved.id, name: serverName, toolId: tool.id, toolName: `mcp__${saved.id}__${tool.id}` };
   };
   const first = await makeServer("first");
   const second = await makeServer("second");
@@ -230,8 +230,12 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       { text: "SECOND MCP VERIFIED" },
     ],
     [
-      { tool: "tool_search", arguments: { query: `select:${second.toolName}` } },
-      { tool: second.toolName, arguments: { text: "mcp recovered" } },
+      { tool: "mcp_readiness", arguments: { action: "continue", reason: "This task needs no MCP evidence", sourceIds: [] } },
+      { text: "MCP OMITTED; NONBLOCKING" },
+    ],
+    [
+      { tool: "mcp_readiness", arguments: { action: "wait", reason: "This task requires the selected echo source", sourceIds: [second.id] } },
+      { tool: "mcp_recovered_call", arguments: { sourceId: second.id, toolId: second.toolId, input: { text: "mcp recovered" } } },
       { text: "MCP RECOVERED" },
     ],
   ]);
@@ -275,7 +279,7 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       expect(saved.some((item) => item.sourceId === second.id && item.status === "succeeded")).toBe(true);
       await expect(page.locator(".message").filter({ hasText: "SECOND MCP VERIFIED" }).last()).toBeVisible();
     });
-    await journey.step("停用已选择的 MCP 服务器", "运行失败并显示来源状态和恢复操作，不静默回退", async () => {
+    await journey.step("停用已选择的 MCP 服务器", "非阻塞任务继续，省略工具的状态可见", async () => {
       const response = await page.request.put(`${apiBaseUrl()}/api/mcp/servers/${second.id}`, {
         headers: authorizationHeader(), data: {
           name: second.name, command: process.execPath,
@@ -283,14 +287,19 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
         },
       });
       expect(response.ok()).toBe(true);
-      const run = await sendUserMessage(page, fixture.session.id, "Use the selected MCP source again.");
+      const run = await sendUserMessage(page, fixture.session.id, "Do a task that needs no MCP evidence; explain the omitted connector.");
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
-      expect(terminal.status).toBe("failed");
-      expect(terminal.error).toContain(`${second.id}: unavailable`);
-      expect(terminal.error).toContain("Check /api/mcp/sources");
-      expect(terminal.error).toContain("disable these connectors");
+      expect(terminal.status, terminal.error).toBe("completed");
+      await expect(page.getByText("MCP OMITTED; NONBLOCKING", { exact: true })).toBeVisible();
+      await expect(page.locator(".run-timeline").filter({ hasText: second.id }).last()).toContainText("unavailable");
     });
-    await journey.step("恢复 MCP 服务器后重试", "同一会话恢复成功调用并完成运行", async () => {
+    await journey.step("等待修复并恢复调用", "重要来源阻塞任务，修复卡片重新检查后同一运行成功", async () => {
+      const before = (await invocations()).length;
+      const run = await sendUserMessage(page, fixture.session.id, "The selected MCP tool is essential. Wait for repair, then call it.");
+      const card = page.getByRole("region", { name: "执行受阻" });
+      await expect(card).toContainText("等待 MCP 修复");
+      await expect(card).toContainText(second.id);
+      expect((await invocations()).length).toBe(before);
       const response = await page.request.put(`${apiBaseUrl()}/api/mcp/servers/${second.id}`, {
         headers: authorizationHeader(), data: {
           name: second.name, command: process.execPath,
@@ -298,8 +307,7 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
         },
       });
       expect(response.ok()).toBe(true);
-      const before = (await invocations()).length;
-      const run = await sendUserMessage(page, fixture.session.id, "Use the restored MCP tool with mcp recovered.");
+      await card.getByRole("button", { name: "已修复，重新检查" }).click();
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
       expect(terminal.status, terminal.error).toBe("completed");
       expect((await invocations()).length).toBeGreaterThan(before);

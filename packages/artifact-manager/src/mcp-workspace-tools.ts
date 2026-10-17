@@ -32,11 +32,12 @@ import type { McpSourceCatalog } from "@sciencediscovery/data-source";
 
 type McpWorkspaceTools = Pick<
   WorkspaceAgentOptions,
-  "artifactDownload" | "mcpTools" | "paperExtractPdf"
+  "artifactDownload" | "mcpTools" | "paperExtractPdf" | "mcpReadiness"
 >;
 
 export interface McpInvocationStore {
   listMcpInvocations(sessionId: string): Promise<McpInvocation[]>;
+  executionBlocks?: { wait(input: Omit<import("@sciencediscovery/schema").ExecutionBlock, "id" | "createdAt">, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").ExecutionBlockDecision> };
 }
 
 export interface PaperExtractionPort {
@@ -61,6 +62,7 @@ export interface McpWorkspaceToolOptions {
   broker: McpGovernanceBroker;
   catalog: McpSourceCatalog;
   enabledSourceIds: readonly string[];
+  reportReadiness?(summary: string): void;
   emitPermissionRequest(request: PermissionRequest): void;
   pauseExternalWait(): () => void;
   paperService: PaperExtractionPort;
@@ -100,27 +102,17 @@ function unprefixedWorkspacePath(path: string | undefined, prefix: string | unde
 
 export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWorkspaceTools {
   const enabledSourceIds = new Set(options.enabledSourceIds);
-  // Validate the effective Session selection before constructing any tools. The
-  // run scheduler persists this error and emits run.failed, so missing tools
-  // cannot silently turn a requested MCP workflow into a web-only run.
-  const unavailableSources = options.registry.list()
+  const statuses = () => options.registry.list()
     .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
-    .map((adapter) => options.catalog.getStatus(adapter.manifest.id))
-    .filter((status) => status.status !== "ready" || status.availableTools.length === 0);
-  if (unavailableSources.length) {
-    const details = unavailableSources.map((status) =>
-      `${status.sourceId}: ${status.status}; available tools: ${status.availableTools.length}; missing tools: ${status.missingTools.join(", ") || "none"}`);
-    throw new Error(
-      `Enabled MCP sources are not ready: ${details.join("; ")}. `
-      + "Check /api/mcp/sources, repair and refresh the MCP catalog, or disable these connectors in the Session before retrying.",
-    );
-  }
-  const mcpTools: NonNullable<WorkspaceAgentOptions["mcpTools"]> = options.registry.list()
+    .map((adapter) => options.catalog.getStatus(adapter.manifest.id));
+  const unhealthy = () => statuses().filter((status) => status.status !== "ready" || !status.availableTools.length);
+  const guidance = "Inspect MCP settings and /api/mcp/sources. Repair or enable the configured server, then reload the catalog via POST /api/mcp/sources/reload. Host changes require user authorization; sandbox scripts cannot repair control-plane MCP.";
+  const diagnostics = () => ({ sources: statuses(), guidance,
+    omittedTools: unhealthy().map(status => ({ sourceId: status.sourceId, tools: status.missingTools })) });
+  const allTools: NonNullable<WorkspaceAgentOptions["mcpTools"]> = options.registry.list()
     .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
     .flatMap((adapter) => {
-      const availableTools = new Set(options.catalog.getStatus(adapter.manifest.id).availableTools);
       return Object.values(adapter.manifest.tools)
-        .filter((tool) => availableTools.has(tool.id))
         .map((tool) => ({
           description: [
             tool.description,
@@ -170,7 +162,46 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
         }));
     });
 
+  if (unhealthy().length) options.reportReadiness?.(JSON.stringify(diagnostics()));
+  const mcpTools = allTools.filter(tool => options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId));
+  const omitted = allTools.filter(tool => !mcpTools.includes(tool));
   return {
+    ...(unhealthy().length ? { mcpReadiness: {
+      summary: JSON.stringify(diagnostics()),
+      decide: async (action, reason, sourceIds, signal, toolCallId) => {
+        signal?.throwIfAborted();
+        if (action === "check") await options.catalog.refresh(signal);
+        if (action === "wait") {
+          if (!sourceIds.length || sourceIds.some(id => !enabledSourceIds.has(id))) throw new Error("Choose enabled MCP sources that block this task");
+          const affected = unhealthy().filter(status => sourceIds.includes(status.sourceId));
+          if (affected.length) {
+            if (!options.store.executionBlocks) throw new Error("Interactive MCP repair is unavailable; provide repair guidance and stop this task");
+            const release = options.pauseExternalWait();
+            try {
+              const decision = await options.store.executionBlocks.wait({
+                kind: "mcp", sessionId: options.sessionId, executionId: options.turnId,
+                runnerId: "MCP", operationId: toolCallId, toolCallId,
+                agentId: options.parentSubagentId ?? "main", summary: reason,
+                reason: affected.map(status => `${status.sourceId}: ${status.status}; omitted tools: ${status.missingTools.join(", ")}`).join("; "),
+                suggestions: [guidance], alternatives: [],
+              }, signal);
+              signal?.throwIfAborted();
+              if (decision.action !== "retry") return { ...diagnostics(), action: "cancel", instruction: "Repair wait cancelled or expired. Stop the blocked task; do not silently substitute another source." };
+              await options.catalog.refresh(signal);
+            } finally { release(); }
+          }
+        }
+        return { ...diagnostics(), action, reason,
+          recoveredTools: omitted.filter(tool => options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId))
+            .map(({ sourceId, toolId, inputSchema }) => ({ sourceId, toolId, inputSchema })),
+          instruction: "Assess current status. If an important source is still unavailable, wait again or explain and stop. Recovered omitted tools can be invoked with mcp_recovered_call; normal permissions apply. Never claim an omitted tool ran." };
+      },
+      invoke: async (sourceId, toolId, input, signal, toolCallId) => {
+        const tool = omitted.find(tool => tool.sourceId === sourceId && tool.toolId === toolId);
+        if (!tool || !options.catalog.getStatus(sourceId).availableTools.includes(toolId)) throw new Error("Tool is not a recovered MCP tool from this run's selection");
+        return tool.execute(toolCallId, input, signal);
+      },
+    } satisfies NonNullable<WorkspaceAgentOptions["mcpReadiness"]> } : {}),
     artifactDownload: async (input, signal): Promise<ArtifactDownloadResult> => {
       const invocation = (await options.store.listMcpInvocations(options.sessionId))
         .find((item) => item.id === input.mcpInvocationId);

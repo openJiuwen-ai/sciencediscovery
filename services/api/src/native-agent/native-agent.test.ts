@@ -1134,3 +1134,24 @@ test("an oversized execution result enters history as a head/tail preview the mo
     restore();
   }
 });
+
+for (const action of ["continue", "wait"] as const) {
+  test(`MCP readiness reaches the model and records its ${action} decision`, async () => {
+    const decisions: string[] = [];
+    const options: NativeAgentOptions = { ...workspace(), mcpReadiness: {
+      summary: "arxiv unavailable; omitted tools: search",
+      decide: async choice => { decisions.push(choice); return { action: choice, omittedTools: ["arxiv/search"] }; },
+      invoke: async () => { throw new Error("No recovered call expected"); },
+    } };
+    const scripts: Array<(call: StreamerCall) => ModelTurn> = [
+      call => {
+        assert.ok(call.tools.some(tool => tool.name === "mcp_readiness"));
+        return toolTurn("mcp_readiness", { action, reason: "Assess importance", sourceIds: ["arxiv"] });
+      },
+      call => { assert.match(JSON.stringify(call.history), /omittedTools/); return textTurn("Readiness decision recorded."); },
+    ];
+    const restore = setModelTurnStreamerForTest(scriptStreamer(scripts).streamer);
+    try { await createNativeAgent(options).execute("Assess this missing source"); assert.deepEqual(decisions, [action]); }
+    finally { restore(); }
+  });
+}

@@ -143,7 +143,7 @@ export const JIUWENSWARM_ASK_TOOLS: ReadonlySet<string> = new Set([
   "pdb_prepare_structure_download",
 ]);
 
-export const approvalFor = (name: string): "allow" | "ask" => JIUWENSWARM_ASK_TOOLS.has(name) || name.startsWith("mcp__") ? "ask" : "allow";
+export const approvalFor = (name: string): "allow" | "ask" => JIUWENSWARM_ASK_TOOLS.has(name) || name === "mcp_recovered_call" || name.startsWith("mcp__") ? "ask" : "allow";
 
 /**
  * The resource a JiuwenSwarm approval question is checked against, for the tools whose native equivalent

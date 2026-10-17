@@ -39,3 +39,20 @@ test("Runner settings refresh probes the selected Runner instead of the API host
     assert.deepEqual(probes, [["lab", false], ["lab", true]]);
   } finally { await act(async () => renderer.unmount()); }
 });
+
+test("MCP repair card shows source diagnostics and rechecks without a Runner switch", async () => {
+  const decisions: unknown[] = [];
+  const client = { listExecutionBlocks: async () => [{ id: "mcp-block", kind: "mcp", runnerId: "MCP", reason: "arxiv: unavailable; omitted tools: search", suggestions: ["Repair and reload the catalog"], alternatives: [] }],
+    decideExecutionBlock: async (...args: unknown[]) => { decisions.push(args); },
+  } as unknown as ApiClient;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(ExecutionBlockCards, { client, sessionId: "s" })); });
+  try {
+    assert.match(JSON.stringify(renderer.toJSON()), /arxiv: unavailable/);
+    assert.match(JSON.stringify(renderer.toJSON()), /Repair and reload the catalog/);
+    const buttons = renderer.root.findAllByType("button");
+    assert.equal(buttons.length, 2);
+    await act(async () => { await buttons[0]!.props.onClick(); });
+    assert.deepEqual(decisions, [["s", "mcp-block", { action: "retry" }]]);
+  } finally { await act(async () => renderer.unmount()); }
+});

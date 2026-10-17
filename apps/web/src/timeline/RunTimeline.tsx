@@ -596,6 +596,11 @@ export function reduceRunTimeline(
     return [...finished, { id: nextAnswerId(finished), type: "assistant", ...snapshotFields }];
   }
 
+  if (event.type === "mcp.readiness") {
+    return [...entries, { id: `mcp-readiness-${entries.length}`, type: "assistant",
+      content: `MCP (${event.agentId ?? "main"}): ${event.summary}` }];
+  }
+
   if (event.type === "permission.required" || event.type === "permission.resolved") {
     const finished = finishThinking(entries);
     const index = finished.findIndex((entry) => entry.type === "permission" && entry.request.id === event.request.id);

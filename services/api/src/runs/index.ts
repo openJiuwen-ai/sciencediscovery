@@ -1245,6 +1245,7 @@ async function executeAgentRun(
       broker: mcpBroker,
       catalog: mcpCatalog,
       enabledSourceIds: settingsSnapshot.enabledConnectorIds,
+      reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary }),
       emitPermissionRequest: (permissionRequest) => {
         responseSink.emit({ request: permissionRequest, type: "permission.required" });
       },
@@ -1412,6 +1413,7 @@ async function executeAgentRun(
           broker: mcpBroker,
           catalog: mcpCatalog,
           enabledSourceIds: settingsSnapshot.enabledConnectorIds,
+          reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary }),
           emitPermissionRequest: (permissionRequest) => {
             responseSink.emit({ request: permissionRequest, type: "permission.required" });
           },
@@ -1430,7 +1432,7 @@ async function executeAgentRun(
               modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
               runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
               skills: pluginEnabled(settingsSnapshot.plugins, "skill") ? skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]) : [],
-              workspace: { ...agentOptions, mcpTools: reviewerMcpTools.mcpTools },
+              workspace: { ...agentOptions, mcpTools: reviewerMcpTools.mcpTools, mcpReadiness: reviewerMcpTools.mcpReadiness },
             })
           : undefined;
         try {
@@ -1753,6 +1755,7 @@ async function executeAgentRun(
               broker: mcpBroker,
               catalog: mcpCatalog,
               enabledSourceIds: subagentConnectorIds,
+              reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary, agentId: subagent.id }),
               emitPermissionRequest: (permissionRequest) => {
                 responseSink.emit({ request: permissionRequest, type: "permission.required" });
               },

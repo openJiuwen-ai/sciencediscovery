@@ -1077,3 +1077,10 @@ test("legacy snapshots keep one answer and a cursor across repeated approval swi
   assert.equal(entries[0]?.type === "assistant" && entries[0].content, "Complete");
   assert.match(renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle: () => undefined })), /class="cursor"/);
 });
+
+test("MCP omissions remain visible on timeline replay without an agent tool call", () => {
+  const entries = apply([{ type: "mcp.readiness", agentId: "literature-child", summary: "arxiv unavailable; omitted tools: search" }]);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.type, "assistant");
+  assert.match(JSON.stringify(entries), /literature-child.*arxiv unavailable/);
+});

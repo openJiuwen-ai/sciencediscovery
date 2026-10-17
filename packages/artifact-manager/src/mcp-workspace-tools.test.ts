@@ -14,9 +14,9 @@
 
 import assert from "node:assert/strict";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-import { McpSourceCatalog } from "../../data-source/src/catalog.js";
-import { McpSourceRegistry } from "../../mcp-sources/src/registry.js";
-import { createPublicBiomedSources } from "../../mcp-sources/src/public-biomed.js";
+import { McpSourceCatalog } from "@sciencediscovery/data-source";
+import { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import type { McpCatalog } from "@sciencediscovery/schema";
 import { createMcpWorkspaceTools, type McpWorkspaceToolOptions } from "./mcp-workspace-tools.js";
 
@@ -39,9 +39,15 @@ function fixture() {
   return { options, catalog, remote };
 }
 
-test("enabled literature sources fail visibly before the catalog is refreshed", () => {
+test("enabled literature sources expose diagnostics before the catalog is refreshed", () => {
   const { options } = fixture();
-  assert.throws(() => createMcpWorkspaceTools(options), /arxiv: unavailable.*pubmed: unavailable.*Check \/api\/mcp\/sources/);
+  const reports: string[] = [];
+  options.reportReadiness = summary => reports.push(summary);
+  const result = createMcpWorkspaceTools(options);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0]!, /omittedTools.*search/);
+  assert.deepEqual(result.mcpTools, []);
+  assert.match(result.mcpReadiness!.summary, /arxiv.*unavailable.*pubmed.*unavailable/);
 });
 
 test("ready literature sources expose every declared MCP tool", async () => {
@@ -55,7 +61,7 @@ test("ready literature sources expose every declared MCP tool", async () => {
 });
 
 for (const failure of ["missing server", "disabled server", "server error", "missing tool", "incompatible tool"] as const) {
-  test(`enabled literature sources reject ${failure} and recover after refresh`, async () => {
+  test(`enabled literature sources report ${failure} and recover after refresh`, async () => {
     const { options, catalog, remote } = fixture();
     const healthy = structuredClone(remote.servers);
     if (failure === "missing server") remote.servers = [];
@@ -64,7 +70,7 @@ for (const failure of ["missing server", "disabled server", "server error", "mis
     if (failure === "missing tool") remote.servers[0]!.tools.shift();
     if (failure === "incompatible tool") remote.servers[0]!.tools[0]!.inputSchema = { type: "array" };
     await catalog.refresh();
-    assert.throws(() => createMcpWorkspaceTools(options), /Enabled MCP sources are not ready:.*(?:unavailable|degraded)/);
+    assert.match(createMcpWorkspaceTools(options).mcpReadiness!.summary, /unavailable|degraded/);
     remote.servers = healthy;
     await catalog.refresh();
     assert.ok(createMcpWorkspaceTools(options).mcpTools!.length > 0);
@@ -88,15 +94,84 @@ test("a selected ready source remains usable when an unselected source is degrad
   assert.ok(tools.every((tool) => tool.sourceId === "pubmed"));
 
   options.enabledSourceIds = ["arxiv", "pubmed"];
-  assert.throws(() => createMcpWorkspaceTools(options), /arxiv: degraded.*missing tools: search/);
+  assert.match(createMcpWorkspaceTools(options).mcpReadiness!.summary, /degraded/);
+  assert.ok(createMcpWorkspaceTools(options).mcpTools!.some(tool => tool.name === "mcp__pubmed__search"));
 });
 
 test("subagent construction checks the same enabled literature source readiness", async () => {
   const { options, catalog } = fixture();
   options.parentSubagentId = "literature-searcher-child";
-  assert.throws(() => createMcpWorkspaceTools(options), /arxiv: unavailable.*pubmed: unavailable/);
+  assert.match(createMcpWorkspaceTools(options).mcpReadiness!.summary, /arxiv.*unavailable.*pubmed.*unavailable/);
   await catalog.refresh();
   const names = createMcpWorkspaceTools(options).mcpTools!.map((tool) => tool.name);
   assert.ok(names.includes("mcp__arxiv__search"));
   assert.ok(names.includes("mcp__pubmed__search"));
+});
+
+
+test("Specialist extra missing source does not block healthy selected tools; agent can continue visibly", async () => {
+  const { options, catalog } = fixture();
+  options.parentSubagentId = "literature-searcher-child";
+  const sessionSelection = ["arxiv", "pubmed"];
+  const specialistConnectors = ["pubmed", "arxiv", "europe-pmc", "biorxiv", "medrxiv"];
+  for (const source of createPublicBiomedSources(["europe-pmc", "biorxiv", "medrxiv"])) options.registry.register(source);
+  options.enabledSourceIds = [...new Set([...sessionSelection, ...specialistConnectors])];
+  await catalog.refresh();
+  const result = createMcpWorkspaceTools(options);
+  assert.ok(result.mcpTools!.some(tool => tool.name === "mcp__pubmed__search"));
+  assert.ok(result.mcpTools!.some(tool => tool.name === "mcp__arxiv__search"));
+  assert.ok(!result.mcpTools!.some(tool => tool.sourceId === "biorxiv"));
+  const decision = await result.mcpReadiness!.decide("continue", "PubMed and arXiv are sufficient for this task", []);
+  assert.match(JSON.stringify(decision), /PubMed and arXiv are sufficient/);
+  assert.match(JSON.stringify(decision), /omittedTools.*biorxiv.*search/);
+});
+
+
+test("important missing source waits for repair, rechecks, and invokes recovered tools through governance", async () => {
+  const { options, catalog } = fixture();
+  let releaseCount = 0;
+  let card: unknown;
+  let resolveRepair!: (choice: { action: "retry" }) => void;
+  const repaired = new Promise<{ action: "retry" }>(resolve => { resolveRepair = resolve; });
+  const invocations: Array<Parameters<McpWorkspaceToolOptions["broker"]["invoke"]>[0]> = [];
+  options.pauseExternalWait = () => () => { releaseCount++; };
+  options.store = { listMcpInvocations: async () => [], executionBlocks: {
+    wait: async input => { card = input; return repaired; },
+  } };
+  options.broker = { invoke: async (input: Parameters<McpWorkspaceToolOptions["broker"]["invoke"]>[0]) => { invocations.push(input); return { result: {}, invocation: { id: "audit" } }; } } as unknown as McpWorkspaceToolOptions["broker"];
+  const readiness = createMcpWorkspaceTools(options).mcpReadiness!;
+  await assert.rejects(readiness.invoke("arxiv", "search", {}, undefined, "call"), /not a recovered/);
+  const pending = readiness.decide("wait", "arXiv evidence is required", ["arxiv"], undefined, "wait-call");
+  assert.equal(releaseCount, 0, "external wait remains active until user response");
+  assert.equal(catalog.getStatus("arxiv").status, "unavailable");
+  assert.equal(invocations.length, 0);
+  resolveRepair({ action: "retry" });
+  const result = await pending;
+  assert.match(JSON.stringify(card), /"kind":"mcp"/);
+  assert.match(JSON.stringify(card), /arxiv: unavailable/);
+  assert.equal(releaseCount, 1);
+  assert.equal(catalog.getStatus("arxiv").status, "ready");
+  assert.match(JSON.stringify(result), /recoveredTools.*search/);
+  await readiness.invoke("arxiv", "search", { query: "test" }, undefined, "call");
+  assert.match(JSON.stringify(invocations[0]), /"sourceId":"arxiv"/);
+  assert.equal(typeof invocations[0]!.authorize, "function");
+  await assert.rejects(readiness.invoke("foreign", "search", {}, undefined, "call"), /not a recovered/);
+});
+
+test("cancelled repair does not refresh or invoke; persistent failure remains visible", async () => {
+  const { options, remote } = fixture();
+  options.pauseExternalWait = () => () => {};
+  options.store = { listMcpInvocations: async () => [], executionBlocks: { wait: async () => ({ action: "cancel" }) } };
+  const readiness = createMcpWorkspaceTools(options).mcpReadiness!;
+  const cancelled = await readiness.decide("wait", "Required", ["arxiv"]);
+  assert.match(JSON.stringify(cancelled), /"action":"cancel"/);
+  assert.equal(options.catalog.getStatus("arxiv").status, "unavailable");
+  options.store.executionBlocks!.wait = async () => ({ action: "retry" });
+  remote.servers = [];
+  const stillMissing = await readiness.decide("wait", "Required", ["arxiv"]);
+  assert.match(JSON.stringify(stillMissing), /unavailable/);
+  await assert.rejects(readiness.invoke("arxiv", "search", {}, undefined, "call"), /not a recovered/);
+  await assert.rejects(readiness.decide("wait", "Required", ["foreign"]), /Choose enabled/);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(readiness.decide("wait", "Required", ["arxiv"], controller.signal), /abort/i);
 });

@@ -1999,3 +1999,15 @@ test("idle cancellation does not wait for the trajectory finish queue", { timeou
     assert.equal(finish.mock.callCount(), 1);
   } finally { release(); await adapter.close(); }
 });
+
+test("MCP readiness and governed recovery tools are offered to JiuwenSwarm", async () => {
+  const adapter = await fakeAdapter(async (_request, response) => { response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ mcpReadiness: {
+      summary: "arxiv unavailable; omitted tools: search", decide: async () => ({}), invoke: async () => ({}),
+    } })).execute("go");
+    const tools = adapter.requests[0].body.tools;
+    assert.match(tools.find((tool: { name: string }) => tool.name === "mcp_readiness").description, /arxiv unavailable/);
+    assert.equal(tools.find((tool: { name: string }) => tool.name === "mcp_recovered_call").approval, "ask");
+  } finally { await adapter.close(); }
+});
