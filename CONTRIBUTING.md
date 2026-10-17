@@ -554,3 +554,14 @@ blank-line and fenced-code structure, image alternative text, and the existence
 of repository-local link and image targets. External URLs are deliberately not
 requested by the gate, so an unavailable third-party site cannot make an
 otherwise unrelated pull request fail.
+
+## Development queue reviews
+
+For issue-to-release blocker triage and role-separated review TODOs, see the
+[development loop guide](docs/en/developer-docs/development-loop.md) and its
+[thin operator entry](.agents/skills/development-loop/SKILL.md). Start from
+[AGENTS](AGENTS.md); candidate/evidence settings live in
+[loop.project.json](loop.project.json), and adjudicated regressions belong in
+[LESSONS](LESSONS.md). These document an
+operator-invoked workflow; CI gates and action permissions remain governed by
+the current repository policy and explicit operator authorization.
