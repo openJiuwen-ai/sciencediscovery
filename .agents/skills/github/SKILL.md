@@ -36,10 +36,10 @@ explicitly wants Chinese. If a GitHub issue or pull request was filed in
 Chinese by mistake, fix it with `gh issue edit` or `gh pr edit` before calling
 it done.
 
-Edit only items you created when changing titles or bodies. On someone else's
-issue or pull request, add a comment; do not rewrite their title, body or
-comments. Assigning yourself to an issue and adding comments when starting
-work are allowed under [Issues](#issues).
+Edit only items you created. On someone else's issue or pull request, add a
+comment; do not rewrite their title, body or comments. The one exception is
+adding yourself as an assignee to an issue you start implementing, under
+[Issues](#issues).
 
 ## Setup
 
