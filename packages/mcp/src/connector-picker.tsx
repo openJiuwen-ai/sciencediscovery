@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState } from "react";
-import type { ConnectorId, ConnectorManifest } from "@sciencediscovery/schema";
+import React, { useEffect, useRef, useState } from "react";
+import type { ConnectorId, ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -42,6 +42,9 @@ export function ConnectorPicker({
   disabled = false,
   enabledIds,
   onToggle,
+  sourceStatuses = {},
+  specialistIds = [],
+  onOpen, onReload, refreshing = false, refreshError,
 }: {
   t: Translate; icons:{database:ReactNode;external:ReactNode};
   connectors: ConnectorManifest[];
@@ -49,8 +52,18 @@ export function ConnectorPicker({
   disabled?: boolean;
   enabledIds: readonly string[];
   onToggle: (connectorId: ConnectorId) => void;
+  /** Catalog readiness is separate from session selection.  Keep an enabled
+   * source selectable, but make a connector with no injectable tools visible. */
+  sourceStatuses?: Readonly<Record<string, McpSourceStatus>>;
+  specialistIds?: readonly string[];
+  onOpen?: () => void;
+  onReload?: () => void;
+  refreshing?: boolean;
+  refreshError?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => { if (open) onOpen?.(); }, [open, onOpen]);
+  const effectiveIds = new Set([...enabledIds, ...specialistIds]);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -69,7 +82,7 @@ export function ConnectorPicker({
     };
   }, [open]);
 
-  const enabledCount = connectors.filter((connector) => enabledIds.includes(connector.id)).length;
+  const enabledCount = connectors.filter((connector) => effectiveIds.has(connector.id)).length;
   const summary = `${t("connectors.title")}: ${t("connectors.summary", { enabled: enabledCount, total: connectors.length })}`;
   const builtinConnectors = connectors.filter((connector) => !connector.id.startsWith("custom-") && connector.id !== "web");
   const customConnectors = connectors.filter((connector) => connector.id.startsWith("custom-"));
@@ -100,15 +113,25 @@ export function ConnectorPicker({
           {group.items.map((connector) => {
             const name = connector.displayName ?? connectorName(connector.id);
             const policyLabel = t("connectors.providerPolicy", { name });
+            const status = sourceStatuses[connector.id];
+            const inherited = specialistIds.includes(connector.id);
+            const selected = effectiveIds.has(connector.id);
+            const unavailable = selected && connector.id !== "web" && (!status || status.status !== "ready" || !status.availableTools.length);
             return <li key={connector.id}>
               <label>
                 <input
-                  checked={enabledIds.includes(connector.id)}
-                  disabled={disabled}
+                  checked={selected}
+                  disabled={disabled || inherited}
                   onChange={() => onToggle(connector.id)}
                   type="checkbox"
                 />
-                <span><strong>{name}</strong><small>{connector.publisher}</small></span>
+                <span><strong>{name}</strong><small>{connector.publisher}</small>
+                  {inherited ? <small>{t("connectors.specialist")}</small> : null}
+                  {unavailable ? <small className="connector-picker-status" role="status">
+                    {!status ? t("connectors.catalogUnknown") : t(status.status === "degraded" ? "connectors.catalogDegraded" : "connectors.catalogUnavailable", { error: status.error ?? "" })}
+                    {status ? <> {status.missingTools.length ? t("connectors.omittedTools", { tools: status.missingTools.join(", ") }) : t("connectors.unknownTools")}</> : null}
+                  </small> : null}
+                </span>
               </label>
               {connector.termsUrl ? <a
                 aria-label={policyLabel}
@@ -121,6 +144,8 @@ export function ConnectorPicker({
           })}
         </ul>
       </div> : null)}
+      {refreshError ? <p role="alert">{t("connectors.refreshFailed", { error: refreshError })}</p> : null}
+      {onReload ? <button type="button" disabled={refreshing} onClick={onReload}>{t(refreshing ? "connectors.refreshing" : "connectors.reload")}</button> : null}
       <p className="connector-picker-note">{t("connectors.note")}</p>
     </div> : null}
   </div>;

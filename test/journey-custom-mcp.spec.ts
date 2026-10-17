@@ -188,8 +188,8 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
  * Purpose: Agent discovers and calls selected custom MCP tools, including one added after a prior run.
  * Steps:
  *   1. Select the first custom connector and call its echo tool.
- *   2. Add a second connector to the Session and call its echo tool in a new run.
- *   3. Disable a selected server: a nonblocking run completes with the omission visible; a blocking run waits on the repair card, then recovers in the same run after re-enable; clean up.
+ *   2. Select a Specialist that mounts a second connector; verify its effective selection and call its echo tool in a new run.
+ *   3. Disable a selected server: a nonblocking run completes with the omission visible; a blocking run waits on the repair card, then recovers in the same run after re-enable; verify picker warnings disappear after catalog reload; clean up.
  * Environment: Isolated local stack and data directory, current local working tree.
  * Type: mocked
  * LLM: Local deterministic OpenAI-compatible stub; no provider API is called.
@@ -218,6 +218,13 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
   };
   const first = await makeServer("first");
   const second = await makeServer("second");
+  const specialistResponse = await page.request.post(`${apiBaseUrl()}/api/specialists`, {
+    headers: authorizationHeader(), data: { name: `${name} Specialist`, description: "Local MCP readiness journey",
+      instructions: "Use the selected local echo service when requested.", connectorIds: [second.id], enabledSkillIds: [] },
+  });
+  expect(specialistResponse.ok()).toBe(true);
+  const specialist = await specialistResponse.json() as { id: string };
+
   const stub = await scriptedModel([
     [
       { tool: "tool_search", arguments: { query: `select:${first.toolName}` } },
@@ -264,10 +271,13 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       expect((await invocations()).some((item) => item.sourceId === first.id && item.status === "succeeded")).toBe(true);
       await expect(page.locator(".message").filter({ hasText: "FIRST MCP VERIFIED" }).last()).toBeVisible();
     });
-    await journey.step("追加第二个自定义 MCP", "第二个服务器成为当前 Session 可用连接器", async () => {
+    await journey.step("选择挂载第二个 MCP 的专家", "专家来源自动选中且显示挂载原因，不能单独取消", async () => {
+      await page.getByLabel("专家", { exact: true }).selectOption(specialist.id);
       await page.locator(".connector-picker-trigger").click();
-      await page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(second.name) }).click();
-      await expect(page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(second.name) })).toBeChecked();
+      const source = page.locator(".connector-picker-popover li").filter({ hasText: second.name });
+      await expect(source).toContainText("由当前专家挂载");
+      await expect(source.getByRole("checkbox")).toBeChecked();
+      await expect(source.getByRole("checkbox")).toBeDisabled();
       await page.keyboard.press("Escape");
     });
     await journey.step("调用新加入的 MCP", "新运行也能执行工具并保存成功调用记录", async () => {
@@ -287,6 +297,14 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
         },
       });
       expect(response.ok()).toBe(true);
+      await page.locator(".connector-picker-trigger").click();
+      const picker = page.locator(".connector-picker-popover");
+      await picker.getByRole("button", { name: "重新加载 MCP 工具目录", exact: true }).click();
+      const source = picker.locator("li").filter({ hasText: second.name });
+      await expect(source.getByRole("status")).toContainText("MCP 不可用");
+      await expect(source.getByRole("checkbox")).toBeChecked();
+      await expect(picker.locator("li").filter({ hasText: first.name }).getByRole("status")).toHaveCount(0);
+      await page.keyboard.press("Escape");
       const run = await sendUserMessage(page, fixture.session.id, "Do a task that needs no MCP evidence; explain the omitted connector.");
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
       expect(terminal.status, terminal.error).toBe("completed");
@@ -314,12 +332,19 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       expect(recovered.length).toBeGreaterThan(before);
       expect(recovered.some(item => item.sourceId === second.id && item.turnId === run.id && item.status === "succeeded")).toBe(true);
       await expect(page.locator(".message").filter({ hasText: "MCP RECOVERED" }).last()).toBeVisible();
+      await page.locator(".connector-picker-trigger").click();
+      const picker = page.locator(".connector-picker-popover");
+      await picker.getByRole("button", { name: "重新加载 MCP 工具目录", exact: true }).click();
+      await expect(picker.getByRole("button", { name: "重新加载 MCP 工具目录", exact: true })).toBeEnabled();
+      await expect(picker.locator("li").filter({ hasText: second.name }).getByRole("status")).toHaveCount(0);
+      await page.keyboard.press("Escape");
     });
   } finally {
     await cleanupJourney(page, fixture);
     await stub.stop();
     await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${first.id}`, { headers: authorizationHeader() });
     await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${second.id}`, { headers: authorizationHeader() });
+    await page.request.delete(`${apiBaseUrl()}/api/specialists/${specialist.id}`, { headers: authorizationHeader() });
   }
 });
 

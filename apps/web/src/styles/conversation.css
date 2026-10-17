@@ -155,6 +155,7 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-popover label > span { min-width: 0; display: grid; }
 .connector-picker-popover label strong { color: var(--text-heading); font-size: 13px; }
 .connector-picker-popover label small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.connector-picker-popover label .connector-picker-status { color: var(--warning-accent); white-space: normal; }
 .connector-picker-popover a { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--text-faint); }
 .connector-picker-popover a:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .connector-picker-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ConnectorManifest } from "@sciencediscovery/schema";
+import type { ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -49,7 +49,7 @@ test("scoped connector overrides filter every source and refresh through the hos
   let view: ReactTestRenderer;
   await act(async () => {
     view = create(createElement(PluginWebHost, { client, projectId: "project", children:
-      createElement(ConnectorPicker, { connectors, enabledIds: ["pubmed", "uniprot"], onToggle: () => undefined }) }));
+      createElement(ConnectorPicker, { connectors, enabledIds: ["pubmed", "uniprot"], specialistIds: ["pubmed"], sourceStatuses: { pubmed: sourceStatus() }, onToggle: () => undefined }) }));
   });
   try {
     const visibleIds = () => view.root.findByType(McpPicker).props.connectors.map((item: ConnectorManifest) => item.id);
@@ -95,7 +95,7 @@ test("lists every connector with its checked state and policy link when open", (
   assert.match(markup, /connector-picker-popover/);
   assert.match(markup, /<strong>PubMed<\/strong>/);
   assert.match(markup, /<strong>UniProt<\/strong>/);
-  const checked = markup.match(/checked/g) ?? [];
+  const checked = markup.match(/checked=""/g) ?? [];
   assert.equal(checked.length, 1);
   assert.match(markup, /href="https:\/\/www\.uniprot\.org\/help\/license"/);
   assert.match(markup, /aria-label="UniProt provider policy"/);
@@ -112,4 +112,63 @@ test("disables the checkboxes but keeps the list readable while a run is active"
   assert.match(markup, /connector-picker-popover/);
   const disabled = markup.match(/disabled/g) ?? [];
   assert.equal(disabled.length, 2);
+});
+
+const sourceStatus = (overrides: Partial<McpSourceStatus> = {}): McpSourceStatus => ({
+  availableTools: [], error: "biomed disconnected", lastCheckedAt: "now",
+  missingTools: ["search", "download"], sourceId: "pubmed", status: "unavailable", ...overrides,
+});
+
+for (const state of ["unavailable", "degraded"] as const) {
+  test(`selected ${state} connector explains catalog errors and omitted tools`, () => {
+    const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+      connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+      sourceStatuses: { pubmed: sourceStatus({ status: state, availableTools: state === "degraded" ? ["search"] : [], missingTools: ["download"] }) },
+    }));
+    assert.match(markup, state === "degraded" ? /Some MCP tools unavailable/ : /MCP unavailable/);
+    assert.match(markup, /biomed disconnected/);
+    assert.match(markup, /Omitted tools: download/);
+    assert.equal((markup.match(/checked=""/g) ?? []).length, 1);
+  });
+}
+
+for (const state of ["ready", "unselected", "web"] as const) {
+  test(`${state} connector has no catalog warning`, () => {
+    const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+      connectors: state === "web" ? [{ id: "web", publisher: "Web" } as ConnectorManifest] : connectors,
+      defaultOpen: true, enabledIds: state === "unselected" ? [] : [state === "web" ? "web" : "pubmed"],
+      onToggle: () => undefined,
+      sourceStatuses: { pubmed: state === "unselected" ? sourceStatus() : sourceStatus({ status: "ready", availableTools: ["search"], missingTools: [], error: undefined }) },
+    }));
+    assert.doesNotMatch(markup, /connector-picker-status/);
+  });
+}
+
+test("Specialist sources are checked with readiness, explained and cannot be deselected independently", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: [], specialistIds: ["pubmed"], onToggle: () => undefined,
+    sourceStatuses: { pubmed: sourceStatus() },
+  }));
+  assert.match(markup, /Included by the selected Specialist/);
+  assert.match(markup, /biomed disconnected/);
+  assert.match(markup, /disabled=""[^>]*checked=""/);
+  assert.match(markup, /1 of 2 enabled/);
+});
+
+test("missing discovery data is visible rather than implying ready", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+  }));
+  assert.match(markup, /MCP readiness not checked/);
+  assert.doesNotMatch(markup, /No tools injected/);
+});
+
+test("catalog reload stays available during a run and refresh failures are visible", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, disabled: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+    sourceStatuses: { pubmed: sourceStatus() }, onReload: () => undefined, refreshError: "catalog offline",
+  }));
+  assert.match(markup, /MCP unavailable/);
+  assert.match(markup, /role="alert">Could not check MCP readiness: catalog offline/);
+  assert.match(markup, /<button type="button">Reload MCP catalog<\/button>/);
 });
