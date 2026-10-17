@@ -181,3 +181,37 @@ test("ready source without discovered tools reports no tools without claiming se
   assert.match(markup, /No MCP tools discovered/);
   assert.doesNotMatch(markup, /MCP unavailable|tool list unavailable until discovery succeeds/);
 });
+
+test("busy catalog disables reload, while an undiscovered source explains its unknown tool list", async (context) => {
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", {configurable: true, value: {addEventListener() {}, removeEventListener() {}}});
+  context.after(() => {
+    if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  });
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let reloaded = 0;
+  let view!: ReactTestRenderer;
+  await act(async () => {view = create(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+    sourceStatuses: {pubmed: sourceStatus({missingTools: [], error: undefined})},
+    refreshing: true, onReload: () => {reloaded++;},
+  }));});
+  try {
+    const text = JSON.stringify(view.toJSON());
+    assert.match(text, /Checking MCP readiness/);
+    assert.match(text, /No tools injected; tool list unavailable until discovery succeeds/);
+    assert.doesNotMatch(text, /Omitted tools:/);
+    const button = view.root.findAllByType("button").find(item => item.props.disabled === true);
+    assert.ok(button, "busy reload must be disabled");
+    await act(async () => view.update(createElement(ConnectorPicker, {
+      connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+      sourceStatuses: {pubmed: sourceStatus()}, refreshing: false, onReload: () => {reloaded++;},
+    })));
+    const reload = view.root.findAllByType("button").find(item => item.children.includes("Reload MCP catalog"));
+    assert.ok(reload);
+    assert.equal(reload.props.disabled, false);
+    await act(async () => reload.props.onClick());
+    assert.equal(reloaded, 1);
+  } finally {await act(async () => view.unmount());}
+});

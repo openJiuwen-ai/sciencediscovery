@@ -68,3 +68,46 @@ test("an older catalog read cannot replace a newer settings update", async () =>
     assert.equal(hook.sourceStatuses.pubmed?.status, "ready");
   } finally { await act(async () => view.unmount()); }
 });
+
+test("non-Error rejection invalidates ready status and callback reload clears the error", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let fail = true, reloaded = 0;
+  let hook!: ReturnType<typeof useMcpReadiness>;
+  const client = {listMcpSources: async () => { if (fail) throw "catalog disconnected"; return ready; },
+    reloadMcpSources: async () => { reloaded++; fail = false; }};
+  function Harness() { hook = useMcpReadiness(client); return null; }
+  let view!: ReactTestRenderer;
+  await act(async () => { view = create(createElement(Harness)); });
+  try {
+    await act(async () => hook.applyListing(ready));
+    await act(async () => hook.check());
+    assert.equal(hook.error, "catalog disconnected");
+    assert.deepEqual(hook.sourceStatuses, {});
+    assert.equal(hook.refreshing, false);
+    await act(async () => hook.reload());
+    assert.equal(reloaded, 1);
+    assert.equal(hook.sourceStatuses.pubmed?.status, "ready");
+    assert.equal(hook.error, undefined);
+    assert.equal(hook.refreshing, false);
+  } finally { await act(async () => view.unmount()); }
+});
+
+test("stale catalog rejection cannot erase a newer ready result", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let rejectOld!: (reason: unknown) => void;
+  let calls = 0;
+  let hook!: ReturnType<typeof useMcpReadiness>;
+  const client = {listMcpSources: () => ++calls === 1 ? new Promise<Listing>((_resolve, reject) => {rejectOld = reject;}) : Promise.resolve(ready), reloadMcpSources: async () => undefined};
+  function Harness() {hook = useMcpReadiness(client); return null;}
+  let view!: ReactTestRenderer;
+  await act(async () => {view = create(createElement(Harness));});
+  try {
+    let pending!: Promise<void>;
+    await act(async () => {pending = hook.refresh();});
+    await act(async () => {await hook.refresh();});
+    await act(async () => {rejectOld("obsolete failure"); await pending;});
+    assert.equal(hook.error, undefined);
+    assert.equal(hook.sourceStatuses.pubmed?.status, "ready");
+    assert.equal(hook.refreshing, false);
+  } finally {await act(async () => view.unmount());}
+});

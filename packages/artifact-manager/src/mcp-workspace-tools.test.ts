@@ -244,3 +244,61 @@ test("repair discovers tools absent from the initial manifest without expanding 
   await catalog.refresh();
   await assert.rejects(readiness.invoke("arxiv", "search", {}, undefined, "removed"), /not a recovered/);
 });
+
+test("important MCP wait without a repair-card port fails closed without refreshing", async () => {
+  const {options, catalog} = fixture();
+  options.store = {listMcpInvocations: async () => []};
+  let paused = false;
+  options.pauseExternalWait = () => { paused = true; return () => {}; };
+  const readiness = createMcpWorkspaceTools(options).mcpReadiness!;
+  await assert.rejects(readiness.decide("wait", "Required evidence", ["arxiv"]), /Interactive MCP repair is unavailable/);
+  assert.equal(paused, false);
+  assert.equal(catalog.getStatus("arxiv").status, "unavailable");
+  await assert.rejects(readiness.decide("wait", "Required evidence", []), /Choose enabled MCP sources/);
+});
+
+test("abort during MCP repair wait releases external wait and never refreshes or invokes", async () => {
+  const {options, catalog} = fixture();
+  const controller = new AbortController();
+  let releaseCount = 0, invoked = false;
+  options.pauseExternalWait = () => () => { releaseCount++; };
+  options.store = {listMcpInvocations: async () => [], executionBlocks: {wait: async () => {
+    controller.abort(); return {action: "retry"};
+  }}};
+  options.broker = {invoke: async () => { invoked = true; throw new Error("must not invoke"); }} as unknown as McpWorkspaceToolOptions["broker"];
+  const readiness = createMcpWorkspaceTools(options).mcpReadiness!;
+  await assert.rejects(readiness.decide("wait", "Required", ["arxiv"], controller.signal), /abort/i);
+  assert.equal(releaseCount, 1);
+  assert.equal(catalog.getStatus("arxiv").status, "unavailable");
+  await assert.rejects(readiness.invoke("arxiv", "search", {}, undefined, "invalid"), /not a recovered/);
+  assert.equal(invoked, false);
+});
+
+test("repair wait rejection releases the clock and a source repaired before wait needs no card", async () => {
+  const {options, catalog} = fixture();
+  let released = 0;
+  options.pauseExternalWait = () => () => { released++; };
+  options.store = {listMcpInvocations: async () => [], executionBlocks: {wait: async () => {throw new Error("card aborted");}}};
+  const readiness = createMcpWorkspaceTools(options).mcpReadiness!;
+  await assert.rejects(readiness.decide("wait", "Required", ["arxiv"]), /card aborted/);
+  assert.equal(released, 1);
+  await catalog.refresh();
+  const result = await readiness.decide("wait", "Already repaired", ["arxiv"]);
+  assert.equal(released, 1, "healthy source must not reopen the card");
+  assert.match(JSON.stringify(result), /recoveredTools/);
+});
+
+test("a ready catalog with no tools is diagnosed, while ready tools omit the recovery port", async (context) => {
+  const {options, catalog} = fixture();
+  options.enabledSourceIds = ["arxiv"];
+  await catalog.refresh();
+  assert.equal(createMcpWorkspaceTools(options).mcpReadiness, undefined);
+  const ready = catalog.getStatus("arxiv");
+  context.mock.method(catalog, "getStatus", () => ({...ready, availableTools: [], missingTools: []}));
+  const result = createMcpWorkspaceTools(options);
+  assert.deepEqual(result.mcpTools, []);
+  assert.ok(result.mcpReadiness);
+  const decision = await result.mcpReadiness.decide("continue", "No retrieval needed", []);
+  assert.match(JSON.stringify(decision), /No retrieval needed/);
+  assert.deepEqual((decision as {omittedTools: unknown[]}).omittedTools, [{sourceId: "arxiv", tools: []}]);
+});

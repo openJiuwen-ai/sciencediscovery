@@ -1085,3 +1085,18 @@ test("MCP omissions remain visible on timeline replay without an agent tool call
   assert.equal(entries[0]!.type, "mcp-readiness");
   assert.match(JSON.stringify(entries), /literature-child.*arxiv unavailable/);
 });
+
+test("MCP warning JSX preserves main and child source diagnostics after assistant snapshots", () => {
+  const entries = apply([
+    {type: "mcp.readiness", summary: "arxiv: unavailable; omitted tools: search.\npubmed: degraded; omitted tools: download."},
+    {type: "mcp.readiness", agentId: "child", summary: "custom: unavailable; no tools injected."},
+    {type: "assistant.snapshot", content: "Continuing unrelated work"},
+  ]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, {entries, isRunning: false, onToggle: () => undefined}));
+  assert.equal((html.match(/class="boundary-note process-notice"/g) ?? []).length, 2);
+  assert.match(html, /white-space:pre-line/);
+  assert.match(html, /MCP \(main\): arxiv: unavailable; omitted tools: search\./);
+  assert.match(html, /pubmed: degraded; omitted tools: download\./);
+  assert.match(html, /MCP \(child\): custom: unavailable; no tools injected\./);
+  assert.match(html, /Continuing unrelated work/);
+});

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { ExecutionBlockCards, RunnerReadinessPanel } from "../src/ExecutionReadiness.js";
+import { LocaleProvider } from "../src/i18n/index.js";
 import type { ApiClient } from "../src/api/client.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,3 +57,18 @@ test("MCP repair card shows source diagnostics and rechecks without a Runner swi
     assert.deepEqual(decisions, [["s", "mcp-block", { action: "retry" }]]);
   } finally { await act(async () => renderer.unmount()); }
 });
+
+for (const locale of ["en", "zh-CN"] as const) {
+  for (const kind of [undefined, "mcp"] as const) {
+    test(`repair card distinguishes ${kind ?? "runner"} consent from MCP recheck in ${locale}`, async () => {
+      const client = {listExecutionBlocks: async () => [{id: "b", kind, runnerId: "target", reason: "offline", alternatives: []}]} as unknown as ApiClient;
+      let view!: ReactTestRenderer;
+      await act(async () => {view = create(createElement(LocaleProvider, {initialLocale: locale}, createElement(ExecutionBlockCards, {client, sessionId: "s"})));});
+      try {
+        const text = JSON.stringify(view.toJSON());
+        assert.match(text, kind === "mcp" ? (locale === "en" ? /Waiting for MCP repair/ : /等待 MCP 修复/) : (locale === "en" ? /code has not executed/ : /代码尚未执行/));
+        assert.match(text, kind === "mcp" ? (locale === "en" ? /does not grant permission/ : /此操作不授予权限/) : (locale === "en" ? /never executes code automatically/ : /不会自动执行代码/));
+      } finally {await act(async () => view.unmount());}
+    });
+  }
+}

@@ -399,3 +399,23 @@ test("updates the Reviewer Specialist system switch and review level", async () 
     globalThis.fetch = previousFetch;
   }
 });
+
+test("MCP catalog reload posts authenticated request and propagates HTTP failure", async () => {
+  const previous = globalThis.fetch;
+  const calls: Array<{url: string; init?: RequestInit}> = [];
+  let fail = false;
+  globalThis.fetch = async (input, init) => {
+    calls.push({url: String(input), init});
+    return fail ? Response.json({ error: "reload failed" }, {status: 503}) : Response.json({ revision: "repaired" });
+  };
+  try {
+    const client = new ApiClient("reload-token");
+    assert.deepEqual(await client.reloadMcpSources(), {revision: "repaired"});
+    assert.equal(calls[0]!.url, "/api/mcp/sources/reload");
+    assert.equal(calls[0]!.init?.method, "POST");
+    assert.equal(new Headers(calls[0]!.init?.headers).get("authorization"), "Bearer reload-token");
+    assert.equal(calls[0]!.init?.body, undefined, "reloading does not submit configuration or permission grants");
+    fail = true;
+    await assert.rejects(client.reloadMcpSources(), /reload failed/);
+  } finally { globalThis.fetch = previous; }
+});

@@ -2059,3 +2059,67 @@ test("recovered MCP calls without an approval port never invoke the broker", asy
     assert.match(result.text, /approval denied/);
   } finally { await adapter.close(); }
 });
+
+test("stale generic recovery approval question is denied without consulting or minting a grant", async () => {
+  let asked = 0, answered!: string;
+  let resolveAnswer!: () => void;
+  const answer = new Promise<void>(resolve => { resolveAnswer = resolve; });
+  const adapter = await fakeAdapter(async ({body}, response) => {
+    if (body.decision) { answered = body.decision; response.writeHead(200); response.end("{}"); resolveAnswer(); return; }
+    response.writeHead(200);
+    response.write(line({event: {type: "permission.required", request: {
+      id: "stale", toolName: "mcp_recovered_call", resource: "mcp_recovered_call", toolCallId: "stale", summary: "Call recovered tool",
+    }}}));
+    await answer;
+    response.end(line({done: {finalText: "denied"}}));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({adapterUrl: adapter.url})(options({
+      requestApproval: async () => {asked++; return "allow_matching";},
+    })).execute("go");
+    assert.equal(answered, "deny");
+    assert.equal(asked, 0, "generic recovery grants must never reach the permission store");
+  } finally { await adapter.close(); }
+});
+
+test("recovered MCP approval rejection releases the wait without invoking", async () => {
+  let invoked = false;
+  let result: any;
+  const adapter = await fakeAdapter(async ({body}, response) => {
+    response.writeHead(200);
+    const args = {sourceId: "arxiv", toolId: "search", input: {}};
+    response.write(line({event: {type: "tool.started", trace: {id: "approval-error", name: "mcp_recovered_call", args, status: "running"}}}));
+    result = await (await fetch(body.bridge.url, {method: "POST", headers: {authorization: `Bearer ${body.bridge.token}`}, body: JSON.stringify({name: "mcp_recovered_call", arguments: args})})).json();
+    response.end(line({done: {finalText: "approval unavailable"}}));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({adapterUrl: adapter.url})(options({
+      requestApproval: async () => {throw new Error("approval disconnected");},
+      mcpReadiness: {summary: "repaired", decide: async () => ({}), invoke: async () => {invoked = true; return {}; }},
+    })).execute("go");
+    assert.equal(invoked, false);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /approval disconnected/);
+  } finally {await adapter.close();}
+});
+
+test("cancellation during recovered MCP approval prevents dispatch after an allow answer", async () => {
+  let invoked = false, asked = false;
+  const adapter = await fakeAdapter(async ({body}, response) => {
+    response.writeHead(200);
+    const args = {sourceId: "arxiv", toolId: "search", input: {}};
+    response.write(line({event: {type: "tool.started", trace: {id: "approval-abort", name: "mcp_recovered_call", args, status: "running"}}}));
+    // Cancellation can close the bridge before the response reaches the adapter.
+    await fetch(body.bridge.url, {method: "POST", headers: {authorization: `Bearer ${body.bridge.token}`}, body: JSON.stringify({name: "mcp_recovered_call", arguments: args})}).catch(() => undefined);
+    response.end(line({done: {finalText: "cancelled"}}));
+  });
+  const agent = createJiuwenSwarmAgentFactory({adapterUrl: adapter.url})(options({
+    requestApproval: async () => {asked = true; agent.abort(); return "allow_once";},
+    mcpReadiness: {summary: "repaired", decide: async () => ({}), invoke: async () => {invoked = true; return {}; }},
+  }));
+  try {
+    await assert.rejects(agent.execute("go"), /abort|cancel/i);
+    assert.equal(asked, true);
+    assert.equal(invoked, false);
+  } finally {agent.abort(); await adapter.close();}
+});
