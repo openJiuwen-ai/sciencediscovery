@@ -1240,3 +1240,17 @@ test("native tool progress arrives before completion and ignores late callbacks"
     assert.equal(events.length, count);
   } finally { release(); restore(); }
 });
+
+test("native Agent exposes network consent and returns its blocked decision without dispatch", async () => {
+  let requests = 0;
+  const options = { ...workspace(), sandboxNetwork: { request: async (input: { hosts: string[]; purpose: string }) => {
+    requests++; assert.deepEqual(input.hosts, ["pypi.org:443"]);
+    return { state: "blocked", hosts: input.hosts, instruction: "Required retrieval is incomplete" };
+  } } } as NativeAgentOptions;
+  const restore = setModelTurnStreamerForTest(scriptStreamer([
+    call => { assert.ok(call.tools.some(t => t.name === "request_sandbox_network")); return toolTurn("request_sandbox_network", { hosts: ["pypi.org:443"], purpose: "Retrieve package metadata" }); },
+    call => { assert.match(JSON.stringify(call.history), /Required retrieval is incomplete/); return textTurn("Retrieval blocked; no silent fallback."); },
+  ]).streamer);
+  try { await createNativeAgent(options).execute("Ask for network consent before retrieval."); assert.equal(requests, 1); }
+  finally { restore(); }
+});

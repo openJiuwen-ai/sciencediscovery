@@ -4,7 +4,7 @@
  * E2E-META
  * Purpose: Grant scoped sandbox egress and recover an observed denial without replaying side effects.
  * Steps: Start production API/Runner CLIs; deny and approve explicit hosts in none mode; approve a live allowlist denial; issue a safe new retrieval and inspect output, execution audit and unchanged settings.
- * Environment: Committed/built task worktree; Linux bubblewrap; isolated native API/Runner; ephemeral ports/data.
+ * Environment: Committed/built task worktree; Linux bubblewrap; isolated native API/Runner; ephemeral ports/data; localhost.localdomain must resolve to loopback (no fake-IP DNS).
  * Type: mocked
  * LLM: Local scripted OpenAI-compatible model only.
  * WebSearch: none
@@ -29,8 +29,9 @@ await mkdir(root, { recursive: true });
 const dataDir = resolve(root, "data"), token = randomUUID(), processes = [], steps = [];
 let api, logs = "", calls = 0;
 const redact = value => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
-let targetCalls = 0;
+let targetCalls = 0, configuredCalls = 0;
 const target = createServer((_req, res) => { targetCalls++; res.end("LOCAL_RETRIEVAL_OK"); });
+const configuredTarget = createServer((_req, res) => { configuredCalls++; res.end("CONFIGURED_HOST_OK"); });
 const field = (content, name) => {
   const text = String(content).replaceAll('\\"', '"');
   const match = text.match(new RegExp('"' + name + '"\\s*:\\s*"([^"\\n]*)"'));
@@ -48,7 +49,9 @@ const stub = createServer(async (request, response) => {
     if (previous) console.log(`Model observed ${previous}: ${redact(content).slice(0, 1400)}`);
     const gateway = String(messages[lastUser]?.content).includes("gateway recovery");
     let call;
-    const command = `python3 -c 'import urllib.request; print(urllib.request.urlopen("http://localhost.localdomain:${target.address().port}/records",timeout=3).read().decode())'`;
+    const configuredCommand = `python3 -c 'import urllib.request; print(urllib.request.urlopen("http://localhost.localdomain:${configuredTarget.address().port}/configured",timeout=3).read().decode())'`;
+    const retrievalCommand = `python3 -c 'import urllib.request; print(urllib.request.urlopen("http://localhost.localdomain:${target.address().port}/records",timeout=3).read().decode())'`;
+    const command = `${configuredCommand}; ${retrievalCommand}`;
     if (!String(messages[lastUser]?.content).includes("[Execution notifications]")) {
       if (!previous) call = gateway
         ? { name: "run_shell", arguments: { command: "printf 'initial-side-effect\\n' >> attempt.txt; " + command } }
@@ -119,6 +122,7 @@ try {
   const local = await lookup("localhost.localdomain");
   assert.ok(["::1", "127.0.0.1"].includes(local.address), "Fixture host must resolve locally");
   await new Promise(done => target.listen(0, local.address, done));
+  await new Promise(done => configuredTarget.listen(0, local.address, done));
   await step("1. Start isolated production API/Runner", "Sandbox is usable; default policy is none.", async () => {
     const runner = await start("runner"); api = await start("api", { SCIENCE_AGENT_RUNNER_URL: runner });
     assert.equal((await json("/api/sandbox-network-settings")).mode, "none"); return "Production services started; default none confirmed";
@@ -127,7 +131,7 @@ try {
   const project = await json("/api/projects", { name: "Network consent" });
   for (const scenario of ["deny", "allow_once", "allow_matching", "always_allow", "gateway recovery"]) {
     await step(`${steps.length + 1}. ${scenario}`, "Consent is scoped; no egress before approval, denial stays offline, approval never replays previous side effects.", async () => {
-      if (scenario === "gateway recovery") await json("/api/sandbox-network-settings", { mode: "domain-allowlist", allowedDomains: ["example.org"], allowPrivateNetwork: true }, "PUT");
+      if (scenario === "gateway recovery") await json("/api/sandbox-network-settings", { mode: "domain-allowlist", allowedDomains: [`localhost.localdomain:${configuredTarget.address().port}`], allowPrivateNetwork: true }, "PUT");
       const before = await json("/api/sandbox-network-settings");
       const session = await json(`/api/projects/${project.id}/sessions`, { title: scenario, modelId: model.id, runnerIds: ["local"], approvalMode: scenario === "always_allow" ? "always_allow" : "ask_for_dangerous" });
       // Approve ordinary code separately so this journey focuses on network consent.
@@ -144,6 +148,7 @@ try {
         });
         assert.match(card.summary, scenario === "gateway recovery" ? /localhost.localdomain/ : /pubmed.ncbi.nlm.nih.gov:443.*Retrieve requested PubMed/);
         assert.equal(targetCalls, 0);
+        if (scenario === "gateway recovery") assert.equal(configuredCalls, 1, "configured host is available before new consent");
         const executions = (await json(`/api/sessions/${session.id}/agent-activity`)).executions;
         assert.equal(executions.length, scenario === "gateway recovery" ? 1 : 0);
         await json(`/api/permission-requests/${card.id}/decision`, { decision: scenario === "gateway recovery" ? "allow_once" : scenario });
@@ -162,6 +167,7 @@ try {
       assert.equal(recorded.filter(x => x.exitCode === 0).length, 1);
       if (scenario === "gateway recovery") {
         assert.equal(targetCalls, 1, "only safe new call reaches target after consent");
+        assert.equal(configuredCalls, 2, "retry keeps configured capability and approved extra host together");
         const fs = await import("node:fs/promises");
         const path = resolve(dataDir, "projects", project.id, "sessions", session.id, "workspace", "attempt.txt");
         assert.equal(await fs.readFile(path, "utf8"), "initial-side-effect\n", "the side-effecting first command must never be replayed");
@@ -170,7 +176,7 @@ try {
         assert.equal(activity.executions.filter(x => x.state === "completed").length, 1);
         const stdout = await json(`/api/sessions/${session.id}/agent-activity/executions/${activity.executions.find(x => x.state === "completed").id}/logs`);
         assert.match(stdout.chunks.map(x => x.text).join(""), /LOCAL_RETRIEVAL_OK/);
-        return "Denied execution recorded as failed; one approved new retrieval reached local target exactly once; first command was never replayed";
+        return "Denied execution recorded as failed; one approved new retrieval reached local target exactly once; first command was never replayed; configured host remains available on retry";
       }
       return "Explicit consent produced one new scoped execution; global none unchanged";
     });
@@ -187,6 +193,7 @@ finally {
   }
   stub.closeAllConnections(); await new Promise(done => stub.close(done));
   target.closeAllConnections(); await new Promise(done => target.close(done));
+  configuredTarget.closeAllConnections(); await new Promise(done => configuredTarget.close(done));
   await rm(dataDir, { recursive: true, force: true });
   console.log(`${outcome}: ${steps.filter(item => item.status === "PASS").length}/${steps.length} steps; report ${resolve(root, "report.md")}`);
 }

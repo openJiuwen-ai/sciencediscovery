@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { createHash } from "node:crypto";
-import { epochSandboxNetworkAccess, normalizeAllowedDomains, parseAllowedDomain,
+import { epochSandboxNetworkAccess, formatAllowedDomain, normalizeAllowedDomains, parseAllowedDomain,
   type PermissionEpoch, type SandboxNetworkPermissionResult, type ScientificExecutionResult } from "@sciencediscovery/schema";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
@@ -62,20 +62,43 @@ export function createSandboxNetworkConsent(options: {
       tickets.delete(id); // Consume before dispatch, including uncertain transport outcomes.
       const base = epochSandboxNetworkAccess(epoch);
       const { revision: _revision, ...settings } = base;
-      const access = sandboxNetworkAccess({ ...settings, mode: "domain-allowlist", allowedDomains: ticket.hosts });
+      // Configured capability is already authorized. Only the extra hosts
+      // come from this run/Agent/Runner-bound token; none still starts empty.
+      const access = base.mode === "open" ? base : sandboxNetworkAccess({ ...settings, mode: "domain-allowlist",
+        allowedDomains: [...(base.mode === "domain-allowlist" ? base.allowedDomains : []), ...ticket.hosts] });
       // Unique epoch prevents a persistent kernel from retaining a broader prior policy.
       return { ...epoch, id: `${epoch.id}:network:${id}`, networkPolicy: access.mode, networkAccess: access };
     },
     async observe<T extends Pick<ScientificExecutionResult, "networkDeniedHosts" | "networkPermission">>(result: T, runnerId: string, signal?: AbortSignal): Promise<T & { networkPermission?: SandboxNetworkPermissionResult }> {
       if (!result.networkDeniedHosts?.length) return result;
+      // One unsupported target must not suppress consent for other valid hosts.
+      const hosts: string[] = [];
+      const blockedHosts: Array<{ host: string; reason: string }> = [];
+      for (const host of result.networkDeniedHosts) {
+        try {
+          const entry = parseAllowedDomain(host);
+          if (entry.wildcard) throw new Error("Observed targets must be exact hosts, not wildcards");
+          hosts.push(formatAllowedDomain(entry));
+        } catch (error) {
+          blockedHosts.push({ host, reason: error instanceof Error ? error.message : "Unsupported sandbox host" });
+        }
+      }
+      const feedback = blockedHosts.length ? {
+        blockedHosts,
+        instruction: `These targets remain blocked and are not authorized by this consent: ${blockedHosts.map(entry => `${entry.host} (${entry.reason})`).join("; ")}. Required retrieval involving them remains incomplete.`,
+      } : undefined;
+      if (!hosts.length) return { ...result, networkPermission: { state: "blocked", hosts, ...feedback,
+        instruction: feedback!.instruction } };
       // The execution has already ended. Consent never revives that execution.
       try {
-        const networkPermission = await request({ hosts: result.networkDeniedHosts, purpose: "Continue the sandbox retrieval blocked by this execution", runnerId }, signal);
+        const permission = await request({ hosts, purpose: "Continue the sandbox retrieval blocked by this execution", runnerId }, signal);
+        const networkPermission = feedback ? { ...permission, blockedHosts,
+          instruction: `${permission.instruction} ${feedback.instruction}` } : permission;
         return { ...result, networkPermission };
       } catch (error) {
         // Never turn a known terminal execution into an unknown outcome just
         // because its run ended or consent became unavailable after execution.
-        return { ...result, networkPermission: { state: "blocked", hosts: result.networkDeniedHosts,
+        return { ...result, networkPermission: { state: "blocked", hosts, ...(feedback ? { blockedHosts } : {}),
           instruction: `Required sandbox retrieval remains blocked. ${error instanceof Error ? error.message : "Consent unavailable"}. Reconcile the recorded execution before any retry; do not silently substitute web_search success.` } };
       }
     },
