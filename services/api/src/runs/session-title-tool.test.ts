@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../store.js";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
@@ -79,7 +80,7 @@ test("cancelled runs, archived sessions and no-op renames emit no update", async
 // rather than teaching the fixture the behavior that the regression expects.
 for (const edit of ["none", "manual", "same-title", "away-and-back", "agent"] as const) {
   test(`explicit rename after background refinement preserves ${edit} intervening edit`, async (context) => {
-    const root = await mkdtemp(join(process.cwd(), ".tmp/title-race-"));
+    const root = await mkdtemp(join(tmpdir(), "title-race-"));
     context.after(() => rm(root, { recursive: true, force: true }));
     const store = new SessionStore(root);
     await store.load();
@@ -111,7 +112,7 @@ for (const edit of ["none", "manual", "same-title", "away-and-back", "agent"] as
 }
 
 test("refinement landing between tool read and CAS still permits the explicit request", async (context) => {
-  const root = await mkdtemp(join(process.cwd(), ".tmp/title-race-"));
+  const root = await mkdtemp(join(tmpdir(), "title-race-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   const store = new SessionStore(root);
   await store.load();
