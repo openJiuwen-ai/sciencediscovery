@@ -253,3 +253,12 @@ test("system prompt preserves MCP importance and separate direct execution conse
   assert.match(prompt, /Only a NEW run_direct_shell call with the returned scope can submit that operation/);
   assert.match(prompt, /Direct consent never inherits sandbox Always Allow/);
 });
+
+test("network consent guidance prevents alternating single-host retries without accumulating grants", () => {
+  const prompt = buildWorkspaceSystemPrompt([], false);
+  assert.match(prompt, /Declare all known required hosts together up front/);
+  assert.match(prompt, /approvals do not accumulate across executions/);
+  assert.match(prompt, /observed denial names only hosts attempted in that execution/);
+  assert.match(prompt, /reconcile prior side effects, request the complete known host set/);
+  assert.match(prompt, /new token only for a safe NEW execution/);
+});

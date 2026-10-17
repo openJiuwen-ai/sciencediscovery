@@ -106,6 +106,14 @@ without replaying the execution. Only newly approved hosts are added; configured
 allowlist entries remain allowed, and configured `open` remains open. Wildcards,
 URLs and IP literals are not accepted by this consent path.
 
+Declare **all known required hosts together up front**. For example, if a script
+needs both `a.example.org` and `b.example.org`, request both in one `hosts` list.
+Approvals do not accumulate across executions: an observed denial includes only
+hosts attempted in that execution. A script that stops at its first failure can
+otherwise alternate between single-host requests. If another required host is
+discovered, reconcile the previous execution's effects, then request the complete
+known host set for a safe **new** execution. Consent never replays the script.
+
 The token belongs to this Agent, run and Runner. It is consumed before
 submission, including when the submission outcome is uncertain. Matching
 consent covers the identical host set and scope during that Agent run;
