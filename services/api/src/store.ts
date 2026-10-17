@@ -1111,7 +1111,7 @@ export class SessionStore {
       proxyServers,
       quotaSettings,
       sandboxNetworkSettings,
-      reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled === true,
+      reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled ?? true,
       reviewerSpecialistFeedbackPolicy,
       reviewerSpecialistLevel,
       remoteHosts,

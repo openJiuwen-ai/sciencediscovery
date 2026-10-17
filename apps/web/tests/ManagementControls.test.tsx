@@ -113,6 +113,21 @@ test("can disable a sidebar add button while creation is pending", () => {
   assert.match(header, /aria-label="Add session"[^>]*disabled=""/);
 });
 
+test("does not show a stale sidebar count while the resource list is loading", () => {
+  const header = renderToStaticMarkup(createElement(SidebarSectionHeader, {
+    addDisabled: true,
+    addLabel: "Add project",
+    expanded: true,
+    label: "Projects",
+    onAdd: () => undefined,
+    onToggle: () => undefined,
+    panelId: "projects-panel-content",
+  }));
+
+  assert.doesNotMatch(header, /sidebar-section-count/);
+  assert.match(header, /aria-label="Add project"[^>]*disabled=""/);
+});
+
 test("renders Project actions behind one ellipsis menu trigger", () => {
   const closed = renderToStaticMarkup(createElement(ProjectOverflowMenu, {
     label: "Cancer research",

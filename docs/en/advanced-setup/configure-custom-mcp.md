@@ -4,6 +4,8 @@
 
 This guide covers custom MCP management in system settings. Existing built-in sources remain available in their own tab and do not need to be added again.
 
+> **Release availability:** Custom MCP server management is available in 0.3.0-beta and later builds. It is not included in the 0.2.0 release: that version has neither the **MCP servers** settings page nor the `/api/mcp/servers` routes described below. Upgrade before following this guide.
+
 ## Before you start
 
 - Start the product and connect your browser using the `Open to sign in` URL (or the local service access token) printed by the backend.

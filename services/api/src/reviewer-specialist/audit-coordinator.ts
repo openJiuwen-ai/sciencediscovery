@@ -96,7 +96,6 @@ export class ReviewerAuditCoordinator {
     // platform-produced scientific conclusion. Reviewer Specialist is scoped
     // to readable report deliverables, never code or data intermediates.
     if (!version || !artifact || artifact.origin !== "llm_declared" || !isReviewerReportCandidate(artifact, version)) return undefined;
-    if (!this.store.getReviewerSpecialistSettings().enabled) return undefined;
     const sessionSettings = this.store.getSessionReviewerSpecialistSettings(input.sessionId);
     if (!sessionSettings.automaticReviewEnabled) return undefined;
     // Structured data is always checked deterministically. It must not spend a
@@ -363,10 +362,17 @@ export class ReviewerAuditCoordinator {
         if (task.origin === "artifact_registered") {
           const sessionSettings = this.store.getSessionReviewerSpecialistSettings(sessionId);
           if (!this.store.getReviewerSpecialistSettings().enabled || !sessionSettings.automaticReviewEnabled) {
+            const reason = !this.store.getReviewerSpecialistSettings().enabled
+              ? "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists."
+              : "Automatic review skipped: automatic review was turned off for this session.";
+            await this.publishCheckpoint(task);
             await this.store.updateReviewerAuditTask(sessionId, task.id, {
-              errorSummary: "Automatic review is disabled",
+              errorSummary: reason,
               finishedAt: new Date().toISOString(),
-              status: "superseded",
+              status: "failed",
+            });
+            await this.store.updateReviewerCheckpointMessage(sessionId, task.checkpointMessageId, {
+              content: reviewerCheckpointPromptContent([], reason), error: reason, status: "failed",
             });
             continue;
           }

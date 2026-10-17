@@ -4191,11 +4191,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <div className={sidebarResourceClass} style={{ "--sidebar-split": `${sidebarSplit}%` } as CSSProperties}>
           <div className={projectsExpanded ? "sidebar-section projects" : "sidebar-section projects collapsed"}>
             <SidebarSectionHeader
+              addDisabled={!projectsLoaded || !globalSettings}
               addLabel={t("sidebar.addProject")}
-              count={projects.length}
+              count={projectsLoaded ? projects.length : undefined}
               expanded={projectsExpanded}
               label={t("sidebar.projects")}
-              onAdd={() => { setProjectsExpanded(true); setProjectCreationOpen(true); }}
+              onAdd={() => {
+                if (!projectsLoaded || !globalSettings) return;
+                setProjectsExpanded(true);
+                setProjectCreationOpen(true);
+              }}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
               panelId="projects-panel-content"
             />
@@ -4473,9 +4478,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <div className="session-intro">
                       <span className="eyebrow">{t("empty.sessionReady")}</span>
                       <h2>{t("empty.investigate")}</h2>
-                      <p>{session.enabledConnectorIds.includes("pubmed") && session.enabledConnectorIds.includes("uniprot")
-                        ? t("app.sessionIntroPrompt")
-                        : t("empty.sessionCsvHelp")}</p>
                     </div>
                   ) : null}
                   {conversationBlocks.map((block) => block.kind === "message" ? (
@@ -4626,6 +4628,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
+                  {reviewerSpecialistSettings && !reviewerSpecialistSettings.enabled && session.reviewerAutomaticReviewEnabled
+                    ? <div className="composer-thinking-notice" role="status">{t("reviewer.automaticUnavailable")}</div>
+                    : null}
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
@@ -4655,6 +4660,23 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
+                    <button
+                      aria-checked={Boolean(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled)}
+                      aria-label={t("reviewer.automaticReview")}
+                      className="automatic-review-toggle"
+                      disabled={sessionArchived || reviewerSessionSettingsBusy || !reviewerSpecialistSettings}
+                      onClick={() => reviewerSpecialistSettings?.enabled
+                        ? void updateSessionReviewerSpecialistSettings({
+                          automaticReviewEnabled: !session.reviewerAutomaticReviewEnabled,
+                          level: session.reviewerSpecialistLevel,
+                        })
+                        : openSystemSettings("specialists")}
+                      role="switch"
+                      title={t(reviewerSpecialistSettings?.enabled ? "reviewer.automaticReview" : "reviewer.automaticUnavailable")}
+                      type="button"
+                    >
+                      {t("reviewer.automaticReview")}: {t(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled ? "common.on" : "common.off")}
+                    </button>
                     <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
                   </div>
                 </form>
