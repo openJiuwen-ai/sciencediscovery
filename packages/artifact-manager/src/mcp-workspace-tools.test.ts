@@ -76,3 +76,27 @@ test("unselected unhealthy MCP sources do not block web-only work", () => {
   options.enabledSourceIds = ["web"];
   assert.deepEqual(createMcpWorkspaceTools(options).mcpTools, []);
 });
+
+test("a selected ready source remains usable when an unselected source is degraded", async () => {
+  const { options, catalog, remote } = fixture();
+  remote.servers[0]!.tools = remote.servers[0]!.tools.filter((tool) => tool.name !== "arxiv_search");
+  await catalog.refresh();
+  assert.equal(catalog.getStatus("arxiv").status, "degraded");
+  options.enabledSourceIds = ["pubmed"];
+  const tools = createMcpWorkspaceTools(options).mcpTools!;
+  assert.ok(tools.some((tool) => tool.name === "mcp__pubmed__search"));
+  assert.ok(tools.every((tool) => tool.sourceId === "pubmed"));
+
+  options.enabledSourceIds = ["arxiv", "pubmed"];
+  assert.throws(() => createMcpWorkspaceTools(options), /arxiv: degraded.*missing tools: search/);
+});
+
+test("subagent construction checks the same enabled literature source readiness", async () => {
+  const { options, catalog } = fixture();
+  options.parentSubagentId = "literature-searcher-child";
+  assert.throws(() => createMcpWorkspaceTools(options), /arxiv: unavailable.*pubmed: unavailable/);
+  await catalog.refresh();
+  const names = createMcpWorkspaceTools(options).mcpTools!.map((tool) => tool.name);
+  assert.ok(names.includes("mcp__arxiv__search"));
+  assert.ok(names.includes("mcp__pubmed__search"));
+});
