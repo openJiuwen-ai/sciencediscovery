@@ -87,6 +87,8 @@
 .mcp-builtin { padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
 .mcp-builtin summary { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .mcp-builtin summary span { margin-left: auto; color: var(--muted); }
+.mcp-builtin summary .mcp-status + span { margin-left: 0; }
+.mcp-builtin p.mcp-server-error { color: #a52b3c; }
 .mcp-builtin p { overflow-wrap: anywhere; color: var(--muted); }
 .mcp-inspector h4 { font-size: 16px; overflow-wrap: anywhere; margin: 18px 0 6px; }
 .mcp-inspector-session { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 18px; }

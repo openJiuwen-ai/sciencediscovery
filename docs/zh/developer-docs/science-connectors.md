@@ -76,6 +76,8 @@ JiuwenSwarm 在运行开始时固定工具表，后续不能再把新 schema 加
 Source Catalog 只暴露 MCP server 中实际存在且 schema 兼容的工具。缺失或不兼容的工具使来源进入
 `degraded`，不会作为可调用工具交给 Agent。
 
+来源所属的 MCP server 关闭（`enabled: false`，或未进入已解析的 server 表）时，来源状态为 `disabled`：`GET /api/connectors` 不再返回它，任何连接器选择里都看不到，即使 Session 仍保留它，也没有工具交给 Agent。已启用的 server 连接失败或 `listTools` 失败时，来源状态为 `unavailable`：它仍在 `GET /api/connectors` 中，并带 `connectionError`（`message`、`checkedAt`）供界面提示，`GET /api/mcp/sources` 也带同一字段。catalog 尚未成功应用之前，来源既不隐藏也不标记失败。
+
 ## 5. 本地 LLM Wiki
 
 `llm-wiki` 通过随包的 stdio MCP 桥接服务读取任意领域的 LLM Wiki 知识库。

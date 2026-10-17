@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import type { CustomMcpServerDetails, CustomMcpServerInput, McpSourceManifest } from "@sciencediscovery/schema";
+import type { CustomMcpServerDetails, CustomMcpServerInput, McpSourceDetails } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { useLocale } from "./i18n/index.js";
 import { AlertCircleIcon, CheckIcon, CloseIcon, DatabaseIcon, EditIcon, PlusIcon, SearchIcon, SpinnerIcon, TrashIcon, UploadIcon } from "./icons.js";
@@ -66,7 +66,7 @@ function SecretFields({ rows, onChange, label }: { rows: SecretRow[]; onChange: 
 
 export function McpServerSettings({ client, sources, sessionId, sessionTitle, onChanged }: {
   client: Pick<ApiClient, "listMcpServers" | "saveMcpServer" | "testMcpServer" | "deleteMcpServer" | "importMcpServers" | "inspectMcpTool"> & McpAuthorizationClient;
-  sources: McpSourceManifest[];
+  sources: McpSourceDetails[];
   sessionId?: string;
   sessionTitle?: string;
   onChanged: () => Promise<void>;
@@ -136,7 +136,7 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
   }
 
   const filtered = servers.filter((server) => `${server.name} ${server.description}`.toLowerCase().includes(query.toLowerCase()));
-  const builtins = sources.filter((source) => !source.id.startsWith("custom-"));
+  const builtins = sources.filter((source) => !source.manifest.id.startsWith("custom-"));
   const draft = editor?.draft;
   const inspectedServer = servers.find((server) => server.id === inspecting);
   const change = (patch: Partial<Draft>) => setEditor((current) => current ? { ...current, draft: { ...current.draft, ...patch } } : current);
@@ -206,7 +206,11 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
             </div>
           </article>)}
         </div>}
-      </> : <div className="mcp-builtin-list">{builtins.map((source) => <details key={source.id} className="mcp-builtin"><summary><DatabaseIcon size={16} /><strong>{source.displayName}</strong><span>{Object.keys(source.tools).length} {t("mcp.tools")}</span></summary><p>{source.description}</p><ul>{Object.values(source.tools).map((tool) => <li key={tool.id}><code>{tool.mcpToolName}</code><p>{tool.description}</p></li>)}</ul></details>)}</div>}
+      </> : <div className="mcp-builtin-list">{builtins.map(({ connectionError, manifest: source, status }) => {
+        // Off servers keep their row here; only a failed connection of an enabled server is an error.
+        const state = status.status === "disabled" ? "disabled" : connectionError ? "error" : undefined;
+        return <details key={source.id} className="mcp-builtin"><summary><DatabaseIcon size={16} /><strong>{source.displayName}</strong>{state ? <span className={`mcp-status ${state}`}><i />{t(`mcp.status.${state}`)}</span> : null}<span>{Object.keys(source.tools).length} {t("mcp.tools")}</span></summary><p>{source.description}</p>{connectionError ? <p className="mcp-server-error">{connectionError.message}</p> : null}<ul>{Object.values(source.tools).map((tool) => <li key={tool.id}><code>{tool.mcpToolName}</code><p>{tool.description}</p></li>)}</ul></details>;
+      })}</div>}
     </>}
   </section>;
 }

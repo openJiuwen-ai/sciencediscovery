@@ -847,10 +847,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (await handlePluginRequest(request, response, url, store.plugins, () => readJson(request))) return;
       if (await handleCustomMcpRequest(request, response, url, platform.customMcpServers, () => readJson(request), { broker: mcpBroker, registry: mcpRegistry, store })) return;
       if (request.method === "GET" && url.pathname === "/api/mcp/sources") {
-        sendJson(response, 200, mcpRegistry.listManifests().map((manifest) => ({
-          manifest,
-          status: mcpCatalog.getStatus(manifest.id),
-        })));
+        sendJson(response, 200, mcpRegistry.listManifests().map((manifest) => {
+          const connectionError = mcpCatalog.connectionError(manifest.id);
+          return {
+            ...(connectionError ? { connectionError } : {}),
+            manifest,
+            status: mcpCatalog.getStatus(manifest.id),
+          };
+        }));
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/mcp/sources/reload") {
@@ -1557,7 +1561,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           trustLevel: "bundled",
           version: "1",
         };
-        sendJson(response, 200, [...mcpRegistry.listManifests().map(mcpConnectorManifest), webConnector]);
+        // A connector whose MCP server is off is not offered at all; one whose
+        // enabled server failed to connect stays listed and carries the failure.
+        const mcpConnectors = mcpRegistry.listManifests()
+          .filter((manifest) => mcpCatalog.getStatus(manifest.id).status !== "disabled")
+          .map((manifest) => {
+            const connectionError = mcpCatalog.connectionError(manifest.id);
+            return { ...mcpConnectorManifest(manifest), ...(connectionError ? { connectionError } : {}) };
+          });
+        sendJson(response, 200, [...mcpConnectors, webConnector]);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/skills") {

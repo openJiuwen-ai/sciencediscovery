@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConnectorId, ConnectorManifest } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.connectionFailed"|"connectors.failedSummary",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -70,7 +70,12 @@ export function ConnectorPicker({
   }, [open]);
 
   const enabledCount = connectors.filter((connector) => enabledIds.includes(connector.id)).length;
-  const summary = `${t("connectors.title")}: ${t("connectors.summary", { enabled: enabledCount, total: connectors.length })}`;
+  // A failed connector that this Session relies on is flagged on the closed trigger too.
+  const failedCount = connectors.filter((connector) => connector.connectionError && enabledIds.includes(connector.id)).length;
+  const summary = [
+    `${t("connectors.title")}: ${t("connectors.summary", { enabled: enabledCount, total: connectors.length })}`,
+    ...(failedCount ? [t("connectors.failedSummary", { count: failedCount })] : []),
+  ].join(" · ");
   const builtinConnectors = connectors.filter((connector) => !connector.id.startsWith("custom-") && connector.id !== "web");
   const customConnectors = connectors.filter((connector) => connector.id.startsWith("custom-"));
   const webConnectors = connectors.filter((connector) => connector.id === "web");
@@ -84,7 +89,7 @@ export function ConnectorPicker({
       aria-expanded={open}
       aria-haspopup="dialog"
       aria-label={summary}
-      className={enabledCount ? "connector-picker-trigger has-enabled" : "connector-picker-trigger"}
+      className={["connector-picker-trigger", ...(enabledCount ? ["has-enabled"] : []), ...(failedCount ? ["has-error"] : [])].join(" ")}
       onClick={() => setOpen((current) => !current)}
       title={summary}
       type="button"
@@ -108,7 +113,10 @@ export function ConnectorPicker({
                   onChange={() => onToggle(connector.id)}
                   type="checkbox"
                 />
-                <span><strong>{name}</strong><small>{connector.publisher}</small></span>
+                <span><strong>{name}</strong><small>{connector.publisher}</small>{connector.connectionError ? <small
+                  className="connector-picker-error"
+                  title={connector.connectionError.message}
+                >{t("connectors.connectionFailed", { message: connector.connectionError.message })}</small> : null}</span>
               </label>
               {connector.termsUrl ? <a
                 aria-label={policyLabel}

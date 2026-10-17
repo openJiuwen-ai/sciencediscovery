@@ -5,7 +5,7 @@ import type {ConnectorManifest,RuntimeSettingsDetails,RuntimeSettingsOverrides,R
 export function McpSettingsSection({details,draft,setDraft,connectors,allowInheritance,disabled,t,renderSource}:{
 details:RuntimeSettingsDetails;draft:RuntimeSettingsOverrides;setDraft:(update:(value:RuntimeSettingsOverrides)=>RuntimeSettingsOverrides)=>void;
 connectors:ConnectorManifest[];allowInheritance:boolean;disabled:boolean;
-t:(key:"settings.connectors" | "scopedSettings.connectorModeAria" | "scopedSettings.inheritCount" | "scopedSettings.overrideCount",variables?:Record<string,string|number>)=>string;renderSource:(field:RuntimeSettingsField)=>ReactNode;
+t:(key:"settings.connectors" | "scopedSettings.connectorModeAria" | "scopedSettings.inheritCount" | "scopedSettings.overrideCount" | "connectors.connectionFailed",variables?:Record<string,string|number>)=>string;renderSource:(field:RuntimeSettingsField)=>ReactNode;
 }) {
  const saving=false;
  const connectorOverride=draft.enabledConnectorIds!==undefined;
@@ -37,7 +37,7 @@ return <>      <fieldset className="settings-array" disabled={disabled || saving
           <option value="override">{t("scopedSettings.overrideCount", { count: draft.enabledConnectorIds?.length ?? 0 })}</option>
         </select> : null}
         {connectorOverride || !allowInheritance ? <div className="settings-choices">
-          {connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={draft.enabledConnectorIds?.includes(connector.id) ?? false} onChange={() => toggleArrayValue("enabledConnectorIds", connector.id)} /><span>{connector.displayName ?? connector.id}</span></label>)}
+          {connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={draft.enabledConnectorIds?.includes(connector.id) ?? false} onChange={() => toggleArrayValue("enabledConnectorIds", connector.id)} /><span>{connector.displayName ?? connector.id}{connector.connectionError ? <small className="connector-connection-error" title={connector.connectionError.message}>{t("connectors.connectionFailed", { message: connector.connectionError.message })}</small> : null}</span></label>)}
         </div> : null}
         {allowInheritance ? renderSource("enabledConnectorIds") : null}
       </fieldset>
