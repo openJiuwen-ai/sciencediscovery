@@ -245,7 +245,7 @@ Runner 请求、执行时间和 Provider 返回的 token 用量，失败时也�
 - [配置参考](../reference/configuration.md) — 相关环境变量、配额与数据落点
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — Ascend NPU Broker 设计背景
 
-## 显式授权的本机直执恢复
+## 显式授权的直执恢复
 
 已配置的本机或远程 Runner 可达但沙箱不可用时，Agent 可通过 `request_direct_execution`
 提交失败操作 ID、确切 Shell 命令和工作区相对目录。对话中的独立授权卡展示目标
