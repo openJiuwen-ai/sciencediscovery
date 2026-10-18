@@ -48,8 +48,9 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
       assert.equal(evolve.status, 200); assert.equal((await evolve.json() as any).choices[0].message.content, "OK");
       assert.equal(spend[0]?.usageStatus, "provider-not-reported"); assert.equal(spend[0]?.costUsd, null);
       // Invoke the actual Python sidecar completion client through the authenticated proxy.
-      const python = process.env.SCIENCE_TEST_PYTHON ?? "python3";
-      await promisify(execFile)(python, ["-c", "import sys; from sciencediscovery_evolve.completion import completion_for; usage=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=128,timeout=2,on_usage=usage.append)('synthetic sidecar request'); assert result == 'OK'; assert usage == []", `http://127.0.0.1:${(server.address() as AddressInfo).port}/internal/evolve-llm/synthetic-run/v1/chat/completions`, token], {
+      // This client uses only the standard library. ST runs independently of UT,
+      // whose SCIENCE_TEST_PYTHON points at a service venv that ST does not create.
+      await promisify(execFile)("python3", ["-c", "import sys; from sciencediscovery_evolve.completion import completion_for; usage=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=128,timeout=2,on_usage=usage.append)('synthetic sidecar request'); assert result == 'OK'; assert usage == []", `http://127.0.0.1:${(server.address() as AddressInfo).port}/internal/evolve-llm/synthetic-run/v1/chat/completions`, token], {
         timeout: 5000, env: { ...process.env, PYTHONPATH: [fileURLToPath(new URL("../../evolve/src/", import.meta.url)), process.env.PYTHONPATH].filter(Boolean).join(":") },
       });
       assert.equal(spend.length, 2);
