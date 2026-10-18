@@ -86,7 +86,7 @@ try {
     });
   }
   if (process.argv.includes('--browser')) await step('5. Browser consent and matrix journey', 'Consent, capability details and responsive layouts pass through the shipped UI', async () => {
-    const browser = spawn('npm', ['run', 'test:mocked', '--', 'journey-model-compatibility.spec.ts', '--workers=1'], { cwd: resolve('.e2e'), env: { PATH: process.env.PATH, E2E_BASE_URL: origin, E2E_API_TOKEN: token, NODE_OPTIONS: '--max-old-space-size=768' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const browser = spawn('npm', ['run', 'test:mocked', '--', 'journey-model-compatibility.spec.ts', '--workers=1'], { cwd: resolve('.e2e'), env: { PATH: process.env.PATH, E2E_OUTPUT_DIR: resolve(root, 'test-results'), E2E_HTML_REPORT: resolve(root, 'playwright-report'), E2E_JOURNEY_REPORTS: resolve(root, 'journey-reports'), E2E_BASE_URL: origin, E2E_API_TOKEN: token, NODE_OPTIONS: '--max-old-space-size=768' }, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = ''; for (const stream of [browser.stdout, browser.stderr]) stream.on('data', chunk => { output += redact(chunk); });
     const exit = await new Promise(r => browser.once('close', r)); await writeFile(resolve(root, 'browser.log'), output);
     assert.equal(exit, 0, output); return 'Pinned browser journey passed';
