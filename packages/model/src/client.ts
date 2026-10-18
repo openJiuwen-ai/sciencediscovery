@@ -1042,7 +1042,6 @@ export async function streamModelTurn(
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks = {},
 ): Promise<ModelTurn> {
-  signal = AbortSignal.any([signal, AbortSignal.timeout(policy.requestTimeoutMs)]);
   switch (endpointProtocol(endpoint)) {
     case "anthropic-messages":
       return streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);

@@ -221,11 +221,13 @@ class IdeaTreeEngine:
                     raise BudgetReached('Remaining token budget cannot fund the next stage')
                 self.reserved += estimate
             usage = None
+            received = False
             try:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
                     raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling)
+                received = True
             finally:
                 async with self.usage_lock:
                     # Settle actual usage and release its reservation together.
@@ -234,7 +236,8 @@ class IdeaTreeEngine:
                     else:
                         self.state['usageKnown'] = False
                         # Admission reserve only, never reported usage or a cost estimate.
-                        self.state['unreportedBudgetEstimate'] = self.state.get('unreportedBudgetEstimate', 0) + estimate
+                        if received:
+                            self.state['unreportedBudgetEstimate'] = self.state.get('unreportedBudgetEstimate', 0) + estimate
                     self.reserved -= estimate
             self.save()
             self.check_stop()

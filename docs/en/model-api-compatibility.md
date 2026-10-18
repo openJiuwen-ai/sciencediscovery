@@ -105,3 +105,25 @@ explicit consent returns HTTP 400 without contacting a provider. The result's
 `protocols` array contains `apiProtocol`, `basic`, `streaming`, `tools` and
 `usage`; the top-level outcome describes the saved selection's basic check.
 Results are ephemeral. Saving credentials alone never invokes these requests.
+
+## Stream and research failure semantics
+
+Normal Agent/Swarm `requestTimeoutMs` remains a response-header timeout. A healthy
+stream can continue beyond it; only an explicit caller turn/cancel signal ends
+that stream. Compatibility checks retain their independent outer deadlines above.
+
+IdeaTree accepts all three saved protocol families at its public research entry.
+The API issues a run-scoped, model-pinned grant to the authenticated Python
+sidecar; it never changes the saved protocol or starts research on registration.
+A malformed native completion produces a precise HTTP 422 model-response error,
+not a connectivity error; IdeaTree does not repeat that deterministic request.
+Actual provider 5xx responses retain their original status/cause and existing
+bounded retry behavior. A Chat null-content reply is accepted only with explicit
+`finish_reason: length`, preserving measured usage and the sidecar's capped-output
+diagnosis; it does not establish a successful basic capability check.
+
+A failed IdeaTree call releases its in-flight admission reserve and does not
+permanently consume the successful-unreported-call reserve. Its usage stays
+unknown: failure is not proof that the provider charged nothing. Successful calls
+without valid usage still retain the separately labelled conservative admission
+reserve. These bounds cannot certify an exact token bill or hard provider cost cap.

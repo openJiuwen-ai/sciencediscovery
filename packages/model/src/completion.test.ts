@@ -60,7 +60,16 @@ for (const apiProtocol of protocols) {
 test("non-stream boundary rejects unsupported controls, malformed/oversized responses and retains original errors", async () => {
   const endpoint = { baseUrl: "http://fixture.test/v1", model: "s", proxy: { mode: "direct" as const } };
   const body = { messages: [{ role: "user", content: "synthetic" }] };
-  for (const extra of [{ stream: true }, { thinking: { type: "unknown" } }, { max_tokens: -1 }, { top_p: 1 }, { tools: [{ type: "unknown", function: { name: "x" } }] }]) await assert.rejects(completeChatRequest(endpoint, { ...body, ...extra }, AbortSignal.timeout(1000)));
+  let dispatches = 0;
+  for (const extra of [{ stream: true }, { thinking: { type: "unknown" } }, { max_tokens: -1 }, { top_p: 1.1 }, { tools: [{ type: "unknown", function: { name: "x" } }] }]) await assert.rejects(completeChatRequest(endpoint, { ...body, ...extra }, AbortSignal.timeout(1000), async () => { dispatches++; throw new Error("Unexpected dispatch"); }));
+  assert.equal(dispatches, 0);
+  for (const top_p of [0, 1]) {
+    await completeChatRequest(endpoint, { ...body, top_p }, AbortSignal.timeout(1000), async (_url, init) => {
+      dispatches++; assert.equal(JSON.parse(String(init?.body)).top_p, top_p);
+      return Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] });
+    });
+  }
+  assert.equal(dispatches, 2);
   await assert.rejects(completeChatRequest(endpoint, { messages: [{ role: "invalid", content: "x" }] }, AbortSignal.timeout(1000)));
   for (const payload of ['{}', '[]', 'not json']) await assert.rejects(completeChatRequest(endpoint, body, AbortSignal.timeout(1000), async () => new Response(payload)));
   await assert.rejects(completeChatRequest(endpoint, body, AbortSignal.timeout(1000), async () => new Response('x'.repeat(200)), 100), /byte limit/);
@@ -166,4 +175,38 @@ test("Chat auxiliary images stay in the first user message when no system instru
   assert.equal(without.messages.length, 1); assert.equal(without.messages[0].role, "user"); assert.equal(without.messages[0].content.length, 2);
   const withSystem = JSON.parse(createModelRequest(endpoint, "actual system instruction", history, [], policy, false).body);
   assert.deepEqual(withSystem.messages[0], { role: "system", content: "actual system instruction" }); assert.equal(withSystem.messages[1].content.length, 2);
+});
+
+test("only an explicitly truncated Chat null reply retains usage and is not a successful basic answer", async () => {
+  const endpoint = { baseUrl: 'http://synthetic.invalid/v1', model: 'synthetic' };
+  for (const finish_reason of ['length', 'stop', undefined]) {
+    const invoke = () => completeChatRequest(endpoint, { messages: [{ role: 'user', content: 'synthetic' }] }, AbortSignal.timeout(1000), async () => Response.json({ choices: [{ message: { content: null }, finish_reason }], usage: { prompt_tokens: 6, completion_tokens: 8, total_tokens: 14 } }));
+    if (finish_reason === 'length') { const body = await (await invoke()).json() as any; assert.equal(body.choices[0].message.content, null); assert.equal(body.usage.total_tokens, 14); }
+    else await assert.rejects(invoke(), /Invalid Chat completion response/);
+  }
+});
+
+for (const apiProtocol of protocols) test(`${apiProtocol} preserves header-only stream timeout and honors caller cancellation`, async () => {
+  const frames = apiProtocol === 'anthropic-messages' ? [
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'OK' } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+  ] : apiProtocol === 'openai-responses' ? [
+    { type: 'response.output_text.delta', delta: 'OK' }, { type: 'response.completed', response: { status: 'completed' } },
+  ] : [{ choices: [{ delta: { content: 'OK' }, finish_reason: null }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }];
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify(frames[0])}\n\n`);
+    const heartbeat = setInterval(() => res.write(': generating\n\n'), 20);
+    const end = setTimeout(() => res.end(`data: ${JSON.stringify(frames[1])}\n\n`), 250);
+    res.on('close', () => { clearInterval(heartbeat); clearTimeout(end); });
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const endpoint = { apiProtocol, baseUrl: `http://127.0.0.1:${(server.address() as any).port}/v1`, model: 'synthetic', proxy: { mode: 'direct' as const } };
+    const invoke = (signal: AbortSignal) => streamModelTurn(endpoint, '', [], [], { ...policy, requestTimeoutMs: 100 }, signal);
+    const result = await invoke(AbortSignal.timeout(2000));
+    assert.equal(result.assistantMessage.content, 'OK'); assert.equal(result.completionObserved, true);
+    await assert.rejects(invoke(AbortSignal.timeout(50)));
+  } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });

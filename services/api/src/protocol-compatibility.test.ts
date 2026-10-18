@@ -79,3 +79,41 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
     }
   });
 }
+
+for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'transient-provider-error'] as const) test(`${responseKind}: real Python clients preserve model classification and never retry deterministic shape failures`, async () => {
+  let upstreamCalls = 0;
+  const provider = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    upstreamCalls++;
+    const status = responseKind === 'transient-provider-error' && upstreamCalls === 1 ? 503 : 200;
+    res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(status === 503 ? { error: 'original temporary provider cause' } : responseKind === 'invalid-shape' ? {} : {
+      choices: [{ message: { role: 'assistant', content: responseKind === 'truncated-hidden-reasoning' ? null : 'OK' }, finish_reason: responseKind === 'truncated-hidden-reasoning' ? 'length' : 'stop' }],
+      ...(responseKind === 'truncated-hidden-reasoning' ? { usage: { prompt_tokens: 6, completion_tokens: 8, total_tokens: 14 } } : {}),
+    }));
+  });
+  await new Promise<void>(r => provider.listen(0, '127.0.0.1', r));
+  const tokens = new RunTokenRegistry(), token = tokens.issue('synthetic', 'session', 'model');
+  const spend: ModelInvocationUsage[] = [];
+  const proxy = createServer((req, res) => void handleEvolveCompletion(req, res, 'synthetic', { tokens, store: {
+    getModel: () => ({ id: 'model', name: 'synthetic', model: 'synthetic', baseUrl: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`, apiProtocol: 'openai-chat-completions' }),
+    getModelApiToken: () => 'synthetic', resolveProxy: () => ({ mode: 'direct' }), appendModelInvocationUsage: async (u: ModelInvocationUsage) => { spend.push(u); },
+  } as never }).catch(error => res.writeHead(500).end(String(error))));
+  await new Promise<void>(r => proxy.listen(0, '127.0.0.1', r));
+  try {
+    const script = responseKind === 'truncated-hidden-reasoning'
+      ? "from sciencediscovery_evolve.completion import completion_for; usage=[]; failures=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=8,timeout=2,on_usage=usage.append)('synthetic',on_failure=failures.append); assert result == ''; assert failures == []; assert len(usage)==1 and usage[0].total==14 and usage[0].completion==8 and usage[0].capped"
+      : "from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (responseKind === 'invalid-shape'
+        ? "\ntry: engine.transport('synthetic',{},64)\nexcept RuntimeError as error: assert 'Model HTTP 422' in str(error) and 'Invalid Chat completion response' in str(error)\nelse: raise AssertionError('Malformed provider response was accepted')"
+        : "assert engine.transport('synthetic',{},64) == ('OK',None)");
+    await promisify(execFile)('python3', ['-c', 'import sys; '+script, `http://127.0.0.1:${(proxy.address() as AddressInfo).port}/internal/evolve-llm/synthetic/v1/chat/completions`, token], {
+      timeout: 5000, env: { ...process.env, PYTHONPATH: fileURLToPath(new URL('../../evolve/src/', import.meta.url)) },
+    });
+    assert.equal(upstreamCalls, responseKind === 'transient-provider-error' ? 2 : 1);
+    if (responseKind === 'invalid-shape') assert.equal(spend.length, 0, 'No reported counts or zero cost may be invented for a rejected body');
+    else if (responseKind === 'truncated-hidden-reasoning') assert.equal(spend[0]?.outputTokens, 8);
+    else assert.equal(spend[0]?.usageStatus, 'provider-not-reported');
+  } finally {
+    tokens.revoke('synthetic');
+    for (const server of [proxy, provider]) { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+  }
+});

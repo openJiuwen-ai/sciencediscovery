@@ -141,8 +141,16 @@ export function ModelConnectivityButton({
       <p>{t("settings.modelTest.selectionUnchanged")}</p>
       <ul>{state.result.protocols.map(p => <li key={p.apiProtocol}>
         <strong>{p.apiProtocol}</strong>
-        <ul>{(["basic", "streaming", "tools"] as const).map(cap => <li key={cap}>{cap}: {p[cap].ok ? "supported" : p[cap].category} — {p[cap].message}</li>)}
-        <li>usage: {p.usage}</li></ul>
+        <ul>{(["basic", "streaming", "tools"] as const).map(cap => {
+          const outcome = p[cap];
+          const copy = failureCopy(outcome.category, t);
+          return <li key={cap}>{t(`settings.modelTest.${cap}`)}: {outcome.ok
+            ? t("settings.modelTest.supported")
+            : outcome.category === "invalid_response" ? t("settings.modelTest.inconclusive") : copy.label}
+            {" — "}{outcome.ok ? t(`settings.modelTest.${cap}Detail`)
+              : outcome.category === "invalid_response" ? t("settings.modelTest.inconclusiveDetail") : copy.title}</li>;
+        })}
+        <li>{t("settings.modelTest.usage")}: {t(p.usage === "available" ? "settings.modelTest.usageAvailable" : "settings.modelTest.usageUnknown")}</li></ul>
       </li>)}</ul>
     </div> : null}
     </div>

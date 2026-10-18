@@ -18,6 +18,11 @@ export interface ChatCompletionRequest {
 
 const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
+/** A provider answered, but its body cannot satisfy the selected protocol. */
+export class InvalidModelResponseError extends Error {
+  override name = "InvalidModelResponseError";
+}
+
 /** Non-streaming compatibility at the existing model boundary. No protocol probing or fallback. */
 export async function completeChatRequest(
   endpoint: ModelEndpoint, body: ChatCompletionRequest, signal: AbortSignal,
@@ -57,7 +62,7 @@ export async function completeChatRequest(
         const { done, value } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > maxResponseBytes) throw new Error("Model response exceeds the byte limit");
+        if (size > maxResponseBytes) throw new InvalidModelResponseError("Model response exceeds the byte limit");
         chunks.push(value);
       }
     } finally { await reader.cancel(); }
@@ -65,44 +70,45 @@ export async function completeChatRequest(
     const redacted = endpoint.apiToken ? raw.split(endpoint.apiToken).join("[redacted]") : raw;
     if (!response.ok) return new Response(redacted, { status: response.status, headers: { "content-type": "application/json" } });
     let payload: unknown;
-    try { payload = JSON.parse(raw); } catch { throw new Error("Model returned malformed JSON"); }
-    if (!record(payload)) throw new Error("Invalid model completion response");
+    try { payload = JSON.parse(raw); } catch { throw new InvalidModelResponseError("Model returned malformed JSON"); }
+    if (!record(payload)) throw new InvalidModelResponseError("Invalid model completion response");
     const protocol = endpoint.apiProtocol ?? (endpoint.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions");
     if (protocol === "openai-chat-completions") {
       const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
-      if (!record(choice) || !record(choice.message)) throw new Error("Invalid Chat completion response");
+      if (!record(choice) || !record(choice.message)) throw new InvalidModelResponseError("Invalid Chat completion response");
       const calls = choice.message.tool_calls;
       const validCalls = Array.isArray(calls) && calls.length > 0 && calls.every(c => record(c) && typeof c.id === "string" && Boolean(c.id) && record(c.function) && typeof c.function.name === "string" && Boolean(c.function.name) && typeof c.function.arguments === "string");
-      if (!(typeof choice.message.content === "string" || typeof choice.message.reasoning_content === "string" || validCalls)) throw new Error("Invalid Chat completion response");
+      const emptyTruncation = choice.message.content === null && choice.finish_reason === "length";
+      if (!(typeof choice.message.content === "string" || typeof choice.message.reasoning_content === "string" || validCalls || emptyTruncation)) throw new InvalidModelResponseError("Invalid Chat completion response");
       return new Response(raw, { headers: { "content-type": "application/json" } });
     }
     let message: Record<string, unknown>;
     let finish: string | undefined;
     if (protocol === "anthropic-messages") {
-      if (payload.type !== "message" || !Array.isArray(payload.content)) throw new Error("Invalid Messages completion response");
-      if (!payload.content.every(record)) throw new Error("Invalid Messages content blocks");
+      if (payload.type !== "message" || !Array.isArray(payload.content)) throw new InvalidModelResponseError("Invalid Messages completion response");
+      if (!payload.content.every(record)) throw new InvalidModelResponseError("Invalid Messages content blocks");
       const blocks = payload.content.filter(record);
       for (const block of blocks) {
         const valid = block.type === "text" ? typeof block.text === "string"
           : block.type === "thinking" ? typeof block.thinking === "string" && typeof block.signature === "string"
           : block.type === "redacted_thinking" ? typeof block.data === "string"
           : block.type === "tool_use" && typeof block.id === "string" && Boolean(block.id) && typeof block.name === "string" && Boolean(block.name) && record(block.input);
-        if (!valid) throw new Error("Unsupported or malformed Messages content block");
+        if (!valid) throw new InvalidModelResponseError("Unsupported or malformed Messages content block");
       }
       const calls = blocks.filter(b => b.type === "tool_use").map(b => ({ id: b.id, type: "function", function: { name: b.name, arguments: JSON.stringify(b.input) } }));
       message = { role: "assistant", content: blocks.filter(b => b.type === "text").map(b => b.text).join(""), anthropic_content: blocks,
         ...(calls.length ? { tool_calls: calls } : {}) };
       finish = payload.stop_reason === "max_tokens" ? "length" : calls.length ? "tool_calls" : typeof payload.stop_reason === "string" ? "stop" : undefined;
     } else {
-      if (payload.object !== "response" || !Array.isArray(payload.output)) throw new Error("Invalid Responses completion response");
-      if (payload.status === "failed" || payload.error) throw new Error(`Responses API failed: ${endpoint.apiToken ? JSON.stringify(payload.error ?? "unknown provider failure").split(endpoint.apiToken).join("[redacted]").slice(0, 2000) : JSON.stringify(payload.error ?? "unknown provider failure").slice(0, 2000)}`);
-      if (!payload.output.every(record)) throw new Error("Invalid Responses output items");
+      if (payload.object !== "response" || !Array.isArray(payload.output)) throw new InvalidModelResponseError("Invalid Responses completion response");
+      if (payload.status === "failed" || payload.error) throw new InvalidModelResponseError(`Responses API failed: ${endpoint.apiToken ? JSON.stringify(payload.error ?? "unknown provider failure").split(endpoint.apiToken).join("[redacted]").slice(0, 2000) : JSON.stringify(payload.error ?? "unknown provider failure").slice(0, 2000)}`);
+      if (!payload.output.every(record)) throw new InvalidModelResponseError("Invalid Responses output items");
       const items = payload.output.filter(record);
       for (const item of items) {
         const valid = item.type === "message" ? Array.isArray(item.content) && item.content.every(p => record(p) && p.type === "output_text" && typeof p.text === "string")
           : item.type === "reasoning" ? typeof item.id === "string" && Array.isArray(item.summary) && item.summary.every(p => record(p) && p.type === "summary_text" && typeof p.text === "string")
           : item.type === "function_call" && typeof item.call_id === "string" && Boolean(item.call_id) && typeof item.name === "string" && Boolean(item.name) && typeof item.arguments === "string";
-        if (!valid) throw new Error("Unsupported or malformed Responses output item");
+        if (!valid) throw new InvalidModelResponseError("Unsupported or malformed Responses output item");
       }
       const calls = items.filter(i => i.type === "function_call").map(i => ({ id: i.call_id, type: "function", function: { name: i.name, arguments: i.arguments } }));
       message = { role: "assistant", content: items.filter(i => i.type === "message").flatMap(i => Array.isArray(i.content) ? i.content.filter(record) : []).filter(p => p.type === "output_text").map(p => p.text).join(""), response_items: items,

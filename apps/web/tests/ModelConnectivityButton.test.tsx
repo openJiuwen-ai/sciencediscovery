@@ -48,8 +48,9 @@ function view(
   testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>,
   profileVersion = "version-1",
   disabled = false,
+  locale: "zh-CN" | "en-US" = "zh-CN",
 ) {
-  return createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ModelConnectivityButton, {
+  return createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectivityButton, {
     disabled,
     modelId: "model-1",
     modelName: "DeepSeek V4",
@@ -152,8 +153,9 @@ test("compatibility requests require explicit cost consent and render independen
   assert.equal(calls, 1);
   const text = JSON.stringify(renderer!.toJSON());
   for (const protocol of protocols) assert.ok(text.includes(protocol.apiProtocol));
-  assert.match(text, /usage:.*unknown/);
-  assert.match(text, /inconclusive tool result/);
+  assert.match(text, /用量.*未知/);
+  assert.match(text, /无法确认/);
+  assert.ok(!text.includes("inconclusive tool result"));
   await act(async () => renderer!.unmount());
 });
 
@@ -171,4 +173,22 @@ test("profile changes invalidate in-flight compatibility results and request err
   await act(async () => { renderer!.root.findByType("button").props.onClick(); await Promise.resolve(); });
   assert.match(renderer!.root.findByType("button").props.title, /transport failed/);
   await act(async () => renderer!.unmount());
+});
+
+for (const locale of ['zh-CN', 'en-US'] as const) test(`capability and failure evidence is localized in ${locale}`, async () => {
+  const categories = ['missing_token', 'authorization', 'not_found', 'rate_limited', 'timeout', 'network', 'provider_error', 'invalid_response', 'ok'] as const;
+  for (const category of categories) {
+    const outcome = { ok: category === 'ok', category, message: 'RAW_SERVER_ENGLISH_DO_NOT_RENDER' };
+    const protocols = [{ apiProtocol: 'anthropic-messages' as const, basic: outcome, streaming: outcome, tools: outcome, usage: category === 'ok' ? 'available' as const : 'unknown' as const }];
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(view(async () => ({ ...success, protocols }), 'v1', false, locale)); });
+    await acceptProbeCost(renderer!);
+    await act(async () => { renderer!.root.findByType('button').props.onClick(); await Promise.resolve(); });
+    const rendered = JSON.stringify(renderer!.toJSON());
+    assert.ok(!rendered.includes('RAW_SERVER_ENGLISH_DO_NOT_RENDER'));
+    for (const label of locale === 'zh-CN' ? ['基本响应', '流式响应', '工具往返', '用量'] : ['Basic response', 'Streaming', 'Tool round-trip', 'Usage']) assert.ok(rendered.includes(label));
+    if (category === 'ok') assert.ok(rendered.includes(locale === 'zh-CN' ? '可获取' : 'Available'));
+    if (category === 'invalid_response') assert.ok(rendered.includes(locale === 'zh-CN' ? '无法确认' : 'Inconclusive'));
+    await act(async () => renderer!.unmount());
+  }
 });

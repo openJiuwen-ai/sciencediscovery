@@ -164,6 +164,31 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.state['usageKnown'])
         self.assertEqual(engine.reserved, 0)
 
+    async def test_failed_unknown_call_releases_admission_budget_and_persists_uncertainty(self):
+        calls = []
+        async def call(role, payload):
+            calls.append(role)
+            if len(calls) == 1:
+                raise RuntimeError('synthetic failure before I/O')
+            return '{"text":"valid design"}', 100
+        engine = IdeaTreeEngine(self.state, self.store, {}, call)
+        with self.assertRaisesRegex(RuntimeError, 'before I/O'):
+            await engine.ask('design', {})
+        self.assertEqual(engine.reserved, 0)
+        self.assertEqual(self.state.get('unreportedBudgetEstimate', 0), 0)
+        self.assertEqual(self.state['tokens'], 0)
+        self.assertFalse(self.state['usageKnown'])  # Failure is not proof of free provider usage.
+        persisted = self.store.read('p', 's', 'research-test')
+        self.assertEqual(persisted.get('unreportedBudgetEstimate', 0), 0)
+        self.assertFalse(persisted['usageKnown'])
+        self.assertEqual(persisted['activities'][-1]['status'], 'failed')
+        # Just enough for one stage; a stale failed-call reserve would block it.
+        self.state['settings']['maxTokens'] = len((engine.role_prompt('design') + '\nReturn JSON only, matching: {"text":"..."}' + '{}').encode()) + self.state['settings']['maxTokensPerCall'] + 256
+        self.assertEqual(await engine.ask('design', {}), {'text': 'valid design'})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(engine.reserved, 0)
+        self.assertEqual(self.state['tokens'], 100)
+
     async def test_shallow_candidate_runs_and_pending_parent_is_rejected(self):
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
         shallow = node('1', 'ROOT', 'Shallow', 'candidate', 1)

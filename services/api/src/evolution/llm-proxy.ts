@@ -33,7 +33,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { completeChatRequest, type ChatCompletionRequest } from "@sciencediscovery/model";
+import { completeChatRequest, InvalidModelResponseError, type ChatCompletionRequest } from "@sciencediscovery/model";
 
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 
@@ -164,11 +164,12 @@ export async function handleEvolveCompletion(
       AbortSignal.any([controller.signal, AbortSignal.timeout(CALL_CEILING_MS)]), deps.fetchImpl);
   } catch (error) {
     inFlight.delete(began);
-    apiLog.warn("evolve_llm_unreachable", {
+    const invalidResponse = error instanceof InvalidModelResponseError;
+    apiLog.warn(invalidResponse ? "evolve_llm_invalid_response" : "evolve_llm_unreachable", {
       elapsedMs: Date.now() - began,
       reason: error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "Unknown model failure", runId,
     });
-    return sendError(response, 502, error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "The model provider could not be reached");
+    return sendError(response, invalidResponse ? 422 : 502, error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "The model provider could not be reached");
   }
   inFlight.delete(began);
 
