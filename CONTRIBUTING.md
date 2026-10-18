@@ -33,6 +33,10 @@ For opt-in agent-assisted Issue delivery and PR maintenance, see the
 ([中文](docs/zh/developer-docs/issue-pipeline.md)). It requires explicit setup and
 does not run automatically or change the application backend.
 
+For the broader Issue-as-Interface skill family (issue gate, Magpie review,
+OSS ops), see [Issue as Interface](docs/en/developer-docs/issue-as-interface.md)
+([中文](docs/zh/developer-docs/issue-as-interface.md)).
+
 ```bash
 pnpm test:shared  # the one plan CI runs: freeze it from source tags, then run all of it
 pnpm test:list    # freeze and print that plan without running a single test body

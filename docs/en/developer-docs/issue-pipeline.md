@@ -34,3 +34,5 @@ not installed automatically; completion-event wake-ups are not implemented.
 The skill's behavioral rules require operator oversight and cannot be certified by
 transport unit tests. Merging, queue entry, releases, settings/secrets changes,
 gate weakening and paid real-model tests need their own authorization.
+
+A companion [Issue as Interface](issue-as-interface.md) skill family (issue gate, patrol, worker, Magpie review, OSS ops) lives alongside this pipeline; installing it does not start bots automatically.
