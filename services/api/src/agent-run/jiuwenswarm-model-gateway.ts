@@ -281,6 +281,7 @@ export async function startModelGateway(
     // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
     // requests may come from instances without that boundary, still fail the request.
     const invalidCalls = (turn: ModelTurn) => {
+      if (turn.streamDiagnostics?.unparseableSsePayloads && !turn.toolCalls.some(call => call.argsParseError)) throw new Error("Model stream contained malformed event payloads");
       if (turn.completionObserved === false) throw new Error("Model stream ended without a completion event");
       if (turn.truncated) return [];
       const invalid = turn.toolCalls.filter(call => call.argsParseError);

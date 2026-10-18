@@ -65,3 +65,23 @@ test("non-stream boundary rejects unsupported controls, malformed/oversized resp
   const failed = await completeChatRequest(endpoint, body, AbortSignal.timeout(1000), async () => new Response('{"error":"original"}', { status: 429 }));
   assert.equal(failed.status, 429); assert.match(await failed.text(), /original/);
 });
+
+test("Messages rejects malformed canonical tool arguments and missing history IDs instead of dropping them", async () => {
+  const { toAnthropicMessages } = await import("./client.js");
+  for (const call of [{ id: "c", function: { name: "echo", arguments: "[]" } }, { function: { name: "echo", arguments: "{}" } }]) assert.throws(() => toAnthropicMessages([{ role: "assistant", content: "", tool_calls: [call] }]), /tool|history/i);
+});
+
+for (const protocol of protocols) test(`${protocol} refuses a missing provider tool ID and cancels unary requests`, async () => {
+  const provider = await protocolProvider(protocol, { hang: true });
+  try {
+    await assert.rejects(completeChatRequest({ apiProtocol: protocol, baseUrl: provider.baseUrl, model: "s", proxy: { mode: "direct" } }, { messages: [{ role: "user", content: "s" }] }, AbortSignal.timeout(30)));
+  } finally { await provider.close(); }
+  const { createServer } = await import("node:http");
+  const frame = protocol === "openai-chat-completions" ? { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "echo", arguments: "{}" } }] }, finish_reason: "tool_calls" }] }
+    : protocol === "openai-responses" ? { type: "response.output_item.done", output_index: 0, item: { type: "function_call", name: "echo", arguments: "{}" } }
+    : { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "echo", input: {} } };
+  const server = createServer(async (req, res) => { for await (const _chunk of req) {} res.writeHead(200, { "content-type": "text/event-stream" }); res.end(`data: ${JSON.stringify(frame)}\n\n`); });
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  try { await assert.rejects(streamModelTurn({ apiProtocol: protocol, baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: "s", proxy: { mode: "direct" } }, "s", [], [], policy, AbortSignal.timeout(1000)), /omitted a tool call ID/); }
+  finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});

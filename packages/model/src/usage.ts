@@ -75,10 +75,10 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
     totalTokens = inputTokens + outputTokens;
   }
   if (inputTokens === undefined && totalTokens !== undefined && outputTokens !== undefined) {
-    inputTokens = Math.max(totalTokens - outputTokens, 0);
+    inputTokens = totalTokens >= outputTokens ? totalTokens - outputTokens : undefined;
   }
   if (outputTokens === undefined && totalTokens !== undefined && inputTokens !== undefined) {
-    outputTokens = Math.max(totalTokens - inputTokens, 0);
+    outputTokens = totalTokens >= inputTokens ? totalTokens - inputTokens : undefined;
   }
   if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined || !Number.isSafeInteger(totalTokens)) return undefined;
   return {

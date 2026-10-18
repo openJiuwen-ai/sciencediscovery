@@ -242,3 +242,21 @@ test("one endpoint can support multiple protocols without changing the saved sel
     assert.equal(selected.apiProtocol, "openai-responses"); assert.equal(provider.requests.length, 12);
   } finally { await provider.close(); }
 });
+
+test("empty native and Chat successful payloads do not certify a basic capability", async () => {
+  for (const [apiProtocol, payload] of [
+    ["openai-chat-completions", { choices: [{ message: { content: "" } }] }],
+    ["openai-responses", { object: "response", status: "completed", output: [] }],
+    ["anthropic-messages", { type: "message", content: [] }],
+  ] as const) await withProvider(async (request, response) => {
+    await readRequest(request); response.end(JSON.stringify(payload));
+  }, async origin => {
+    const result = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy });
+    assert.equal(result.category, "invalid_response"); assert.equal(result.ok, false);
+  });
+});
+
+test("network errors are distinct from successful but malformed responses", async () => {
+  const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: profile("http://127.0.0.1:1"), resolveProxy: directProxy });
+  assert.equal(tested.category, "network");
+});

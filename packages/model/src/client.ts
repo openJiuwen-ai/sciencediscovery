@@ -607,6 +607,7 @@ async function streamOpenAiTurn(
     if (text) callbacks.onTextDelta?.(text);
   }
   const orderedFragments = [...fragments.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+  if (orderedFragments.some(f => f.function?.name && !(typeof f.id === "string" && f.id))) throw new Error("Chat completion omitted a tool call ID");
   const wireToolCalls = orderedFragments.map((fragment) => ({
     ...fragment,
     id: typeof fragment.id === "string" && fragment.id ? fragment.id : `call_${randomUUID()}`,
@@ -748,6 +749,7 @@ async function streamResponsesTurn(
     if (text) callbacks.onTextDelta?.(text);
   }
   const functionCalls = responseItems.filter((item) => item.type === "function_call");
+  if (functionCalls.some(c => typeof c.call_id !== "string" || !c.call_id)) throw new Error("Responses completion omitted a tool call ID");
   const wireToolCalls = functionCalls.map((item) => ({
     id: typeof item.call_id === "string" ? item.call_id : `call_${randomUUID()}`,
     type: "function",
@@ -800,8 +802,9 @@ export function toAnthropicMessages(history: AgentHistoryMessage[]): Array<{ con
       const text = contentText(message.content);
       if (text) blocks.push({ type: "text", text });
       for (const raw of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
-        if (!isRecord(raw) || !isRecord(raw.function)) continue;
+        if (!isRecord(raw) || !isRecord(raw.function) || typeof raw.id !== "string" || !raw.id) throw new Error("Invalid tool call history");
         const parsed = parseToolCallArgs(typeof raw.function.arguments === "string" ? raw.function.arguments : "");
+        if (parsed.error) throw new Error("Cannot replay malformed tool arguments");
         blocks.push({
           type: "tool_use",
           id: typeof raw.id === "string" ? raw.id : `call_${randomUUID()}`,
@@ -920,6 +923,7 @@ async function streamAnthropicTurn(
   const anthropicContent = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
   const text = anthropicContent.filter((block) => block.type === "text").map((block) => contentText(block)).join("");
   const toolBlocks = anthropicContent.filter((block) => block.type === "tool_use");
+  if (toolBlocks.some(b => typeof b.id !== "string" || !b.id)) throw new Error("Messages completion omitted a tool call ID");
   const wireToolCalls = toolBlocks.map((block) => ({
     id: typeof block.id === "string" ? block.id : `call_${randomUUID()}`,
     type: "function",

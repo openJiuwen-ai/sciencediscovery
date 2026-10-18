@@ -55,7 +55,9 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
       const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: 8 }, signal, undefined, 64 * 1024);
       if (!response.ok) basic = { category: category(response.status), ok: false, providerStatus: response.status, message: "Provider rejected this protocol request; this does not establish model incompatibility" };
       else {
-        const payload = await response.json() as { usage?: unknown };
+        const payload = await response.json() as { usage?: unknown; choices?: Array<{ message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
+        const message = payload.choices?.[0]?.message;
+        if (!message || !(message.content || message.reasoning_content || message.tool_calls?.length || message.anthropic_content?.length || message.response_items?.length)) throw new Error("No basic completion evidence");
         basic = { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure" };
         if (normalizeUsage(payload.usage, "openai-chat-completions")) usage = "available";
       }

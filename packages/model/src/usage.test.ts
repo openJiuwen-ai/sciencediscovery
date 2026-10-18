@@ -77,3 +77,8 @@ test("oversized counts cannot overflow normalized totals or masquerade as measur
   assert.equal(normalizeUsage({ input_tokens: Number.MAX_VALUE, output_tokens: Number.MAX_VALUE }, "openai-responses"), undefined);
   assert.equal(normalizeUsage({ input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1 }, "openai-responses"), undefined);
 });
+
+test("impossible totals do not invent zero for a missing side of usage", () => {
+  assert.equal(normalizeUsage({ total_tokens: 1, completion_tokens: 2 }, "openai-chat-completions"), undefined);
+  assert.equal(normalizeUsage({ total_tokens: 1, prompt_tokens: 2 }, "openai-chat-completions"), undefined);
+});

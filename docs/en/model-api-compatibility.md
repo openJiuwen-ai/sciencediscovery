@@ -69,7 +69,11 @@ attached to assistant history. Truncation remains distinct from completion.
 
 The Evolve/IdeaTree HTTP proxy is a non-streaming completion interface; streaming
 requests there return a precise limitation. Streaming Agent/Swarm requests use
-the existing gateway. Unknown model parameters and unsupported tools are rejected
+the existing gateway. That gateway preserves explicit token ceilings and temperature,
+requires requested budgets to fit its configured ceiling, and reports precise
+limitations for image input, forced tool choice and unsupported controls. Missing
+tool IDs and malformed replay arguments are rejected rather than fabricated.
+Unknown model parameters and unsupported tools are rejected
 instead of silently discarded. Auxiliary completions have a 4 MiB response
 ceiling (paper vision retains its tighter existing limit). Session naming keeps
 its existing bounded attempts for provider-specific thinking/temperature
