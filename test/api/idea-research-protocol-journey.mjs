@@ -13,11 +13,12 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export async function runIdeaResearchProtocolJourney() {
-  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  const root = resolve('.tmp', `idea-research-protocol-${randomUUID()}`);
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolve(repoRoot, 'services/evolve/.venv/bin/python') } = {}) {
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', cwd: repoRoot }).trim();
+  const root = resolve(repoRoot, '.tmp', `idea-research-protocol-${randomUUID()}`);
   await mkdir(root, { recursive: true });
   const secret = randomUUID(), internal = randomUUID(), providerKey = randomUUID();
   const children = [], steps = [], requests = [];
@@ -26,10 +27,12 @@ export async function runIdeaResearchProtocolJourney() {
   const until = async (fn, timeout = 20000) => { const end = Date.now() + timeout; for (;;) { const result = await fn(); if (result) return result; if (Date.now() > end) throw new Error('Timed out waiting for research result'); await new Promise(r => setTimeout(r, 30)); } };
   const start = async (command, args, env, pattern, name) => {
     const instrumentation = Object.fromEntries(['NODE_V8_COVERAGE', 'COVERAGE_PROCESS_START', 'SCIENCE_COVERAGE_DATA_DIR', 'SCIENCE_COVERAGE_PROCESS_LOG'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
-    const child = spawn(command, args, { env: { PATH: process.env.PATH, NODE_OPTIONS: '--max-old-space-size=768', ...instrumentation, ...env, ...(instrumentation.COVERAGE_PROCESS_START ? { PYTHONPATH: resolve('test/support/tagged/python/coverage-hook') + ':' + (env.PYTHONPATH ?? '') } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
-    const state = { child, name, log: '', url: '' }; children.push(state);
+    const child = spawn(command, args, { cwd: repoRoot, env: { PATH: process.env.PATH, NODE_OPTIONS: '--max-old-space-size=768', ...instrumentation, ...env, ...(instrumentation.COVERAGE_PROCESS_START ? { PYTHONPATH: resolve(repoRoot, 'test/support/tagged/python/coverage-hook') + ':' + (env.PYTHONPATH ?? '') } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const state = { child, name, log: '', url: '', error: null, closed: false }; children.push(state);
+    child.once('error', error => { state.error = error; });
+    child.once('close', () => { state.closed = true; });
     for (const stream of [child.stdout, child.stderr]) stream.on('data', b => { state.log += redact(b); state.url ||= b.toString().match(pattern)?.[1] ?? ''; });
-    await until(() => { if (child.exitCode !== null) throw new Error(`${name} exited: ${state.log}`); return state.url; });
+    await until(() => { if (state.error) throw new Error(`${name} could not start: ${redact(state.error.message)}`); if (state.closed) throw new Error(`${name} exited: ${state.log}`); return state.url; });
     return state.url;
   };
   const provider = createServer(async (req, res) => {
@@ -55,12 +58,12 @@ export async function runIdeaResearchProtocolJourney() {
   let api;
   try {
     await step('1. Start owned API and real research sidecar', 'Healthy isolated services, internal/public auth enforced, no model requests', async () => {
-      sidecarOrigin = await start(resolve('services/evolve/.venv/bin/python'), ['-m', 'uvicorn', 'sciencediscovery_evolve.server:app', '--host', '127.0.0.1', '--port', '0'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'sidecar'), SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, PYTHONPATH: resolve('services/evolve/src') }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'sidecar');
+      sidecarOrigin = await start(pythonExecutable, ['-m', 'uvicorn', 'sciencediscovery_evolve.server:app', '--host', '127.0.0.1', '--port', '0'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'sidecar'), SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, PYTHONPATH: resolve(repoRoot, 'services/evolve/src') }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'sidecar');
       const portReservation = createServer();
       await new Promise(r => portReservation.listen(0, '127.0.0.1', r));
       const apiPort = portReservation.address().port;
       await new Promise(r => portReservation.close(r));
-      origin = await start(process.execPath, ['services/api/dist/server.js'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'api'), SCIENCE_AGENT_AUTH_TOKEN: secret, SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_PORT: String(apiPort), SCIENCE_AGENT_EVOLVE_URL: sidecarOrigin, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1' }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
+      origin = await start(process.execPath, [resolve(repoRoot, 'services/api/dist/server.js')], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'api'), SCIENCE_AGENT_AUTH_TOKEN: secret, SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_PORT: String(apiPort), SCIENCE_AGENT_EVOLVE_URL: sidecarOrigin, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1' }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
       api = async (path, body, method = body ? 'POST' : 'GET') => { const r = await fetch(origin + path, { method, headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) }); const text = await r.text(); assert.ok(!text.includes(providerKey) && !text.includes(internal)); return { status: r.status, body: JSON.parse(text) }; };
       assert.equal((await fetch(origin + '/api/models')).status, 401);
       assert.equal((await fetch(sidecarOrigin + '/idea-tree/research/command', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
@@ -102,7 +105,12 @@ export async function runIdeaResearchProtocolJourney() {
     }
     outcome = 'PASS';
   } finally {
-    for (const { child } of [...children].reverse()) { child.kill('SIGTERM'); await until(() => child.exitCode !== null, 5000).catch(() => child.kill('SIGKILL')); }
+    for (const state of [...children].reverse()) {
+      if (!state.closed) {
+        state.child.kill('SIGTERM');
+        await until(() => state.closed, 5000).catch(async () => { state.child.kill('SIGKILL'); await until(() => state.closed, 5000); });
+      }
+    }
     provider.closeAllConnections(); await new Promise(r => provider.close(r));
     for (const state of children) await writeFile(resolve(root, `${state.name}.log`), state.log);
     await writeFile(resolve(root, 'steps.json'), JSON.stringify({ sha, outcome, steps, requests, paidRequests: 0 }, null, 2));

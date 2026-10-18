@@ -241,6 +241,8 @@ class IdeaTreeEngine:
                     self.reserved -= estimate
             self.save()
             self.check_stop()
+            if raw is None or isinstance(raw, str) and not raw.strip():
+                raise ValueError(f'{role}: empty or truncated model output; stage cannot continue')
             try:
                 result = validate_result(role, parse_json(raw), {item['id'] for item in self.assessors()})
                 if check:

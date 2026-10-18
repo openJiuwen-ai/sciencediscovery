@@ -210,3 +210,18 @@ for (const apiProtocol of protocols) test(`${apiProtocol} preserves header-only 
     await assert.rejects(invoke(AbortSignal.timeout(50)));
   } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });
+
+test('explicit Responses provider errors retain cause, classification and conservative unknown-code behavior', async () => {
+  const endpoint = { apiProtocol: 'openai-responses' as const, baseUrl: 'http://fixture.test/v1', model: 's', apiToken: 'secret-native-388', proxy: { mode: 'direct' as const } };
+  for (const [error, status] of [
+    [{ code: 'server_error' }, 502], [{ type: 'server_error' }, 502],
+    [{ code: 'rate_limit_exceeded' }, 429], [{ code: 'invalid_api_key' }, 401],
+    [{ code: 'invalid_request_error' }, 400], [{ code: 'unrecognized' }, 422], [{}, 422],
+  ] as const) {
+    const result = await completeChatRequest(endpoint, { messages: [{ role: 'user', content: 'synthetic' }] }, AbortSignal.timeout(1000), async () => Response.json({ object: 'response', status: 'failed', output: [], error: { ...error, message: 'original native cause secret-native-388' } }));
+    assert.equal(result.status, status);
+    const text = await result.text(); assert.match(text, /original native cause/); assert.ok(!text.includes(endpoint.apiToken));
+    assert.deepEqual(JSON.parse(text).error, { ...error, message: 'original native cause [redacted]' });
+  }
+  await assert.rejects(completeChatRequest(endpoint, { messages: [{ role: 'user', content: 'synthetic' }] }, AbortSignal.timeout(1000), async () => Response.json({})), /Invalid Responses completion/);
+});

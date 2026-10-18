@@ -1,10 +1,12 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { randomUUID } from "node:crypto";
 import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { protocolProvider } from "./helpers/protocol-provider.js";
 
+for (const locale of ["zh-CN", "en"] as const) {
 /**
  * E2E-META
  * Purpose: Explicitly consent to protocol checks and inspect independent capabilities without changing selection.
@@ -25,30 +27,31 @@ import { protocolProvider } from "./helpers/protocol-provider.js";
  * Credentials: synthetic loopback-only credential.
  * CostSideEffects: journey-owned provider/model records and local requests, no charges.
  */
-for (const locale of ["zh-CN", "en"] as const) test(`(${locale}) Explicit compatibility consent preserves a manually chosen protocol`, { tag: ["@mocked", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:none"] }, async ({ page, journey }) => {
+test(`(${locale}) Explicit compatibility consent preserves a manually chosen protocol`, { tag: ["@mocked", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:none"] }, async ({ page, journey }) => {
   journey.scenario({ goal: "Check model protocol capabilities with explicit cost consent", preconditions: ["Isolated API/Web and a synthetic loopback-only provider; no paid credentials"] });
   await page.addInitScript(value => window.localStorage.setItem("science-agent-locale", value), locale);
   const fixture = await protocolProvider("all", { usage: "missing" });
-  let providerId: string | undefined;
+  const providerName = `Protocol consent fixture ${locale} ${randomUUID()}`;
+  let providerId: string | undefined, modelId: string | undefined;
   const call = async (path: string, data?: unknown, method = data ? "POST" : "GET") => {
     const response = await page.request.fetch(`${apiBaseUrl()}${path}`, { headers: authorizationHeader(), method, ...(data ? { data } : {}) });
     expect(response.ok()).toBeTruthy(); return response.json();
   };
   try {
     await journey.step("Register a local provider with an explicit Responses selection", "Settings shows the saved model, without automatic completion requests", async () => {
-      const provider = await call("/api/providers", { name: "Protocol consent fixture", baseUrl: fixture.baseUrl, apiProtocol: "openai-responses", apiToken: "local-synthetic-388", proxyPolicy: "none" });
+      const provider = await call("/api/providers", { name: providerName, baseUrl: fixture.baseUrl, apiProtocol: "openai-responses", apiToken: "local-synthetic-388", proxyPolicy: "none" });
       providerId = provider.id;
-      await call(`/api/providers/${provider.id}/models`, { model: "synthetic", name: "Synthetic protocol model" });
+      modelId = (await call(`/api/providers/${provider.id}/models`, { model: "synthetic", name: "Synthetic protocol model" })).id;
       await page.goto("/");
       await page.getByRole("button", { name: locale === "zh-CN" ? /^系统设置/ : /^System configuration/ }).click();
       const dialog = page.getByRole("dialog", { name: locale === "zh-CN" ? "系统设置" : "System configuration" });
       const navigation = dialog.getByRole("navigation", { name: locale === "zh-CN" ? "设置分组" : "Setting groups" });
       if (!await navigation.isVisible()) await dialog.getByRole("button", { name: locale === "zh-CN" ? /^设置目录/ : /^Settings directory/ }).click();
       await navigation.getByRole("button", { name: locale === "zh-CN" ? /^模型注册表/ : /^Model registry/ }).click();
-      await dialog.locator(".provider-row").filter({ hasText: "Protocol consent fixture" }).locator(".provider-row-summary").click();
+      await dialog.locator(".provider-row").filter({ hasText: providerName }).locator(".provider-row-summary").click();
       expect(fixture.requests).toHaveLength(0);
     });
-    const section = page.locator(".provider-row").filter({ hasText: "Protocol consent fixture" });
+    const section = page.locator(".provider-row").filter({ hasText: providerName });
     await journey.step("Read costs and explicitly agree to synthetic requests", "Probe disabled until consent; results show all protocols and unknown usage", async () => {
       const check = section.locator(".model-compatibility-check");
       const action = check.getByRole("button");
@@ -75,7 +78,19 @@ for (const locale of ["zh-CN", "en"] as const) test(`(${locale}) Explicit compat
       expect(saved.apiProtocol).toBe("openai-responses");
     });
   } finally {
-    if (providerId) await page.request.fetch(`${apiBaseUrl()}/api/providers/${providerId}`, { method: "DELETE", headers: authorizationHeader() });
-    await fixture.close();
+    try {
+      if (providerId) {
+        // The first added model can become the global default. Remove only this
+        // journey-owned reference, retaining every other current setting.
+        const current = (await call("/api/settings")).overrides;
+        if (modelId && current.modelId === modelId) {
+          delete current.modelId;
+          await call("/api/settings", current, "PUT");
+        }
+        await call(`/api/providers/${providerId}`, undefined, "DELETE");
+        expect((await call("/api/providers")).providers.some((p: { id: string }) => p.id === providerId)).toBe(false);
+      }
+    } finally { await fixture.close(); }
   }
 });
+}

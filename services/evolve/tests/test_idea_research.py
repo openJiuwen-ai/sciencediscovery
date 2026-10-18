@@ -23,6 +23,25 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                           reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         self.calls = []
 
+    async def test_empty_or_truncated_stage_preserves_usage_without_format_correction(self):
+        for raw in (None, '', '  '):
+            with self.subTest(raw=raw):
+                calls = []
+                async def truncated(role, payload):
+                    calls.append(payload)
+                    return raw, 14
+                self.state['tokens'] = 0
+                engine = IdeaTreeEngine(self.state, self.store, {}, truncated)
+                with self.assertRaisesRegex(ValueError, 'design: empty or truncated model output'):
+                    await engine.ask('design', {})
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(self.state['tokens'], 14)
+                self.assertEqual(engine.reserved, 0)
+                persisted = self.store.read('p', 's', 'research-test')
+                self.assertEqual(persisted['tokens'], 14)
+                self.assertEqual(persisted['activities'][-1]['status'], 'failed')
+                self.assertIn('empty or truncated', persisted['activities'][-1]['error'])
+
     async def model(self, role, payload):
         self.calls.append((role, payload))
         if role == 'ideate':

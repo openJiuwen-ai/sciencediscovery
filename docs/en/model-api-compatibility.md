@@ -131,3 +131,12 @@ reserve. These bounds cannot certify an exact token bill or hard provider cost c
 Provider failures retain their HTTP status and JSON or plain-text cause. A
 non-object/plain error body is bounded to 2,000 characters and credentials are
 redacted; an invalid error envelope is not relabelled as a network failure.
+
+An explicit Responses `server_error` (code or type) inside an HTTP 200 failed
+response remains a provider failure (502), eligible for IdeaTree's existing one
+bounded 5xx retry. Recognized authentication, rate-limit and invalid-request
+codes retain their 401/429/400 classifications. Unknown reported errors remain
+422 with their cause, without assuming they are transient. Malformed envelopes
+remain deterministic 422 failures. IdeaTree stops an empty or truncated stage
+without a JSON-format correction; already reported usage remains accounted.
+A nonempty malformed JSON answer still permits the existing single correction.

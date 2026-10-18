@@ -101,7 +101,15 @@ export async function completeChatRequest(
       finish = payload.stop_reason === "max_tokens" ? "length" : calls.length ? "tool_calls" : typeof payload.stop_reason === "string" ? "stop" : undefined;
     } else {
       if (payload.object !== "response" || !Array.isArray(payload.output)) throw new InvalidModelResponseError("Invalid Responses completion response");
-      if (payload.status === "failed" || payload.error) throw new InvalidModelResponseError(`Responses API failed: ${endpoint.apiToken ? JSON.stringify(payload.error ?? "unknown provider failure").split(endpoint.apiToken).join("[redacted]").slice(0, 2000) : JSON.stringify(payload.error ?? "unknown provider failure").slice(0, 2000)}`);
+      if (payload.status === "failed" || payload.error) {
+        // Explicit native provider errors are distinct from malformed envelopes.
+        // Only recognized server errors enter the existing bounded 5xx retry.
+        const error = record(payload.error) ? payload.error : {};
+        const code = typeof error.code === "string" ? error.code : error.type;
+        const status = code === "server_error" ? 502 : code === "rate_limit_exceeded" ? 429
+          : code === "invalid_api_key" ? 401 : code === "invalid_request_error" ? 400 : 422;
+        return new Response(redacted, { status, headers: { "content-type": "application/json" } });
+      }
       if (!payload.output.every(record)) throw new InvalidModelResponseError("Invalid Responses output items");
       const items = payload.output.filter(record);
       for (const item of items) {

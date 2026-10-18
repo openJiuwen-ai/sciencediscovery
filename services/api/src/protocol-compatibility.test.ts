@@ -80,15 +80,15 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
   });
 }
 
-for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'transient-provider-error'] as const) test(`${responseKind}: real Python clients preserve model classification and never retry deterministic shape failures`, async () => {
+for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'transient-provider-error', 'truncated-idea-stage'] as const) test(`${responseKind}: real Python clients preserve model classification and never retry deterministic shape failures`, async () => {
   let upstreamCalls = 0;
   const provider = createServer(async (req, res) => {
     for await (const _ of req) {}
     upstreamCalls++;
     const status = responseKind === 'transient-provider-error' && upstreamCalls === 1 ? 503 : 200;
     res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(status === 503 ? { error: 'original temporary provider cause' } : responseKind === 'invalid-shape' ? {} : {
-      choices: [{ message: { role: 'assistant', content: responseKind === 'truncated-hidden-reasoning' ? null : 'OK' }, finish_reason: responseKind === 'truncated-hidden-reasoning' ? 'length' : 'stop' }],
-      ...(responseKind === 'truncated-hidden-reasoning' ? { usage: { prompt_tokens: 6, completion_tokens: 8, total_tokens: 14 } } : {}),
+      choices: [{ message: { role: 'assistant', content: responseKind.startsWith('truncated-') ? null : 'OK' }, finish_reason: responseKind.startsWith('truncated-') ? 'length' : 'stop' }],
+      ...(responseKind.startsWith('truncated-') ? { usage: { prompt_tokens: 6, completion_tokens: 8, total_tokens: 14 } } : {}),
     }));
   });
   await new Promise<void>(r => provider.listen(0, '127.0.0.1', r));
@@ -100,7 +100,18 @@ for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'tran
   } as never }).catch(error => res.writeHead(500).end(String(error))));
   await new Promise<void>(r => proxy.listen(0, '127.0.0.1', r));
   try {
-    const script = responseKind === 'truncated-hidden-reasoning'
+    const script = responseKind === 'truncated-idea-stage'
+      ? `import asyncio,tempfile; from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore,node,now
+async def run():
+ with tempfile.TemporaryDirectory() as folder:
+  state=dict(id='r',projectId='p',sessionId='s',objective='Synthetic',materials='',modelId='m',settings=dict(maxTokensPerCall=8,maxTokens=100000),status='paused',phase='design',round=0,tokens=0,usageKnown=True,currentNodeId=None,nodes=[node('ROOT',None,'Goal','direction',0)],createdAt=now(),updatedAt=now())
+  store=ResearchStore(Path(folder)); engine=IdeaTreeEngine(state,store,dict(url=sys.argv[1],token=sys.argv[2]))
+  try: await engine.ask('design',{})
+  except ValueError as e: assert 'empty or truncated model output' in str(e)
+  else: raise AssertionError('Empty stage succeeded')
+  persisted=store.read('p','s','r'); assert persisted['tokens']==14 and engine.reserved==0 and persisted['activities'][-1]['status']=='failed'
+asyncio.run(run())`
+      : responseKind === 'truncated-hidden-reasoning'
       ? "from sciencediscovery_evolve.completion import completion_for; usage=[]; failures=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=8,timeout=2,on_usage=usage.append)('synthetic',on_failure=failures.append); assert result == ''; assert failures == []; assert len(usage)==1 and usage[0].total==14 and usage[0].completion==8 and usage[0].capped"
       : "from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (responseKind === 'invalid-shape'
         ? "\ntry: engine.transport('synthetic',{},64)\nexcept RuntimeError as error: assert 'Model HTTP 422' in str(error) and 'Invalid Chat completion response' in str(error)\nelse: raise AssertionError('Malformed provider response was accepted')"
@@ -110,10 +121,44 @@ for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'tran
     });
     assert.equal(upstreamCalls, responseKind === 'transient-provider-error' ? 2 : 1);
     if (responseKind === 'invalid-shape') assert.equal(spend.length, 0, 'No reported counts or zero cost may be invented for a rejected body');
-    else if (responseKind === 'truncated-hidden-reasoning') assert.equal(spend[0]?.outputTokens, 8);
+    else if (responseKind.startsWith('truncated-')) assert.equal(spend[0]?.outputTokens, 8);
     else assert.equal(spend[0]?.usageStatus, 'provider-not-reported');
   } finally {
     tokens.revoke('synthetic');
+    for (const server of [proxy, provider]) { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+  }
+});
+
+for (const kind of ['server', 'server-type', 'server-exhausted', 'client', 'unknown'] as const) test(`${kind}: reported native Responses errors preserve cause and existing bounded retry`, async () => {
+  let calls = 0;
+  const provider = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    calls++;
+    const failed = kind === 'server-exhausted' || calls === 1;
+    const error = kind === 'server-type' ? { type: 'server_error' } : { code: kind.startsWith('server') ? 'server_error' : kind === 'client' ? 'invalid_request_error' : 'unknown_error' };
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(failed
+      ? { object: 'response', status: 'failed', output: [], error: { ...error, message: 'original native cause' } }
+      : { object: 'response', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }] }));
+  });
+  await new Promise<void>(r => provider.listen(0, '127.0.0.1', r));
+  const tokens = new RunTokenRegistry(), token = tokens.issue('native-error', 'session', 'model');
+  const spend: ModelInvocationUsage[] = [];
+  const proxy = createServer((req, res) => void handleEvolveCompletion(req, res, 'native-error', { tokens, store: {
+    getModel: () => ({ id: 'model', name: 'synthetic', model: 'synthetic', baseUrl: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`, apiProtocol: 'openai-responses' }),
+    getModelApiToken: () => 'local-key', resolveProxy: () => ({ mode: 'direct' }), appendModelInvocationUsage: async (u: ModelInvocationUsage) => { spend.push(u); },
+  } as never }).catch(error => res.writeHead(500).end(String(error))));
+  await new Promise<void>(r => proxy.listen(0, '127.0.0.1', r));
+  try {
+    const success = kind === 'server' || kind === 'server-type';
+    const status = kind === 'client' ? 400 : kind === 'unknown' ? 422 : 502;
+    const script = "from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (success
+      ? "assert engine.transport('synthetic',{},64) == ('OK',None)"
+      : `\ntry: engine.transport('synthetic',{},64)\nexcept RuntimeError as error: assert 'Model HTTP ${status}' in str(error) and 'original native cause' in str(error)\nelse: raise AssertionError('Provider error accepted')`);
+    await promisify(execFile)('python3', ['-c', 'import sys; '+script, `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`, token], { timeout: 5000, env: { ...process.env, PYTHONPATH: fileURLToPath(new URL('../../evolve/src/', import.meta.url)) } });
+    assert.equal(calls, kind.startsWith('server') ? 2 : 1);
+    assert.ok(spend.every(u => u.usageStatus === 'provider-not-reported'));
+  } finally {
+    tokens.revoke('native-error');
     for (const server of [proxy, provider]) { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
   }
 });
