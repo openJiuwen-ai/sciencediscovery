@@ -111,7 +111,7 @@ export function ModelConnectivityButton({
     label = t("settings.modelTest.success", { latency: state.result.latencyMs });
     title = t("settings.modelTest.successDetail", { latency: state.result.latencyMs });
   } else if (state.status === "result") {
-    const copy = state.result.inconclusiveReason === "output_limit" ? { label: t("settings.modelTest.inconclusive"), title: t("wizard.outputLimitNotice") } : failureCopy(state.result.category, t);
+    const copy = state.result.category === "invalid_response" ? { label: t("settings.modelTest.inconclusive"), title: t(state.result.inconclusiveReason === "output_limit" ? "wizard.outputLimitNotice" : "settings.modelTest.inconclusiveDetail") } : failureCopy(state.result.category, t);
     className += " failure";
     icon = <AlertCircleIcon size={14} />;
     label = copy.label;

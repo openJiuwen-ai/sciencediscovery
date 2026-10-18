@@ -205,3 +205,14 @@ test('scope defaults to one selected-protocol request and switching to matrix re
   await acceptProbeCost(renderer!); await act(async () => { await renderer!.root.findByType('button').props.onClick(); });
   assert.deepEqual(modes, [false, true]); await act(async () => renderer!.unmount());
 });
+
+test('selected-protocol insufficient evidence stays inconclusive, with a specific valid-budget notice', async () => {
+  for (const locale of ['en', 'zh-CN'] as const) for (const budget of [false, true]) {
+    let renderer: ReactTestRenderer;
+    await act(async () => { renderer = create(view(async () => ({ ...success, category: 'invalid_response', ok: false, ...(budget ? { inconclusiveReason: 'output_limit' as const } : {}) }), 'v1', false, locale)); });
+    await acceptProbeCost(renderer!); await act(async () => { renderer!.root.findByType('button').props.onClick(); await Promise.resolve(); });
+    assert.match(buttonText(renderer!), locale === 'en' ? /Inconclusive/ : /无法确认/);
+    if (budget) assert.match(renderer!.root.findByType('button').props.title, locale === 'en' ? /output limit/ : /输出预算/);
+    await act(async () => renderer!.unmount());
+  }
+});

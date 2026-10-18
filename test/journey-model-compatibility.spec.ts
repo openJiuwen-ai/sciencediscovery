@@ -55,17 +55,15 @@ for (const locale of ["zh-CN", "en"] as const) {
       await journey.step("Read costs and explicitly agree to synthetic requests", "Probe disabled until consent; results show all protocols and unknown usage", async () => {
         const check = section.locator(".model-compatibility-check");
         const action = check.getByRole("button");
-      await expect(action).toBeDisabled();
-      await check.getByRole("checkbox").check(); await action.click();
-      await expect(action).toBeEnabled(); expect(fixture.requests).toHaveLength(1);
-      expect(fixture.requests[0]!.body.max_output_tokens).toBe(16);
-      await check.getByRole("combobox").selectOption("matrix");
-      expect(fixture.requests).toHaveLength(1);
-      const beforeMatrix = fixture.requests.length;
-      const action = check.getByRole("button");
         await expect(action).toBeDisabled();
-        await check.getByRole("checkbox").check();
-        await action.click();
+        await check.getByRole("checkbox").check(); await action.click();
+        await expect(action).toBeEnabled(); expect(fixture.requests).toHaveLength(1);
+        expect(fixture.requests[0]!.body.max_output_tokens).toBe(16);
+        await check.getByRole("combobox").selectOption("matrix");
+        expect(fixture.requests).toHaveLength(1);
+        const beforeMatrix = fixture.requests.length;
+        await expect(action).toBeDisabled();
+        await check.getByRole("checkbox").check(); await action.click();
         const results = check.getByRole("status");
         await expect(results).toContainText("openai-chat-completions");
         await expect(results).toContainText("openai-responses");

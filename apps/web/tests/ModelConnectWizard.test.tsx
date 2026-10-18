@@ -1640,18 +1640,19 @@ test("the first model merges into the settings read at save time when no callbac
   }]);
 });
 
-import { createServer } from 'node:http';
-import { testModelConnectivity } from '../../../services/api/src/model-connectivity.js';
-for (const kind of ['responses-min16','reasoning-limit','auth','empty'] as const) test(`mounted wizard preserves protocol and valid budget-limited setup: ${kind}`, async () => {
- const sent: any[] = [], deleted: string[] = []; let success = false;
- const server = createServer(async (req,res) => { let raw=''; for await(const b of req)raw+=b; const body=JSON.parse(raw);sent.push(body);
- const rejected=kind==='auth'||kind==='responses-min16'&&body.max_output_tokens<16;
- res.writeHead(rejected?(kind==='auth'?401:400):200,{'content-type':'application/json'}).end(JSON.stringify(rejected?{error:{message:'synthetic rejection'}}:kind==='empty'?{choices:[{message:{content:''},finish_reason:'stop'}]}:kind==='responses-min16'?{object:'response',status:'completed',output:[{type:'message',content:[{type:'output_text',text:'OK'}]}]}:{choices:[{message:{content:null,reasoning_content:'synthetic reasoning'},finish_reason:'length'}],usage:{prompt_tokens:1,completion_tokens:8,total_tokens:9}})); });
- await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const apiProtocol=kind==='responses-min16'?'openai-responses':'openai-chat-completions';
- const client=createMockClient({testModel: async()=>testModelConnectivity({apiToken:'synthetic',profile:{id:'s',name:'s',model:'s',baseUrl:`http://127.0.0.1:${(server.address() as any).port}/v1`,apiProtocol} as any,resolveProxy:()=>({mode:'direct'}),timeoutMs:1000}),deleteModel:async(id:string)=>{deleted.push('model');return {deleted:id}},deleteProvider:async(id:string)=>{deleted.push('provider');return {deleted:id}}});
- let renderer:ReactTestRenderer;try {
- await act(async()=>{renderer=create(createElement(LocaleProvider,{initialLocale:'en'},createElement(ModelConnectWizard,{client,presets:MODEL_PROVIDER_PRESETS,onSuccess:()=>{success=true}})))});
- await act(async()=>renderer!.root.findByProps({id:'wizard-api-key'}).props.onChange({target:{value:'synthetic'}}));await acceptProbeCost(renderer!);await act(async()=>{renderer!.root.findByProps({className:'primary-button wizard-submit-button'}).props.onClick(); const deadline=Date.now()+3000; while(!success&&deleted.length<2&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20))});
- if(kind==='auth'||kind==='empty'){assert.deepEqual(deleted,['model','provider']);assert.equal(success,false)}else{assert.deepEqual(deleted,[]);assert.equal(success,true);if(kind==='reasoning-limit')assert.match(extractText(renderer!.toJSON()),/compatibility unconfirmed/)}assert.equal(sent.length,1);assert.equal(kind==='responses-min16'?sent[0].max_output_tokens:sent[0].max_tokens,kind==='responses-min16'?16:8);
- }finally{if(renderer!)await act(async()=>renderer.unmount());server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))}
+for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'budget', 'auth', 'empty'] as const) test(`${locale} mounted wizard setup result ${kind} is honest and preserves rollback`, async () => {
+  const deleted: string[] = []; let saved = false, probes = 0, renderer: ReactTestRenderer;
+  const outcome: ModelConnectivityTestResult = kind === 'valid' ? successResult : kind === 'auth' ? { ...authFailResult, inconclusiveReason: 'output_limit' }
+    : { ...successResult, ok: false, category: 'invalid_response', ...(kind === 'budget' ? { inconclusiveReason: 'output_limit' as const } : {}) };
+  const client = createMockClient({ testModel: async () => { probes++; return outcome; }, deleteModel: async id => { deleted.push('model'); return { deleted: id }; }, deleteProvider: async id => { deleted.push('provider'); return { deleted: id }; } });
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS, onSuccess: () => { saved = true; } }))); });
+  try {
+    await act(async () => { renderer!.root.findByProps({ id: 'wizard-api-key' }).props.onChange({ target: { value: 'synthetic' } }); });
+    assert.equal(probes, 0); await acceptProbeCost(renderer!);
+    await act(async () => { renderer!.root.findByProps({ className: 'primary-button wizard-submit-button' }).props.onClick(); const end = Date.now()+2000; while (!saved && deleted.length < 2 && Date.now()<end) await new Promise(r => setTimeout(r,10)); });
+    assert.equal(probes, 1);
+    if (kind === 'auth' || kind === 'empty') { assert.equal(saved, false); assert.deepEqual(deleted, ['model','provider']); }
+    else { assert.equal(saved, true); assert.deepEqual(deleted, []); }
+    if (kind === 'budget') { const rendered = extractText(renderer!.toJSON()); assert.match(rendered, locale === 'en' ? /compatibility unconfirmed/ : /兼容性未确认/); assert.doesNotMatch(rendered, /Connected —|已成功连接/); }
+  } finally { await act(async () => renderer!.unmount()); }
 });

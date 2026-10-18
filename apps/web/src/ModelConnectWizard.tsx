@@ -453,8 +453,8 @@ export function ModelConnectWizard({
       const count = createdModelIds.length;
       const defaultChanged = !hadModels;
       const successDesc = defaultChanged
-        ? t("wizard.successDesc", { count, model: firstProfile.name })
-        : t("wizard.successDescKeepDefault", { count });
+        ? t(budgetLimited ? "wizard.savedDesc" : "wizard.successDesc", { count, model: firstProfile.name })
+        : t(budgetLimited ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count });
 
       setSuccessInfo({
         count,
@@ -833,8 +833,8 @@ export function ModelConnectWizard({
               <strong>{t(successInfo.inconclusive ? "wizard.savedInconclusive" : "wizard.successTitle")}: </strong>
               <span>
                 {successInfo.defaultChanged
-                  ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
-                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
+                  ? t(successInfo.inconclusive ? "wizard.savedDesc" : "wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
+                  : t(successInfo.inconclusive ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count: successInfo.count })}
                 {" "}({successInfo.latencyMs} ms)
                 {successInfo.inconclusive ? <span className="wizard-alert-detail">{t("wizard.outputLimitNotice")}</span> : null}
               </span>
