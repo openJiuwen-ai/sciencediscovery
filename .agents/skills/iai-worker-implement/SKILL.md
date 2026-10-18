@@ -69,6 +69,16 @@ Ambiguity only a human can resolve → Issue comment (question + options) + `hum
 - CI addressed until green or documented flake
 - Host-defined worker marker/trailer
 
+## Branch sync (no merge main)
+
+When catching up a feature branch / open PR with the default branch (usually `main`):
+
+- **Forbidden:** `git merge main`, `git merge origin/main`, or any merge of the base branch into the feature branch to "sync".
+- **Required:** `git fetch` then `git rebase origin/<base>`, resolve conflicts, and `git push --force-with-lease` if the branch was already pushed.
+- If rebase is blocked by host policy or conflicts need human product judgment → escalate via issue + `human-need`; **do not** fall back to merge-main.
+
+Reason: merge commits from syncing main can keep the PR out of the merge queue / complicate queueable history.
+
 ## Exit back to patrol
 
 | Exit | Meaning |

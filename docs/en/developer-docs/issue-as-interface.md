@@ -20,6 +20,10 @@ OSS ops (parallel, draft/read-only by default):
 
 On **first boot** (or when ledgers are empty / badly out of sync with GitHub), every bot must take a **full inventory** of all open issues and PRs and their states (labels, draft, CI, links, `human-need` / `agent-claimed`) and rebuild or reconcile both ledgers before starting the ~10-minute incremental patrol. See `iai-developer-patrol` and `iai-reviewer-patrol`.
 
+## Branch sync
+
+Workers catching up a PR with `main` must **rebase** onto the base (`git fetch` + `git rebase origin/<base>`), never merge the base branch into the feature branch—merge-sync commits can keep the PR out of the merge queue. See `iai-worker-implement`.
+
 Related: the existing opt-in [Issue-to-PR pipeline](issue-pipeline.md)
 (`repo-issue-pipeline`). Installing these skills does **not** start bots or change
 the application backend. Merging, closing issues, and `human-need` escalation
