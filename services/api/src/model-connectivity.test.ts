@@ -272,3 +272,20 @@ test("malformed native blocks cannot certify a basic capability", async () => {
     assert.equal((await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy })).category, "invalid_response");
   });
 });
+
+for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) test(`${apiProtocol} known basic truncation is inconclusive while its usage stays independently available`, async () => {
+  await withProvider(async (request, response) => {
+    const body = JSON.parse(await readRequest(request));
+    response.setHeader("content-type", "application/json");
+    if (body.stream) { response.writeHead(403); response.end(JSON.stringify({ error: { message: "synthetic stream rejection" } })); return; }
+    response.end(JSON.stringify(apiProtocol === "openai-chat-completions"
+      ? { choices: [{ finish_reason: "length", message: { content: "partial" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }
+      : apiProtocol === "openai-responses" ? { object: "response", status: "incomplete", output: [{ type: "message", content: [{ type: "output_text", text: "partial" }] }], usage: { input_tokens: 1, output_tokens: 1 } }
+      : { type: "message", stop_reason: "max_tokens", content: [{ type: "text", text: "partial" }], usage: { input_tokens: 1, output_tokens: 1 } }));
+  }, async origin => {
+    const result = await testModelConnectivity({ apiToken: "synthetic", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    const selected = result.protocols?.find(p => p.apiProtocol === apiProtocol); assert.ok(selected);
+    assert.equal(selected.basic.ok, false); assert.equal(selected.basic.category, "invalid_response"); assert.match(selected.basic.message, /truncated.*inconclusive/);
+    assert.equal(selected.streaming.category, "authorization"); assert.equal(selected.tools.category, "authorization"); assert.equal(selected.usage, "available");
+  });
+});

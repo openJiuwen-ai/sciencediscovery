@@ -851,12 +851,14 @@ export function ModelConnectWizard({
             >
               {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
             </button>
-            <span className="wizard-plan-summary">{planSummary}</span>
+            <div className="wizard-fetch-copy">
+              <span className="wizard-plan-summary">{planSummary}</span>
+              <label className="wizard-probe-consent"><input type="checkbox" checked={probeConsent} onChange={e => setProbeConsent(e.target.checked)} disabled={busy} />{t("settings.modelTest.basicConsent")}</label>
+            </div>
           </div>
           {/* The surrounding settings dialog closes when a press lands on its
               backdrop; a press on the wizard's own buttons must never take
               part in that gesture, even after future handler refactors. */}
-          <label><input type="checkbox" checked={probeConsent} onChange={e => setProbeConsent(e.target.checked)} disabled={busy} />{t("settings.modelTest.basicConsent")}</label>
           <div className="wizard-actions" onMouseDown={(event) => event.stopPropagation()}>
             <button
               aria-busy={testing}

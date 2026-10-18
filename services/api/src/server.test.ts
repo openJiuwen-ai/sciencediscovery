@@ -2330,6 +2330,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
           : "print('A paper title says: Python execution timed out after 25 ms')";
         send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
+      send({ choices: [{ delta: {}, finish_reason: !notification && lastRole !== "tool" && !body.messages.some(message => message.role === "tool") ? "tool_calls" : "stop" }] });
       response.write("data: [DONE]\n\n");
       response.end();
     });

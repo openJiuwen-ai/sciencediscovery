@@ -158,3 +158,12 @@ for (const apiProtocol of protocols) test(`${apiProtocol} validates top_p before
   for (const topP of [-1, 1.1, NaN]) assert.throws(() => createModelRequest(endpoint, "s", [], [], { ...policy, topP }, false), /top_p/);
   for (const topP of [0, 1]) assert.equal(JSON.parse(createModelRequest(endpoint, "s", [], [], { ...policy, topP }, false).body).top_p, topP);
 });
+
+test("Chat auxiliary images stay in the first user message when no system instruction was supplied", () => {
+  const endpoint = { baseUrl: "http://fixture/v1", model: "synthetic" };
+  const history = [{ role: "user", content: [{ type: "text", text: "synthetic" }, { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } }] }];
+  const without = JSON.parse(createModelRequest(endpoint, "", history, [], policy, false).body);
+  assert.equal(without.messages.length, 1); assert.equal(without.messages[0].role, "user"); assert.equal(without.messages[0].content.length, 2);
+  const withSystem = JSON.parse(createModelRequest(endpoint, "actual system instruction", history, [], policy, false).body);
+  assert.deepEqual(withSystem.messages[0], { role: "system", content: "actual system instruction" }); assert.equal(withSystem.messages[1].content.length, 2);
+});

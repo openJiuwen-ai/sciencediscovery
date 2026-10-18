@@ -981,7 +981,7 @@ export function createModelRequest(
           model: endpoint.model,
           ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
           ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
-          messages: [{ role: "system", content: systemPrompt }, ...chatHistory(history, variant)],
+          messages: [...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []), ...chatHistory(history, variant)],
           ...(tools.length ? { tools: tools.map((tool) => ({
             type: "function",
             function: { name: tool.name, description: tool.description, parameters: tool.parameters },
