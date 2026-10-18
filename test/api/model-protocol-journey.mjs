@@ -32,7 +32,7 @@ const steps = [];
 let logs = '', origin, outcome = 'FAIL';
 const redact = value => String(value).replaceAll(token, '[redacted]').replaceAll(process.cwd(), '<worktree>');
 const child = spawn(process.execPath, ['services/api/dist/server.js'], { stdio: ['ignore', 'pipe', 'pipe'], env: {
-  PATH: process.env.PATH, SCIENCE_AGENT_PORT: '0', SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_DISCOVERY_DATA_DIR: resolve(root, 'data'),
+  PATH: process.env.PATH, SCIENCE_AGENT_PORT: '0', SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_DATA_DIR: resolve(root, 'data'),
   SCIENCE_AGENT_AUTH_TOKEN: token, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MODEL_CATALOG_PATH: resolve(root, 'absent-catalog'),
   SCIENTIFIC_ENVS: '0', SCIENCE_AGENT_NPU_BROKER: '0', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_EVOLVE_URL: 'http://127.0.0.1:1',
 } });
@@ -44,7 +44,13 @@ async function request(path, body, method = body ? 'POST' : 'GET') {
 }
 async function step(name, expected, work) { try { const actual = await work(); steps.push({ name, expected, actual, status: 'PASS' }); } catch (error) { steps.push({ name, expected, actual: redact(error.stack), status: 'FAIL' }); throw error; } }
 try {
-  await step('1. Start isolated API CLI', 'Healthy API, explicit native backend, no full stack', async () => { await until(() => { if (child.exitCode !== null) throw new Error(logs); return origin; }); assert.equal((await fetch(`${origin}/health`)).status, 200); return `API healthy at ${origin}`; });
+  await step('1. Start isolated API CLI', 'Healthy API, empty model/provider registry, explicit native backend, no full stack', async () => {
+    await until(() => { if (child.exitCode !== null) throw new Error(logs); return origin; });
+    assert.equal((await fetch(`${origin}/health`)).status, 200);
+    assert.deepEqual((await request('/api/models')).body, []);
+    assert.deepEqual((await request('/api/providers')).body, []);
+    return `API healthy at ${origin}; fresh model/provider registry verified`;
+  });
   for (const apiProtocol of ['openai-chat-completions', 'openai-responses', 'anthropic-messages']) {
     let model;
     await step(`2. Register ${apiProtocol} and refuse a check without consent`, 'No provider request before consent', async () => {
