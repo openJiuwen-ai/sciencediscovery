@@ -185,6 +185,19 @@ export interface McpSourceStatus {
   status: "degraded" | "disabled" | "misconfigured" | "ready" | "unavailable";
 }
 
+/** An enabled MCP server that the last catalog refresh could not connect to or list tools from. */
+export interface McpConnectionError {
+  checkedAt: string;
+  message: string;
+}
+
+/** One entry of `GET /api/mcp/sources`. */
+export interface McpSourceDetails {
+  connectionError?: McpConnectionError;
+  manifest: McpSourceManifest;
+  status: McpSourceStatus;
+}
+
 export interface McpCatalogTool {
   annotations?: Record<string, unknown>;
   description: string;

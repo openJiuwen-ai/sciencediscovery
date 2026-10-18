@@ -41,6 +41,8 @@ JiuwenSwarm fixes its tool list when a run starts, so `jiuwenswarm-agent.ts` pro
 
 Literature: PubMed, arXiv, Europe PMC, bioRxiv, medRxiv. Databases: UniProt, PDB, Ensembl, Reactome, ClinVar, ChEMBL, GEO. A missing or incompatible tool makes its source degraded and unavailable to the Agent.
 
+A source whose MCP server is off (`enabled: false`, or absent from the resolved server table) is `disabled`: `GET /api/connectors` leaves it out of every connector selection and no tool reaches the Agent, even if a Session still lists it. A source whose enabled server failed to connect or list tools is `unavailable`; it stays in `GET /api/connectors` with `connectionError` (`message`, `checkedAt`) so the UI can show the failure, and `GET /api/mcp/sources` carries the same field. Before any catalog has been applied, sources are neither hidden nor flagged.
+
 ## 5. Local LLM Wiki
 
 `llm-wiki` reads an LLM Wiki knowledge base of any domain through the bundled stdio MCP bridge.

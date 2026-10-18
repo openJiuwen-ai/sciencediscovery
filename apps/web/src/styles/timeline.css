@@ -135,6 +135,7 @@
 .specialist-layout input[type="text"], .specialist-layout input:not([type]), .specialist-layout textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 7px; padding: 8px; font: inherit; }
 .specialist-layout fieldset { display: flex; flex-wrap: wrap; gap: 8px 14px; border: 1px solid var(--border); border-radius: 8px; }
 .specialist-layout fieldset label { display: flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
+.specialist-layout fieldset .connector-connection-error { color: var(--danger); font-size: 11px; }
 .specialist-layout fieldset input[type="checkbox"] { flex: 0 0 24px; width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
 .specialist-actions { display: flex; justify-content: space-between; }
 .specialist-actions-secondary { display: flex; align-items: center; gap: 8px; }
