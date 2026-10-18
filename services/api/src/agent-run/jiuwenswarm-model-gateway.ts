@@ -68,6 +68,7 @@ interface ChatRequest {
   max_tokens?: number;
   max_completion_tokens?: number;
   temperature?: number;
+  top_p?: number;
   thinking?: { type: string };
   tool_choice?: unknown;
   parallel_tool_calls?: boolean;
@@ -246,7 +247,7 @@ export async function startModelGateway(
     let requestPolicy = policy;
     let requestEndpoint = endpoint;
     try {
-      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "thinking", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
+      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
       if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
       if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
       if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
@@ -255,8 +256,9 @@ export async function startModelGateway(
       const budget = body.max_completion_tokens ?? body.max_tokens ?? policy.maxTokens;
       if (!Number.isInteger(budget) || budget <= 0 || budget > policy.maxTokens || (body.max_completion_tokens !== undefined && body.max_tokens !== undefined && body.max_tokens !== body.max_completion_tokens)) throw new Error("Requested token limit must be positive and within the configured gateway ceiling");
       if (body.temperature !== undefined && !Number.isFinite(body.temperature)) throw new Error("Invalid gateway temperature");
+      if (body.top_p !== undefined && (!Number.isFinite(body.top_p) || body.top_p < 0 || body.top_p > 1)) throw new Error("top_p must be between zero and one");
       if (body.thinking && !["enabled", "disabled"].includes(body.thinking.type)) throw new Error("Unsupported gateway thinking control");
-      requestPolicy = { ...policy, maxTokens: budget, ...(body.temperature === undefined ? {} : { temperature: body.temperature }), ...(body.thinking ? { thinking: body.thinking } : {}) };
+      requestPolicy = { ...policy, maxTokens: budget, ...(body.top_p === undefined ? {} : { topP: body.top_p }), ...(body.temperature === undefined ? {} : { temperature: body.temperature }), ...(body.thinking ? { thinking: body.thinking } : {}) };
       requestEndpoint = { ...endpoint, ...(body.thinking ? { thinkingMode: body.thinking.type as "enabled" | "disabled" } : {}) };
       translated = toModelRequest(body, restore);
     } catch (error) {

@@ -3,10 +3,11 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { completeChatRequest, createModelRequest, streamModelTurn } from "./index.js";
 import { protocolProvider } from "../../../test/helpers/protocol-provider.js";
 const protocols = ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const;
-const policy = { maxRetries: 0, maxTokens: 128, requestTimeoutMs: 1000 };
+const policy = { maxRetries: 0, maxTokens: 128, requestTimeoutMs: 1000, topP: .8 };
 const tools = [{ name: "compatibility_echo", description: "echo", parameters: { type: "object" } }];
 for (const apiProtocol of protocols) {
   for (const usage of ["valid", "missing", "malformed"] as const) test(`${apiProtocol} non-stream and streamed parallel tool round trips with ${usage} usage`, async () => {
@@ -24,12 +25,13 @@ for (const apiProtocol of protocols) {
       const nextHistory = [...history, first.assistantMessage, ...first.toolCalls.map(c => ({ role: "tool", content: "OK", tool_call_id: c.id }))];
       const final = await streamModelTurn(endpoint, "synthetic system", nextHistory, tools, policy, AbortSignal.timeout(2000));
       assert.equal(final.assistantMessage.content, "OK");
-      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: "synthetic system" }, ...history], tools: tools.map(t => ({ type: "function", function: t })) }, AbortSignal.timeout(2000));
+      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: "synthetic system" }, ...history], tools: tools.map(t => ({ type: "function", function: t })), top_p: .8 }, AbortSignal.timeout(2000));
       const native = await response.json() as any;
       assert.equal(native.choices[0].finish_reason, "tool_calls");
-      const follow = await completeChatRequest(endpoint, { messages: [...history, native.choices[0].message, ...native.choices[0].message.tool_calls.map((c: { id: string }) => ({ role: "tool", content: "OK", tool_call_id: c.id }))] }, AbortSignal.timeout(2000));
+      const follow = await completeChatRequest(endpoint, { messages: [...history, native.choices[0].message, ...native.choices[0].message.tool_calls.map((c: { id: string }) => ({ role: "tool", content: "OK", tool_call_id: c.id }))], top_p: .8 }, AbortSignal.timeout(2000));
       assert.equal((await follow.json() as any).choices[0].message.content, "OK");
       assert.ok(provider.requests.every(r => r.path.startsWith("/custom/v1/")));
+      assert.ok(provider.requests.every(r => r.body.top_p === .8));
     } finally { await provider.close(); }
   });
   test(`${apiProtocol} preserves truncation, malformed tool args, provider and stream errors, cancellation`, async () => {
@@ -131,4 +133,28 @@ for (const apiProtocol of protocols) test(`${apiProtocol} stream errors retain c
       return true;
     });
   } finally { await provider.close(); }
+});
+
+test('canonical Chat assistant parallel history maps to Responses without losing content, IDs or args', () => {
+  const calls = ['a', 'b'].map(id => ({ id, type: 'function', function: { name: 'echo', arguments: JSON.stringify({ id }) } }));
+  const endpoint = { apiProtocol: 'openai-responses' as const, model: 'synthetic', baseUrl: 'http://fixture/v1' };
+  const wire = JSON.parse(createModelRequest(endpoint, 'system', [{ role: 'assistant', content: 'retained text', tool_calls: calls }, ...calls.map(c => ({ role: 'tool', tool_call_id: c.id, content: 'result' }))], [], policy, false).body);
+  assert.ok(JSON.stringify(wire).includes('retained text'));
+  assert.deepEqual(wire.input.filter((v: any) => v.type === 'function_call').map((v: any) => [v.call_id, v.arguments]), calls.map(c => [c.id, c.function.arguments]));
+  assert.deepEqual(wire.input.filter((v: any) => v.type === 'function_call_output').map((v: any) => v.call_id), ['a', 'b']);
+  assert.throws(() => createModelRequest(endpoint, '', [{ role: 'assistant', content: '', tool_calls: [null] }], [], policy, false), /Invalid tool call history/);
+});
+test('Responses failed terminal errors keep native cause and redact token, including absent cause', async () => {
+  for (const error of [{ message: 'original native cause synthetic-key' }, undefined]) {
+    const server = createServer(async (req, res) => { for await (const _ of req) {} res.setHeader('content-type', 'text/event-stream'); res.end(`data: ${JSON.stringify({ type: 'response.failed', response: { error } })}\n\n`); });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    try { await assert.rejects(streamModelTurn({ apiProtocol: 'openai-responses', baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, apiToken: 'synthetic-key', model: 's', proxy: { mode: 'direct' } }, '', [], [], policy, AbortSignal.timeout(2000)), (e: Error) => { assert.match(e.message, /Responses API failed/); if (error) assert.match(e.message, /original native cause/); assert.ok(!e.message.includes('synthetic-key')); return true; }); }
+    finally { await new Promise<void>(r => { server.close(() => r()); server.closeAllConnections(); }); }
+  }
+});
+
+for (const apiProtocol of protocols) test(`${apiProtocol} validates top_p before dispatch`, () => {
+  const endpoint = { apiProtocol, baseUrl: "http://fixture/v1", model: "synthetic" };
+  for (const topP of [-1, 1.1, NaN]) assert.throws(() => createModelRequest(endpoint, "s", [], [], { ...policy, topP }, false), /top_p/);
+  for (const topP of [0, 1]) assert.equal(JSON.parse(createModelRequest(endpoint, "s", [], [], { ...policy, topP }, false).body).top_p, topP);
 });

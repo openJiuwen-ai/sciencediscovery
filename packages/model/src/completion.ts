@@ -10,6 +10,7 @@ export interface ChatCompletionRequest {
   messages: RuntimeMessage[];
   max_tokens?: number;
   temperature?: number;
+  top_p?: number;
   thinking?: { type: string };
   tools?: Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>;
   stream?: boolean;
@@ -23,7 +24,7 @@ export async function completeChatRequest(
   fetchImpl?: typeof fetch,
   maxResponseBytes = 4 * 1024 * 1024,
 ): Promise<Response> {
-  const unsupported = Object.keys(body).filter(k => !["messages", "model", "max_tokens", "temperature", "thinking", "tools", "stream"].includes(k));
+  const unsupported = Object.keys(body).filter(k => !["messages", "model", "max_tokens", "temperature", "top_p", "thinking", "tools", "stream"].includes(k));
   if (unsupported.length) throw new Error(`Unsupported model parameters: ${unsupported.join(", ")}`);
   if (body.stream) throw new Error("Use the shared model gateway for streaming Chat requests");
   if (!Array.isArray(body.messages) || body.messages.some(m => !["user", "assistant", "system", "tool"].includes(m.role ?? ""))) throw new Error("Invalid model message history");
@@ -36,7 +37,7 @@ export async function completeChatRequest(
     return { name: t.function.name, description: t.function.description ?? "", parameters: t.function.parameters ?? { type: "object" } };
   });
   const probe = createModelRequest(selected, systemPrompt, body.messages.filter(m => m.role !== "system"), tools,
-    { maxTokens: body.max_tokens ?? 16_384, maxRetries: 0, requestTimeoutMs: 90_000, temperature: body.temperature, thinking: body.thinking }, false);
+    { maxTokens: body.max_tokens ?? 16_384, maxRetries: 0, requestTimeoutMs: 90_000, temperature: body.temperature, topP: body.top_p, thinking: body.thinking }, false);
   const dispatcher = proxyDispatcher(endpoint.proxy);
   try {
     let response: Response;

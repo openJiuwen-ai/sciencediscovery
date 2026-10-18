@@ -23,7 +23,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
     if (req.method === "GET" && req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [{ id: "synthetic", object: "model" }] })); return; }
     const protocol = selection === "all" ? req.url?.endsWith("/responses") ? "openai-responses" : req.url?.endsWith("/messages") ? "anthropic-messages" : "openai-chat-completions" : selection;
   const usage = options.usage === "missing" ? undefined : options.usage === "malformed" ? { input_tokens: "bad", output_tokens: -1 } : protocol === "openai-chat-completions" ? { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } : { input_tokens: 3, output_tokens: 2, total_tokens: 5 };
-  const nativeState = protocol === "anthropic-messages" ? { type: "thinking", thinking: "synthetic reasoning", signature: "signature-required" } : { type: "reasoning", id: "reason-1", encrypted_content: "encrypted-required", summary: [] };
+  const nativeState = protocol === "anthropic-messages" ? { type: "thinking", thinking: "synthetic reasoning", signature: "signature-required" } : { type: "reasoning", id: "reason-1", encrypted_content: "encrypted-required", summary: [{ type: "summary_text", text: "synthetic summary" }] };
     let raw = ""; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw || "{}");
     requests.push({ path: req.url!, body });

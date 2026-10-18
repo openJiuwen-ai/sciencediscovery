@@ -118,6 +118,7 @@ export interface ModelClientPolicy {
   requestTimeoutMs: number;
   maxResponseBytes?: number;
   temperature?: number;
+  topP?: number;
   thinking?: { type: string };
 }
 
@@ -969,6 +970,7 @@ export function createModelRequest(
   endpoint: ModelEndpoint, systemPrompt: string, history: AgentHistoryMessage[],
   tools: WireToolSpec[], policy: ModelClientPolicy, stream: boolean,
 ): { url: string; headers: Record<string, string>; body: string } {
+  if (policy.topP !== undefined && (!Number.isFinite(policy.topP) || policy.topP < 0 || policy.topP > 1)) throw new Error("top_p must be between zero and one");
   const variant = endpointVariant(endpoint);
   switch (endpointProtocol(endpoint)) {
     case "openai-chat-completions":
@@ -978,6 +980,7 @@ export function createModelRequest(
         body: JSON.stringify({
           model: endpoint.model,
           ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+          ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
           messages: [{ role: "system", content: systemPrompt }, ...chatHistory(history, variant)],
           ...(tools.length ? { tools: tools.map((tool) => ({
             type: "function",
@@ -997,6 +1000,7 @@ export function createModelRequest(
         body: JSON.stringify({
           model: endpoint.model,
           ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+          ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
           instructions: systemPrompt,
           input: responsesInput(history),
           ...(tools.length ? { tools: tools.map((tool) => ({
@@ -1016,6 +1020,7 @@ export function createModelRequest(
         body: JSON.stringify({
           model: endpoint.model,
           ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+          ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
           system: systemPrompt,
           messages: toAnthropicMessages(history),
           ...(tools.length ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
