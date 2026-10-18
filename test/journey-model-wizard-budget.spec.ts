@@ -1,5 +1,17 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
@@ -33,6 +45,7 @@ for (const [kind, locale] of [['responses-min16', 'en'], ['reasoning-limit', 'en
     const name = `Budget fixture ${randomUUID()}`, requests: Record<string, any>[] = [];
     const protocol = kind === 'responses-min16' ? 'openai-responses' : 'openai-chat-completions';
     const server = createServer(async (req, res) => {
+      if (req.method === 'GET') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'synthetic' }] })); return; }
       let raw = ''; for await (const b of req) raw += b;
       const body = JSON.parse(raw); requests.push(body);
       const status = kind === 'auth' ? 401 : kind === 'responses-min16' && body.max_output_tokens < 16 ? 400 : 200;

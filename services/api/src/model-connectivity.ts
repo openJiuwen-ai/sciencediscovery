@@ -103,7 +103,7 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
         if (first.usage) usage = "available";
         if (validTurn(first) && first.toolCalls.length === 1 && first.toolCalls[0]!.name === TOOLS[0]!.name && first.toolCalls[0]!.args.value === "OK" && !first.toolCalls[0]!.argsParseError) {
           const final = await streamModelTurn(endpoint, instruction, [...HISTORY, first.assistantMessage, { role: "tool", tool_call_id: first.toolCalls[0]!.id, content: "OK" }], TOOLS, policy, toolSignal);
-          tools = validTurn(final) && /^OK[.!]?$/i.test(final.assistantMessage.content.trim()) && !final.toolCalls.length ? { category: "ok", ok: true, message: "Tool call ID, arguments and result completed a round-trip" } : unknown();
+          tools = validTurn(final) && typeof final.assistantMessage.content === "string" && /^OK[.!]?$/i.test(final.assistantMessage.content.trim()) && !final.toolCalls.length ? { category: "ok", ok: true, message: "Tool call ID, arguments and result completed a round-trip" } : unknown();
           if (final.usage) usage = "available";
         }
       } catch (error) { tools = failure(error, toolSignal); }
