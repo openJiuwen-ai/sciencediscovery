@@ -38,7 +38,7 @@ export async function runIdeaResearchProtocolJourney() {
     requests.push({ protocol, path: req.url, model: body.model });
     if (gate) { const held = gate; gate = undefined; await held; }
     const system = protocol === 'anthropic-messages' ? body.system : protocol === 'openai-responses' ? body.instructions : body.messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
-    const value = system.includes('matching: {"candidates"') ? { candidates: [{ parentId: 'ROOT', direction: 'Synthetic direction', hypothesis: 'Synthetic hypothesis' }], reason: 'One bounded synthetic comparison' }
+    const value = system.includes('matching: {"candidates"') ? { candidates: [{ parentId: 'ROOT', hypothesis: 'Synthetic hypothesis' }], reason: 'One bounded synthetic comparison' }
       : system.includes('"score":1.0') ? { text: 'Synthetic independent assessment', score: 8 }
       : system.includes('"strengths":[]') ? { text: 'Synthetic aggregation', strengths: [], failureModes: [], uncertainties: [], evidenceGaps: [], recommendedNextMoves: [], constraintFlags: [], confidence: 0.5 }
       : { text: 'Synthetic design or propagation' };
@@ -55,7 +55,11 @@ export async function runIdeaResearchProtocolJourney() {
   try {
     await step('1. Start owned API and real research sidecar', 'Healthy isolated services, internal/public auth enforced, no model requests', async () => {
       sidecarOrigin = await start(resolve('services/evolve/.venv/bin/python'), ['-m', 'uvicorn', 'sciencediscovery_evolve.server:app', '--host', '127.0.0.1', '--port', '0'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'sidecar'), SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, PYTHONPATH: resolve('services/evolve/src') }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'sidecar');
-      origin = await start(process.execPath, ['services/api/dist/server.js'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'api'), SCIENCE_AGENT_AUTH_TOKEN: secret, SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_PORT: '0', SCIENCE_AGENT_EVOLVE_URL: sidecarOrigin, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1' }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
+      const portReservation = createServer();
+      await new Promise(r => portReservation.listen(0, '127.0.0.1', r));
+      const apiPort = portReservation.address().port;
+      await new Promise(r => portReservation.close(r));
+      origin = await start(process.execPath, ['services/api/dist/server.js'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'api'), SCIENCE_AGENT_AUTH_TOKEN: secret, SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_PORT: String(apiPort), SCIENCE_AGENT_EVOLVE_URL: sidecarOrigin, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1' }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
       api = async (path, body, method = body ? 'POST' : 'GET') => { const r = await fetch(origin + path, { method, headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) }); const text = await r.text(); assert.ok(!text.includes(providerKey) && !text.includes(internal)); return { status: r.status, body: JSON.parse(text) }; };
       assert.equal((await fetch(origin + '/api/models')).status, 401);
       assert.equal((await fetch(sidecarOrigin + '/idea-tree/research/command', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
@@ -74,7 +78,7 @@ export async function runIdeaResearchProtocolJourney() {
       await step(`3. Create and complete public ${apiProtocol} research`, 'Real Python stages finish with scored persisted graph and unknown billing', async () => {
         const before = requests.length;
         let release; gate = new Promise(r => { release = r; });
-        const r = await api(`/api/sessions/${session.id}/idea-tree/research`, { content: '/idea-tree Synthetic bounded hypothesis comparison', settings: { maxRounds: 1, maxDepth: 1, candidatesPerRound: 1, maxTokensPerCall: 256, maxTokens: 600000 } }); assert.equal(r.status, 200, JSON.stringify(r.body));
+        const r = await api(`/api/sessions/${session.id}/idea-tree/research`, { content: '/idea-tree Synthetic bounded hypothesis comparison', settings: { explorationIntensity: 'quick', maxNodes: 2, maxDepth: 1, maxTokensPerCall: 256, maxTokens: 600000 } }); assert.equal(r.status, 200, JSON.stringify(r.body));
         research = r.body.research;
         await until(() => requests.length > before);
         // A session selection change cannot redirect an issued research grant.
