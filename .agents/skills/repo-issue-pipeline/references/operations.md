@@ -34,6 +34,7 @@ Task section:
 - ready-since time, priority/aging and last meaningful progress; changed source revision, observed change, judgment, next action, responsible actor and blocker/resume condition;
 - last remote check/progress time and current branch/head;
 - worker thread ID and process/service identity, worktree, logs and report;
+- pairing report/head and blocking/advisory disposition (or human waiver) before Ready;
 - relevant CI run/head/status, approvals, unresolved discussions and actual merge-queue evidence;
 - questions and authoritative decision/disposition URLs.
 
@@ -65,7 +66,7 @@ Keep waiting tasks under periodic observation, including questions posted in Iss
 
 ## Review and reports
 
-The main agent performs independent code/evidence review and can do so while an unrelated worker develops. It must inspect the reported head, not a different local revision, and verify complete substantive discussion dispositions. Preserve evidence for tests not run locally and distinguish remote CI evidence from a local pass.
+The main agent performs independent code/evidence review and can do so while an unrelated worker develops. It must inspect the reported head, not a different local revision, and verify complete substantive discussion dispositions. Before Ready or acceptance, require a pairing pre-flight report for that head covering Correctness, Security and Conventions, with no unresolved **blocking** findings unless an explicit human waiver is recorded; advisory findings may remain as tracked follow-ups. Preserve evidence for tests not run locally and distinguish remote CI evidence from a local pass.
 
 Measure rather than infer efficiency: when supported record timestamped worker start/resume/end, model request/tool/test intervals, requirement decisions, CI creation/start/end/attempt and queue transitions with task/head links. Separate implementation, review repair, conflict, CI/infrastructure, external decisions, environment/dependency blocks and scheduler wait; allow overlaps without double-counting. Do not log credentials or unredacted request/context payloads, or claim per-operation timings when only turn boundaries exist. This is an observability requirement, not proof that the installed SDK host already emits such events.
 

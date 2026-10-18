@@ -14,7 +14,9 @@ Periodic wake-up → Main Codex agent → Independent SDK workers → Fork pull 
 The main agent checks ownership before admission, confirms the problem on current
 main, schedules within the agreed cap, reviews completed work and tracks PRs until
 the accepted Issue scope is delivered. Workers own analysis, implementation, tests,
-documentation and fork PR maintenance; continuations resume the original thread.
+documentation, Magpie-style pairing pre-flight (Correctness / Security / Conventions)
+and fork PR maintenance; continuations resume the original thread. Ready requires no
+unresolved blocking pairing findings on the submitted head.
 CI failures, meaningful review comments, conflicts and accepted residual work stay
 in the pool. Waiting for an external decision does not occupy a worker slot.
 

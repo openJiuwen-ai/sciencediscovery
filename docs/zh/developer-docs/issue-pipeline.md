@@ -11,7 +11,8 @@
 ```
 
 主 Agent 在入队前确认负责人和问题是否仍存在，按约定并发调度，复核交付并持续关注 PR。
-Worker 自主完成分析、开发、测试、文档和提交；后续处理评论、CI、冲突时，恢复原有线程。
+Worker 自主完成分析、开发、测试、文档、Magpie 风格的 pairing 预检（正确性 / 安全 / 约定）和提交；
+后续处理评论、CI、冲突时，恢复原有线程。标 Ready 前须确认当前 head 无未解决的 blocking pairing 项。
 Issue 部分完成后的剩余工作仍需跟踪，等待外部决策的任务不占执行名额。
 
 启用前阅读[配置与运行指南](../../../.agents/skills/repo-issue-pipeline/references/setup.md)，

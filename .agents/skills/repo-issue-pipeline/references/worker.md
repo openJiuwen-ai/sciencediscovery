@@ -31,7 +31,7 @@ First verify on current upstream main that the reported failure reproduces, or t
 
 If not reproduced or the necessary environment/details are unavailable, stop before product implementation, preserve existing work and post a concise evidence-based Issue/PR comment. Explain exactly what was checked, results, limitations and what information/conditions would permit verification. Report waiting-for-reproduction and release the slot; do not create a speculative PR, claim resolution, close the Issue or repeatedly ask the same question. Temporary diagnostic/reproduction checks are allowed. For actual CI/conflict maintenance, the relevant current failing job/conflict supplies that verification target.
 
-Once the problem/gap is confirmed, choose a proportionate solution, implement with useful regression tests, execute bounded relevant verification, update docs when behavior requires it, self-review and submit/update the upstream PR from the personal fork. Read the repository template and current CI rules. Do not ask the main agent to approve ordinary implementation decisions.
+Once the problem/gap is confirmed, choose a proportionate solution, implement with useful regression tests, execute bounded relevant verification, update docs when behavior requires it, complete pairing pre-flight, and submit/update the upstream PR from the personal fork. Read the repository template and current CI rules. Do not ask the main agent to approve ordinary implementation decisions.
 
 The default assignment is complete delivery, not a succession of local-only phase grants. Plan and checkpoint internally; continue into implementation after a successful diagnostic without returning for routine main-agent authorization. Verify a minimal real invocation-to-result path and risky runtime/dependency prerequisites early; reuse existing framework pieces before adding broad infrastructure. Stop for actual user scope/authority/external blockers, not self-imposed phase ceremonies. Preserve explicit user exclusions and genuine partial-scope decisions; if an assignment artificially limits authorized engineering, report that conflict once for correction rather than silently treating a prototype as full delivery.
 
@@ -42,6 +42,12 @@ Keep raw validation artifacts and applicability metadata on disk. Reuse unchange
 Reply to substantive adopted/rejected suggestions with evidence, changes and actual validation. Prefix automation comments with the main skill's marker. Resolve a thread only after addressing its concern. Refresh discussion/ownership before publishing. If our account owns the Issue, an open third-party PR is reference material, not a reason to stop or deliver only a dependent fragment. Ensure our own PR covers all accepted requirements on current main, integrating justified ideas/code with attribution and tests where useful. Reuse already merged functionality. Respect approved deferrals, but never defer required work solely to somebody else's unmerged PR. Do not modify or close that contributor's PR. If ownership actually belongs to another account or an authorized scope decision conflicts, report the precise ownership/decision evidence for coordination.
 
 CI repair and conflict resolution are part of the same task. Inspect current-commit failures and actual artifacts. Justified ordinary CI reruns may be performed without another user confirmation under the main skill's policy. Record the workflow/run/job/head/attempt and reason. Avoid weakening tests, cycling retries without diagnosis or starting paid workloads.
+
+## Pairing before delivery PR
+
+Before opening or updating the delivery PR, run the main skill's **pairing pre-flight** on the current head: Correctness, Security and Conventions, each finding graded blocking or advisory. Default is a single-pass self-review of all three axes; for high-stakes or security-sensitive changes run isolated multi-pass reviews and merge/dedupe. Pairing is read-only on the forge (no merge, no review comment, no remote mutation as part of the review itself)—emit a structured report only.
+
+Clear every **blocking** finding, or record an explicit human waiver with rationale, before publishing/updating the PR. Attach report path, head SHA and disposition of blocking items in the worker report. Re-run pairing when the head changes after earlier review.
 
 ## Questions and completion
 
@@ -55,6 +61,7 @@ Write your report in the assigned report file and finish the current run when aw
 - before-fix reproduction or missing-capability evidence on the relevant upstream SHA, or a not-reproduced/unable-to-test disposition and public comment URL;
 - exact tests/outcomes and CI run URLs, with unverified scope stated;
 - added-code UT/ST coverage scope, metrics and report/command evidence, plus specific reasons, residual risks and alternative checks for uncovered code or unavailable measurement;
+- pairing report path/head SHA, axis coverage (Correctness/Security/Conventions), blocking vs advisory dispositions and any human waivers;
 - source URLs and dispositions for substantive discussions;
 - open questions/blockers and posted comment links;
 - next action and whether code work is complete, CI is pending, or a decision is awaited.

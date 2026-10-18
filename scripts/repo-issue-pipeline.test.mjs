@@ -179,3 +179,21 @@ test("CLI errors are nonzero and do not print private request contents", () => {
     assert.doesNotMatch(result.stderr, /ENOENT|nonexistent-private-request/);
   }
 });
+
+test("skill contract documents Magpie-style pairing axes and Ready gate", async () => {
+  const root = new URL("../.agents/skills/repo-issue-pipeline/", import.meta.url);
+  const skill = await readFile(new URL("SKILL.md", root), "utf8");
+  const worker = await readFile(new URL("references/worker.md", root), "utf8");
+  const ops = await readFile(new URL("references/operations.md", root), "utf8");
+  for (const text of [skill, worker, ops]) {
+    assert.match(text, /pairing pre-flight/i);
+    assert.match(text, /Correctness/);
+    assert.match(text, /Security/);
+    assert.match(text, /Conventions/);
+    assert.match(text, /blocking/);
+  }
+  assert.match(skill, /Ready/);
+  assert.match(skill, /read-only on the forge|does not merge/i);
+  assert.match(worker, /Before opening or updating the delivery PR/);
+  assert.match(ops, /Before Ready or acceptance/);
+});
