@@ -63,7 +63,7 @@ test("a user initializes the pinned release into an empty installation and compl
       },
     };
     const context = { dataDir: join(workspace, "data"), payloadRoot: workspace, manifest, io,
-      env: { PATH: process.env.PATH, SCIENCE_AGENT_PYPI_INDEX: "https://pypi.org/simple" }, log };
+      env: { PATH: process.env.PATH, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: "https://pypi.org/simple" }, log };
     control = await startEvolveControl(context);
     assert.equal(control.runtime.status().state, "not_initialized");
     assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");
@@ -122,6 +122,11 @@ test("a user initializes the pinned release into an empty installation and compl
     assert(events.at(-1).bestTestScore > baseline);
     assert(calls > 0); assert(calls <= 2);
     record("A real PUCT task with sandboxed pandas/sklearn candidates improves its held-out score", { modelCalls: calls, result: "succeeded" });
+    const { CandidateSources } = await import("../../services/api/src/evolution/candidates.js");
+    const winner = events.find(event => event.type === "expanded" && event.valid === true && event.score > baseline);
+    const source = await new CandidateSources(context.dataDir, context.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR).read("distribution-journey", winner.codeHash);
+    assert(source?.includes("LinearRegression"), "API candidate reader must find the actual sidecar output at the configured override");
+    record("The API reads the actual winning candidate from the operator-configured shared directory");
     const token = connection.internalToken;
     await control.close(); control = undefined;
     await assert.rejects(fetch(`${connection.url}/health`));

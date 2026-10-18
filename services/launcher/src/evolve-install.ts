@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { createHash, randomBytes } from "node:crypto";
-import { access, chmod, lstat, mkdir, mkdtemp, open, readFile, rename, rm, statfs, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, statfs, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 import { defaultBootstrapIo, ensureUv, resolveBootstrapSettings, withBootstrapLock, type BootstrapIo } from "./bootstrap.js";
@@ -140,6 +140,33 @@ async function directoryBytes(root: string): Promise<number> {
   return total;
 }
 
+const STAGING_OWNER = ".evolve-staging-owner.json";
+function stagingIdentity(context: EvolveInstallContext): string {
+  return JSON.stringify({ format: 1, archive: EVOLVE_RELEASE.sha256, requirements: EVOLVE_RELEASE.requirementsSha256,
+    python: context.manifest.python.version, arch: process.arch });
+}
+/** Called only under the exclusive bootstrap lock, on explicit Init/retry. */
+async function reclaimStaging(parent: string, context: EvolveInstallContext): Promise<void> {
+  for (const entry of await readdir(parent, { withFileTypes: true })) {
+    if (!/^\.install-[A-Za-z0-9]{6}$/.test(entry.name) || !entry.isDirectory()) continue;
+    const path = join(parent, entry.name);
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.uid !== process.getuid!() || (info.mode & 0o777) !== 0o700) continue;
+    let owned = false;
+    try {
+      const file = await open(join(path, STAGING_OWNER), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const marker = await file.stat();
+        owned = marker.isFile() && marker.uid === info.uid && (marker.mode & 0o777) === 0o600
+          && marker.size <= 1024 && (await file.readFile("utf8")) === stagingIdentity(context);
+      } finally { await file.close(); }
+    } catch (error) {
+      if (!["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
+    if (owned) await rm(path, { recursive: true });
+  }
+}
+
 /** restore never downloads. init is called only by the authenticated explicit user action. */
 export async function resolveEvolveInstallation(context: EvolveInstallContext, initialize = false): Promise<EvolveInstallation | undefined> {
   const parent = join(context.dataDir, "evolve");
@@ -165,6 +192,7 @@ export async function resolveEvolveInstallation(context: EvolveInstallContext, i
       if (!initialize) return undefined;
       if (!context.manifest.bootstrap) throw new Error("This payload cannot initialize Evolve. Install a current ScienceDiscovery release.");
       if (digest(EVOLVE_REQUIREMENTS) !== EVOLVE_RELEASE.requirementsSha256) throw new Error("Evolve dependency lock checksum mismatch");
+      await reclaimStaging(parent, context);
       const disk = await statfs(parent);
       if (disk.bavail * disk.bsize < MAX_INSTALL_BYTES) throw new Error("Evolve initialization needs at least 1 GiB of free disk space");
       const python = join(context.payloadRoot, context.manifest.python.path);
@@ -173,6 +201,7 @@ export async function resolveEvolveInstallation(context: EvolveInstallContext, i
       const uv = await ensureUv(io, resolveBootstrapSettings(context.env, context.dataDir), context.manifest.bootstrap, python);
       const staging = await mkdtemp(join(parent, ".install-"));
       try {
+        await writeFile(join(staging, STAGING_OWNER), stagingIdentity(context), { mode: 0o600 });
         context.log(`Downloading Evolve ${EVOLVE_RELEASE.release} and its pinned candidate runtime...`);
         await download(io, join(staging, "source.tar.gz"));
         await writeFile(join(staging, "requirements.txt"), EVOLVE_REQUIREMENTS, { mode: 0o600 });
@@ -197,6 +226,7 @@ export async function resolveEvolveInstallation(context: EvolveInstallContext, i
         // Only an incomplete same-pin install can occupy this path; valid ones returned above.
         await rm(root, { recursive: true, force: true });
         await rename(staging, root);
+        await rm(join(root, STAGING_OWNER));
       } finally { await rm(staging, { recursive: true, force: true }); }
     }
     return { root, python: join(root, "venv/bin/python"), token: await privateEvolveToken(context.dataDir) };

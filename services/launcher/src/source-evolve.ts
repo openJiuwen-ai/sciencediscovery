@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { privateEvolveToken } from "./evolve-install.js";
 import { defaultBootstrapIo, withBootstrapLock } from "./bootstrap.js";
-import { EvolveRuntime, createEvolveControl, type EvolveControl } from "./evolve-runtime.js";
+import { EvolveRuntime, createEvolveControl, evolveChildEnvironment, type EvolveControl } from "./evolve-runtime.js";
 
 export async function startSourceEvolve(python: string, dataDir: string, stateFile: string, signal?: AbortSignal): Promise<EvolveControl> {
   const parent = join(dataDir, "evolve");
@@ -16,7 +16,7 @@ export async function startSourceEvolve(python: string, dataDir: string, stateFi
   const token = await withBootstrapLock(parent, defaultBootstrapIo(log), () => privateEvolveToken(dataDir), signal);
   // The source stack has explicitly provisioned this interpreter with uv sync.
   // Reuse the same socket/process supervision as the slim-binary installer.
-  const context = { dataDir, env: { PATH: process.env.PATH } };
+  const context = { dataDir, env: evolveChildEnvironment(process.env, true) };
   const runtime = new EvolveRuntime(context, { install: async () => ({ python, root: dataDir, token }), spawn, fetch, allowRuntimeProvisioning: true });
   const control = await createEvolveControl(runtime, signal);
   try {

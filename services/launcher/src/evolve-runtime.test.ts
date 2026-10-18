@@ -157,3 +157,26 @@ test("shutdown while health or auth is completing cannot publish a connection", 
     } finally { deliverSignal?.(); await stopping; await runtime.stop(); }
   }
 }));
+test("owned sidecars receive documented candidate/log settings, with source-only provisioning settings and no model secrets", async () => fixture(async context => {
+  const settings = {
+    SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(context.dataDir, 'operator-candidates'),
+    SCIENCE_AGENT_EVOLVE_LOG_LEVEL: 'debug', SCIENCE_AGENT_LOG_LEVEL: 'warning', SCIENCE_AGENT_LOG_DIR: join(context.dataDir, 'operator-logs'),
+    SCIENCE_AGENT_LOG_MAX_BYTES: '2048', SCIENCE_AGENT_LOG_BACKUP_COUNT: '2',
+  };
+  const provisioning = { HTTP_PROXY: 'http://proxy.invalid:3128', HTTPS_PROXY: 'http://proxy.invalid:3128', ALL_PROXY: 'http://proxy.invalid:3128', NO_PROXY: '127.0.0.1',
+    http_proxy: 'http://proxy.invalid:3128', https_proxy: 'http://proxy.invalid:3128', all_proxy: 'http://proxy.invalid:3128', no_proxy: 'localhost',
+    UV_INDEX_URL: 'https://index.invalid/simple', UV_DEFAULT_INDEX: 'https://index.invalid/simple', UV_EXTRA_INDEX_URL: 'https://extra.invalid/simple',
+    PIP_INDEX_URL: 'https://index.invalid/simple', PIP_EXTRA_INDEX_URL: 'https://extra.invalid/simple', SSL_CERT_FILE: '/fixture/cert.pem', SSL_CERT_DIR: '/fixture/certs' };
+  const keys = [...Object.keys(settings), ...Object.keys(provisioning)];
+  context.env = { ...context.env, ...settings, ...provisioning, HOME: '/fixture/private-home', OPENAI_API_KEY: 'synthetic-never-forward' };
+  for (const allowRuntimeProvisioning of [false, true]) {
+
+    const runtime = new EvolveRuntime(context, { install: async () => ({ python: process.execPath, root: context.dataDir, token: 'synthetic-private' }),
+      spawn: (_command, _args, options) => spawn(process.execPath, ['-e', FIXTURE.replace("if (req.url === '/environment') return res.end(JSON.stringify({leaked:process.env.REAL_MODEL_TOKEN !== undefined, locked:process.env.UV_NO_INDEX === \"1\"}));",`if(req.url==='/environment')return res.end(JSON.stringify({values:Object.fromEntries(${JSON.stringify(keys)}.filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]])),leaked:process.env.HOME!==undefined||process.env.OPENAI_API_KEY!==undefined||process.env.REAL_MODEL_TOKEN!==undefined}));`)], options), fetch, allowRuntimeProvisioning, startupTimeoutMs: 5_000 });
+    try {
+      await runtime.start(); assert.equal(runtime.status().state, 'ready');
+      const result = await (await fetch(runtime.connection()!.url + '/environment')).json();
+      assert.deepEqual(result, { values: { ...settings, ...(allowRuntimeProvisioning ? provisioning : {}) }, leaked: false });
+    } finally { await runtime.stop(); }
+  }
+}));

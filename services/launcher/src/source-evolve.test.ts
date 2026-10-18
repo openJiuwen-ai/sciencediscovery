@@ -52,3 +52,22 @@ test("source-stack CLI readiness is atomic and SIGTERM stops both control and ow
     await assert.rejects(readFile(stateFile), { code: "ENOENT" });
   } finally { child.kill("SIGKILL"); await exited; await rm(dataDir, { recursive: true, force: true }); }
 });
+test("source helper forwards only operator provisioning and sidecar settings into the actual owned child", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'source-evolve-env-'));
+  const python = join(dataDir, 'fixture-interpreter'); const output = join(dataDir, 'captured.json');
+  const settings = { SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(dataDir, 'candidates'), SCIENCE_AGENT_LOG_DIR: join(dataDir, 'logs'),
+    SCIENCE_AGENT_LOG_LEVEL: 'debug', HTTPS_PROXY: 'http://proxy.invalid:3128', UV_INDEX_URL: 'https://index.invalid/simple', OPENAI_API_KEY: 'synthetic-must-not-forward' };
+  const previous = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]]));
+  await writeFile(python, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({values:Object.fromEntries(${JSON.stringify(Object.keys(settings).filter(key => key !== 'OPENAI_API_KEY'))}.map(k=>[k,process.env[k]])),leaked:process.env.OPENAI_API_KEY!==undefined||process.env.HOME!==undefined}));\nconst s=require('node:http').createServer((req,res)=>res.end(req.url==='/health'?'{"status":"healthy"}':'{"stopped":false}'));s.listen(0,'127.0.0.1',()=>console.log('EVOLVE_PORT='+s.address().port));`, { mode: 0o700 });
+  let control: Awaited<ReturnType<typeof startSourceEvolve>> | undefined;
+  try {
+    Object.assign(process.env, settings);
+    control = await startSourceEvolve(python, dataDir, join(dataDir, 'state.json'));
+    assert.equal(control.runtime.status().state, 'ready');
+    const { OPENAI_API_KEY: _secret, ...expected } = settings;
+    assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), { values: expected, leaked: false });
+  } finally {
+    await control?.close(); for (const key of Object.keys(settings)) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

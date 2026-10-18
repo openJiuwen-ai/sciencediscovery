@@ -21,11 +21,23 @@ export interface EvolveStatus {
 export class EvolveAvailability {
   private current: EvolveStatus = { state: "not_initialized", canInitialize: false };
   private readonly external: EvolveConnection;
+  private pending?: { initialize: boolean; promise: Promise<EvolveStatus> };
   constructor(private readonly config: EvolveConfiguration) {
     this.external = { url: config.url, internalToken: config.internalToken };
   }
   get ready(): boolean { return this.current.state === "ready"; }
   async refresh(initialize = false): Promise<EvolveStatus> {
+    if (this.pending) {
+      if (!initialize || this.pending.initialize) return await this.pending.promise;
+      await this.pending.promise;
+      return await this.refresh(true);
+    }
+    const promise = this.refreshOnce(initialize);
+    this.pending = { initialize, promise };
+    try { return await promise; }
+    finally { if (this.pending?.promise === promise) this.pending = undefined; }
+  }
+  private async refreshOnce(initialize: boolean): Promise<EvolveStatus> {
     try {
       if (this.config.controlUrl && this.config.controlToken) {
         const response = await fetch(`${this.config.controlUrl}/${initialize ? "init" : "status"}`, {

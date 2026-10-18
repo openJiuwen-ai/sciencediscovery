@@ -19,6 +19,19 @@ export interface EvolveRuntimeIo {
   /** Explicit source-stack runtimes retain operator-controlled extra-package provisioning. */
   allowRuntimeProvisioning?: boolean;
 }
+/** Sidecar-owned settings only; never inherit model/provider credentials or HOME. */
+export function evolveChildEnvironment(env: NodeJS.ProcessEnv, allowProvisioning: boolean): NodeJS.ProcessEnv {
+  const keys = ["PATH", "LANG", "TMPDIR", "SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR", "SCIENCE_AGENT_EVOLVE_LOG_LEVEL",
+    "SCIENCE_AGENT_LOG_LEVEL", "SCIENCE_AGENT_LOG_DIR", "SCIENCE_AGENT_LOG_MAX_BYTES", "SCIENCE_AGENT_LOG_BACKUP_COUNT"];
+  // Source/container runtimes explicitly retain their operator's provisioning
+  // policy. Managed pinned runtimes never receive mutable-index/proxy settings.
+  if (allowProvisioning) keys.push("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "SSL_CERT_FILE", "SSL_CERT_DIR");
+  const result: NodeJS.ProcessEnv = {};
+  for (const key of keys) if (env[key] !== undefined) result[key] = env[key];
+  return result;
+}
+
 /** Bind first, then publish the owned socket; no select-free-port/close/rebind race. */
 export const EVOLVE_ENTRY = String.raw`
 import socket, sys
@@ -67,9 +80,7 @@ export class EvolveRuntime {
       const child = this.io.spawn(install.python, ["-I", "-u", "-c", EVOLVE_ENTRY], {
         cwd: install.root,
         env: {
-          PATH: this.context.env.PATH,
-          LANG: this.context.env.LANG,
-          TMPDIR: this.context.env.TMPDIR,
+          ...evolveChildEnvironment(this.context.env, Boolean(this.io.allowRuntimeProvisioning)),
           PYTHONNOUSERSITE: "1",
           ...(!this.io.allowRuntimeProvisioning ? { UV_NO_INDEX: "1", UV_NO_CACHE: "1", UV_NO_CONFIG: "1", PIP_NO_INDEX: "1", PIP_CONFIG_FILE: "/dev/null" } : {}),
           SCIENCE_AGENT_DATA_DIR: this.context.dataDir,

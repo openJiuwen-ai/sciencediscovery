@@ -63,3 +63,35 @@ test("API client exposes authenticated status and explicit POST init", async () 
     assert.deepEqual(seen, ["GET /api/evolve/status", "POST /api/evolve/init"]);
   } finally { globalThis.fetch = original; }
 });
+test("a late status poll cannot overwrite an explicit Init result", async () => {
+  const client = new EvolveApiClient('fixture'); let finish: (status: EvolveStatus) => void;
+  client.getEvolveStatus = () => new Promise(done => { finish = done; });
+  let hook: ReturnType<typeof useEvolveStatus>; let renderer: ReactTestRenderer;
+  function Status() { hook = useEvolveStatus(client); return null; }
+  await act(async () => { renderer = create(createElement(Status)); });
+  try {
+    await act(async () => hook!.setStatus({ state: 'ready', canInitialize: true }));
+    await act(async () => finish!({ state: 'not_initialized', canInitialize: true }));
+    assert.equal(hook!.status.state, 'ready');
+  } finally { await act(async () => renderer!.unmount()); }
+});
+test("status failures are fail-closed but a stale failure after Init or unmount cannot overwrite status", async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const client = new EvolveApiClient('fixture'); const failures: ((error: Error) => void)[] = [];
+  client.getEvolveStatus = () => new Promise((_done, fail) => failures.push(fail));
+  let hook: ReturnType<typeof useEvolveStatus>; let renderer: ReactTestRenderer;
+  function Status() { hook = useEvolveStatus(client); return null; }
+  await act(async () => { renderer = create(createElement(Status)); });
+  try {
+    await act(async () => hook!.setStatus({ state: 'ready', canInitialize: true }));
+    await act(async () => failures[0]!(new Error('late fixture failure')));
+    assert.equal(hook!.status.state, 'ready');
+    await act(async () => t.mock.timers.tick(5_000));
+    await act(async () => failures[1]!(new Error('current fixture failure')));
+    assert.deepEqual(hook!.status, { state: 'error', canInitialize: false });
+    await act(async () => t.mock.timers.tick(5_000));
+    await act(async () => renderer!.unmount());
+    await act(async () => failures[2]!(new Error('unmounted fixture failure')));
+    assert.deepEqual(hook!.status, { state: 'error', canInitialize: false });
+  } finally { await act(async () => renderer!.unmount()); }
+});

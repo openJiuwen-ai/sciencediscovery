@@ -102,3 +102,32 @@ test("dynamic sidecar transport uses only the authenticated owned endpoint and g
     assert(targets.every(target => target.startsWith("http://launcher.invalid/") || target.startsWith("http://owned.invalid/")));
   } finally { globalThis.fetch = original; }
 });
+test("concurrent operator refreshes share health/auth work without caching stale connections", async () => {
+  const original = globalThis.fetch; let calls = 0; let release: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  globalThis.fetch = async url => { calls++; await gate; return String(url).endsWith('/health') ? Response.json({ status: 'healthy' }) : Response.json({ stopped: false }); };
+  try {
+    const access = new EvolveAvailability({ url: 'http://operator.invalid', internalToken: 'synthetic-operator' });
+    const pending = [access.refresh(), access.refresh(), access.refresh()]; release!(); await Promise.all(pending);
+    assert.equal(calls, 2);
+    await access.connection(); assert.equal(calls, 4, 'a later operation must recheck, not reuse cached availability');
+  } finally { globalThis.fetch = original; }
+});
+test("explicit Init waits for an earlier status response and concurrent Init/status share its result", async () => {
+  const original = globalThis.fetch; let finishStatus: (response: Response) => void; let finishInit!: (response: Response) => void; let initCalls = 0;
+  globalThis.fetch = async url => String(url).endsWith('/status') ? await new Promise<Response>(done => { finishStatus = done; }) : (initCalls++, await new Promise<Response>(done => { finishInit = done; }));
+  const access = new EvolveAvailability({ url: '', internalToken: '', controlUrl: 'http://control.invalid', controlToken: 'synthetic-control' });
+  const status = access.refresh(); const initializing = access.refresh(true);
+  try {
+    await Promise.resolve(); assert.equal(initCalls, 0, 'a late old status must finish before Init');
+    finishStatus!(Response.json({ state: 'not_initialized', canInitialize: true })); await status;
+    await Promise.resolve();
+    const duplicate = access.refresh(true); const poll = access.refresh();
+    finishInit!(Response.json({ state: 'ready', canInitialize: true, connection: { url: 'http://owned.invalid', internalToken: 'synthetic-owned' } }));
+    assert.equal((await initializing).state, 'ready'); assert.equal((await duplicate).state, 'ready'); assert.equal((await poll).state, 'ready');
+    assert.equal(initCalls, 1); assert.equal(access.ready, true);
+  } finally {
+    finishStatus!(Response.json({ state: 'not_initialized', canInitialize: true }));
+    finishInit?.(Response.json({ state: 'not_initialized', canInitialize: true })); await status; await initializing; globalThis.fetch = original;
+  }
+});

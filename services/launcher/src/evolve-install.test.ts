@@ -4,7 +4,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EVOLVE_RELEASE, EVOLVE_REQUIREMENTS } from "./evolve-lock.js";
@@ -108,4 +108,48 @@ test("credential promotion failure never activates a partial token and a later r
   const recovered = await resolveEvolveInstallation(context); assert(recovered);
   assert.match(recovered.token, /^[\w-]{43}$/);
   assert(!(await readdir(secrets)).includes(".internal-token.pending"));
+}));
+test("SIGKILL-interrupted owned staging is reclaimed on explicit retry; unknown trees and symlinks survive", async () => fixture(async (context) => {
+  const { spawn } = await import('node:child_process');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const parent = join(context.dataDir, 'evolve'); await mkdir(parent, { mode: 0o700 });
+  const unknown = join(parent, '.install-legacy'); await mkdir(unknown); await writeFile(join(unknown, 'keep'), 'unknown ownership');
+  const outside = join(context.dataDir, 'outside'); await mkdir(outside); await writeFile(join(outside, 'keep'), 'outside');
+  const link = join(parent, '.install-ABC123'); await symlink(outside, link);
+  const marker = join(context.dataDir, 'download-started');
+  const moduleUrl = new URL('./evolve-install.ts', import.meta.url).href;
+  const serialized = JSON.stringify({ ...context, io: undefined });
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    import {resolveEvolveInstallation} from ${JSON.stringify(moduleUrl)};
+    import {writeFile} from 'node:fs/promises';
+    const context=${serialized}; context.log=()=>{};
+    context.io={findExecutable:async()=>'/fixture/uv',log:()=>{},run:async()=>({stdout:'',stderr:''}),fetch:async()=>{await writeFile(${JSON.stringify(marker)},'started');setInterval(()=>{},1000);return await new Promise(()=>{});}};
+    await resolveEvolveInstallation(context,true);
+  `], { stdio: 'ignore' });
+  const exited = new Promise(done => child.once('exit', done));
+  try {
+    let started = false;
+    for (let n = 0; n < 100 && !started; n++) { started = await readFile(marker).then(() => true, () => false); if (!started) await delay(25); }
+    assert(started, 'actual installer must reach the controlled interrupted download');
+    child.kill('SIGKILL'); await exited;
+    const before = (await readdir(parent)).filter(name => /^\.install-[A-Za-z0-9]{6}$/.test(name) && name !== '.install-ABC123' && name !== '.install-legacy');
+    assert.equal(before.length, 1);
+    const ownership = await readFile(join(parent, before[0]!, '.evolve-staging-owner.json'), 'utf8');
+    const preserved = ['other1', 'unsafe', 'large1', 'public', 'badmod', 'folder'];
+    for (const suffix of preserved) {
+      const dir = join(parent, '.install-' + suffix); await mkdir(dir, { mode: suffix === 'public' ? 0o755 : 0o700 });
+      if (suffix === 'public') await chmod(dir, 0o755);
+      const path = join(dir, '.evolve-staging-owner.json');
+      if (suffix === 'unsafe') { await writeFile(join(outside, 'owner'), ownership); await symlink(join(outside, 'owner'), path); }
+      else if (suffix === 'folder') await mkdir(path);
+      else await writeFile(path, suffix === 'other1' ? ownership.replace(EVOLVE_RELEASE.sha256, 'different-pin') : suffix === 'large1' ? 'x'.repeat(1025) : ownership, { mode: 0o600 });
+      if (suffix === 'badmod') await chmod(path, 0o644);
+    }
+    await assert.rejects(resolveEvolveInstallation(context, true), /archive/);
+    for (const suffix of preserved) assert((await readdir(parent)).includes('.install-' + suffix), suffix + ' must be preserved');
+    assert(!(await readdir(parent)).includes(before[0]!), 'owned abandoned staging must be removed under the recovered lock');
+    assert.equal(await readFile(join(unknown, 'keep'), 'utf8'), 'unknown ownership');
+    assert.equal(await readFile(join(outside, 'keep'), 'utf8'), 'outside');
+    assert((await readdir(parent)).includes('.install-ABC123'));
+  } finally { child.kill('SIGKILL'); await exited; }
 }));

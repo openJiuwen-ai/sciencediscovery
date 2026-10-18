@@ -440,7 +440,7 @@ Once the service is running, stop reading deployment details and return to the [
 - Internal processes and module boundaries: [Developer docs: Architecture](../developer-docs/architecture.md)
 - Repository structure and source entry points: [Developer docs: Repository layout](../developer-docs/repository-layout.md)
 
-### Initialize Evolve on demand
+## Initialize Evolve on demand
 
 The slim binary starts with Evolve and its related Idea Tree research paths
 **not initialized**. Chat remains available. In a Session, open **Tasks → Evolve**
@@ -465,7 +465,10 @@ persists in `<data-dir>/evolve/secrets/internal-token` with owner-only access;
 it is never a browser/model token. Closing `serve` stops the owned process.
 Restarts reuse the verified installation and token. A failed download, checksum,
 installation or startup leaves Evolve unavailable; select **Init Evolve** to
-retry. Incomplete staging directories are cleaned up rather than promoted.
+retry. Failed attempts clean their staging directory. After an interrupted process,
+explicit Init reclaims private staging marked as owned by this exact pinned runtime,
+under the installation lock. Unknown/unmarked directories are preserved for operator
+inspection rather than deleted automatically.
 
 Operators may explicitly configure `SCIENCE_AGENT_EVOLVE_URL` and
 `SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN` for an existing service. This mode remains
@@ -481,3 +484,11 @@ install another package from a mutable index; missing additional packages cause
 a refusal. Supporting another managed dependency requires updating the reviewed
 lock. An explicitly provisioned source stack or operator-configured service
 retains its own runtime provisioning policy.
+
+The launcher forwards the documented candidate-directory and log settings to its
+sidecar, so the API and sidecar share `SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR`.
+Only explicitly provisioned source/container runtimes also receive operator proxy,
+package-index and certificate-path settings; managed runtimes retain their locked
+package policy. Model keys, HOME and arbitrary environment variables are not inherited.
+While Evolve is unavailable, its workspace/history routes are disabled together;
+persisted records remain on disk and return when the service becomes ready.
