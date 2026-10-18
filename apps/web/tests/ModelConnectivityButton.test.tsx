@@ -45,7 +45,7 @@ const authorizationFailure: ModelConnectivityTestResult = {
 };
 
 function view(
-  testModel: (modelId: string) => Promise<ModelConnectivityTestResult>,
+  testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>,
   profileVersion = "version-1",
   disabled = false,
 ) {
@@ -58,6 +58,10 @@ function view(
   }));
 }
 
+async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
+  await act(async () => { renderer.root.findByType("input").props.onChange({ target: { checked: true } }); });
+}
+
 function buttonText(renderer: ReactTestRenderer): string {
   return renderer.root.findByType("button").findByType("span").children.join("");
 }
@@ -67,8 +71,9 @@ test("model test button spins, shows a result, and can be clicked again", async 
   const first = new Promise<ModelConnectivityTestResult>((resolve) => { resolveFirst = resolve; });
   const responses = [first, Promise.resolve(authorizationFailure)];
   let calls = 0;
-  const testModel = async (modelId: string) => {
+  const testModel = async (modelId: string, compatibility?: boolean) => {
     assert.equal(modelId, "model-1");
+    assert.equal(compatibility, true);
     calls += 1;
     return await responses.shift()!;
   };
@@ -76,6 +81,7 @@ test("model test button spins, shows a result, and can be clicked again", async 
   await act(async () => { renderer = create(view(testModel)); });
   assert.equal(buttonText(renderer!), "测试");
 
+  await acceptProbeCost(renderer!);
   await act(async () => { renderer!.root.findByType("button").props.onClick(); });
   const testingButton = renderer!.root.findByType("button");
   assert.equal(buttonText(renderer!), "测试中");
@@ -87,6 +93,7 @@ test("model test button spins, shows a result, and can be clicked again", async 
   assert.equal(buttonText(renderer!), "可用 · 42 ms");
   assert.equal(renderer!.root.findByType("button").props.disabled, false);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     renderer!.root.findByType("button").props.onClick();
     await Promise.resolve();
@@ -101,6 +108,7 @@ test("saving a changed profile clears its previous test result", async () => {
   const testModel = async () => success;
   let renderer: ReactTestRenderer;
   await act(async () => { renderer = create(view(testModel)); });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     renderer!.root.findByType("button").props.onClick();
     await Promise.resolve();
@@ -108,6 +116,8 @@ test("saving a changed profile clears its previous test result", async () => {
   assert.equal(buttonText(renderer!), "可用 · 42 ms");
   await act(async () => { renderer!.update(view(testModel, "version-2")); });
   assert.equal(buttonText(renderer!), "测试");
+  assert.equal(renderer!.root.findByType("input").props.checked, false);
+  assert.equal(renderer!.root.findByType("button").props.disabled, true);
   await act(async () => renderer!.unmount());
 });
 
@@ -125,5 +135,40 @@ test("unsaved model changes disable the saved-profile test", async () => {
   assert.equal(button.props.disabled, true);
   assert.match(button.props.title, /保存/);
   assert.equal(calls, 0);
+  await act(async () => renderer!.unmount());
+});
+
+test("compatibility requests require explicit cost consent and render independent native outcomes", async () => {
+  let calls = 0;
+  const outcome = { ok: true, category: "ok" as const, message: "actual synthetic completion" };
+  const protocols = (["openai-chat-completions", "openai-responses", "anthropic-messages"] as const).map(apiProtocol => ({ apiProtocol, basic: outcome, streaming: outcome, tools: { ...outcome, ok: false, category: "invalid_response" as const, message: "inconclusive tool result" }, usage: "unknown" as const }));
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view(async () => { calls++; return { ...success, protocols }; })); });
+  assert.equal(renderer!.root.findByType("button").props.disabled, true);
+  await act(async () => { renderer!.root.findByType("button").props.onClick(); });
+  assert.equal(calls, 0);
+  await acceptProbeCost(renderer!);
+  await act(async () => { renderer!.root.findByType("button").props.onClick(); await Promise.resolve(); });
+  assert.equal(calls, 1);
+  const text = JSON.stringify(renderer!.toJSON());
+  for (const protocol of protocols) assert.ok(text.includes(protocol.apiProtocol));
+  assert.match(text, /usage:.*unknown/);
+  assert.match(text, /inconclusive tool result/);
+  await act(async () => renderer!.unmount());
+});
+
+test("profile changes invalidate in-flight compatibility results and request errors remain visible", async () => {
+  let resolve: (value: ModelConnectivityTestResult) => void = () => undefined;
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view(() => new Promise(done => { resolve = done; }))); });
+  await acceptProbeCost(renderer!);
+  await act(async () => { renderer!.root.findByType("button").props.onClick(); });
+  await act(async () => { renderer!.update(view(async () => { throw new Error("transport failed"); }, "new-version")); });
+  await act(async () => { resolve(success); });
+  assert.equal(buttonText(renderer!), "测试");
+  assert.equal(renderer!.root.findByType("input").props.checked, false);
+  await acceptProbeCost(renderer!);
+  await act(async () => { renderer!.root.findByType("button").props.onClick(); await Promise.resolve(); });
+  assert.match(renderer!.root.findByType("button").props.title, /transport failed/);
   await act(async () => renderer!.unmount());
 });

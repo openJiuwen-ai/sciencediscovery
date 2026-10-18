@@ -496,6 +496,13 @@ function chatHistory(history: AgentHistoryMessage[], variant: ModelApiVariant): 
   });
 }
 
+/** Error payloads are provider-controlled and may echo authorization values. */
+function streamErrorDetail(value: unknown, endpoint: ModelEndpoint): string {
+  let detail = typeof value === "string" ? value : JSON.stringify(value) ?? "unknown";
+  if (endpoint.apiToken) detail = detail.split(endpoint.apiToken).join("[redacted]");
+  return detail.slice(0, 2_000);
+}
+
 async function streamOpenAiTurn(
   endpoint: ModelEndpoint,
   systemPrompt: string,
@@ -531,7 +538,7 @@ async function streamOpenAiTurn(
       streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
-    if (chunk.error) throw new Error(`Chat API error: ${JSON.stringify(chunk.error)}`);
+    if (chunk.error) throw new Error(`Chat API error: ${streamErrorDetail(chunk.error, endpoint)}`);
     const chunkUsage = normalizeUsage(chunk.usage, "openai-chat-completions");
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
@@ -740,9 +747,9 @@ async function streamResponsesTurn(
       usage = normalizeUsage(event.response.usage, "openai-responses") ?? usage;
       truncated = event.type === "response.incomplete";
     } else if (event.type === "error") {
-      throw new Error(`Responses API error: ${String(event.message ?? "unknown")}`);
+      throw new Error(`Responses API error: ${streamErrorDetail(event.message ?? "unknown", endpoint)}`);
     } else if (event.type === "response.failed") {
-      throw new Error(`Responses API failed${isRecord(event.response) && isRecord(event.response.error) && typeof event.response.error.message === "string" ? `: ${event.response.error.message}` : ""}`);
+      throw new Error(`Responses API failed${isRecord(event.response) && isRecord(event.response.error) && typeof event.response.error.message === "string" ? `: ${streamErrorDetail(event.response.error.message, endpoint)}` : ""}`);
     }
   }
   if (truncated) for (const [index, item] of partialItems) if (!items.has(index)) items.set(index, item);
@@ -878,7 +885,7 @@ async function streamAnthropicTurn(
       streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
-    if (event.type === "error") throw new Error(`Messages API error: ${JSON.stringify(event.error)}`);
+    if (event.type === "error") throw new Error(`Messages API error: ${streamErrorDetail(event.error, endpoint)}`);
     if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
       inputTokens = numberField(event.message.usage, ["input_tokens"]);
       cacheReadTokens = numberField(event.message.usage, ["cache_read_input_tokens"]) ?? null;

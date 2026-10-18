@@ -116,6 +116,12 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
   } as unknown as SettingsApiClient;
 }
 
+async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
+  const label = renderer.root.findAllByType("label").find(node => /我同意发送一次|I agree to one/.test(extractText(node)));
+  assert.ok(label, "Cost disclosure must be reachable before a model request");
+  await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
+}
+
 test("renders preset provider selection, official registration link, and billing notice in zh-CN and en", async () => {
   let zhRenderer: ReactTestRenderer;
   await act(async () => {
@@ -236,6 +242,7 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
   });
 
   // Click "保存并连接"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -315,6 +322,7 @@ test("successful flow with existing models: registers all listed models but leav
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -392,6 +400,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   });
 
   // Click "测试并启用"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -483,6 +492,7 @@ test("bad key with an existing provider: new provider is rolled back, existing r
   });
 
   // Click "测试并启用"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -597,6 +607,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   });
 
   // Submit
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -660,6 +671,7 @@ test("custom provider without model id: registers every listed model", async () 
   });
 
   // Model identifier intentionally left empty: the listing decides.
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -716,6 +728,7 @@ test("empty model listing: readable error, provider rolled back, default untouch
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -765,6 +778,7 @@ test("model listing failure: readable error with detail, provider rolled back, d
     keyInput.props.onChange({ target: { value: "sk-bad-key" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -802,6 +816,7 @@ test("validation errors: missing key prevents client API calls", async () => {
   });
 
   // Submit without key
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -902,6 +917,7 @@ test("advanced preset fields: base URL override is honored when creating a provi
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-test" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -979,6 +995,7 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
   const variantSelect = renderer!.root.findByProps({ id: "wizard-api-variant" });
   assert.equal(variantSelect.props.value, "anthropic-adaptive");
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1075,6 +1092,7 @@ test("same preset can be added again with its own name and key; the existing row
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-second-key" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1163,6 +1181,7 @@ test("advanced manual selection: the fetched list starts fully ticked, unticking
   assert.equal(renderer.root.findByProps({ "aria-label": "全选" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1197,6 +1216,7 @@ test("advanced: unticking every listed row is an explicit none — readable erro
   assert.equal(renderer.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 0 个模型/);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1250,6 +1270,7 @@ test("advanced manual entry: a model described by hand is registered with its fa
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
   assert.deepEqual(registered, []);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1307,6 +1328,7 @@ test("advanced: a failed preview is readable, keeps the card usable, and writes 
   assert.equal(extractText(renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" })), "获取模型列表");
   // The card is still the same card: the simple path remains one click away.
   assert.equal(renderer.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  await acceptProbeCost(renderer!);
   assert.equal(renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.disabled, false);
 });
 
@@ -1342,6 +1364,7 @@ test("advanced preset fields: protocol and variant overrides drive creation just
   });
   assert.equal(renderer.root.findByProps({ id: "wizard-api-variant" }).props.value, "responses");
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1565,6 +1588,7 @@ test("a failed settings read stops before creating a provider or model", async (
   await act(async () => {
     renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-invalid-key" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1603,6 +1627,7 @@ test("the first model merges into the settings read at save time when no callbac
   await act(async () => {
     renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });

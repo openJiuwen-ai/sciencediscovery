@@ -15,10 +15,12 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
   hang?: boolean;
   malformed?: boolean;
   streamError?: boolean;
+  errorMessage?: string;
 } = {}) {
   const requests: Array<{ path: string; body: Record<string, any> }> = [];
   const calls = Array.from({ length: options.parallel ? 2 : 1 }, (_, i) => ({ id: `call-${i}`, name: "compatibility_echo", arguments: options.invalidArgs ? '{"value":' : '{"value":"OK"}' }));
   const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url?.endsWith("/models")) { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [{ id: "synthetic", object: "model" }] })); return; }
     const protocol = selection === "all" ? req.url?.endsWith("/responses") ? "openai-responses" : req.url?.endsWith("/messages") ? "anthropic-messages" : "openai-chat-completions" : selection;
   const usage = options.usage === "missing" ? undefined : options.usage === "malformed" ? { input_tokens: "bad", output_tokens: -1 } : protocol === "openai-chat-completions" ? { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } : { input_tokens: 3, output_tokens: 2, total_tokens: 5 };
   const nativeState = protocol === "anthropic-messages" ? { type: "thinking", thinking: "synthetic reasoning", signature: "signature-required" } : { type: "reasoning", id: "reason-1", encrypted_content: "encrypted-required", summary: [] };
@@ -45,7 +47,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
     const send = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-    if (options.streamError) { send({ type: "error", error: { message: "original fixture stream error" }, message: "original fixture stream error" }); res.end(); return; }
+    if (options.streamError) { send({ type: "error", error: { message: options.errorMessage ?? "original fixture stream error" }, message: options.errorMessage ?? "original fixture stream error" }); res.end(); return; }
     if (protocol === "openai-chat-completions") {
       if (tool) for (const [index, c] of calls.entries()) {
         send({ choices: [{ delta: { tool_calls: [{ index, id: c.id, function: { name: c.name, arguments: c.arguments.slice(0, 5) } }] } }] });

@@ -118,3 +118,17 @@ for (const apiProtocol of protocols) test(`${apiProtocol} streaming response byt
   try { await assert.rejects(streamModelTurn({ apiProtocol, baseUrl: provider.baseUrl, model: "s", proxy: { mode: "direct" } }, "s", [], [], { ...policy, maxResponseBytes: 8 }, AbortSignal.timeout(1000)), /byte limit/); }
   finally { await provider.close(); }
 });
+
+for (const apiProtocol of protocols) test(`${apiProtocol} stream errors retain cause and redact echoed token`, async () => {
+  const apiToken = "synthetic-echoed-credential";
+  const provider = await protocolProvider(apiProtocol, { streamError: true, errorMessage: `original cause ${apiToken} ` + "x".repeat(4000) });
+  try {
+    await assert.rejects(streamModelTurn({ apiProtocol, baseUrl: provider.baseUrl, model: "synthetic", apiToken, proxy: { mode: "direct" } }, "s", [{ role: "user", content: "s" }], [], policy, AbortSignal.timeout(2000)), error => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /original cause/);
+      assert.ok(!error.message.includes(apiToken));
+      assert.ok(error.message.length < 2100);
+      return true;
+    });
+  } finally { await provider.close(); }
+});
