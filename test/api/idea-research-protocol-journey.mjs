@@ -74,7 +74,7 @@ export async function runIdeaResearchProtocolJourney() {
       await step(`3. Create and complete public ${apiProtocol} research`, 'Real Python stages finish with scored persisted graph and unknown billing', async () => {
         const before = requests.length;
         let release; gate = new Promise(r => { release = r; });
-        const r = await api(`/api/sessions/${session.id}/idea-tree/research`, { content: '/idea-tree Synthetic bounded hypothesis comparison', settings: { maxRounds: 1, maxDepth: 1, candidatesPerRound: 1, candidateConcurrency: 1, maxTokensPerCall: 256, maxTokens: 600000 } }); assert.equal(r.status, 200, JSON.stringify(r.body));
+        const r = await api(`/api/sessions/${session.id}/idea-tree/research`, { content: '/idea-tree Synthetic bounded hypothesis comparison', settings: { maxRounds: 1, maxDepth: 1, candidatesPerRound: 1, maxTokensPerCall: 256, maxTokens: 600000 } }); assert.equal(r.status, 200, JSON.stringify(r.body));
         research = r.body.research;
         await until(() => requests.length > before);
         // A session selection change cannot redirect an issued research grant.

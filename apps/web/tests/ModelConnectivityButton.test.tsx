@@ -48,7 +48,7 @@ function view(
   testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>,
   profileVersion = "version-1",
   disabled = false,
-  locale: "zh-CN" | "en-US" = "zh-CN",
+  locale: "zh-CN" | "en" = "zh-CN",
 ) {
   return createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectivityButton, {
     disabled,
@@ -175,7 +175,7 @@ test("profile changes invalidate in-flight compatibility results and request err
   await act(async () => renderer!.unmount());
 });
 
-for (const locale of ['zh-CN', 'en-US'] as const) test(`capability and failure evidence is localized in ${locale}`, async () => {
+for (const locale of ['zh-CN', 'en'] as const) test(`capability and failure evidence is localized in ${locale}`, async () => {
   const categories = ['missing_token', 'authorization', 'not_found', 'rate_limited', 'timeout', 'network', 'provider_error', 'invalid_response', 'ok'] as const;
   for (const category of categories) {
     const outcome = { ok: category === 'ok', category, message: 'RAW_SERVER_ENGLISH_DO_NOT_RENDER' };

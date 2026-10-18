@@ -25,7 +25,7 @@ import { protocolProvider } from "./helpers/protocol-provider.js";
  * Credentials: synthetic loopback-only credential.
  * CostSideEffects: journey-owned provider/model records and local requests, no charges.
  */
-for (const locale of ["zh-CN", "en-US"] as const) test(`Explicit compatibility consent preserves a manually chosen protocol (${locale})`, { tag: ["@mocked", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:none"] }, async ({ page, journey }) => {
+for (const locale of ["zh-CN", "en"] as const) test(`Explicit compatibility consent preserves a manually chosen protocol (${locale})`, { tag: ["@mocked", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:none"] }, async ({ page, journey }) => {
   journey.scenario({ goal: "Check model protocol capabilities with explicit cost consent", preconditions: ["Isolated API/Web and a synthetic loopback-only provider; no paid credentials"] });
   await page.addInitScript(value => window.localStorage.setItem("science-agent-locale", value), locale);
   const fixture = await protocolProvider("all", { usage: "missing" });
