@@ -111,7 +111,7 @@ async function download(io: BootstrapIo, destination: string): Promise<void> {
       bytes += chunk.byteLength;
       if (bytes > EVOLVE_RELEASE.bytes) throw new Error("Evolve archive exceeds its pinned size");
       hash.update(chunk);
-      await file.write(chunk);
+      await file.writeFile(chunk);
     }
     if (bytes !== EVOLVE_RELEASE.bytes || hash.digest("hex") !== EVOLVE_RELEASE.sha256) throw new Error("Evolve archive checksum or size mismatch");
   } finally { await file.close(); }
