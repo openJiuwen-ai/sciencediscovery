@@ -289,3 +289,25 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
     assert.equal(selected.streaming.category, "authorization"); assert.match(selected.streaming.message, /API key is invalid or is not authorized/); assert.equal(selected.tools.category, "authorization"); assert.equal(selected.usage, "available");
   });
 });
+
+test('compatibility outer deadlines still stop healthy partial streams independently of normal header timeouts', async () => {
+  const server = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    if (body.stream) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': healthy but no terminal result\n\n');
+      const heartbeat = setInterval(() => res.write(': generating\n\n'), 10);
+      res.on('close', () => clearInterval(heartbeat)); return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(req.url?.endsWith('/messages')
+      ? { type: 'message', content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn' }
+      : req.url?.endsWith('/responses') ? { object: 'response', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }], status: 'completed' }
+      : { choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }));
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const result = await testModelConnectivity({ apiToken: 'synthetic', profile: profile(`http://127.0.0.1:${(server.address() as any).port}/v1`), resolveProxy: directProxy, compatibility: true, timeoutMs: 50 });
+    assert.equal(result.protocols?.length, 3);
+    for (const protocol of result.protocols!) { assert.equal(protocol.basic.ok, true); assert.equal(protocol.streaming.category, 'timeout'); assert.equal(protocol.tools.category, 'timeout'); }
+  } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});

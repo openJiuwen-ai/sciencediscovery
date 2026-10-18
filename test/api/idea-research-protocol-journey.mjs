@@ -25,7 +25,8 @@ export async function runIdeaResearchProtocolJourney() {
   const redact = value => String(value).replaceAll(secret, '[redacted]').replaceAll(internal, '[redacted]').replaceAll(providerKey, '[redacted]');
   const until = async (fn, timeout = 20000) => { const end = Date.now() + timeout; for (;;) { const result = await fn(); if (result) return result; if (Date.now() > end) throw new Error('Timed out waiting for research result'); await new Promise(r => setTimeout(r, 30)); } };
   const start = async (command, args, env, pattern, name) => {
-    const child = spawn(command, args, { env: { PATH: process.env.PATH, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const instrumentation = Object.fromEntries(['NODE_V8_COVERAGE', 'COVERAGE_PROCESS_START', 'SCIENCE_COVERAGE_DATA_DIR', 'SCIENCE_COVERAGE_PROCESS_LOG'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
+    const child = spawn(command, args, { env: { PATH: process.env.PATH, NODE_OPTIONS: '--max-old-space-size=768', ...instrumentation, ...env, ...(instrumentation.COVERAGE_PROCESS_START ? { PYTHONPATH: resolve('test/support/tagged/python/coverage-hook') + ':' + (env.PYTHONPATH ?? '') } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
     const state = { child, name, log: '', url: '' }; children.push(state);
     for (const stream of [child.stdout, child.stderr]) stream.on('data', b => { state.log += redact(b); state.url ||= b.toString().match(pattern)?.[1] ?? ''; });
     await until(() => { if (child.exitCode !== null) throw new Error(`${name} exited: ${state.log}`); return state.url; });
