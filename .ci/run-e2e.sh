@@ -338,7 +338,7 @@ if [[ "$backend" == jiuwenswarm ]]; then
 fi
 for busy_port in "${busy_ports[@]}"; do
   if ss -ltn "sport = :$busy_port" 2>/dev/null | grep -q LISTEN; then
-    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner, evolve and memory-graph ports.\n' \
+    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner and memory-graph ports. Evolve uses a launcher-owned ephemeral port.\n' \
       "$busy_port" | tee -a "$test_log" >&2
     exit 2
   fi

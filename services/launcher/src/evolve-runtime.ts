@@ -34,7 +34,7 @@ export function evolveChildEnvironment(env: NodeJS.ProcessEnv, allowProvisioning
 
 /** Same documented startup budget as the source stack's health wait. */
 export function evolveStartupTimeoutMs(env: NodeJS.ProcessEnv): number {
-  const seconds = Number(env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS ?? 60);
+  const seconds = Number(env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS?.trim() || 60);
   const milliseconds = seconds * 1000;
   if (!Number.isSafeInteger(seconds) || !Number.isSafeInteger(milliseconds) || seconds <= 0) throw new Error("SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS must be positive whole seconds");
   return milliseconds;

@@ -166,7 +166,7 @@ wait_healthy() { # <name> <url>
   # here does not just skip one sidecar: the failure trips `set -e` and cleanup
   # takes the whole stack down, so the caller only ever sees "never healthy".
   local attempts="$health_attempts"
-  if [[ -n "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" ]]; then
+  if [[ "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" =~ [^[:space:]] ]]; then
     attempts=$((SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS * 5))
   fi
   local attempt
@@ -636,7 +636,7 @@ start_stack() {
     node services/launcher/dist/source-evolve.js "$evolve_python" "$data_dir" "$evolve_state" &
     evolve_pid="$!"
     pids+=("$evolve_pid")
-    if [[ -n "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" ]]; then
+    if [[ "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" =~ [^[:space:]] ]]; then
       evolve_attempts=$((SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS * 5))
     fi
     for ((attempt=0; attempt<evolve_attempts; attempt++)); do

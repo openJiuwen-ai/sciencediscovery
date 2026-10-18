@@ -71,3 +71,37 @@ test("source helper forwards only operator provisioning and sidecar settings int
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+test("blank source-helper budgets start owned services; nonblank invalid values remain rejected", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'source-evolve-budget-')); const python = join(dataDir, 'interpreter');
+  const previous = process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS;
+  await writeFile(python, `#!${process.execPath}\nconst s=require('node:http').createServer((req,res)=>res.end(req.url==='/health'?'{"status":"healthy"}':'{"stopped":false}'));s.listen(0,'127.0.0.1',()=>console.log('EVOLVE_PORT='+s.address().port));`, { mode: 0o700 });
+  try {
+    for (const value of ['', ' \t\n ', '120']) {
+      process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS = value;
+      const control = await startSourceEvolve(python, dataDir, join(dataDir, 'state.json'));
+      try { assert.equal(control.runtime.status().state, 'ready'); assert(control.runtime.connection()); }
+      finally { await control.close(); }
+    }
+    for (const value of ['0', '-1', '1.5', 'invalid']) {
+      process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS = value;
+      await assert.rejects(startSourceEvolve(python, dataDir, join(dataDir, 'state.json')), /HEALTH_TIMEOUT/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS; else process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS = previous;
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+test("actual shell health waits default for blank values and retain explicit positive budgets", async () => {
+  const { execFileSync } = await import('node:child_process');
+  const source = await readFile(new URL('../../../scripts/start-stack.sh', import.meta.url), 'utf8');
+  const start = source.indexOf('wait_healthy()'); const end = source.indexOf('\n}', start) + 2;
+  assert(start >= 0 && end > start, 'actual shell helper must be found');
+  const helper = source.slice(start, end);
+  for (const [value, expected] of [['', 3], [' \t\n ', 3], ['2', 10]] as const) {
+    // Execute the production function. Only curl/sleep are bounded local fixtures;
+    // counting sleeps observes the budget without contacting a service or waiting.
+    const stdout = execFileSync('bash', ['-c', helper + '\nhealth_attempts=3; count=0; curl(){ return 1; }; sleep(){ count=$((count+1)); }; wait_healthy fixture fixture 2>/dev/null || true; echo "$count"'],
+      { env: { PATH: process.env.PATH, SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS: value }, encoding: 'utf8', timeout: 10_000 });
+    assert.equal(Number(stdout.trim()), expected);
+  }
+});

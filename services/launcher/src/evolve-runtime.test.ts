@@ -4,10 +4,12 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { Server } from "node:http";
+import { getEventListeners } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EvolveRuntime, startEvolveControl, evolveStartupTimeoutMs, type EvolveRuntimeIo } from "./evolve-runtime.js";
+import { EvolveRuntime, createEvolveControl, startEvolveControl, evolveStartupTimeoutMs, type EvolveRuntimeIo } from "./evolve-runtime.js";
 import type { EvolveInstallContext } from "./evolve-install.js";
 
 const FIXTURE = `const http = require('node:http');
@@ -192,4 +194,73 @@ test("the documented source health budget also permits slow owned startup", asyn
     spawn: (_command, _args, options) => spawn(process.execPath, ['-e', FIXTURE], options), fetch });
   try { await runtime.start(); assert.equal(runtime.status().state, 'ready'); assert(runtime.connection()); }
   finally { Date.now = original; await runtime.stop(); }
+}));
+test("blank startup budgets default in the actual managed runtime while invalid nonblank budgets fail closed", async () => fixture(async context => {
+  for (const value of ['', ' \t\n ', 'invalid']) {
+    context.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS = value;
+    const runtime = new EvolveRuntime(context, { install: async () => ({ python: process.execPath, root: context.dataDir, token: 'fixture-private' }),
+      spawn: (_command, _args, options) => spawn(process.execPath, ['-e', FIXTURE], options), fetch });
+    try {
+      await runtime.start(true);
+      assert.equal(runtime.status().state, value === 'invalid' ? 'error' : 'ready');
+      assert.equal(Boolean(runtime.connection()), value !== 'invalid');
+    } finally { await runtime.stop(); }
+  }
+}));
+function emptyOwnedRuntime() {
+  return new EvolveRuntime({ dataDir: '/fixture', env: {} }, { install: async () => undefined,
+    spawn: () => { throw new Error('must not spawn'); }, fetch });
+}
+test("authenticated Init during shutdown returns safe503 without leaking a connection", async () => {
+  const runtime = emptyOwnedRuntime(); const control = await createEvolveControl(runtime);
+  try {
+    await runtime.stop();
+    const response = await fetch(control.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL + '/init', { method: 'POST', headers: { authorization: 'Bearer ' + control.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN } });
+    assert.equal(response.status, 503); const body = await response.json();
+    assert.equal(body.canInitialize, false); assert.equal(body.connection, undefined);
+    assert(!JSON.stringify(body).includes(control.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN!));
+  } finally { await control.close(); }
+});
+test("control listen failure stops the owned runtime and removes its abort listener", async () => {
+  const runtime = emptyOwnedRuntime(); const controller = new AbortController(); const listen = Server.prototype.listen;
+  const failure = Object.assign(new Error('fixture listen fault'), { code: 'EADDRINUSE' });
+  try {
+    Server.prototype.listen = function () { throw failure; } as typeof listen;
+    await assert.rejects(createEvolveControl(runtime, controller.signal), error => error === failure);
+  } finally { Server.prototype.listen = listen; }
+  assert.equal(runtime.status().canInitialize, false); assert.equal(runtime.connection(), undefined);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+test("abort immediately after real control bind closes the socket and removes signal state", async () => {
+  const runtime = emptyOwnedRuntime(); const controller = new AbortController(); const listen = Server.prototype.listen;
+  let server: Server | undefined;
+  try {
+    Server.prototype.listen = function (this: Server, ...args: unknown[]) {
+      server = this; const callback = args.pop() as () => void;
+      return Reflect.apply(listen, this, [...args, () => { callback(); controller.abort(); }]);
+    } as typeof listen;
+    await assert.rejects(createEvolveControl(runtime, controller.signal), /abort/i);
+  } finally { Server.prototype.listen = listen; }
+  assert.equal(server!.listening, false); assert.equal(runtime.status().canInitialize, false);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+test("abort during restore does not publish a control server or retain the abort listener", async () => {
+  let release: (value: undefined) => void;
+  const runtime = new EvolveRuntime({ dataDir: '/fixture', env: {} }, { install: async () => await new Promise<undefined>(done => { release = done; }), spawn: () => { throw new Error('must not spawn'); }, fetch });
+  const controller = new AbortController(); const starting = createEvolveControl(runtime, controller.signal);
+  controller.abort(); release!(undefined);
+  await assert.rejects(starting, /abort/i);
+  assert.equal(runtime.status().canInitialize, false); assert.equal(runtime.connection(), undefined);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+test("shutdown escalates to SIGKILL when the real owned child ignores SIGTERM", { timeout: 15_000 }, async () => fixture(async context => {
+  let child: ReturnType<typeof spawn> | undefined;
+  const runtime = new EvolveRuntime(context, { install: async () => ({ python: process.execPath, root: context.dataDir, token: 'fixture-private' }),
+    spawn: (_command, _args, options) => child = spawn(process.execPath, ['-e', FIXTURE + "\nprocess.on('SIGTERM',()=>{});"], options), fetch });
+  try {
+    await runtime.start(); assert.equal(runtime.status().state, 'ready');
+    await runtime.stop();
+    assert.equal(child!.signalCode, 'SIGKILL'); assert.equal(runtime.connection(), undefined);
+    assert.equal(runtime.status().canInitialize, false);
+  } finally { child?.kill('SIGKILL'); await runtime.stop(); }
 }));
