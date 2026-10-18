@@ -104,16 +104,20 @@ export class EvolveRuntime {
         }
       });
       const deadline = Date.now() + (this.io.startupTimeoutMs ?? 60_000);
-      while (!this.stopping && !exited && child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+      const ownsLiveChild = () => !this.stopping && !exited && this.child === child && child.exitCode === null && child.signalCode === null;
+      while (ownsLiveChild() && Date.now() < deadline) {
         if (port) {
           const url = `http://127.0.0.1:${port}`;
           try {
             const health = await this.io.fetch(`${url}/health`, { signal: AbortSignal.timeout(2_000), redirect: "error" });
             if (health.ok && (await health.json() as { status?: string }).status === "healthy") {
+              if (!ownsLiveChild()) break;
               const auth = await this.io.fetch(`${url}/runs/readiness-${randomUUID()}/stop`, {
                 method: "POST", headers: { authorization: `Bearer ${install.token}` },
                 signal: AbortSignal.timeout(2_000), redirect: "error",
               });
+              // Awaited responses can outlive either the child or shutdown.
+              if (!ownsLiveChild()) break;
               if (!auth.ok) throw new Error("Evolve authentication failed");
               this.endpoint = { url, internalToken: install.token };
               this.state = { state: "ready", canInitialize: true };

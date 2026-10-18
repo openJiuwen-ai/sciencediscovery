@@ -106,3 +106,54 @@ test("shutdown during initialization cannot publish or spawn a late installation
   assert.equal(runtime.connection(), undefined);
   assert.equal(runtime.status().canInitialize, false);
 }));
+test("exit during authenticated readiness cannot republish a dead child; explicit retry succeeds", async () => fixture(async (context) => {
+  let child: ReturnType<typeof spawn>; let interrupt = true; let requests = 0;
+  const runtime = new EvolveRuntime(context, {
+    install: async () => ({ python: process.execPath, root: context.dataDir, token: "fixture-private" }),
+    spawn: (_command, _args, options) => child = spawn(process.execPath, ["-e", FIXTURE], options),
+    fetch: async (...args) => {
+      const response = await fetch(...args); requests++;
+      if (interrupt && String(args[0]).includes("/stop")) {
+        interrupt = false;
+        const exited = new Promise(resolve => child.once("exit", resolve));
+        child.kill("SIGTERM"); await exited;
+      }
+      return response;
+    }, startupTimeoutMs: 5_000,
+  });
+  try {
+    await runtime.start(true);
+    assert.equal(requests, 2, "readiness must not keep contacting an exited process");
+    assert.equal(runtime.status().state, "error"); assert.equal(runtime.connection(), undefined);
+    await runtime.start(true);
+    assert.equal(runtime.status().state, "ready"); assert(runtime.connection());
+  } finally { await runtime.stop(); }
+}));
+test("shutdown while health or auth is completing cannot publish a connection", async () => fixture(async (context) => {
+  for (const boundary of ["/health", "/stop"]) {
+    let child: ReturnType<typeof spawn>; let stopping: Promise<void> | undefined;
+    let deliverSignal: (() => void) | undefined; let requests = 0;
+    const runtime = new EvolveRuntime(context, {
+      install: async () => ({ python: process.execPath, root: context.dataDir, token: "fixture-private" }),
+      spawn: (_command, _args, options) => {
+        child = spawn(process.execPath, ["-e", FIXTURE], options);
+        const kill = child.kill.bind(child);
+        // Hold signal delivery so the assertion observes publication before stop
+        // completes, rather than allowing stop's final state to hide the race.
+        child.kill = signal => { deliverSignal = () => { kill(signal); }; return true; };
+        return child;
+      },
+      fetch: async (...args) => {
+        const response = await fetch(...args); requests++;
+        if (String(args[0]).includes(boundary)) stopping = runtime.stop();
+        return response;
+      }, startupTimeoutMs: 5_000,
+    });
+    try {
+      await runtime.start(true);
+      assert.equal(runtime.connection(), undefined, boundary);
+      assert.notEqual(runtime.status().state, "ready", boundary);
+      assert.equal(requests, boundary === "/health" ? 1 : 2);
+    } finally { deliverSignal?.(); await stopping; await runtime.stop(); }
+  }
+}));
