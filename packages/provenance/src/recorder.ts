@@ -392,6 +392,25 @@ export class ProvenanceRecorder {
     const sourceFileInputs = this.inferredSourceFileInputs(options.sessionId, options.name, code);
     const kind = this.artifactKind(options.path);
     const isReportKind = kind === "markdown" || kind === "latex" || kind === "report";
+    // A report writer may redeclare the same logical artifact without carrying
+    // base_version_id.  Retain only the old chip mappings still named by the
+    // revised text; otherwise unchanged [evidenceN] markers become dead links.
+    let inheritedReferences: ComposerReference[] | undefined;
+    if (isReportKind) {
+      const existing = (await this.store.listArtifacts(options.sessionId)).find((item) =>
+        options.artifactId ? item.id === options.artifactId : item.name === options.name);
+      if (existing) {
+        const versions = await this.store.listArtifactVersions(options.sessionId, existing.id);
+        const previous = options.baseVersionId
+          ? versions.find((version) => version.id === options.baseVersionId)
+          : versions.at(-1);
+        if (previous?.references?.length) {
+          const source = await readFile(resolveWorkspaceFile(options.workspaceRoot, options.path), "utf8");
+          const aliases = new Set([...source.matchAll(/\[(evidence\d+|ev\d+)\]/gi)].map((match) => match[1]!.toLowerCase()));
+          inheritedReferences = previous.references.filter((reference) => aliases.has(reference.label.toLowerCase()));
+        }
+      }
+    }
     // Register FIRST, drain AFTER. registerWorkspaceArtifact reads the file
     // (ENOENT if the LLM declared a path that doesn't exist yet) and throws
     // before any version lands. If we drained the chip/claim buffer before
@@ -414,6 +433,7 @@ export class ProvenanceRecorder {
       originMeta: { declaredPath: options.sourcePath, ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}) },
       parentSubagentId: options.parentSubagentId,
       path: options.path,
+      ...(inheritedReferences?.length ? { references: inheritedReferences } : {}),
       sessionId: options.sessionId,
       sourcePath: options.sourcePath,
       turnId: options.turnId,
