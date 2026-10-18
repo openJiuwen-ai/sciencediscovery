@@ -3,6 +3,8 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { ProviderModelClient } from "./runtime-client.js";
 import { ModelRequestError, type ModelTurn } from "./client.js";
 const endpoint = { baseUrl: "http://127.0.0.1:1", model: "synthetic" };
@@ -21,4 +23,35 @@ test("runtime preserves original errors and unavailable usage without failing su
   const turn: ModelTurn = { assistantMessage: { role: "assistant", content: "OK" }, toolCalls: [], completionObserved: true };
   const good = new ProviderModelClient(endpoint, policy, async () => turn);
   assert.equal((await good.invoke(input, new AbortController().signal, observer)).usage, undefined);
+});
+
+for (const terminal of ["missing-native-stop", "native-end-turn"] as const) test(`Messages HTTP stream with ${terminal} retains strict runtime completion`, async () => {
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) {}
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of [
+      { type: "message_start", message: { usage: { input_tokens: 6 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "valid answer" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", ...(terminal === "native-end-turn" ? { delta: { stop_reason: "end_turn", stop_sequence: null } } : {}), usage: { output_tokens: 5 } },
+    ]) res.write(`data: ${JSON.stringify(event)}\n\n`);
+    // Text, usage and OpenAI's sentinel do not establish native Messages completion.
+    res.end(terminal === "native-end-turn" ? 'data: {"type":"message_stop"}\n\n' : "data: [DONE]\n\n");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const client = new ProviderModelClient({ ...endpoint, apiProtocol: "anthropic-messages", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, proxy: { mode: "direct" } }, policy);
+    const result = client.invoke(input, AbortSignal.timeout(2000), observer);
+    if (terminal === "missing-native-stop") await assert.rejects(result, /Model stream ended without a completion event/);
+    else {
+      const turn = await result;
+      assert.equal(turn.assistantMessage.content, "valid answer");
+      assert.equal(turn.usage?.inputTokens, 6);
+      assert.equal(turn.usage?.outputTokens, 5);
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });

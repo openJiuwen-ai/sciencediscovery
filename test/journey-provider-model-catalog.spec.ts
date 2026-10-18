@@ -149,8 +149,11 @@ function providerStub(): Promise<ProviderStub> {
           index: 0,
           delta: { type: "text_delta", text: "Claude Haiku 4.5 legacy thinking is active." },
         })}\n\n`);
-        response.write(`data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 5 } })}\n\n`);
-        response.end("data: [DONE]\n\n");
+        response.write(`data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 },
+        })}\n\n`);
+        response.end(`data: ${JSON.stringify({ type: "message_stop" })}\n\n`);
         return;
       }
       response.writeHead(404, { "content-type": "application/json" });
