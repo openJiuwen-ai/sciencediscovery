@@ -115,7 +115,7 @@ test("actual source CLI rejects missing arguments and failed startup without pub
   try {
     for (const [args, message] of [[[], /Expected interpreter, data directory and private state file/], [[join(root, "missing-interpreter"), root, state], /^Evolve could not start\. Check the provisioned source runtime\.\s*$/]] as const) {
       await assert.rejects(promisify(execFile)(process.execPath, ["--import", "tsx", helper, ...args], {
-        env: { PATH: process.env.PATH, TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH }, timeout: 10_000,
+        env: { PATH: process.env.PATH, TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH, NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE }, timeout: 10_000,
       }), error => {
         const failure = error as Error & { code?: number; signal?: string; stdout: string; stderr: string };
         assert.equal(failure.code, 1); assert.equal(failure.signal, null); assert.equal(failure.stdout, "");
@@ -123,6 +123,12 @@ test("actual source CLI rejects missing arguments and failed startup without pub
       });
       await assert.rejects(readFile(state), { code: "ENOENT" });
     }
+    const { pathToFileURL } = await import("node:url");
+    const imported = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(helper).href)});console.log('import-only');`], {
+      env: { PATH: process.env.PATH, TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH, NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE }, timeout: 5_000,
+    });
+    assert.equal(imported.stdout, "import-only\n"); assert.equal(imported.stderr, "");
+    await assert.rejects(readFile(state), { code: "ENOENT" });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -140,4 +146,29 @@ test("both actual shell readiness budget guards default blanks and retain explic
     assert.equal(result.status, 1); assert.match(result.stderr, /Evolve did not become ready/);
     assert.equal(Number(result.stdout.trim()), expected); assert.equal(result.signal, null);
   }
+});
+
+test("actual source CLI SIGTERM during startup exits cleanly without publishing readiness or leaving its child", { timeout: 10_000 }, async () => {
+  const { spawn } = await import("node:child_process"); const { fileURLToPath } = await import("node:url");
+  const { setTimeout: delay } = await import("node:timers/promises");
+  const root = await mkdtemp(join(tmpdir(), "source-cli-abort-")); const state = join(root, "state.json");
+  const marker = join(root, "child.pid"); const interpreter = join(root, "interpreter");
+  await writeFile(interpreter, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);`, { mode: 0o700 });
+  const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./source-evolve.ts", import.meta.url)), interpreter, root, state], {
+    env: { PATH: process.env.PATH, TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH, NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = ""; let stdout = ""; child.stderr.on("data", chunk => { stderr += chunk; }); child.stdout.on("data", chunk => { stdout += chunk; });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(done => child.once("exit", (code, signal) => done({ code, signal })));
+  try {
+    let pid: number | undefined;
+    for (let attempt = 0; attempt < 100 && !pid; attempt++) {
+      try { pid = Number(await readFile(marker, "utf8")); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (!pid) await delay(20);
+    }
+    assert(pid, "actual owned child must have started before interruption");
+    child.kill("SIGTERM");
+    assert.deepEqual(await exited, { code: 0, signal: null }); assert.equal(stderr, ""); assert.equal(stdout, "");
+    assert.throws(() => process.kill(pid!, 0), { code: "ESRCH" });
+    await assert.rejects(readFile(state), { code: "ENOENT" });
+  } finally { child.kill("SIGKILL"); await exited; await rm(root, { recursive: true, force: true }); }
 });

@@ -347,7 +347,7 @@ describe("micromamba seeding", () => {
   });
 });
 
-for (const mode of ["owned", "operator", "abort-startup"] as const) {
+for (const mode of ["owned", "operator", "abort-startup", "fail-startup"] as const) {
 test(`serve ${mode} preserves ownership and cleans up on shutdown or interrupted startup`, { timeout: 15_000 }, async () => {
   const { createServer } = await import("node:http");
   const { mkdir, symlink } = await import("node:fs/promises");
@@ -374,11 +374,15 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
     let ready: () => void; const becameReady = new Promise<void>(done => { ready = done; });
     const signals = process.listenerCount("SIGTERM");
     const running = serve(context, message => {
-      if (mode === "abort-startup" && message.includes("Starting control API")) { process.emit("SIGTERM", "SIGTERM"); throw new Error("fixture startup interruption"); }
+      if ((mode === "abort-startup" || mode === "fail-startup") && message.includes("Starting control API")) {
+        if (mode === "abort-startup") process.emit("SIGTERM", "SIGTERM");
+        throw new Error("fixture startup interruption");
+      }
       if (message.includes("ScienceDiscovery is ready at")) ready!();
     });
-    if (mode === "abort-startup") {
-      assert.equal((await running).exitCode, 0);
+    if (mode === "abort-startup" || mode === "fail-startup") {
+      if (mode === "abort-startup") assert.equal((await running).exitCode, 0);
+      else await assert.rejects(running, /fixture startup interruption/);
       const pid = Number(await readFile(join(root, "data/runner.pid"), "utf8"));
       // SIGTERM starts asynchronous Supervisor cleanup; observe actual exit rather than
       // assuming OS reaping has happened in the same microtask as serve's return.
