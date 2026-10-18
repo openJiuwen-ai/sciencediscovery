@@ -1314,7 +1314,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const openEvolveRun = evolveRuns.find((run) => run.id === openEvolveRunId);
 
   useEffect(() => {
-    if (!activeSessionId) {
+    if (!activeSessionId || !evolveReady) {
       setEvolveRuns([]);
       return;
     }
@@ -1342,7 +1342,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     };
     load();
     return () => { live = false; if (timer) clearTimeout(timer); };
-  }, [activeSessionId, client, evolveRefreshKey]);
+  }, [activeSessionId, client, evolveRefreshKey, evolveReady]);
   // The session-bar badge needs the catalog whenever a Session is open, not
   // only when one is pinned to a remote host.
   useEffect(() => {
@@ -4843,7 +4843,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               </div>
             </details> : null}
 
-            {session ? <IdeaTreeView client={client} onOpenSubagent={setOpenSubagentId} onOpenArtifact={(id) => { const artifact = artifacts.find(item => item.id === id); if (artifact) setArtifactModalName(artifact.name); }} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}`} sessionId={session.id} /> : null}
+            {session && evolveReady ? <IdeaTreeView client={client} onOpenSubagent={setOpenSubagentId} onOpenArtifact={(id) => { const artifact = artifacts.find(item => item.id === id); if (artifact) setArtifactModalName(artifact.name); }} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}`} sessionId={session.id} /> : null}
 
             {session && evolveRuns.length ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("evolve.card.title")}</strong><span className="fold-meta">{evolveRuns.length}</span></summary><EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /></details> : null}
 
