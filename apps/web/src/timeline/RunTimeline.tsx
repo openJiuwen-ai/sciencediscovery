@@ -929,18 +929,18 @@ export function RunTimeline({
         if (entry.type === "permission") {
           if (entry.request.state !== "pending") return null;
           const pending = entry.request.state === "pending";
-          const status = t("permissions.required");
+          const status = entry.request.action === "sandbox_network" ? t("permissions.sandboxNetwork") : t("permissions.required");
           return (
             <article className={`permission-card timeline-permission ${entry.request.state}`} key={entry.id}>
               <div>
                 <span className="eyebrow">{status}</span>
                 <h4>{entry.request.summary}</h4>
-                <code>{entry.request.resource}</code>
+                {entry.request.action !== "sandbox_network" ? <code>{entry.request.resource}</code> : null}
                 {!pending && entry.request.decidedAt ? <small>{t("timeline.decided")} {new Date(entry.request.decidedAt).toLocaleString(locale)}</small> : null}
                 <details className="permission-details">
                   <summary>{t("timeline.details")}</summary>
                   <dl>
-                    <dt>{t("timeline.action")}</dt><dd><code>{entry.request.action}</code></dd>
+                    <dt>{t("timeline.action")}</dt><dd><code>{entry.request.action === "sandbox_network" ? t("permissions.sandboxNetwork") : entry.request.action}</code></dd>
                     <dt>{t("timeline.resource")}</dt><dd><code>{entry.request.resource}</code></dd>
                     <dt>{t("timeline.requested")}</dt><dd>{new Date(entry.request.createdAt).toLocaleString(locale)}</dd>
                     {entry.request.decision ? <><dt>{t("timeline.decision")}</dt><dd>{entry.request.decision}</dd></> : null}

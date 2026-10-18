@@ -1338,3 +1338,26 @@ test("reopening a reasoning placeholder preserves earlier narrative and expansio
   assert.equal(entries[0]?.type==="assistant"&&entries[0].content,"Research begins");
   assert.equal(entries[1]?.type==="thinking"&&entries[1].expanded,false);
 });
+
+for (const [locale, label] of [["en", "Sandbox network access"], ["zh-CN", "沙箱网络访问"]] as const) {
+  test(`live timeline network permission localizes scope and keeps its digest in closed Details (${locale})`, () => {
+    const resource = "sandbox-network:" + "a".repeat(64);
+    const entries = apply([{ type: "permission.required", request: {
+      id: "network-permission", action: "sandbox_network", resource, sessionId: "session-1", state: "pending",
+      createdAt: "2026-10-18T10:00:00.000Z",
+      summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records.",
+    } }]);
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, {
+      entries, isRunning: true, onToggle() {}, onPermissionDecision: async () => {},
+    })));
+    const collapsed = html.replace(/<details\b[\s\S]*?<\/details>/g, "");
+    assert.match(collapsed, /eutils\.ncbi\.nlm\.nih\.gov:443/);
+    assert.match(collapsed, /Retrieve requested PubMed records/);
+    assert.ok(collapsed.includes(`<span class="eyebrow">${label}</span>`));
+    assert.ok(!collapsed.includes(resource), "opaque scope is not exposed in the collapsed card");
+    assert.match(html, /<details class="permission-details">/);
+    assert.ok(html.includes(`<dd><code>${label}</code></dd>`), "Details action is localized");
+    assert.equal(html.split(resource).length - 1, 1, "resource remains available once in Details");
+    assert.ok(!html.includes("sandbox_network"));
+  });
+}

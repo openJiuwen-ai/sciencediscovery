@@ -68,6 +68,8 @@
 .idea-research-timeline-card ol { margin: 8px 0 0; padding-left: 19px; color: var(--text-secondary); }
 .timeline-permission.allowed { border-color: var(--success-border); background: var(--success-soft); }
 .timeline-permission.denied, .timeline-permission.cancelled { border-color: var(--danger-border); background: var(--danger-soft); }
+.timeline-permission > div { min-width: 0; overflow-wrap: anywhere; }
+.timeline-permission .permission-details dd { min-width: 0; }
 .timeline-permission > div > small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; }
 .follow-output-dock { position: sticky; z-index: var(--z-dock); bottom: 14px; display: grid; justify-items: center; margin-top: -14px; pointer-events: none; }
 .follow-output-button { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; border: 1px solid var(--accent-border-soft); border-radius: 999px; background: var(--surface); box-shadow: var(--shadow-2); padding: 7px 13px; color: var(--accent-ink); cursor: pointer; font-size: 13px; font-weight: 700; pointer-events: auto; }
