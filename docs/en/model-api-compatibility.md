@@ -17,8 +17,9 @@ No runtime protocol fallback or automatic chargeable recheck occurs. After
 changing endpoint, model, credentials or protocol, explicitly check again.
 
 The connection wizard requires consent before its single basic model request.
-In an expanded provider row, select a saved model, read and check the cost
-consent, then run the compatibility check. It sends **up to 12 synthetic requests**:
+In an expanded provider row, select a saved model. The default check sends one
+basic request using only the saved protocol. Select the all-protocol matrix and
+consent again to check independent capabilities. It sends **up to 12 synthetic requests**:
 for each of the three families, one non-streaming basic completion, one streaming
 completion, and a two-request tool-call/result round-trip. Tokens may be billed
 by the configured provider, even for unsuccessful or truncated responses. No
@@ -41,7 +42,7 @@ earlier under a token budget; it is never displayed as billed usage or cost.
 Each basic and streaming attempt has a 10-second ceiling. The two tool turns
 share another 10-second ceiling. The entire sequential matrix therefore has a
 90-second ceiling, excluding local scheduling overhead. Basic output is limited
-to 8 tokens; stream and tool outputs to 64 tokens per request, and response
+to 8 tokens for Chat/Messages and 16 for Responses; stream and tool outputs to 64 tokens per request, and response
 bodies to 64 KiB per request. Providers can ignore output limits; the byte and
 time ceilings still apply. A slow reasoning model may exhaust these small
 budgets: the result is inconclusive, not evidence that the model is unusable.
@@ -78,7 +79,10 @@ instead of silently discarded. Auxiliary completions have a 4 MiB response
 ceiling (paper vision retains its tighter existing limit). Session naming keeps
 its existing bounded attempts for provider-specific thinking/temperature
 restrictions, within the selected protocol and 30 seconds per attempt; the
-default output budget is now bounded at 16,384 tokens. Evolve keeps its 20-minute
+default output budget is 16,384 tokens, overridden by `SCIENCE_AGENT_LLM_MAX_TOKENS`
+for unary callers that omit an explicit limit (including naming fallback and paper
+vision). Explicit caller budgets are preserved; set a suitable configured limit for
+providers with lower output caps. Evolve keeps its 20-minute
 wall-clock ceiling and run-scoped credentials. Never place credentials in URLs
 or public diagnostics.
 
@@ -140,3 +144,34 @@ codes retain their 401/429/400 classifications. Unknown reported errors remain
 remain deterministic 422 failures. IdeaTree stops an empty or truncated stage
 without a JSON-format correction; already reported usage remains accounted.
 A nonempty malformed JSON answer still permits the existing single correction.
+
+## Basic limits and setup
+
+The Responses-only basic probe uses16 output tokens because the
+[official OpenAI Responses create reference](https://developers.openai.com/api/reference/resources/responses/methods/create)
+specifies that minimum. This is documentation-backed behavior, not a live vendor
+certification; Azure and other providers were not independently verified. No
+arbitrary runtime caller budget is globally clamped to16. Consent shows the
+different probe limits before any request; saving or changing scope sends nothing.
+
+A structurally valid reply ending at the synthetic output limit stays inconclusive,
+with reported usage preserved. The setup wizard retains the selected configuration
+and clearly says compatibility is unconfirmed instead of deleting it solely for
+this budget limitation. Authentication, provider and malformed/empty-response
+failures still roll back newly created setup records. No automatic larger probe
+is sent. Tool acknowledgement tolerates case, surrounding whitespace and one
+terminal period/exclamation mark; tool ID, arguments, native state and result replay
+checks remain strict. Other answer text is inconclusive, not proof of incompatibility.
+
+## Intentional streaming compatibility changes
+
+Compared with main24bd51ca, runtime Agent and Swarm now require nonempty
+provider-supplied tool IDs: an omitted or empty ID fails the turn instead of
+generating an ID that cannot reliably replay provider history. Chat SSE `[DONE]`
+is a transport terminator, not a completion reason. A stream without a
+`finish_reason` fails runtime completion (the gateway returns502); capability
+checks remain inconclusive. Valid finish reasons, native history/signatures,
+parallel tool results and unknown usage retain their existing contracts. This
+is an intentional breaking compatibility change for nonconforming providers.
+Configure a conforming endpoint; no silent ID fabrication, completion inference
+or protocol fallback is offered.

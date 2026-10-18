@@ -7,6 +7,7 @@ import type { ModelApiProtocol } from "../../packages/schema/src/index.js";
 
 /** Loopback only, synthetic data. Native protocol state is required on the tool-result turn. */
 export async function protocolProvider(selection: ModelApiProtocol | "all", options: {
+  acknowledgement?: string;
   usage?: "valid" | "missing" | "malformed";
   parallel?: boolean;
   truncated?: boolean;
@@ -29,6 +30,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
     requests.push({ path: req.url!, body });
     const expected = protocol === "openai-responses" ? "/responses" : protocol === "anthropic-messages" ? "/messages" : "/chat/completions";
     if (!req.url?.endsWith(expected) || options.status) { res.writeHead(options.status ?? 404); res.end(JSON.stringify({ error: { message: "original fixture error" } })); return; }
+    if (protocol === "openai-responses" && body.max_output_tokens < 16) { res.writeHead(400); res.end(JSON.stringify({ error: { message: "Synthetic Responses fixture requires max_output_tokens >= 16" } })); return; }
     if (options.hang) return;
     if (options.malformed) { res.end('{"result":"not a completion"}'); return; }
     const history = body.input ?? body.messages;
@@ -37,7 +39,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
       res.writeHead(400); res.end('{"error":{"message":"native state missing"}}'); return;
     }
     const tool = (body.tools ?? []).some((t: any) => (t.name ?? t.function?.name) === "compatibility_echo") && !hasResult;
-    const text = tool ? "" : "OK";
+    const text = tool ? "" : options.acknowledgement ?? "OK";
     const items = [nativeState, ...(tool ? calls.map((c, index) => protocol === "anthropic-messages" ? { type: "tool_use", id: c.id, name: c.name, input: { value: "OK" } } : { type: "function_call", id: `item-${index}`, call_id: c.id, name: c.name, arguments: c.arguments }) : protocol === "anthropic-messages" ? [{ type: "text", text }] : [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }])];
     if (!body.stream) {
       res.setHeader("content-type", "application/json");
@@ -53,7 +55,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
         send({ choices: [{ delta: { tool_calls: [{ index, id: c.id, function: { name: c.name, arguments: c.arguments.slice(0, 5) } }] } }] });
         send({ choices: [{ delta: { tool_calls: [{ index, function: { arguments: c.arguments.slice(5) } }] } }] });
       }
-      else { send({ choices: [{ delta: { content: "O" } }] }); send({ choices: [{ delta: { content: "K" } }] }); }
+      else { send({ choices: [{ delta: { content: text.slice(0, 1) } }] }); send({ choices: [{ delta: { content: text.slice(1) } }] }); }
       send({ choices: [{ delta: {}, finish_reason: options.truncated ? "length" : tool ? "tool_calls" : "stop" }], usage });
     } else if (protocol === "openai-responses") {
       send({ type: "response.output_item.done", output_index: 0, item: nativeState });
@@ -63,7 +65,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
         for (const delta of [c.arguments.slice(0, 5), c.arguments.slice(5)]) send({ type: "response.function_call_arguments.delta", output_index: index + 1, delta });
         if (!options.truncated) send({ type: "response.output_item.done", output_index: index + 1, item: { ...item, arguments: c.arguments } });
       }
-      else for (const delta of ["O", "K"]) send({ type: "response.output_text.delta", delta });
+      else for (const delta of [text.slice(0, 1), text.slice(1)]) send({ type: "response.output_text.delta", delta });
       send({ type: options.truncated ? "response.incomplete" : "response.completed", response: { usage, ...(options.truncated ? { incomplete_details: { reason: "max_output_tokens" } } : {}) } });
     } else {
       send({ type: "message_start", message: { usage: usage === undefined ? undefined : { ...usage, output_tokens: 0 } } });
@@ -78,7 +80,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
       }
       else {
         send({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
-        for (const text of ["O", "K"]) send({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text } });
+        for (const part of [text.slice(0, 1), text.slice(1)]) send({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: part } });
         send({ type: "content_block_stop", index: 1 });
       }
       send({ type: "message_delta", delta: { stop_reason: options.truncated ? "max_tokens" : tool ? "tool_use" : "end_turn" }, usage: usage === undefined ? undefined : { output_tokens: usage.output_tokens } });

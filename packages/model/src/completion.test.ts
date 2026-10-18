@@ -234,3 +234,22 @@ test('Responses failures with absent or non-object native error details remain n
     assert.equal(result.status, 422); assert.deepEqual(await result.json(), payload);
   }
 });
+
+test('unary defaults honor configured output budget and never clamp an explicit Responses caller budget', async () => {
+  const old = process.env.SCIENCE_AGENT_LLM_MAX_TOKENS; process.env.SCIENCE_AGENT_LLM_MAX_TOKENS = '128';
+  try {
+    for (const apiProtocol of protocols) {
+      const provider = await protocolProvider(apiProtocol);
+      try {
+        const endpoint = { apiProtocol, baseUrl: provider.baseUrl, model: 'synthetic', proxy: { mode: 'direct' as const } };
+        const response = await completeChatRequest(endpoint, { messages: [{ role: 'user', content: 'synthetic' }] }, AbortSignal.timeout(2000));
+        assert.equal(response.status, 200); const body = provider.requests[0]!.body;
+        assert.equal(apiProtocol === 'openai-responses' ? body.max_output_tokens : body.max_tokens, 128);
+        if (apiProtocol === 'openai-responses') {
+          const limited = await completeChatRequest(endpoint, { messages: [{ role: 'user', content: 'synthetic' }], max_tokens: 8 }, AbortSignal.timeout(2000));
+          assert.equal(limited.status, 400); assert.equal(provider.requests[1]!.body.max_output_tokens, 8);
+        }
+      } finally { await provider.close(); }
+    }
+  } finally { if (old === undefined) delete process.env.SCIENCE_AGENT_LLM_MAX_TOKENS; else process.env.SCIENCE_AGENT_LLM_MAX_TOKENS = old; }
+});

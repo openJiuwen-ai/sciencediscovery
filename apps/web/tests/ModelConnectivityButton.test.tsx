@@ -74,7 +74,7 @@ test("model test button spins, shows a result, and can be clicked again", async 
   let calls = 0;
   const testModel = async (modelId: string, compatibility?: boolean) => {
     assert.equal(modelId, "model-1");
-    assert.equal(compatibility, true);
+    assert.equal(compatibility, false);
     calls += 1;
     return await responses.shift()!;
   };
@@ -148,6 +148,7 @@ test("compatibility requests require explicit cost consent and render independen
   assert.equal(renderer!.root.findByType("button").props.disabled, true);
   await act(async () => { renderer!.root.findByType("button").props.onClick(); });
   assert.equal(calls, 0);
+  await act(async () => { renderer!.root.findByType("select").props.onChange({ target: { value: "matrix" } }); });
   await acceptProbeCost(renderer!);
   await act(async () => { renderer!.root.findByType("button").props.onClick(); await Promise.resolve(); });
   assert.equal(calls, 1);
@@ -191,4 +192,16 @@ for (const locale of ['zh-CN', 'en'] as const) test(`capability and failure evid
     if (category === 'invalid_response') assert.ok(rendered.includes(locale === 'zh-CN' ? '无法确认' : 'Inconclusive'));
     await act(async () => renderer!.unmount());
   }
+});
+
+test('scope defaults to one selected-protocol request and switching to matrix requires fresh cost consent without probing', async () => {
+  const modes: boolean[] = []; let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view(async (_id, compatibility) => { modes.push(Boolean(compatibility)); return success; }, 'v1', false, 'en')); });
+  assert.equal(renderer!.root.findByType('select').props.value, 'selected');
+  await acceptProbeCost(renderer!); await act(async () => { await renderer!.root.findByType('button').props.onClick(); });
+  assert.deepEqual(modes, [false]);
+  await act(async () => { renderer!.root.findByType('select').props.onChange({ target: { value: 'matrix' } }); });
+  assert.equal(renderer!.root.findByType('input').props.checked, false); assert.equal(renderer!.root.findByType('button').props.disabled, true); assert.deepEqual(modes, [false]);
+  await acceptProbeCost(renderer!); await act(async () => { await renderer!.root.findByType('button').props.onClick(); });
+  assert.deepEqual(modes, [false, true]); await act(async () => renderer!.unmount());
 });

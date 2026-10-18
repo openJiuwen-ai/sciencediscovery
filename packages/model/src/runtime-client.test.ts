@@ -55,3 +55,20 @@ for (const terminal of ["missing-native-stop", "native-end-turn"] as const) test
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+for (const kind of ['missing-id', 'done-only', 'valid-finish'] as const) test(`Chat runtime strict completion/replay boundary: ${kind}`, async () => {
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const choice = kind === 'missing-id' ? { delta: { tool_calls: [{ index: 0, function: { name: 'echo', arguments: '{}' } }] }, finish_reason: 'tool_calls' }
+      : { delta: { content: 'OK' }, ...(kind === 'valid-finish' ? { finish_reason: 'stop' } : {}) };
+    res.end(`data: ${JSON.stringify({ choices: [choice] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const client = new ProviderModelClient({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: 'synthetic', proxy: { mode: 'direct' } }, policy);
+    const call = client.invoke(input, AbortSignal.timeout(2000), observer);
+    if (kind === 'valid-finish') assert.equal((await call).assistantMessage.content, 'OK');
+    else await assert.rejects(call, kind === 'missing-id' ? /omitted a tool call ID/ : /without a completion event/);
+  } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});

@@ -1,5 +1,16 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 import { completeChatRequest, normalizeUsage, ModelRequestError, streamModelTurn, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
 import type { ModelApiProtocol, ModelCompatibilityOutcome, ModelConnectivityTestCategory, ModelConnectivityTestResult, ModelProfile, ResolvedProxy } from "@sciencediscovery/schema";
@@ -60,13 +71,13 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
     let basic = unknown(), streaming = unknown(), tools = unknown();
     let usage: "available" | "unknown" = "unknown";
     try {
-      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: 8 }, signal, undefined, 64 * 1024);
+      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: apiProtocol === "openai-responses" ? 16 : 8 }, signal, undefined, 64 * 1024);
       if (!response.ok) basic = providerFailure(response.status);
       else {
         const payload = await response.json() as { usage?: unknown; choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
         if (normalizeUsage(payload.usage, "openai-chat-completions")) usage = "available";
         if (payload.choices?.[0]?.finish_reason === "length") {
-          basic = { category: "invalid_response", ok: false, providerStatus: response.status, message: "Basic reply was truncated at the synthetic output limit; support remains inconclusive" };
+          basic = { category: "invalid_response", ok: false, inconclusiveReason: "output_limit", providerStatus: response.status, message: "Basic reply was truncated at the synthetic output limit; support remains inconclusive" };
         } else {
           const message = payload.choices?.[0]?.message;
           if (!message || !(message.content || message.reasoning_content || message.tool_calls?.length || message.anthropic_content?.length || message.response_items?.length)) throw new Error("No basic completion evidence");
@@ -92,7 +103,7 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
         if (first.usage) usage = "available";
         if (validTurn(first) && first.toolCalls.length === 1 && first.toolCalls[0]!.name === TOOLS[0]!.name && first.toolCalls[0]!.args.value === "OK" && !first.toolCalls[0]!.argsParseError) {
           const final = await streamModelTurn(endpoint, instruction, [...HISTORY, first.assistantMessage, { role: "tool", tool_call_id: first.toolCalls[0]!.id, content: "OK" }], TOOLS, policy, toolSignal);
-          tools = validTurn(final) && final.assistantMessage.content === "OK" && !final.toolCalls.length ? { category: "ok", ok: true, message: "Tool call ID, arguments and result completed a round-trip" } : unknown();
+          tools = validTurn(final) && /^OK[.!]?$/i.test(final.assistantMessage.content.trim()) && !final.toolCalls.length ? { category: "ok", ok: true, message: "Tool call ID, arguments and result completed a round-trip" } : unknown();
           if (final.usage) usage = "available";
         }
       } catch (error) { tools = failure(error, toolSignal); }

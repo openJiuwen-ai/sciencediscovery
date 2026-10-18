@@ -109,6 +109,8 @@ export type ModelConnectivityTestCategory =
   | "invalid_response";
 
 export interface ModelCompatibilityOutcome {
+  /** Valid response exhausted the small synthetic budget; not confirmed compatible. */
+  inconclusiveReason?: "output_limit";
   category: ModelConnectivityTestCategory;
   message: string;
   ok: boolean;
@@ -116,6 +118,7 @@ export interface ModelCompatibilityOutcome {
 }
 
 export interface ModelConnectivityTestResult {
+  inconclusiveReason?: ModelCompatibilityOutcome["inconclusiveReason"];
   category: ModelConnectivityTestCategory;
   latencyMs: number;
   message: string;

@@ -688,3 +688,21 @@ for (const incomplete of [false, true]) test(`gateway rejects ${incomplete ? "un
     assert.equal(response.status, 502); assert.match(await response.text(), /Model stream/);
   } finally { await g.close(); }
 });
+
+for (const kind of ['missing-id', 'done-only', 'valid-finish'] as const) test(`actual Chat gateway preserves strict completion/replay contract: ${kind}`, async () => {
+  const { createServer } = await import('node:http');
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const choice = kind === 'missing-id' ? { delta: { tool_calls: [{ index: 0, id: '', function: { name: 'echo', arguments: '{}' } }] }, finish_reason: 'tool_calls' }
+      : { delta: { content: 'OK' }, ...(kind === 'valid-finish' ? { finish_reason: 'stop' } : {}) };
+    res.end(`data: ${JSON.stringify({ choices: [choice] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const gateway = await startModelGateway({ baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: 'synthetic', proxy: { mode: 'direct' } }, POLICY, AbortSignal.timeout(3000));
+  try {
+    const r = await fetch(gateway.url + '/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${gateway.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'synthetic' }] }) });
+    assert.equal(r.status, kind === 'valid-finish' ? 200 : 502);
+    const text = await r.text(); assert.match(text, kind === 'missing-id' ? /omitted a tool call ID/ : kind === 'done-only' ? /without a completion event/ : /"content":"OK"/);
+  } finally { await gateway.close(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});

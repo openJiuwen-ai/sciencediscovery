@@ -133,7 +133,7 @@ export function ModelConnectWizard({
   useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, proxyPolicy, baseUrlOverride, selectedPresetId]);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
-  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
+  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string; inconclusive?: boolean }>();
 
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
@@ -408,7 +408,8 @@ export function ModelConnectWizard({
 
       const testOutcome = await client.testModel(firstProfile.id);
 
-      if (!testOutcome.ok) {
+      const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
+      if (!testOutcome.ok && !budgetLimited) {
         // Failed: roll back everything this attempt created.
         // Restore settings first so deleteModel is not blocked by runtime settings.
         await restoreSavedOverrides();
@@ -459,13 +460,14 @@ export function ModelConnectWizard({
         count,
         defaultChanged,
         latencyMs: testOutcome.latencyMs,
+        inconclusive: budgetLimited,
         modelName: firstProfile.name,
       });
       // The plan belonged to the provider that now exists; the next connect
       // starts from a clean slate.
       resetPlan();
 
-      onNotice?.(t("wizard.successTitle"), successDesc);
+      onNotice?.(t(budgetLimited ? "wizard.savedInconclusive" : "wizard.successTitle"), successDesc + (budgetLimited ? " " + t("wizard.outputLimitNotice") : ""));
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
       await restoreSavedOverrides();
@@ -825,15 +827,16 @@ export function ModelConnectWizard({
         {failureNode}
 
         {successInfo ? (
-          <div className="wizard-alert wizard-alert-success" role="status">
-            <CheckIcon size={16} />
+          <div className={successInfo.inconclusive ? "wizard-alert" : "wizard-alert wizard-alert-success"} role="status">
+            {successInfo.inconclusive ? <AlertCircleIcon size={16} /> : <CheckIcon size={16} />}
             <div className="wizard-alert-content">
-              <strong>{t("wizard.successTitle")}: </strong>
+              <strong>{t(successInfo.inconclusive ? "wizard.savedInconclusive" : "wizard.successTitle")}: </strong>
               <span>
                 {successInfo.defaultChanged
                   ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
                   : t("wizard.successDescKeepDefault", { count: successInfo.count })}
                 {" "}({successInfo.latencyMs} ms)
+                {successInfo.inconclusive ? <span className="wizard-alert-detail">{t("wizard.outputLimitNotice")}</span> : null}
               </span>
             </div>
           </div>

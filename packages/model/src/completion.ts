@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
-import { createModelRequest, normalizeUsage, proxyDispatcher, type ModelEndpoint } from "./client.js";
+import { createModelRequest, normalizeUsage, proxyDispatcher, resolveModelClientPolicy, type ModelEndpoint } from "./client.js";
 import { request } from "undici";
 import { Readable } from "node:stream";
 
@@ -42,7 +42,7 @@ export async function completeChatRequest(
     return { name: t.function.name, description: t.function.description ?? "", parameters: t.function.parameters ?? { type: "object" } };
   });
   const probe = createModelRequest(selected, systemPrompt, body.messages.filter(m => m.role !== "system"), tools,
-    { maxTokens: body.max_tokens ?? 16_384, maxRetries: 0, requestTimeoutMs: 90_000, temperature: body.temperature, topP: body.top_p, thinking: body.thinking }, false);
+    { maxTokens: body.max_tokens ?? resolveModelClientPolicy().maxTokens, maxRetries: 0, requestTimeoutMs: 90_000, temperature: body.temperature, topP: body.top_p, thinking: body.thinking }, false);
   const dispatcher = proxyDispatcher(endpoint.proxy);
   try {
     let response: Response;

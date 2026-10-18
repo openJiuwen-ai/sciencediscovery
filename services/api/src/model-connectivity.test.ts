@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { protocolProvider } from "../../../test/helpers/protocol-provider.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -312,4 +313,19 @@ test('compatibility outer deadlines still stop healthy partial streams independe
     assert.equal(result.protocols?.length, 3);
     for (const protocol of result.protocols!) { assert.equal(protocol.basic.ok, true); assert.equal(protocol.streaming.category, 'timeout'); assert.equal(protocol.tools.category, 'timeout'); }
   } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});
+
+test('Responses basic uses the documented16-token probe minimum while runtime explicit budgets remain untouched', async () => {
+  const provider = await protocolProvider('openai-responses');
+  try {
+    const tested = await testModelConnectivity({ apiToken: 'synthetic', profile: { ...profile(provider.baseUrl), apiProtocol: 'openai-responses' }, resolveProxy: directProxy });
+    assert.equal(tested.ok, true); assert.equal(provider.requests.length, 1); assert.equal(provider.requests[0]!.body.max_output_tokens, 16);
+  } finally { await provider.close(); }
+});
+for (const acknowledgement of ['OK.', ' ok! ', 'unexpected answer']) test(`tool acknowledgement ${acknowledgement} retains identity/history checks without exact punctuation matching`, async () => {
+  const provider = await protocolProvider('all', { acknowledgement });
+  try {
+    const tested = await testModelConnectivity({ apiToken: 'synthetic', profile: profile(provider.baseUrl), resolveProxy: directProxy, compatibility: true });
+    assert.equal(provider.requests.length, 12); assert.ok(tested.protocols!.every(p => p.tools.ok === (acknowledgement !== 'unexpected answer')));
+  } finally { await provider.close(); }
 });

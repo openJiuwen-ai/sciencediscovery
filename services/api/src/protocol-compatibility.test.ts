@@ -21,6 +21,8 @@ import type { ModelInvocationUsage, ModelProfile } from "@sciencediscovery/schem
 
 for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
   test(`${apiProtocol}: Swarm gateway and auxiliary callers complete actual protocol round trips without usage`, async () => {
+    const previousBudget = process.env.SCIENCE_AGENT_LLM_MAX_TOKENS;
+    process.env.SCIENCE_AGENT_LLM_MAX_TOKENS = "128";
     const provider = await protocolProvider(apiProtocol, { usage: "missing", parallel: true });
     const model: ModelProfile = { id: "synthetic", name: "synthetic", model: "synthetic", baseUrl: provider.baseUrl, apiProtocol, hasApiToken: true, proxyPolicy: "none", vision: true, createdAt: "2026-10-18T00:00:00Z", updatedAt: "2026-10-18T00:00:00Z" };
     const gateway = await startModelGateway({ ...model, apiToken: "synthetic", proxy: { mode: "direct" } }, { maxTokens: 128, maxRetries: 0, requestTimeoutMs: 1000 }, AbortSignal.timeout(10000));
@@ -72,7 +74,9 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
       const imageRequest = provider.requests.at(-1)!;
       assert.match(JSON.stringify(imageRequest.body), apiProtocol === "anthropic-messages" ? /media_type/ : apiProtocol === "openai-responses" ? /input_image/ : /image_url/);
       assert.ok(run);
+      assert.equal(apiProtocol === "openai-responses" ? imageRequest.body.max_output_tokens : imageRequest.body.max_tokens, 128);
     } finally {
+      if (previousBudget === undefined) delete process.env.SCIENCE_AGENT_LLM_MAX_TOKENS; else process.env.SCIENCE_AGENT_LLM_MAX_TOKENS = previousBudget;
       await gateway.close(); await provider.close(); tokens.revoke("synthetic-run");
       await new Promise<void>(r => { server.close(() => r()); server.closeAllConnections(); });
       await rm(dataDir, { recursive: true, force: true });

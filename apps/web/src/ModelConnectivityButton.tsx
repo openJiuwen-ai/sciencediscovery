@@ -69,6 +69,7 @@ export function ModelConnectivityButton({
   const [state, setState] = useState<TestState>({ status: "idle" });
   const requestRevision = useRef(0);
   const [consent, setConsent] = useState(false);
+  const [scope, setScope] = useState("selected");
 
   useEffect(() => {
     requestRevision.current += 1;
@@ -81,7 +82,7 @@ export function ModelConnectivityButton({
     const revision = ++requestRevision.current;
     setState({ status: "testing" });
     try {
-      const result = await testModel(modelId, true);
+      const result = await testModel(modelId, scope === "matrix");
       if (requestRevision.current === revision) setState({ result, status: "result" });
     } catch (reason) {
       if (requestRevision.current !== revision) return;
@@ -110,7 +111,7 @@ export function ModelConnectivityButton({
     label = t("settings.modelTest.success", { latency: state.result.latencyMs });
     title = t("settings.modelTest.successDetail", { latency: state.result.latencyMs });
   } else if (state.status === "result") {
-    const copy = failureCopy(state.result.category, t);
+    const copy = state.result.inconclusiveReason === "output_limit" ? { label: t("settings.modelTest.inconclusive"), title: t("wizard.outputLimitNotice") } : failureCopy(state.result.category, t);
     className += " failure";
     icon = <AlertCircleIcon size={14} />;
     label = copy.label;
@@ -124,7 +125,10 @@ export function ModelConnectivityButton({
 
   return (
     <div className="model-compatibility-check">
-    <label><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} disabled={state.status === "testing"} />{t("settings.modelTest.consent")}</label>
+    <label>{t("settings.modelTest.scope")} <select value={scope} disabled={state.status === "testing"} onChange={e => { requestRevision.current += 1; setScope(e.target.value); setConsent(false); setState({ status: "idle" }); }}>
+      <option value="selected">{t("settings.modelTest.selectedCheck")}</option><option value="matrix">{t("settings.modelTest.fullCheck")}</option>
+    </select></label>
+    <label><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} disabled={state.status === "testing"} />{t(scope === "matrix" ? "settings.modelTest.consent" : "settings.modelTest.basicConsent")}</label>
     <button
       aria-busy={state.status === "testing"}
       aria-label={title}

@@ -12,7 +12,7 @@ for (const locale of ["zh-CN", "en"] as const) {
    * Purpose: Explicitly consent to protocol checks and inspect independent capabilities without changing selection.
    * Steps:
    *   1. Register a local provider with an explicit Responses selection; open model settings with no automatic completion requests.
-   *   2. Read costs and explicitly consent; inspect independent protocol/capability results and unknown usage.
+   *   2. Read costs and consent separately to one selected basic request and the full matrix; inspect independent results and unknown usage.
    *   3. Inspect localized result details at 390px without horizontal overflow.
    *   4. Inspect localized result details at 960px without horizontal overflow.
    *   5. Inspect localized result details at 1440px without horizontal overflow.
@@ -55,6 +55,14 @@ for (const locale of ["zh-CN", "en"] as const) {
       await journey.step("Read costs and explicitly agree to synthetic requests", "Probe disabled until consent; results show all protocols and unknown usage", async () => {
         const check = section.locator(".model-compatibility-check");
         const action = check.getByRole("button");
+      await expect(action).toBeDisabled();
+      await check.getByRole("checkbox").check(); await action.click();
+      await expect(action).toBeEnabled(); expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0]!.body.max_output_tokens).toBe(16);
+      await check.getByRole("combobox").selectOption("matrix");
+      expect(fixture.requests).toHaveLength(1);
+      const beforeMatrix = fixture.requests.length;
+      const action = check.getByRole("button");
         await expect(action).toBeDisabled();
         await check.getByRole("checkbox").check();
         await action.click();
@@ -64,7 +72,7 @@ for (const locale of ["zh-CN", "en"] as const) {
         await expect(results).toContainText("anthropic-messages");
         await expect(results).toContainText(locale === "zh-CN" ? "用量: 未知" : "Usage: Unknown");
         await expect(results).toContainText(locale === "zh-CN" ? "支持" : "Supported");
-        expect(fixture.requests).toHaveLength(12);
+        expect(fixture.requests.length - beforeMatrix).toBe(12);
       });
       for (const width of [390, 960, 1440]) await journey.step(`Inspect result details at ${width}px`, "Cost disclosure and all capability evidence remain readable and scrollable", async () => {
         await page.setViewportSize({ width, height: 800 });
