@@ -14,6 +14,7 @@ developer-bot loop: inspect GitHub + ledgers, claim work, dispatch workers, nudg
 - Scheduled patrol (about every 10 minutes)
 - Manual "run developer patrol" / "claim agent-ready queue"
 - After worker/PR events when asked to refresh the queue
+- Cold start / ledger rebuild
 
 ## Hard safety
 
@@ -29,6 +30,19 @@ developer-bot loop: inspect GitHub + ledgers, claim work, dispatch workers, nudg
 - `concurrency` (default 1 in early phases)
 - label mapping for `agent-ready`, `agent-claimed`, `human-need`, `needs-clarification`
 - worker skill: [iai-worker-implement](../iai-worker-implement/SKILL.md)
+
+
+## Cold start (full inventory)
+
+On **first boot**, after restart, empty/missing ledgers, or host `cold_start=true`:
+
+1. List **all open issues** and **all open PRs** in the configured repo (paginate; do not stop at the first page).
+2. Record for each: number, title, labels, assignees, updatedAt, and for PRs: draft, mergeable, CI rollup, linked issues.
+3. Reconcile into ledgers: rebuild or repair `active-tasks` from `agent-claimed` / open worker PRs; note orphans; never invent claimed work.
+4. Classify into buckets: `agent-ready` (claimable), in-flight IAI, `human-need`, needs-clarification, other open, draft PRs, reviewable PRs, stale candidates.
+5. Only after the inventory is written may normal incremental patrol (claim / nudge / review) run.
+
+Subsequent patrols may be incremental; re-run cold start when ledgers and GitHub diverge badly.
 
 ## Each patrol
 

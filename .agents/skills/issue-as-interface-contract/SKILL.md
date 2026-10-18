@@ -15,6 +15,10 @@ Issue (+ comments) is the only product input. PR is the delivery. Two durable le
 
 **Automation runs the principles; humans only cover exceptions and uncertainty.**
 
+## Cold start
+
+On first boot or empty ledgers, **developer-bot and reviewer-bot** must each (or jointly) take a **full inventory** of all open issues and PRs and their states before incremental patrol. See [iai-developer-patrol](../iai-developer-patrol/SKILL.md) and [iai-reviewer-patrol](../iai-reviewer-patrol/SKILL.md).
+
 ## Magpie-derived principles (reuse these)
 
 ### P1 — Evidence before code (`issue-reproducer`)

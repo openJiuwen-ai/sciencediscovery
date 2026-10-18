@@ -16,6 +16,10 @@ Core skills (under `.agents/skills/`):
 OSS ops (parallel, draft/read-only by default):
 `oss-ops-newcomer-gfi`, `oss-ops-stale-sweep`, `oss-ops-maintainer-stats`, `oss-ops-repo-health`.
 
+## Cold start
+
+On **first boot** (or when ledgers are empty / badly out of sync with GitHub), every bot must take a **full inventory** of all open issues and PRs and their states (labels, draft, CI, links, `human-need` / `agent-claimed`) and rebuild or reconcile both ledgers before starting the ~10-minute incremental patrol. See `iai-developer-patrol` and `iai-reviewer-patrol`.
+
 Related: the existing opt-in [Issue-to-PR pipeline](issue-pipeline.md)
 (`repo-issue-pipeline`). Installing these skills does **not** start bots or change
 the application backend. Merging, closing issues, and `human-need` escalation

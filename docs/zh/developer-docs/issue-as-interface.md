@@ -52,6 +52,10 @@ flowchart TD
 
 不达标：`needs-clarification` / `human-need`，**不自动认领**。
 
+## 1.5 冷启动
+
+所有 bot **第一次启动**（或账本空/与 GitHub 严重不一致）时，先 **全量扫描** 当前所有 open Issue、PR 及其状态（标签、draft、CI、关联、是否 `human-need`/`agent-claimed`），重建或校准双账本与分类桶；完成后再进入约 10 分钟的增量巡检。
+
 ## 2. developer-bot：巡检与队列
 
 建议周期：**约每 10 分钟**（可再叠加事件驱动）。每轮关注：

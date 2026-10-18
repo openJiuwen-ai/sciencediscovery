@@ -17,9 +17,22 @@ Periodic reviewer for open worker PRs. Read [issue-as-interface-contract](../iss
 - Manual review of a pipeline PR
 - After worker marks `pr-ready` / `pr-updated`
 
+
+## Cold start (full inventory)
+
+On **first boot**, after restart, empty/missing ledgers, or host `cold_start=true`:
+
+1. List **all open issues** and **all open PRs** in the configured repo (paginate; do not stop at the first page).
+2. Record for each: number, title, labels, assignees, updatedAt, and for PRs: draft, mergeable, CI rollup, linked issues.
+3. Reconcile into ledgers: rebuild or repair `active-tasks` from `agent-claimed` / open worker PRs; note orphans; never invent claimed work.
+4. Classify into buckets: `agent-ready` (claimable), in-flight IAI, `human-need`, needs-clarification, other open, draft PRs, reviewable PRs, stale candidates.
+5. Only after the inventory is written may normal incremental patrol (deep Magpie review) run.
+
+Subsequent patrols may be incremental; re-run cold start when ledgers and GitHub diverge badly.
+
 ## Each patrol
 
-1. Find PRs in active ledger with `pr-open` or `in-review`.
+1. If cold start just ran, use that PR inventory; else find PRs in active ledger with `pr-open` or `in-review` (and any open non-draft PRs linked to agent-ready/claimed issues missing from the ledger).
 2. **PR triage (P4):** skip drafts (unless asked), obviously stale/unreviewable, or missing linked issue when closure is claimed.
 3. Skip issues labeled `human-need`.
 4. Run magpie-pr-review-pipeline on survivors.

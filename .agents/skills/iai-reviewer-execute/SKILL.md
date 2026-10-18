@@ -11,6 +11,8 @@ Same brain as [iai-reviewer-patrol](../iai-reviewer-patrol/SKILL.md) + [magpie-p
 
 Enable only when the host/routine turns on Phase 4 for the repo; otherwise fall back to suggest mode.
 
+On cold start, run the same full open-PR/issue inventory as [iai-reviewer-patrol](../iai-reviewer-patrol/SKILL.md) before executing merges.
+
 ## Authority
 
 | Outcome | Execute |
