@@ -28,6 +28,11 @@ for what is verified and what is still open.
 
 ## Development commands
 
+For opt-in agent-assisted Issue delivery and PR maintenance, see the
+[Issue-to-PR contributor pipeline](docs/en/developer-docs/issue-pipeline.md)
+([中文](docs/zh/developer-docs/issue-pipeline.md)). It requires explicit setup and
+does not run automatically or change the application backend.
+
 ```bash
 pnpm test:shared  # the one plan CI runs: freeze it from source tags, then run all of it
 pnpm test:list    # freeze and print that plan without running a single test body
