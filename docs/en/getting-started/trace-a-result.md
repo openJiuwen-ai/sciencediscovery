@@ -5,7 +5,7 @@ A result is only as useful as your ability to check it. In this lesson you start
 - **Time:** about 15 minutes, including one short run.
 - **You need:** the Session from [Analyze a dataset](analyze-a-dataset.md), with `growth-report.md` and `treatment-boxplot.png` among its Artifacts.
 - **Skills and connectors:** none.
-- **You end with:** version 2 of `growth-report.md`, compared with version 1, and the code-execution grant from that lesson revoked.
+- **You end with:** version 2 of `growth-report.md` alongside the unchanged version 1, and the code-execution grant from that lesson revoked.
 
 The [Review and provenance](../developer-docs/review-provenance.md) design page explains what is recorded and why.
 
@@ -38,11 +38,11 @@ Send:
 The Reviewer card lists numbers in growth-report.md that are not linked to recorded evidence. Add a short "Where the numbers come from" section that names, for each table and test, the script and results file that produced it, and link the flagged values to those records. Do not rerun the analysis or change any number. Save the file and declare growth-report.md again so it becomes version 2 of the same artifact.
 ```
 
-What you should see: the Agent reads the report and earlier records, edits the file, and declares it again. The Artifact now shows a version selector such as **v2 of 2**; the conversation mentions the new version. A new automatic review may follow, and it may still have findings.
+What you should see: the Agent reads the report and earlier records, edits the file, and declares it again. The Artifact's **version** selector now lists two versions, and its preview shows **v2 of 2**; the conversation mentions the new version. A new automatic review may follow, and it may still have findings.
 
 ## 5. Compare the versions
 
-Open `growth-report.md`, select version 2, and choose version 1 in **Compare with**. The diff shows the new section and the lines where links were added. Check a few values: they should be the same in both versions, because the prompt asked for links, not new calculations. Both versions remain stored; opening version 1 still shows the original text and its own provenance.
+Open `growth-report.md`. In the **version** selector at the top of the Artifact, choose version 2; the preview shows **v2 of 2** and the new "Where the numbers come from" section. Then choose version 1 in the same selector and look at the same tables. A Markdown report has no side-by-side diff view, so compare the two previews yourself: version 2 adds the new section and links, and every value in the tables and test results should be unchanged, because the prompt asked for links, not new calculations. Both versions remain stored; version 1 still shows the original text and its own provenance.
 
 ## 6. Revoke the permission you granted
 
@@ -52,7 +52,7 @@ In the dataset lesson you chose **Allow same type** for code execution, which le
 
 - [ ] The figure's **Provenance** tab shows the command, its exit code and the package versions it ran with.
 - [ ] `plant-growth.csv` shows **User upload** as its origin.
-- [ ] `growth-report.md` has two versions, and **Compare with** shows the difference.
+- [ ] The **version** selector of `growth-report.md` lists two versions; version 2 adds the new section, and its values match version 1.
 - [ ] **Standing permission grants** no longer lists the grants you revoked.
 
 ## Where to go next
