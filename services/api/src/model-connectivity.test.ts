@@ -199,3 +199,46 @@ test("coordinator coalesces concurrent tests and allows a later retest", async (
   });
   assert.equal(calls, 2);
 });
+
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`compatibility matrix independently verifies ${protocol} and leaves selection unchanged`, async () => {
+    const { protocolProvider } = await import("../../../test/helpers/protocol-provider.js");
+    const provider = await protocolProvider(protocol);
+    try {
+      const selected = { ...profile(provider.baseUrl), apiProtocol: protocol };
+      const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: selected, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+      const matching = tested.protocols!.find(p => p.apiProtocol === protocol)!;
+      assert.equal(tested.ok, true);
+      assert.equal(matching.basic.ok, true);
+      assert.equal(matching.streaming.ok, true);
+      assert.equal(matching.tools.ok, true);
+      assert.equal(matching.usage, "available");
+      assert.equal(selected.apiProtocol, protocol);
+      assert.equal(tested.protocols!.filter(p => p.basic.ok).length, 1);
+      assert.equal(provider.requests.length, 10, "4 matching requests plus three attempts for each incompatible protocol");
+      assert.doesNotMatch(JSON.stringify(tested), /fixture-secret-388|signature-required|encrypted-required/);
+    } finally { await provider.close(); }
+  });
+}
+
+for (const usage of ["missing", "malformed"] as const) test(`missing capability usage stays unknown: ${usage}`, async () => {
+  const { protocolProvider } = await import("../../../test/helpers/protocol-provider.js");
+  const provider = await protocolProvider("anthropic-messages", { usage });
+  try {
+    const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(provider.baseUrl), apiProtocol: "anthropic-messages" }, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    const matching = tested.protocols!.find(p => p.apiProtocol === "anthropic-messages")!;
+    assert.equal(matching.basic.ok, true); assert.equal(matching.tools.ok, true); assert.equal(matching.usage, "unknown");
+  } finally { await provider.close(); }
+});
+
+test("one endpoint can support multiple protocols without changing the saved selection", async () => {
+  const { protocolProvider } = await import("../../../test/helpers/protocol-provider.js");
+  const provider = await protocolProvider("all");
+  try {
+    const selected = { ...profile(provider.baseUrl), apiProtocol: "openai-responses" as const };
+    const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: selected, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    assert.equal(tested.protocols!.length, 3);
+    assert.ok(tested.protocols!.every(p => p.basic.ok && p.streaming.ok && p.tools.ok && p.usage === "available"));
+    assert.equal(selected.apiProtocol, "openai-responses"); assert.equal(provider.requests.length, 12);
+  } finally { await provider.close(); }
+});

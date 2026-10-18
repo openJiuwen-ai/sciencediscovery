@@ -131,3 +131,5 @@ Join the ScienceDiscovery community on Slack or Feishu to discuss your work and 
 [Apache License 2.0](LICENSE).
 
 This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
+
+[Model API compatibility, checks and costs](docs/en/model-api-compatibility.md)

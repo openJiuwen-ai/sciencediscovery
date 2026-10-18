@@ -47,6 +47,7 @@ function fakeStore(overrides: { apiToken?: string; model?: typeof MODEL | undefi
     recorded,
     store: {
       appendModelInvocationUsage: async (record: ModelInvocationUsage) => { recorded.push(record); },
+      resolveProxy: () => ({ mode: "direct" }),
       getModel: () => ("model" in overrides ? overrides.model : MODEL),
       getModelApiToken: () => ("apiToken" in overrides ? overrides.apiToken : "sk-provider-secret"),
     } as never,
@@ -137,7 +138,7 @@ test("a run token buys exactly one run's completions and nothing else", async ()
 test("no token, a wrong token and a revoked token are the same answer", async () => {
   const tokens = new RunTokenRegistry();
   const { store } = fakeStore();
-  const { origin } = await mount({ fetchImpl: (async () => new Response("{}")) as never, store, tokens });
+  const { origin } = await mount({ fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }))) as never, store, tokens });
 
   const token = tokens.issue("run-1", "s1", "model-1");
   assert.equal((await completion(origin, "run-1")).status, 401, "no token");
@@ -157,7 +158,7 @@ test("the caller cannot choose the model it is billed for", async () => {
   const { origin } = await mount({
     fetchImpl: (async (_url: string, init: RequestInit) => {
       seen.push(JSON.parse(String(init.body)));
-      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
     }) as never,
     store,
     tokens,
@@ -179,7 +180,7 @@ test("a provider that reports no usage is recorded as unknown, not as zero", asy
   const tokens = new RunTokenRegistry();
   const { recorded, store } = fakeStore();
   const { origin } = await mount({
-    fetchImpl: (async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })) as never,
+    fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 })) as never,
     store,
     tokens,
   });
@@ -199,7 +200,7 @@ test("evolution persists Chat counts and cache details without adding aliases or
     { input_tokens: 8, output_tokens: 5 },
   ];
   const { origin } = await mount({
-    fetchImpl: (async () => new Response(JSON.stringify({ choices: [], usage: samples.shift() }), { status: 200 })) as never,
+    fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: samples.shift() }), { status: 200 })) as never,
     store, tokens,
   });
   const token = tokens.issue("run-1", "s1", "model-1");
@@ -234,7 +235,7 @@ test("the provider's own error is forwarded rather than flattened", async () => 
 test("a run whose model has no key fails loudly instead of silently", async () => {
   const tokens = new RunTokenRegistry();
   const { store } = fakeStore({ apiToken: undefined });
-  const { origin } = await mount({ fetchImpl: (async () => new Response("{}")) as never, store, tokens });
+  const { origin } = await mount({ fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }))) as never, store, tokens });
 
   const response = await completion(origin, "run-1", tokens.issue("run-1", "s1", "model-1"));
   assert.equal(response.status, 503);
@@ -257,7 +258,7 @@ test("an empty request is refused before the provider is called", async () => {
   const { store } = fakeStore();
   let called = false;
   const { origin } = await mount({
-    fetchImpl: (async () => { called = true; return new Response("{}"); }) as never,
+    fetchImpl: (async () => { called = true; return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] })); }) as never,
     store,
     tokens,
   });
@@ -307,7 +308,7 @@ test("the caller's thinking setting reaches the provider, unlike its model", asy
   const { origin } = await mount({
     fetchImpl: (async (_url: string, init: RequestInit) => {
       seen.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
     }) as never,
     store,
     tokens,
@@ -342,7 +343,7 @@ test("a caller that says nothing about thinking has nothing added", async () => 
   const { origin } = await mount({
     fetchImpl: (async (_url: string, init: RequestInit) => {
       seen.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
     }) as never,
     store,
     tokens,

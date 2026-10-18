@@ -940,7 +940,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           onRefresh={(providerId) => void loadModels(providerId, true)}
           onToggle={toggleRow}
           provider={provider}
-          testModel={(modelId) => client.testModel(modelId)}
+          testModel={(modelId, compatibility) => client.testModel(modelId, compatibility)}
         />)}
       </div> : <p className="muted">{t("providers.configured.empty")}</p>}
     </section>

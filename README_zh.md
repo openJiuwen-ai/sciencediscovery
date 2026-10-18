@@ -125,3 +125,5 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 [Apache License 2.0](LICENSE)。
 
 本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
+
+[模型 API 协议兼容性、检查与费用](docs/zh/model-api-compatibility.md)

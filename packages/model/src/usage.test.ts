@@ -72,3 +72,8 @@ test("missing fields can be derived but missing usage is not a zero bill", () =>
   assert.equal(normalizeUsage({ prompt_tokens: 12, total_tokens: 19 }, "openai-chat-completions")?.outputTokens, 7);
   assert.equal(normalizeUsage({ completion_tokens: 7, total_tokens: 19 }, "openai-chat-completions")?.inputTokens, 12);
 });
+
+test("oversized counts cannot overflow normalized totals or masquerade as measured usage", () => {
+  assert.equal(normalizeUsage({ input_tokens: Number.MAX_VALUE, output_tokens: Number.MAX_VALUE }, "openai-responses"), undefined);
+  assert.equal(normalizeUsage({ input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 1 }, "openai-responses"), undefined);
+});

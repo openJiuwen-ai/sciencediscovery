@@ -83,7 +83,7 @@ test("Session title refinement uses an OpenAI-compatible model and records provi
 
   assert.equal(requestBody?.model, model.model);
   assert.equal(requestBody?.thinking, undefined);
-  assert.equal(requestBody?.max_tokens, undefined);
+  assert.equal(requestBody?.max_tokens, 16_384);
   const messages = requestBody?.messages as Array<{ content: string; role: string }>;
   assert.equal(messages[0]?.role, "system");
   assert.doesNotMatch(messages[0]?.content ?? "", /no more than|characters/i);
@@ -214,7 +214,7 @@ test("Session title refinement retries without thinking for a strict compatible 
   assert.deepEqual(requestBodies[0]?.thinking, { type: "disabled" });
   assert.equal(requestBodies[0]?.max_tokens, 64);
   assert.equal(requestBodies[1]?.thinking, undefined);
-  assert.equal(requestBodies[1]?.max_tokens, undefined);
+  assert.equal(requestBodies[1]?.max_tokens, 16_384);
   assert.equal(refined.title, "Gateway fallback");
 });
 
@@ -243,7 +243,7 @@ test("Session title refinement leaves the temperature to a model that takes only
   }
 });
 
-test("Session title refinement retries without a token limit when a gateway ignores thinking control", async () => {
+test("Session title refinement retries with the bounded default budget when a gateway ignores thinking control", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   const visibleAnswer = "A comprehensive analysis of TP53 expression across all treatment cohorts";
   const refined = await generateRefinedSessionTitle({
@@ -282,7 +282,7 @@ test("Session title refinement retries without a token limit when a gateway igno
   assert.equal(requestBodies.length, 2);
   assert.equal(requestBodies[0]?.max_tokens, 64);
   assert.deepEqual(requestBodies[0]?.thinking, { type: "disabled" });
-  assert.equal(requestBodies[1]?.max_tokens, undefined);
+  assert.equal(requestBodies[1]?.max_tokens, 16_384);
   assert.equal(requestBodies[1]?.thinking, undefined);
   assert.equal(refined.title, createLocalSessionTitle(visibleAnswer));
   assert.equal(Array.from(refined.title).length, SESSION_TITLE_MAX_CHARACTERS);

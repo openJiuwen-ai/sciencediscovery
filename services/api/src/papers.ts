@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
+import { completeChatRequest } from "@sciencediscovery/model";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -76,7 +78,7 @@ export class PaperService {
     private readonly store: SessionStore,
     private readonly pythonPath: string,
     private readonly workerPath: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl?: typeof fetch,
   ) {
     this.cas = new CasStore(store.dataDir);
     this.dataCas = new CasStore(store.dataDir, "data");
@@ -279,8 +281,7 @@ export class PaperService {
       paperId: acquisition.id,
       prompt,
     }));
-    const response = await this.fetchImpl(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      body: JSON.stringify({
+    const response = await completeChatRequest({ ...model, apiToken, proxy: resolveProxyForUrl(this.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, {
         messages: [{
           content: [
             { text: prompt, type: "text" },
@@ -291,19 +292,15 @@ export class PaperService {
           ],
           role: "user",
         }],
-        model: model.model,
         temperature: 0,
-      }),
-      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-      method: "POST",
-      signal: AbortSignal.timeout(90_000),
-    });
-    if (!response.ok) throw new Error(`Vision model failed with HTTP ${response.status}`);
+    }, AbortSignal.timeout(90_000), this.fetchImpl, MAX_VISION_RESPONSE_BYTES);
+    if (!response.ok) throw new Error(`Vision model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
     const declaredLength = Number(response.headers.get("content-length") || "0");
     if (declaredLength > MAX_VISION_RESPONSE_BYTES) throw new Error("Vision model response exceeds the byte limit");
     const responseBytes = Buffer.from(await response.arrayBuffer());
     if (responseBytes.length > MAX_VISION_RESPONSE_BYTES) throw new Error("Vision model response exceeds the byte limit");
-    const responseBody = JSON.parse(responseBytes.toString("utf8")) as { choices?: Array<{ message?: { content?: string } }>; usage?: unknown };
+    const responseBody = JSON.parse(responseBytes.toString("utf8")) as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }>; usage?: unknown };
+    if (responseBody.choices?.[0]?.finish_reason === "length") throw new Error("Vision model response was truncated at its output limit");
     const content = responseBody.choices?.[0]?.message?.content?.trim();
     if (!content) throw new Error("Vision model returned no content");
     const usage = normalizeUsage(responseBody.usage, "openai-chat-completions");

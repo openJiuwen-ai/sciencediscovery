@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createLocalSessionTitle, type ModelProfile } from "@sciencediscovery/schema";
+import { completeChatRequest } from "@sciencediscovery/model";
+import { createLocalSessionTitle, type ModelProfile, type ResolvedProxy } from "@sciencediscovery/schema";
 
 import { parseProviderUsage, type ProviderUsageBreakdown } from "./provider-usage.js";
 
@@ -157,33 +158,23 @@ export async function generateRefinedSessionTitle(options: {
   fetchImpl?: typeof fetch;
   firstMessage: string;
   model: ModelProfile;
+  proxy?: ResolvedProxy;
 }): Promise<RefinedSessionTitle> {
   const startedAt = new Date().toISOString();
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const requestCompletion = (disableThinking: boolean, fixedTemperature = true) => fetchImpl(
-    `${options.model.baseUrl.replace(/\/$/, "")}/chat/completions`,
+  const fetchImpl = options.fetchImpl;
+  const requestCompletion = (disableThinking: boolean, fixedTemperature = true) => completeChatRequest(
+    { ...options.model, apiToken: options.apiToken, proxy: options.proxy },
     {
-      body: JSON.stringify({
-        messages: [
-          { content: SESSION_NAMING_SYSTEM_PROMPT, role: "system" },
-          { content: namingRequest(options.firstMessage), role: "user" },
-        ],
-        model: options.model.model,
-        ...(fixedTemperature ? { temperature: 0 } : {}),
-        ...(disableThinking
-          ? { max_tokens: 64, thinking: { type: "disabled" } }
-          : {}),
-      }),
-      headers: {
-        authorization: `Bearer ${options.apiToken}`,
-        "content-type": "application/json",
-      },
-      method: "POST",
-      signal: AbortSignal.timeout(30_000),
-    },
+      messages: [
+        { content: SESSION_NAMING_SYSTEM_PROMPT, role: "system" },
+        { content: namingRequest(options.firstMessage), role: "user" },
+      ],
+      ...(fixedTemperature ? { temperature: 0 } : {}),
+      ...(disableThinking ? { max_tokens: 64, thinking: { type: "disabled" } } : {}),
+    }, AbortSignal.timeout(30_000), fetchImpl,
   );
 
-  const disableThinking = supportsThinkingToggle(options.model);
+  const disableThinking = options.model.apiProtocol === "anthropic-messages" || options.model.apiProtocol === "openai-responses" || supportsThinkingToggle(options.model);
   let response = await requestCompletion(disableThinking);
   let usedUnboundedFallback = false;
   // `thinking` is a provider extension. Strict OpenAI-compatible gateways may
@@ -199,7 +190,7 @@ export async function generateRefinedSessionTitle(options: {
     response = await requestCompletion(false, false);
     usedUnboundedFallback = true;
   }
-  if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
   let body = await response.json() as ChatCompletionBody;
   const attemptUsages = [parseProviderUsage(body.usage, "openai-chat-completions")];
   // Some compatible gateways accept unknown fields but silently ignore them.
@@ -208,7 +199,7 @@ export async function generateRefinedSessionTitle(options: {
   if (disableThinking && !usedUnboundedFallback && reasoningConsumedVisibleAnswer(body)) {
     response = await requestCompletion(false);
     usedUnboundedFallback = true;
-    if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
     body = await response.json() as ChatCompletionBody;
     attemptUsages.push(parseProviderUsage(body.usage, "openai-chat-completions"));
   }

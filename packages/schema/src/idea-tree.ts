@@ -311,6 +311,8 @@ export interface IdeaResearchState {
   batchCompleted: number;
   tokens: number;
   usageKnown: boolean;
+  /** Conservative admission reserve for unreported calls, never billed usage. */
+  unreportedBudgetEstimate?: number;
   reason: string | null;
   modelId: string;
   currentNodeId: string | null;

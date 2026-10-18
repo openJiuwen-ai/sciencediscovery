@@ -32,7 +32,7 @@ export interface ModelConnectivityButtonProps {
   modelId: string;
   modelName: string;
   profileVersion: string;
-  testModel: (modelId: string) => Promise<ModelConnectivityTestResult>;
+  testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>;
 }
 
 export function failureCopy(category: ModelConnectivityTestCategory, t: Translate): { label: string; title: string } {
@@ -68,6 +68,7 @@ export function ModelConnectivityButton({
   const { t } = useLocale();
   const [state, setState] = useState<TestState>({ status: "idle" });
   const requestRevision = useRef(0);
+  const [consent, setConsent] = useState(false);
 
   useEffect(() => {
     requestRevision.current += 1;
@@ -75,10 +76,11 @@ export function ModelConnectivityButton({
   }, [modelId, profileVersion]);
 
   async function runTest(): Promise<void> {
+    if (!consent) return;
     const revision = ++requestRevision.current;
     setState({ status: "testing" });
     try {
-      const result = await testModel(modelId);
+      const result = await testModel(modelId, true);
       if (requestRevision.current === revision) setState({ result, status: "result" });
     } catch (reason) {
       if (requestRevision.current !== revision) return;
@@ -120,11 +122,13 @@ export function ModelConnectivityButton({
   }
 
   return (
+    <div className="model-compatibility-check">
+    <label><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} disabled={state.status === "testing"} />{t("settings.modelTest.consent")}</label>
     <button
       aria-busy={state.status === "testing"}
       aria-label={title}
       className={className}
-      disabled={disabled || state.status === "testing"}
+      disabled={disabled || !consent || state.status === "testing"}
       onClick={() => void runTest()}
       title={title}
       type="button"
@@ -132,5 +136,14 @@ export function ModelConnectivityButton({
       {icon}
       <span aria-live="polite">{label}</span>
     </button>
+    {state.status === "result" && state.result.protocols ? <div role="status" className="model-compatibility-results">
+      <p>{t("settings.modelTest.selectionUnchanged")}</p>
+      <ul>{state.result.protocols.map(p => <li key={p.apiProtocol}>
+        <strong>{p.apiProtocol}</strong>
+        <ul>{(["basic", "streaming", "tools"] as const).map(cap => <li key={cap}>{cap}: {p[cap].ok ? "supported" : p[cap].category} — {p[cap].message}</li>)}
+        <li>usage: {p.usage}</li></ul>
+      </li>)}</ul>
+    </div> : null}
+    </div>
   );
 }

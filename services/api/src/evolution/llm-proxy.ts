@@ -33,7 +33,9 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
+import { completeChatRequest, type ChatCompletionRequest } from "@sciencediscovery/model";
+
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 
 import type { ModelInvocationUsage } from "@sciencediscovery/schema";
 
@@ -112,60 +114,7 @@ export interface EvolveCompletionDeps {
   tokens: RunTokenRegistry;
 }
 
-interface CompletionBody {
-  max_tokens?: number;
-  messages?: Array<{ content: string; role: string }>;
-  temperature?: number;
-  /** Passed through. Unlike `model` this is the caller's to decide: it changes
-   *  how the chosen model answers, not which model is billed. */
-  thinking?: { type: string };
-  /** Ignored: the model is the one the run was created with, not the one the
-   *  caller asks for. A sidecar that could name any model could bill the user
-   *  for a model they never chose. */
-  model?: string;
-}
-
-/**
- * `POST /internal/evolve-llm/:runId/v1/chat/completions`.
- *
- * OpenAI-shaped because that is what the vendored port's completion adapter
- * speaks; the provider on the other side may be anything the user configured.
- */
-/**
- * Dispatcher for the one call this module makes.
- *
- * `bodyTimeout: 0` because the response arrives in one piece once it starts;
- * `headersTimeout` is the real budget, and it is the *thinking* time of a model
- * asked to rewrite a program. Fifteen minutes rather than undici's five: at five
- * the call was aborted mid-thought and the search recorded a candidate that
- * "would not run".
- *
- * It is paired with undici's own `fetch` below, and the pairing is the point.
- * Node's global `fetch` is backed by the copy of undici built into the runtime,
- * which does not recognise a dispatcher constructed from the package in
- * `node_modules` — the call fails immediately with a bare "fetch failed", which
- * reads exactly like an unreachable provider. Both sides come from the same
- * copy here, as they do everywhere else in this product that talks to a model.
- */
-const LONG_CALL_DISPATCHER = new UndiciAgent({ bodyTimeout: 0, headersTimeout: 15 * 60_000 });
-
-/**
- * A wall-clock ceiling on one mutation, because the dispatcher's is not one.
- *
- * `bodyTimeout: 0` is deliberate — a reasoning model streams for minutes and a
- * body timeout would cut a call that is working. But that leaves nothing at all
- * bounding a call whose headers arrived and whose body never ends, and with
- * thinking on that is the observed shape: two calls out, neither finished,
- * a search that reported "running" for as long as anyone watched it.
- *
- * Generous on purpose. This is not tuning, it is the difference between a slow
- * expansion and a run that never reports anything again.
- */
 const CALL_CEILING_MS = 20 * 60_000;
-
-/** Calls this process currently has open to a provider, by start time. Only for
- *  the log line: how many were already in flight is what tells a serialised
- *  proxy apart from a slow provider. */
 const inFlight = new Set<number>();
 
 export async function handleEvolveCompletion(
@@ -190,13 +139,13 @@ export async function handleEvolveCompletion(
     return sendError(response, 503, "The model this run was created with has no API token");
   }
 
-  const body = await readJson<CompletionBody>(request);
+  const body = await readJson<ChatCompletionRequest>(request);
   if (!Array.isArray(body.messages) || !body.messages.length) {
     return sendError(response, 400, "messages is required");
   }
 
   const startedAt = new Date().toISOString();
-  const call = deps.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
+
   let upstream: Response;
   // Timed, and logged at both ends, because a search that produces nothing
   // looks identical from outside whether the provider is slow, the proxy is
@@ -209,43 +158,17 @@ export async function handleEvolveCompletion(
   });
   inFlight.add(began);
   try {
-    // `${baseUrl}/chat/completions`, not `/v1/chat/completions`: a profile's
-    // base URL already carries the provider's version segment, which is the
-    // convention every other caller in this product follows (session-naming,
-    // papers, native-agent/model-client). Appending another one produced
-    // `.../api/coding/v3/v1/chat/completions` and a 404 that the proxy
-    // faithfully forwarded — so every expansion became an empty reply, and the
-    // search read as a model that could not write code.
-    const ceiling = AbortSignal.timeout(CALL_CEILING_MS);
-    upstream = await call(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      signal: ceiling,
-      body: JSON.stringify({
-        max_tokens: body.max_tokens,
-        messages: body.messages,
-        model: model.model,
-        temperature: body.temperature,
-        // Forwarded, not invented: the sidecar decides whether this workload
-        // wants a reasoning model's thinking, and for a whole-program rewrite
-        // upstream's answer is that it does not — with it on, the model spends
-        // the entire output budget thinking and returns nothing.
-        ...(body.thinking === undefined ? {} : { thinking: body.thinking }),
-      }),
-      // A reasoning model rewriting a program thinks for minutes before the
-      // first byte, and undici's 300-second default aborted the call — which
-      // arrived at the sidecar as "the provider could not be reached" and
-      // became a failed candidate. Same shape the agent's model client uses:
-      // no body timeout, an explicit ceiling on the wait for headers.
-      dispatcher: LONG_CALL_DISPATCHER,
-      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-      method: "POST",
-    } as RequestInit);
+    const controller = new AbortController();
+    response.on("close", () => { if (!response.writableEnded) controller.abort(); });
+    upstream = await completeChatRequest({ ...model, apiToken, proxy: resolveProxyForUrl(deps.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, body,
+      AbortSignal.any([controller.signal, AbortSignal.timeout(CALL_CEILING_MS)]), deps.fetchImpl);
   } catch (error) {
     inFlight.delete(began);
     apiLog.warn("evolve_llm_unreachable", {
       elapsedMs: Date.now() - began,
-      reason: error instanceof Error ? error.message : String(error), runId,
+      reason: error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "Unknown model failure", runId,
     });
-    return sendError(response, 502, "The model provider could not be reached");
+    return sendError(response, 502, error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "The model provider could not be reached");
   }
   inFlight.delete(began);
 

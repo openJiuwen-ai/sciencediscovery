@@ -31,6 +31,18 @@ class JudgeRetryTests(unittest.TestCase):
     def run_judge(self, request):
         return judge_with_retries(self.body, request, json.loads, self.output, sleep=self.sleep)
 
+    def test_unknown_or_malformed_usage_does_not_block_scoring(self):
+        for index, usage in enumerate([None, [], 'malformed', {'completion_tokens': 'bad'}]):
+            with self.subTest(usage=usage):
+                raw = response()
+                raw['usage'] = usage
+                request = Mock(return_value=raw)
+                result, _ = judge_with_retries(self.body, request, json.loads,
+                                               Path(self.tmp.name) / f'usage-{index}', sleep=self.sleep)
+                self.assertEqual(result['score'], 77)
+                self.assertEqual(result['usage'], usage)
+                self.assertEqual(request.call_count, 1)
+
     def test_truncation_retries_same_evidence_and_stops_at_first_valid_score(self):
         request = Mock(side_effect=[response('', 'length'), response(), response('{"score":100}')])
         result, _ = self.run_judge(request)

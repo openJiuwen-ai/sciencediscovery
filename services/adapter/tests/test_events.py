@@ -373,3 +373,13 @@ def test_the_run_tag_is_not_part_of_a_reported_call():
         "tool_call_id": "c1", "name": "mcp_sci_run_shell", "arguments": '{"command": "ls", "_sd_run": "abc"}'}}})
     started = next(event for event in events if event["type"] == "tool.started")
     assert started["trace"]["args"] == {"command": "ls"} and "_sd_run" not in started["trace"]["input"]
+
+
+@pytest.mark.parametrize("usage", [None, [], ["malformed"], "malformed", {}, {"input_tokens": "bad", "output_tokens": 2},
+                                   {"input_tokens": 2}, {"input_tokens": True, "output_tokens": 2},
+                                   {"input_tokens": float("inf"), "output_tokens": 2}, {"input_tokens": -1, "output_tokens": 2}])
+def test_malformed_usage_is_nonfatal_and_never_zero_filled(usage):
+    mapper = RunEventMapper()
+    assert mapper.feed({"type": "event", "event": "chat.usage_metadata", "payload": {"metadata": {"usage_metadata": usage}}}) == []
+    # The same stream can continue to a valid final answer.
+    mapper.feed({"type": "event", "event": "chat.final", "payload": {"content": "valid answer"}})

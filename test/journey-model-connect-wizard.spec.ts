@@ -295,6 +295,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         authValid = false;
 
         // 点击测试并启用
+        await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizardSection.locator(".wizard-submit-button").click();
 
         // 验证可读错误提示
@@ -335,6 +336,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         // 模型标识留空：向导应登记该服务商模型列表的全部模型（stub 返回 alpha 与 omega 两项）
         await wizardSection.locator("#wizard-custom-model").fill("");
         await wizardSection.locator("#wizard-api-key").fill("valid-key-pass");
+        await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizardSection.locator(".wizard-submit-button").click();
 
         // 验证成功提示：全量登记数量 + 设为默认（系统首个模型）
@@ -376,6 +378,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await wizardAgain.locator("#wizard-custom-url").fill(stubBaseUrl);
         // 模型标识留空：同样全量登记
         await wizardAgain.locator("#wizard-api-key").fill("valid-key-pass-2");
+        await wizardAgain.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizardAgain.locator(".wizard-submit-button").click();
         const secondSuccess = wizardAgain.locator(".wizard-alert-success");
         await expect(secondSuccess).toBeVisible();
@@ -455,6 +458,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
           try {
             await wizardSection.locator("#wizard-provider-select").selectOption(preset.id);
             await wizardSection.locator("#wizard-api-key").fill(preset.key);
+            await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
             await wizardSection.locator(".wizard-submit-button").click();
             await expect(wizardSection.locator(".wizard-alert-success")).toBeVisible();
           } finally {
@@ -496,6 +500,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await wizardSection.locator("#wizard-api-key").fill("bad-key-cannot-overwrite");
 
         authValid = false;
+        await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizardSection.locator(".wizard-submit-button").click();
 
         // 验证失败提示
@@ -574,6 +579,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(table).toContainText("已选 1/2");
         await expect(fetchRow.locator(".wizard-plan-summary")).toContainText("登记 1 个模型");
 
+        await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
+
         await wizardSection.locator(".wizard-submit-button").click();
         const success = wizardSection.locator(".wizard-alert-success");
         await expect(success).toBeVisible();
@@ -623,6 +630,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(manualList).toContainText("手动");
         await expect(advanced.locator(".provider-manual-form")).toHaveCount(0);
         await expect(wizardSection.locator(".wizard-fetch-side .wizard-plan-summary")).toContainText("登记 1 个模型");
+
+        await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
 
         await wizardSection.locator(".wizard-submit-button").click();
         const success = wizardSection.locator(".wizard-alert-success");

@@ -32,6 +32,7 @@ tokens (see `_Usage` in `puct_engine.py`), and `with_retries` wraps this.
 from __future__ import annotations
 
 import json
+import math
 import threading
 import urllib.error
 import urllib.request
@@ -199,18 +200,18 @@ def completion_for(
             failures.append(str(error) or error.__class__.__name__)
             return ""
         if report is not None:
-            usage = (body.get("usage") or {}) if isinstance(body, dict) else {}
+            usage = body.get("usage") if isinstance(body, dict) else None
+            usage = usage if isinstance(usage, dict) else {}
             completion = usage.get("completion_tokens")
             total = usage.get("total_tokens")
-            if isinstance(total, (int, float)):
-                report(CompletionUsage(
-                    total=int(total),
-                    completion=int(completion) if isinstance(completion, (int, float)) else 0,
-                    # `>=` rather than `==`: providers report the cap inclusive
-                    # of a token or two either way, and being one short of it is
-                    # the same situation.
-                    capped=isinstance(completion, (int, float)) and completion >= max_tokens - 2,
-                ))
+            valid = lambda value: (isinstance(value, (int, float)) and not isinstance(value, bool)
+                                   and 0 <= value <= 2**53 - 1 and (isinstance(value, int) or math.isfinite(value)))
+            if valid(total) and valid(completion) and total >= completion:
+                try:
+                    report(CompletionUsage(total=int(total), completion=int(completion),
+                                           capped=completion >= max_tokens - 2))
+                except Exception:  # Accounting is best effort; retain the already-paid answer.
+                    log.warning("completion usage could not be recorded")
         return _first_text(body)
 
     return complete

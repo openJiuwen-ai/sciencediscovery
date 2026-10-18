@@ -94,8 +94,10 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             raw, _ = await self.model(role, payload)
             return raw, None
         await IdeaTreeEngine(self.state, self.store, {}, unknown).run()
-        self.assertEqual(self.state['status'], 'interrupted')
-        self.assertIn('did not report', self.state['reason'])
+        self.assertEqual(self.state['status'], 'paused')
+        self.assertIn('budget', self.state['reason'])
+        self.assertFalse(self.state['usageKnown'])
+        self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
 
     async def test_candidates_execute_before_max_depth_and_can_branch(self):
         self.state['settings']['maxDepth'] = 6
@@ -133,6 +135,20 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(n['cycleComplete'] for n in candidates))
         self.assertEqual(self.state['tokens'], calls * 100)
         self.assertEqual(engine.reserved, 0)
+
+    async def test_unknown_usage_preserves_scores_under_a_token_budget(self):
+        self.state['settings'].update(maxRounds=1, maxTokens=600000)
+        async def unknown_model(role, payload):
+            result, _usage = await self.model(role, payload)
+            return result, None
+        await IdeaTreeEngine(self.state, self.store, {}, unknown_model).run()
+        self.assertEqual(self.state['status'], 'completed')
+        self.assertFalse(self.state['usageKnown'])
+        self.assertEqual(self.state['tokens'], 0)  # No measured counts; explicitly partial.
+        self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
+        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
+        self.assertTrue(candidates)
+        self.assertTrue(all(n['score'] == 6.1 and n['cycleComplete'] for n in candidates))
 
     async def test_concurrent_usage_settlement_releases_failed_requests(self):
         async def model(role, payload):

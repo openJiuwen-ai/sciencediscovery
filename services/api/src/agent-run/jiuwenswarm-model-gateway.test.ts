@@ -666,3 +666,16 @@ for (const truncated of [false, true]) {
     } finally { release(); await g.close(); }
   });
 }
+
+test("gateway preserves explicit generation controls and refuses unsupported controls before dispatch", async () => {
+  const seen: unknown[] = [];
+  const gateway = await startModelGateway({ baseUrl: "http://127.0.0.1:1", model: "synthetic" }, { maxTokens: 100, maxRetries: 0, requestTimeoutMs: 1000 }, new AbortController().signal,
+    async (endpoint, _s, _h, _t, policy) => { seen.push({ endpoint, policy }); return { assistantMessage: { role: "assistant", content: "OK" }, toolCalls: [] }; });
+  try {
+    const post = (extra: unknown) => fetch(`${gateway.url}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${gateway.token}`, "content-type": "application/json" }, body: JSON.stringify({ messages: [{ role: "user", content: "synthetic" }], ...extra as object }) });
+    assert.equal((await post({ max_tokens: 33, temperature: .25, thinking: { type: "disabled" } })).status, 200);
+    assert.equal((seen[0] as any).policy.maxTokens, 33); assert.equal((seen[0] as any).policy.temperature, .25); assert.equal((seen[0] as any).endpoint.thinkingMode, "disabled");
+    for (const extra of [{ max_tokens: 101 }, { max_tokens: -1 }, { max_tokens: 10, max_completion_tokens: 20 }, { top_p: .2 }, { tool_choice: "required" }, { parallel_tool_calls: false }, { n: 2 }, { stream_options: { include_usage: false } }, { thinking: { type: "unknown" } }, { tools: [{}] }, { messages: {} }]) assert.equal((await post(extra)).status, 400);
+    assert.equal(seen.length, 1);
+  } finally { await gateway.close(); }
+});

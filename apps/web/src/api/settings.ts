@@ -454,7 +454,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
   }
 
-  testModel(modelId: string): Promise<ModelConnectivityTestResult> {
-    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST" });
+  testModel(modelId: string, compatibility = false): Promise<ModelConnectivityTestResult> {
+    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST", body: JSON.stringify({ consent: true, compatibility }) });
   }
 }

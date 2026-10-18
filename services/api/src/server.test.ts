@@ -6344,8 +6344,11 @@ test("model connectivity endpoint uses the encrypted saved credential", async (c
   });
   assert.equal(created.response.status, 201);
   assert.equal((await fetch(`${origin}/api/models/${created.body.id}/test`, { method: "POST" })).status, 401);
+  assert.equal((await fetch(`${origin}/api/models/${created.body.id}/test`, { method: "POST", headers: authorization, body: "{}" })).status, 400);
+  assert.equal(providerAuthorization, "");
   const tested = await jsonRequest<ModelConnectivityTestResult>(`${origin}/api/models/${created.body.id}/test`, {
     headers: authorization,
+    body: JSON.stringify({ consent: true }),
     method: "POST",
   });
   assert.equal(tested.response.status, 200);

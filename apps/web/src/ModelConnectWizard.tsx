@@ -129,6 +129,7 @@ export function ModelConnectWizard({
   }, [advancedOpen, preview]);
 
   const [testing, setTesting] = useState(false);
+  const [probeConsent, setProbeConsent] = useState(false);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
   const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
@@ -339,6 +340,7 @@ export function ModelConnectWizard({
   }
 
   async function handleTestAndEnable(): Promise<void> {
+    if (!probeConsent) return;
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
@@ -853,11 +855,12 @@ export function ModelConnectWizard({
           {/* The surrounding settings dialog closes when a press lands on its
               backdrop; a press on the wizard's own buttons must never take
               part in that gesture, even after future handler refactors. */}
+          <label><input type="checkbox" checked={probeConsent} onChange={e => setProbeConsent(e.target.checked)} disabled={busy} />{t("settings.modelTest.basicConsent")}</label>
           <div className="wizard-actions" onMouseDown={(event) => event.stopPropagation()}>
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"
-              disabled={busy}
+              disabled={busy || !probeConsent}
               onClick={() => void handleTestAndEnable()}
               type="button"
             >

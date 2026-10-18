@@ -23,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function count(value: Record<string, unknown>, keys: string[]): number | undefined {
   for (const key of keys) {
     const raw = value[key];
-    if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+    if (typeof raw === "number" && Number.isSafeInteger(Math.floor(raw)) && raw >= 0) return Math.floor(raw);
   }
   return undefined;
 }
@@ -80,7 +80,7 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
   if (outputTokens === undefined && totalTokens !== undefined && inputTokens !== undefined) {
     outputTokens = Math.max(totalTokens - inputTokens, 0);
   }
-  if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined) return undefined;
+  if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined || !Number.isSafeInteger(totalTokens)) return undefined;
   return {
     inputTokens,
     outputTokens,

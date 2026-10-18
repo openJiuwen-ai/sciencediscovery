@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -297,19 +298,22 @@ class RunEventMapper:
         ]
 
     def _on_chat_usage_metadata(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        usage = ((payload.get("metadata") or {}).get("usage_metadata")) or {}
-        if "input_tokens" not in usage and "output_tokens" not in usage:
+        metadata = payload.get("metadata")
+        usage = metadata.get("usage_metadata") if isinstance(metadata, dict) else None
+        if not isinstance(usage, dict):
             return []
-        usage_out: dict[str, Any] = {
-            "inputTokens": int(usage.get("input_tokens") or 0),
-            "outputTokens": int(usage.get("output_tokens") or 0),
-            "totalTokens": int(usage.get("total_tokens") or 0),
-        }
-        # Cache fields are null when the provider did not report them, which is
-        # different from zero; keep that distinction.
-        for source, target in (("cache_read_tokens", "cacheReadTokens"), ("cache_write_tokens", "cacheWriteTokens")):
-            usage_out[target] = usage.get(source)
-        return [{"type": "model.usage", "usage": usage_out, "reasoningTokens": usage.get("reasoning_tokens")}]
+        def count(key: str) -> int | None:
+            value = usage.get(key)
+            return int(value) if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                                  and 0 <= value <= 2**53 - 1 and (isinstance(value, int) or math.isfinite(value))) else None
+        input_count, output_count = count("input_tokens"), count("output_tokens")
+        if input_count is None or output_count is None:
+            return []  # Unknown accounting must not fail the model's task or invent zero counts.
+        total = count("total_tokens")
+        usage_out = {"inputTokens": input_count, "outputTokens": output_count,
+                     "totalTokens": total if total is not None else input_count + output_count,
+                     "cacheReadTokens": count("cache_read_tokens"), "cacheWriteTokens": count("cache_write_tokens")}
+        return [{"type": "model.usage", "usage": usage_out, "reasoningTokens": count("reasoning_tokens")}]
 
     def _on_chat_final(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if payload.get("content"):

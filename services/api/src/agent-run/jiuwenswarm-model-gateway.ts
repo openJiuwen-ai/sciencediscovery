@@ -65,6 +65,14 @@ interface ChatRequest {
   model?: string;
   messages?: Array<Record<string, unknown>>;
   stream?: boolean;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  temperature?: number;
+  thinking?: { type: string };
+  tool_choice?: unknown;
+  parallel_tool_calls?: boolean;
+  stream_options?: { include_usage?: boolean };
+  n?: number;
   tools?: Array<{ function?: { description?: string; name?: string; parameters?: unknown } }>;
 }
 
@@ -99,9 +107,10 @@ export function toModelRequest(body: ChatRequest, restore: ModelGateway["restore
     ...message,
     ...(Array.isArray(message.content) ? { content: textOf(message.content) } : {}),
   })) as HistoryMessage[];
-  const tools = (body.tools ?? []).flatMap((tool) => tool.function?.name
-    ? [{ name: tool.function.name, description: tool.function.description ?? "", parameters: tool.function.parameters ?? { type: "object" } }]
-    : []);
+  const tools = (body.tools ?? []).map((tool) => {
+    if (!tool.function?.name) throw new Error("Gateway requires named function tools");
+    return { name: tool.function.name, description: tool.function.description ?? "", parameters: tool.function.parameters ?? { type: "object" } };
+  });
   return { history, systemPrompt, tools };
 }
 
@@ -233,12 +242,28 @@ export async function startModelGateway(
       fail(400, "invalid JSON");
       return;
     }
-    // JiuwenSwarm probes a model for image input with a picture; a text-only client answers "no".
-    if ((body.messages ?? []).some(hasNonText)) {
-      fail(400, "images are not supported by this gateway");
+    let translated: ReturnType<typeof toModelRequest>;
+    let requestPolicy = policy;
+    let requestEndpoint = endpoint;
+    try {
+      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "thinking", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
+      if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
+      if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
+      if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
+      if (body.stream_options && body.stream_options.include_usage !== true) throw new Error("Gateway supports include_usage=true only");
+      if (body.messages.some(hasNonText)) throw new Error("images are not supported by this gateway");
+      const budget = body.max_completion_tokens ?? body.max_tokens ?? policy.maxTokens;
+      if (!Number.isInteger(budget) || budget <= 0 || budget > policy.maxTokens || (body.max_completion_tokens !== undefined && body.max_tokens !== undefined && body.max_tokens !== body.max_completion_tokens)) throw new Error("Requested token limit must be positive and within the configured gateway ceiling");
+      if (body.temperature !== undefined && !Number.isFinite(body.temperature)) throw new Error("Invalid gateway temperature");
+      if (body.thinking && !["enabled", "disabled"].includes(body.thinking.type)) throw new Error("Unsupported gateway thinking control");
+      requestPolicy = { ...policy, maxTokens: budget, ...(body.temperature === undefined ? {} : { temperature: body.temperature }), ...(body.thinking ? { thinking: body.thinking } : {}) };
+      requestEndpoint = { ...endpoint, ...(body.thinking ? { thinkingMode: body.thinking.type as "enabled" | "disabled" } : {}) };
+      translated = toModelRequest(body, restore);
+    } catch (error) {
+      fail(400, error instanceof Error ? error.message : "Invalid gateway request");
       return;
     }
-    const { history, systemPrompt, tools } = toModelRequest(body, restore);
+    const { history, systemPrompt, tools } = translated;
     const housekeeping = request.headers["x-sciencediscovery-model-purpose"] === "housekeeping";
     const auxiliary = housekeeping || isSwarmCompaction(body);
     // The legacy default-model route selects the latest active endpoint, not
@@ -256,6 +281,7 @@ export async function startModelGateway(
     // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
     // requests may come from instances without that boundary, still fail the request.
     const invalidCalls = (turn: ModelTurn) => {
+      if (turn.completionObserved === false) throw new Error("Model stream ended without a completion event");
       if (turn.truncated) return [];
       const invalid = turn.toolCalls.filter(call => call.argsParseError);
       if (!invalid.length) return invalid;
@@ -330,7 +356,7 @@ export async function startModelGateway(
         trace("start", true);
         await prepare();
         controller.signal.throwIfAborted();
-        const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
+        const turn = await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, {
           onProgress: () => { upstream(); trace("receive"); },
           onTextDelta: (delta) => writeDelta({ content: delta }),
           onThinkingDelta: (delta) => writeDelta({ reasoning_content: delta }),
@@ -366,7 +392,7 @@ export async function startModelGateway(
       }
       await prepare();
       controller.signal.throwIfAborted();
-      const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
+      const turn = await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, {
         onProgress: upstream,
         onTextDelta: progress,
         onThinkingDelta: progress,
@@ -389,7 +415,8 @@ export async function startModelGateway(
     } catch (error) {
       trace(controller.signal.aborted ? "cancelled" : "error", true);
       const status = error instanceof ModelRequestError && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502;
-      const message = error instanceof Error ? error.message : String(error);
+      const original = error instanceof Error ? error.message : String(error);
+      const message = endpoint.apiToken ? original.split(endpoint.apiToken).join("[redacted]") : original;
       if (response.headersSent) {
         // Mid-stream: tell the client the way OpenAI does, then stop.
         response.write(`data: ${JSON.stringify({ error: { message, type: "model_gateway_error" } })}\n\n`);

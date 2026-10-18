@@ -108,6 +108,13 @@ export type ModelConnectivityTestCategory =
   | "provider_error"
   | "invalid_response";
 
+export interface ModelCompatibilityOutcome {
+  category: ModelConnectivityTestCategory;
+  message: string;
+  ok: boolean;
+  providerStatus?: number;
+}
+
 export interface ModelConnectivityTestResult {
   category: ModelConnectivityTestCategory;
   latencyMs: number;
@@ -115,6 +122,13 @@ export interface ModelConnectivityTestResult {
   ok: boolean;
   providerStatus?: number;
   testedAt: string;
+  protocols?: Array<{
+    apiProtocol: ModelApiProtocol;
+    basic: ModelCompatibilityOutcome;
+    streaming: ModelCompatibilityOutcome;
+    tools: ModelCompatibilityOutcome;
+    usage: "available" | "unknown";
+  }>;
 }
 
 export interface ModelRunInfo {
