@@ -216,8 +216,10 @@ test("authenticated Init during shutdown returns safe503 without leaking a conne
   try {
     await runtime.stop();
     const response = await fetch(control.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL + '/init', { method: 'POST', headers: { authorization: 'Bearer ' + control.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN } });
-    assert.equal(response.status, 503); const body = await response.json();
-    assert.equal(body.canInitialize, false); assert.equal(body.connection, undefined);
+    assert.equal(response.status, 503); const body: unknown = await response.json();
+    assert(body !== null && typeof body === 'object' && !Array.isArray(body));
+    assert('canInitialize' in body);
+    assert.equal(body.canInitialize, false); assert.equal('connection' in body, false);
     assert(!JSON.stringify(body).includes(control.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN!));
   } finally { await control.close(); }
 });
