@@ -225,3 +225,12 @@ test('explicit Responses provider errors retain cause, classification and conser
   }
   await assert.rejects(completeChatRequest(endpoint, { messages: [{ role: 'user', content: 'synthetic' }] }, AbortSignal.timeout(1000), async () => Response.json({})), /Invalid Responses completion/);
 });
+
+
+test('Responses failures with absent or non-object native error details remain nonretryable and preserve evidence', async () => {
+  for (const error of [undefined, null, 'original native error detail']) {
+    const payload = { object: 'response', status: 'failed', output: [], ...(error === undefined ? {} : { error }) };
+    const result = await completeChatRequest({ apiProtocol: 'openai-responses', baseUrl: 'http://fixture.test', model: 's', proxy: { mode: 'direct' } }, { messages: [{ role: 'user', content: 'synthetic' }] }, AbortSignal.timeout(1000), async () => Response.json(payload));
+    assert.equal(result.status, 422); assert.deepEqual(await result.json(), payload);
+  }
+});

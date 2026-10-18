@@ -306,6 +306,8 @@ test('compatibility outer deadlines still stop healthy partial streams independe
   });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   try {
+    // Give immediate basic controls the ordinary success budget; these streams
+    // intentionally never terminate, so their outer-timeout result is deterministic.
     const result = await testModelConnectivity({ apiToken: 'synthetic', profile: profile(`http://127.0.0.1:${(server.address() as any).port}/v1`), resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
     assert.equal(result.protocols?.length, 3);
     for (const protocol of result.protocols!) { assert.equal(protocol.basic.ok, true); assert.equal(protocol.streaming.category, 'timeout'); assert.equal(protocol.tools.category, 'timeout'); }
