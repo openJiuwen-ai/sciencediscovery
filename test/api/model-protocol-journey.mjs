@@ -48,7 +48,7 @@ try {
     await until(() => { if (child.exitCode !== null) throw new Error(logs); return origin; });
     assert.equal((await fetch(`${origin}/health`)).status, 200);
     assert.deepEqual((await request('/api/models')).body, []);
-    assert.deepEqual((await request('/api/providers')).body, []);
+    assert.deepEqual((await request('/api/providers')).body.providers, []);
     return `API healthy at ${origin}; fresh model/provider registry verified`;
   });
   for (const apiProtocol of ['openai-chat-completions', 'openai-responses', 'anthropic-messages']) {
