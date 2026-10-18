@@ -177,31 +177,5 @@ test("a program too large to diff degrades instead of freezing the tab", () => {
 // --- the wizard -----------------------------------------------------------------
 
 
-test("the evolve card polls while a search is active and stops when it finishes", async () => {
-  // The card shows an expansion count and a status, so a one-shot read froze
-  // at whatever "19/20" the list happened to hold when it was fetched — only
-  // a session switch corrected it. The effect lives in App.tsx and needs a
-  // DOM to render, so the invariants are pinned on its source: poll while a
-  // run is active, stop when none are, and never keep polling after an error.
-  const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-  const effect = source.slice(
-    source.indexOf("const load = () => {"),
-    source.indexOf("}, [activeSessionId, client, evolveRefreshKey]);"),
-  );
-  assert.ok(effect.length > 0, "the effect that loads the evolve list was not found");
-
-  // Re-arms only when something is still running.
-  assert.match(effect, /isEvolveRunActive\(run\.status\)/);
-  assert.match(effect, /setTimeout\(load, EVOLVE_CARD_POLL_MS\)/);
-  // The failure path must not re-arm: a broken list will not fix itself by
-  // being asked again every few seconds.
-  const errorPath = effect.slice(effect.indexOf(".catch("));
-  assert.doesNotMatch(errorPath, /setTimeout/);
-  // And the timer is cleared on unmount, or a session switch leaks one.
-  const teardown = source.slice(
-    source.indexOf("return () => { live = false;"),
-    source.indexOf("}, [activeSessionId, client, evolveRefreshKey]);"),
-  );
-  assert.match(teardown, /clearTimeout\(timer\)/);
-});
+// Polling lifecycle is executed against the production hook in
+// EvolveRunPolling.test.tsx, including unavailable and terminal states.

@@ -837,3 +837,21 @@
 
 /* evolve-table-island needs a base rule even when the dot has the colour */
 .evolve-table-island { white-space: nowrap; }
+
+/* Keep installation status and its explicit action readable in both the
+ * composer and the narrower Tasks panel, including translated long copy. */
+.evolve-setup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.evolve-setup > strong { color: var(--text-heading); }
+.evolve-setup > p { margin: 0; line-height: 1.5; }
+.evolve-setup > button { max-width: 100%; white-space: normal; }

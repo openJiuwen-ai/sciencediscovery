@@ -195,23 +195,20 @@ IFS= read -r auth_token < "$auth_token_path"
 
 export SCIENCE_AGENT_AUTH_TOKEN="$auth_token"
 export SCIENCE_DISCOVERY_DATA_DIR="$runtime_root/data"
-# The product's own defaults — 4310/4311, evolve 4313, memory-graph 17674 — belong
+# The product's API/Runner/memory-graph default ports belong
 # to the instance a person leaves running. A test stack that reuses them competes
 # with that instance for the port and puts its own address in front of whoever the
 # suite then talks to, so the layer keeps a block of its own. An explicit override
 # still wins, which is how two runs share one machine.
 export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4410}"
 export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4411}"
-export SCIENCE_AGENT_EVOLVE_PORT="${SCIENCE_AGENT_EVOLVE_PORT:-4413}"
 export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774}"
 # Moving a service is only half of it: the API dials each sidecar by URL, and
-# every one of those has its own hardcoded default (see
-# services/api/src/bootstrap/config.ts). Setting only the port starts the
-# service on the new one and leaves the API knocking on the old one, which
-# fails as a connection refused the API reports to the browser as a bare
-# "fetch failed". Derive every URL from the port that was just chosen.
+# Runner and memory-graph still have defaults in API configuration. Derive
+# their URLs from the chosen test ports. Evolve uses private owned control.
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
-export SCIENCE_AGENT_EVOLVE_URL="http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT}"
+# Evolve is started by the source launcher on its owned socket. Do not invent
+# an operator URL here: that explicitly opts out of owned service startup.
 export SCIENCE_AGENT_MEMORY_GRAPH_URL="http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
@@ -335,7 +332,7 @@ if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
 # journeys reach whoever already owns the address, and the run reports a wall of
 # 401s that reads like a broken token. Say it here instead, while the port is
 # still the answer.
-busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
+busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
 if [[ "$backend" == jiuwenswarm ]]; then
   busy_ports+=("${SCIENCE_AGENT_LEGACY_PORT:-$((SCIENCE_AGENT_PORT + 100))}")
 fi

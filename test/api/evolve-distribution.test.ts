@@ -107,11 +107,13 @@ test("a user initializes the pinned release into an empty installation and compl
       body: JSON.stringify({ search_id: "distribution-journey", algorithm: "puct", engine: "puct", expansions: 2,
         scorecard_hash: "sha256:distribution-journey", statement: "Bring the prediction error down", baseline_code: BASELINE, dataset_dir: dataset,
         candidate_timeout_seconds: 60, llm: { url: modelUrl, token: "synthetic-model-token" },
-        sandbox: { backend: "bubblewrap", bwrap_path: "bwrap", disable_userns: false, proc_mode: "proc" },
+        sandbox: { backend: "bwrap", bwrap_path: "bwrap", disable_userns: false, proc_mode: "proc" },
         scorecard: { aggregate: "weighted_sum", constraints: [], criteria: [{ direction: "minimize", id: "err", name: "mean absolute error", measure: { datasetCas: ["sha256:fixture"], kind: "dataset_metric", metric: { direction: "minimize", name: "mae" }, split: { gateShards: 4, rolloutShards: 4, seed: 0, shardRows: 4, testShards: 1, trainRows: 40 } }, normalize: { kind: "reciprocal" }, weight: 1 }], hash: "sha256:distribution-journey", schemaVersion: 1, solvedThreshold: 0.999 } }),
       signal: AbortSignal.timeout(180_000) });
-    assert.equal(response.status, 200);
-    const records = (await response.text()).split("\n").filter(Boolean).map(line => JSON.parse(line));
+    const taskBody = await response.text();
+    if (!response.ok) record("Task HTTP failure", { status: response.status, body: taskBody });
+    assert.equal(response.status, 200, taskBody);
+    const records = taskBody.split("\n").filter(Boolean).map(line => JSON.parse(line));
     const events = records.map(record => record.event);
     assert.equal(events[0].type, "search_started"); assert.equal(events.at(-1).type, "search_finished");
     assert.equal(events.at(-1).status, "succeeded");

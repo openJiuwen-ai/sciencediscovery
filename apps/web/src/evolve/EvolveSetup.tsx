@@ -30,7 +30,7 @@ export function EvolveSetup({ client, status, onStatus }: {
     <p role="status" aria-live="polite">{t(key)}</p>
     {status.state !== "ready" ? <>
       <p className="muted">{t(status.canInitialize ? "evolve.setup.download" : "evolve.setup.operator")}</p>
-      <button type="button" disabled={installing || !status.canInitialize} onClick={() => {
+      <button className="secondary-button compact-button" type="button" disabled={installing || !status.canInitialize} onClick={() => {
         setBusy(true);
         void client.initEvolve().then(onStatus).catch(() => onStatus({ state: "error", canInitialize: true }))
           .finally(() => setBusy(false));
