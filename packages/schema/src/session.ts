@@ -407,6 +407,7 @@ export interface AgentEventEvidence {
 }
 
 export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
+  | { type: "mcp.readiness"; summary: string; agentId?: string }
   /** Evidence with no chat equivalent. Bodies remain in immutable CAS objects. */
   | { type: "agent.record"; name: "context.captured" | "state.committed" | "model.completed" | "context_recovery";
       payloadRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string } }

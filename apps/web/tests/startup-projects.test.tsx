@@ -19,6 +19,10 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
+import { ApiClient } from "../src/api.js";
+import { ConnectorPicker } from "../src/composer/ConnectorPicker.js";
+import { McpServerSettings } from "../src/McpServerSettings.js";
+import type { RunStreamEvent, SessionRun } from "@sciencediscovery/schema";
 import { App } from "../src/App.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 
@@ -117,3 +121,70 @@ function extractText(node: { children?: unknown[] } | null | undefined): string 
   if (!node || !node.children) return "";
   return node.children.map((child) => typeof child === "string" ? child : extractText(child as { children?: unknown[] })).join("");
 }
+
+test("mounted Session composer refreshes effective MCP status on terminal events and settings changes", async (context) => {
+  const browser = installBrowserStubs();
+  browser.location.pathname = "/settings/mcp";
+  const previousFetch = globalThis.fetch;
+  const session = {id: "session-1", projectId: "project-1", title: "MCP Session", messages: [], enabledConnectorIds: ["pubmed"], enabledSkillIds: [], specialistId: "specialist", settingsOverrides: {}};
+  const run = {id: "run", prompt: "Inspect MCP", references: [], annotationIds: [], sessionId: session.id, status: "running", queueOrder: 0, createdAt: "now", settingsSnapshot: {enabledConnectorIds: [], enabledSkillIds: []}} as unknown as SessionRun;
+  const manifest = {id: "pubmed", displayName: "PubMed", publisher: "NCBI", termsUrl: "https://example.test/policy"};
+  let status = "unavailable", reads = 0, fail = false;
+  let onEvent!: (event: RunStreamEvent, sequence?: number) => void;
+  context.mock.method(ApiClient.prototype, "subscribeRunEvents", async (_session, _run, _after, listener, signal) => {
+    onEvent = listener;
+    await new Promise<void>(resolve => signal?.addEventListener("abort", () => resolve(), {once: true}));
+  });
+  globalThis.fetch = (async input => {
+    const path = String(input).split("?")[0];
+    if (path === "/api/settings") return jsonResponse({overrides: {}, effective: {enabledConnectorIds: [], enabledSkillIds: [], enabledSkillLibraries: [], plugins: {}}, sources: {}});
+    if (path === "/api/memory/settings") return jsonResponse({enabled: false});
+    if (path === "/api/memory/subgraph") return jsonResponse({nodes: [], edges: [], reason: "memory_graph_disabled"});
+    if (path === "/api/projects") return jsonResponse([{id: "project-1", name: "Alpha", remoteRunnerHostIds: [], localRunnerEnabled: true}]);
+    if (path === "/api/projects/project-1/sessions") return jsonResponse([session]);
+    if (path === "/api/sessions/session-1") return jsonResponse(session);
+    if (path === "/api/specialists") return jsonResponse([{id: "specialist", name: "Literature", connectorIds: ["arxiv"]}]);
+    if (path === "/api/connectors") return jsonResponse([manifest, {...manifest, id: "arxiv", displayName: "arXiv"}]);
+    if (path === "/api/mcp/sources") {
+      reads++;
+      if (fail) return Response.json({error: "discovery offline"}, {status: 503});
+      return jsonResponse([{manifest, status: {sourceId: "pubmed", status, availableTools: status === "ready" ? ["search"] : [], missingTools: status === "ready" ? [] : ["search"], error: status === "ready" ? undefined : "offline"}}]);
+    }
+    if (path?.endsWith("/idea-tree/graph")) return jsonResponse({graph: null, hasIdeaTreeRun: false, treeIds: []});
+    if (path?.endsWith("/research")) return jsonResponse({items: []});
+    if (path === "/api/sessions/session-1/agent-activity") return jsonResponse({executions: [], timers: [], transfers: [], agents: []});
+    if (path === "/api/sessions/session-1/usage") return jsonResponse({totals: {}, byRun: [], byModel: [], bySession: []});
+    if (path === "/api/sessions/session-1/runs") return jsonResponse([run]);
+    if (path === "/api/projects/project-1/plugins") return jsonResponse({settings: {effective: {plugins: {}}}});
+    return jsonResponse(startupBody(String(input)));
+  }) as typeof fetch;
+  let view!: ReactTestRenderer;
+  try {
+    await act(async () => {view = create(createElement(LocaleProvider, {initialLocale: "en"}, createElement(App, {initialToken: "test-token"})));});
+    const picker = () => view.root.findByType(ConnectorPicker);
+    assert.deepEqual(picker().props.specialistIds, ["arxiv"]);
+    assert.equal(picker().props.sourceStatuses.pubmed.status, "unavailable");
+    const before = reads;
+    await act(async () => onEvent({type: "run.status", status: "running", run}));
+    assert.equal(reads, before, "nonterminal events must not trigger catalog traffic");
+    status = "ready";
+    await act(async () => onEvent({type: "run.status", status: "completed", run: {...run, status: "completed"}}));
+    assert.equal(reads, before + 1, "terminal event must recheck without opening the picker");
+    assert.equal(picker().props.sourceStatuses.pubmed.status, "ready");
+    fail = true;
+    await act(async () => picker().props.onOpen());
+    assert.match(picker().props.refreshError, /discovery offline/);
+    assert.deepEqual(picker().props.sourceStatuses, {}, "failed refresh cannot retain a ready badge");
+    fail = false;
+    await act(async () => picker().props.onReload());
+    assert.equal(picker().props.sourceStatuses.pubmed.status, "ready");
+    const serverSettings = view.root.findByType(McpServerSettings);
+    status = "degraded";
+    const settingsBefore = reads;
+    await act(async () => {await serverSettings.props.onChanged();});
+    assert.equal(reads, settingsBefore + 1);
+    assert.equal(picker().props.sourceStatuses.pubmed.status, "degraded");
+    await act(async () => onEvent({type: "session.updated", session: {...session, specialistId: undefined}} as unknown as RunStreamEvent));
+    assert.deepEqual(picker().props.specialistIds, [], "removing the Specialist removes its inherited selection");
+  } finally {await act(async () => view?.unmount()); globalThis.fetch = previousFetch;}
+});

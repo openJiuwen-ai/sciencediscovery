@@ -17,6 +17,7 @@ import type {
   IdeaTreeSettingsDetails,
   McpProxyPolicies,
   McpSourceManifest,
+  McpSourceStatus,
   MemoryGraphSettingsDetails,
   ModelCatalogDetails,
   ModelProfile,
@@ -74,7 +75,7 @@ export function workspaceCapabilitiesFromQuota(quotas: SystemQuotaSettings): Wor
   };
 }
 
-type McpSourceListing = Array<{ manifest: McpSourceManifest }>;
+type McpSourceListing = Array<{ manifest: McpSourceManifest; status: McpSourceStatus }>;
 type ProviderRegistry = { presets: ModelProviderPreset[]; providers: ModelProvider[] };
 
 /** Reads the System settings dialog refreshes, including the provider registry. */

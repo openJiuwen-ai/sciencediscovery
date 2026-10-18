@@ -56,7 +56,8 @@ function timelineModelNameSnapshot(
 }
 
 function startsRunTimeline(event: RunStreamEvent): boolean {
-  return event.type === "run.started"
+  return event.type === "mcp.readiness"
+    || event.type === "run.started"
     || (event.type === "run.status" && (event.status === "running" || event.status === "blocked"))
     || event.type === "agent.phase"
     || event.type === "idea_tree.phase"
