@@ -53,6 +53,7 @@ test("a user initializes the pinned release into an empty installation and compl
       bootstrap: { requirementsPath: "unused", gatewayWheelPath: "unused", uv: { version: pins.uv.version, project: pins.uv.project, wheelFilename: uv.filename, wheelSha256: uv.sha256 } },
     };
     let sourceDownloads = 0; let injectDependencyFailure = true;
+    const dependencyFailureEvidence: { monitorAborted: boolean; sparseAllocatedBytes?: number } = { monitorAborted: false };
     const log = (message: string) => record("Installer progress", { message });
     const realIo = defaultBootstrapIo(log);
     const io: BootstrapIo = { ...realIo,
@@ -64,18 +65,18 @@ test("a user initializes the pinned release into an empty installation and compl
           const file = await open(join(options!.env!.TMPDIR!, "quota-fixture"), "wx");
           try {
             await file.truncate(1024 * 1024 * 1024 + 1);
-            assert((await file.stat()).blocks * 512 < 1024 * 1024, "sparse fault must not consume host disk");
+            dependencyFailureEvidence.sparseAllocatedBytes = (await file.stat()).blocks * 512;
+            assert(dependencyFailureEvidence.sparseAllocatedBytes < 1024 * 1024, "sparse fault must not consume host disk");
           } finally { await file.close(); }
           assert(options?.signal);
           const signal = options.signal;
           await new Promise<void>((done, reject) => {
             const timer = setTimeout(() => { signal.removeEventListener("abort", aborted); reject(new Error("disk monitor did not cancel dependency installation")); }, 10_000);
-            const aborted = () => { clearTimeout(timer); done(); };
+            const aborted = () => { dependencyFailureEvidence.monitorAborted = signal.aborted; clearTimeout(timer); done(); };
             signal.addEventListener("abort", aborted, { once: true });
             if (signal.aborted) { signal.removeEventListener("abort", aborted); aborted(); }
           });
           assert(signal.aborted);
-          record("Actual disk monitor cancels sparse over-quota dependency staging without allocating GiB");
           throw new Error("controlled dependency-installer failure");
         }
         return await realIo.run(command, args, options);
@@ -91,6 +92,12 @@ test("a user initializes the pinned release into an empty installation and compl
     const initUrl = `${control.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL}/init`;
     const failed = await fetch(initUrl, { method: "POST", headers, signal: AbortSignal.timeout(5 * 60_000) });
     assert.equal((await failed.json() as { state: string }).state, "error");
+    // Install errors become the same error state, so assert observed fault evidence
+    // here, outside the callback caught by the runtime.
+    assert(typeof dependencyFailureEvidence.sparseAllocatedBytes === "number", "sparse allocation evidence must be recorded");
+    assert(dependencyFailureEvidence.sparseAllocatedBytes < 1024 * 1024, "sparse fault must not consume host disk");
+    assert.equal(dependencyFailureEvidence.monitorAborted, true, "disk monitor must abort dependency installation");
+    record("Actual disk monitor cancels sparse over-quota dependency staging without allocating GiB", dependencyFailureEvidence);
     assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");
     assert(!(await readdir(join(context.dataDir, "evolve"))).some(name => name.startsWith(".install-")));
     record("A controlled dependency-installer failure cleans staging and leaves the service unavailable");
