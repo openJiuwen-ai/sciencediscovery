@@ -32,6 +32,14 @@ export function evolveChildEnvironment(env: NodeJS.ProcessEnv, allowProvisioning
   return result;
 }
 
+/** Same documented startup budget as the source stack's health wait. */
+export function evolveStartupTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const seconds = Number(env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS ?? 60);
+  const milliseconds = seconds * 1000;
+  if (!Number.isSafeInteger(seconds) || !Number.isSafeInteger(milliseconds) || seconds <= 0) throw new Error("SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS must be positive whole seconds");
+  return milliseconds;
+}
+
 /** Bind first, then publish the owned socket; no select-free-port/close/rebind race. */
 export const EVOLVE_ENTRY = String.raw`
 import socket, sys
@@ -114,7 +122,7 @@ export class EvolveRuntime {
           if (value > 0 && value < 65536) port = value;
         }
       });
-      const deadline = Date.now() + (this.io.startupTimeoutMs ?? 60_000);
+      const deadline = Date.now() + (this.io.startupTimeoutMs ?? evolveStartupTimeoutMs(this.context.env));
       const ownsLiveChild = () => !this.stopping && !exited && this.child === child && child.exitCode === null && child.signalCode === null;
       while (ownsLiveChild() && Date.now() < deadline) {
         if (port) {

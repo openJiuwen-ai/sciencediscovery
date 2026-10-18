@@ -631,12 +631,15 @@ start_stack() {
   # a run lives in the API's data/evolution/runs/<runId>/events.ndjson.
   if [[ -x "$evolve_python" && -z "${SCIENCE_AGENT_EVOLVE_URL:-}" ]]; then
     echo "Starting the evolve service..." >&2
-    local evolve_state evolve_pid
+    local evolve_state evolve_pid evolve_attempts=300
     evolve_state="$(mktemp "$data_dir/.evolve-control.XXXXXX")"
     node services/launcher/dist/source-evolve.js "$evolve_python" "$data_dir" "$evolve_state" &
     evolve_pid="$!"
     pids+=("$evolve_pid")
-    for ((attempt=0; attempt<300; attempt++)); do
+    if [[ -n "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" ]]; then
+      evolve_attempts=$((SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS * 5))
+    fi
+    for ((attempt=0; attempt<evolve_attempts; attempt++)); do
       [[ -s "$evolve_state" ]] && break
       kill -0 "$evolve_pid" 2>/dev/null || { echo "Evolve exited before readiness." >&2; return 1; }
       sleep 0.2

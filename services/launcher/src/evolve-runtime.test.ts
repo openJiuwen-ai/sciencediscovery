@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EvolveRuntime, startEvolveControl, type EvolveRuntimeIo } from "./evolve-runtime.js";
+import { EvolveRuntime, startEvolveControl, evolveStartupTimeoutMs, type EvolveRuntimeIo } from "./evolve-runtime.js";
 import type { EvolveInstallContext } from "./evolve-install.js";
 
 const FIXTURE = `const http = require('node:http');
@@ -179,4 +179,17 @@ test("owned sidecars receive documented candidate/log settings, with source-only
       assert.deepEqual(result, { values: { ...settings, ...(allowRuntimeProvisioning ? provisioning : {}) }, leaked: false });
     } finally { await runtime.stop(); }
   }
+}));
+
+test("the documented source health budget also permits slow owned startup", async () => fixture(async context => {
+  assert.equal(evolveStartupTimeoutMs({}), 60_000);
+  assert.equal(evolveStartupTimeoutMs({ SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS: '120' }), 120_000);
+  for (const value of ['0', '-1', '0.5', 'invalid', 'Infinity', '9007199254740991']) assert.throws(() => evolveStartupTimeoutMs({ SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS: value }), /HEALTH_TIMEOUT/);
+  context.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS = '120';
+  const original = Date.now; let calls = 0;
+  Date.now = () => original() + (calls++ === 0 ? 0 : 61_000);
+  const runtime = new EvolveRuntime(context, { install: async () => ({ python: process.execPath, root: context.dataDir, token: 'fixture-private' }),
+    spawn: (_command, _args, options) => spawn(process.execPath, ['-e', FIXTURE], options), fetch });
+  try { await runtime.start(); assert.equal(runtime.status().state, 'ready'); assert(runtime.connection()); }
+  finally { Date.now = original; await runtime.stop(); }
 }));
