@@ -302,7 +302,7 @@ export class ProvenanceRecorder {
       origin: options.origin ?? "user_upload",
       ...(options.originMeta ? { originMeta: options.originMeta } : {}),
       path: options.path,
-      ...(options.references?.length ? { references: options.references } : {}),
+      ...(options.references !== undefined ? { references: options.references } : {}),
       sessionId: options.sessionId,
       sourcePath: options.sourcePath ?? options.path,
       ...(options.title ? { title: options.title } : {}),
@@ -400,13 +400,14 @@ export class ProvenanceRecorder {
       const existing = (await this.store.listArtifacts(options.sessionId)).find((item) =>
         options.artifactId ? item.id === options.artifactId : item.name === options.name);
       if (existing) {
-        const versions = await this.store.listArtifactVersions(options.sessionId, existing.id);
+        const versions = (await this.store.listArtifactVersions(options.sessionId, existing.id))
+          .filter((version) => version.sessionId === options.sessionId);
         const previous = options.baseVersionId
           ? versions.find((version) => version.id === options.baseVersionId)
           : versions.at(-1);
         if (previous?.references?.length) {
           const source = await readFile(resolveWorkspaceFile(options.workspaceRoot, options.path), "utf8");
-          const aliases = new Set([...source.matchAll(/\[(evidence\d+|ev\d+)\]/gi)].map((match) => match[1]!.toLowerCase()));
+          const aliases = new Set([...source.matchAll(/\[([a-z]+\d+)\]/gi)].map((match) => match[1]!.toLowerCase()));
           inheritedReferences = previous.references.filter((reference) => aliases.has(reference.label.toLowerCase()));
         }
       }
@@ -433,7 +434,7 @@ export class ProvenanceRecorder {
       originMeta: { declaredPath: options.sourcePath, ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}) },
       parentSubagentId: options.parentSubagentId,
       path: options.path,
-      ...(inheritedReferences?.length ? { references: inheritedReferences } : {}),
+      ...(inheritedReferences !== undefined ? { references: inheritedReferences } : {}),
       sessionId: options.sessionId,
       sourcePath: options.sourcePath,
       turnId: options.turnId,
