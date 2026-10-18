@@ -28,9 +28,17 @@ function category(status: number): ModelConnectivityTestCategory {
   if (status === 404) return "not_found";
   return "provider_error";
 }
+function providerFailure(status: number): ModelCompatibilityOutcome {
+  const kind = category(status);
+  const message = kind === "authorization" ? "API key is invalid or is not authorized"
+    : kind === "not_found" ? "Base URL or model ID was not found"
+    : kind === "rate_limited" ? "Provider is rate limiting requests or the account has insufficient quota"
+    : "The model provider rejected the request or is temporarily unavailable";
+  return { category: kind, ok: false, providerStatus: status, message };
+}
 function failure(error: unknown, signal: AbortSignal): ModelCompatibilityOutcome {
   if (signal.aborted) return { category: "timeout", ok: false, message: "Compatibility check timed out; support is unknown" };
-  if (error instanceof ModelRequestError) return { category: category(error.statusCode), ok: false, providerStatus: error.statusCode, message: "Provider rejected the synthetic request; check credentials, quota and endpoint configuration" };
+  if (error instanceof ModelRequestError) return providerFailure(error.statusCode);
   if (networkError(error)) return { category: "network", ok: false, message: "Could not connect to model provider; support is unknown" };
   return { category: "invalid_response", ok: false, message: "No valid capability evidence; inspect the configured endpoint and retry explicitly" };
 }
@@ -53,7 +61,7 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
     let usage: "available" | "unknown" = "unknown";
     try {
       const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: 8 }, signal, undefined, 64 * 1024);
-      if (!response.ok) basic = { category: category(response.status), ok: false, providerStatus: response.status, message: "Provider rejected this protocol request; this does not establish model incompatibility" };
+      if (!response.ok) basic = providerFailure(response.status);
       else {
         const payload = await response.json() as { usage?: unknown; choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
         if (normalizeUsage(payload.usage, "openai-chat-completions")) usage = "available";

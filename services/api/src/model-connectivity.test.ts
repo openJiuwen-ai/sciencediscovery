@@ -286,6 +286,6 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
     const result = await testModelConnectivity({ apiToken: "synthetic", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
     const selected = result.protocols?.find(p => p.apiProtocol === apiProtocol); assert.ok(selected);
     assert.equal(selected.basic.ok, false); assert.equal(selected.basic.category, "invalid_response"); assert.match(selected.basic.message, /truncated.*inconclusive/);
-    assert.equal(selected.streaming.category, "authorization"); assert.equal(selected.tools.category, "authorization"); assert.equal(selected.usage, "available");
+    assert.equal(selected.streaming.category, "authorization"); assert.match(selected.streaming.message, /API key is invalid or is not authorized/); assert.equal(selected.tools.category, "authorization"); assert.equal(selected.usage, "available");
   });
 });
