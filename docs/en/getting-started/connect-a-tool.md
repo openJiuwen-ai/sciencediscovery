@@ -58,7 +58,7 @@ Use the DeepWiki connector to look at the scipy/scipy repository on GitHub.
 Declare tukey-hsd-notes.md as an artifact and name it in your final reply.
 ```
 
-The first call to each DeepWiki tool pauses on a **Permission required** card that names the tool, for example one ending in `ask_wiki_question`. Choose **Allow same type** for each, and approve the code execution that writes the file.
+The first call to each DeepWiki tool pauses on a **Permission required** card that names the tool, for example one ending in `ask_question`. Choose **Allow same type** for each, and approve the code execution that writes the file.
 
 ## 5. What you should see
 
