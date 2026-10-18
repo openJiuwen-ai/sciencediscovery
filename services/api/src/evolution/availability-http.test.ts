@@ -49,8 +49,10 @@ test("native Evolve/research tools are absent until the launcher reports authent
     await platform.evolveAvailability.refresh();
     assert.equal(platform.evolveRuntimeFactory({} as never), undefined);
     ready = true; await platform.evolveAvailability.refresh();
-    assert(platform.evolveRuntimeFactory({} as never)?.createEvolveRun);
-    ready = false; await platform.evolveAvailability.refresh();
+    const runtime = platform.evolveRuntimeFactory({} as never)!;
+    assert(runtime.createEvolveRun);
+    ready = false;
+    await assert.rejects(runtime.createEvolveRun({} as never), /not initialized/); await platform.evolveAvailability.refresh();
     assert.equal(platform.evolveRuntimeFactory({} as never), undefined);
   } finally { platform.ideaResearch.close(); globalThis.fetch = original; await rm(data, { recursive: true, force: true }); }
 });

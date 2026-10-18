@@ -85,8 +85,16 @@ export async function privateEvolveToken(dataDir: string): Promise<string> {
     let token = (await file.readFile("utf8")).trim();
     if (!token) {
       token = randomBytes(32).toString("base64url");
-      await file.write(`${token}\n`, 0, "utf8");
-      await file.sync();
+      const pending = join(secrets, ".internal-token.pending");
+      // Under the installation lock: a crash leaves either the old empty file
+      // or a complete credential, never a partially written active token.
+      await rm(pending, { force: true });
+      try {
+        const next = await open(pending, "wx", 0o600);
+        try { await next.writeFile(`${token}\n`); await next.sync(); }
+        finally { await next.close(); }
+        await rename(pending, path);
+      } finally { await rm(pending, { force: true }); }
     }
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error("Invalid Evolve credential file");
     return token;
@@ -121,7 +129,12 @@ async function directoryBytes(root: string): Promise<number> {
   let total = 0;
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
-    total += entry.isDirectory() ? await directoryBytes(path) : (await lstat(path)).size;
+    try {
+      total += entry.isDirectory() ? await directoryBytes(path) : (await lstat(path)).size;
+    } catch (error) {
+      // uv removes temporary wheels while the disk monitor scans them.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     if (total > MAX_INSTALL_BYTES) throw new Error("Evolve installation exceeds its disk limit");
   }
   return total;

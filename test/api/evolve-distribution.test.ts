@@ -11,11 +11,12 @@ const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux",
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { defaultBootstrapIo, type BootstrapIo } from "../../services/launcher/src/bootstrap.js";
 import { startEvolveControl } from "../../services/launcher/src/evolve-runtime.js";
 import { EVOLVE_RELEASE } from "../../services/launcher/src/evolve-lock.js";
 import type { PayloadManifest } from "../../services/launcher/src/payload-manifest.js";
@@ -51,16 +52,34 @@ test("a user initializes the pinned release into an empty installation and compl
       node: { version: process.version, path: "node" }, app: { root: ".", apiEntry: "unused", runnerEntry: "unused", webDir: "unused" },
       bootstrap: { requirementsPath: "unused", gatewayWheelPath: "unused", uv: { version: pins.uv.version, project: pins.uv.project, wheelFilename: uv.filename, wheelSha256: uv.sha256 } },
     };
-    const context = { dataDir: join(workspace, "data"), payloadRoot: workspace, manifest,
-      env: { PATH: process.env.PATH, SCIENCE_AGENT_PYPI_INDEX: "https://pypi.org/simple" }, log: (message: string) => record("Installer progress", { message }) };
+    let sourceDownloads = 0; let injectDependencyFailure = true;
+    const log = (message: string) => record("Installer progress", { message });
+    const realIo = defaultBootstrapIo(log);
+    const io: BootstrapIo = { ...realIo,
+      fetch: async (url, options) => { if (String(url) === EVOLVE_RELEASE.url) sourceDownloads++; return await realIo.fetch(url, options); },
+      run: async (command, args, options) => {
+        if (args[0] === "pip" && injectDependencyFailure) { injectDependencyFailure = false; throw new Error("controlled dependency-installer failure"); }
+        return await realIo.run(command, args, options);
+      },
+    };
+    const context = { dataDir: join(workspace, "data"), payloadRoot: workspace, manifest, io,
+      env: { PATH: process.env.PATH, SCIENCE_AGENT_PYPI_INDEX: "https://pypi.org/simple" }, log };
     control = await startEvolveControl(context);
     assert.equal(control.runtime.status().state, "not_initialized");
-    assert.equal(control.runtime.connection(), undefined);
+    assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");
     record("Serve without Evolve does not install or launch it");
     const headers = { authorization: `Bearer ${control.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN}` };
-    const init = await fetch(`${control.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL}/init`, { method: "POST", headers, signal: AbortSignal.timeout(12 * 60_000) });
-    assert.equal(init.status, 200);
-    const result = await init.json() as { state: string; error?: string };
+    const initUrl = `${control.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL}/init`;
+    const failed = await fetch(initUrl, { method: "POST", headers, signal: AbortSignal.timeout(5 * 60_000) });
+    assert.equal((await failed.json() as { state: string }).state, "error");
+    assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");
+    assert(!(await readdir(join(context.dataDir, "evolve"))).some(name => name.startsWith(".install-")));
+    record("A controlled dependency-installer failure cleans staging and leaves the service unavailable");
+    const [init, concurrent] = await Promise.all([0, 1].map(() => fetch(initUrl, { method: "POST", headers, signal: AbortSignal.timeout(12 * 60_000) })));
+    assert.equal(init!.status, 200); assert.equal(concurrent!.status, 200);
+    assert.equal((await concurrent!.json() as { state: string }).state, "ready");
+    assert.equal(sourceDownloads, 2, "one failed attempt and one coalesced retry download");
+    const result = await init!.json() as { state: string; error?: string };
     assert.equal(result.state, "ready", result.error ?? "Evolve did not initialize");
     const connection = control.runtime.connection()!;
     record("Explicit Init downloads, verifies and installs the designated source plus frozen candidate dependencies", { release: EVOLVE_RELEASE.release, commit: EVOLVE_RELEASE.commit, sourceSha256: EVOLVE_RELEASE.sha256, requirementsSha256: EVOLVE_RELEASE.requirementsSha256 });
@@ -107,6 +126,7 @@ test("a user initializes the pinned release into an empty installation and compl
     control = await startEvolveControl(context);
     assert.equal(control.runtime.status().state, "ready");
     assert(control.runtime.connection()!.internalToken === token, "restart must reuse the private install credential");
+    assert.equal(sourceDownloads, 2, "restart must not download or reinstall");
     record("Restart reuses the installation and its private token, with a fresh owned process");
   } finally {
     await control?.close();

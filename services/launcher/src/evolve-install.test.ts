@@ -80,6 +80,7 @@ test("installed runtime restores one per-install token under concurrency with pr
     assert((await resolveEvolveInstallation(otherContext))!.token !== first.token, "separate installs require independent credentials");
   } finally { await rm(other, { recursive: true, force: true }); }
   await writeFile(secret, "not a token"); await assert.rejects(resolveEvolveInstallation(context), /credential/);
+  await writeFile(secret, "x".repeat(129)); await assert.rejects(resolveEvolveInstallation(context), /credential/);
 }));
 test("managed directories and token symlinks are refused rather than followed", async () => fixture(async (context) => {
   await seedInstalled(context);
@@ -97,3 +98,14 @@ test("offline frozen dependency export matches the shipped lock byte for byte", 
   const result = await promisify(execFile)("uv", ["export", "--project", "services/evolve", "--frozen", "--offline", "--extra", "candidates", "--no-dev", "--no-emit-project", "--no-header", "--format", "requirements-txt"], { cwd, timeout: 10_000 });
   assert.equal(result.stdout, EVOLVE_REQUIREMENTS);
 });
+test("credential promotion failure never activates a partial token and a later retry recovers", async () => fixture(async (context) => {
+  await seedInstalled(context);
+  const secrets = join(context.dataDir, "evolve/secrets"); await mkdir(secrets);
+  await mkdir(join(secrets, ".internal-token.pending"));
+  await assert.rejects(resolveEvolveInstallation(context));
+  assert.equal(await readFile(join(secrets, "internal-token"), "utf8"), "");
+  await rm(join(secrets, ".internal-token.pending"), { recursive: true });
+  const recovered = await resolveEvolveInstallation(context); assert(recovered);
+  assert.match(recovered.token, /^[\w-]{43}$/);
+  assert(!(await readdir(secrets)).includes(".internal-token.pending"));
+}));

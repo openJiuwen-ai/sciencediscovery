@@ -40,7 +40,7 @@ test("configured external service proves health and auth without forwarding mode
     return Response.json({ stopped: false }, { status: mode === "bad-auth" ? 401 : 200 });
   };
   try {
-    const settings = config().evolve; settings.url = "http://fixture.invalid"; settings.internalToken = "fixture-token";
+    const settings = loadServerConfig({ SCIENCE_AGENT_AUTH_TOKEN: "synthetic", SCIENCE_AGENT_RUNNER_TOKEN: "synthetic", SCIENCE_AGENT_EVOLVE_URL: "http://fixture.invalid/", SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: "fixture-token" }).evolve;
     const access = new EvolveAvailability(settings);
     assert.equal((await access.refresh()).state, "ready");
     assert.deepEqual(await access.connection(), { url: "http://fixture.invalid", internalToken: "fixture-token" });
@@ -72,5 +72,33 @@ test("managed Init uses authenticated private launcher transport, hides credenti
     assert.deepEqual(await access.connection(), { url: "http://owned.invalid", internalToken: "private-fixture" });
     fail = true; assert.equal((await access.refresh()).state, "error"); assert.equal(settings.url, "");
     assert.equal(settings.internalToken, "");
+  } finally { globalThis.fetch = original; }
+});
+test("dynamic sidecar transport uses only the authenticated owned endpoint and gives contextual auth errors", async () => {
+  const original = globalThis.fetch; let rejectAuth = true; const targets: string[] = [];
+  const settings = { url: "", internalToken: "", controlUrl: "http://launcher.invalid", controlToken: "synthetic-control" };
+  globalThis.fetch = async (url, init) => {
+    const target = String(url); targets.push(target);
+    if (target.startsWith("http://launcher.invalid/")) return Response.json({ state: "ready", canInitialize: true, connection: { url: "http://owned.invalid", internalToken: "synthetic-owned" } });
+    assert(target.startsWith("http://owned.invalid/"));
+    if (target.endsWith("/health")) return Response.json({ status: "healthy" });
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-owned");
+    if (target.endsWith("/probe")) {
+      assert.equal(JSON.parse(String(init?.body)).llm.token, "synthetic-model-only");
+      return rejectAuth ? Response.json({ detail: "invalid internal token" }, { status: 401 }) : Response.json({ baseline: 0.5, flat: false, label: "fixture", worsened: 0 });
+    }
+    if (target.endsWith("/stop")) return Response.json({ stopped: true });
+    return new Response(JSON.stringify({ createdAt: "2026-10-18T00:00:00Z", sequence: 1, event: { type: "search_finished", status: "succeeded" } }) + "\n");
+  };
+  try {
+    const availability = new EvolveAvailability(settings);
+    const client = new EvolveSidecarClient({ ...settings, connection: () => availability.connection() });
+    const spec = { searchId: "fixture", algorithm: "puct", expansions: 1, scorecardHash: "fixture", llm: { url: "http://synthetic.invalid", token: "synthetic-model-only" } };
+    await assert.rejects(client.probe(spec), /Evolve authentication failed/);
+    rejectAuth = false; assert.equal((await client.probe(spec)).flat, false);
+    assert.equal((await client.health())!.status, "healthy");
+    const events = []; for await (const event of client.stream(spec)) events.push(event);
+    assert.equal(events.length, 1); assert.equal(await client.stop("fixture"), true);
+    assert(targets.every(target => target.startsWith("http://launcher.invalid/") || target.startsWith("http://owned.invalid/")));
   } finally { globalThis.fetch = original; }
 });
