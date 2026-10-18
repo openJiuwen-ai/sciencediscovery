@@ -71,12 +71,14 @@ function startModelStub(requests: ChatRequest[]): Promise<{ server: Server; url:
           { choices: [{ delta: { content: "Checking the workspace…" } }] },
           { choices: [{ delta: { tool_calls: [{ index: 0, id: "call-list", type: "function", function: { name: "list_files", arguments: '{"path"' } }] } }] },
           { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: ':"."}' } }] } }] },
+          { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
           { choices: [], usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 } },
         ]);
         return;
       }
       sse(response, [
         { choices: [{ delta: { content: "Listed the workspace files." } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
         { choices: [], usage: { prompt_tokens: 42, completion_tokens: 6, total_tokens: 48 } },
       ]);
     });

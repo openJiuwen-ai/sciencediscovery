@@ -260,3 +260,15 @@ test("network errors are distinct from successful but malformed responses", asyn
   const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: profile("http://127.0.0.1:1"), resolveProxy: directProxy });
   assert.equal(tested.category, "network");
 });
+
+test("malformed native blocks cannot certify a basic capability", async () => {
+  for (const [apiProtocol, payload] of [
+    ["openai-chat-completions", { choices: [{ message: { tool_calls: [null] } }] }],
+    ["openai-responses", { object: "response", output: [{ type: "not-a-model-item" }] }],
+    ["openai-responses", { object: "response", output: [{ type: "message", content: [{ type: "output_text", text: {} }] }] }],
+    ["anthropic-messages", { type: "message", content: [{ type: "not-a-model-block" }] }],
+    ["anthropic-messages", { type: "message", content: [{ type: "text", text: {} }] }],
+  ] as const) await withProvider(async (request, response) => { await readRequest(request); response.end(JSON.stringify(payload)); }, async origin => {
+    assert.equal((await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy })).category, "invalid_response");
+  });
+});
