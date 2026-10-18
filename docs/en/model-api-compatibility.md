@@ -127,3 +127,7 @@ permanently consume the successful-unreported-call reserve. Its usage stays
 unknown: failure is not proof that the provider charged nothing. Successful calls
 without valid usage still retain the separately labelled conservative admission
 reserve. These bounds cannot certify an exact token bill or hard provider cost cap.
+
+Provider failures retain their HTTP status and JSON or plain-text cause. A
+non-object/plain error body is bounded to 2,000 characters and credentials are
+redacted; an invalid error envelope is not relabelled as a network failure.

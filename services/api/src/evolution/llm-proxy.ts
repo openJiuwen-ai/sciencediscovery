@@ -173,7 +173,15 @@ export async function handleEvolveCompletion(
   }
   inFlight.delete(began);
 
-  const payload = await upstream.json().catch(() => ({})) as Record<string, unknown>;
+  const rawPayload = await upstream.text();
+  let payload: Record<string, unknown>;
+  try {
+    const decoded: unknown = JSON.parse(rawPayload);
+    payload = decoded !== null && typeof decoded === "object" && !Array.isArray(decoded)
+      ? decoded as Record<string, unknown> : { error: rawPayload.slice(0, 2000) };
+  } catch {
+    payload = { error: rawPayload.slice(0, 2000) };
+  }
   const choices = Array.isArray(payload.choices) ? payload.choices : [];
   const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
   const spend = parseProviderUsage(payload.usage, "openai-chat-completions");

@@ -377,3 +377,19 @@ test("a run's two models get two tokens, and neither buys the other", async () =
   assert.equal(tokens.resolve("run-1", judge), undefined);
   assert.equal(tokens.size, 0);
 });
+
+test('provider errors preserve original status and bounded redacted causes for plain, primitive and JSON bodies', async () => {
+  for (const raw of ['original plain cause sk-provider-secret ' + 'x'.repeat(2500), 'null', '["original array cause"]', '"original string cause"', '{"error":"original JSON cause"}']) {
+    const tokens = new RunTokenRegistry();
+    const { store, recorded } = fakeStore();
+    const { origin } = await mount({ tokens, store, fetchImpl: (async () => new Response(raw, { status: 503 })) as never });
+    const response = await completion(origin, 'run', tokens.issue('run', 'session', 'model-1'));
+    assert.equal(response.status, 503);
+    const body = await response.json() as { error: string };
+    assert.equal(typeof body.error, 'string'); assert.ok(body.error.length <= 2000);
+    assert.ok(!body.error.includes('sk-provider-secret'));
+    if (raw.startsWith('original plain')) assert.match(body.error, /original plain cause \[redacted\]/);
+    else assert.match(body.error, /original|null/);
+    assert.equal(recorded.length, 0, 'Failed requests do not manufacture reported usage or zero cost');
+  }
+});
