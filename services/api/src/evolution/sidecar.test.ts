@@ -145,3 +145,26 @@ test("a body that is not the shape we expect still says something", async () => 
     /the discrimination probe could not be taken \(422\)/,
   );
 });
+
+test("actual probe refusals classify 401/403 safely and preserve non-auth diagnostic sentences", async () => {
+  const { createServer } = await import("node:http");
+  const { EvolveSidecarClient, EvolveSidecarError } = await import("./sidecar.js");
+  let status = 403; const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url!); assert.equal(request.headers.authorization, "Bearer synthetic-probe-only");
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify({ detail: { message: status === 400 ? "fixture baseline cannot execute" : "synthetic-private-refusal" } }));
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  try {
+    const client = new EvolveSidecarClient({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, internalToken: "synthetic-probe-only" });
+    for (status of [401, 403, 400]) {
+      await assert.rejects(client.probe({ algorithm: "puct", expansions: 1, scorecardHash: "fixture", searchId: "fixture" }), error => {
+        assert(error instanceof EvolveSidecarError); assert.equal(error.status, status);
+        assert.equal(error.message, status === 400 ? "fixture baseline cannot execute" : "Evolve authentication failed. Check the configured service or retry Init Evolve.");
+        assert(!error.message.includes("synthetic-private")); return true;
+      });
+    }
+    assert.deepEqual(requests, ["/probe", "/probe", "/probe"]);
+  } finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
+});

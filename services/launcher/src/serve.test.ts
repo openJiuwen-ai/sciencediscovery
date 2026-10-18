@@ -347,7 +347,8 @@ describe("micromamba seeding", () => {
   });
 });
 
-test("serve forwards the private Evolve control and closes it with its owned processes on shutdown without initializing", async () => {
+for (const mode of ["owned", "operator", "abort-startup"] as const) {
+test(`serve ${mode} preserves ownership and cleans up on shutdown or interrupted startup`, { timeout: 15_000 }, async () => {
   const { createServer } = await import("node:http");
   const { mkdir, symlink } = await import("node:fs/promises");
   const { serve } = await import("./serve.js");
@@ -358,6 +359,7 @@ test("serve forwards the private Evolve control and closes it with its owned pro
   await Promise.all(reservations.map(server => new Promise<void>(done => server.close(() => done()))));
   const fixture = `const fs=require('node:fs'),http=require('node:http');
 const runner=process.argv[1].includes('/runner/');
+if(runner)fs.writeFileSync(process.env.SCIENCE_AGENT_DATA_DIR+'/runner.pid',String(process.pid));
 if(!runner)fs.writeFileSync(process.env.SCIENCE_AGENT_DATA_DIR+'/control-observation.json',JSON.stringify({url:process.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL,hasPrivateCredential:Boolean(process.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN),hasImplicitEndpoint:Boolean(process.env.SCIENCE_AGENT_EVOLVE_URL)}));
 http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end('{"status":"ok"}');}).listen(Number(runner?process.env.SCIENCE_AGENT_RUNNER_PORT:process.env.SCIENCE_AGENT_PORT),'127.0.0.1');`;
   try {
@@ -366,13 +368,38 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
       const { dirname } = await import("node:path"); await mkdir(dirname(join(root, entry)), { recursive: true }); await writeFile(join(root, entry), fixture);
     }
     const context = contextFor({ payloadRoot: root,
-      baseEnv: { SCIENCE_AGENT_AUTH_TOKEN: "synthetic-launcher-access" },
+      baseEnv: { SCIENCE_AGENT_AUTH_TOKEN: "synthetic-launcher-access", ...(mode === "operator" ? { SCIENCE_AGENT_EVOLVE_URL: "http://explicit-operator.invalid", SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: "synthetic-operator" } : {}) },
       settings: { ...defaultSettings({}, root), dataDir: join(root, "data"), scientificEnvironments: false, jiuwenswarm: false,
         bwrapPath: "/nonexistent/bwrap-fixture", port: ports[0]!, runnerPort: ports[1]! } });
     let ready: () => void; const becameReady = new Promise<void>(done => { ready = done; });
-    const running = serve(context, message => { if (message.includes("ScienceDiscovery is ready at")) ready!(); });
+    const signals = process.listenerCount("SIGTERM");
+    const running = serve(context, message => {
+      if (mode === "abort-startup" && message.includes("Starting control API")) { process.emit("SIGTERM", "SIGTERM"); throw new Error("fixture startup interruption"); }
+      if (message.includes("ScienceDiscovery is ready at")) ready!();
+    });
+    if (mode === "abort-startup") {
+      assert.equal((await running).exitCode, 0);
+      const pid = Number(await readFile(join(root, "data/runner.pid"), "utf8"));
+      // SIGTERM starts asynchronous Supervisor cleanup; observe actual exit rather than
+      // assuming OS reaping has happened in the same microtask as serve's return.
+      const { setTimeout: delay } = await import("node:timers/promises");
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") break; throw error; }
+        await delay(20);
+      }
+      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+      assert.equal(process.listenerCount("SIGTERM"), signals);
+      return;
+    }
     await becameReady;
     const observed = JSON.parse(await readFile(join(root, "data/control-observation.json"), "utf8"));
+    if (mode === "operator") {
+      assert.equal(observed.hasPrivateCredential, false); assert.equal(observed.hasImplicitEndpoint, true);
+      assert.equal(observed.url, undefined);
+      process.emit("SIGTERM", "SIGTERM"); assert.equal((await running).exitCode, 0);
+      await assert.rejects(access(join(root, "data/evolve")), { code: "ENOENT" });
+      assert.equal(process.listenerCount("SIGTERM"), signals); return;
+    }
     assert.equal(observed.hasPrivateCredential, true); assert.equal(observed.hasImplicitEndpoint, false);
     assert.equal((await fetch(`${observed.url}/status`)).status, 401);
     process.emit("SIGTERM", "SIGTERM");
@@ -381,3 +408,5 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
     assert.equal((await (await import("node:fs/promises")).readdir(join(root, "data/evolve"))).some(name => name.startsWith(".install-")), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+}

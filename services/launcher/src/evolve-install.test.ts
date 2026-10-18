@@ -153,3 +153,12 @@ test("SIGKILL-interrupted owned staging is reclaimed on explicit retry; unknown 
     assert((await readdir(parent)).includes('.install-ABC123'));
   } finally { child.kill('SIGKILL'); await exited; }
 }));
+
+test("installation parent symlinks are refused without changing another directory", async () => fixture(async (context, calls) => {
+  const outside = join(context.dataDir, "operator-owned"); await mkdir(outside);
+  await writeFile(join(outside, "keep"), "operator data");
+  await symlink(outside, join(context.dataDir, "evolve"));
+  await assert.rejects(resolveEvolveInstallation(context, true), /real directory/);
+  assert.equal(await readFile(join(outside, "keep"), "utf8"), "operator data");
+  assert.deepEqual(await readdir(outside), ["keep"]); assert.deepEqual(calls, []);
+}));

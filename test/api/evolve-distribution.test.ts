@@ -11,7 +11,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux",
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +58,26 @@ test("a user initializes the pinned release into an empty installation and compl
     const io: BootstrapIo = { ...realIo,
       fetch: async (url, options) => { if (String(url) === EVOLVE_RELEASE.url) sourceDownloads++; return await realIo.fetch(url, options); },
       run: async (command, args, options) => {
-        if (args[0] === "pip" && injectDependencyFailure) { injectDependencyFailure = false; throw new Error("controlled dependency-installer failure"); }
+        if (args[0] === "pip" && injectDependencyFailure) {
+          injectDependencyFailure = false;
+          // Apparent size crosses the quota without allocating GiB of data or running pip.
+          const file = await open(join(options!.env!.TMPDIR!, "quota-fixture"), "wx");
+          try {
+            await file.truncate(1024 * 1024 * 1024 + 1);
+            assert((await file.stat()).blocks * 512 < 1024 * 1024, "sparse fault must not consume host disk");
+          } finally { await file.close(); }
+          assert(options?.signal);
+          const signal = options.signal;
+          await new Promise<void>((done, reject) => {
+            const timer = setTimeout(() => { signal.removeEventListener("abort", aborted); reject(new Error("disk monitor did not cancel dependency installation")); }, 10_000);
+            const aborted = () => { clearTimeout(timer); done(); };
+            signal.addEventListener("abort", aborted, { once: true });
+            if (signal.aborted) { signal.removeEventListener("abort", aborted); aborted(); }
+          });
+          assert(signal.aborted);
+          record("Actual disk monitor cancels sparse over-quota dependency staging without allocating GiB");
+          throw new Error("controlled dependency-installer failure");
+        }
         return await realIo.run(command, args, options);
       },
     };

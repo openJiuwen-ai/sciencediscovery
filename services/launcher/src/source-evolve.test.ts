@@ -105,3 +105,39 @@ test("actual shell health waits default for blank values and retain explicit pos
     assert.equal(Number(stdout.trim()), expected);
   }
 });
+
+test("actual source CLI rejects missing arguments and failed startup without publishing private state", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { fileURLToPath } = await import("node:url");
+  const root = await mkdtemp(join(tmpdir(), "source-cli-refusal-")); const state = join(root, "state.json");
+  const helper = fileURLToPath(new URL("./source-evolve.ts", import.meta.url));
+  try {
+    for (const [args, message] of [[[], /Expected interpreter, data directory and private state file/], [[join(root, "missing-interpreter"), root, state], /^Evolve could not start\. Check the provisioned source runtime\.\s*$/]] as const) {
+      await assert.rejects(promisify(execFile)(process.execPath, ["--import", "tsx", helper, ...args], {
+        env: { PATH: process.env.PATH, TSX_TSCONFIG_PATH: process.env.TSX_TSCONFIG_PATH }, timeout: 10_000,
+      }), error => {
+        const failure = error as Error & { code?: number; signal?: string; stdout: string; stderr: string };
+        assert.equal(failure.code, 1); assert.equal(failure.signal, null); assert.equal(failure.stdout, "");
+        assert.match(failure.stderr, message); assert(!failure.stderr.includes("Bearer")); return true;
+      });
+      await assert.rejects(readFile(state), { code: "ENOENT" });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("both actual shell readiness budget guards default blanks and retain explicit budgets", async () => {
+  const source = await readFile(new URL("../../../scripts/start-stack.sh", import.meta.url), "utf8");
+  const begin = source.indexOf('    if [[ "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}"', source.indexOf('local evolve_state evolve_pid evolve_attempts=300'));
+  const end = source.indexOf('\n    # Private control', begin);
+  assert(begin >= 0 && end > begin, "actual Evolve readiness guard/loop must exist");
+  const guardAndLoop = source.slice(begin, end);
+  for (const [value, expected] of [["", 300], [" \t\n ", 300], ["2", 10]] as const) {
+    const script = 'probe(){ local evolve_attempts=300 evolve_state=/nonexistent-fixture count=0; kill(){ return 0; }; sleep(){ count=$((count+1)); };\n' + guardAndLoop + '\n}; probe; status=$?; echo "$count"; exit "$status"';
+    const result = (await import("node:child_process")).spawnSync("bash", ["-c", script.replace('local evolve_attempts=300 evolve_state=/nonexistent-fixture count=0', 'local evolve_attempts=300 evolve_state=/nonexistent-fixture; count=0')], {
+      env: { PATH: process.env.PATH, SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS: value }, encoding: "utf8", timeout: 5_000,
+    });
+    assert.equal(result.status, 1); assert.match(result.stderr, /Evolve did not become ready/);
+    assert.equal(Number(result.stdout.trim()), expected); assert.equal(result.signal, null);
+  }
+});
