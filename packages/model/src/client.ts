@@ -187,26 +187,21 @@ function numberField(value: Record<string, unknown>, keys: string[]): number | u
   return undefined;
 }
 
-/** Normalize provider usage payloads (OpenAI and Anthropic spellings). */
-export function normalizeUsage(raw: unknown): AgentModelUsage | undefined {
+/** Read the requested wire protocol, never competing extra fields from a proxy. */
+export function normalizeUsage(raw: unknown, protocol: "openai-chat-completions" | "openai-responses"): AgentModelUsage | undefined {
   if (!isRecord(raw)) return undefined;
-  let inputTokens = numberField(raw, ["input_tokens", "prompt_tokens"]);
-  let outputTokens = numberField(raw, ["output_tokens", "completion_tokens"]);
+  const chat = protocol === "openai-chat-completions";
+  const inputTokens = numberField(raw, [chat ? "prompt_tokens" : "input_tokens"]);
+  const outputTokens = numberField(raw, [chat ? "completion_tokens" : "output_tokens"]);
   let totalTokens = numberField(raw, ["total_tokens"]);
   let cacheReadTokens = numberField(raw, ["cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"]);
   const cacheWriteTokens = numberField(raw, ["cache_creation_input_tokens", "cache_write_tokens", "prompt_cache_miss_tokens"]);
-  const promptDetails = raw.prompt_tokens_details;
+  const promptDetails = chat ? raw.prompt_tokens_details : raw.input_tokens_details;
   if (cacheReadTokens === undefined && isRecord(promptDetails)) {
     cacheReadTokens = numberField(promptDetails, ["cached_tokens", "cache_read_tokens"]);
   }
   if (totalTokens === undefined && inputTokens !== undefined && outputTokens !== undefined) {
     totalTokens = inputTokens + outputTokens;
-  }
-  if (inputTokens === undefined && totalTokens !== undefined && outputTokens !== undefined) {
-    inputTokens = Math.max(totalTokens - outputTokens, 0);
-  }
-  if (outputTokens === undefined && totalTokens !== undefined && inputTokens !== undefined) {
-    outputTokens = Math.max(totalTokens - inputTokens, 0);
   }
   if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined) return undefined;
   return {
@@ -538,7 +533,7 @@ async function streamOpenAiTurn(
     } catch {
       continue;
     }
-    const chunkUsage = normalizeUsage(chunk.usage);
+    const chunkUsage = normalizeUsage(chunk.usage, "openai-chat-completions");
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
     // Read before the `delta` guard below: the chunk that carries
@@ -728,7 +723,7 @@ async function streamResponsesTurn(
       if (event.item.type === "function_call") emitTool(index, event.item.call_id, event.item.name,
         typeof event.item.arguments === "string" ? event.item.arguments : "{}");
     } else if (event.type === "response.completed" && isRecord(event.response)) {
-      usage = normalizeUsage(event.response.usage) ?? usage;
+      usage = normalizeUsage(event.response.usage, "openai-responses") ?? usage;
     } else if (event.type === "response.failed") {
       throw new Error(`Responses API failed${isRecord(event.response) && isRecord(event.response.error) && typeof event.response.error.message === "string" ? `: ${event.response.error.message}` : ""}`);
     }
