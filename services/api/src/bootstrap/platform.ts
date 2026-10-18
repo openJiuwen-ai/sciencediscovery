@@ -43,6 +43,7 @@ import { storeEvolutionInput } from "../evolution/workspace-input.js";
 import { CandidateSources } from "../evolution/candidates.js";
 import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 import { EvolveOrchestrator } from "../evolution/orchestrator.js";
+import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
@@ -144,6 +145,7 @@ export function createPlatformServices(
   }, config.memoryGraph.neo4jPassword, config.memoryGraph.available !== false);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
   const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const evolveAvailability = new EvolveAvailability(config.evolve);
   const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 
   mgLog.setDataDir(config.dataDir);
@@ -160,7 +162,7 @@ export function createPlatformServices(
     const session = store.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     return dependencies.ideaTreeRepository?.({ projectId: session.projectId, sessionId }) ?? ideaTreeRepositoryForSession(
-      { token: config.evolve.internalToken, url: config.evolve.url },
+      { token: config.evolve.internalToken, url: config.evolve.url, connection: () => evolveAvailability.connection() },
       { projectId: session.projectId, sessionId },
     );
   };
@@ -241,7 +243,7 @@ export function createPlatformServices(
   // Run-scoped model tokens. In memory only: a token that outlived the process
   // would outlive the run it belongs to, and that is the property it exists for.
   const evolveRunTokens = new RunTokenRegistry();
-  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
+  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken, connection: () => evolveAvailability.connection(),
     apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const evolveCas = new CasStore(config.dataDir);
   const evolveCandidates = new CandidateSources(
@@ -249,7 +251,7 @@ export function createPlatformServices(
   );
   const evolveOrchestrator = new EvolveOrchestrator(
     evolutionStore,
-    new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url }),
+    new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url, connection: () => evolveAvailability.connection() }),
     memoryGraphSink,
     undefined,
     evolveRunTokens,
@@ -358,17 +360,18 @@ export function createPlatformServices(
    * The run loop calls this per turn and spreads whatever comes back into the
    * agent's options; it never sees `EvolutionStore`, the orchestrator, or the
    * proposal validator. A composition root that has no evolve sidecar returns
-   * `undefined` here and the tools simply do not exist — this one always has
-   * one, so it always returns a runtime.
+   * `undefined` here and the tools simply do not exist until initialization
+   * or the explicitly configured service has passed readiness checks.
    *
    * The main loop designs the run; this only turns the design into one. Every
    * gate the wizard used to sit in front of still runs on this side — the
    * probe, pre-flight, the frozen scoring — because the agent is the designer
    * and never the authority on whether its own scoring can rank.
    */
-  const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => ({
+  const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => !evolveAvailability.ready ? undefined : ({
     approvalMode: turn.approvalMode,
     createEvolveRun: async (input: EvolveRunProposal) => {
+      await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
       // The probe runs real evaluations in the sandbox — two or three, each
       // with the candidate timeout as its ceiling. That is minutes, and the
@@ -440,6 +443,7 @@ export function createPlatformServices(
     artifactManager,
     customMcpServers,
     evolutionStore,
+    evolveAvailability,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -486,6 +490,7 @@ export async function initializePlatformServices(
   config: ServerConfig,
   skillLibraryCatalog: SkillLibraryCatalog,
 ): Promise<void> {
+  await services.evolveAvailability.refresh();
   const {
     artifactManager,
     evolutionStore,

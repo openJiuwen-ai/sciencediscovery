@@ -382,6 +382,13 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Provision sandbox for the installed Evolve task journey
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev true
+
       # The hermetic agent loop drives a scripted local endpoint and performs a
       # real workspace tool round trip; no sandbox and no model credential. It
       # runs the API's native agent in process, so `--coverage` records what

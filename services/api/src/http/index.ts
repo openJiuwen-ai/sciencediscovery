@@ -346,6 +346,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const {
     artifactManager,
     evolutionStore,
+    evolveAvailability,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -837,6 +838,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (url.pathname.startsWith("/api/") && !isAuthorized(request, config.authToken)) {
         sendError(response, 401, "Unauthorized");
         return;
+      }
+      if (url.pathname === "/api/evolve/status" && request.method === "GET") {
+        return sendJson(response, 200, await evolveAvailability.refresh());
+      }
+      if (url.pathname === "/api/evolve/init" && request.method === "POST") {
+        return sendJson(response, 200, await evolveAvailability.refresh(true));
+      }
+      if ((url.pathname.startsWith("/api/evolve/") || /^\/api\/sessions\/[^/]+\/idea-tree(?:\/|$)/.test(url.pathname))
+          && (await evolveAvailability.refresh()).state !== "ready") {
+        return sendError(response, 503, "Evolve is not initialized or unavailable. Select Init Evolve or check the configured service.");
       }
 
       if (await handleExecutionReadiness(request, response, url, store, runnerClient, remoteCompute, () => readJson(request))) return;
@@ -3580,6 +3591,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           message,
         );
       }
+      else if (code === "EVOLVE_UNAVAILABLE") sendError(response, 503, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");

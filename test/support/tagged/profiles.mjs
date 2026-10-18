@@ -99,6 +99,7 @@ export const nodeSources = Object.freeze([
   'services/*/src/**/*.test.ts',
   'services/runner/scripts/*.test.mjs',
   'test/contract/*.test.mjs',
+  'test/api/*.test.ts',
   'test/helpers/*.unit.ts',
   'test/fixtures/*.test.mjs',
   'test/benchmarks/**/*.test.ts',

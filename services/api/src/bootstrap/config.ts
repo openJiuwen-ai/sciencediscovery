@@ -104,6 +104,8 @@ export interface ServerConfig {
   evolve: {
     url: string;
     internalToken: string;
+    controlUrl?: string;
+    controlToken?: string;
   };
 }
 
@@ -251,8 +253,10 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       available: env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE?.trim() !== "0",
     },
     evolve: {
-      url: env.SCIENCE_AGENT_EVOLVE_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4313",
-      internalToken: env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN?.trim() || "sciencediscovery-evolve-local",
+      controlUrl: env.SCIENCE_AGENT_EVOLVE_CONTROL_URL?.trim(),
+      controlToken: env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN?.trim(),
+      url: env.SCIENCE_AGENT_EVOLVE_URL?.trim().replace(/\/$/, "") || "",
+      internalToken: env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN?.trim() || "",
     },
   };
 }

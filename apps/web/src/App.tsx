@@ -235,6 +235,7 @@ import { EvidenceModal } from "./EvidenceModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
 import { isMemoryGraphVisible, MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
+import { EvolveSetup, useEvolveStatus } from "./evolve/EvolveSetup.js";
 import { EvolveAlgorithmPicker } from "./evolve/EvolveAlgorithmPicker.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
@@ -1132,8 +1133,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
-  const showEvolveAlgorithmPicker =
-    /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
+
 
   function selectEvolveAlgorithm(algorithm: "puct" | "openevolve"): void {
     const afterCommand = message.replace(/^\/evolve-design\s*/, "");
@@ -1296,6 +1296,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const mcpReadiness = useMcpReadiness(client);
   const mcpSources = mcpReadiness.sources;
 
+  const { status: evolveStatus, setStatus: setEvolveStatus } = useEvolveStatus(client);
+  const evolveReady = evolveStatus.state === "ready";
+  const evolveCommandBlocked = /^(?:\/evolve-design|\/idea-tree(?:-team)?)(?:\s|$)/.test(message) && !evolveReady;
+  const showEvolveAlgorithmPicker =
+    evolveReady && /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
   // With the JiuwenSwarm backend its language follows the UI's: on load, and whenever the user switches.
   useEffect(() => {
     if (webSettings?.backend !== "jiuwenswarm") return;
@@ -3347,6 +3352,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   async function submitMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (evolveCommandBlocked) return;
     if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
     if (message.trim() === "/web-usage") {
       try {
@@ -4586,6 +4592,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
+                  {evolveCommandBlocked ? <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} /> : null}
                   {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
@@ -4663,7 +4670,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     >
                       {t("reviewer.automaticReview")}: {t(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled ? "common.on" : "common.off")}
                     </button>
-                    <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
+                    <ComposerRunButton action={{ ...composerRunAction, runDisabled: composerRunAction.runDisabled || evolveCommandBlocked }} onStop={() => void stopRun()} />
                   </div>
                 </form>
               </>
@@ -4824,6 +4831,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             </details> : null}
             </WorkspaceFolder>
             <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")} reveal={activityFocus?.token}>
+            <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} />
             {workspacePlans.length ? <details className="workspace-fold workspace-plan-section">
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
@@ -4907,7 +4915,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setArtifactModalVersion(undefined);
             setArtifactModalSessionId(undefined);
           }}
-          onEvolve={(seed) => {
+          onEvolve={evolveReady ? (seed) => {
             // Into the composer, not into a form. The agent designs the run in
             // conversation — it can read this artifact, ask what "better" means
             // here, and *run* its own scoring before spending a budget — so the
@@ -4917,7 +4925,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setArtifactModalName(undefined);
             setArtifactModalVersion(undefined);
             setMessage(`/evolve-design make the artifact ${seed.label} better: `);
-          }}
+          } : undefined}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name, version) => {
             // Provenance links can target an older version of the artifact

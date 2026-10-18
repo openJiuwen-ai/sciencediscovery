@@ -346,3 +346,38 @@ describe("micromamba seeding", () => {
     assert.equal(await seedProvisioner(context), undefined);
   });
 });
+
+test("serve forwards the private Evolve control and closes it with its owned processes on shutdown without initializing", async () => {
+  const { createServer } = await import("node:http");
+  const { mkdir, symlink } = await import("node:fs/promises");
+  const { serve } = await import("./serve.js");
+  const root = await mkdtemp(join(tmpdir(), "serve-evolve-boundary-"));
+  const reservations = [createServer(), createServer()];
+  await Promise.all(reservations.map(server => new Promise<void>(done => server.listen(0, "127.0.0.1", done))));
+  const ports = reservations.map(server => (server.address() as { port: number }).port);
+  await Promise.all(reservations.map(server => new Promise<void>(done => server.close(() => done()))));
+  const fixture = `const fs=require('node:fs'),http=require('node:http');
+const runner=process.argv[1].includes('/runner/');
+if(!runner)fs.writeFileSync(process.env.SCIENCE_AGENT_DATA_DIR+'/control-observation.json',JSON.stringify({url:process.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL,hasPrivateCredential:Boolean(process.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN),hasImplicitEndpoint:Boolean(process.env.SCIENCE_AGENT_EVOLVE_URL)}));
+http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end('{"status":"ok"}');}).listen(Number(runner?process.env.SCIENCE_AGENT_RUNNER_PORT:process.env.SCIENCE_AGENT_PORT),'127.0.0.1');`;
+  try {
+    await mkdir(join(root, "node/bin"), { recursive: true }); await symlink(process.execPath, join(root, manifest.node.path));
+    for (const entry of [manifest.app.apiEntry, manifest.app.runnerEntry]) {
+      const { dirname } = await import("node:path"); await mkdir(dirname(join(root, entry)), { recursive: true }); await writeFile(join(root, entry), fixture);
+    }
+    const context = contextFor({ payloadRoot: root,
+      baseEnv: { SCIENCE_AGENT_AUTH_TOKEN: "synthetic-launcher-access" },
+      settings: { ...defaultSettings({}, root), dataDir: join(root, "data"), scientificEnvironments: false, jiuwenswarm: false,
+        bwrapPath: "/nonexistent/bwrap-fixture", port: ports[0]!, runnerPort: ports[1]! } });
+    let ready: () => void; const becameReady = new Promise<void>(done => { ready = done; });
+    const running = serve(context, message => { if (message.includes("ScienceDiscovery is ready at")) ready!(); });
+    await becameReady;
+    const observed = JSON.parse(await readFile(join(root, "data/control-observation.json"), "utf8"));
+    assert.equal(observed.hasPrivateCredential, true); assert.equal(observed.hasImplicitEndpoint, false);
+    assert.equal((await fetch(`${observed.url}/status`)).status, 401);
+    process.emit("SIGTERM", "SIGTERM");
+    assert.equal((await running).exitCode, 0);
+    await assert.rejects(fetch(`${observed.url}/status`));
+    assert.equal((await (await import("node:fs/promises")).readdir(join(root, "data/evolve"))).some(name => name.startsWith(".install-")), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

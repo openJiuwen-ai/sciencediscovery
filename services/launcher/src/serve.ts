@@ -28,6 +28,7 @@ import {
   resolveServeCredentials,
   type ServeCredentials,
 } from "./bootstrap-tokens.js";
+import { startEvolveControl, type EvolveControl } from "./evolve-runtime.js";
 import { runBootstrap } from "./bootstrap.js";
 import { planMemoryGraph, startMemoryGraph } from "./memory-graph.js";
 import { adapterServiceDefinition, ensureInstance, jiuwenswarmServiceDefinition, waitForGateway } from "./jiuwenswarm.js";
@@ -271,6 +272,8 @@ export async function serve(context: ServeContext, log: (message: string) => voi
     context = { ...context, gatewayPythonPath: bootstrap.gatewayPython };
   }
 
+  let evolveControl: EvolveControl | undefined;
+  const evolveAbort = new AbortController();
   const services = planServices({ ...context, credentials });
 
   const supervisor = new Supervisor({ log });
@@ -280,6 +283,7 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   const shutdown = (signal: NodeJS.Signals): void => {
     if (stopping) return;
     stopping = true;
+    evolveAbort.abort();
     log(`\nReceived ${signal}; stopping the ScienceDiscovery stack...`);
     void supervisor.stop().then(() => Promise.all([memorySupervisor.stop(), runnerSupervisor.stop()]));
   };
@@ -288,6 +292,11 @@ export async function serve(context: ServeContext, log: (message: string) => voi
 
   try {
     const [runnerService, apiService, memoryService] = services;
+    if (!context.baseEnv.SCIENCE_AGENT_EVOLVE_URL?.trim()) {
+      evolveControl = await startEvolveControl({ dataDir: settings.dataDir, payloadRoot: context.payloadRoot,
+        manifest, env: context.baseEnv, log, signal: evolveAbort.signal });
+      Object.assign(apiService!.env, evolveControl.env);
+    }
     try {
       await runnerSupervisor.start([runnerService!]);
       void runnerSupervisor.waitForFirstExit().then(() => {
@@ -346,11 +355,15 @@ export async function serve(context: ServeContext, log: (message: string) => voi
       log(`${first.name} exited (${first.signal ? `signal ${first.signal}` : `status ${String(first.code)}`}); stopping the stack.`);
     }
     return { exitCode: stopping ? 0 : (first.code ?? 1) };
+  } catch (error) {
+    if (stopping) return { exitCode: 0 };
+    throw error;
   } finally {
     stopping = true;
     await supervisor.stop();
     await memorySupervisor.stop();
     await runnerSupervisor.stop();
+    await evolveControl?.close();
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
   }

@@ -27,7 +27,16 @@ import { SkillsApiClient } from "./skills.js";
  * source, a projection in Neo4j, and it is optional: with Science Memory off it
  * answers `memory_graph_disabled` and nothing else changes.
  */
+export interface EvolveStatus {
+  state: "not_initialized" | "installing" | "ready" | "error";
+  canInitialize: boolean;
+  error?: string;
+}
+
 export class EvolveApiClient extends SkillsApiClient {
+  getEvolveStatus(): Promise<EvolveStatus> { return this.request("/api/evolve/status"); }
+  initEvolve(): Promise<EvolveStatus> { return this.request("/api/evolve/init", { method: "POST" }); }
+
 
   listEvolveRuns(sessionId?: string): Promise<EvolveRun[]> {
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";

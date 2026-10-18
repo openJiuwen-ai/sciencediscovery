@@ -439,3 +439,45 @@ Once the service is running, stop reading deployment details and return to the [
 - Sandbox isolation and execution internals: [Developer docs: Sandbox execution](../developer-docs/sandbox-execution.md)
 - Internal processes and module boundaries: [Developer docs: Architecture](../developer-docs/architecture.md)
 - Repository structure and source entry points: [Developer docs: Repository layout](../developer-docs/repository-layout.md)
+
+### Initialize Evolve on demand
+
+The slim binary starts with Evolve and its related Idea Tree research paths
+**not initialized**. Chat remains available. In a Session, open **Tasks → Evolve**
+and select **Init Evolve**, or type `/evolve-design` and use the initialization
+action shown above the composer. Initialization is explicit: starting `serve`
+does not download Evolve or the candidate runtime.
+
+Init downloads the designated `v0.3.0-rc1` application source archive at commit
+`844947da87b27528d9a34d0ee6d0efd591e57749`, verifies SHA-256
+`2cea0ea513eef43c94e697e72a21cf7bb3d4b8883117479240b6c8d3e0cc2e99`,
+and installs `services/evolve` with the frozen candidate dependencies on the
+release's bundled Python (3.12 or later). No Git checkout or host Python is
+required. Allow at least 1 GiB of free disk space and network access to GitHub
+and the configured Python package index. The source package's local `0.0.0`
+version is identified by that release/commit/archive digest, not by a PyPI
+sidecar release. The exact runtime export and its checksum live in
+`services/launcher/src/evolve-lock.ts`.
+
+The launcher starts the installed sidecar on its own dynamically bound loopback
+socket. Its random internal credential is private to the installation and
+persists in `<data-dir>/evolve/secrets/internal-token` with owner-only access;
+it is never a browser/model token. Closing `serve` stops the owned process.
+Restarts reuse the verified installation and token. A failed download, checksum,
+installation or startup leaves Evolve unavailable; select **Init Evolve** to
+retry. Incomplete staging directories are cleaned up rather than promoted.
+
+Operators may explicitly configure `SCIENCE_AGENT_EVOLVE_URL` and
+`SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN` for an existing service. This mode remains
+operator-owned; the launcher does not install or stop that service. Health and
+authentication must succeed before Evolve tools are offered. Without a launcher
+or explicit service configuration, the UI explains that initialization is
+unavailable. The source/container stack explicitly starts its provisioned
+sidecar through the same launcher socket supervision; it no longer relies on
+an implicit fixed port or public credential.
+
+The managed Evolve runtime uses only its locked packages. A task cannot silently
+install another package from a mutable index; missing additional packages cause
+a refusal. Supporting another managed dependency requires updating the reviewed
+lock. An explicitly provisioned source stack or operator-configured service
+retains its own runtime provisioning policy.

@@ -5,11 +5,17 @@ import type { RunTokenRegistry } from "../evolution/llm-proxy.js";
 
 /** Only transport and credentials live here. Python owns research state and scheduling. */
 export function createIdeaResearchClient(options: {
-  url: string; token?: string; apiOrigin: string; store: SessionStore; tokens: RunTokenRegistry;
+  url: string; token?: string; connection?: () => Promise<{ url: string; internalToken: string }>; apiOrigin: string; store: SessionStore; tokens: RunTokenRegistry;
 }) {
+  async function connection() {
+    const result = options.connection ? await options.connection() : { url: options.url, internalToken: options.token };
+    if (!result.url) throw new Error("Evolve is not initialized. Select Init Evolve.");
+    return result;
+  }
   const grants = new Map<string, { sessionId: string; token: string }>();
   const pending = new Set<string>();
   async function invoke(sessionId: string, operation: string, input: Record<string, unknown> = {}): Promise<any> {
+    const target = await connection();
     const session = operation === "list" || operation === "get" || operation === "defaults"
       ? options.store.getSession(sessionId) : options.store.assertSessionWritable(sessionId);
     if (!session) throw new Error("Session not found");
@@ -39,8 +45,8 @@ export function createIdeaResearchClient(options: {
     }
     try {
       const observedGrants = new Map(grants);
-      const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/command`, {
-        method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
+      const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/command`, {
+        method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
         body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
       });
       const body = await response.json() as any;
@@ -73,18 +79,21 @@ export function createIdeaResearchClient(options: {
     finally { if (mutation) pending.delete(sessionId); }
   }
   async function cleanup(projectId: string, sessionId: string) {
-    const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/command`, {
-      method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
+    if (!options.url && !options.connection) return;
+    const target = await connection();
+    const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/command`, {
+      method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
       body: JSON.stringify({operation: "delete", projectId, sessionId}), signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(`Research cleanup failed: HTTP ${response.status}`);
     for (const [id, owner] of grants) if (owner.sessionId === sessionId) { options.tokens.revoke(id); grants.delete(id); }
   }
   async function events(sessionId: string, researchId: string, signal: AbortSignal) {
+    const target = await connection();
     const session = options.store.getSession(sessionId);
     if (!session) throw new Error("Session not found");
-    const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/events`, {
-      method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
+    const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/events`, {
+      method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
       body: JSON.stringify({operation: "get", projectId: session.projectId, sessionId, researchId}), signal,
     });
     if (!response.ok || !response.body) throw new Error(`Research stream failed: HTTP ${response.status}`);

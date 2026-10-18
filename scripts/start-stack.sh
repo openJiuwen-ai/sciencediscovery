@@ -629,13 +629,23 @@ start_stack() {
   # never sees a model key: model calls go back through the API's loopback
   # proxy with a one-shot run token, and everything needed to replay or resume
   # a run lives in the API's data/evolution/runs/<runId>/events.ndjson.
-  if [[ -x "$evolve_python" ]]; then
+  if [[ -x "$evolve_python" && -z "${SCIENCE_AGENT_EVOLVE_URL:-}" ]]; then
     echo "Starting the evolve service..." >&2
-    SCIENCE_AGENT_DATA_DIR="$data_dir" \
-    SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN="${SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN:-sciencediscovery-evolve-local}" \
-    "$evolve_python" -m sciencediscovery_evolve.server &
-    pids+=("$!")
-    wait_healthy "evolve" "http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT:-4313}/health"
+    local evolve_state evolve_pid
+    evolve_state="$(mktemp "$data_dir/.evolve-control.XXXXXX")"
+    node services/launcher/dist/source-evolve.js "$evolve_python" "$data_dir" "$evolve_state" &
+    evolve_pid="$!"
+    pids+=("$evolve_pid")
+    for ((attempt=0; attempt<300; attempt++)); do
+      [[ -s "$evolve_state" ]] && break
+      kill -0 "$evolve_pid" 2>/dev/null || { echo "Evolve exited before readiness." >&2; return 1; }
+      sleep 0.2
+    done
+    [[ -s "$evolve_state" ]] || { echo "Evolve did not become ready." >&2; return 1; }
+    # Private control coordinates availability and credentials; no model token is sent to a guessed port.
+    SCIENCE_AGENT_EVOLVE_CONTROL_URL="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).SCIENCE_AGENT_EVOLVE_CONTROL_URL)' "$evolve_state")"
+    SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN)' "$evolve_state")"
+    export SCIENCE_AGENT_EVOLVE_CONTROL_URL SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN
   fi
 
   if [[ "${SCIENCE_AGENT_EXECUTOR:-}" == "jiuwenswarm" ]]; then
