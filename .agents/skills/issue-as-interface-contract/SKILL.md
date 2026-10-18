@@ -148,7 +148,7 @@ Not a hard kill by default:
 | `merge-keep-open` | Merge PR; leave issue open; comment gaps; completed `keep-open` |
 | `human-need` | Label issue; comment decisions on issue; stop automation |
 
-Phase policy (which codes auto-execute vs propose) lives in the reviewer skill version, not here.
+**IAI review-bot default is execute:** wire [iai-reviewer-execute](../iai-reviewer-execute/SKILL.md) (or `iai.reviewer.mode=execute` / `allow_merge=true`) so merge-close / merge-keep-open run when gates pass — no per-PR chat authorize. Opt-in safer staging: wire [iai-reviewer-patrol](../iai-reviewer-patrol/SKILL.md) (or `iai.reviewer.mode=suggest` / `allow_merge=false`) for propose-only merge/close. A running bot has **no phase identity**; host wiring / `reviewer.mode` decides. Historical alias: Phase 3 = suggest, Phase 4 = execute.
 
 ## Out of scope for this skill
 

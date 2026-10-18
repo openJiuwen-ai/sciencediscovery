@@ -10,8 +10,11 @@ Core skills (under `.agents/skills/`):
 - [issue-as-interface-contract](../../../.agents/skills/issue-as-interface-contract/SKILL.md) — labels, state machine, ledgers, Magpie principles
 - [issue-review-agent-ready](../../../.agents/skills/issue-review-agent-ready/SKILL.md) — issue gate before `agent-ready`
 - [iai-developer-patrol](../../../.agents/skills/iai-developer-patrol/SKILL.md) / [iai-worker-implement](../../../.agents/skills/iai-worker-implement/SKILL.md)
-- [iai-reviewer-patrol](../../../.agents/skills/iai-reviewer-patrol/SKILL.md) / [iai-reviewer-execute](../../../.agents/skills/iai-reviewer-execute/SKILL.md)
-- [magpie-pr-review-pipeline](../../../.agents/skills/magpie-pr-review-pipeline/SKILL.md) — pairing + PR↔issue closure
+- [iai-reviewer-execute](../../../.agents/skills/iai-reviewer-execute/SKILL.md) — **execute mode (IAI default)**: may merge-close / merge-keep-open / continue / human-need when gates pass; no per-PR chat authorize
+- [iai-reviewer-patrol](../../../.agents/skills/iai-reviewer-patrol/SKILL.md) — **suggest mode (opt-in staging)**: continue + human-need; propose-only merge/close
+- [magpie-pr-review-pipeline](../../../.agents/skills/magpie-pr-review-pipeline/SKILL.md) — pairing + PR↔issue verdicts; Approve ≠ merge; standalone-chat draft/COMMENT does **not** block IAI review-bot merges
+
+**A running review-bot has no phase identity.** IAI default is high authority (wire execute / `iai.reviewer.mode=execute`). Suggest is optional safer staging. Historical aliases Phase 3 = suggest, Phase 4 = execute — upgrade notes only.
 
 OSS ops (parallel, draft/read-only by default):
 `oss-ops-newcomer-gfi`, `oss-ops-stale-sweep`, `oss-ops-maintainer-stats`, `oss-ops-repo-health`.
@@ -26,5 +29,7 @@ Workers catching up a PR with `main` must **rebase** onto the base (`git fetch` 
 
 Related: the existing opt-in [Issue-to-PR pipeline](issue-pipeline.md)
 (`repo-issue-pipeline`). Installing these skills does **not** start bots or change
-the application backend. Merging, closing issues, and `human-need` escalation
-follow the skill text and require the host's configured authority.
+the application backend. **IAI review-bot default:** wire `iai-reviewer-execute`
+(or `iai.reviewer.mode=execute`) so merge/close run when gates pass.
+Suggest/`iai-reviewer-patrol` is opt-in staging. `human-need` escalation follows
+the skill text.
