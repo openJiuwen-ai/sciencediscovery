@@ -20,6 +20,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { DEFAULT_MODEL_API_VARIANT } from '../../packages/schema/dist/index.js';
 import { protocolProvider } from '../helpers/protocol-provider.ts';
 const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 assert.equal(execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim(), '', 'Commit candidate before E2E');
@@ -57,6 +58,13 @@ try {
       const result = await request(`/api/models/${model.id}/test`, { consent: true, compatibility: true });
       assert.equal(result.status, 200); assert.ok(result.body.protocols.every(p => p.basic.ok && p.streaming.ok && p.tools.ok && p.usage === 'unknown'));
       const saved = (await request('/api/models')).body.find(m => m.id === model.id); assert.equal(saved.apiProtocol, apiProtocol);
+      const beforeOverride = provider.requests.length;
+      const override = apiProtocol === 'openai-responses' ? 'openai-chat-completions' : 'openai-responses';
+      assert.equal((await request(`/api/models/${model.id}`, { name: model.name, model: model.model, baseUrl: model.baseUrl, apiProtocol: override, apiVariant: DEFAULT_MODEL_API_VARIANT[override] }, 'PUT')).status, 200);
+      assert.equal((await request('/api/models')).body.find(m => m.id === model.id).apiProtocol, override);
+      assert.equal(provider.requests.length, beforeOverride, 'Saving a manual override must not automatically spend tokens');
+      assert.equal((await request(`/api/models/${model.id}`, { name: model.name, model: model.model, baseUrl: model.baseUrl, apiProtocol, apiVariant: DEFAULT_MODEL_API_VARIANT[apiProtocol] }, 'PUT')).status, 200);
+
       assert.doesNotMatch(result.text, new RegExp(token));
       return 'Three protocol matrices pass; usage stays unknown; no protocol switch';
     });

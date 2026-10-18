@@ -82,3 +82,16 @@ test("impossible totals do not invent zero for a missing side of usage", () => {
   assert.equal(normalizeUsage({ total_tokens: 1, completion_tokens: 2 }, "openai-chat-completions"), undefined);
   assert.equal(normalizeUsage({ total_tokens: 1, prompt_tokens: 2 }, "openai-chat-completions"), undefined);
 });
+
+test("fractional token counts remain unknown instead of becoming fabricated zero counts", () => {
+  assert.equal(normalizeUsage({ prompt_tokens: .5, completion_tokens: 2 }, "openai-chat-completions"), undefined);
+  assert.equal(normalizeUsage({ input_tokens: 2, output_tokens: .5 }, "openai-responses"), undefined);
+});
+
+test("native Responses cache fields take precedence and preserve explicit zero", () => {
+  for (const cached of [0, 3]) {
+    const usage = normalizeUsage({ input_tokens: 10, output_tokens: 2, prompt_tokens_details: { cached_tokens: 99 }, input_tokens_details: { cached_tokens: cached, cache_write_tokens: 1 } }, "openai-responses");
+    assert.equal(usage?.cacheReadTokens, cached); assert.equal(usage?.cacheWriteTokens, 1);
+  }
+  assert.equal(normalizeUsage({ input_tokens: 10, output_tokens: 2, input_tokens_details: { cached_tokens: .5 } }, "openai-responses")?.cacheReadTokens, null);
+});

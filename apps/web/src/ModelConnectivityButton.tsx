@@ -73,6 +73,7 @@ export function ModelConnectivityButton({
   useEffect(() => {
     requestRevision.current += 1;
     setState({ status: "idle" });
+    setConsent(false);
   }, [modelId, profileVersion]);
 
   async function runTest(): Promise<void> {

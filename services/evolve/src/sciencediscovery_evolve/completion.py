@@ -205,7 +205,7 @@ def completion_for(
             completion = usage.get("completion_tokens")
             total = usage.get("total_tokens")
             valid = lambda value: (isinstance(value, (int, float)) and not isinstance(value, bool)
-                                   and 0 <= value <= 2**53 - 1 and (isinstance(value, int) or math.isfinite(value)))
+                                   and 0 <= value <= 2**53 - 1 and int(value) == value and (isinstance(value, int) or math.isfinite(value)))
             if valid(total) and valid(completion) and total >= completion:
                 try:
                     report(CompletionUsage(total=int(total), completion=int(completion),

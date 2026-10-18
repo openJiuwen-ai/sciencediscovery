@@ -377,8 +377,10 @@ def test_the_run_tag_is_not_part_of_a_reported_call():
 
 @pytest.mark.parametrize("usage", [None, [], ["malformed"], "malformed", {}, {"input_tokens": "bad", "output_tokens": 2},
                                    {"input_tokens": 2}, {"input_tokens": True, "output_tokens": 2},
-                                   {"input_tokens": float("inf"), "output_tokens": 2}, {"input_tokens": -1, "output_tokens": 2}])
+                                   "infinite-count", {"input_tokens": -1, "output_tokens": 2}, {"input_tokens": 0.5, "output_tokens": 2}])
 def test_malformed_usage_is_nonfatal_and_never_zero_filled(usage):
+    if usage == "infinite-count":
+        usage = {"input_tokens": float("inf"), "output_tokens": 2}
     mapper = RunEventMapper()
     assert mapper.feed({"type": "event", "event": "chat.usage_metadata", "payload": {"metadata": {"usage_metadata": usage}}}) == []
     # The same stream can continue to a valid final answer.

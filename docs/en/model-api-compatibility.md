@@ -87,6 +87,11 @@ not additional product protocol routers. They keep their declared Chat
 Completions interface and are not run by compatibility checks. No new paid-model
 PR gate is introduced.
 
+Responses cache accounting reads the native `input_tokens_details.cached_tokens`
+and `cache_write_tokens` fields, retaining legacy compatible aliases as a
+fallback. Native counts take precedence over zero-filled aliases. See the
+[official OpenAI cache guidance](https://developers.openai.com/api/docs/guides/prompt-caching/diagnostics).
+
 ## HTTP API
 
 `POST /api/models/:id/test` requires normal API authentication and a JSON body:

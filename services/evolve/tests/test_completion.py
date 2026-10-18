@@ -84,12 +84,14 @@ def test_sends_temperature_when_given(model_server: str):
 
 
 @pytest.mark.parametrize("usage", [None, [], ["malformed"], "malformed", {},
-                                  {"total_tokens": float("nan"), "completion_tokens": 1},
+                                  "nan-count",
                                   {"total_tokens": -1, "completion_tokens": 1},
                                   {"total_tokens": True, "completion_tokens": 0},
-                                  {"total_tokens": 2}, {"total_tokens": 1, "completion_tokens": 2}])
+                                  {"total_tokens": 2}, {"total_tokens": 1, "completion_tokens": 2}, {"total_tokens": 2.5, "completion_tokens": 1}, {"total_tokens": 2, "completion_tokens": 0.5}])
 def test_malformed_usage_does_not_discard_valid_text(usage, monkeypatch):
     import io
+    if usage == "nan-count":
+        usage = {"total_tokens": float("nan"), "completion_tokens": 1}
     recorded = []
     payload = dict(choices=[dict(message=dict(content="valid result"))], usage=usage)
     monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: io.BytesIO(json.dumps(payload).encode()))

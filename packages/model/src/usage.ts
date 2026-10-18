@@ -23,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function count(value: Record<string, unknown>, keys: string[]): number | undefined {
   for (const key of keys) {
     const raw = value[key];
-    if (typeof raw === "number" && Number.isSafeInteger(Math.floor(raw)) && raw >= 0) return Math.floor(raw);
+    if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) return raw;
   }
   return undefined;
 }
@@ -66,9 +66,12 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
     cacheReadTokens ??= count(promptDetails, ["cached_tokens", "cache_read_tokens", "cache_tokens"]);
     cacheWriteTokens ??= count(promptDetails, ["cache_write_tokens", "cache_creation_tokens"]);
   }
-  const inputDetails = raw.input_token_details;
+  const inputDetails = raw.input_tokens_details ?? raw.input_token_details;
   if (isRecord(inputDetails)) {
-    cacheReadTokens ??= count(inputDetails, ["cache_read", "cached_tokens", "cache_read_tokens"]);
+    const read = count(inputDetails, ["cached_tokens", "cache_read", "cache_read_tokens"]);
+    const write = count(inputDetails, ["cache_write_tokens", "cache_write"]);
+    cacheReadTokens = protocol === "openai-responses" ? read ?? cacheReadTokens : cacheReadTokens ?? read;
+    cacheWriteTokens = protocol === "openai-responses" ? write ?? cacheWriteTokens : cacheWriteTokens ?? write;
   }
 
   if (totalTokens === undefined && inputTokens !== undefined && outputTokens !== undefined) {

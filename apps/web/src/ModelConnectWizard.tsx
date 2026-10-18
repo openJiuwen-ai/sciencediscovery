@@ -130,6 +130,7 @@ export function ModelConnectWizard({
 
   const [testing, setTesting] = useState(false);
   const [probeConsent, setProbeConsent] = useState(false);
+  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, proxyPolicy, baseUrlOverride, selectedPresetId]);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
   const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();

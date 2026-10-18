@@ -7,17 +7,18 @@ import { ProviderModelClient } from "./runtime-client.js";
 import { ModelRequestError, type ModelTurn } from "./client.js";
 const endpoint = { baseUrl: "http://127.0.0.1:1", model: "synthetic" };
 const policy = { maxTokens: 16, maxRetries: 0, requestTimeoutMs: 1000 };
+const observer = { onProgress: () => undefined, onTextDelta: () => undefined, onThinkingDelta: () => undefined };
 const input = { systemPrompt: "synthetic", history: [{ role: "user", content: "synthetic" }], tools: [] };
 for (const failure of ["incomplete", "malformed"] as const) test(`runtime rejects ${failure} stream evidence`, async () => {
   const client = new ProviderModelClient(endpoint, policy, async () => ({ assistantMessage: { role: "assistant", content: "partial" }, toolCalls: [], ...(failure === "incomplete" ? { completionObserved: false } : { streamDiagnostics: { protocol: "openai-responses", unparseableSsePayloads: 1 } }) }));
-  await assert.rejects(client.invoke(input, new AbortController().signal, {}), /Model stream/);
+  await assert.rejects(client.invoke(input, new AbortController().signal, observer), /Model stream/);
 });
 test("runtime preserves original errors and unavailable usage without failing successful completion", async () => {
   const failure = new ModelRequestError("original provider error", 429);
   const bad = new ProviderModelClient(endpoint, policy, async () => { throw failure; });
-  await assert.rejects(bad.invoke(input, new AbortController().signal, {}), e => e === failure);
+  await assert.rejects(bad.invoke(input, new AbortController().signal, observer), e => e === failure);
   assert.equal(bad.isInputTooLargeError(failure), false);
   const turn: ModelTurn = { assistantMessage: { role: "assistant", content: "OK" }, toolCalls: [], completionObserved: true };
   const good = new ProviderModelClient(endpoint, policy, async () => turn);
-  assert.equal((await good.invoke(input, new AbortController().signal, {})).usage, undefined);
+  assert.equal((await good.invoke(input, new AbortController().signal, observer)).usage, undefined);
 });

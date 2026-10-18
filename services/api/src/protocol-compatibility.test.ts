@@ -4,6 +4,9 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -44,6 +47,13 @@ for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthr
       const evolve = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/internal/evolve-llm/synthetic-run/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ messages: initial, max_tokens: 128, thinking: { type: "disabled" } }), signal: AbortSignal.timeout(2000) });
       assert.equal(evolve.status, 200); assert.equal((await evolve.json() as any).choices[0].message.content, "OK");
       assert.equal(spend[0]?.usageStatus, "provider-not-reported"); assert.equal(spend[0]?.costUsd, null);
+      // Invoke the actual Python sidecar completion client through the authenticated proxy.
+      const python = process.env.SCIENCE_TEST_PYTHON ?? "python3";
+      await promisify(execFile)(python, ["-c", "import sys; from sciencediscovery_evolve.completion import completion_for; usage=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=128,timeout=2,on_usage=usage.append)('synthetic sidecar request'); assert result == 'OK'; assert usage == []", `http://127.0.0.1:${(server.address() as AddressInfo).port}/internal/evolve-llm/synthetic-run/v1/chat/completions`, token], {
+        timeout: 5000, env: { ...process.env, PYTHONPATH: [fileURLToPath(new URL("../../evolve/src/", import.meta.url)), process.env.PYTHONPATH].filter(Boolean).join(":") },
+      });
+      assert.equal(spend.length, 2);
+
       // Paper vision uses real workspace/CAS persistence and the same HTTP provider, no Python required.
       await mkdir(dataDir, { recursive: true });
       const store = new SessionStore(dataDir); await store.load();

@@ -305,11 +305,13 @@ class RunEventMapper:
         def count(key: str) -> int | None:
             value = usage.get(key)
             return int(value) if (isinstance(value, (int, float)) and not isinstance(value, bool)
-                                  and 0 <= value <= 2**53 - 1 and (isinstance(value, int) or math.isfinite(value))) else None
+                                  and 0 <= value <= 2**53 - 1 and int(value) == value and (isinstance(value, int) or math.isfinite(value))) else None
         input_count, output_count = count("input_tokens"), count("output_tokens")
         if input_count is None or output_count is None:
             return []  # Unknown accounting must not fail the model's task or invent zero counts.
         total = count("total_tokens")
+        if total is None and input_count + output_count > 2**53 - 1:
+            return []
         usage_out = {"inputTokens": input_count, "outputTokens": output_count,
                      "totalTokens": total if total is not None else input_count + output_count,
                      "cacheReadTokens": count("cache_read_tokens"), "cacheWriteTokens": count("cache_write_tokens")}

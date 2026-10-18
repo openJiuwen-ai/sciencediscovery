@@ -229,7 +229,7 @@ class IdeaTreeEngine:
             finally:
                 async with self.usage_lock:
                     # Settle actual usage and release its reservation together.
-                    if isinstance(usage, int) and not isinstance(usage, bool) and usage >= 0:
+                    if isinstance(usage, int) and not isinstance(usage, bool) and 0 <= usage <= 2**53 - 1:
                         self.state['tokens'] += usage
                     else:
                         self.state['usageKnown'] = False

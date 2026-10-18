@@ -195,7 +195,7 @@ export function proxyDispatcher(proxy: ResolvedProxy | undefined): Dispatcher | 
 function numberField(value: Record<string, unknown>, keys: string[]): number | undefined {
   for (const key of keys) {
     const raw = value[key];
-    if (typeof raw === "number" && Number.isSafeInteger(Math.floor(raw)) && raw >= 0) return raw;
+    if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) return raw;
   }
   return undefined;
 }
@@ -649,6 +649,10 @@ function responsesInput(history: AgentHistoryMessage[]): unknown[] {
   for (const message of history) {
     if (message.role === "assistant" && Array.isArray(message.response_items)) {
       input.push(...structuredClone(message.response_items));
+      // Some compatible streams omit the text-item snapshot. Keep observed text
+      // alongside native reasoning/tool state rather than dropping it on replay.
+      const hasText = message.response_items.some(item => isRecord(item) && item.type === "message" && contentText(item.content));
+      if (!hasText && contentText(message.content)) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: contentText(message.content) }] });
     } else if (message.role === "tool") {
       input.push({
         type: "function_call_output",
@@ -881,6 +885,8 @@ async function streamAnthropicTurn(
       cacheWriteTokens = numberField(event.message.usage, ["cache_creation_input_tokens"]) ?? null;
     } else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
       blocks.set(event.index, structuredClone(event.content_block));
+      if (event.content_block.type === "text" && typeof event.content_block.text === "string" && event.content_block.text) callbacks.onTextDelta?.(event.content_block.text);
+      if (event.content_block.type === "thinking" && typeof event.content_block.thinking === "string" && event.content_block.thinking) callbacks.onThinkingDelta?.(event.content_block.thinking);
       if (event.content_block.type === "tool_use") {
         toolJson.set(event.index, "");
         emitTool(event.index, event.content_block.id, event.content_block.name, "");

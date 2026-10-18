@@ -85,3 +85,36 @@ for (const protocol of protocols) test(`${protocol} refuses a missing provider t
   try { await assert.rejects(streamModelTurn({ apiProtocol: protocol, baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: "s", proxy: { mode: "direct" } }, "s", [], [], policy, AbortSignal.timeout(1000)), /omitted a tool call ID/); }
   finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });
+
+test("Responses replays observed text when native text-item snapshots are absent", async () => {
+  const provider = await protocolProvider("openai-responses");
+  try {
+    const endpoint = { apiProtocol: "openai-responses" as const, baseUrl: provider.baseUrl, model: "synthetic", proxy: { mode: "direct" as const } };
+    const turn = await streamModelTurn(endpoint, "s", [{ role: "user", content: "synthetic" }], [], policy, AbortSignal.timeout(2000));
+    await streamModelTurn(endpoint, "s", [turn.assistantMessage, { role: "user", content: "continue" }], [], policy, AbortSignal.timeout(2000));
+    assert.match(JSON.stringify(provider.requests[1]!.body.input), /encrypted-required/);
+    assert.match(JSON.stringify(provider.requests[1]!.body.input), /output_text.*OK/);
+  } finally { await provider.close(); }
+});
+
+test("Messages streams initial text and thinking exactly once", async () => {
+  const { createServer } = await import("node:http");
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) {}
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of [{ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "initial thought", signature: "sig" } }, { type: "content_block_start", index: 1, content_block: { type: "text", text: "O" } }, { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "K" } }, { type: "message_delta", delta: { stop_reason: "end_turn" } }]) res.write(`data: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  });
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  try {
+    let text = "", thought = "";
+    const turn = await streamModelTurn({ apiProtocol: "anthropic-messages", baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: "s", proxy: { mode: "direct" } }, "s", [], [], policy, AbortSignal.timeout(2000), { onTextDelta: d => { text += d; }, onThinkingDelta: d => { thought += d; } });
+    assert.equal(text, "OK"); assert.equal(thought, "initial thought"); assert.equal(turn.assistantMessage.content, "OK");
+  } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});
+
+for (const apiProtocol of protocols) test(`${apiProtocol} streaming response byte ceiling terminates an oversized stream`, async () => {
+  const provider = await protocolProvider(apiProtocol);
+  try { await assert.rejects(streamModelTurn({ apiProtocol, baseUrl: provider.baseUrl, model: "s", proxy: { mode: "direct" } }, "s", [], [], { ...policy, maxResponseBytes: 8 }, AbortSignal.timeout(1000)), /byte limit/); }
+  finally { await provider.close(); }
+});

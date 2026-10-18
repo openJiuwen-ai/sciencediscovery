@@ -176,29 +176,29 @@ export async function generateRefinedSessionTitle(options: {
 
   const disableThinking = options.model.apiProtocol === "anthropic-messages" || options.model.apiProtocol === "openai-responses" || supportsThinkingToggle(options.model);
   let response = await requestCompletion(disableThinking);
-  let usedUnboundedFallback = false;
+  let usedDefaultBudgetFallback = false;
   // `thinking` is a provider extension. Strict OpenAI-compatible gateways may
-  // reject it. Let the provider choose the output budget on fallback so a
-  // reasoning model can reach its visible answer before we truncate locally.
+  // reject it. Use the shared bounded default budget on fallback so a
+  // reasoning model has room to reach its visible answer.
   if (disableThinking && (response.status === 400 || response.status === 422)) {
     response = await requestCompletion(false);
-    usedUnboundedFallback = true;
+    usedDefaultBudgetFallback = true;
   }
   // Some models take only their own temperature (Kimi's coding models answer 400 "only 1 is allowed"):
   // the last try leaves it to the provider.
   if (response.status === 400 || response.status === 422) {
     response = await requestCompletion(false, false);
-    usedUnboundedFallback = true;
+    usedDefaultBudgetFallback = true;
   }
   if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
   let body = await response.json() as ChatCompletionBody;
   const attemptUsages = [parseProviderUsage(body.usage, "openai-chat-completions")];
   // Some compatible gateways accept unknown fields but silently ignore them.
-  // If all limited output was still reasoning, retry once without a provider
-  // limit and use only the visible content from that response.
-  if (disableThinking && !usedUnboundedFallback && reasoningConsumedVisibleAnswer(body)) {
+  // If all limited output was still reasoning, retry once with the shared
+  // bounded default budget and use only that response's visible content.
+  if (disableThinking && !usedDefaultBudgetFallback && reasoningConsumedVisibleAnswer(body)) {
     response = await requestCompletion(false);
-    usedUnboundedFallback = true;
+    usedDefaultBudgetFallback = true;
     if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
     body = await response.json() as ChatCompletionBody;
     attemptUsages.push(parseProviderUsage(body.usage, "openai-chat-completions"));

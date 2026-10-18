@@ -679,3 +679,12 @@ test("gateway preserves explicit generation controls and refuses unsupported con
     assert.equal(seen.length, 1);
   } finally { await gateway.close(); }
 });
+
+for (const incomplete of [false, true]) test(`gateway rejects ${incomplete ? "unterminated" : "malformed"} streams before reporting success`, async () => {
+  const { streamer } = fakeStreamer(answer(incomplete ? { completionObserved: false } : { streamDiagnostics: { protocol: "openai-responses", unparseableSsePayloads: 1 } }));
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { messages: [], stream: false });
+    assert.equal(response.status, 502); assert.match(await response.text(), /Model stream/);
+  } finally { await g.close(); }
+});
