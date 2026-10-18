@@ -83,8 +83,11 @@ for (const [kind, locale] of [['responses-min16', 'en'], ['reasoning-limit', 'en
         expect(requests).toHaveLength(1);
       });
       for (const width of [390, 1440]) await journey.step(`Inspect wizard at${width}px`, 'Outcome text wraps and setup controls remain reachable', async () => {
-        await page.setViewportSize({ width, height: 800 }); await wizard.scrollIntoViewIfNeeded();
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy(); await expect(wizard.locator('.wizard-submit-button')).toBeVisible();
+        await page.setViewportSize({ width, height: 800 });
+        const outcome = wizard.locator('.wizard-alert');
+        await outcome.scrollIntoViewIfNeeded(); await expect(outcome).toBeInViewport();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+        await expect(wizard.locator('.wizard-submit-button')).toBeInViewport();
       });
     } finally {
       try {
