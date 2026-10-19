@@ -195,9 +195,13 @@ export class EvolveSidecarClient {
       signal,
     });
     if (!response.ok || !response.body) {
-      const detail = await response.text().catch(() => "");
+      // A refusal may be a proxy page or contain private upstream diagnostics.
+      // Discard it without buffering it into the user-facing run error.
+      await response.body?.cancel().catch(() => undefined);
       throw new EvolveSidecarError(
-        `evolve sidecar refused the run (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`,
+        response.status === 401 || response.status === 403
+          ? "Evolve authentication failed. Check the configured service or retry Init Evolve."
+          : `Evolve service ${response.ok ? "returned no run stream" : "refused the run"} (HTTP ${response.status}). Check the service configuration or retry Init Evolve.`,
         response.status,
       );
     }

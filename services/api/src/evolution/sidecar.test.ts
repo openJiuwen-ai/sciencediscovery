@@ -168,3 +168,70 @@ test("actual probe refusals classify 401/403 safely and preserve non-auth diagno
     assert.deepEqual(requests, ["/probe", "/probe", "/probe"]);
   } finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
 });
+
+test("run stream refusals name Evolve and retain status without exposing upstream bodies", async () => {
+  const { createServer } = await import("node:http");
+  const { EvolveSidecarClient, EvolveSidecarError } = await import("./sidecar.js");
+  let status = 500;
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    request.resume();
+    requests.push(`${request.method} ${request.url}`);
+    assert.equal(request.headers.authorization, "Bearer synthetic-stream-only");
+    response.writeHead(status, { "content-type": "text/plain" });
+    response.end(status === 200 ? LINE(1) + LINE(2) : "synthetic-private-upstream-body");
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  try {
+    const client = new EvolveSidecarClient({ url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, internalToken: "synthetic-stream-only" });
+    const spec = { algorithm: "puct", expansions: 1, scorecardHash: "fixture", searchId: "fixture" };
+    const collectRun = async () => { const events = []; for await (const event of client.stream(spec)) events.push(event); return events; };
+    for (status of [500, 401, 403, 400, 429, 503, 204]) {
+      await assert.rejects(collectRun(), error => {
+        assert(error instanceof EvolveSidecarError);
+        assert.equal(error.status, status);
+        assert.match(error.message, /Evolve/);
+        assert.doesNotMatch(error.message, /synthetic-private|synthetic-stream|upstream-body/);
+        if (status === 401 || status === 403) assert.equal(error.message, "Evolve authentication failed. Check the configured service or retry Init Evolve.");
+        else {
+          assert.match(error.message, new RegExp(`HTTP ${status}`));
+          assert.match(error.message, status === 204 ? /no run stream/ : /refused the run/);
+        }
+        return true;
+      });
+    }
+    status = 200;
+    assert.deepEqual((await collectRun()).map(event => event.sequence), [1, 2]);
+    assert.deepEqual(requests, Array(8).fill("POST /runs"));
+    const abort = new AbortController(); abort.abort();
+    await assert.rejects(async () => { for await (const event of client.stream(spec, abort.signal)) void event; }, { name: "AbortError" });
+    assert.equal(requests.length, 8, "a cancelled request is not sent");
+    server.closeAllConnections();
+    await new Promise<void>(done => server.close(() => done()));
+    await assert.rejects(collectRun(), error => {
+      assert(error instanceof TypeError); assert.equal(error.message, "fetch failed");
+      assert(!(error instanceof EvolveSidecarError), "transport failure must not be misreported as an HTTP refusal");
+      return true;
+    });
+  } finally { server.closeAllConnections(); if (server.listening) await new Promise<void>(done => server.close(() => done())); }
+});
+
+test("a refused response still reports Evolve and its status when discarding its body fails", async () => {
+  const { EvolveSidecarClient, EvolveSidecarError } = await import("./sidecar.js");
+  const original = globalThis.fetch;
+  let cancelled = false;
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    cancel() { cancelled = true; throw new Error("synthetic-private-discard-fault"); },
+  }), { status: 502 });
+  try {
+    const client = new EvolveSidecarClient({ url: "http://fixture.invalid", internalToken: "synthetic-only" });
+    await assert.rejects(async () => {
+      for await (const event of client.stream({ algorithm: "puct", expansions: 1, scorecardHash: "fixture", searchId: "fixture" })) void event;
+    }, error => {
+      assert(error instanceof EvolveSidecarError); assert.equal(error.status, 502);
+      assert.match(error.message, /Evolve service.*HTTP 502/);
+      assert.doesNotMatch(error.message, /synthetic-private-discard/); return true;
+    });
+    assert.equal(cancelled, true);
+  } finally { globalThis.fetch = original; }
+});
