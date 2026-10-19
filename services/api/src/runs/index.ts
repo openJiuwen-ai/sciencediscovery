@@ -2054,7 +2054,7 @@ async function executeAgentRun(
                   summary: `Run Codex directly on the API host in ${subagentWorkspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
                 }); },
                 configure: async runtime => {
-                  subagent = { ...subagent, runtimeOptions: runtime };
+                  subagent = { ...subagent, runtimeOptions: runtime, timeoutSeconds: runtime.timeoutSeconds ?? subagent.timeoutSeconds };
                   if (runtime.timeoutSeconds) { subagentConfig.timeoutSeconds = runtime.timeoutSeconds; setDeadline(runtime.timeoutSeconds); }
                   await store.updateSubagent({ ...subagent, steps });
                   await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });

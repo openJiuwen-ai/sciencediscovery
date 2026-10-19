@@ -363,3 +363,19 @@ test("unavailable tools before dispatch can request recovery without treating or
   ];
   await assert.rejects(new CodexSpecialistAdapter(factory([events(decision("run_shell")), events(decision("report_runtime_unavailable"))])).invoke(request({ tools }), async () => {}), SpecialistUnavailableError);
 });
+
+test("cancellation while publishing recovery prevents native fallback from starting", async () => {
+  const { SpecialistUnavailableError } = await import("./codex.js");
+  const root = await mkdtemp(join(tmpdir(), "sd-cancel-recovery-"));
+  try {
+    let handle: ReturnType<ReturnType<typeof codexAgentFactory>>;
+    const create = codexAgentFactory({ maxTurns: 2, credential: async () => "test-secret",
+      adapter: { invoke: async () => { throw new SpecialistUnavailableError("unavailable"); } },
+      onRuntimeEvent: async event => { if (event.type === "fallback") handle.abort(); },
+      fallbackFactory: () => { assert.fail("cancelled recovery must not start a new agent"); },
+    });
+    handle = create({ config: { dataDir: root, baseUrl: "http://unused", model: "unused" }, sessionId: "cancel", workspaceRoot: root, enabledConnectorIds: [],
+      executePython: async () => { throw Error("unused"); }, executeShell: async () => { throw Error("unused"); } });
+    await assert.rejects(handle.execute("Task"), { name: "AbortError" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

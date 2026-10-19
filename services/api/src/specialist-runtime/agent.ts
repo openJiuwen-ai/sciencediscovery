@@ -85,6 +85,7 @@ export function codexAgentFactory(config: {
       } catch (error) {
         if (controller.signal.aborted || !(error instanceof SpecialistUnavailableError) || runtime.fallback === false || !config.fallbackFactory) throw error;
         await sink({ type: "fallback", specialistId: "builtin-code-engineer" });
+        controller.signal.throwIfAborted();
         fallback = config.fallbackFactory(options);
         const unsubscribe = fallback.subscribe(emit);
         try { return await fallback.execute(prompt); } finally { unsubscribe(); }

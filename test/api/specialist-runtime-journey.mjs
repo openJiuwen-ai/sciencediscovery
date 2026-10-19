@@ -175,6 +175,7 @@ try {
       if (name === "handoff") {
         assert.equal(terminal.status, "completed", text);
         assert.equal(terminal.runtimeOptions?.reasoningEffort, "low");
+        assert.equal(terminal.timeoutSeconds, 45, "visible timeout must match the applied task budget");
         assert.equal(terminal.runtimeOptions?.fallback, false);
         assert.ok(terminal.runtimeSessionId);
         const artifacts = await json(`/api/sessions/${session.id}/artifacts`);
