@@ -52,13 +52,18 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
         # No read timeout: SSE runs stay open for the whole agent run.
         timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=5.0)
         async with (
+            # These clients connect to local companion services. Do not let an
+            # ambient HTTP(S)/SOCKS proxy intercept loopback traffic.
             httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
-                              follow_redirects=False) as legacy,
-            # Tool-bridge calls go to loopback URLs the caller names, not to the legacy base URL.
-            httpx.AsyncClient(timeout=timeout) as bridge,
+                              follow_redirects=False, trust_env=False) as legacy,
+            httpx.AsyncClient(timeout=timeout, trust_env=False) as bridge,
+            # Model routes are external destinations and must retain proxy
+            # support, including SOCKS configured through the environment.
+            httpx.AsyncClient(timeout=timeout, trust_env=True) as models,
         ):
             app.state.legacy = legacy
             app.state.bridge = bridge
+            app.state.models = models
             await forget_stale_aliases(app.state.agent_runner)
             yield
 
@@ -67,7 +72,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
     registry = ToolsetRegistry()
     app.include_router(mcp_router(registry))
     routes = LlmRoutes()
-    app.include_router(llm_router(routes, lambda: app.state.bridge))
+    app.include_router(llm_router(routes, lambda: app.state.models))
     app.state.agent_runner = AgentRunner(settings, registry, lambda: app.state.bridge, routes)
     app.include_router(agent_router(app.state.agent_runner, settings))
     # Migrated routes are registered above this line, one router per domain.

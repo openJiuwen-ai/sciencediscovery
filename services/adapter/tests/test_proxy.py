@@ -25,6 +25,27 @@ pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 
 SETTINGS = Settings(host="127.0.0.1", port=4310, legacy_url="http://legacy.test")
 
 
+async def test_internal_clients_do_not_inherit_proxy_environment(monkeypatch):
+    created = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    monkeypatch.setattr("sciencediscovery_adapter.app.httpx.AsyncClient", Client)
+    app = create_app(SETTINGS)
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert [client["trust_env"] for client in created] == [False, False, True]
+
+
 def streamed(status: int, body: bytes = b"", headers=None) -> httpx.Response:
     """A response whose body is still a stream, as a real transport returns it."""
     return httpx.Response(status, headers=headers, stream=httpx.ByteStream(body))
