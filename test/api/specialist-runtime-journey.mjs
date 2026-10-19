@@ -13,6 +13,7 @@
  * OtherExternal: sandboxed local shell. Real mode contacts the OpenAI Responses API.
  * Credentials: Random local bearer/fixture key; real key read from SPECIALIST_KEY_FILE and submitted through config API only.
  * CostSideEffects: Real mode uses billable Codex tokens; temporary records/processes are removed; report retained.
+ * Browser: SPECIALIST_BROWSER=1 runs the pinned config-card browser journey before API scenarios.
  * Run: node test/api/specialist-runtime-journey.mjs
  * Real: SPECIALIST_REAL=1 SPECIALIST_KEY_FILE=<private-key-file> SPECIALIST_MODEL=<model> node test/api/specialist-runtime-journey.mjs
  */
@@ -126,6 +127,18 @@ try {
     assert.equal((await fetch(`${runner}/health`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
     return "Production API and Runner ready on ephemeral loopback ports";
   });
+  if (process.env.SPECIALIST_BROWSER === "1") {
+    await step("2. Browser config card and cancellation", "Password entry, opt-out and cancellation remain usable at narrow and wide widths", async () => {
+      const browser = spawn(resolve(".e2e/node_modules/.bin/playwright"), ["test", "journey-codex-config.spec.ts", "--project", "mocked"], {
+        cwd: resolve(".e2e"), env: { ...process.env, E2E_BASE_URL: api, E2E_API_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      let output = "";
+      for (const stream of [browser.stdout, browser.stderr]) stream.on("data", chunk => { output += redact(chunk); });
+      const code = await new Promise(done => browser.once("exit", done));
+      assert.equal(code, 0, output);
+      return output;
+    });
+  }
   const model = await json("/api/models", { name: "Specialist journey lead", model: "lead", apiToken: token, baseUrl: endpoint });
   project = await json("/api/projects", { name: "Specialist Phase 2 journey" });
   for (const name of ["handoff", "cancel", "timeout", "fallback-on", "fallback-off"]) {
@@ -171,7 +184,7 @@ try {
       else if (name === "timeout") { assert.equal(terminal.status, "timed_out", text); assert.equal(fallback, false); }
       else if (name === "fallback-on") { assert.equal(fallback, true, text); assert.equal(terminal.status, "completed", text); assert.match(text, /Native fallback completed/); }
       else { assert.equal(fallback, false); assert.equal(terminal.status, "failed", text); }
-      await json(`/api/sessions/${session.id}`, undefined, "DELETE");
+      await json(`/api/sessions/${session.id}`, { confirmationId: session.id }, "DELETE");
       await json(`/api/specialists/${specialist.id}`, undefined, "DELETE");
       return `${terminal.status}; fallback=${fallback}; private config accepted; ${real ? "live Codex auth path" : "official SDK/CLI + local Responses"}`;
     });
@@ -179,10 +192,10 @@ try {
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
 finally {
-  if (project && api) await json(`/api/projects/${project.id}`, undefined, "DELETE").catch(() => {});
+  if (project && api) await json(`/api/projects/${project.id}`, { confirmationId: project.id }, "DELETE").catch(() => {});
   for (const child of processes.reverse()) { child.kill("SIGTERM"); await Promise.race([new Promise(done => child.once("exit", done)), new Promise(done => setTimeout(done, 3000))]); if (child.exitCode === null) child.kill("SIGKILL"); }
   stub.closeAllConnections(); await new Promise(done => stub.close(done));
-  const report = `# Specialist Phase 2: ${outcome}\n\nSHA: ${sha}\nMode: ${real ? "real Codex API-key auth; local lead/native fallback stub" : "mocked providers; real pinned SDK/CLI and Runner sandbox"}\nCommand: node test/api/specialist-runtime-journey.mjs\n\n${steps.map(item => `## ${item.name}: ${item.status}\nExpected: ${item.expected}\nActual: ${item.actual}\n`).join("\n")}\nCounts: ${steps.filter(step => step.status === "PASS").length} passed / ${steps.filter(step => step.status === "FAIL").length} failed / ${6 - steps.length} unexecuted.\n`;
+  const report = `# Specialist Phase 2: ${outcome}\n\nSHA: ${sha}\nMode: ${real ? "real Codex API-key auth; local lead/native fallback stub" : "mocked providers; real pinned SDK/CLI and Runner sandbox"}\nCommand: node test/api/specialist-runtime-journey.mjs\n\n${steps.map(item => `## ${item.name}: ${item.status}\nExpected: ${item.expected}\nActual: ${item.actual}\n`).join("\n")}\nCounts: ${steps.filter(step => step.status === "PASS").length} passed / ${steps.filter(step => step.status === "FAIL").length} failed / ${(process.env.SPECIALIST_BROWSER === "1" ? 7 : 6) - steps.length} unexecuted.\n`;
   await writeFile(resolve(root, "report.md"), redact(report));
   await writeFile(resolve(root, "services.log"), logs);
   await rm(resolve(root, "data"), { recursive: true, force: true });

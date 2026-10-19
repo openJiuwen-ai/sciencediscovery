@@ -354,3 +354,12 @@ test("provider failures after platform dispatch do not replay potentially comple
   });
   assert.equal(observed.some(event => (event as { type: string }).type === "file_change"), false);
 });
+
+test("unavailable tools before dispatch can request recovery without treating ordinary task failure as unavailability", async () => {
+  const { SpecialistUnavailableError } = await import("./codex.js");
+  const tools: AgentTool[] = [
+    { name: "run_shell", label: "Run", description: "Run", parameters: Type.Object({}), execute: async () => ({ isError: true, content: [], details: { code: "RUNNER_UNAVAILABLE", dispatched: false } }) },
+    { name: "report_runtime_unavailable", label: "Report", description: "Report", parameters: Type.Object({}), execute: async () => ({ content: [] }) },
+  ];
+  await assert.rejects(new CodexSpecialistAdapter(factory([events(decision("run_shell")), events(decision("report_runtime_unavailable"))])).invoke(request({ tools }), async () => {}), SpecialistUnavailableError);
+});

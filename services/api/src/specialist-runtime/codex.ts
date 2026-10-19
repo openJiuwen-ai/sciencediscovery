@@ -111,9 +111,12 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
         const id = randomUUID();
         await sink({ type: "tool_call", id, name: tool.name, args });
         request.signal.throwIfAborted();
+        const previouslyDispatched = dispatched;
         dispatched ||= ["run_shell", "run_python", "run_scientific", "run_direct_shell", "declare_artifact"].includes(tool.name);
         const toolResult = await tool.execute(id, args, request.signal);
         request.signal.throwIfAborted();
+        const blocked = toolResult.details as { code?: string; dispatched?: boolean } | undefined;
+        if (blocked?.code === "RUNNER_UNAVAILABLE" && blocked.dispatched === false) dispatched = previouslyDispatched;
         await sink({ type: "tool_call", id, name: tool.name, args, result: toolResult });
         if (tool.name === "report_runtime_unavailable") throw new SpecialistUnavailableError("Codex cannot run with the available platform tools");
         if (tool.name === "declare_artifact" && !toolResult.isError) result.artifacts.push(toolResult.details);
