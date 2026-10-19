@@ -20,6 +20,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { EvolveSetup, useEvolveStatus } from "../src/evolve/EvolveSetup.js";
 import { EvolveApiClient, type EvolveStatus } from "../src/api/evolve.js";
+import { useMcpReadiness } from "../src/composer/useMcpReadiness.js";
 import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -106,4 +107,33 @@ test("status failures are fail-closed but a stale failure after Init or unmount 
     await act(async () => failures[2]!(new Error('unmounted fixture failure')));
     assert.deepEqual(hook!.status, { state: 'error', canInitialize: false });
   } finally { await act(async () => renderer!.unmount()); }
+});
+
+
+test("MCP readiness repair coexists with unavailable Evolve without implicit initialization", async () => {
+  let initCalls = 0, reloads = 0;
+  const client = Object.assign(new EvolveApiClient("fixture"), {
+    listMcpSources: async () => [],
+    reloadMcpSources: async () => { reloads++; },
+  });
+  client.getEvolveStatus = async () => ({ state: "not_initialized", canInitialize: true });
+  client.initEvolve = async () => { initCalls++; throw new Error("explicit Init required"); };
+  let evolve!: ReturnType<typeof useEvolveStatus>;
+  let mcp!: ReturnType<typeof useMcpReadiness>;
+  function Harness() { mcp = useMcpReadiness(client); evolve = useEvolveStatus(client); return null; }
+  let view!: ReactTestRenderer;
+  await act(async () => { view = create(createElement(Harness)); });
+  try {
+    assert.deepEqual(evolve.status, { state: "not_initialized", canInitialize: true });
+    await act(async () => { await mcp.refresh(true); });
+    assert.equal(reloads, 1);
+    assert.equal(mcp.error, undefined);
+    assert.equal(evolve.status.state, "not_initialized");
+    await act(async () => { evolve.setStatus({ state: "ready", canInitialize: true }); });
+    client.listMcpSources = async () => { throw new Error("MCP offline"); };
+    await act(async () => { await mcp.refresh(); });
+    assert.equal(mcp.error, "MCP offline");
+    assert.equal(evolve.status.state, "ready");
+    assert.equal(initCalls, 0);
+  } finally { await act(async () => view.unmount()); }
 });
