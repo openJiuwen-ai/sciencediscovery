@@ -467,7 +467,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
   const workspaceRoot = store.workspacePath(session.id);
   await mkdir(workspaceRoot, { recursive: true });
 
-  const chipMap: ComposerReference[] = [{ id: "ev-id-1", kind: "evidence", label: "ev1" }];
+  const chipMap: ComposerReference[] = [{ id: "ev-id-1", kind: "evidence", label: "ev1" }, { id: "file-id-1", kind: "evidence", label: "sourcefile1" }];
   const claimIds: string[] = ["claim-id-1"];
   // No memory-graph sink here (states edges are fire-and-forget; the drain is
   // what matters). The provider mirrors server.ts: splice on drain so a later
@@ -481,7 +481,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
 
   const runnerClient = {
     executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
-      await writeFile(resolve(workspaceRoot, "report.md"), "# Brief\n[ev1]\n");
+      await writeFile(resolve(workspaceRoot, "report.md"), "# Brief\n[ev1] [sourcefile1]\n");
       const timestamp = new Date().toISOString();
       return {
         cgroupMode: "none", createdFiles: ["report.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
@@ -510,6 +510,16 @@ test("a report version drains the chip references + claim ids accumulated earlie
   assert.equal(version!.references![0]!.label, "ev1");
   assert.equal(chipMap.length, 0, "chip buffer drained (destructive) so a later report starts fresh");
   assert.equal(claimIds.length, 0, "claim ids drained");
+  // Current main retains mappings by the markers still present in a revision,
+  // even after the original turn's provider has already drained its chips.
+  await writeFile(resolve(workspaceRoot, "report.md"), "# Revised\n[sourcefile1]\n");
+  await recorder.declareWorkspaceArtifact({
+    artifactId: reportArtifact.id, baseVersionId: version!.id,
+    name: "report.md", path: "report.md", referencesProvider, sessionId: session.id,
+    sourcePath: "report.md", turnId: "revision", workspaceRoot,
+  });
+  const revised = store.listArtifactVersions(session.id, reportArtifact.id).at(-1)!;
+  assert.deepEqual(revised.references, [{ id: "file-id-1", kind: "evidence", label: "sourcefile1" }]);
   // A non-report artifact never carries chips.
   const dataRecorder = new ProvenanceRecorder(dataDir, store);
   const dataProvider: (turnId?: string) => { references: ComposerReference[]; claimIds: string[] } = () =>
