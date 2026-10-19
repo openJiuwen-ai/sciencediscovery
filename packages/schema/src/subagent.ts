@@ -88,6 +88,7 @@ export interface SubagentStep {
 }
 
 export interface Subagent {
+  runtimeOptions?: Extract<import("./specialist.js").SpecialistRuntime, { kind: "codex" }>;
   /** Credential-free interactive setup state; the secret travels over a dedicated API. */
   runtimeInput?: { id: string; runtime: "codex"; state: "pending" | "configured" };
   runtimeSessionId?: string;

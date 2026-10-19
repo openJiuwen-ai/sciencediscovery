@@ -46,60 +46,78 @@ Use the trial to improve the description, instructions, and resource scope, then
 - [Specialists](../core/specialists.md): built-in roles and use cases.
 - [Import and manage Skills](configure-skills.md): add your own methods and scripts.
 
-## Codex runtime MVP
+## Codex Specialist runtime
 
-Custom specialists can opt into Codex through `POST /api/specialists` (there
-is no runtime picker yet):
+Create a custom Specialist through `POST /api/specialists` (there is no runtime
+picker yet):
 
 ```json
 {
   "name": "Codex coder",
   "description": "Delegate coding work to Codex",
-  "instructions": "Implement and verify the requested change. Declare output artifacts.",
-  "runtime": { "kind": "codex" }
+  "instructions": "Implement and verify the request. Explicitly declare deliverables.",
+  "runtime": { "kind": "codex", "fallback": true }
 }
 ```
 
-An optional `runtime.model` selects the Codex model. Omit `runtime`, or use
-`{"kind":"native"}`, for the existing native behavior. Credentials, commands,
-argv and environment variables are rejected in runtime metadata. Supply no
-secrets in specialist instructions. Update and read APIs retain the runtime.
-Only non-native runtime metadata participates in `specialistConfigHash`;
-native and omitted runtime preserve the legacy hash.
+Omit `runtime`, or use `{"kind":"native"}`, for native behavior. Codex options
+are `model`, `reasoningEffort` (`minimal`, `low`, `medium`, `high`, `xhigh`),
+`timeoutSeconds` (1–86400), `fallback` (default true), and `execution` (default
+`sandbox`; `direct` requires separate `direct_code` consent). Credentials,
+commands, argv and arbitrary environment variables are rejected. Non-native
+runtime options participate in `specialistConfigHash`; native hashes are unchanged.
 
-Ask the lead to delegate explicitly with `task(specialistId=…)`. Selecting a
-specialist for the lead does not switch the lead runtime. The child retains
-its own Workspace, selected input handoff, Brief, timeout, cancellation,
-timeline and platform Artifact registration. Codex requests a small set of
-platform tools through structured decisions; commands run through the same
-platform execution bindings and permission checks as native children. Codex
-has no enabled native shell, uses read-only permissions, and runs in a fresh
-private scratch directory rather than the product Workspace.
+Ask the lead to delegate explicitly with `task(specialistId=…)`. The Specialist
+uses the same conversation channel for messages, permission requests and config.
+Ask it in chat to adjust advanced settings; `configure_specialist_runtime`
+validates and applies model/reasoning to the next decision, the total wall-clock
+budget to the current task, and fallback to runtime recovery. Settings survive
+platform continuations in `runtimeOptions`; the frozen profile hash is retained.
+A reduced deadline already in the past expires immediately. Stop cancels both
+credential waits and provider streaming. Cancellation, deadlines, exhausted
+turns and ordinary task failures do not trigger fallback.
 
-If the Session has no Codex credential, an interactive **Connect Codex to
-continue** card appears in the conversation, including when the child card
-is collapsed. Enter an OpenAI API key there; the pending task continues. The
-key travels through the authenticated config endpoint and is encrypted in a
-separate platform secret table, scoped to the Session and removed on Session
-or Project deletion. It never enters chat messages, specialist metadata,
-argv, or the model prompt. Always-allow does not supply credentials. Setup
-waits count toward the task's wall-clock timeout; stop cancels the wait.
-The MVP supports API-key authentication, not ChatGPT browser/device login.
-A rejected key produces a child failure; fix the credential with a new Session
-or use `builtin-code-engineer`. Credential management beyond this focused
-card belongs to the later configuration work.
+The **Connect Codex to continue** card is the fallback configuration surface.
+Enter the API key only there; never put secrets in chat or Specialist instructions.
+The card also lets you disable native fallback before Codex starts. Keys use the
+authenticated secret endpoint, encrypted separately and scoped to the Session;
+Always-allow cannot supply a key. API-key authentication is supported; host
+ChatGPT OAuth state is never imported. Setup waits count toward the deadline.
 
-Developer contract: `services/api/src/specialist-runtime/adapter.ts` defines
-`SpecialistRuntimeAdapter.invoke(request, sink)` and the normalized
-`started | progress | tool_call | file_change | need_input | done` events.
-The compatibility factory maps these onto the existing Subagent stream and
-returns `SpecialistResult` with summary, platform artifact receipts, usage
-and Codex thread ID. Artifact receipts originate only in `declare_artifact`;
-provider file paths are never adopted as artifacts. The pinned official
-TypeScript SDK runs on the API host with an explicit environment and a fresh
-Codex HOME. A platform continuation carries its closed conversation and frozen
-Brief into a fresh Codex thread. Host process confinement, durable Codex thread continuation,
-ACP, additional SDKs, runtime selection UI, and full Skills/MCP bridging are
-later phases. See [Issue #385](https://github.com/openJiuwen-ai/sciencediscovery/issues/385),
+The pinned Codex CLI runs inside the Runner's Bubblewrap/seccomp launch profile,
+with inner `danger-full-access` to avoid nested user namespaces. Each task has
+an independent Workspace and private `CODEX_HOME` within it, removed on exit.
+The model-only transport has API network access; native Codex shell, web search,
+MCP and subagents are disabled/rejected. Commands use platform tools on separate
+Runner executions with the normal offline/allowlist network policy and the same
+permission channel. `request_sandbox_network` can request scoped tool egress;
+`request_direct_execution` / `run_direct_shell` remain explicit consent paths.
+A deployment can set `SCIENCE_AGENT_CODEX_BASE_URL` for a compatible Responses
+endpoint; it is never read from Specialist metadata. The outer model-process
+sandbox currently requires Linux and a local API-host Bubblewrap installation.
+Remote tool Runners remain independent. No shared sandbox is introduced.
+
+Only `declare_artifact(path=…)` / `declare_artifact(paths=…)` is a handoff API.
+Only successful declared receipts enter `artifacts[]`. Undeclared new/modified
+files stay physical Workspace state: no automatic Artifact, file-change timeline
+entry, generated-file provenance, or execution Workspace snapshot/diff. Execution
+status, stdout/stderr and code remain auditable. Explicit declaration copies the
+selected file through the normal Artifact boundary. Do not declare private
+Codex runtime state. The parent reads Artifact IDs/versions, not child-local paths.
+
+If process startup, provider authentication or unavailable platform tools prevent
+Codex from running, recovery defaults to `builtin-code-engineer`, with a visible
+status step. Set `runtime.fallback=false`, ask the Specialist to disable it, or
+uncheck fallback on the config card. A provider failure after platform work was
+dispatched stays a failure so potentially completed work is not replayed.
+Missing credentials first wait for the config card; cancelling or timing out that
+wait does not launch native work. A denied direct-execution request also stays denied.
+
+Developer contract: `services/api/src/specialist-runtime/adapter.ts` defines the
+adapter and normalized `started | progress | tool_call | need_input | fallback |
+done` events. A continuation carries its closed conversation and frozen Brief
+into a fresh private Codex thread. Durable provider-thread resume, shared
+sandboxes, additional SDKs/ACP, full observability and full Skills/MCP bridging
+remain outside Phase 2. See [Issue #385](https://github.com/openJiuwen-ai/sciencediscovery/issues/385),
 [configuration follow-up #278](https://github.com/openJiuwen-ai/sciencediscovery/issues/278),
 and the separate [ACP Agent work #64](https://github.com/openJiuwen-ai/sciencediscovery/issues/64).

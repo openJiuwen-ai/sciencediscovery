@@ -14,13 +14,17 @@ export type SpecialistRuntimeEvent =
   | { type: "started"; runtimeSessionId?: string }
   | { type: "progress"; text: string }
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown>; result?: AgentToolResult }
-  | { type: "file_change"; toolCallId: string; details: unknown }
+  | { type: "fallback"; specialistId: "builtin-code-engineer" }
   | { type: "need_input"; runtime: "codex" }
   | { type: "done"; result: SpecialistResult };
 export type SpecialistEventSink = (event: SpecialistRuntimeEvent) => Promise<void>;
 export interface SpecialistRuntimeRequest {
   prompt: string;
   model?: string;
+  workspaceRoot?: string;
+  execution?: "sandbox" | "direct";
+  authorizeDirect?(): Promise<void>;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
   signal: AbortSignal;
   maxTurns: number;
   tools: AgentTool[];

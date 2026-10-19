@@ -90,6 +90,8 @@ export interface KernelSession {
 }
 
 export interface ScientificExecutionRequest {
+  /** Trusted Specialist binding: declare_artifact is the only file tracking boundary. */
+  explicitHandoff?: boolean;
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
   agentId: string;
   code: string;
@@ -233,6 +235,7 @@ export interface DirectExecutionCapability {
 }
 
 export interface ShellExecutionRequest {
+  explicitHandoff?: boolean;
   directAuthorization?: DirectExecutionAuthorization;
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
   agentId: string;

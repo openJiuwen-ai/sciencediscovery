@@ -497,7 +497,7 @@ export function createRunnerServer(
           });
         }
         return await operation();
-      }, { kind: "legacy-execution", id: execution.executionId, onCommitted: (tree) => { workspaceSnapshot = tree; } }, signal), execution.permissionEpoch.sessionId);
+      }, { kind: "legacy-execution", id: execution.executionId, trackFiles: !execution.explicitHandoff, onCommitted: (tree) => { workspaceSnapshot = tree; } }, signal), execution.permissionEpoch.sessionId);
       if (result && typeof result === "object") Object.assign(result, { workspaceSnapshot });
       return result;
     } catch (error) {

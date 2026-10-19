@@ -14,6 +14,7 @@
 
 import { setTimeout as runtimeDelay } from "node:timers/promises";
 import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
+import { createNativeAgent } from "../native-agent/index.js";
 import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
@@ -1547,6 +1548,8 @@ async function executeAgentRun(
       const subagentConfig = resolveSubagentConfig(input);
       const specialist = resolveSubagentSpecialist(store, session.specialistId, input);
       const codexRuntime = input.specialistId?.trim() && specialist?.runtime?.kind === "codex" ? specialist.runtime : undefined;
+      const effectiveCodexRuntime = continuation?.runtimeOptions ?? codexRuntime;
+      if (effectiveCodexRuntime?.timeoutSeconds) subagentConfig.timeoutSeconds = effectiveCodexRuntime.timeoutSeconds;
       const subagentInput: SubagentInput = specialist && input.specialistId?.trim() !== specialist.id
         ? { ...input, specialistId: specialist.id }
         : input;
@@ -1571,7 +1574,16 @@ async function executeAgentRun(
         // timeout_seconds is instead a wall-clock budget, including MCP calls,
         // approvals, and model/provider waits. Keep that hard deadline outside
         // AgentRun so an unhealthy dependency cannot strand the parent task.
-        const wallClockTimeoutSignal = AbortSignal.timeout(subagentConfig.timeoutSeconds * 1_000);
+        const timeoutController = new AbortController();
+        const deadlineStarted = Date.now();
+        let deadlineTimer: ReturnType<typeof setTimeout>;
+        const setDeadline = (seconds: number) => {
+          clearTimeout(deadlineTimer);
+          deadlineTimer = setTimeout(() => timeoutController.abort(new DOMException("Specialist task timeout", "TimeoutError")), Math.max(0, seconds * 1000 - (Date.now() - deadlineStarted)));
+          deadlineTimer.unref();
+        };
+        setDeadline(subagentConfig.timeoutSeconds);
+        const wallClockTimeoutSignal = timeoutController.signal;
         const childSignal = AbortSignal.any([parentSignal, childController.signal, wallClockTimeoutSignal]);
         await ideaTreeRuntime?.recordSubagent(subagent.id);
         await emit({ subagent, type: "subagent.updated" });
@@ -1814,6 +1826,7 @@ async function executeAgentRun(
               store,
               workspaceRoot: subagentWorkspaceRoot,
               parentSubagentId: subagent.id,
+              explicitHandoff: Boolean(codexRuntime),
             }),
             ...createMcpWorkspaceTools({
               artifactManager,
@@ -2030,6 +2043,26 @@ async function executeAgentRun(
             ...(codexRuntime ? {
               createAgent: codexAgentFactory({
                 model: codexRuntime.model,
+                runtime: effectiveCodexRuntime,
+                readRuntime: () => store.listSubagents(sessionId).find(child => child.id === subagent.id)?.runtimeOptions ?? effectiveCodexRuntime,
+                authorizeDirect: async () => { await childExecution.permission.requirePrivilege({
+                  action: "direct_code", executionId: subagent.id, signal: childSignal,
+                  resource: `codex-runtime:${subagent.id}:${subagentWorkspaceRoot}`,
+                  summary: `Run Codex directly on the API host in ${subagentWorkspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
+                }); },
+                configure: async runtime => {
+                  subagent = { ...subagent, runtimeOptions: runtime };
+                  if (runtime.timeoutSeconds) { subagentConfig.timeoutSeconds = runtime.timeoutSeconds; setDeadline(runtime.timeoutSeconds); }
+                  await store.updateSubagent({ ...subagent, steps });
+                  await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                },
+                fallbackFactory: options => {
+                  const builtin = store.getSpecialist("builtin-code-engineer")!;
+                  const skills = scopeRuntimeSkills(skillCatalog.resolve(builtin.enabledSkillIds), "subagent");
+                  return createNativeAgent({ ...options, specialist: builtin,
+                    skills: [...(options.skills ?? []), ...skills],
+                  });
+                },
                 maxTurns: subagentConfig.maxTurns,
                 credential: async (runtimeSignal, needInput) => {
                   let key = store.codexApiKey(sessionId);
@@ -2039,7 +2072,7 @@ async function executeAgentRun(
                       await runtimeDelay(250, undefined, { signal: runtimeSignal });
                       key = store.codexApiKey(sessionId);
                     }
-                    subagent = { ...subagent, runtimeInput: { ...subagent.runtimeInput!, state: "configured" } };
+                    subagent = { ...subagent, runtimeOptions: store.listSubagents(sessionId).find(child => child.id === subagent.id)?.runtimeOptions ?? effectiveCodexRuntime, runtimeInput: { ...subagent.runtimeInput!, state: "configured" } };
                     await store.updateSubagent({ ...subagent, steps });
                     await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
                   }
@@ -2052,8 +2085,11 @@ async function executeAgentRun(
                     await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
                   }
                   if (event.type === "started") subagent.runtimeSessionId = event.runtimeSessionId;
-                  if (event.type === "file_change") publishStep({ id: randomUUID(), kind: "system", status: "completed",
-                    content: "Platform execution changed Workspace files", details: event.details, createdAt: new Date().toISOString() });
+                  if (event.type === "fallback") {
+                    subagent.runtimeInput = undefined;
+                    publishStep({ id: randomUUID(), kind: "system", status: "completed",
+                      content: "Codex cannot run. Falling back to builtin-code-engineer.", createdAt: new Date().toISOString() });
+                  }
                 },
               }),
             } : {}),
@@ -2132,6 +2168,7 @@ async function executeAgentRun(
             steps,
           };
         } finally {
+          clearTimeout(deadlineTimer!);
           for (const timer of progressTimers.values()) clearTimeout(timer);
           progressTimers.clear();
           releaseParentWait?.();

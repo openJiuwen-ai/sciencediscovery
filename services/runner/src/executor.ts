@@ -1042,7 +1042,7 @@ export async function executePython(
     ? await validatedWorkspace(config.dataDir, request.readOnlyWorkspaceRoot)
     : undefined;
   const skillRoots = await resolveSandboxSkillRoots(config.dataDir, workspaceRoot, request.skillPackagesRoot);
-  const before = await workspaceSnapshot(workspaceRoot);
+  const before = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
   const runtime = environmentStore?.capability.available
     ? environmentStore.resolveRuntime(request.environmentRevisionId, language)
@@ -1124,7 +1124,7 @@ export async function executePython(
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
-  const after = await workspaceSnapshot(workspaceRoot);
+  const after = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
   const createdFiles = [...after.keys()].filter((path) => !before.has(path)).toSorted();
   const modifiedFiles = [...after.entries()]
     .filter(([path, fingerprint]) => before.has(path) && before.get(path) !== fingerprint)
@@ -1187,7 +1187,7 @@ export async function executeShell(
     ? await validatedWorkspace(config.dataDir, request.readOnlyWorkspaceRoot)
     : undefined;
   const skillRoots = await resolveSandboxSkillRoots(config.dataDir, workspaceRoot, request.skillPackagesRoot);
-  const before = await workspaceSnapshot(workspaceRoot);
+  const before = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
   const hostRuntimeSupport = await resolveHostRuntimeSupport(config.dataDir);
   const localPythonPackages = await localPythonPackagePath(config);
@@ -1255,7 +1255,7 @@ export async function executeShell(
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
-  const after = await workspaceSnapshot(workspaceRoot);
+  const after = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
   const shellCreatedFiles = [...after.keys()].filter((path) => !before.has(path)).toSorted();
   const shellModifiedFiles = [...after.entries()]
     .filter(([path, fingerprint]) => before.has(path) && before.get(path) !== fingerprint)
@@ -1331,7 +1331,7 @@ export async function executeDirectShell(
   const maxWorkspaceBytes = resolveQuotaBytes(request.maxWorkspaceBytes, config.maxWorkspaceBytes, "maxWorkspaceBytes");
   const maxOutputBytes = resolveQuotaBytes(request.maxOutputBytes, config.maxOutputBytes, "maxOutputBytes");
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
-  const before = await workspaceSnapshot(workspaceRoot);
+  const before = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
   // Do not inject Runner service credentials into the process environment. Host
   // filesystem/network access is still unrestricted and is disclosed at consent.
@@ -1348,7 +1348,7 @@ export async function executeDirectShell(
       return child;
     });
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
-  const after = await workspaceSnapshot(workspaceRoot);
+  const after = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
   return { ...result, cgroupMode: "none", createdFiles: [...after.keys()].filter(path => !before.has(path)).sort(),
     modifiedFiles: [...after.keys()].filter(path => before.has(path) && before.get(path) !== after.get(path)).sort(),
     environmentRevisionId: "system-shell-direct-v1", environmentVariables: env, executionId: request.executionId,

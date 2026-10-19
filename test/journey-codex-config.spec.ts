@@ -48,6 +48,10 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
           await expect(card.getByLabel("OpenAI API key")).toHaveAttribute("type", "password");
           await expect(card.getByRole("button", { name: "Connect and continue" })).toBeVisible();
           await expect(card.getByRole("button", { name: "Connect and continue" })).toBeDisabled();
+          const fallback = card.getByRole("checkbox", { name: "Use code-engineer if Codex cannot run" });
+          await expect(fallback).toBeVisible();
+          if (width === 390) { await expect(fallback).toBeChecked(); await fallback.uncheck(); }
+          await expect(fallback).not.toBeChecked();
           const box = await card.getByLabel("OpenAI API key").boundingBox();
           expect(box).not.toBeNull();
           expect(box!.x).toBeGreaterThanOrEqual(0);

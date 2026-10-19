@@ -5,11 +5,15 @@ const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux",
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { sandboxedCodex } from "./launcher.js";
 import { Codex } from "@openai/codex-sdk";
 import { CodexSpecialistAdapter } from "./codex.js";
 
 /** Official SDK + unmodified pinned CLI against a loopback-only Responses fixture. */
-test("Codex SDK/CLI completes a local provider turn with native shell disabled", { timeout: 30000 }, async () => {
+test("Runner outer sandbox and inner Codex full access complete a provider turn without nested userns", { timeout: 30000 }, async () => {
   let calls = 0;
   const server = createServer(async (req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/responses")) { res.writeHead(404); res.end(); return; }
@@ -34,13 +38,15 @@ test("Codex SDK/CLI completes a local provider turn with native shell disabled",
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  const root = await mkdtemp(join(tmpdir(), "sd-codex-st-"));
   try {
-    const adapter = new CodexSpecialistAdapter((options, thread) => new Codex({ ...options, baseUrl,
+    const codexPathOverride = await sandboxedCodex(root, root);
+    const adapter = new CodexSpecialistAdapter((options, thread) => new Codex({ ...options, baseUrl, codexPathOverride,
       config: { ...options.config, model_provider: "fixture", model_providers: { fixture: { name: "Local fixture", base_url: baseUrl, env_key: "CODEX_API_KEY", wire_api: "responses", supports_websockets: false } } },
     }).startThread(thread));
-    const result = await adapter.invoke({ prompt: "Return a final structured answer without tools.", signal: AbortSignal.timeout(20000), model: "gpt-5.4", maxTurns: 1, tools: [], credential: async () => "fixture-key" }, async () => {});
+    const result = await adapter.invoke({ workspaceRoot: root, prompt: "Return a final structured answer without tools.", signal: AbortSignal.timeout(20000), model: "gpt-5.4", maxTurns: 1, tools: [], credential: async () => "fixture-key" }, async () => {});
     assert.equal(result.summary, "Local Codex result");
     assert.ok(result.runtimeSessionId);
     assert.equal(calls, 1);
-  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  } finally { await rm(root, { recursive: true, force: true }); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });

@@ -172,7 +172,7 @@ export class ShellExecutions {
             && (observed.version || !observed.startedAt)) {
             throw new RecordedRunnerFailure(observed.error ?? `Execution ${observed.state} before producing a result`);
           }
-          if (!observed.result || !observed.version || !observed.result.workspaceSnapshot) {
+          if (!observed.result || !observed.version || (!request.explicitHandoff && !observed.result.workspaceSnapshot)) {
             throw new Error(observed.error ?? "Runner ended without a committed result; inspect its state before retrying");
           }
           // The envelope receipt is authoritative, including older Runners

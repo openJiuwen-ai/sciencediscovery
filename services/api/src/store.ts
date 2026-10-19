@@ -2834,17 +2834,19 @@ export class SessionStore {
     return row && this.secretKey ? decryptSecretValue(this.secretKey, `codex:${sessionId}`, row.encrypted_value) : undefined;
   }
 
-  configureCodex(subagentId: string, inputId: string, apiKey: string): void {
+  configureCodex(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): void {
     const child = this.catalog.subagents.find(candidate => candidate.id === subagentId);
     if (!child || child.status !== "running" || child.runtimeInput?.state !== "pending" || child.runtimeInput.id !== inputId) {
       throw new SessionStoreHttpError("Codex configuration request is no longer pending", 409);
     }
     this.assertSessionWritable(child.sessionId);
+    if (fallback !== undefined && typeof fallback !== "boolean") throw new SessionStoreHttpError("Invalid Codex fallback option", 400);
     const key = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!key || key.length > 16384) throw new SessionStoreHttpError("Codex API key must be 1-16384 characters", 400);
     if (!this.database || !this.secretKey) throw new Error("Secret storage is unavailable");
     this.database.prepare("INSERT INTO specialist_runtime_secrets (session_id, encrypted_value) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET encrypted_value = excluded.encrypted_value")
       .run(child.sessionId, encryptSecretValue(this.secretKey, `codex:${child.sessionId}`, key));
+    if (fallback !== undefined) child.runtimeOptions = { kind: "codex", ...this.getSpecialist(child.specialistId)?.runtime, ...child.runtimeOptions, fallback } as NonNullable<Subagent["runtimeOptions"]>;
     child.runtimeInput.state = "configured";
   }
 

@@ -178,7 +178,7 @@ test("official SDK executable transport receives isolated config and secret env,
     await writeFile(cli, `#!/usr/bin/env node\nlet input=''; for await (const chunk of process.stdin) input+=chunk;\nif(process.argv.join(' ').includes('test-secret')) process.exit(10);\nif(process.env.CODEX_API_KEY!=='test-secret') process.exit(11);\nfor(const event of ${JSON.stringify(events(decision()))}) console.log(JSON.stringify(event));\n`, { mode: 0o700 });
     const adapter = new CodexSpecialistAdapter((options, thread) => {
       assert.equal(options.config?.features && (options.config.features as Record<string, unknown>).shell_tool, false);
-      assert.equal(thread.sandboxMode, "read-only");
+      assert.equal(thread.sandboxMode, "danger-full-access");
       assert.equal(thread.networkAccessEnabled, false);
       assert.equal(options.env?.OPENAI_API_KEY, undefined);
       sdkHome = options.env!.CODEX_HOME!;
@@ -225,7 +225,7 @@ test("existing Subagent AgentRun receives normalized events and executes through
     assert.ok(observed.some(e => e.type === "tool_execution_end"));
     assert.ok(observed.some(e => e.type === "message_update" && e.assistantMessageEvent.type === "text_delta"));
     assert.ok(runtimeEvents.some(e => e.type === "need_input"));
-    assert.ok(runtimeEvents.some(e => e.type === "file_change"));
+    assert.equal(runtimeEvents.some(e => (e as { type: string }).type === "file_change"), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -258,13 +258,13 @@ test("Codex child uses platform approval while the Swarm lead retains native dec
 });
 
 
-test("file-change events include modified files and omit unchanged executions", async () => {
+test("undeclared new and modified files never emit automatic file-change events", async () => {
   for (const changed of [false, true]) {
     const observed: SpecialistRuntimeEvent[] = [];
     const tool: AgentTool = { name: "run_shell", label: "Run", description: "Run", parameters: Type.Object({}),
       execute: async () => ({ content: [{ type: "text", text: "Executed by platform" }], details: { modifiedFiles: changed ? ["input.txt"] : [] } }) };
     await new CodexSpecialistAdapter(factory([events(decision("run_shell")), events(decision())])).invoke(request({ tools: [tool] }), async e => { observed.push(e); });
-    assert.deepEqual(observed.filter(e => e.type === "file_change").map(e => e.details), changed ? [{ paths: ["input.txt"] }] : []);
+    assert.deepEqual(observed.filter(e => (e as { type: string }).type === "file_change"), []);
   }
 });
 
@@ -286,4 +286,71 @@ test("fresh Codex threads retain the existing platform continuation history and 
   for (const required of ["Frozen Brief and Workspace handoff", "Original question", "Previous result", "Revise using the new constraint"]) assert.ok(runtimePrompt.includes(required));
   assert.deepEqual(result.finalMessages.slice(0, 2), previous);
   assert.equal(result.finalMessages.at(-1)?.content, "Revised result");
+});
+
+test("advanced settings requested in the conversation reach the next SDK turn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sd-settings-"));
+  try {
+    const models: (string | undefined)[] = [];
+    const turns = [events(decision("configure_specialist_runtime", JSON.stringify({ model: "new-model", reasoningEffort: "low", timeoutSeconds: 30, fallback: false }))), events(decision())];
+    let configured: unknown;
+    const create = codexAgentFactory({ maxTurns: 3, credential: async () => "test-secret", onRuntimeEvent: async () => {},
+      configure: async value => { configured = value; },
+      adapter: new CodexSpecialistAdapter((_options, thread) => {
+        models.push(thread.model);
+        return { async runStreamed() { return { events: (async function* () { yield* turns.shift()!; })() }; } };
+      }),
+    });
+    const handle = create({ config: { baseUrl: "http://unused", model: "unused", dataDir: root }, workspaceRoot: root, sessionId: "settings", enabledConnectorIds: [] });
+    const result = await handle.execute("Use new-model, low reasoning, 30 seconds and disable fallback.");
+    assert.equal(result.finalMessages.at(-1)?.content, "Finished");
+    assert.deepEqual(configured, { kind: "codex", model: "new-model", reasoningEffort: "low", timeoutSeconds: 30, fallback: false });
+    assert.deepEqual(models, [undefined, "new-model"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("fallback handles runtime unavailability, respects opt-out, and never swallows cancellation or task failure", async () => {
+  const { SpecialistUnavailableError, CodexRuntimeError } = await import("./codex.js");
+  const root = await mkdtemp(join(tmpdir(), "sd-fallback-"));
+  try {
+    const options = { config: { baseUrl: "http://unused", model: "unused", dataDir: root }, workspaceRoot: root, sessionId: "fallback", enabledConnectorIds: [] };
+    for (const [error, enabled, expected] of [
+      [new SpecialistUnavailableError("Auth unavailable"), true, true],
+      [new SpecialistUnavailableError("Process unavailable"), false, false],
+      [new CodexRuntimeError("turn budget"), true, false],
+      [new DOMException("cancelled", "AbortError"), true, false],
+      [new DOMException("deadline", "TimeoutError"), true, false],
+    ] as const) {
+      let calls = 0;
+      const observed: SpecialistRuntimeEvent[] = [];
+      const create = codexAgentFactory({ runtime: { kind: "codex", fallback: enabled }, maxTurns: 2, credential: async () => "test-secret",
+        adapter: { invoke: async () => { throw error; } }, onRuntimeEvent: async event => { observed.push(event); },
+        fallbackFactory: () => ({ execute: async () => { calls++; return { finalMessages: [{ role: "assistant", content: "Native recovery" }] }; },
+          prompt: async () => {}, abort: () => {}, beginExternalWait: () => () => {}, subscribe: () => () => {} }),
+      });
+      if (expected) assert.equal((await create(options).execute("Task")).finalMessages.at(-1)?.content, "Native recovery");
+      else await assert.rejects(create(options).execute("Task"), error);
+      assert.equal(calls, expected ? 1 : 0);
+      assert.equal(observed.some(event => event.type === "fallback"), expected);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("direct runtime execution requires an independent consent callback", async () => {
+  let invoked = false;
+  const adapter = new CodexSpecialistAdapter(factory([events(decision())]));
+  await assert.rejects(adapter.invoke(request({ execution: "direct" }), async () => {}), /direct_code consent/);
+  assert.equal((await adapter.invoke(request({ execution: "direct", authorizeDirect: async () => { invoked = true; } }), async () => {})).summary, "Finished");
+  assert.equal(invoked, true);
+});
+
+test("provider failures after platform dispatch do not replay potentially completed work through fallback", async () => {
+  const { SpecialistUnavailableError } = await import("./codex.js");
+  const tool: AgentTool = { name: "run_shell", label: "Run", description: "Run", parameters: Type.Object({}),
+    execute: async () => ({ content: [{ type: "text", text: "done" }], details: { createdFiles: ["undeclared.txt"] } }) };
+  const observed: SpecialistRuntimeEvent[] = [];
+  await assert.rejects(new CodexSpecialistAdapter(factory([events(decision("run_shell")), [{ type: "error", message: "auth" }]])).invoke(request({ tools: [tool] }), async event => { observed.push(event); }), error => {
+    assert.equal(error instanceof SpecialistUnavailableError, false); return true;
+  });
+  assert.equal(observed.some(event => (event as { type: string }).type === "file_change"), false);
 });

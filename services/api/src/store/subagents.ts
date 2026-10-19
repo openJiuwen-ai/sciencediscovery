@@ -164,6 +164,7 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
     ...(specialistId ? { specialistId } : {}),
     ...(typeof value.specialistConfigHash === "string" ? { specialistConfigHash: value.specialistConfigHash } : {}),
     ...(typeof value.runtimeSessionId === "string" ? { runtimeSessionId: value.runtimeSessionId } : {}),
+    ...(isRecord(value.runtimeOptions) && value.runtimeOptions.kind === "codex" ? { runtimeOptions: value.runtimeOptions as unknown as NonNullable<Subagent["runtimeOptions"]> } : {}),
     ...(isRecord(value.runtimeInput) && typeof value.runtimeInput.id === "string" && value.runtimeInput.runtime === "codex"
       && (value.runtimeInput.state === "pending" || value.runtimeInput.state === "configured")
       ? { runtimeInput: { id: value.runtimeInput.id, runtime: "codex" as const, state: value.runtimeInput.state } } : {}),

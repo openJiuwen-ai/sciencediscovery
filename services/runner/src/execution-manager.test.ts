@@ -227,3 +227,17 @@ test("cancellation wins over a successful late process result without losing its
   assert.equal(manager.get("late-success", owner).result!.exitCode, 0);
   assert.ok(manager.get("late-success", owner).version);
 });
+
+test("explicit Specialist handoff records execution receipts without snapshotting undeclared files", async (context) => {
+  const { manager, workspace, root } = await fixture(context);
+  manager.start({ ...request(workspace, "explicit"), explicitHandoff: true }, async () => {
+    await writeFile(resolve(workspace, "private.txt"), "must-not-be-versioned");
+    return result("explicit");
+  });
+  await until(() => manager.get("explicit", owner).state === "completed");
+  const execution = manager.get("explicit", owner);
+  assert.ok(execution.version, "execution receipt remains durable");
+  assert.equal(execution.result?.workspaceSnapshot, undefined);
+  const record = await new VersionStore(root).readRecord<{ workspace?: unknown }>(execution.version!, "WorkspaceExecution");
+  assert.equal(record.value.workspace, undefined, "no file tree or undeclared bytes in the execution version");
+});

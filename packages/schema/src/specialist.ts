@@ -14,8 +14,8 @@
 
 import type { ConnectorId } from "./connectors.js";
 
-/** MVP runtime metadata is credential-free; omitted runtime means native. */
-export type SpecialistRuntime = { kind: "native" } | { kind: "codex"; model?: string };
+/** Runtime metadata is credential-free; omitted runtime means native. */
+export type SpecialistRuntime = { kind: "native" } | { kind: "codex"; model?: string; fallback?: boolean; execution?: "sandbox" | "direct"; timeoutSeconds?: number; reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" };
 
 export interface Specialist {
   runtime?: SpecialistRuntime;

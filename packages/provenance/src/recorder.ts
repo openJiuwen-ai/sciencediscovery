@@ -148,6 +148,8 @@ async function runnerSandboxKind(runnerClient: RunnerClient): Promise<SandboxKin
 }
 
 export interface RecordExecutionOptions {
+  /** Specialist outputs enter the platform only through declare_artifact. */
+  explicitHandoff?: boolean;
   agentId: string;
   artifactPathPrefix?: string;
   code: string;
@@ -813,6 +815,7 @@ export class ProvenanceRecorder {
         ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
         ...(options.npuDevices?.length ? { npuDevices: options.npuDevices } : {}),
         workspaceRoot: options.workspaceRoot,
+        ...(options.explicitHandoff ? { explicitHandoff: true } : {}),
       }, options.signal);
     } catch (error) {
       const timestamp = new Date().toISOString();
@@ -871,7 +874,7 @@ export class ProvenanceRecorder {
     await this.store.appendExecutionRun({
       cgroupMode: result.cgroupMode,
       code,
-      createdFiles: result.createdFiles,
+      createdFiles: options.explicitHandoff ? [] : result.createdFiles,
       environmentRevisionId: result.environmentRevisionId,
       envSnapshot: await this.putEnvSnapshot(result.environmentVariables),
       exitCode: result.exitCode,
@@ -880,7 +883,7 @@ export class ProvenanceRecorder {
       kernelId: result.kernelId,
       kernelMode: result.kernelMode,
       language: "shell",
-      modifiedFiles: result.modifiedFiles,
+      modifiedFiles: options.explicitHandoff ? [] : result.modifiedFiles,
       ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
@@ -903,7 +906,7 @@ export class ProvenanceRecorder {
 
     const paths = [...new Set([...result.createdFiles, ...result.modifiedFiles])];
     // 远端 runner 的产出留在远端 workspace，只有模型显式 pull 回来才登记。
-    if (!options.runnerWorkspaceKey) {
+    if (!options.runnerWorkspaceKey && !options.explicitHandoff) {
       await this.recordGeneratedFiles({
         artifactPathPrefix: options.artifactPathPrefix,
         code: options.code,
@@ -943,7 +946,7 @@ export class ProvenanceRecorder {
       inputSourceFiles: shellSourceFileInputs,
     });
     if (environmentSyncError) throw environmentSyncError;
-    return result;
+    return options.explicitHandoff ? { ...result, createdFiles: [], modifiedFiles: [] } : result;
   }
 
   async executeScientific(options: RecordExecutionOptions): Promise<PythonExecutionResult> {
@@ -979,6 +982,7 @@ export class ProvenanceRecorder {
         ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
         ...(options.npuDevices?.length ? { npuDevices: options.npuDevices } : {}),
         workspaceRoot: options.workspaceRoot,
+        ...(options.explicitHandoff ? { explicitHandoff: true } : {}),
       }, options.signal);
     } catch (error) {
       const timestamp = new Date().toISOString();
@@ -1042,7 +1046,7 @@ export class ProvenanceRecorder {
     await this.store.appendExecutionRun({
       cgroupMode: result.cgroupMode,
       code,
-      createdFiles: result.createdFiles,
+      createdFiles: options.explicitHandoff ? [] : result.createdFiles,
       environmentRevisionId: result.environmentRevisionId,
       envSnapshot: await this.putEnvSnapshot(result.environmentVariables),
       exitCode: result.exitCode,
@@ -1051,7 +1055,7 @@ export class ProvenanceRecorder {
       kernelId: result.kernelId,
       kernelMode: result.kernelMode,
       language: result.language,
-      modifiedFiles: result.modifiedFiles,
+      modifiedFiles: options.explicitHandoff ? [] : result.modifiedFiles,
       ...(result.networkAccessRevision ? { networkAccessRevision: result.networkAccessRevision } : {}),
       networkPolicy: result.networkPolicy,
       permissionEpochId: options.permissionEpoch.id,
@@ -1072,7 +1076,7 @@ export class ProvenanceRecorder {
     });
 
     const paths = [...new Set([...result.createdFiles, ...result.modifiedFiles])];
-    if (!options.runnerWorkspaceKey) {
+    if (!options.runnerWorkspaceKey && !options.explicitHandoff) {
       await this.recordGeneratedFiles({
         artifactPathPrefix: options.artifactPathPrefix,
         code: options.code,
@@ -1116,6 +1120,6 @@ export class ProvenanceRecorder {
       inputSourceFiles: sourceFileInputs,
     });
     if (environmentSyncError) throw environmentSyncError;
-    return result;
+    return options.explicitHandoff ? { ...result, createdFiles: [], modifiedFiles: [] } : result;
   }
 }
