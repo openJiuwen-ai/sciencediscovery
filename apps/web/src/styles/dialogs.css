@@ -79,7 +79,9 @@
 .version-picker { display: flex; align-items: center; gap: 6px; }
 .version-picker > span { color: var(--muted); font-size: 11px; }
 .version-picker select { min-width: 140px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 6px; font-size: 11px; }
-.artifact-modal-body { overflow-y: auto; padding: 22px 26px 32px; }
+.artifact-modal-panel > .artifact-modal-header,
+.artifact-modal-panel > .artifact-mode-tabs { flex: 0 0 auto; }
+.artifact-modal-body { overflow-y: auto; padding: 22px 26px 32px; flex: 1 1 auto; min-height: 0; }
 /* The viewer is now a 1600px-wide content window, so markdown prose keeps a
  * readable measure instead of running the full width; tables, code, images and
  * plots still use the window. */

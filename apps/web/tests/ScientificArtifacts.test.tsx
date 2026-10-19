@@ -131,6 +131,21 @@ test("artifact viewer stylesheet fills large screens and keeps prose readable", 
   assert.match(dialogs, /\.artifact-modal-panel \{[^}]*width: min\(1600px, calc\(100vw - 80px\)\)/);
   assert.match(dialogs, /\.artifact-modal-panel \{[^}]*height: min\(960px, calc\(100vh - 80px\)\)/);
   assert.match(dialogs, /\.artifact-modal-body \.markdown-body > :is\(p, ul, ol, dl, blockquote\) \{ max-width: 76ch; \}/);
+  // #309 review: the taller window must actually fill with content — the body
+  // flexes to the leftover height while header and tabs stay unsquashed, and
+  // inside the modal the preview caps are lifted so one scroll (the body)
+  // replaces four nested ones.
+  assert.match(dialogs, /\.artifact-modal-body \{[^}]*flex: 1 1 auto/);
+  assert.match(dialogs, /\.artifact-modal-body \{[^}]*min-height: 0/);
+  assert.match(dialogs, /\.artifact-modal-panel > \.artifact-modal-header,\s*\.artifact-modal-panel > \.artifact-mode-tabs \{ flex: 0 0 auto; \}/);
+  const artifacts = readFileSync(new URL("../src/styles/artifacts.css", import.meta.url), "utf8");
+  assert.match(
+    artifacts,
+    /\.artifact-modal-panel \.artifact-modal-body \.manuscript-preview,\s*\.artifact-modal-panel \.artifact-modal-body \.artifact-source-preview,\s*\.artifact-modal-panel \.artifact-modal-body \.dataset-table-wrapper,\s*\.artifact-modal-panel \.artifact-modal-body \.notebook-cells \{ max-height: none; \}/
+  );
+  // Inline and timeline previews share these classes and keep their caps.
+  assert.match(artifacts, /\.manuscript-preview \{[^}]*max-height: 560px/);
+  assert.match(artifacts, /\.dataset-table-wrapper \{[^}]*max-height: 460px/);
   const responsive = readFileSync(new URL("../src/styles/responsive.css", import.meta.url), "utf8");
   assert.match(responsive, /@media \(max-width: 900px\)[\s\S]*?\.artifact-modal-panel \{[^}]*width: 100%/);
 });

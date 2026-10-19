@@ -54,6 +54,15 @@
 .dataset-table tbody tr:hover { background: var(--surface-sunk); }
 .dataset-table-meta { padding: 4px 10px; font: 11px/1.4 var(--font-stack); color: var(--text-muted); }
 .notebook-cells { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow: auto; }
+/* The artifact viewer is a fixed 960px window, so inside it these previews
+ * fill the panel and the body scrolls instead of each preview scrolling in
+ * its own 460/560px box. Inline and timeline previews share these classes
+ * and keep their caps. (#309 review) */
+.artifact-modal-panel .artifact-modal-body .manuscript-preview,
+.artifact-modal-panel .artifact-modal-body .artifact-source-preview,
+.artifact-modal-panel .artifact-modal-body .dataset-table-wrapper,
+.artifact-modal-panel .artifact-modal-body .notebook-cells { max-height: none; }
+.artifact-modal-panel .artifact-modal-body .annotatable-figure img { max-height: min(760px, calc(100vh - 240px)); }
 .notebook-cell { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .notebook-cell.markdown { padding: 11px; }
 .notebook-cell.code pre { margin: 0; padding: 11px; background: var(--surface-sunk); font: 11px/1.5 ui-monospace, monospace; overflow: auto; }
