@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import { writeFile, realpath, access } from "node:fs/promises";
+import { writeFile, realpath, access, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
 import { buildSandboxLaunch, sandboxLaunchProfile, resolveHostRuntimeSupport } from "./executor.js";
@@ -21,12 +21,17 @@ export async function prepareSpecialistLauncher(options: {
     bwrapPath = found.find(Boolean) ?? requested;
   }
   bwrapPath = await realpath(bwrapPath);
+  // A delegated repository may contain untrusted project MCP/plugin config.
+  // Do not let the model transport load it before normalized event validation.
+  const projectConfig = join(options.privateRoot, "project-config");
+  await mkdir(projectConfig, { recursive: true, mode: 0o700 });
   const launch = buildSandboxLaunch({
     ...await sandboxLaunchProfile(bwrapPath),
     chdir: options.workspaceRoot, language: "shell", pathEnv: "/usr/bin:/bin",
     environmentBinds: ["--ro-bind", binary, "/opt/sd-codex"],
     hostInterpreterMasks: [], hostRuntimeSupport: await resolveHostRuntimeSupport(options.privateRoot),
-    workspaceBindArgs: ["--bind", options.workspaceRoot, options.workspaceRoot],
+    workspaceBindArgs: ["--bind", options.workspaceRoot, options.workspaceRoot,
+      "--ro-bind", projectConfig, join(options.workspaceRoot, ".codex")],
   });
   // Keep the SDK's explicitly allowlisted environment, including CODEX_API_KEY.
   // No credential is placed in a generated script or bwrap argv.

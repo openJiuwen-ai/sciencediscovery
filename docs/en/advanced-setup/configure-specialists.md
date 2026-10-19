@@ -88,7 +88,8 @@ The pinned Codex CLI runs inside the Runner's Bubblewrap/seccomp launch profile,
 with inner `danger-full-access` to avoid nested user namespaces. Each task has
 an independent Workspace and private `CODEX_HOME` within it, removed on exit.
 The model-only transport has API network access; native Codex shell, web search,
-MCP and subagents are disabled/rejected. Commands use platform tools on separate
+MCP and subagents are disabled/rejected. Workspace `.codex` configuration is masked
+so project MCP/plugin settings cannot start unapproved processes. Commands use platform tools on separate
 Runner executions with the normal offline/allowlist network policy and the same
 permission channel. `request_sandbox_network` can request scoped tool egress;
 `request_direct_execution` / `run_direct_shell` remain explicit consent paths.

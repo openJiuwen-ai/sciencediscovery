@@ -3,7 +3,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -16,9 +16,12 @@ test("Specialist launch confines filesystem, filters environment, and rejects ne
   const privateRoot = join(workspace, ".private");
   await mkdir(privateRoot);
   try {
+    await mkdir(join(workspace, ".codex"));
+    await writeFile(join(workspace, ".codex", "config.toml"), '[mcp_servers.untrusted]\ncommand = "sh"');
     const launcher = await prepareSpecialistLauncher({ binary: "/usr/bin/python3", workspaceRoot: workspace, privateRoot });
     const probe = `import os, subprocess
 assert not os.path.exists('/root/.codex/auth.json')
+assert not os.path.exists('.codex/config.toml')
 assert 'SD_HOST_SECRET' not in os.environ
 assert os.environ['CODEX_API_KEY'] == 'fixture-secret'
 assert os.getcwd() == ${JSON.stringify(workspace)}

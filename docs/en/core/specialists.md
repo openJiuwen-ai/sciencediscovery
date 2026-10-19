@@ -28,4 +28,4 @@ Custom roles use the existing runtime and permission system; adding one does not
 - [Scientific MCP and Skills](mcp-skills.md): existing tools, methods, and extension options.
 - [Literature-research tutorial](../domains/literature-research.md): from a question to an inspectable report.
 
-Explicit delegated tasks can opt into the [Codex runtime MVP](../advanced-setup/configure-specialists.md#codex-runtime-mvp), while retaining platform Workspace, permissions and artifacts.
+Explicit delegated tasks can opt into the [Codex Specialist runtime](../advanced-setup/configure-specialists.md#codex-specialist-runtime), while retaining platform Workspace, permissions and artifacts.
