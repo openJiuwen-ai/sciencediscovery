@@ -979,7 +979,6 @@ export function createRunnerServer(
         await resolveExecutionWorkspace(config, execution);
         const direct = url.pathname === "/direct-shell-executions";
         if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
-        if (direct && (await readiness.get()).ready) throw new Error("Direct execution is available only during sandbox recovery");
         if (!direct) execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
         execution.maxOutputBytes ??= config.maxOutputBytes;
         const accepted = managedExecutions.start(execution, (signal, log) => direct

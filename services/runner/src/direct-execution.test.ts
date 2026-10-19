@@ -87,9 +87,9 @@ for (const mode of ["timeout", "cancel"] as const) {
   });
 }
 
-async function remoteFixture(t: TestContext) {
+async function remoteFixture(t: TestContext, sandboxReady = false) {
   const f = await fixture(t);
-  const server = await startRunnerServer({ ...f.config, authToken: "test-token", host: "127.0.0.1", port: 0,
+  const server = await startRunnerServer({ ...f.config, ...(sandboxReady ? { bwrapPath: process.env.SCIENCE_AGENT_BWRAP_PATH || "bwrap" } : {}), authToken: "test-token", host: "127.0.0.1", port: 0,
     scientificEnvsEnabled: false, npuBrokerEnabled: false });
   t.after(async () => { server.closeAllConnections(); await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -159,6 +159,17 @@ test("remote direct Shell/Python retains durable output, workspace version and e
   await assert.rejects(readFile(resolve(f.workspaceRoot, "result.txt")), { code: "ENOENT" });
   assert.match((await f.client.shellExecutionLogs(execution.id, f.owner)).chunks.map(c => c.text).join(""), /42/);
   await assert.rejects(f.client.startShellExecution(f.request), /already been used/);
+});
+
+test("ready sandbox accepts a separately authorized direct HTTP submission", async t => {
+  const f = await remoteFixture(t, true);
+  assert.equal((await f.client.executionCapability()).ready, true);
+  await f.client.startShellExecution(f.request);
+  const execution = await f.wait(f.request.executionId);
+  assert.equal(execution.state, "completed");
+  assert.equal(execution.result!.sandbox, "none");
+  assert.equal(execution.result!.stdout.trim(), "42");
+  assert.deepEqual(execution.result!.directAuthorization, f.request.directAuthorization);
 });
 
 for (const changed of ["key", "root", "account", "target", "agent"] as const) {
