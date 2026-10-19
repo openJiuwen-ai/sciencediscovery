@@ -32,6 +32,14 @@ description: Inspect an uploaded CSV for missing values and duplicate rows, and 
 
 导入后打开技能，检查名称、正文和配套文件。仅把脚本放进技能包不会自动执行脚本或安装 Python/R 依赖；运行所需依赖仍由科学计算环境管理。
 
+### 文件夹导入的兼容性与自动化限制
+
+**Skills → 导入 → 本地文件夹** 在支持原生目录选择（`webkitdirectory`）的普通 Chromium 类浏览器中可以正常使用。如果浏览器缺少这项能力，文件夹入口会禁用；请通过**本地文件**导入完整技能包的 ZIP，或使用 **Git**。浏览器能力检测和替代方式提示由 [PR #352](https://github.com/openJiuwen-ai/sciencediscovery/pull/352) 加入。
+
+某些外部自动化宿主或文件选择器封装，例如 [Issue #339](https://github.com/openJiuwen-ai/sciencediscovery/issues/339) 中报告的 Scenario 2 Case A 环境，即使浏览器提供 `webkitdirectory`，也可能拒绝目录路径。这一遗留限制来自宿主或驱动。在这些环境中，优先使用 ZIP/Git 保留完整技能包，或在支持原生目录选择的真实浏览器中使用文件夹导入。
+
+本仓库的 Playwright 旅程 **J11**（[`test/journey-skill-folder-import.spec.ts`](../../../test/journey-skill-folder-import.spec.ts)）已成功通过 `setInputFiles` 传入目录，并验证导入后的 Skill 保留配套文件。J11 不受上述外部宿主限制阻塞；它没有复现该外部文件选择器环境。
+
 ## 3. 确认当前后端能够使用
 
 技能库中存在一个条目，与实际运行时启用它是两件事：

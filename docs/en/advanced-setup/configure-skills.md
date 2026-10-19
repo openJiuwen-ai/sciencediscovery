@@ -32,6 +32,14 @@ Open the library management view in **System settings → Skills** and choose a 
 
 Open the imported Skill and inspect its name, instructions, and supporting files. Packaging a script does not execute it or install Python/R dependencies. Dependencies remain managed through scientific environments.
 
+### Folder import compatibility and automation limits
+
+**Skills → Import → Folder** works in ordinary Chromium-based browsers with native directory selection (`webkitdirectory`). If the browser lacks this capability, Folder is disabled; use a package ZIP through **File**, or use **Git**. This browser capability check and the alternative guidance were added in [PR #352](https://github.com/openJiuwen-ai/sciencediscovery/pull/352).
+
+Some external automation hosts or file-picker wrappers, such as the Scenario 2 Case A setup reported in [issue #339](https://github.com/openJiuwen-ai/sciencediscovery/issues/339), may reject a directory path even when the browser exposes `webkitdirectory`. This remaining limitation belongs to the host or driver. In that environment, prefer ZIP/Git to preserve the complete package, or use Folder in a real browser with native directory selection.
+
+The repository's Playwright journey **J11** ([`test/journey-skill-folder-import.spec.ts`](../../../test/journey-skill-folder-import.spec.ts)) successfully passes a directory to `setInputFiles` and verifies that the imported Skill retains its supporting file. J11 is not blocked by the external host limitation; it does not reproduce that external picker setup.
+
 ## 3. Check runtime availability
 
 Library presence and runtime enablement are separate:
