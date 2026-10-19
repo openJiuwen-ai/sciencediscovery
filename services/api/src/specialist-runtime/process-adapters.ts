@@ -96,7 +96,9 @@ abstract class ProcessAdapter implements SpecialistRuntimeAdapter {
       const launcher = request.execution === "direct" ? binary : await prepareSpecialistLauncher({ binary, workspaceRoot: root, privateRoot: root });
       const start = (args: string[]) => {
         request.signal.throwIfAborted();
-        const child = spawn(launcher, args, { cwd: root, env: { PATH: "/usr/bin:/bin", HOME: home,
+        // Script-based CLIs use env shebangs; hosted runners and standard Node
+        // installs place their interpreter in /usr/local/bin.
+        const child = spawn(launcher, args, { cwd: root, env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: home,
           ...(this.kind === "acp" ? { SD_ACP_TOKEN: credential } : { ANTHROPIC_API_KEY: credential }) }, stdio: "pipe" });
         children.add(child); child.once("close", () => children.delete(child));
         return child;
