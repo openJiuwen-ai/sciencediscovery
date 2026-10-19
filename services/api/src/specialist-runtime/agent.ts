@@ -37,12 +37,15 @@ export function codexAgentFactory(config: {
     };
     const execute: NativeAgentHandle["execute"] = async prompt => {
       const result = await (config.adapter ?? new CodexSpecialistAdapter()).invoke({
-        prompt: [options.specialist?.instructions, options.subagent?.instructions, prompt].filter(Boolean).join("\n\n"),
+        prompt: [options.specialist?.instructions, options.subagent?.instructions,
+          options.runContract && options.runContract !== prompt ? `Original delegation:\n${options.runContract}` : undefined,
+          options.gatewayHistory?.length ? `Prior platform conversation:\n${JSON.stringify(options.gatewayHistory)}` : undefined,
+          prompt].filter(Boolean).join("\n\n"),
         ...(config.model ? { model: config.model } : {}), maxTurns: config.maxTurns, signal: controller.signal,
         tools: buildTools(options).filter(tool => PLATFORM_TOOLS.has(tool.name)),
         credential: () => config.credential(controller.signal, () => sink({ type: "need_input", runtime: "codex" })),
       }, sink);
-      return { finalMessages: [{ role: "user", content: prompt }, { role: "assistant", content: result.summary }] };
+      return { finalMessages: [...(options.gatewayHistory ?? []), { role: "user", content: prompt }, { role: "assistant", content: result.summary }] };
     };
     return { execute, prompt: async text => { await execute(text); }, abort: () => controller.abort(),
       beginExternalWait: () => () => undefined,

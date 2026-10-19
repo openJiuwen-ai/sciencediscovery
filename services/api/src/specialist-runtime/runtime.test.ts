@@ -238,3 +238,23 @@ test("file-change events include modified files and omit unchanged executions", 
     assert.deepEqual(observed.filter(e => e.type === "file_change").map(e => e.details), changed ? [{ paths: ["input.txt"] }] : []);
   }
 });
+
+
+test("fresh Codex threads retain the existing platform continuation history and frozen Brief", async () => {
+  const previous = [{ role: "user" as const, content: "Original question" }, { role: "assistant" as const, content: "Previous result" }];
+  let runtimePrompt = "";
+  const create = codexAgentFactory({ maxTurns: 2, credential: async () => "unused", onRuntimeEvent: async () => {},
+    adapter: { invoke: async (input, sink) => {
+      runtimePrompt = input.prompt;
+      const result = { summary: "Revised result", artifacts: [] };
+      await sink({ type: "done", result });
+      return result;
+    } } });
+  const agent = create({ sessionId: "child", config: { baseUrl: "http://unused.test", dataDir: "/unused", model: "unused" },
+    gatewayHistory: previous, runContract: "Frozen Brief and Workspace handoff", enabledConnectorIds: [], workspaceRoot: "/unused",
+    executePython: async () => { assert.fail("unused"); }, executeShell: async () => { assert.fail("unused"); } });
+  const result = await agent.execute("Revise using the new constraint");
+  for (const required of ["Frozen Brief and Workspace handoff", "Original question", "Previous result", "Revise using the new constraint"]) assert.ok(runtimePrompt.includes(required));
+  assert.deepEqual(result.finalMessages.slice(0, 2), previous);
+  assert.equal(result.finalMessages.at(-1)?.content, "Revised result");
+});

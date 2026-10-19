@@ -97,7 +97,8 @@ returns `SpecialistResult` with summary, platform artifact receipts, usage
 and Codex thread ID. Artifact receipts originate only in `declare_artifact`;
 provider file paths are never adopted as artifacts. The pinned official
 TypeScript SDK runs on the API host with an explicit environment and a fresh
-Codex HOME. Host process confinement, durable Codex thread continuation,
+Codex HOME. A platform continuation carries its closed conversation and frozen
+Brief into a fresh Codex thread. Host process confinement, durable Codex thread continuation,
 ACP, additional SDKs, runtime selection UI, and full Skills/MCP bridging are
 later phases. See [Issue #385](https://github.com/openJiuwen-ai/sciencediscovery/issues/385),
 [configuration follow-up #278](https://github.com/openJiuwen-ai/sciencediscovery/issues/278),
