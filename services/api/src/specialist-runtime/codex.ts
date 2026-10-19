@@ -92,10 +92,9 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
         request.signal.throwIfAborted();
         await sink({ type: "tool_call", id, name: tool.name, args, result: toolResult });
         if (tool.name === "declare_artifact" && !toolResult.isError) result.artifacts.push(toolResult.details);
-        const createdFiles = (toolResult.details as { createdFiles?: unknown } | undefined)?.createdFiles;
-        if (Array.isArray(createdFiles) && createdFiles.length) {
-          await sink({ type: "file_change", toolCallId: id, details: { paths: createdFiles } });
-        }
+        const changes = toolResult.details as { createdFiles?: unknown; modifiedFiles?: unknown } | undefined;
+        const paths = [...new Set([changes?.createdFiles, changes?.modifiedFiles].flatMap(files => Array.isArray(files) ? files : []))];
+        if (paths.length) await sink({ type: "file_change", toolCallId: id, details: { paths } });
         input = `Platform tool result:\n${JSON.stringify(toolResult).slice(0, 32000)}\nChoose the next platform tool or finish.`;
       }
       throw new CodexRuntimeError(`Codex exceeded maximum turns (${request.maxTurns})`);

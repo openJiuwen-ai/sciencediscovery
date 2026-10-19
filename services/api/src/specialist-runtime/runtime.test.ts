@@ -14,6 +14,8 @@ import { createSubagentProfile, type AgentEvent } from "@sciencediscovery/orches
 import type { Specialist } from "@sciencediscovery/schema";
 import type { AgentTool } from "@sciencediscovery/tools";
 import { CasStore } from "@sciencediscovery/cas";
+import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
+import { routeSpecialistPermissions } from "./permissions.js";
 import { normalizeSpecialistRuntime } from "./config.js";
 import { CodexSpecialistAdapter, type CodexFactory } from "./codex.js";
 import type { SpecialistRuntimeEvent, SpecialistRuntimeRequest } from "./adapter.js";
@@ -196,4 +198,43 @@ test("existing Subagent AgentRun receives normalized events and executes through
     assert.ok(runtimeEvents.some(e => e.type === "need_input"));
     assert.ok(runtimeEvents.some(e => e.type === "file_change"));
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("Codex child uses platform approval while the Swarm lead retains native decisions in one permission cell", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sd-runtime-permission-"));
+  try {
+    const store = new SessionStore(root); await store.load();
+    const project = await store.createProject("Permission routing");
+    const session = await store.createSession(project.id, "Ask before code", {}, {}, { allowUnconfiguredModel: true });
+    const external = new Set(["codex-child"]);
+    const required: string[] = [];
+    const runtime = createAgentPermissionRuntime(store.getSessionPermissionEpoch(session.id)!, {
+      requestPermission: routeSpecialistPermissions(
+        (action, resource, _summary, context) => store.authorizeByJiuwenSwarm(session.id, action, resource, context),
+        (action, resource, summary, context) => store.requestPermission(session.id, action, resource, summary, context), external),
+      readEpoch: () => store.getSessionPermissionEpoch(session.id),
+      readAuthorization: id => store.getPermissionAuthorization(id),
+      emitRequired: request => { required.push(request.executionId!); },
+      waitForDecision: async request => ({ ...request, state: "denied" }),
+    });
+    await runtime.requirePrivilege({ action: "code", resource: "lead-command", summary: "Native lead", executionId: "lead" });
+    await assert.rejects(runtime.requirePrivilege({ action: "code", resource: "external-command", summary: "Codex command", executionId: "codex-child" }), /Permission denied/);
+    assert.deepEqual(required, ["codex-child"], "Swarm approval must not authorize a Codex execution");
+    await runtime.requirePrivilege({ action: "code", resource: "native-child-command", summary: "Native child", executionId: "native-child" });
+    assert.deepEqual(required, ["codex-child"]);
+    external.delete("codex-child");
+    await runtime.requirePrivilege({ action: "code", resource: "native-again", summary: "Native", executionId: "codex-child" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("file-change events include modified files and omit unchanged executions", async () => {
+  for (const changed of [false, true]) {
+    const observed: SpecialistRuntimeEvent[] = [];
+    const tool: AgentTool = { name: "run_shell", label: "Run", description: "Run", parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text", text: "Executed by platform" }], details: { modifiedFiles: changed ? ["input.txt"] : [] } }) };
+    await new CodexSpecialistAdapter(factory([events(decision("run_shell")), events(decision())])).invoke(request({ tools: [tool] }), async e => { observed.push(e); });
+    assert.deepEqual(observed.filter(e => e.type === "file_change").map(e => e.details), changed ? [{ paths: ["input.txt"] }] : []);
+  }
 });

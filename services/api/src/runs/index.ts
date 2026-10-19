@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { setTimeout as runtimeDelay } from "node:timers/promises";
+import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
 import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
@@ -1087,6 +1088,7 @@ async function executeAgentRun(
     const grant = decided.grantId ? store.getPermissionGrant(decided.grantId) : undefined;
     return grant && grant.scope !== "once" ? "allow_matching" : "allow_once";
   };
+  const externalSpecialistExecutions = new Set<string>();
   const permissionRuntime = createAgentPermissionRuntime(initialPermissionEpoch, {
     beginExternalWait: (executionId) => {
       const begin = executionId ? externalWaitByExecution.get(executionId) : undefined;
@@ -1100,9 +1102,13 @@ async function executeAgentRun(
     readEpoch: () => store.getSessionPermissionEpoch(sessionId),
     readAuthorization: (authorizationId) => store.getPermissionAuthorization(authorizationId),
     // With the JiuwenSwarm backend its permission engine decides before a tool runs; ScienceDiscovery records that.
-    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code" && action !== "sandbox_network"
-      ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
-      : store.requestPermission(sessionId, action, resource, summary, context),
+    requestPermission: routeSpecialistPermissions(
+      (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code" && action !== "sandbox_network"
+        ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
+        : store.requestPermission(sessionId, action, resource, summary, context),
+      (action, resource, summary, context) => store.requestPermission(sessionId, action, resource, summary, context),
+      externalSpecialistExecutions,
+    ),
     waitForDecision: (permissionRequest, signal) =>
       waitForPermissionDecision(
         store,
@@ -1540,6 +1546,7 @@ async function executeAgentRun(
       }
       const subagentConfig = resolveSubagentConfig(input);
       const specialist = resolveSubagentSpecialist(store, session.specialistId, input);
+      const codexRuntime = input.specialistId?.trim() && specialist?.runtime?.kind === "codex" ? specialist.runtime : undefined;
       const subagentInput: SubagentInput = specialist && input.specialistId?.trim() !== specialist.id
         ? { ...input, specialistId: specialist.id }
         : input;
@@ -1550,13 +1557,14 @@ async function executeAgentRun(
         parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
-          model: input.specialistId?.trim() && specialist?.runtime?.kind === "codex"
-            ? { id: "codex", model: specialist.runtime.model ?? "Codex default", name: "Codex" }
+          model: codexRuntime
+            ? { id: "codex", model: codexRuntime.model ?? "Codex default", name: "Codex" }
             : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
         childId = subagent.id;
+        if (codexRuntime) externalSpecialistExecutions.add(childId);
         const childController = new AbortController();
         activeSubagentAbortControllers.set(childId, childController);
         // AgentRun deadlines pause while waiting on external systems. A task's
@@ -2019,9 +2027,9 @@ async function executeAgentRun(
         subagentRunHandle = runSubagentTask({
           bindings: {
             pluginSettings: settingsSnapshot.plugins,
-            ...(input.specialistId?.trim() && specialist?.runtime?.kind === "codex" ? {
+            ...(codexRuntime ? {
               createAgent: codexAgentFactory({
-                model: specialist.runtime.model,
+                model: codexRuntime.model,
                 maxTurns: subagentConfig.maxTurns,
                 credential: async (runtimeSignal, needInput) => {
                   let key = store.codexApiKey(sessionId);
@@ -2176,7 +2184,10 @@ async function executeAgentRun(
         });
         return subagent;
       } finally {
-        if (childId) activeSubagentAbortControllers.delete(childId);
+        if (childId) {
+          activeSubagentAbortControllers.delete(childId);
+          externalSpecialistExecutions.delete(childId);
+        }
         releaseSubagentSlot();
       }
     },

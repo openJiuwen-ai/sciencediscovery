@@ -41,16 +41,20 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
         child = (await response.json())[0];
         expect(child.runtimeInput.state).toBe("pending");
       });
-      await journey.step("Inspect private credential entry", "Password input and submit remain reachable at 390px and 1440px", async () => {
-        for (const width of [390, 1440]) {
+      for (const width of [390, 1440]) {
+        await journey.step(`Inspect private credential entry at ${width}px`, "Password input and submit remain visible and within the viewport", async () => {
           await page.setViewportSize({ width, height: 900 });
           const card = page.getByRole("form", { name: "Connect Codex to continue" }).first();
           await expect(card.getByLabel("OpenAI API key")).toHaveAttribute("type", "password");
           await expect(card.getByRole("button", { name: "Connect and continue" })).toBeVisible();
           await expect(card.getByRole("button", { name: "Connect and continue" })).toBeDisabled();
-        }
-        expect(stub.calls.every(call => call.route === "main")).toBeTruthy();
-      });
+          const box = await card.getByLabel("OpenAI API key").boundingBox();
+          expect(box).not.toBeNull();
+          expect(box!.x).toBeGreaterThanOrEqual(0);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+          expect(stub.calls.every(call => call.route === "main")).toBeTruthy();
+        });
+      }
       await journey.step("Cancel setup", "Child becomes cancelled; stale secret submission is rejected and no card remains", async () => {
         const stopped = await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/subagents/${child.id}/stop`, { headers });
         expect(stopped.ok()).toBeTruthy();
