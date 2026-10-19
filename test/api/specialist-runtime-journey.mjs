@@ -15,6 +15,7 @@
  * CostSideEffects: Real mode uses billable Codex tokens; temporary records/processes are removed; report retained.
  * Browser: SPECIALIST_BROWSER=1 runs the pinned config-card browser journey before API scenarios.
  * Run: node test/api/specialist-runtime-journey.mjs
+ * Rejected real auth only: SPECIALIST_REAL=1 SPECIALIST_CASES=fallback-on,fallback-off node test/api/specialist-runtime-journey.mjs
  * Real: SPECIALIST_REAL=1 SPECIALIST_KEY_FILE=<private-key-file> SPECIALIST_MODEL=<model> node test/api/specialist-runtime-journey.mjs
  */
 import assert from "node:assert/strict";
@@ -29,7 +30,11 @@ assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no
 const root = resolve(".tmp", `specialist-journey-${randomUUID()}`);
 await mkdir(root, { recursive: true });
 const real = process.env.SPECIALIST_REAL === "1";
-const key = real && process.env.SPECIALIST_KEY_FILE ? (await readFile(process.env.SPECIALIST_KEY_FILE, "utf8")).trim() : real ? undefined : "fixture-codex-key";
+const allCases = ["handoff", "cancel", "timeout", "fallback-on", "fallback-off"];
+const cases = process.env.SPECIALIST_CASES?.split(",") ?? allCases;
+assert.ok(cases.length && cases.every(name => allCases.includes(name)), "SPECIALIST_CASES must name existing scenarios");
+const rejectedAuthOnly = cases.every(name => name.startsWith("fallback"));
+const key = real && process.env.SPECIALIST_KEY_FILE ? (await readFile(process.env.SPECIALIST_KEY_FILE, "utf8")).trim() : real ? rejectedAuthOnly ? "invalid-e2e-key" : undefined : "fixture-codex-key";
 if (!key) {
   await writeFile(resolve(root, "report.md"), `# BLOCKED\nSHA: ${sha}\nReal Codex matrix blocked: SPECIALIST_KEY_FILE is required. No live calls made.\n`);
   console.error(`BLOCKED: missing approved API key; report: ${root}/report.md`); process.exit(2);
@@ -141,7 +146,7 @@ try {
   }
   const model = await json("/api/models", { name: "Specialist journey lead", model: "lead", apiToken: token, baseUrl: endpoint });
   project = await json("/api/projects", { name: "Specialist Phase 2 journey" });
-  for (const name of ["handoff", "cancel", "timeout", "fallback-on", "fallback-off"]) {
+  for (const name of cases) {
     await step(`${steps.length + 1}. ${name}`, "Explicit task and config card lead to the required terminal outcome", async () => {
       const specialist = await json("/api/specialists", { name: `Codex ${name}`, description: "Phase 2", instructions: "Follow the user's exact task. Use only platform tools.",
         runtime: { kind: "codex", model: process.env.SPECIALIST_MODEL ?? "gpt-5.4", fallback: name !== "fallback-off", timeoutSeconds: name === "timeout" ? 2 : 60 } });
@@ -186,7 +191,7 @@ try {
       else { assert.equal(fallback, false); assert.equal(terminal.status, "failed", text); }
       await json(`/api/sessions/${session.id}`, { confirmationId: session.id }, "DELETE");
       await json(`/api/specialists/${specialist.id}`, undefined, "DELETE");
-      return `${terminal.status}; fallback=${fallback}; private config accepted; ${real ? "live Codex auth path" : "official SDK/CLI + local Responses"}`;
+      return `${terminal.status}; fallback=${fallback}; private config accepted; ${real ? name.startsWith("fallback") ? "live OpenAI rejected-auth path" : "live Codex auth path" : "official SDK/CLI + local Responses"}`;
     });
   }
   outcome = "PASS";
@@ -195,7 +200,7 @@ finally {
   if (project && api) await json(`/api/projects/${project.id}`, { confirmationId: project.id }, "DELETE").catch(() => {});
   for (const child of processes.reverse()) { child.kill("SIGTERM"); await Promise.race([new Promise(done => child.once("exit", done)), new Promise(done => setTimeout(done, 3000))]); if (child.exitCode === null) child.kill("SIGKILL"); }
   stub.closeAllConnections(); await new Promise(done => stub.close(done));
-  const report = `# Specialist Phase 2: ${outcome}\n\nSHA: ${sha}\nMode: ${real ? "real Codex API-key auth; local lead/native fallback stub" : "mocked providers; real pinned SDK/CLI and Runner sandbox"}\nCommand: node test/api/specialist-runtime-journey.mjs\n\n${steps.map(item => `## ${item.name}: ${item.status}\nExpected: ${item.expected}\nActual: ${item.actual}\n`).join("\n")}\nCounts: ${steps.filter(step => step.status === "PASS").length} passed / ${steps.filter(step => step.status === "FAIL").length} failed / ${(process.env.SPECIALIST_BROWSER === "1" ? 7 : 6) - steps.length} unexecuted.\n`;
+  const report = `# Specialist Phase 2: ${outcome}\n\nSHA: ${sha}\nMode: ${real ? "real Codex API-key auth; local lead/native fallback stub" : "mocked providers; real pinned SDK/CLI and Runner sandbox"}\nCommand: node test/api/specialist-runtime-journey.mjs\n\n${steps.map(item => `## ${item.name}: ${item.status}\nExpected: ${item.expected}\nActual: ${item.actual}\n`).join("\n")}\nCounts: ${steps.filter(step => step.status === "PASS").length} passed / ${steps.filter(step => step.status === "FAIL").length} failed / ${cases.length + (process.env.SPECIALIST_BROWSER === "1" ? 2 : 1) - steps.length} unexecuted.\n`;
   await writeFile(resolve(root, "report.md"), redact(report));
   await writeFile(resolve(root, "services.log"), logs);
   await rm(resolve(root, "data"), { recursive: true, force: true });
