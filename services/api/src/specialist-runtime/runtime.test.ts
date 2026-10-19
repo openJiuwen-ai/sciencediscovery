@@ -164,7 +164,7 @@ test("cancel before launch and during credential wait; timeout stops a streaming
   await assert.rejects(adapter.invoke(request({ signal: cancelled.signal }), async () => {}), { name: "AbortError" });
   assert.equal(launched, false);
   const signal = AbortSignal.timeout(20);
-  await assert.rejects(adapter.invoke(request({ signal, credential: async () => { await delay(1000, undefined, { signal }); return "x"; } }), async () => {}), { name: "AbortError" });
+  await assert.rejects(adapter.invoke(request({ signal, credential: async () => { await delay(1000, undefined, { signal }); return "x"; } }), async () => {}), { name: "TimeoutError" });
   assert.equal(launched, false);
   const streaming: CodexFactory = () => ({ async runStreamed(_input, opts) { return { events: (async function* () { await delay(1000, undefined, { signal: opts!.signal }); yield* events(decision()); })() }; } });
   await assert.rejects(new CodexSpecialistAdapter(streaming).invoke(request({ signal: AbortSignal.timeout(20) }), async () => {}), { name: "TimeoutError" });

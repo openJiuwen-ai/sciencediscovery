@@ -100,7 +100,7 @@ export class ExecutionManager {
           const stderr = await this.versions.put("agent-state", readLog("stderr") || execution.result?.stderr || execution.error || "");
           const code = await this.versions.put("agent-state", request.code);
           const version = await this.versions.putRecord("WorkspaceExecution", {
-            executionId: execution.id, ...owner, workspace, code, stdout, stderr,
+            executionId: execution.id, ...owner, ...(workspace ? { workspace } : {}), code, stdout, stderr,
             environmentRevisionId: execution.result?.environmentRevisionId ?? null,
             state: execution.state,
           });

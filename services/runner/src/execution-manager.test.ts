@@ -234,8 +234,9 @@ test("explicit Specialist handoff records execution receipts without snapshottin
     await writeFile(resolve(workspace, "private.txt"), "must-not-be-versioned");
     return result("explicit");
   });
-  await until(() => manager.get("explicit", owner).state === "completed");
+  await until(() => !["queued", "running"].includes(manager.get("explicit", owner).state));
   const execution = manager.get("explicit", owner);
+  assert.equal(execution.state, "completed", execution.error);
   assert.ok(execution.version, "execution receipt remains durable");
   assert.equal(execution.result?.workspaceSnapshot, undefined);
   const record = await new VersionStore(root).readRecord<{ workspace?: unknown }>(execution.version!, "WorkspaceExecution");

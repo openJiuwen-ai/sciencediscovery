@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { writeFile, realpath, access } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
 import { buildSandboxLaunch, sandboxLaunchProfile, resolveHostRuntimeSupport } from "./executor.js";
 import { ensureSeccompFilter } from "./seccomp.js";
@@ -43,7 +44,7 @@ const cliArgs = process.argv.slice(2);
 const index = cliArgs.indexOf('--output-schema');
 if (index !== -1) {
   const schema = realpathSync(cliArgs[index + 1]);
-  if (!schema.startsWith(join(tmpdir(), 'codex-output-schema-')) || !schema.endsWith('/schema.json')) process.exit(64);
+  if (!schema.startsWith(${JSON.stringify(join(tmpdir(), "codex-output-schema-"))}) || !schema.endsWith('/schema.json')) process.exit(64);
   args.push('--ro-bind', dirname(schema), dirname(schema));
 }
 const child = spawn(${JSON.stringify(bwrapPath)}, [...args, '/opt/sd-codex', ...cliArgs], {
