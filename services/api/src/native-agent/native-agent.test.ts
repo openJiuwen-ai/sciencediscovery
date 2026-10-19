@@ -1156,10 +1156,14 @@ for (const action of ["continue", "wait"] as const) {
   });
 }
 
-test("MCP recovery, sandbox network and scoped direct execution coexist in the native agent", async () => {
+for (const agentFirst of [false, true]) {
+test(`MCP recovery, sandbox network and scoped direct execution coexist in the native agent${agentFirst ? " (agent-first)" : ""}`, async () => {
+  const command = "printf science";
+  const request = agentFirst
+    ? { runner_id: "local", command, cwd: "" }
+    : { operation_id: "failed-op", command, cwd: "" };
   const calls: string[] = [];
   const networkCalls: string[] = [];
-  const command = "printf science";
   const scope = { authorizationId: "consent", command, cwd: "", target: "local", account: "test" };
   const options: NativeAgentOptions = {
     ...workspace(),
@@ -1187,7 +1191,7 @@ test("MCP recovery, sandbox network and scoped direct execution coexist in the n
     },
     directExecution: {
       request: async input => {
-        assert.deepEqual(input, { operationId: "failed-op", command, cwd: "" });
+        assert.deepEqual(input, { operationId: request.operation_id, runnerId: request.runner_id, command, cwd: "" });
         calls.push("consent"); return scope;
       },
       start: async input => {
@@ -1203,7 +1207,7 @@ test("MCP recovery, sandbox network and scoped direct execution coexist in the n
       return toolTurn("mcp_readiness", { action: "check", reason: "Source repaired", sourceIds: ["arxiv"] });
     },
     () => toolTurn("mcp_recovered_call", { sourceId: "arxiv", toolId: "search", input: { query: "science" } }),
-    () => toolTurn("request_direct_execution", { operation_id: "failed-op", command, cwd: "" }),
+    () => toolTurn("request_direct_execution", request),
     () => {
       assert.deepEqual(calls, ["check", "recovered", "consent"], "consent does not dispatch execution");
       return toolTurn("run_direct_shell", { authorization_id: "consent", command, cwd: "", target: "local", account: "test" });
@@ -1224,6 +1228,7 @@ test("MCP recovery, sandbox network and scoped direct execution coexist in the n
     assert.deepEqual(networkCalls, ["permission", "new-execution"]);
   } finally { restore(); }
 });
+}
 
 
 test("native tool progress arrives before completion and ignores late callbacks", { timeout: 10_000 }, async () => {
