@@ -25,9 +25,11 @@ test("plugin installation preserves every built-in manifest, tool and governance
   const registry = createMcpSourceRegistry();
   await scope.start(new AbortController().signal);
   for (const contribution of scope.contributions) for (const source of contribution.sources) registry.register(source);
-  assert.equal(builtinMcpSourceManifests.length, 13);
+  // 26 built-ins: uniprot + llm-wiki + 24 public biomed sources; pin so adding
+  // a source without updating this test fails loudly.
+  assert.equal(builtinMcpSourceManifests.length, 26);
   assert.deepEqual(registry.listManifests(), createBuiltinMcpSourceRegistry().listManifests());
-  assert.equal(new Set(scope.manifests.map(manifest => manifest.id)).size, 13);
+  assert.equal(new Set(scope.manifests.map(manifest => manifest.id)).size, 26);
   await scope.dispose();
 });
 
@@ -61,7 +63,7 @@ test("invalid optional Wiki configuration does not prevent other source plugins 
   try {
     process.env.SCIENCE_AGENT_LLM_WIKI_URL = "not-a-url";
     const scope = await createPluginScope(builtinMcpSourcePlugins);
-    assert.equal(scope.contributions.flatMap(item => item.sources).length, 12);
+    assert.equal(scope.contributions.flatMap(item => item.sources).length, 25); // 26 built-ins minus the misconfigured Wiki
     assert.deepEqual(scope.contributions.flatMap(item => item.diagnostics ?? []), [{ pluginId: "connector.llm-wiki", code: "invalid_configuration" }]);
     await scope.dispose();
   } finally {

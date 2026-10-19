@@ -179,6 +179,8 @@ Self-check before delivery:
 
 Produce the final report and save to `/mnt/user-data/outputs/report-<topic-slug>-<YYYYMMDD>.md`. Present file path back to the orchestrator.
 
+**Final pass**: with a knowledge base available, run `polish_report` on the saved markdown BEFORE declaring it — it strips boilerplate, verifies verbatim fragments against the KB and marks them as [n] citations with an index, and normalizes headings. Unverifiable fragments are left untouched (handle them per the evidence discipline, not by editing the polish output).
+
 ## Default Report Template
 
 Used when user does not specify a format:

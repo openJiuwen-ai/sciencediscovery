@@ -63,7 +63,37 @@ import {
   handleRunEvents as handleEvolveRunEvents,
   handleStopRun as handleEvolveStopRun,
 } from "../evolution/routes.js";
+import {
+  handleKeCreateKb,
+  handleKeGetDocument,
+  handleKeGetDocumentAnchor,
+  handleKeGetEntity,
+  handleKeGetGraph,
+  handleKeGetGrow,
+  handleKeGetKb,
+  handleKeListCitations,
+  handleKeListDocuments,
+  handleKeListFormulae,
+  handleKeListJobs,
+  handleKeListKbs,
+  handleKeSimilarDocuments,
+  handleKeSeed,
+  handleKeStartGrow,
+  handleKeGetGraphRoots,
+  handleKeStartResolution,
+  handleKeListCommunityReports,
+  handleKeGenerateCommunityReports,
+  handleKeListMerges,
+  handleKeUnmerge,
+  handleKeSearchPreview,
+  handleKeUploadPdf,
+  parseKeDocumentLevel,
+} from "../knowledge-engine/routes.js";
+import { AGENT_MEMORY_CATEGORIES } from "@sciencediscovery/schema";
 import type {
+  AgentMemoryCategory,
+  AgentMemoryStatus,
+  DecidePlanApprovalRequest,
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
   CancelRunResult,
@@ -145,6 +175,8 @@ import type {
   PromptManifest,
   SubagentStep,
   UpdateSpecialistRequest,
+  ProposePlanRequest,
+  RevisePlanRequest,
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
@@ -186,7 +218,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
+import { inferDomain, mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -271,6 +303,7 @@ import {
   emptyTrace,
   getActiveSessionRun,
   publishApprovalModeChange,
+  publishPlanApprovalDecision,
   scheduleSessionRuns,
   sessionHasActiveRun,
   streamAgentRun,
@@ -346,6 +379,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const {
     artifactManager,
     evolutionStore,
+    keGraphRoots,
+    keOrchestrator,
+    knowledgeEngineStore,
+    knowledgeEngineTools,
+    keJobRunner,
+    keLivingReviewRunner,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -2236,6 +2275,76 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const sessionPlansMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans$/);
+      if (sessionPlansMatch && request.method === "GET") {
+        sendJson(response, 200, store.listSessionPlans(sessionPlansMatch[1]!));
+        return;
+      }
+
+      if (sessionPlansMatch && request.method === "POST") {
+        const plan = await store.proposeSessionPlan(
+          sessionPlansMatch[1]!,
+          await readJson<ProposePlanRequest>(request),
+        );
+        // Correct the goal's domain/scope from plan.scope, same as the
+        // streaming propose path. Never blocks the response.
+        memoryGraphSink.observeSessionPlan({
+          sessionId: sessionPlansMatch[1]!,
+          goalId: `goal:session:${sessionPlansMatch[1]!}`,
+          planId: plan.id,
+          scope: plan.scope,
+          domain: inferDomain(plan.scope),
+          steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
+        });
+        sendJson(response, 201, plan);
+        return;
+      }
+      const sessionPlanMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans\/([^/]+)$/);
+      if (sessionPlanMatch && request.method === "PUT") {
+        const plan = await store.reviseSessionPlan(
+          sessionPlanMatch[1]!,
+          sessionPlanMatch[2]!,
+          await readJson<RevisePlanRequest>(request),
+        );
+        // Re-mirror a revised plan (steps may have changed). Idempotent: MERGE
+        // on step.id updates the objective without rebuilding the chain. Never
+        // blocks the response.
+        memoryGraphSink.observeSessionPlan({
+          sessionId: sessionPlanMatch[1]!,
+          goalId: `goal:session:${sessionPlanMatch[1]!}`,
+          planId: plan.id,
+          scope: plan.scope,
+          domain: inferDomain(plan.scope),
+          steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
+        });
+        sendJson(response, 200, plan);
+        return;
+      }
+      // Plan approval (V3-C2): the human decision endpoint that wakes a run
+      // blocked in awaiting_user, plus the decision log read.
+      const sessionPlanDecisionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans\/([^/]+)\/decision$/);
+      if (sessionPlanDecisionMatch && request.method === "POST") {
+        try {
+          const body = await readJson<DecidePlanApprovalRequest>(request);
+          const outcome = await store.decideSessionPlanApproval(sessionPlanDecisionMatch[1]!, sessionPlanDecisionMatch[2]!, body);
+          await publishPlanApprovalDecision(store, sessionPlanDecisionMatch[1]!, outcome);
+          sendJson(response, 200, outcome);
+          return;
+        } catch (error) {
+          if (error instanceof SessionStoreHttpError) {
+            return sendError(response, error.statusCode, error.message);
+          }
+          throw error;
+        }
+      }
+      const sessionPlanApprovalsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plan-approvals$/);
+      if (sessionPlanApprovalsMatch && request.method === "GET") {
+        sendJson(response, 200, store.listPlanApprovalDecisions(
+          sessionPlanApprovalsMatch[1]!,
+          url.searchParams.get("planId") ?? undefined,
+        ));
+        return;
+      }
       const sessionSubagentsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents$/);
       if (sessionSubagentsMatch && request.method === "GET") {
         sendJson(response, 200, store.listSubagents(sessionSubagentsMatch[1]!));
@@ -2552,6 +2661,60 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listPermissionGrants());
         return;
       }
+
+      // Agent memory (V3-C1): the human review gate. Candidates written by
+      // the agent_memory tool or the background reviewer wait here for
+      // promote (verified → prompt-eligible), stale, supersede or delete.
+      if (request.method === "GET" && url.pathname === "/api/agent-memories") {
+        const category = url.searchParams.get("category");
+        const status = url.searchParams.get("status");
+        sendJson(response, 200, store.listAgentMemories({
+          ...(category ? { category: category as AgentMemoryCategory } : {}),
+          ...(status ? { status: status as AgentMemoryStatus } : {}),
+        }));
+        return;
+      }
+      const agentMemoryActionMatch = url.pathname.match(/^\/api\/agent-memories\/([^/]+)\/(promote|stale|supersede)$/);
+      if (agentMemoryActionMatch && request.method === "POST") {
+        const memoryId = agentMemoryActionMatch[1]!;
+        const action = agentMemoryActionMatch[2]!;
+        try {
+          if (action === "promote") {
+            sendJson(response, 200, store.promoteAgentMemory(memoryId));
+            return;
+          }
+          if (action === "stale") {
+            sendJson(response, 200, store.markAgentMemoryStale(memoryId));
+            return;
+          }
+          const body = await readJson<{ category?: AgentMemoryCategory; content?: string }>(request);
+          if (!body.content?.trim()) return sendError(response, 400, "content is required");
+          if (body.category && !AGENT_MEMORY_CATEGORIES.includes(body.category)) {
+            return sendError(response, 400, `category must be one of ${AGENT_MEMORY_CATEGORIES.join(", ")}`);
+          }
+          // A human-written replacement is born verified at the default band.
+          sendJson(response, 201, store.supersedeAgentMemory(memoryId, {
+            content: body.content,
+            ...(body.category ? { category: body.category } : {}),
+            provenance: { kind: "manual", requiresReview: false },
+          }));
+          return;
+        } catch (error) {
+          if (error instanceof SessionStoreHttpError) {
+            return sendError(response, error.statusCode, error.message);
+          }
+          if (error instanceof Error && /conflicts/.test(error.message)) {
+            return sendError(response, 409, error.message);
+          }
+          return sendError(response, 404, error instanceof Error ? error.message : "Agent memory not found");
+        }
+      }
+      const agentMemoryDeleteMatch = url.pathname.match(/^\/api\/agent-memories\/([^/]+)$/);
+      if (agentMemoryDeleteMatch && request.method === "DELETE") {
+        store.removeAgentMemory(agentMemoryDeleteMatch[1]!);
+        sendJson(response, 200, { removed: agentMemoryDeleteMatch[1] });
+        return;
+      }
       const sessionPermissionRequestMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/permission-requests$/);
       if (sessionPermissionRequestMatch && request.method === "POST") {
         const body = await readJson<CreatePermissionRequest>(request);
@@ -2844,6 +3007,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           config,
           memoryGraphClient,
           evolveRuntimeFactory,
+          knowledgeEngineTools,
         );
         sendJson(response, 201, run);
         return;
@@ -2905,6 +3069,164 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      // ---------------------------------------------------------- knowledge engine
+      if (url.pathname === "/api/knowledge-engine/kbs" && request.method === "GET") {
+        handleKeListKbs(response, knowledgeEngineStore);
+        return;
+      }
+      if (url.pathname === "/api/knowledge-engine/kbs" && request.method === "POST") {
+        await handleKeCreateKb(request, response, knowledgeEngineStore);
+        return;
+      }
+      const keKbMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)$/);
+      if (keKbMatch && request.method === "GET") {
+        handleKeGetKb(response, knowledgeEngineStore, decodeURIComponent(keKbMatch[1]!));
+        return;
+      }
+      const keSeedMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/seed$/);
+      if (keSeedMatch && request.method === "POST") {
+        await handleKeSeed(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keSeedMatch[1]!));
+        return;
+      }
+      const keSearchPreviewMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/search-preview$/);
+      if (keSearchPreviewMatch && request.method === "POST") {
+        await handleKeSearchPreview(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keSearchPreviewMatch[1]!));
+        return;
+      }
+      const keUploadMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/upload$/);
+      if (keUploadMatch && request.method === "POST") {
+        await handleKeUploadPdf(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keUploadMatch[1]!));
+        return;
+      }
+      const keDocsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents$/);
+      if (keDocsMatch && request.method === "GET") {
+        handleKeListDocuments(response, knowledgeEngineStore, decodeURIComponent(keDocsMatch[1]!));
+        return;
+      }
+      const keCitationsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/citations$/);
+      if (keCitationsMatch && request.method === "GET") {
+        handleKeListCitations(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keCitationsMatch[1]!),
+          url.searchParams,
+        );
+        return;
+      }
+      const keFormulaeMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/formulae$/);
+      if (keFormulaeMatch && request.method === "GET") {
+        handleKeListFormulae(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keFormulaeMatch[1]!),
+          url.searchParams,
+        );
+        return;
+      }
+      // Anchor resolution first — the doc match's `[^/]+$` cannot capture it,
+      // but keeping the pair adjacent documents the route family in one place.
+      const keDocAnchorMatch = url.pathname.match(
+        /^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents\/([^/]+)\/anchors\/([^/]+)$/,
+      );
+      if (keDocAnchorMatch && request.method === "GET") {
+        handleKeGetDocumentAnchor(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keDocAnchorMatch[1]!),
+          decodeURIComponent(keDocAnchorMatch[2]!),
+          decodeURIComponent(keDocAnchorMatch[3]!),
+        );
+        return;
+      }
+      const keDocSimilarMatch = url.pathname.match(
+        /^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents\/([^/]+)\/similar$/,
+      );
+      if (keDocSimilarMatch && request.method === "GET") {
+        handleKeSimilarDocuments(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keDocSimilarMatch[1]!),
+          decodeURIComponent(keDocSimilarMatch[2]!),
+        );
+        return;
+      }
+      const keDocMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents\/([^/]+)$/);
+      if (keDocMatch && request.method === "GET") {
+        handleKeGetDocument(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keDocMatch[1]!),
+          decodeURIComponent(keDocMatch[2]!),
+          parseKeDocumentLevel(url.searchParams.get("level")),
+        );
+        return;
+      }
+      const keJobsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/jobs$/);
+      if (keJobsMatch && request.method === "GET") {
+        handleKeListJobs(response, knowledgeEngineStore, decodeURIComponent(keJobsMatch[1]!));
+        return;
+      }
+      const keGraphMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/graph$/);
+      if (keGraphMatch && request.method === "GET") {
+        handleKeGetGraph(response, knowledgeEngineStore, decodeURIComponent(keGraphMatch[1]!));
+        return;
+      }
+      const keRootsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/roots$/);
+      if (keRootsMatch && request.method === "GET") {
+        await handleKeGetGraphRoots(response, keGraphRoots, knowledgeEngineStore, decodeURIComponent(keRootsMatch[1]!));
+        return;
+      }
+      const keResolutionMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/resolution$/);
+      if (keResolutionMatch && request.method === "POST") {
+        handleKeStartResolution(response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keResolutionMatch[1]!));
+        return;
+      }
+      const keReportsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/reports$/);
+      if (keReportsMatch && request.method === "GET") {
+        await handleKeListCommunityReports(
+          response,
+          keGraphRoots,
+          knowledgeEngineStore,
+          decodeURIComponent(keReportsMatch[1]!),
+        );
+        return;
+      }
+      const keReportsGenerateMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/reports\/generate$/);
+      if (keReportsGenerateMatch && request.method === "POST") {
+        await handleKeGenerateCommunityReports(
+          response,
+          keOrchestrator,
+          keGraphRoots,
+          knowledgeEngineStore,
+          decodeURIComponent(keReportsGenerateMatch[1]!),
+        );
+        return;
+      }
+      const keMergesMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/merges$/);
+      if (keMergesMatch && request.method === "GET") {
+        handleKeListMerges(response, knowledgeEngineStore, decodeURIComponent(keMergesMatch[1]!));
+        return;
+      }
+      const keUnmergeMatch = url.pathname.match(/^\/api\/knowledge-engine\/merges\/([^/]+)\/unmerge$/);
+      if (keUnmergeMatch && request.method === "POST") {
+        handleKeUnmerge(response, knowledgeEngineStore, decodeURIComponent(keUnmergeMatch[1]!));
+        return;
+      }
+      const keGrowMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/grow$/);
+      if (keGrowMatch && request.method === "POST") {
+        await handleKeStartGrow(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keGrowMatch[1]!));
+        return;
+      }
+      if (keGrowMatch && request.method === "GET") {
+        handleKeGetGrow(response, knowledgeEngineStore, decodeURIComponent(keGrowMatch[1]!));
+        return;
+      }
+      const keEntityMatch = url.pathname.match(/^\/api\/knowledge-engine\/entities\/([^/]+)$/);
+      if (keEntityMatch && request.method === "GET") {
+        handleKeGetEntity(response, knowledgeEngineStore, decodeURIComponent(keEntityMatch[1]!));
+        return;
+      }
+
       const sessionRunSkillEvolutionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/skill-evolution$/);
       if (sessionRunSkillEvolutionMatch && request.method === "POST") {
         const sessionId = sessionRunSkillEvolutionMatch[1]!;
@@ -2939,6 +3261,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           config,
           memoryGraphClient,
           evolveRuntimeFactory,
+          knowledgeEngineTools,
         );
         sendJson(response, 201, run);
         return;
@@ -3555,6 +3878,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           config,
           memoryGraphClient,
           evolveRuntimeFactory,
+          knowledgeEngineTools,
         );
         return;
       }
@@ -3606,6 +3930,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     }
   });
+  // Stop the KE job runner's 1s poll chain — every booted server leaves one
+  // ref'd timer loop running forever otherwise — and close the KE store's
+  // sqlite connection: leaked open connections keep WAL/-shm file handles
+  // alive after the data dir is removed and can busy-wait a final sync
+  // statement forever at process exit. (remoteCompute and the MCP gateway
+  // close via cleanup() below; a second once("close") hook would double-close
+  // the transport.)
+  server.once("close", () => {
+    keJobRunner.stop();
+    keLivingReviewRunner.stop();
+    knowledgeEngineStore.close();
+  });
   let hasListened = false;
   let hasClosed = false;
   let closePromise: Promise<void> | undefined;
@@ -3614,16 +3950,26 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
   const cleanup = () => cleanupPromise ??= (async () => {
     jiuwenSwarmWebSyncAbort.abort();
-    ideaResearch.close();
-    await (await platform.connectorPlugins).dispose();
-    remoteCompute.close();
-    mcpBroker.close();
-    webBroker.close();
+    // The MCP transport teardown goes first and un-awaited-by-callers: its
+    // stdio subprocess pipes are what keep a booted process alive, and the
+    // shutdown wiring contract asserts the close call synchronously on the
+    // server close event.
     try {
       await mcpGateway.close?.();
     } catch (error) {
       apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });
     }
+    ideaResearch.close();
+    // A failing plugin dispose must not skip the remaining teardown —
+    // every step is best-effort in isolation.
+    try {
+      await (await platform.connectorPlugins).dispose();
+    } catch (error) {
+      apiLog.warn("connector_plugins_dispose_failed", { errorMessage: shortErrorMessage(error) });
+    }
+    remoteCompute.close();
+    mcpBroker.close();
+    webBroker.close();
   })();
   server.once("listening", () => { hasListened = true; });
   server.once("close", () => {
@@ -3645,7 +3991,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
     (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,
       mcpRegistry, mcpCatalog, artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
-      ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory));
+      ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory, knowledgeEngineTools));
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let notificationClosed = false;
   void ready.then(() => {

@@ -27,6 +27,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { AgentMemoryPanel } from "./AgentMemoryPanel.js";
 import { translate, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
@@ -141,7 +142,7 @@ export function requestFromDraft(draft: SkillEditorDraft): CreateSkillPackageReq
   };
 }
 
-type SkillManagerView = "jiuwenswarm" | "libraries" | "skills";
+type SkillManagerView = "jiuwenswarm" | "libraries" | "memory" | "skills";
 
 /** Whether agents run on JiuwenSwarm, so that the tabs offer its skills. */
 const JiuwenSwarmTab = createContext(false);
@@ -181,6 +182,13 @@ export function SkillManager({
       .then((result) => { if (active) setJiuwenSwarm(result.backend === "jiuwenswarm"); }, () => undefined);
     return () => { active = false; };
   }, [client]);
+
+  if (view === "memory") {
+    return <JiuwenSwarmTab.Provider value={jiuwenSwarm}><div className="skill-manager">
+      <SkillManagerViewTabs activeView="memory" onViewChange={setView} />
+      <AgentMemoryPanel client={client} onError={onError} />
+    </div></JiuwenSwarmTab.Provider>;
+  }
 
   if (view === "jiuwenswarm" && jiuwenSwarm) {
     return <JiuwenSwarmTab.Provider value={jiuwenSwarm}><div className="skill-manager">
@@ -223,6 +231,7 @@ function SkillManagerViewTabs({
   return <div aria-label={t("skillManager.viewsAria")} className="skill-manager-tabs" role="tablist">
     <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">{t("skillManager.tabSkills")}</button>
     <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">{t("skillManager.tabLibraries")}</button>
+    <button aria-selected={activeView === "memory"} className={activeView === "memory" ? "active" : ""} onClick={() => onViewChange("memory")} role="tab" type="button">{t("skillManager.tabMemory")}</button>
     {jiuwenSwarm ? <button aria-selected={activeView === "jiuwenswarm"} className={activeView === "jiuwenswarm" ? "active" : ""} onClick={() => onViewChange("jiuwenswarm")} role="tab" type="button">{t("skillManager.tabJiuwenSwarm")}</button> : null}
   </div>;
 }

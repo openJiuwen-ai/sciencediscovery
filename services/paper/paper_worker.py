@@ -131,6 +131,8 @@ def extract_pdf(input_pdf: Path, output_dir: Path) -> dict[str, Any]:
                     })
 
             seen_boxes: set[tuple[int, int, int, int]] = set()
+            page_area = float(page.width) * float(page.height)
+            image_area = 0.0
             for image in page.images:
                 if len(images_manifest) >= MAX_FIGURES:
                     break
@@ -142,6 +144,7 @@ def extract_pdf(input_pdf: Path, output_dir: Path) -> dict[str, Any]:
                 if key in seen_boxes:
                     continue
                 seen_boxes.add(key)
+                image_area += (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
                 ordinal = len(images_manifest) + 1
                 path = output_dir / "images" / f"figure-{ordinal:04d}-p{page_number}.png"
                 render(page, path, bbox)
@@ -152,6 +155,13 @@ def extract_pdf(input_pdf: Path, output_dir: Path) -> dict[str, Any]:
                     "path": relative(path, output_dir),
                     "width": round(bbox[2] - bbox[0], 2),
                 })
+            # Figure-area share of the page lets the ingestion side pick
+            # vision candidates (image-dense pages) without re-parsing.
+            # Heuristic limits: only raster page.images count (vector figures
+            # contribute 0), and once the global MAX_FIGURES cap is hit the
+            # loop above breaks early so later pages report 0 — needsVision
+            # remains the fallback signal for those pages.
+            page_entry["imageAreaRatio"] = round(image_area / page_area, 4) if page_area > 0 and image_area > 0 else 0
 
     if len(pages_manifest) > MAX_PAGE_PREVIEWS:
         warnings.append(f"Rendered only the first {MAX_PAGE_PREVIEWS} page previews")

@@ -749,6 +749,7 @@ export function MemoryGraphExplorer({
   client,
   initialNodeId,
   onOpenEvolveRun,
+  onOpenKnowledgeBase,
   initialVersion,
   autoChain,
   onClose,
@@ -761,6 +762,9 @@ export function MemoryGraphExplorer({
   initialNodeId?: string;
   /** Open the evolve panel for a run a graph node points at. */
   onOpenEvolveRun?: (runId: string) => void;
+  /** Open the knowledge-engine overlay at a mirrored KB document (kb://
+   *  links on DbRecord nodes). Omit where the overlay is out of reach. */
+  onOpenKnowledgeBase?: (kbId: string, docId: string) => void;
   /** Pins the initial Artifact node to a specific version (composite key) so
    * the auto-chain walks that version's chain. Absent → latest version. */
   initialVersion?: number;
@@ -1717,6 +1721,7 @@ export function MemoryGraphExplorer({
             client={client}
             node={selected}
             onOpenEvolveRun={onOpenEvolveRun}
+            onOpenKnowledgeBase={onOpenKnowledgeBase}
             onSelectNode={setSelectedId}
             resolveState={resolveState}
             sessionId={sessionId}

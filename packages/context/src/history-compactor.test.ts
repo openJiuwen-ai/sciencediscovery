@@ -81,6 +81,8 @@ test("compaction preserves a structured checkpoint and reports semantic-shape wa
     "- Prefer primary sources.",
     "## Failed or abandoned leads",
     "- A 404 source is terminal.",
+    "## Retrieval history and read documents",
+    "- kb_search(helical parameters) → 5 hits; read doc1 paragraphs 0-3.",
     "## Pending requirements",
     "- Write the requested report.",
     "## Optional leads",

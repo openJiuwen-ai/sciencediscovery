@@ -159,6 +159,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-popover a { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--text-faint); }
 .connector-picker-popover a:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .connector-picker-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.kb-scope-picker .connector-picker-popover select { width: 100%; margin: 4px 0 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); padding: 4px 6px; color: var(--text-heading); font-size: 11px; }
+.kb-scope-web { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; color: var(--text-heading); font-size: 11px; line-height: 1.4; cursor: pointer; }
+.kb-scope-web input { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; accent-color: var(--accent); }
 .connector-picker-group { margin-top: 6px; }
 .connector-picker-group:first-of-type { margin-top: 0; }
 .connector-picker-group-label { display: block; margin-bottom: 2px; color: var(--text-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }

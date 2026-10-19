@@ -166,6 +166,8 @@ export type RunEvent<TUsage> =
   | { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; type: "tool_execution_end" }
   | { type: "model_usage"; usage: TUsage }
   | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
+  | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
+  | { kick: number; turn: number; type: "stall_kick" }
   | { type: "completed"; truncated?: boolean; usage?: TUsage };
 
 export type RunEventSink<TUsage> = (event: RunEvent<TUsage>) => void;
@@ -217,11 +219,37 @@ export class ExternalWaitController {
   }
 }
 
+/**
+ * Finish-gate verdict. The model produced a turn with no tool calls — the
+ * loop is about to complete. "finish" (or an undefined return) completes the
+ * run; "continue" injects `message` into the canonical history and takes one
+ * more model turn, consuming from the same maxModelTurns budget.
+ */
+export type FinishGateDecision<TMessage extends RuntimeMessage> =
+  | { action: "finish" }
+  | { action: "continue"; message: TMessage };
+
+/**
+ * Hard bound on finish-gate continuations per run, independent of the
+ * policy's own bookkeeping: a stuck or buggy gate can never loop forever.
+ * Three exactly fits the stage chain (skill audit → termination
+ * intervention → grounding enforcement); anything more is churn.
+ */
+export const MAX_FINISH_GATE_CONTINUATIONS = 3;
+
 /** Awaited durable boundary, unlike best-effort event observers. Failures stop the run. */
 export interface TurnLifecycle<TMessage extends RuntimeMessage, TModelInput, TUsage> {
   beforeTurn(input: { turn: number; history: TMessage[] }): Promise<void>;
   afterAssembly(input: { turn: number; assembly: ContextAssembly<TMessage, TModelInput> }): Promise<void>;
   afterTurn(input: { turn: number; history: TMessage[]; modelTurn: ModelTurn<TMessage, TUsage>; results: ToolDispatchResult<TMessage>[] }): Promise<void>;
+  /**
+   * Optional finish gate, invoked when the model answered without tool calls,
+   * AFTER afterTurn has durably recorded the turn. Returning "continue"
+   * appends the message (typically a verification directive) and runs another
+   * turn; the loop caps continuations at MAX_FINISH_GATE_CONTINUATIONS and
+   * never exceeds maxModelTurns.
+   */
+  beforeFinish?(input: { turn: number; history: TMessage[]; modelTurn: ModelTurn<TMessage, TUsage> }): Promise<FinishGateDecision<TMessage> | undefined>;
 }
 
 export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, TUsage> {
@@ -230,6 +258,20 @@ export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, 
   maxModelTurns: number;
   maxParallelToolCalls?: number;
   modelClient: ModelClient<TMessage, TModelInput, TUsage>;
+  /**
+   * Stall guard (phase V, V2-C6 — SA stall-guard.ts adapted): when no
+   * progress event arrives for idleMs during a model call, the in-flight
+   * attempt is aborted and the loop injects a kick message and retries (up
+   * to maxKicks; the last stall fails the run with a stall error). Only
+   * the attempt is killed — the run's history and budget survive, and
+   * there is deliberately no total-duration cap. Stalls inside tool
+   * batches fall back to the composition's outer idle watchdog.
+   */
+  stallGuard?: {
+    createKickMessage: (kick: number, maxKicks: number) => TMessage;
+    idleMs: number;
+    maxKicks: number;
+  };
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController?: ExternalWaitController;
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
@@ -264,6 +306,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
     if (this.state.phase !== "idle") throw new Error("AgentLoop instances execute exactly once");
     this.state = { history: structuredClone([...history]), phase: "idle", turn: 0 };
     let usage: TUsage | undefined;
+    let finishGateContinuations = 0;
     const unsubscribeWait = this.options.waitController?.subscribe((activeCount) => {
       if (this.isTerminal(this.state.phase)) return;
       if (activeCount > 0 && this.state.phase !== "waiting_external") {
@@ -273,6 +316,47 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
       }
     });
     try {
+      // Stall guard state (V2-C6): a per-attempt abort controller chained to
+      // the run signal, plus the idle timer reset by every progress signal.
+      const stall = this.options.stallGuard;
+      let stallKicks = 0;
+      let attemptAbort: AbortController | undefined;
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      const clearStallTimer = () => {
+        if (stallTimer) { clearTimeout(stallTimer); stallTimer = undefined; }
+      };
+      const armStallTimer = () => {
+        if (!stall || stall.idleMs <= 0 || signal.aborted) return;
+        clearStallTimer();
+        stallTimer = setTimeout(() => attemptAbort?.abort(new Error("stall-kick")), stall.idleMs);
+      };
+      const attemptSignal = (): AbortSignal => {
+        attemptAbort = new AbortController();
+        if (signal.aborted) attemptAbort.abort(signal.reason);
+        else {
+          const forward = () => attemptAbort!.abort(signal.reason);
+          signal.addEventListener("abort", forward, { once: true });
+          // Listener hygiene: drop the forwarder when the attempt settles.
+          attemptAbort.signal.addEventListener("abort", () => signal.removeEventListener("abort", forward), { once: true });
+        }
+        return attemptAbort.signal;
+      };
+      const stallKicked = (error: unknown): boolean => {
+        // Only the attempt's own abort counts — an outer abort is the run ending.
+        if (!stall || signal.aborted || !attemptAbort?.signal.aborted) return false;
+        if (stallKicks >= stall.maxKicks) {
+          // Kicks exhausted: fail with a diagnosable stall error, not the
+          // transport's generic abort (review P3).
+          throw new Error(`Agent run stalled: no progress after ${stall.maxKicks} stall-guard kicks (${stall.idleMs} ms each)`);
+        }
+        stallKicks += 1;
+        this.state.history.push(structuredClone(stall.createKickMessage(stallKicks, stall.maxKicks)));
+        this.emit({ kick: stallKicks, turn: this.state.turn, type: "stall_kick" });
+        // The kick IS progress for the outer idle watchdog — otherwise it
+        // would kill the retried run on the original stall's clock.
+        onProgress();
+        return true;
+      };
       for (let turn = 0; turn < this.options.maxModelTurns; turn += 1) {
         this.raiseForAbort(signal);
         if (this.options.turnLifecycle) await this.options.turnLifecycle.beforeTurn({ turn, history: structuredClone(this.state.history) });
@@ -292,9 +376,21 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         this.transition("calling_model", turn);
         this.emit({ type: "turn_start", turn });
         let modelTurn: ModelTurn<TMessage, TUsage>;
+        // Stall-guard wrapper around the shared invokeModel path: the attempt
+        // gets its own abort controller (a kick aborts the attempt, not the
+        // run) and every streamed chunk re-arms the idle timer via onProgress.
+        const invokeWithStall = async (modelInput: TModelInput): Promise<ModelTurn<TMessage, TUsage>> => {
+          armStallTimer();
+          try {
+            return await this.invokeModel(modelInput, attemptSignal(), turn, () => { armStallTimer(); onProgress(); });
+          } finally {
+            clearStallTimer();
+          }
+        };
         try {
-          modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
+          modelTurn = await invokeWithStall(assembly.modelInput);
         } catch (error) {
+          if (stallKicked(error)) continue;
           if (!this.options.modelClient.isInputTooLargeError?.(error) || signal.aborted) throw error;
           this.transition("assembling_context", turn);
           this.emit({ type: "context_recovery", attempt: 1, reason: "model-input-overflow", turn });
@@ -309,7 +405,12 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterAssembly({ turn, assembly: structuredClone(assembly) });
           this.raiseForAbort(signal);
           this.transition("calling_model", turn);
-          modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
+          try {
+            modelTurn = await invokeWithStall(assembly.modelInput);
+          } catch (error) {
+            if (stallKicked(error)) continue;
+            throw error;
+          }
         }
         if (modelTurn.usage !== undefined) {
           usage = modelTurn.usage;
@@ -321,6 +422,22 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         if (modelTurn.toolCalls.length === 0) {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results: [] });
           this.raiseForAbort(signal);
+          const decision = this.options.turnLifecycle?.beforeFinish
+            ? await this.options.turnLifecycle.beforeFinish({ turn, history: structuredClone(this.state.history), modelTurn })
+            : undefined;
+          if (decision?.action === "continue"
+            && finishGateContinuations < MAX_FINISH_GATE_CONTINUATIONS
+            && turn + 1 < this.options.maxModelTurns
+          ) {
+            finishGateContinuations += 1;
+            this.state.history.push(structuredClone(decision.message));
+            this.emit({ type: "finish_gate", action: "continue", turn });
+            continue;
+          }
+          // A "continue" the caps denied is reported as denied — conflating it
+          // with an actual finish verdict would hide a stuck gate.
+          if (decision?.action === "continue") this.emit({ type: "finish_gate", action: "denied", turn });
+          else if (decision !== undefined) this.emit({ type: "finish_gate", action: "finish", turn });
           this.transition("completed", turn);
           this.emit({
             type: "completed",
@@ -424,6 +541,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private toolDispatcher?: ToolDispatcher<TMessage>;
   private waitController?: ExternalWaitController;
   private turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  private stallGuard?: AgentLoopOptions<TMessage, TModelInput, TUsage>["stallGuard"];
 
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
   withEventSink(value: RunEventSink<TUsage>): this { this.eventSink = value; return this; }
@@ -433,6 +551,8 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withToolDispatcher(value: ToolDispatcher<TMessage>): this { this.toolDispatcher = value; return this; }
   withWaitController(value: ExternalWaitController): this { this.waitController = value; return this; }
   withTurnLifecycle(value: TurnLifecycle<TMessage, TModelInput, TUsage> | undefined): this { this.turnLifecycle = value; return this; }
+  /** V2-C6 stall guard — forwarded to AgentLoop when set (optional, additive). */
+  withStallGuard(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["stallGuard"]): this { this.stallGuard = value; return this; }
 
   build(): AgentLoop<TMessage, TModelInput, TUsage> {
     const missing = [
@@ -451,6 +571,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
       ...(this.eventSink ? { eventSink: this.eventSink } : {}),
       ...(this.waitController ? { waitController: this.waitController } : {}),
       ...(this.turnLifecycle ? { turnLifecycle: this.turnLifecycle } : {}),
+      ...(this.stallGuard ? { stallGuard: this.stallGuard } : {}),
     });
   }
 }

@@ -183,3 +183,34 @@ curl -X POST http://127.0.0.1:4310/api/proxy/servers \
 ```
 
 不要把真实代理凭据写入文档、脚本或 shell history。认证设置接口会按当前产品设计返回完整 URL，因此应按凭据管理界面保护 bearer token 和浏览器会话。
+
+
+## 知识引擎
+
+学科知识库：文献摄取、实体/关系图谱、增长周期、实体消解与社区。以下路由都需要 bearer 认证。参见[知识引擎](../explanation/knowledge-engine.md)。
+
+| 方法与路径 | 请求 | 成功 |
+|---|---|---|
+| `GET /api/knowledge-engine/kbs` | 无 | `200`，带统计的 `{kbs}` |
+| `POST /api/knowledge-engine/kbs` | `{name, description?}` | `201`，创建的 KB |
+| `GET /api/knowledge-engine/kbs/:id` | 无 | `200`，带统计的 KB |
+| `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}`（1–25）或 `{paperRefs}`（显式挑选列表，≤50，不再检索） | `202`，`{jobId, enqueued}` 或 `{enqueued}` |
+| `POST /api/knowledge-engine/kbs/:id/search-preview` | `{query, maxPapers?}`（1–25） | `200`，`{papers}`；只检索不下载（挑选播种流的第一步） |
+| `POST /api/knowledge-engine/kbs/:id/upload` | `application/pdf` 请求体（≤50MB），`?title=` 可选 | `201`/`200`（内容去重已完整时），`{documentId, dedupKey, alreadyComplete}`；本地 PDF 直接入库（解析后排队抽取）；非 PDF `415` |
+| `GET /api/knowledge-engine/kbs/:id/documents` | 无 | `200`，精简文档列表 |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2`（默认 `L0`） | `200`，三级阅读：L0 确定性摘要（summary/tags/source）、L1 带锚点块（`{docId}:{type}:{index}`）、L2 全文；跨 KB 文档 `404` |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | 无 | `200`，锚点块 + 邻块上下文；锚点不存在 `404`，文档未解析 `409` |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId/similar` | 无 | `200`，共享实体相似文档 `{similar}`；跨 KB 文档 `404` |
+| `GET /api/knowledge-engine/kbs/:id/citations` | `?intent=`（白名单校验）、`?srcDocId=`、`?dstDocId=`、`?limit=`（1–500） | `200`，W10 引用行（句子/章节/意图，两端标题联查）；intent/limit 非法 `400`，跨库文档 `404` |
+| `GET /api/knowledge-engine/kbs/:id/formulae` | `?docId=`、`?q=`（LaTeX/标签子串）、`?limit=`（1–300） | `200`，W10 展示公式行；limit 非法 `400`，跨库文档 `404` |
+| `GET /api/knowledge-engine/kbs/:id/jobs` | 无 | `200`，最近作业 |
+| `GET /api/knowledge-engine/kbs/:id/graph` | 无 | `200`，精简实体+边（无全文/embedding） |
+| `GET /api/knowledge-engine/kbs/:id/roots` | 无 | `200`，社区 roots（指纹缓存，SWR） |
+| `GET /api/knowledge-engine/kbs/:id/reports` | 无 | `200`，当前 roots 指纹的社区报告 + 覆盖统计（`readyReports`、`communities[].reportId`） |
+| `POST /api/knowledge-engine/kbs/:id/reports/generate` | 无 | `202`，逐社区入队生成（指纹+社区去重，ready 不重生成；全量覆盖时顺带清理旧指纹报告） |
+| `POST /api/knowledge-engine/kbs/:id/grow` | `{query?, budget?: {maxPapers?, maxDepth?, maxPerPaper?}}` | `202`，增长周期句柄 |
+| `GET /api/knowledge-engine/kbs/:id/grow` | 无 | `200`，引擎状态+活动周期+前沿计数 |
+| `POST /api/knowledge-engine/kbs/:id/resolution` | `{}` | `202`，`{jobId, enqueued}`；消解开关为 `off` 时空转 |
+| `GET /api/knowledge-engine/kbs/:id/merges` | 无 | `200`，合并/attach 审计行 |
+| `POST /api/knowledge-engine/merges/:mergeId/unmerge` | 无 | `200`；`404` 未知，`409` 已回滚，`400` 在线 attach（不可回滚） |
+| `GET /api/knowledge-engine/entities/:id` | 无 | `200`，带逐字证据的实体详情 |

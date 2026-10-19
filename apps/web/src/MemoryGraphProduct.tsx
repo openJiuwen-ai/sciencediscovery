@@ -100,10 +100,11 @@ export function useResolvedArtifactName(
  *  type; falls back to the raw key/value dump for unknown labels. Each typed
  *  component composes the shared Field/LongText/TimeField/LinkField primitives
  *  so hashes decode, long text truncates, times format, links open. */
-function NodeProperties({ node, client, onOpenEvolveRun, sessionId, subgraph, scopeChildCounts }: {
+function NodeProperties({ node, client, onOpenEvolveRun, onOpenKnowledgeBase, sessionId, subgraph, scopeChildCounts }: {
   node: MemoryGraphNode;
   client: ApiClient;
   onOpenEvolveRun?: (runId: string) => void;
+  onOpenKnowledgeBase?: (kbId: string, docId: string) => void;
   sessionId: string;
   subgraph: MemorySubgraph;
   scopeChildCounts?: ReadonlyMap<string, number>;
@@ -129,7 +130,7 @@ function NodeProperties({ node, client, onOpenEvolveRun, sessionId, subgraph, sc
     case "Code": return <CodeDetail node={node} client={client} sessionId={sessionId} subgraph={subgraph} />;
     case "SourceFile": return <SourceFileDetail extra={extra} />;
     case "WebPage": return <WebPageDetail extra={extra} client={client} sessionId={sessionId} webPageId={node.id} />;
-    case "DbRecord": return <DbRecordDetail extra={extra} />;
+    case "DbRecord": return <DbRecordDetail extra={extra} onOpenKnowledgeBase={onOpenKnowledgeBase} />;
     default: return <RawNodeProperties extra={extra} />;
   }
 }
@@ -698,7 +699,22 @@ function ContentSection({
  * dedup; the badge uses it as a prefix so two databases' "P38398" don't
  * read identically.
  */
-function DbRecordDetail({ extra }: { extra: Record<string, unknown> }) {
+/** Parse a mirrored knowledge-base document link: kb://<kbId>/<docId> is an
+ *  in-app deep link (see services/api knowledge-engine/graph-mirror), never
+ *  an external one. Exported for tests. */
+export function parseKbDeepLink(url: string | undefined): { kbId: string; docId: string } | null {
+  if (!url) return null;
+  const match = /^kb:\/\/([^/]+)\/([^/]+)$/.exec(url);
+  return match ? { kbId: match[1]!, docId: match[2]! } : null;
+}
+
+function DbRecordDetail({ extra, onOpenKnowledgeBase }: {
+  extra: Record<string, unknown>;
+  /** Open the knowledge-engine overlay at a mirrored KB document. Present only
+   *  where the KE page is reachable (the memory explorer); without it a kb://
+   *  record renders its fields without a jump affordance. */
+  onOpenKnowledgeBase?: (kbId: string, docId: string) => void;
+}) {
   const { t } = useLocale();
   const title = typeof extra.title === "string" && extra.title.trim() ? extra.title : undefined;
   const source = typeof extra.source === "string" && extra.source.trim() ? extra.source : undefined;
@@ -708,6 +724,11 @@ function DbRecordDetail({ extra }: { extra: Record<string, unknown> }) {
   const retrievalCount = typeof extra.retrieval_count === "number" ? extra.retrieval_count : undefined;
   const retrievedAt = extra.retrieved_at;
   const createdAt = extra.created_at;
+  // Mirrored knowledge-base documents carry a kb://<kbId>/<docId> pseudo-URL
+  // (see services/api knowledge-engine/graph-mirror): it is an in-app deep
+  // link, never an external one, so it renders as a jump button rather than
+  // a LinkField.
+  const kbLink = parseKbDeepLink(url);
   return <div className="node-detail-body">
     {title ? <h4 className="node-detail-title">{title}</h4> : null}
     <DbRecordIdentifierBadge source={source} identifier={identifier} />
@@ -716,7 +737,7 @@ function DbRecordDetail({ extra }: { extra: Record<string, unknown> }) {
       <MarkdownSection title="" content={snippet} maxLines={4} />
     </section> : null}
     <dl className="node-detail-fields">
-      {url ? <Field label={t("node.field.record_link")}><LinkField href={url} /></Field> : null}
+      {url && !kbLink ? <Field label={t("node.field.record_link")}><LinkField href={url} /></Field> : null}
       {typeof retrievalCount === "number" ? <Field label={t("node.field.retrieval_count")}>
         <span>{retrievalCount} {t("node.unit.times")}</span>
       </Field> : null}
@@ -724,6 +745,11 @@ function DbRecordDetail({ extra }: { extra: Record<string, unknown> }) {
         : createdAt ? <Field label={t("node.field.retrieved_at")}><TimeField value={createdAt} /></Field> : null}
       {createdAt ? <Field label={t("node.field.created_at")}><TimeField value={createdAt} /></Field> : null}
     </dl>
+    {kbLink && onOpenKnowledgeBase ? <button
+      className="node-evolve-open"
+      onClick={() => onOpenKnowledgeBase(kbLink.kbId, kbLink.docId)}
+      type="button"
+    >{t("node.action.openInKnowledgeBase")}</button> : null}
   </div>;
 }
 
@@ -982,6 +1008,7 @@ export function MemoryGraphNodeDetail({
   client,
   node,
   onOpenEvolveRun,
+  onOpenKnowledgeBase,
   onSelectNode,
   resolveState,
   sessionId,
@@ -993,6 +1020,9 @@ export function MemoryGraphNodeDetail({
   /** Open the evolve panel for a run this node points at. Omit where the
    *  panel is out of reach (a modal without the session's run list). */
   onOpenEvolveRun?: (runId: string) => void;
+  /** Open the knowledge-engine overlay at a mirrored KB document (kb://
+   *  DbRecord links). Omit where the overlay is out of reach. */
+  onOpenKnowledgeBase?: (kbId: string, docId: string) => void;
   /** Follow a relationship to its target node. Omit to render the chips as plain text. */
   onSelectNode?: (nodeId: string) => void;
   resolveState: ResolveState;
@@ -1074,7 +1104,7 @@ export function MemoryGraphNodeDetail({
             {target.label}: {graphNodeName(target)}
           </span>)}
       </div>)}
-      <NodeProperties node={node} client={client} onOpenEvolveRun={onOpenEvolveRun} sessionId={sessionId} subgraph={subgraph} scopeChildCounts={scopeChildCounts} />
+      <NodeProperties node={node} client={client} onOpenEvolveRun={onOpenEvolveRun} onOpenKnowledgeBase={onOpenKnowledgeBase} sessionId={sessionId} subgraph={subgraph} scopeChildCounts={scopeChildCounts} />
     </div>
   </div>;
 }

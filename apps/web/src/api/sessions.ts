@@ -32,6 +32,10 @@ import type {
   Session,
   SessionDetail,
   SessionListState,
+  DecidePlanApprovalRequest,
+  PlanApprovalDecision,
+  RevisePlanRequest,
+  SessionPlan,
   SessionReviewerSpecialistSettings,
   UpdateSessionRequest,
   RotatePermissionEpochRequest,
@@ -53,6 +57,22 @@ export class SessionsApiClient extends ProjectsApiClient {
 
   getSession(sessionId: string): Promise<SessionDetail> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  listSessionPlans(sessionId: string): Promise<SessionPlan[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/plans`);
+  }
+
+  reviseSessionPlan(sessionId: string, planId: string, body: RevisePlanRequest): Promise<SessionPlan> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}`, { body: JSON.stringify(body), method: "PUT" });
+  }
+
+  decideSessionPlanApproval(
+    sessionId: string,
+    planId: string,
+    body: DecidePlanApprovalRequest,
+  ): Promise<{ decision: PlanApprovalDecision; plan: SessionPlan }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/plans/${encodeURIComponent(planId)}/decision`, { body: JSON.stringify(body), method: "POST" });
   }
 
   listSubagents(sessionId: string): Promise<Subagent[]> {

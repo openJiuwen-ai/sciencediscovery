@@ -827,6 +827,47 @@ test("replaying the same approval switch does not stack duplicate timeline recor
   assert.equal(entries[0]?.type === "approval-mode" && entries[0].approvalMode, "ask_for_dangerous");
 });
 
+test("finish gate verdicts become one idempotent badge each (C2 timeline surface)", () => {
+  const gate = (turn: number, action: "continue" | "denied" | "finish"): RunStreamEvent =>
+    ({ action, turn, type: "finish_gate" }) as RunStreamEvent;
+  const entries = apply([
+    { delta: "Draft answer.", type: "assistant.delta" },
+    gate(3, "continue"),
+    { delta: "Self-audited answer.", type: "assistant.delta" },
+    gate(4, "finish"),
+  ]);
+  const badges = entries.filter((entry) => entry.type === "finish-gate");
+  assert.equal(badges.length, 2);
+  assert.deepEqual(
+    badges.map((badge) => badge.type === "finish-gate" && { action: badge.action, turn: badge.turn }),
+    [{ action: "continue", turn: 3 }, { action: "finish", turn: 4 }],
+  );
+  // Replaying the same stream rebuilds the same badges, not duplicates.
+  const replayed = apply([
+    { delta: "Draft answer.", type: "assistant.delta" },
+    gate(3, "continue"),
+    gate(3, "continue"),
+    gate(4, "finish"),
+  ]);
+  assert.equal(replayed.filter((entry) => entry.type === "finish-gate").length, 2);
+});
+
+test("finish gate badges render as boundary notes with the verdict text", () => {
+  const entries = apply([
+    { delta: "Draft answer.", type: "assistant.delta" },
+    { action: "continue", turn: 5, type: "finish_gate" },
+  ]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    isRunning: true,
+    modelName: "Test model",
+    onToggle: () => undefined,
+  }));
+  assert.match(html, /boundary-note/);
+  assert.match(html, /Finish gate \(turn 5\)/);
+  assert.match(html, /final self-audit/);
+});
+
 test("an approval switch between deltas of one response keeps a single markdown container", () => {
   // Issue #76 方式 B：同一次模型响应的两个 delta 之间插入审批切换。
   const entries = apply([

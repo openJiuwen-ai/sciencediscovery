@@ -97,6 +97,7 @@ export function ScopedSettingsEditor({
   details,
   disabled = false,
   draft: controlledDraft,
+  knowledgeBases,
   models,
   onCancel,
   onDraftChange,
@@ -117,6 +118,8 @@ export function ScopedSettingsEditor({
   details: RuntimeSettingsDetails;
   disabled?: boolean;
   draft?: RuntimeSettingsOverrides;
+  /** Knowledge bases for the kbScope fields; omit to hide the fieldset (e.g. global scope). */
+  knowledgeBases?: ReadonlyArray<{ id: string; name: string; stats?: { documents: number; entities: number } }>;
   models: ModelProfile[];
   onCancel?: () => void;
   onDraftChange?: (draft: RuntimeSettingsOverrides) => void;
@@ -153,6 +156,30 @@ export function ScopedSettingsEditor({
     });
   }
 
+  /** kb-scope mode switch: override seeds from the effective set; inherit
+   * drops both kb fields (an empty/absent binding makes web-only inert). */
+  function setKbScopeMode(override: boolean): void {
+    setDraft((current) => {
+      const next = { ...current };
+      if (override) next.kbScopeKbIds = [...(current.kbScopeKbIds ?? details.effective.kbScopeKbIds)];
+      else {
+        delete next.kbScopeKbIds;
+        delete next.kbScopeWebSearch;
+      }
+      return next;
+    });
+  }
+
+  function toggleKbScopeKb(kbId: string): void {
+    setDraft((current) => {
+      const selected = current.kbScopeKbIds ?? [];
+      const nextValues = selected.includes(kbId)
+        ? selected.filter((item) => item !== kbId)
+        : [...selected, kbId];
+      return { ...current, kbScopeKbIds: nextValues };
+    });
+  }
+
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     setSaving(true);
@@ -166,6 +193,12 @@ export function ScopedSettingsEditor({
     }
   }
 
+  const kbScopeOverride = draft.kbScopeKbIds !== undefined;
+  const kbScopeBound = kbScopeOverride ? draft.kbScopeKbIds ?? [] : details.effective.kbScopeKbIds;
+  const kbWebInheritedDenied = details.effective.kbScopeWebSearch === false;
+  const kbWebDenied = draft.kbScopeWebSearch !== undefined
+    ? draft.kbScopeWebSearch === false
+    : kbWebInheritedDenied;
   const skillLibraryMounts = normalizeSkillLibraryMounts(draft.enabledSkillLibraries ?? details.effective.enabledSkillLibraries, skillLibraries);
   return (
     <form className="scoped-settings" onSubmit={(event) => void submit(event)}>
@@ -205,6 +238,39 @@ export function ScopedSettingsEditor({
         </select>
         {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
       </label>
+
+      {skillScope === "global" || knowledgeBases === undefined ? null : <fieldset className="settings-array" disabled={disabled || saving}>
+        <legend>{t("settings.kbScope")}</legend>
+        <small className="settings-hint">{t("settings.kbScopeHint")}</small>
+        {allowInheritance ? <select aria-label="Knowledge-base scope mode" value={kbScopeOverride ? "override" : "inherit"} onChange={(event) => setKbScopeMode(event.target.value === "override")}>
+          <option value="inherit">{t("settings.kbScopeInheritOption", { count: details.effective.kbScopeKbIds.length })}</option>
+          <option value="override">{t("settings.kbScopeOverrideOption", { count: draft.kbScopeKbIds?.length ?? 0 })}</option>
+        </select> : null}
+        {kbScopeOverride || !allowInheritance ? <div className="settings-choices">
+          {knowledgeBases.map((kb) => <label key={kb.id}><input checked={kbScopeBound.includes(kb.id)} onChange={() => toggleKbScopeKb(kb.id)} type="checkbox" /><span>{kb.name}<small>{t("composer.kbScopeKbStats", { documents: kb.stats?.documents ?? 0, entities: kb.stats?.entities ?? 0 })}</small></span></label>)}
+          {!knowledgeBases.length ? <p className="settings-choice-empty">{t("settings.noKnowledgeBases")}</p> : null}
+        </div> : null}
+        {kbScopeBound.length ? <div className="settings-choices">
+          <label>
+            <input
+              checked={kbWebDenied}
+              onChange={() => setDraft((current) => {
+                // Same three-outcome rule as the composer picker: flip, then
+                // drop the override when it matches what inheritance provides
+                // (an explicit true here re-allows a project-layer ban).
+                const next = { ...current };
+                const nextDenied = !kbWebDenied;
+                if (nextDenied === kbWebInheritedDenied) delete next.kbScopeWebSearch;
+                else next.kbScopeWebSearch = !nextDenied;
+                return next;
+              })}
+              type="checkbox"
+            />
+            <span>{t("composer.kbScopeWebOnly")}</span>
+          </label>
+        </div> : null}
+        {allowInheritance ? <SettingsSource details={details} field="kbScopeKbIds" /> : null}
+      </fieldset>}
 
       <PluginSettingsSections {...{ details, draft, setDraft, connectors, allowInheritance, disabled: disabled || saving, t, skillLibraries, skills, skillScope, skillsBackend }} renderSource={(field) => <SettingsSource details={details} field={field} />} />
       {afterFields}

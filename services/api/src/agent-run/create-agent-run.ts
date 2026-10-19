@@ -22,6 +22,7 @@ import type {
 import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import type { PlanStore } from "@sciencediscovery/plan";
+import type { PlanRepository } from "@sciencediscovery/plan-mode";
 
 import { createJiuwenSwarmAgentFactory, jiuwenSwarmConfigFromEnv } from "./jiuwenswarm-agent.js";
 import {
@@ -38,6 +39,9 @@ export interface AgentRunBindings {
   contextContributorFactories?: readonly ContextContributorFactory<AgentHistoryMessage>[];
   observer?: (event: AgentEvent) => void;
   recordEvent?: (event: import("@sciencediscovery/schema").RunStreamEvent) => Promise<void>;
+  /** Approval-gated plan lifecycle (V3-C2, propose_plan/revise_plan). */
+  planRepository?: PlanRepository;
+  /** Model-declared plan snapshots (update_plan). Both may be present. */
   planStore?: PlanStore;
   runIdleTimeoutMs?: number;
   readVersioningAuthorities?: () => Promise<unknown>;
@@ -72,13 +76,14 @@ export function createAgentRun(
       requestExecutionId: input.requestExecutionId,
       ...(bindings.recordEvent ? { recordEvent: bindings.recordEvent } : {}),
       readAuthorities: async () => ({
-        plan: await bindings.planStore?.latest() ?? null,
+        plan: await bindings.planRepository?.latest() ?? bindings.planStore?.latest() ?? null,
         resources: profile.resources,
         toolPolicy: profile.toolPolicy,
         budget: profile.budget,
         external: await bindings.readVersioningAuthorities?.() ?? null,
       }),
     },
+    ...(bindings.planRepository ? { planRepository: bindings.planRepository } : {}),
     ...(bindings.planStore ? { planStore: bindings.planStore } : {}),
     ...(bindings.contextContributorFactories?.length
       ? { contextContributorFactories: bindings.contextContributorFactories }

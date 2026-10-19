@@ -69,6 +69,11 @@ class PaperWorkerTest(unittest.TestCase):
             self.assertTrue((output / "pages/page-0001.png").is_file())
             persisted = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["inputSha256"], manifest["inputSha256"])
+            # Page 1 carries a 160x100 image on a 400x500 page → ratio 0.08;
+            # page 2 is text-only → 0.
+            pages = {entry["page"]: entry for entry in persisted["pages"]}
+            self.assertAlmostEqual(pages[1]["imageAreaRatio"], 160 * 100 / (400 * 500), places=3)
+            self.assertEqual(pages[2]["imageAreaRatio"], 0)
 
     def test_rejects_non_pdf_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

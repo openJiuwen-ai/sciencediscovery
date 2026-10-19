@@ -3391,21 +3391,44 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.deepEqual(initial.body.map((item) => item.id), [
     "antibody-design",
     "assessment-screening",
+    "audit-hypothesis-tournament",
+    "audit-systematic-review",
+    "audit-tree-search",
+    "chunked-analysis",
     "citation-reviewer",
     "code-engineer",
+    "comparative-analysis",
     "computation-reviewer",
     "creative-material-design",
+    "cross-table-analysis",
+    "deep-research",
+    "document-summary",
+    "evidence-discipline",
     "evidence-extractor",
+    "evidence-notes",
     "evolve-design",
+    "hypothesis-tournament",
+    "idea-debate",
     "idea-tree-team",
     "insight-aggregator",
+    "knowledge-engine-explore",
+    "knowledge-engine-grow",
     "life-science-evidence-brief",
     "literature-searcher",
+    "long-form-audit",
+    "long-form-writing",
+    "precise-qa",
+    "progressive-report",
     "report-writer",
     "result-evaluator",
+    "robin-chain",
     "science-research-team",
     "skill-creator",
     "structure-pocket-inspection",
+    "systematic-review",
+    "table-analysis",
+    "tree-search",
+    "virtual-lab",
   ]);
   assert.equal(initial.body[0]?.readOnly, true);
   assert.equal("instructions" in (initial.body[0] ?? {}), false);
@@ -4272,7 +4295,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   const parentResultRequest = fixture.requests.find((request) =>
     request.messages?.some((message) => message.role === "tool"));
   const taskResultContent = parentResultRequest?.messages?.find((message) => message.role === "tool")?.content ?? "";
-  const taskResult = JSON.parse(taskResultContent) as Record<string, unknown>;
+  const taskResult = unwrapTaskResultContent(taskResultContent);
   assert.equal(taskResult.id, subagents.body[0]?.id);
   assert.equal(taskResult.status, "completed");
   assert.equal(taskResult.turnCount, 1);
@@ -4446,7 +4469,7 @@ test("API validates subagent Brief v1 structured output before summarizing task 
     assert.match(taskResultContent, /"status":\s*"completed"/);
     assert.match(taskResultContent, /"summary":\s*"Structured inspection"/);
   } else {
-    const taskResult = JSON.parse(taskResultContent) as Record<string, unknown>;
+    const taskResult = unwrapTaskResultContent(taskResultContent);
     assert.equal(taskResult.status, "completed");
     assert.deepEqual(taskResult.resultValidation, subagents.body[0]?.resultValidation);
     assert.deepEqual(taskResult.structuredResult, { confidence: "high", summary: "Structured inspection" });
@@ -4713,7 +4736,7 @@ test("API fails subagents when structured output fails schema validation", { tag
     assert.match(taskResultContent, /"status":\s*"failed"/);
     assert.match(taskResultContent, /"rawStructuredResult":\s*"\{\\\\"summary\\\\":\\\\"Structured inspection\\\\"\}"/);
   } else {
-    const taskResult = JSON.parse(taskResultContent) as Record<string, unknown>;
+    const taskResult = unwrapTaskResultContent(taskResultContent);
     assert.equal(taskResult.status, "failed");
     assert.equal(taskResult.structuredResult, undefined);
     assert.equal(taskResult.rawStructuredResult, "{\"summary\":\"Structured inspection\"}");
@@ -4770,11 +4793,20 @@ test("API preserves raw subagent structured output when final JSON parsing fails
     assert.match(taskResultContent, /"status":\s*"failed"/);
     assert.match(taskResultContent, /analysis complete but no final json/);
   } else {
-    const taskResult = JSON.parse(taskResultContent) as Record<string, unknown>;
+    const taskResult = unwrapTaskResultContent(taskResultContent);
     assert.equal(taskResult.status, "failed");
     assert.equal(taskResult.rawStructuredResult, "analysis complete but no final json");
   }
 });
+
+
+/** task results reach the model fenced as untrusted subagent content
+ * (packages/tools sanitize.ts) — assert the fence shape, then parse the inner JSON. */
+function unwrapTaskResultContent(content: string): Record<string, unknown> {
+  const fence = /^\[BEGIN UNTRUSTED subagent #[0-9a-f]{12}\]\n([\s\S]*)\n\[END UNTRUSTED #[0-9a-f]{12}\]$/.exec(content);
+  assert.ok(fence, "task result must carry the untrusted-subagent fence markers");
+  return JSON.parse(fence[1]!) as Record<string, unknown>;
+}
 
 test("API PATCH endpoint updates a non-running subagent brief and rejects running updates", { tags: ["status:unreviewed"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-patch-${Date.now()}-${process.pid}`);

@@ -21,8 +21,9 @@
  * confirmations) is never serialized. Pure functions, no React, so the
  * mapping is unit-testable.
  *
- * Path table (top-level words are reserved: `projects`, `settings`, `usage`;
- * they must never clash with the server-owned `/api`, `/health`, `/assets`):
+ * Path table (top-level words are reserved: `projects`, `settings`, `usage`,
+ * `kbs`; they must never clash with the server-owned `/api`, `/health`,
+ * `/assets`):
  * - `/`                                              default landing
  * - `/usage`                                         global Usage page
  * - `/settings/<group>`                              system settings + group
@@ -31,9 +32,12 @@
  * - `/projects/<projectId>/sessions/<sessionId>`     Session
  * - `/projects/<projectId>/sessions/<sessionId>/trajectory`  Session inline trajectory view
  * - `/projects/<projectId>/sessions/<sessionId>/settings`  Session-scoped settings
+ * - `/kbs/<kbId>`                                    knowledge base (KE overlay)
+ * - `/kbs/<kbId>/documents/<docId>`                  knowledge-base document deep link
  *
  * When several layers apply at once the settings layer wins the path, then
- * Usage, then Session, then Project. The inline trajectory view owns a path
+ * the knowledge-base overlay, then Usage, then Session, then Project. The
+ * inline trajectory view owns a path
  * segment because it *is* the Session's main-area view; query parameters stay
  * reserved for state that coexists with other views. The legacy
  * `?trajectory=open` query form is still parsed and normalized to the path.
@@ -67,6 +71,10 @@ export interface ViewState {
   workspaceOpen?: boolean;
   artifact?: string;
   trajectory?: true;
+  /** Knowledge-base overlay target (`/kbs/...`): opens the KE page at this
+   *  KB, optionally straight into one document's reader. */
+  kbId?: string;
+  kbDocId?: string;
 }
 
 const GROUP_SEGMENT = /^[a-z][a-z0-9-]*$/;
@@ -89,6 +97,12 @@ export function parseViewState(pathname: string, search: string): ViewState {
   } else if (parts.length === 2 && parts[0] === "settings" && parts[1] && (GROUP_SEGMENT.test(parts[1]) || parts[1].startsWith("runner:") && parts[1].length > 7)) {
     view.settingsKind = "system";
     view.settingsGroup = parts[1];
+  } else if (parts.length >= 2 && parts[0] === "kbs" && parts[1]) {
+    view.kbId = parts[1];
+    if (parts.length === 4 && parts[2] === "documents" && parts[3]) {
+      view.kbDocId = parts[3];
+    }
+    // Unknown trailing segments below a KB: keep the KB itself.
   } else if (parts.length >= 2 && parts[0] === "projects" && parts[1]) {
     view.projectId = parts[1];
     if (parts.length === 3 && parts[2] === "settings") {
@@ -139,6 +153,8 @@ export function serializeViewState(view: ViewState): { pathname: string; search:
     pathname = `/projects/${encodeURIComponent(view.settingsTargetId ?? view.projectId!)}/settings`;
   } else if (view.settingsKind === "session" && view.projectId && (view.settingsTargetId ?? view.sessionId)) {
     pathname = `/projects/${encodeURIComponent(view.projectId)}/sessions/${encodeURIComponent(view.settingsTargetId ?? view.sessionId!)}/settings`;
+  } else if (view.kbId) {
+    pathname = `/kbs/${encodeURIComponent(view.kbId)}${view.kbDocId ? `/documents/${encodeURIComponent(view.kbDocId)}` : ""}`;
   } else if (view.view === "usage") {
     pathname = "/usage";
   } else if (view.projectId && view.sessionId) {
@@ -167,5 +183,7 @@ export function isPrimaryViewChange(previous: ViewState, next: ViewState): boole
     || previous.settingsKind !== next.settingsKind
     || previous.settingsTargetId !== next.settingsTargetId
     || previous.artifact !== next.artifact
-    || previous.trajectory !== next.trajectory;
+    || previous.trajectory !== next.trajectory
+    || previous.kbId !== next.kbId
+    || previous.kbDocId !== next.kbDocId;
 }

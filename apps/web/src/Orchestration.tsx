@@ -18,7 +18,10 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type {
   ConnectorManifest,
+  PlanConfidence,
+  SessionPlan,
   ReviewerSpecialistLevel,
+  RevisePlanRequest,
   Subagent,
   SkillDescriptor,
   Specialist,
@@ -42,10 +45,171 @@ export function PlanCard(props: { expanded: boolean; onToggle:(expanded:boolean)
  const {t}=useLocale();
  return <ProjectRecordSlot kind="plan.card" {...props} t={t} icons={{check:<CheckIcon size={13}/>,spinner:<SpinnerIcon size={14}/>,chevron:<ChevronRightIcon size={15}/>}} />;
 }
-export function OrchestrationPanel(props: ActivityCardDisclosure & { plans:RunPlanSnapshot[]; terminalRunIds?:ReadonlySet<string> }) {
- const {t}=useLocale();
- return <ProjectRecordSlot kind="plan.panel" {...props} t={t} cardIdFor={(runId,agentId)=>activityCardId("plan", `${runId}:${agentId}`)}
-   icons={{check:<CheckIcon size={13}/>,spinner:<SpinnerIcon size={14}/>,chevron:<ChevronRightIcon size={15}/>}} />;
+
+function PlanItemStatus({ status }: { status: RunPlanSnapshot["items"][number]["status"] }) {
+  const { t } = useLocale();
+  const label = status === "completed" ? t("plan.status.completed") : status === "in_progress" ? t("plan.status.inProgress") : t("plan.status.pending");
+  return <span aria-label={label} className={`plan-item-status ${status}`} role="img">
+    {status === "completed" ? <CheckIcon size={13} /> : status === "in_progress" ? <SpinnerIcon size={14} /> : null}
+  </span>;
+}
+
+function sessionPlanSummary(plan: SessionPlan): string {
+  const feasibility = `${plan.feasibilityConfidence} feasibility`;
+  const completed = plan.steps.filter((step) => step.status === "completed").length;
+  const active = plan.steps.filter((step) => step.status === "in_progress").length;
+  return `${completed}/${plan.steps.length} completed${active ? ` · ${active} active` : ""} · ${feasibility}`;
+}
+
+export function SessionPlanCard({
+  busy,
+  expanded,
+  onDecide,
+  onRevise,
+  onToggle,
+  plan,
+}: {
+  busy?: boolean;
+  expanded: boolean;
+  onDecide?: (plan: SessionPlan, decision: "approve" | "reject", reason?: string) => void;
+  onRevise?: (plan: SessionPlan, body: RevisePlanRequest) => Promise<boolean>;
+  onToggle: (expanded: boolean) => void;
+  plan: SessionPlan;
+}) {
+  const { t } = useLocale();
+  const [editing, setEditing] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [scopeDraft, setScopeDraft] = useState(plan.scope);
+  const [stepsDraft, setStepsDraft] = useState(plan.steps.map((step) => step.description).join("\n"));
+  const [caveatsDraft, setCaveatsDraft] = useState(plan.caveats.join("\n"));
+  const [confidenceDraft, setConfidenceDraft] = useState<PlanConfidence>(plan.feasibilityConfidence);
+  const editable = Boolean(onRevise) && (plan.state === "awaiting_user" || plan.state === "recorded");
+  const startEdit = () => {
+    setScopeDraft(plan.scope);
+    setStepsDraft(plan.steps.map((step) => step.description).join("\n"));
+    setCaveatsDraft(plan.caveats.join("\n"));
+    setConfidenceDraft(plan.feasibilityConfidence);
+    setEditing(true);
+  };
+  const saveEdit = async () => {
+    const steps = stepsDraft.split("\n").map((step) => step.trim()).filter(Boolean);
+    const caveats = caveatsDraft.split("\n").map((caveat) => caveat.trim()).filter(Boolean);
+    // Keep the draft open on failure (version conflict, validation) — the
+    // user must not lose their edit (review P2).
+    const saved = await onRevise?.(plan, {
+      caveats,
+      expectedVersion: plan.version,
+      feasibilityConfidence: confidenceDraft,
+      scope: scopeDraft.trim(),
+      steps,
+    });
+    if (saved) setEditing(false);
+  };
+  return (
+    <article className={`plan-card ${plan.state}`}>
+      <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
+        <span className="card-chevron"><ChevronRightIcon size={15} /></span>
+        <span><strong>Plan · v{plan.version}</strong><small>{sessionPlanSummary(plan)}</small></span>
+        <i>{plan.state === "recorded" ? "active" : plan.state.replaceAll("_", " ")}</i>
+      </button>
+      {expanded ? <div className="plan-card-body">
+        {editing ? <div className="plan-card-edit">
+          <label>{t("plan.scope")}<textarea onChange={(event) => setScopeDraft(event.target.value)} rows={3} value={scopeDraft} /></label>
+          <label>{t("plan.stepsPerLine")}<textarea onChange={(event) => setStepsDraft(event.target.value)} rows={Math.min(10, stepsDraft.split("\n").length + 1)} value={stepsDraft} /></label>
+          <label>{t("plan.caveatsPerLine")}<textarea onChange={(event) => setCaveatsDraft(event.target.value)} rows={3} value={caveatsDraft} /></label>
+          <label>{t("plan.feasibility")}
+            <select onChange={(event) => setConfidenceDraft(event.target.value as PlanConfidence)} value={confidenceDraft}>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+          <div className="plan-card-actions">
+            <button disabled={busy || !scopeDraft.trim() || !stepsDraft.trim()} onClick={() => void saveEdit()} type="button">{t("plan.saveRevision")}</button>
+            <button disabled={busy} onClick={() => setEditing(false)} type="button">{t("plan.cancel")}</button>
+          </div>
+        </div> : <>
+          <p>{plan.scope}</p>
+          <ol>{plan.steps.map((step) => <li key={step.id} data-status={step.status}>{step.description}</li>)}</ol>
+          {plan.abandonmentReason ? <p className="plan-card-note">Abandoned: {plan.abandonmentReason}</p> : null}
+          {plan.caveats.length ? <details><summary>Method caveats</summary><ul>{plan.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}</ul></details> : null}
+          {plan.state === "awaiting_user" ? <p className="plan-card-note">{t("plan.awaitingDecision", { version: plan.version })}</p> : null}
+          <div className="plan-card-actions">
+            {plan.state === "awaiting_user" && onDecide && !rejecting ? <>
+              <button disabled={busy} onClick={() => onDecide(plan, "approve")} type="button">{t("plan.approveVersion", { version: plan.version })}</button>
+              <button disabled={busy} onClick={() => setRejecting(true)} type="button">{t("plan.reject")}</button>
+            </> : null}
+            {editable ? <button disabled={busy} onClick={startEdit} type="button">{t("plan.edit")}</button> : null}
+          </div>
+          {rejecting ? <div className="plan-card-actions">
+            <input
+              onChange={(event) => setRejectReason(event.target.value)}
+              placeholder={t("plan.rejectReasonPlaceholder")}
+              value={rejectReason}
+            />
+            <button
+              disabled={busy}
+              onClick={() => {
+                onDecide?.(plan, "reject", rejectReason.trim() || undefined);
+                setRejecting(false);
+                setRejectReason("");
+              }}
+              type="button"
+            >{t("plan.confirmReject")}</button>
+            <button disabled={busy} onClick={() => setRejecting(false)} type="button">{t("plan.cancel")}</button>
+          </div> : null}
+        </>}
+      </div> : null}
+    </article>
+  );
+}
+
+export function OrchestrationPanel({
+  busy,
+  expandedCards,
+  onDecidePlan,
+  onRevisePlan,
+  onToggleCard,
+  plans,
+  sessionPlans,
+  terminalRunIds = new Set<string>(),
+}: ActivityCardDisclosure & {
+  busy?: boolean;
+  onDecidePlan?: (plan: SessionPlan, decision: "approve" | "reject", reason?: string) => void;
+  onRevisePlan?: (plan: SessionPlan, body: RevisePlanRequest) => Promise<boolean>;
+  /** Model-declared snapshot plans (update_plan), rendered through the plugin slot. */
+  plans: RunPlanSnapshot[];
+  /** Approval-gated session plans (V3-C2 lifecycle). */
+  sessionPlans?: SessionPlan[];
+  terminalRunIds?: ReadonlySet<string>;
+}) {
+  const { t } = useLocale();
+  if (!plans.length && !(sessionPlans ?? []).length) return null;
+  return <section className="orchestration-panel" aria-label={t("plan.sectionAria")}>
+    {(sessionPlans ?? []).map((plan) => {
+      const cardId = activityCardId("plan", plan.id);
+      return <SessionPlanCard
+        busy={busy}
+        expanded={Boolean(expandedCards[cardId])}
+        key={plan.id}
+        onDecide={onDecidePlan}
+        onRevise={onRevisePlan}
+        onToggle={(expanded) => onToggleCard(cardId, expanded)}
+        plan={plan}
+      />;
+    })}
+    {plans.length ? <ProjectRecordSlot
+      cardIdFor={(runId, agentId) => activityCardId("plan", `${runId}:${agentId}`)}
+      expandedCards={expandedCards}
+      icons={{ check: <CheckIcon size={13} />, chevron: <ChevronRightIcon size={15} />, spinner: <SpinnerIcon size={14} /> }}
+      kind="plan.panel"
+      onToggleCard={onToggleCard}
+      plans={plans}
+      t={t}
+      terminalRunIds={terminalRunIds}
+    /> : null}
+  </section>;
 }
 
 function subagentSummary(subagent: Subagent, t: Translate): string {

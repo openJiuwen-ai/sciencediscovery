@@ -32,4 +32,12 @@ export interface McpTransportClient {
   close?(): Promise<void>;
   invoke(request: McpInvokeRequest, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<McpInvokeResponse>;
   reload(proxies?: Record<string, ResolvedProxy>, signal?: AbortSignal): Promise<McpCatalog>;
+  /**
+   * Tear down any live transport resources (stdio MCP subprocesses and their
+   * stdio pipes). Optional because test stubs often have nothing to close;
+   * the production node client's sessions terminate spawned children here —
+   * without this, every server shutdown leaks the warm-up subprocesses and
+   * keeps the process alive after close.
+   */
+  close?(): Promise<void>;
 }
