@@ -36,7 +36,7 @@ When the Agent chooses to wait for the user's decision, it must call the waiting
 
 Only `wait_for_runner` creates a conversation card and pauses the Agent's external-wait deadlines. The card identifies the Agent and attempted operation and offers repair/recheck, an available authorized Runner, or cancel-operation. Each operation has its own decision. All choices return to the Agent; retry and switch perform a fresh check but **never execute or replay code**. The Agent must issue a new execution call, preparing inputs and environments if the Runner changed. A failed recheck returns diagnostics; waiting again requires another explicit Agent call. There is no automatic repair polling. Run cancellation, process shutdown or a ten-minute decision timeout clears the wait. Cards survive browser reloads via `GET /api/sessions/{sessionId}/execution-blocks`; responses use `POST /api/sessions/{sessionId}/execution-blocks/{id}`. These are in-memory waits, not recovery across API restarts. Repeated/stale responses cannot dispatch code. Runner settings periodically read the cached report so Agent-initiated checks are reflected there too.
 
-The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Local host recovery requires the separate explicit consent flow described below; remote host execution remains future work.
+The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Direct host execution requires the separate explicit consent flow described below on a reachable local or configured remote Runner.
 
 ### Sandbox profile
 
@@ -272,11 +272,15 @@ a native-backend pass does not certify Swarm, or vice versa.
 - [Configuration reference](../reference/configuration.md)
 - [Ascend NPU Host Broker](ascend-npu-runner.md)
 
-## Explicit direct-execution recovery
+## Explicit direct execution
 
-When a configured local or remote Runner is reachable but its sandbox is unavailable, the Agent can
-call `request_direct_execution` with its failed operation ID, an exact shell
-command and a workspace-relative working directory. The conversation displays
+Prefer sandbox execution by default. When the user asks to skip the sandbox or
+the Agent judges sandbox unsuitable, the Agent can call `request_direct_execution`
+with `runner_id` (default `local`), an exact shell command and a workspace-relative
+working directory. The selected local or configured remote Runner must be reachable;
+its sandbox may still be ready. No prior sandbox failure is required. For recovery,
+optional `operation_id` pins the Runner to a failed, undispatched operation;
+`runner_id` must match if also supplied. Chat text alone does not grant consent. The conversation displays
 separate host-execution consent, including the target Runner instance, OS account,
 workspace, command and loss of isolation. Declining executes nothing. Approval
 returns a decision only: the Agent must confirm the returned scope in a new
@@ -299,8 +303,7 @@ be revoked through the existing permission controls; they cannot authorize a
 later run or a child Agent. Each returned authorization is consumed before
 submission, including unsuccessful submissions. Run completion/cancellation
 invalidates unused consent. A Runner restart changes its target instance identity
-and requires new consent. Direct execution is recovery-only and uses the existing
-OS account without elevation.
+and requires new consent. Direct execution uses the existing OS account without elevation.
 
 The normal Execution ID, logs, cancellation, timeout, workspace publication and
 artifact provenance remain available. Execution records identify `sandbox: none`,
@@ -318,8 +321,8 @@ process group; descendants that escape it are not guaranteed to terminate. Host
 changes cannot generally be rolled back.
 
 Delivered scope for issue #276 includes local and configured reachable remote
-Runner ephemeral system-shell recovery. The failed operation pins the Runner;
-consent includes its Runner ID and instance, OS account and target-side workspace.
+Runner ephemeral system-shell recovery. Agent-first selection in #406 also permits direct consent while the sandbox is ready.
+The selected Runner (or failed operation for recovery) pins the Runner; consent includes its Runner ID and instance, OS account and target-side workspace.
 The Runner validates the logical remote workspace and canonical cwd before consent
 and revalidates them before execution. Grants cannot cross local/remote Runners,
 workspaces or accounts. Prepare remote inputs explicitly; no local files are
@@ -334,11 +337,12 @@ workspace before any new host command. Unknown outcomes block further direct
 consent for that Agent on the affected Runner. Timeout/cancel uses the existing
 remote execution controls and preserves final errors and workspace versions.
 
-Managed-environment selection, independent SSH maintenance and pre-failure direct
-execution remain unavailable. An unreachable Runner requires an independently
-configured and authorized transport; this path neither creates SSH credentials nor
-repairs that connection. #276 remains open for the deferred maintenance scope.
-The API journey is `node test/api/direct-execution-journey.mjs` after committing and
-building the candidate. Its remote fixture is a separately configured Runner on
+The Agent decides which installed environment to use and asks the user when
+needed. An unreachable Runner blocks direct execution: ask the user or network
+administrator to check its service and connection. This path provides no SSH
+maintenance or connection repair.
+Run the API journey with both `node test/api/direct-execution-journey.mjs`
+(sandbox-unavailable recovery) and `node test/api/direct-execution-journey.mjs --ready`
+(agent-first selection with working Bubblewrap) after committing and building the candidate. Its remote fixture is a separately configured Runner on
 loopback with its own data directory; it does not certify real-network or SSH
 behavior and uses only a local scripted model.

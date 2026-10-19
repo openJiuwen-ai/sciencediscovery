@@ -235,7 +235,7 @@ export interface WorkspaceToolOptions {
   };
 
   directExecution?: {
-    request(input: { operationId: string; command: string; cwd: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
+    request(input: { operationId?: string; runnerId?: string; command: string; cwd: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
     start(input: { authorizationId: string; command: string; cwd: string; target: string; account: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
   };
   runnerReadiness?: {
@@ -705,7 +705,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         : "No Runner is allowed for this Session; do not invoke Runner tools.";
   const runnerIdParameter = Type.String({
     minLength: 1,
-    description: `Sandboxed execution environment ID. ${runnerSelectionHint} Available Runners: ${JSON.stringify(runnerCatalog)}. Runners have independent workspaces; sync selected inputs explicitly.`,
+    description: `Execution environment ID. ${runnerSelectionHint} Available Runners: ${JSON.stringify(runnerCatalog)}. Runners have independent workspaces; sync selected inputs explicitly.`,
   });
   const machineParameter = {
     runner_id: options.localRunnerAllowed === false ? runnerIdParameter : Type.Optional(runnerIdParameter),
@@ -1420,12 +1420,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     tools.push(request);
   }
   if (options.directExecution) {
-    const consentParameters = Type.Object({ operation_id: Type.String(), command: Type.String({ minLength: 1, maxLength: 20000 }), cwd: Type.String() });
+    const consentParameters = Type.Object({ operation_id: Type.Optional(Type.String()), runner_id: Type.Optional(runnerIdParameter), command: Type.String({ minLength: 1, maxLength: 20000 }), cwd: Type.String() });
     const consent: AgentTool<typeof consentParameters> = {
       name: "request_direct_execution", label: "Request host execution consent", parameters: consentParameters,
-      description: "After a RUNNER_UNAVAILABLE failure on a configured, reachable local or remote Runner, request separate consent for an exact host shell command and workspace-relative cwd. Explain its purpose. Shows target/account and loss of isolation. Sandbox Always Allow does not apply. Matching consent is limited to this command, target, account, workspace, Agent and run, without a fixed TTL. Returns a decision only; NEVER executes. Do not batch with dependent execution. Direct shell uses PATH=/usr/bin:/bin, loads no shell startup profiles and does not inherit conda activation. For Homebrew or conda Python, include the installed absolute interpreter path in the command submitted for consent. Changing that path requires new consent. The failed operation pins the Runner; confirm its workspace and prepare inputs explicitly. An unreachable Runner needs a separately configured maintenance transport; SSH is not provided here.",
+      description: "Prefer sandbox execution. When the user asks to skip the sandbox or you judge it unsuitable, request separate explicit user consent on a configured, reachable local or remote Runner for an exact host shell command and workspace-relative cwd. Explain its purpose. Shows target/account and loss of isolation. Sandbox Always Allow does not apply. Matching consent is limited to this command, target, account, workspace, Agent and run, without a fixed TTL. Returns a decision only; NEVER executes. Do not batch with dependent execution. Direct shell uses PATH=/usr/bin:/bin, loads no shell startup profiles and does not inherit conda activation. For Homebrew or conda Python, include the installed absolute interpreter path in the command submitted for consent. Changing that path requires new consent. Use runner_id (default local) without requiring a prior sandbox failure. For recovery, optional operation_id pins the Runner to that failed operation; runner_id must match if supplied. Confirm its workspace and prepare inputs explicitly. Chat text alone never authorizes execution. An unreachable Runner is blocked: ask the user or network administrator to check its service and connection. SSH is not provided here.",
       execute: async (id, params, signal) => {
-        const value = await options.directExecution!.request({ operationId: params.operation_id, command: params.command, cwd: params.cwd }, signal, id);
+        const value = await options.directExecution!.request({ operationId: params.operation_id, runnerId: params.runner_id, command: params.command, cwd: params.cwd }, signal, id);
         return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
       },
     };

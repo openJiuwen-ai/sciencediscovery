@@ -249,7 +249,9 @@ test("memory graph prompt is absent when the feature is disabled", () => {
 test("system prompt preserves MCP importance and separate direct execution consent", () => {
   const prompt = buildWorkspaceSystemPrompt([], true);
   assert.match(prompt, /Call continue with your reason if nonblocking, or wait with the important sourceIds/);
-  assert.match(prompt, /After sandbox failure on a configured, reachable local or remote Runner/);
+  assert.match(prompt, /prefer sandbox by default/);
+  assert.match(prompt, /even while the sandbox is ready/);
+  assert.match(prompt, /Chat text alone is not consent/);
   assert.match(prompt, /Only a NEW run_direct_shell call with the returned scope can submit that operation/);
   assert.match(prompt, /Direct consent never inherits sandbox Always Allow/);
 });

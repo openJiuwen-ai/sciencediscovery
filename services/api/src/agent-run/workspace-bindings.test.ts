@@ -889,10 +889,10 @@ test("NPU broker bindings omit observeNpuJob when the broker is disabled", () =>
   assert.equal(bindings.npuBroker, undefined);
 });
 
-async function directBindingFixture(t: TestContext, machine = "local") {
+async function directBindingFixture(t: TestContext, machine = "local", initiallyReady = false) {
   const root = await mkdtemp(resolve(tmpdir(), "direct-binding-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  let allowed = true, connected = true, active = true, unknown = false, revoked = false, selected = true, ready = false;
+  let allowed = true, connected = true, active = true, unknown = false, revoked = false, selected = true, ready = initiallyReady;
   let target = "machine:instance", account = "user:1000:1000", submissions = 0, grants = 0;
   const resources: string[] = [];
   const dispatches: Array<Record<string, unknown>> = [];
@@ -934,10 +934,10 @@ async function directBindingFixture(t: TestContext, machine = "local") {
   });
   const binding = make();
   let operationId = "";
-  await assert.rejects(binding.executeShell!("printf hello", "ephemeral", undefined, undefined, machine), (error: Error) => {
+  if (!initiallyReady) await assert.rejects(binding.executeShell!("printf hello", "ephemeral", undefined, undefined, machine), (error: Error) => {
     operationId = JSON.parse(error.message).operationId; return Boolean(operationId);
   });
-  const consent = async () => binding.directExecution!.request({ operationId, command: "printf hello", cwd: "" }) as Promise<{
+  const consent = async () => binding.directExecution!.request({ ...(initiallyReady ? { runnerId: machine } : { operationId }), command: "printf hello", cwd: "" }) as Promise<{
     authorizationId: string; command: string; cwd: string; target: string; account: string; dispatched: boolean;
   }>;
   return { binding, make, consent, operationId, resources, dispatches, submissions: () => submissions,
@@ -951,6 +951,35 @@ async function directBindingFixture(t: TestContext, machine = "local") {
 }
 
 for (const machine of ["local", "remote-1"]) {
+test(`${machine}: ready sandbox permits agent-first consent without any failed operation`, async t => {
+  const f = await directBindingFixture(t, machine, true);
+  const consent = await f.consent();
+  assert.equal(consent.dispatched, false);
+  assert.equal(f.submissions(), 0);
+  assert.equal(f.resources.length, 1);
+  await f.binding.directExecution!.start(consent);
+  assert.equal(f.submissions(), 1);
+});
+
+test(`${machine}: sandbox recovery after approval does not invalidate direct consent`, async t => {
+  const f = await directBindingFixture(t, machine);
+  const consent = await f.consent(); f.recover();
+  await f.binding.directExecution!.start(consent);
+  assert.equal(f.submissions(), 1);
+});
+
+test(`${machine}: agent-first unreachable Runner fails before requesting consent`, async t => {
+  const f = await directBindingFixture(t, machine, true); f.disconnect();
+  await assert.rejects(f.consent(), /reachable Runner.*network administrator/);
+  assert.equal(f.resources.length, 0); assert.equal(f.submissions(), 0);
+});
+
+test(`${machine}: recovery cannot switch the failed operation's Runner`, async t => {
+  const f = await directBindingFixture(t, machine);
+  await assert.rejects(f.binding.directExecution!.request({ operationId: f.operationId, runnerId: "other", command: "printf hello", cwd: "" }), /must match/);
+  assert.equal(f.resources.length, 0);
+});
+
 test(`${machine}: direct approval never dispatches; a new confirmed submission consumes it atomically`, async t => {
   const f = await directBindingFixture(t, machine);
   const consent = await f.consent();
@@ -967,7 +996,7 @@ for (const failure of ["deny", "disconnect", "end", "uncertain"] as const) {
     await assert.rejects(f.consent()); assert.equal(f.submissions(), 0);
   });
 }
-for (const failure of ["changeTarget", "changeAccount", "end", "uncertain", "revoke", "disconnect", "remove", "recover"] as const) {
+for (const failure of ["changeTarget", "changeAccount", "end", "uncertain", "revoke", "disconnect", "remove"] as const) {
   test(`${machine}: direct approved operation rejects ${failure} before dispatch`, async t => {
     const f = await directBindingFixture(t, machine); const consent = await f.consent(); f[failure]();
     await assert.rejects(f.binding.directExecution!.start(consent)); assert.equal(f.submissions(), 0);

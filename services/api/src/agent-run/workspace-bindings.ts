@@ -308,7 +308,7 @@ export function createWorkspaceExecutionBindings(
       throw new Error("Reconcile the unknown target execution outcome before authorizing more host side effects");
     }
     const runner = await checkRunner(runnerId, signal, true);
-    if (!runner.connected || runner.ready) throw new Error("Direct execution requires a reachable Runner with unavailable sandbox");
+    if (!runner.connected) throw new Error("Direct execution requires a reachable Runner. Ask the user or network administrator to check the Runner service, connection and authentication; SSH repair is not provided.");
     const capability = await target.runnerClient.directExecutionCapability(signal, {
       ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : { workspaceRoot: options.workspaceRoot }), cwd: cwdValue,
     });
@@ -323,10 +323,12 @@ export function createWorkspaceExecutionBindings(
     sandboxNetwork: { request: networkConsent.request },
     directExecution: {
       request: async (input, signal, toolCallId) => {
-        const blocked = blockedOperations.get(input.operationId);
-        if (!blocked || !blocked.runner.connected) throw new Error("Direct consent requires this Agent's failed, undispatched operation");
+        const blocked = input.operationId === undefined ? undefined : blockedOperations.get(input.operationId);
+        if (input.operationId !== undefined && !blocked) throw new Error("Direct recovery requires this Agent's failed, undispatched operation");
+        const runnerId = input.runnerId?.trim() || blocked?.runner.runnerId || "local";
+        if (blocked && runnerId !== blocked.runner.runnerId) throw new Error("Direct recovery Runner must match the failed operation");
         if (!input.command.trim() || input.command.length > 20000) throw new Error("Provide a nonempty command of at most 20000 characters");
-        const scope = await directScope(blocked.runner.runnerId, input.cwd, signal);
+        const scope = await directScope(runnerId, input.cwd, signal);
         const resource = "direct:" + createHash("sha256").update(JSON.stringify({ ...scope,
           run: options.executionId, agent: options.agentId, session: options.sessionId, command: input.command })).digest("hex");
         const authorization = await options.permission.requirePrivilege({ action: "direct_code", executionId: options.executionId,
@@ -334,7 +336,7 @@ export function createWorkspaceExecutionBindings(
           summary: `DIRECT HOST EXECUTION: Runner ${scope.runnerId}, ${scope.target}, account ${scope.account}, workspace ${scope.workspaceRoot}, cwd ${scope.cwd || "."}. No sandbox filesystem, process or network isolation; host credentials may be accessible. Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL. Approval does not execute. Command:\n${input.command}` });
         signal?.throwIfAborted();
         if (authorization.action !== "direct_code" || authorization.outcome !== "allowed" || authorization.resource !== resource) throw new Error("Direct authorization scope mismatch");
-        const current = await directScope(blocked.runner.runnerId, input.cwd, signal);
+        const current = await directScope(runnerId, input.cwd, signal);
         if (JSON.stringify(current) !== JSON.stringify(scope)) throw new Error("Target or workspace changed during consent; request new consent");
         if (directTickets.size >= 128) throw new Error("Too many unused direct approvals in this run");
         directTickets.set(authorization.id, { ...scope, command: input.command, grantId: authorization.permissionGrantId });

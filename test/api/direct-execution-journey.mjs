@@ -14,8 +14,8 @@
 
 /**
  * E2E-META
- * Purpose: Recover local and configured remote sandbox failures through explicit conversation consent, with no implicit replay.
- * Steps: Start isolated production API/Runner CLIs with missing bwrap; deny one operation; approve once and approve matching in fresh sessions; inspect execution audit, logs and workspace artifacts.
+ * Purpose: Choose direct execution while sandbox ready, recover sandbox failure, and block unreachable Runners through separate consent with no implicit replay.
+ * Steps: Start isolated production API/Runner CLIs; deny one operation; approve once and approve matching in fresh sessions; inspect execution audit, logs and workspace artifacts; verify unreachable direct requests are blocked.
  * Environment: Committed/built task worktree, ephemeral loopback ports, isolated data, native Agent backend.
  * Type: mocked
  * LLM: local scripted OpenAI-compatible model only.
@@ -25,7 +25,7 @@
  * OtherExternal: harmless local shell/Python; separately configured loopback remote Runner; no SSH.
  * Credentials: random journey-owned tokens; no external credentials.
  * CostSideEffects: temporary local files/processes, removed in finally; no paid calls.
- * Run: node test/api/direct-execution-journey.mjs
+ * Run: node test/api/direct-execution-journey.mjs [--ready] (run both modes; --ready requires working bwrap)
  */
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
@@ -33,11 +33,13 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
+const ready = process.argv.includes("--ready");
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim(), "", "Commit candidate before E2E");
 const root = resolve(".tmp", `direct-execution-${randomUUID()}`);
 await mkdir(root, { recursive: true });
 const dataDir = resolve(root, "data"), token = randomUUID(), processes = [], steps = [];
+let unreachableFeedback = "";
 let api, remoteRunner, remoteRunnerId, logs = "", calls = 0, fault = "", submissions = 0;
 const redact = value => String(value).replaceAll(token, "[redacted]").replaceAll(process.cwd(), "<worktree>");
 const command = "printf 'once\\n' >> execution-count.txt; python3 -c 'print(6 * 7)'";
@@ -69,14 +71,17 @@ const stub = createServer(async (request, response) => {
     const remote = String(messages[lastUser]?.content).includes("remote target");
     let call;
     if (!String(messages[lastUser]?.content).includes("[Execution notifications]")) {
-      if (!previous) call = { name: "run_shell", arguments: { command, ...(remote ? { runner_id: remoteRunnerId } : {}) } };
+      if (!previous) call = ready || fault === "unreachable"
+        ? { name: "request_direct_execution", arguments: { command, cwd: "", ...(remote ? { runner_id: remoteRunnerId } : {}) } }
+        : { name: "run_shell", arguments: { command, ...(remote ? { runner_id: remoteRunnerId } : {}) } };
       else if (previous === "run_shell") call = { name: "request_direct_execution", arguments: { operation_id: field(result, "operationId"), command, cwd: "" } };
+      else if (previous === "request_direct_execution" && fault === "unreachable") { unreachableFeedback = String(result); }
       else if (previous === "request_direct_execution" && !String(result).includes("Permission denied") && !String(result).includes("unknown target execution outcome")) {
         call = { name: "run_direct_shell", arguments: { authorization_id: field(result, "authorizationId"), command,
           cwd: field(result, "cwd"), target: field(result, "target"), account: field(result, "account") } };
       } else if (previous === "execution_status" && remote && fault) {
         const failed = history.find(message => message.role === "tool" && String(message.content).includes("RUNNER_UNAVAILABLE"));
-        call = { name: "request_direct_execution", arguments: { operation_id: field(failed.content, "operationId"), command, cwd: "" } };
+        call = { name: "request_direct_execution", arguments: { ...(ready ? { runner_id: remoteRunnerId } : { operation_id: field(failed.content, "operationId") }), command, cwd: "" } };
       } else if (previous === "request_direct_execution" && String(result).includes("unknown target execution outcome")) { /* stop: reconcile, never replay */ }
       else if (previous === "execution_status" && remote) call = { name: "sync_remote_workspace", arguments: { runner_id: remoteRunnerId, operation: "pull", paths: ["execution-count.txt"] } };
       else if (previous === "run_direct_shell") call = { name: "execution_status", arguments: { execution_id: field(result, "id"), wait_ms: 10000 } };
@@ -95,6 +100,7 @@ const stub = createServer(async (request, response) => {
 // Inject transport failures only at the direct submission boundary. Never retry.
 const proxy = createServer(async (request, response) => {
   try {
+    if (fault === "unreachable") { response.destroy(); return; }
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     if (request.url === "/direct-shell-executions") {
       submissions++;
@@ -125,7 +131,7 @@ async function start(kind, extra = {}) {
     PATH: process.env.PATH, TMPDIR: root, SCIENCE_AGENT_DATA_DIR: dataDir,
     SCIENCE_AGENT_AUTH_TOKEN: token, SCIENCE_AGENT_RUNNER_TOKEN: token,
     SCIENCE_AGENT_HOST: "127.0.0.1", SCIENCE_AGENT_PORT: "0", SCIENCE_AGENT_RUNNER_HOST: "127.0.0.1", SCIENCE_AGENT_RUNNER_PORT: "0",
-    SCIENCE_AGENT_BWRAP_PATH: resolve(root, "missing-bwrap"), SCIENTIFIC_ENVS: "0", SCIENCE_AGENT_NPU_BROKER: "0", SCIENCE_AGENT_SSH_CONFIG_PATH: resolve(root, "absent-ssh"),
+    SCIENCE_AGENT_BWRAP_PATH: ready ? execFileSync("which", ["bwrap"], { encoding: "utf8" }).trim() : resolve(root, "missing-bwrap"), SCIENTIFIC_ENVS: "0", SCIENCE_AGENT_NPU_BROKER: "0", SCIENCE_AGENT_SSH_CONFIG_PATH: resolve(root, "absent-ssh"),
     SCIENCE_AGENT_MODEL_CATALOG_PATH: resolve(root, "absent-models"),
     SCIENCE_AGENT_MEMORY_GRAPH_URL: `http://127.0.0.1:${stub.address().port}/unused`,
     SCIENCE_AGENT_EVOLVE_URL: `http://127.0.0.1:${stub.address().port}/unused`, ...extra,
@@ -156,24 +162,28 @@ async function step(name, expected, operation) {
 let outcome = "FAIL";
 try {
   await new Promise(done => stub.listen(0, "127.0.0.1", done));
-  await step("1. Start isolated API and unavailable-sandbox Runner", "Health remains available; sandbox cannot execute.", async () => {
+  await step(`1. Start isolated API and ${ready ? "ready" : "unavailable"}-sandbox Runner`, "Health remains available; Runner readiness matches the scenario.", async () => {
     const runner = await start("runner"); api = await start("api", { SCIENCE_AGENT_RUNNER_URL: runner });
     assert.equal((await fetch(`${api}/health`)).status, 200);
+    const capability = await fetch(`${runner}/execution-capability`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal((await capability.json()).ready, ready);
     return "Production CLI services started on ephemeral loopback ports";
   });
   const model = await json("/api/models", { name: "Direct recovery", model: "direct-journey", apiToken: token,
     baseUrl: `http://127.0.0.1:${stub.address().port}/v1` });
   const project = await json("/api/projects", { name: "Direct recovery" });
   remoteRunner = await start("runner", { SCIENCE_AGENT_DATA_DIR: resolve(root, "remote-data") });
+  const remoteCapability = await fetch(`${remoteRunner}/execution-capability`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal((await remoteCapability.json()).ready, ready);
   await new Promise(done => proxy.listen(0, "127.0.0.1", done));
   const host = await json("/api/remote-hosts", { alias: "direct-recovery-remote", connectionKind: "direct",
     endpoint: { host: "127.0.0.1", port: proxy.address().port, protocol: "http" }, token });
   remoteRunnerId = host.id;
   await json(`/api/remote-hosts/${host.id}/runner/connect`, {});
   for (const machine of ["local", "remote"]) for (const decision of ["deny", "allow_once", "allow_matching"]) {
-    await step(`${steps.length + 1}. ${decision} after ${machine} sandbox failure`, "Separate direct consent appears despite sandbox Always Allow; only approval plus a new tool submission executes.", async () => {
+    await step(`${steps.length + 1}. ${decision} on ${machine} with sandbox ${ready ? "ready (no prior failure)" : "unavailable (recovery)"}`, "Separate direct consent appears despite sandbox Always Allow; only approval plus a new tool submission executes.", async () => {
       const session = await json(`/api/projects/${project.id}/sessions`, { title: decision, modelId: model.id, runnerIds: machine === "local" ? ["local"] : [remoteRunnerId], remoteRunnerHostIds: machine === "local" ? [] : [remoteRunnerId], approvalMode: "always_allow" });
-      const initial = await json(`/api/sessions/${session.id}/runs`, { content: `Direct recovery on ${machine} target: run the harmless calculation, ask me before host execution, then report its result.` });
+      const initial = await json(`/api/sessions/${session.id}/runs`, { content: `${ready ? (decision === "allow_matching" ? "Choose a suitable execution mode" : "Skip the sandbox") : "Direct recovery"} on ${machine} target: run the harmless calculation, ask me before host execution, then report its result.` });
       let pending;
       await until(async () => {
         pending = (await json(`/api/permission-requests?sessionId=${session.id}`)).find(item => item.action === "direct_code" && item.state === "pending");
@@ -262,10 +272,26 @@ try {
       return `One submission attempt, unknown API outcome; ${failure === "after" ? "one remote side effect reconciled by original Execution ID" : "zero host side effects"}; no replay or second consent`;
     });
   }
+  await step(`${steps.length + 1}. Request direct on unreachable remote Runner`, "Clear connection failure, no direct consent and no dispatch; no SSH repair.", async () => {
+    const session = await json(`/api/projects/${project.id}/sessions`, { title: "unreachable", modelId: model.id,
+      runnerIds: [remoteRunnerId], remoteRunnerHostIds: [remoteRunnerId], approvalMode: "always_allow" });
+    fault = "unreachable"; submissions = 0;
+    const initial = await json(`/api/sessions/${session.id}/runs`, { content: "Skip the sandbox on remote target and ask for direct consent." });
+    await until(async () => {
+      const run = (await json(`/api/sessions/${session.id}/runs`)).find(item => item.id === initial.id);
+      assert.notEqual(run.status, "failed", run.error); return run.status === "completed";
+    });
+    assert.match(unreachableFeedback, /requires a reachable Runner/);
+    assert.match(unreachableFeedback, /network administrator/);
+    assert.equal((await json(`/api/permission-requests?sessionId=${session.id}`)).length, 0);
+    assert.equal((await json(`/api/sessions/${session.id}/agent-activity`)).executions.length, 0);
+    assert.equal(submissions, 0); fault = "";
+    return "Unreachable Runner reported to Agent with administrator guidance; no consent, execution or SSH repair";
+  });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
 finally {
-  await writeFile(resolve(root, "report.md"), `# Direct execution journey\n\nResult: ${outcome}\n\nTarget: ${sha}\n\nCommand: node test/api/direct-execution-journey.mjs\n\nEnvironment: production API/Runner CLIs, native backend, local scripted model, missing bwrap; no paid calls; separately configured loopback remote Runner. Model requests: ${calls}.\n\n${steps.map(item => `## ${item.name}\n\nExpected: ${item.expected}\n\nActual: ${item.actual}\n\n${item.status}\n`).join("\n")}\n`);
+  await writeFile(resolve(root, "report.md"), `# Direct execution journey\n\nResult: ${outcome}\n\nTarget: ${sha}\n\nCommand: node test/api/direct-execution-journey.mjs ${ready ? "--ready" : ""}\n\nEnvironment: production API/Runner CLIs, native backend, local scripted model, sandbox ${ready ? "ready" : "unavailable"}; no paid calls; separately configured loopback remote Runner. Model requests: ${calls}.\n\n${steps.map(item => `## ${item.name}\n\nExpected: ${item.expected}\n\nActual: ${item.actual}\n\n${item.status}\n`).join("\n")}\n`);
   await writeFile(resolve(root, "services.log"), logs);
   for (const child of processes.reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;

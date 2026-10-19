@@ -57,13 +57,16 @@ test("direct recovery tools describe reachable remote scope and forward consent 
   });
   const consent = tools.find(tool => tool.name === "request_direct_execution")!;
   assert.match(consent.description, /configured, reachable local or remote Runner/);
-  assert.match(consent.description, /failed operation pins the Runner/);
+  assert.match(consent.description, /operation_id pins the Runner/);
   assert.match(consent.description, /Sandbox Always Allow does not apply/);
   assert.match(consent.description, /PATH=\/usr\/bin:\/bin/);
   assert.match(consent.description, /SSH is not provided/);
   const result = await consent.execute("consent-call", { operation_id: "blocked", command: approved.command, cwd: approved.cwd }, controller.signal);
   assert.deepEqual(result.details, approved);
-  assert.deepEqual(calls, [[{ operationId: "blocked", command: approved.command, cwd: approved.cwd }, controller.signal, "consent-call"]]);
+  assert.deepEqual(calls, [[{ operationId: "blocked", runnerId: undefined, command: approved.command, cwd: approved.cwd }, controller.signal, "consent-call"]]);
+  calls.length = 0;
+  await consent.execute("agent-choice", { runner_id: "remote-1", command: approved.command, cwd: approved.cwd }, controller.signal);
+  assert.deepEqual(calls[0], [{ operationId: undefined, runnerId: "remote-1", command: approved.command, cwd: approved.cwd }, controller.signal, "agent-choice"]);
   await tools.find(tool => tool.name === "run_direct_shell")!.execute("new-call", {
     authorization_id: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account,
   }, controller.signal);
