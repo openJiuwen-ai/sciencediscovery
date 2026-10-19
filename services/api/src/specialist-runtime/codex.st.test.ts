@@ -17,6 +17,7 @@ test("Codex SDK/CLI completes a local provider turn with native shell disabled",
     if (!text) { res.writeHead(400); res.end("missing body"); return; }
     const body = JSON.parse(text);
     assert.equal(req.headers.authorization, "Bearer fixture-key");
+    assert.doesNotMatch(JSON.stringify(body), /fixture-key/, "the credential must not enter the model request body");
     const offered = JSON.stringify(body.tools);
     assert.doesNotMatch(offered, /"(?:exec_command|shell_command|shell|local_shell|write_stdin)"/);
     calls++;

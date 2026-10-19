@@ -2837,11 +2837,11 @@ export class SessionStore {
   configureCodex(subagentId: string, inputId: string, apiKey: string): void {
     const child = this.catalog.subagents.find(candidate => candidate.id === subagentId);
     if (!child || child.status !== "running" || child.runtimeInput?.state !== "pending" || child.runtimeInput.id !== inputId) {
-      throw new Error("Codex configuration request is no longer pending");
+      throw new SessionStoreHttpError("Codex configuration request is no longer pending", 409);
     }
     this.assertSessionWritable(child.sessionId);
     const key = typeof apiKey === "string" ? apiKey.trim() : "";
-    if (!key || key.length > 16384) throw new Error("Codex API key must be 1-16384 characters");
+    if (!key || key.length > 16384) throw new SessionStoreHttpError("Codex API key must be 1-16384 characters", 400);
     if (!this.database || !this.secretKey) throw new Error("Secret storage is unavailable");
     this.database.prepare("INSERT INTO specialist_runtime_secrets (session_id, encrypted_value) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET encrypted_value = excluded.encrypted_value")
       .run(child.sessionId, encryptSecretValue(this.secretKey, `codex:${child.sessionId}`, key));

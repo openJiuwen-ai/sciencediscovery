@@ -1669,7 +1669,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const codexConfigMatch = url.pathname.match(/^\/api\/subagents\/([^/]+)\/codex-config$/);
       if (codexConfigMatch && request.method === "POST") {
-        const input = await readJson<{ inputId: string; apiKey: string }>(request);
+        const input = await readJson<{ inputId: string; apiKey: string }>(request).catch(() => {
+          throw new ApiStatusError(400, "Invalid Codex configuration request");
+        });
         store.configureCodex(codexConfigMatch[1]!, input.inputId, input.apiKey);
         sendJson(response, 200, { configured: true });
         return;
@@ -3613,6 +3615,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (/^(Project|Session|Proxy server|Provider|Model) not found$/.test(message)) sendError(response, 404, message);
       else if (message === "Session is archived and read-only") sendError(response, 409, message);
       else if (message.startsWith("Proxy server is referenced by ")) sendError(response, 409, message);
+      else if (code === "SPECIALIST_RUNTIME_INVALID") sendError(response, 400, message);
       else if (isKnownClientInputError(error)) sendError(response, 400, message);
       else {
         apiLog.error("unclassified_request_error", {

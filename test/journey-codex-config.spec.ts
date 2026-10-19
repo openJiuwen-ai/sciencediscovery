@@ -5,7 +5,7 @@ import { test } from "./helpers/e2e.ts";
 import { scriptedModel, createProjectAndSession, openProjectSession, sendUserMessage, cleanupJourney } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
-test.describe("Codex specialist configuration", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
   /**
    * E2E-META
    * Purpose: Surface missing Codex credentials in conversation and cancel safely.
@@ -59,7 +59,7 @@ test.describe("Codex specialist configuration", { tag: ["@category:e2e", "@os:li
           return (await response.json())[0].status;
         }).toBe("cancelled");
         const stale = await page.request.post(`${apiBaseUrl()}/api/subagents/${child.id}/codex-config`, { headers, data: { inputId: child.runtimeInput.id, apiKey: "synthetic-stale-secret" } });
-        expect(stale.ok()).toBeFalsy();
+        expect(stale.status()).toBe(409);
         await expect(page.getByRole("form", { name: "Connect Codex to continue" })).toHaveCount(0);
       });
     } finally {
