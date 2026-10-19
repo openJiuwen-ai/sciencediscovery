@@ -10,8 +10,16 @@ import re
 import subprocess
 
 
+PATCH_ENCODING = "utf-8"
+
+
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def patch_paths(patches, marker):
+    return sorted({name for patch in patches for name in
+                   re.findall(rf"^{re.escape(marker)} [ab]/(.+)$", patch.read_text(encoding=PATCH_ENCODING), re.M)})
 
 
 def restore_pinned(target, tag, paths, env):
@@ -36,11 +44,31 @@ def process(mode, target, tag, patch_dir=None):
     if not patches:
         raise ValueError(f"No supported Swarm patch set for {tag}")
     manifest = target / ".sciencediscovery-patches.json"
-    paths = sorted({name for patch in patches for name in
-                    re.findall(r"^\+\+\+ b/(.+)$", patch.read_text(), re.M)})
+    paths = patch_paths(patches, "+++")
     for name in paths:
         if not (target / name).resolve().is_relative_to(target):
             raise ValueError(f"Unsafe patch path: {name}")
+    # New files have a +++ header too, but are intentionally absent before the
+    # patch. Only the old-side headers name files a patch must find in the
+    # checked-out JiuwenSwarm source.
+    required_paths = patch_paths(patches, "---")
+    missing = [name for name in required_paths if not (target / name).is_file()]
+    if missing:
+        expected = tag
+        if (target / ".git").exists():
+            pinned = subprocess.run(
+                ["git", "-C", str(target), "rev-parse", f"{tag}^{{commit}}"],
+                capture_output=True,
+                text=True,
+            )
+            if pinned.returncode == 0:
+                expected = f"{tag} ({pinned.stdout.strip()})"
+        raise ValueError(
+            "JiuwenSwarm source is incompatible with the ScienceDiscovery "
+            f"patch set for {expected}: missing patch target(s): {', '.join(missing)}. "
+            "Use scripts/jiuwenswarm.sh setup with the pinned source, or remove "
+            "the stale JIUWENSWARM_ROOT before retrying."
+        )
     expected = {"tag": tag, "patches": {p.name: digest(p) for p in patches}}
     if mode == "apply":
         # A wheel's site-packages may be nested inside the application Git tree.
