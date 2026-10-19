@@ -35,6 +35,8 @@ Runner 是无 root 的代码执行器：Agent 的常规执行统一使用 `run_s
 
 Runner 设置保留能力状态与**重新检查**按钮。Agent 可调用 `check_runner(runner_id?)`，直接刷新目标 Runner 的同一份能力报告，不依赖沙箱。该工具只诊断，不执行代码、不挂起等待。执行前发现 Runner 不可用时，工具返回 `RUNNER_UNAVAILABLE`、`dispatched: false`、`operationId`、原因与修复建议；本次调用已结束，不进入执行队列。Agent 自行决定继续其他工作、说明阻塞并结束本轮，或显式调用 `wait_for_runner(operation_id)`。
 
+Agent 决定等待用户选择时，须调用等待工具；仅最终回复“已暂停”不会创建待处理操作。展示卡片不执行修复、安装、切换机器或代码，因此即使用户禁止这些操作，也无需为展示用户请求的选项再次确认。收到选择后仍须遵守用户约束。框架不会把每次 Runner 失败都强制变为等待状态。
+
 只有 `wait_for_runner` 才会创建对话卡片并暂停 Agent 的外部等待计时。卡片展示 Agent、待执行操作、原因和建议，提供修复后重检、选择可用且已授权的其他 Runner、取消本次操作（非整个任务）。不同操作的选择彼此独立。所有选择均返回 Agent；重试与切换会重新探测，但**绝不执行或重放旧调用**，须由 Agent 重新调用执行工具；换机器时先准备目标工作区、输入与环境。重检失败也返回诊断，是否再次等待仍由 Agent 决定，不自动轮询修复状态。任务取消、进程关闭或十分钟未决定会清理等待。刷新浏览器通过 `GET /api/sessions/{sessionId}/execution-blocks` 恢复卡片，响应经 `POST /api/sessions/{sessionId}/execution-blocks/{id}` 提交；重复或过期响应不会下发代码。等待存于内存，不提供 API 重启后的任务恢复。设置页定期读取能力缓存，也能反映 Agent 发起检查后的状态。
 
 Runner 自身也会在占用执行 ID 前，以 HTTP 503 和 `EXECUTION_UNAVAILABLE` 拒绝不可用的沙箱执行，读取/取消/管理接口仍可使用。**没有无沙箱兜底**，Always Allow 也不会关闭沙箱。探测成功仅证明沙箱可以构建，不保证每个科学依赖包或 GPU 配置正确。检查与受阻结果记录在工具轨迹中；API 操作日志记录 `runner_wait_requested`、`execution_decision`，Runner 记录 `execution_unavailable`。宿主机执行与扩大授权范围属于后续独立特性。
@@ -120,6 +122,38 @@ Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己�
 - 边界：**不解密 TLS**，只按 CONNECT / 绝对 URI 的主机名判定，因此宽泛条目仍是宽泛授权。
 - 策略变更会轮换 Permission Epoch；新执行使用新的策略快照。
 - 科学环境 install 的网络（conda 频道 / pip index / 离线缓存）与本策略互不影响。
+
+#### 对话内网络授权
+
+Skill 脚本或命令需要 HTTP 访问前，Agent 调用 `request_sandbox_network`，显式提供准确的
+`hosts`（可带端口）、简短 `purpose` 和目标 `runner_id`。询问模式会暂停并展示包含主机及用途的
+对话权限卡。批准返回一次性 `authorizationId`，需在新的 `run_shell` 调用中作为
+`network_authorization_id` 传入；始终允许模式自动批准准确主机的权限请求：显式工具调用事先声明主机，执行归属明确的
+白名单拒绝也可在失败后生成同一请求并返回令牌，但绝不自动重放。仅新增批准的主机，
+原有配置的白名单继续保留，原有 open 模式不收窄。
+本路径不接受通配符、URL 或 IP 地址。
+
+请**事先一次声明所有已知的必需主机**。例如脚本同时需要 `a.example.org` 和 `b.example.org`，
+应在同一个 `hosts` 列表中请求两者。批准不会跨执行累积；观测到的拒绝只包含该次执行实际尝试的主机。
+脚本若遇到首个失败便停止，逐个申请可能造成两个主机交替请求。发现其他必需主机时，先核对上次执行的
+副作用，再为安全的**新执行**请求完整的已知主机集合。授权绝不重放脚本。
+
+令牌仅属于当前 Agent、运行和 Runner，提交前即消耗，提交结果不明时也不能重用。同类授权
+仅匹配本次 Agent 运行的相同目标和主机集合，撤销后未用令牌失效；不能继承给子 Agent、
+其他 Runner 或后续运行。执行使用独立网络 Epoch，保留既有配置并仅新增批准主机，保持部署的私网过滤和出口路由，
+不修改全局配置或共享会话 Epoch。未携带令牌的调用仍遵循原有策略。
+
+白名单模式下，每次 Shell 执行的网关独立归属该执行。未放行域名通过 `networkDeniedHosts`
+返回，即使脚本吞掉 HTTP 错误也标记托管执行失败；所属运行仍活动时会弹出同一对话权限卡。
+`networkPermission` 返回决定及批准后的新调用令牌，绝不自动重放。重试前先核对输出、文件及
+远端副作用；结果不明的执行必须先查明。不支持的主机以 `networkPermission.blockedHosts` 逐项说明并保持阻塞，不妨碍为其他合法主机弹卡。
+私网地址过滤或出口路由错误不会通过此卡绕过。
+
+拒绝、取消、关闭或超时保持离线。必需的检索应明确显示阻塞/未完成及原因，禁止静默退化成
+看似完成的 web_search 报告。默认 `none` 保留原有 socket 过滤、独立网络命名空间且无桥接；
+不透明脚本失败不能可靠揭示主机，因此不保证自动弹出带具体域名的卡片。Agent/Skill 必须显式
+声明已知主机；Skill 作者应写明所需主机并要求执行前申请。MCP/Web 的宿主访问和系统配置的
+持久网络白名单独立管理；预检横幅只是辅助，不能替代执行时的对话授权。
 
 ### 3.2 沙箱内的 Ascend NPU
 
@@ -242,3 +276,53 @@ Runner 请求、执行时间和 Provider 返回的 token 用量，失败时也�
 - [architecture.md](architecture.md) — 进程模型与端口
 - [配置参考](../reference/configuration.md) — 相关环境变量、配额与数据落点
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — Ascend NPU Broker 设计背景
+
+## 显式授权的直执恢复
+
+已配置的本机或远程 Runner 可达但沙箱不可用时，Agent 可通过 `request_direct_execution`
+提交失败操作 ID、确切 Shell 命令和工作区相对目录。对话中的独立授权卡展示目标
+Runner 实例、OS 账号、工作区、命令及失去隔离的影响。拒绝不执行任何命令；批准
+只返回决策，Agent 必须用新的 `run_direct_shell` 调用确认返回的范围再执行。
+系统 Shell 可以调用 Python，不会自动提升权限。
+
+直执 Shell 启动时使用 `PATH=/usr/bin:/bin`，不加载 Shell 启动配置，也不继承
+已激活的 conda 环境。使用 Homebrew 或 conda Python 时，应在提交授权的命令中
+写明已安装解释器的绝对路径，例如目标机器上存在相应解释器时使用
+`/opt/homebrew/bin/python3 -c 'print(42)'` 或
+`/usr/local/bin/python3 -c 'print(42)'`。conda 应使用目标环境中 `bin/python`
+的绝对路径。裸命令 `python3` 只搜索最小 PATH；在 macOS 上可能选中系统占位
+程序或失败，而不是使用预期的安装。更换解释器会改变命令，需要匹配的直执授权。
+
+沙箱的 Always Allow 和 JiuwenSwarm 普通工具授权不包含直执许可。“允许匹配”仅
+覆盖当前 Session、Agent、run、目标实例、账号、工作区/目录及完全相同的命令。
+不设固定 TTL；可通过现有权限管理撤销，run 结束或取消后不可继续使用，也不会
+传给子 Agent 或后续 run。每个返回的授权在提交前即被消耗，即使提交失败也不可
+重用。Runner 重启会改变实例标识，需要重新授权。当前仅支持沙箱故障后的恢复。
+
+执行仍使用 Execution ID、日志、取消、超时、工作区版本和产物溯源；记录包含
+`sandbox: none`、`networkPolicy: host`、授权引用及目标/账号/run/Agent。
+结果未知时须先核实，不会自动重放命令。通过 `execution_status`、
+`execution_logs` 和 `execution_cancel` 观察或取消任务。
+
+直执不等同于沙箱：可访问主机文件、进程、网络和主机存储的凭据，没有 CPU、
+内存或网络隔离。Shell 仅注入最小环境而不注入 Runner 服务凭据，但不能保护主机
+文件中的凭据。工作区配额和产物记录不代表完整主机审计，主机副作用通常不可回滚。
+取消会终止进程组，无法保证终止已逃离该进程组的后代进程。
+
+#276 当前交付范围包括本机和已配置且可达的远程 Runner 临时系统 Shell 恢复。
+失败操作固定目标 Runner，授权展示 Runner ID、实例、OS 账号及目标工作区。
+Runner 在授权前校验远程逻辑工作区与实际目录，执行前再次校验。授权不能跨
+本机/远程 Runner、工作区或账号使用。输入须显式传输，不会隐式复制本机文件。
+远程输出保留在该 Runner 工作区，带已提交的工作区版本和执行审计；通过显式
+工作区传输取回文件，不把远程路径当成本机产物。
+
+提交前断连不执行命令。提交确认丢失或无法完成状态观察代表结果未知，不能据此
+认定未执行。API 保留 Execution ID，不重新提交；须先核实该 ID 和目标工作区。
+同一 Agent 在该 Runner 上有未知结果时，阻止新的直执授权。远程超时/取消继续
+使用现有执行控制，保留最终错误和工作区版本。
+
+托管环境选择、独立 SSH 运维或故障前直执仍不支持。Runner 不可达时，须使用
+独立配置并获授权的连接；本路径不创建 SSH 凭据，也不修复连接。#276 仍保留
+未交付的运维范围。提交并构建后可运行 `node test/api/direct-execution-journey.mjs`。
+该旅程的远程目标是独立数据目录、显式配置的 loopback Runner，不代表真实跨机
+网络或 SSH 验证；模型只使用本地脚本，不调用付费服务。

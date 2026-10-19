@@ -16,6 +16,21 @@ export function selectedCases(value = process.env.E2E_BIOMNI_CASE_IDS) {
   return cases.filter(c => ids.includes(c.id));
 }
 
+export const researchTeamReference = {
+  id: "science-research-team",
+  kind: "skill",
+  label: "science-research-team",
+} as const;
+
+export const researchTeamParameters = [
+  '<skill_invocation_parameters skill_id="science-research-team">',
+  "knowledge_domain: disabled",
+  "web_search: disabled",
+  "</skill_invocation_parameters>",
+].join("\n");
+
 export function analysisPrompt(_id: string, instruction: string, file: string) {
-  return `${instruction}\n\n<platform_delivery>\nThe original task above defines the scientific scope and required outputs. The provided data file is in this session workspace: ${file}. Resolve paths using the actual workspace; /app/data in the original instruction maps to the workspace input and /app outputs map to workspace-relative outputs. Save and declare the required trace.md and answer.txt artifacts with those exact logical names.\n</platform_delivery>`;
+  return [instruction, researchTeamParameters,
+    `<platform_delivery>\nThe original task above defines the scientific scope and required outputs. The provided data file is in this session workspace: ${file}. Resolve paths using the actual workspace; /app/data in the original instruction maps to the workspace input and /app outputs map to workspace-relative outputs. Save and declare the required trace.md and answer.txt artifacts with those exact logical names.\n</platform_delivery>`,
+  ].join("\n\n");
 }

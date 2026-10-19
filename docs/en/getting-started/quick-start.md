@@ -87,13 +87,12 @@ using Linux containers. Once the service starts, continue below.
 
 ### After startup
 
-On all three systems, a successful startup prints an `Open to sign in` URL
-in the terminal or Docker logs. Open it in your browser to enter ScienceDiscovery.
+Open <http://127.0.0.1:4310> after startup. If Connection asks for a token, paste the local service access token from `.sciencediscovery-data/secrets/auth-token` (Docker host: `./data/secrets/auth-token`), or use your configured data directory / `SCIENCE_AGENT_AUTH_TOKEN` value, and save. The printed `Open to sign in` URL is an optional shortcut; startup logs are not required.
 
 For binary and local source mode, keep the startup terminal running.
 Closing it or pressing Ctrl-C stops the service. Docker runs in the background.
 
-If no sign-in URL appears, the browser cannot connect, or startup reports an error,
+If the service does not start, the browser cannot connect, or startup reports an error,
 see [binary and source troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode)
 or the [Docker FAQ](deployment.md#docker-faq), as appropriate.
 
@@ -154,6 +153,7 @@ Different models may phrase the report differently. That is expected; what matte
 
 ## 5. Where to go next
 
+- **Next lesson:** [Analyze a dataset](analyze-a-dataset.md) uses a sample CSV shipped with the repository. It is the second of six lessons; each ends by pointing at the next.
 - To understand what ScienceDiscovery can do, see [Core capabilities](../README.md#core-capabilities).
 - To follow complete real research examples, see [Domain guides](../README.md#domain-guides).
 - For a concrete optimization walkthrough, see [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md).

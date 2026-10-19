@@ -200,8 +200,8 @@ Policies are cumulative rows in [profiles.mjs](profiles.mjs). `l1` through `l5`
 contain each preceding tier and may add new cases. The aliases `pr`, `merge`, `daily`
 and `release` mean L2, L3, L4 and L5. `pnpm test:policy` prints the exact rules.
 The default `pr` plan is credential-free. L3 adds nine real API cases: seven
-basic journeys and two Runner-recovery journeys. L4 adds all ten previously
-eligible nightly cases, for 19 real cases in total.
+basic journeys and two Runner-recovery journeys. L4 adds twelve nightly cases,
+including Biomni DA-13-3 and DA-14-1, for 21 real cases in total.
 L5 currently selects the same cases and evaluation modes as L4, retaining its
 separate extension row for future release-only coverage. Both record existing
 AI scores without a historical baseline gate. Existing

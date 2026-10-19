@@ -147,7 +147,20 @@ export type SandboxKind = "bubblewrap" | "seatbelt";
 export const SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
 export const SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID = "system-python3-seatbelt-v1";
 
+export interface SandboxNetworkPermissionResult {
+  /** Observed targets this consent path cannot authorize; they stay blocked. */
+  blockedHosts?: Array<{ host: string; reason: string }>;
+  state: "allowed" | "blocked";
+  authorizationId?: string;
+  hosts: string[];
+  instruction: string;
+}
+
 export interface ScientificExecutionResult {
+  /** Policy denials observed by this execution's gateway; never inferred from stderr. */
+  networkDeniedHosts?: string[];
+  networkPermission?: SandboxNetworkPermissionResult;
+
   /** Immutable Workspace tree captured after execution and rooted before returning. */
   workspaceSnapshot?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   /** Always `none`: sandbox isolation does not apply CPU or memory quotas. */
@@ -169,8 +182,8 @@ export interface ScientificExecutionResult {
   language: ScientificLanguage;
   memoryStateLost?: string;
   modifiedFiles: string[];
-  /** Sandbox network mode this execution actually ran under. */
-  networkPolicy: SandboxNetworkMode;
+  /** Effective network mode; host means unrestricted direct execution. */
+  networkPolicy: SandboxNetworkMode | "host";
   /** Revision of the sandbox network policy snapshot this execution ran under. */
   networkAccessRevision?: string;
   /**
@@ -181,7 +194,8 @@ export interface ScientificExecutionResult {
    */
   producedArtifacts?: ProducedArtifactInfo[];
   runnerVersion: string;
-  sandbox: SandboxKind;
+  sandbox: SandboxKind | "none";
+  directAuthorization?: DirectExecutionAuthorization;
   startedAt: string;
   stderr: string;
   stdout: string;
@@ -196,7 +210,30 @@ export interface ScientificExecutionResult {
 export const SYSTEM_SHELL_ENVIRONMENT_REVISION_ID = "system-shell-bwrap-v1";
 export const SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID = "system-shell-seatbelt-v1";
 
+/** Explicit direct-path consent, carried only by the authenticated control plane. */
+export interface DirectExecutionAuthorization {
+  /** Logical remote workspace selected at consent; absent for local execution. */
+  runnerWorkspaceKey?: string;
+  authorizationId: string;
+  target: string;
+  account: string;
+  runId: string;
+  agentId: string;
+  workspaceRoot: string;
+  cwd: string;
+}
+
+export interface DirectExecutionCapability {
+  /** Target-validated scope, present when a workspace probe was requested. */
+  workspaceRoot?: string;
+  cwd?: string;
+  available: boolean;
+  target: string;
+  account: string;
+}
+
 export interface ShellExecutionRequest {
+  directAuthorization?: DirectExecutionAuthorization;
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
   agentId: string;
   code: string;
@@ -470,6 +507,8 @@ export interface RunnerExecutionCapability {
 }
 
 export interface ExecutionBlock {
+  /** Absent for existing Runner blocks. */
+  kind?: "mcp";
   id: string;
   sessionId: string;
   executionId: string;

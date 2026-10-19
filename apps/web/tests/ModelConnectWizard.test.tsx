@@ -104,6 +104,7 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
       providerId,
       source: "remote" as const,
     }),
+    getGlobalSettings: async () => ({ effective: {}, overrides: {} } as any),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
     testModel: async () => successResult,
@@ -113,6 +114,12 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
     } as ModelProvider),
     ...overrides,
   } as unknown as SettingsApiClient;
+}
+
+async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
+  const label = renderer.root.findAllByType("label").find(node => /我同意发送一次|I agree to one/.test(extractText(node)));
+  assert.ok(label, "Cost disclosure must be reachable before a model request");
+  await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
 }
 
 test("renders preset provider selection, official registration link, and billing notice in zh-CN and en", async () => {
@@ -235,6 +242,7 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
   });
 
   // Click "保存并连接"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -314,6 +322,7 @@ test("successful flow with existing models: registers all listed models but leav
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -391,6 +400,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   });
 
   // Click "测试并启用"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -482,6 +492,7 @@ test("bad key with an existing provider: new provider is rolled back, existing r
   });
 
   // Click "测试并启用"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -596,6 +607,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   });
 
   // Submit
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -659,6 +671,7 @@ test("custom provider without model id: registers every listed model", async () 
   });
 
   // Model identifier intentionally left empty: the listing decides.
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -715,6 +728,7 @@ test("empty model listing: readable error, provider rolled back, default untouch
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -764,6 +778,7 @@ test("model listing failure: readable error with detail, provider rolled back, d
     keyInput.props.onChange({ target: { value: "sk-bad-key" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -801,6 +816,7 @@ test("validation errors: missing key prevents client API calls", async () => {
   });
 
   // Submit without key
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -901,6 +917,7 @@ test("advanced preset fields: base URL override is honored when creating a provi
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-test" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -978,6 +995,7 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
   const variantSelect = renderer!.root.findByProps({ id: "wizard-api-variant" });
   assert.equal(variantSelect.props.value, "anthropic-adaptive");
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1074,6 +1092,7 @@ test("same preset can be added again with its own name and key; the existing row
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-second-key" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1162,6 +1181,7 @@ test("advanced manual selection: the fetched list starts fully ticked, unticking
   assert.equal(renderer.root.findByProps({ "aria-label": "全选" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1196,6 +1216,7 @@ test("advanced: unticking every listed row is an explicit none — readable erro
   assert.equal(renderer.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 0 个模型/);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1249,6 +1270,7 @@ test("advanced manual entry: a model described by hand is registered with its fa
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
   assert.deepEqual(registered, []);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1306,6 +1328,7 @@ test("advanced: a failed preview is readable, keeps the card usable, and writes 
   assert.equal(extractText(renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" })), "获取模型列表");
   // The card is still the same card: the simple path remains one click away.
   assert.equal(renderer.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  await acceptProbeCost(renderer!);
   assert.equal(renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.disabled, false);
 });
 
@@ -1341,6 +1364,7 @@ test("advanced preset fields: protocol and variant overrides drive creation just
   });
   assert.equal(renderer.root.findByProps({ id: "wizard-api-variant" }).props.value, "responses");
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1397,4 +1421,238 @@ test("fetch model list lives in the card's main area, reachable without opening 
   assert.ok(renderer!.root.findByProps({ className: "wizard-model-table" }));
   assert.equal(renderer!.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, true);
   assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
+});
+
+function renderWizard(presets: readonly (typeof MODEL_PROVIDER_PRESETS)[number][]) {
+  const client = createMockClient();
+  const element = (next: typeof presets) => createElement(
+    LocaleProvider,
+    { initialLocale: "zh-CN" },
+    createElement(ModelConnectWizard, { client, presets: next }),
+  );
+  return { client, element };
+}
+
+function hasCustomFields(renderer: ReactTestRenderer): boolean {
+  return renderer.root.findAll((node) => node.props.id === "wizard-custom-url").length > 0;
+}
+
+test("no presets offered: the card is in custom mode, so the select and the fields agree", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+
+  const select = renderer!.root.findByProps({ id: "wizard-provider-select" });
+  assert.deepEqual(select.findAllByType("option").map((option) => option.props.value), ["custom"]);
+  assert.equal(select.props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+});
+
+test("presets arriving after an empty list replace the automatic custom mode with the first preset", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, MODEL_PROVIDER_PRESETS[0]!.id);
+  assert.equal(hasCustomFields(renderer!), false);
+});
+
+test("presets arriving late keep the custom fields the user already started filling", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://localhost:8000/v1" } });
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-url" }).props.value, "http://localhost:8000/v1");
+});
+
+test("a custom provider picked by the user survives a refreshed preset list", async () => {
+  const { element } = renderWizard(MODEL_PROVIDER_PRESETS);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element(MODEL_PROVIDER_PRESETS));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "custom" } });
+  });
+  await act(async () => {
+    renderer!.update(element([...MODEL_PROVIDER_PRESETS]));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+});
+
+test("a selected preset that disappears from the list falls back to the first preset still offered", async () => {
+  const [first, second] = MODEL_PROVIDER_PRESETS;
+  const { element } = renderWizard(MODEL_PROVIDER_PRESETS);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element(MODEL_PROVIDER_PRESETS));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: second!.id } });
+  });
+  await act(async () => {
+    renderer!.update(element([first!]));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, first!.id);
+  assert.equal(hasCustomFields(renderer!), false);
+});
+
+test("clearing a custom name the user already typed does not yield automatic custom mode when presets arrive", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "本地网关" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "" } });
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-name" }).props.value, "");
+});
+
+test("an API key entered before presets arrive keeps automatic custom mode and the key", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-kept" } });
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-kept");
+});
+
+test("a failed settings read stops before creating a provider or model", async () => {
+  let replaceCalls = 0;
+  let createCalls = 0;
+  const errors: unknown[] = [];
+  const client = createMockClient({
+    createProvider: async () => {
+      createCalls += 1;
+      throw new Error("should not create a provider");
+    },
+    getGlobalSettings: async () => { throw new Error("settings 500"); },
+    replaceGlobalSettings: async () => {
+      replaceCalls += 1;
+      return {} as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          onError: (reason) => { errors.push(reason); },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-invalid-key" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.equal(createCalls, 0);
+  assert.equal(replaceCalls, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
+  const alert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
+  assert.match(extractText(alert), /settings 500/);
+});
+
+test("the first model merges into the settings read at save time when no callback is passed", async () => {
+  const writes: unknown[] = [];
+  const client = createMockClient({
+    getGlobalSettings: async () => ({
+      effective: {},
+      overrides: { enabledConnectorIds: [], semanticReviewEnabled: true, thinkingEffort: "high" },
+    } as any),
+    replaceGlobalSettings: async (body: unknown) => {
+      writes.push(body);
+      return { effective: {}, overrides: body } as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS }),
+      ),
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-deepseek-test-123" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.deepEqual(writes, [{
+    enabledConnectorIds: [],
+    modelId: "profile-created-provider-1-listed-model-first",
+    semanticReviewEnabled: true,
+    thinkingEffort: "high",
+  }]);
+});
+
+for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'budget', 'auth', 'empty'] as const) test(`${locale} mounted wizard setup result ${kind} is honest and preserves rollback`, async () => {
+  const deleted: string[] = []; let saved = false, probes = 0, renderer: ReactTestRenderer;
+  const outcome: ModelConnectivityTestResult = kind === 'valid' ? successResult : kind === 'auth' ? { ...authFailResult, inconclusiveReason: 'output_limit' }
+    : { ...successResult, ok: false, category: 'invalid_response', ...(kind === 'budget' ? { inconclusiveReason: 'output_limit' as const } : {}) };
+  const client = createMockClient({ testModel: async () => { probes++; return outcome; }, deleteModel: async id => { deleted.push('model'); return { deleted: id }; }, deleteProvider: async id => { deleted.push('provider'); return { deleted: id }; } });
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS, onSuccess: () => { saved = true; } }))); });
+  try {
+    await act(async () => { renderer!.root.findByProps({ id: 'wizard-api-key' }).props.onChange({ target: { value: 'synthetic' } }); });
+    assert.equal(probes, 0); await acceptProbeCost(renderer!);
+    await act(async () => { renderer!.root.findByProps({ className: 'primary-button wizard-submit-button' }).props.onClick(); const end = Date.now()+2000; while (!saved && deleted.length < 2 && Date.now()<end) await new Promise(r => setTimeout(r,10)); });
+    assert.equal(probes, 1);
+    if (kind === 'auth' || kind === 'empty') { assert.equal(saved, false); assert.deepEqual(deleted, ['model','provider']); }
+    else { assert.equal(saved, true); assert.deepEqual(deleted, []); }
+    if (kind === 'budget') { const rendered = extractText(renderer!.toJSON()); assert.match(rendered, locale === 'en' ? /compatibility unconfirmed/ : /兼容性未确认/); assert.doesNotMatch(rendered, /Connected —|已成功连接/); }
+  } finally { await act(async () => renderer!.unmount()); }
 });

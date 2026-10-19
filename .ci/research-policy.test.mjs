@@ -81,9 +81,12 @@ function workflowJobs(path) {
   return jobs;
 }
 
+const allJobs = () => ['ci.yml', 'real-e2e.yml'].flatMap(file =>
+  [...workflowJobs(`../.github/workflows/${file}`)].map(([name, job]) => [`${file}: ${name}`, job]));
+
 // Which environment supplies the credentials, and what it must hold, is .ci/README.md's job, not this test's.
 test('real-model credentials reach only jobs that take them from an environment and never run for pull requests', () => {
-  const credentialed = [...workflowJobs('../.github/workflows/ci.yml')]
+  const credentialed = allJobs()
     .filter(([, job]) => /\bsecrets\.E2E_(?:LLM|JUDGE)_TOKEN\b/.test(job));
   assert.ok(credentialed.length, 'a job runs the real-model journeys');
   for (const [name, job] of credentialed) {
@@ -93,7 +96,7 @@ test('real-model credentials reach only jobs that take them from an environment 
 });
 
 test('no job-level env uses the runner context, which GitHub provides only to steps', () => {
-  for (const [name, job] of workflowJobs('../.github/workflows/ci.yml')) {
+  for (const [name, job] of allJobs()) {
     const env = /^    env:\n(?:      .*\n|\s*\n)*/m.exec(job)?.[0] ?? '';
     assert.doesNotMatch(env, /\$\{\{[^}]*\brunner\./, `${name}: jobs.<job_id>.env`);
   }

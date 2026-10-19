@@ -47,6 +47,7 @@ function fakeStore(overrides: { apiToken?: string; model?: typeof MODEL | undefi
     recorded,
     store: {
       appendModelInvocationUsage: async (record: ModelInvocationUsage) => { recorded.push(record); },
+      resolveProxy: () => ({ mode: "direct" }),
       getModel: () => ("model" in overrides ? overrides.model : MODEL),
       getModelApiToken: () => ("apiToken" in overrides ? overrides.apiToken : "sk-provider-secret"),
     } as never,
@@ -137,7 +138,7 @@ test("a run token buys exactly one run's completions and nothing else", async ()
 test("no token, a wrong token and a revoked token are the same answer", async () => {
   const tokens = new RunTokenRegistry();
   const { store } = fakeStore();
-  const { origin } = await mount({ fetchImpl: (async () => new Response("{}")) as never, store, tokens });
+  const { origin } = await mount({ fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }))) as never, store, tokens });
 
   const token = tokens.issue("run-1", "s1", "model-1");
   assert.equal((await completion(origin, "run-1")).status, 401, "no token");
@@ -157,7 +158,7 @@ test("the caller cannot choose the model it is billed for", async () => {
   const { origin } = await mount({
     fetchImpl: (async (_url: string, init: RequestInit) => {
       seen.push(JSON.parse(String(init.body)));
-      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
     }) as never,
     store,
     tokens,
@@ -179,7 +180,7 @@ test("a provider that reports no usage is recorded as unknown, not as zero", asy
   const tokens = new RunTokenRegistry();
   const { recorded, store } = fakeStore();
   const { origin } = await mount({
-    fetchImpl: (async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })) as never,
+    fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 })) as never,
     store,
     tokens,
   });
@@ -189,6 +190,25 @@ test("a provider that reports no usage is recorded as unknown, not as zero", asy
   // "We do not know" and "it was free" are different facts.
   assert.equal(recorded[0]?.usageStatus, "provider-not-reported");
   assert.equal(recorded[0]?.totalTokens, null);
+});
+
+test("evolution persists Chat counts and cache details without adding aliases or reasoning", async () => {
+  const tokens = new RunTokenRegistry();
+  const { recorded, store } = fakeStore();
+  const samples = [
+    { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 0, output_tokens: 0, total_tokens: 30477, completion_tokens_details: { reasoning_tokens: 80 }, prompt_tokens_details: { cached_tokens: 12 } },
+    { input_tokens: 8, output_tokens: 5 },
+  ];
+  const { origin } = await mount({
+    fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: samples.shift() }), { status: 200 })) as never,
+    store, tokens,
+  });
+  const token = tokens.issue("run-1", "s1", "model-1");
+  await completion(origin, "run-1", token);
+  await completion(origin, "run-1", token);
+  assert.deepEqual(recorded.map((usage) => [usage.inputTokens, usage.outputTokens, usage.totalTokens]), [[30393, 84, 30477], [8, 5, 13]]);
+  assert.equal(recorded[0]?.cacheReadTokens, 12);
+  assert.equal(recorded[1]?.usageStatus, "reported");
 });
 
 test("the provider's own error is forwarded rather than flattened", async () => {
@@ -215,7 +235,7 @@ test("the provider's own error is forwarded rather than flattened", async () => 
 test("a run whose model has no key fails loudly instead of silently", async () => {
   const tokens = new RunTokenRegistry();
   const { store } = fakeStore({ apiToken: undefined });
-  const { origin } = await mount({ fetchImpl: (async () => new Response("{}")) as never, store, tokens });
+  const { origin } = await mount({ fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }))) as never, store, tokens });
 
   const response = await completion(origin, "run-1", tokens.issue("run-1", "s1", "model-1"));
   assert.equal(response.status, 503);
@@ -238,7 +258,7 @@ test("an empty request is refused before the provider is called", async () => {
   const { store } = fakeStore();
   let called = false;
   const { origin } = await mount({
-    fetchImpl: (async () => { called = true; return new Response("{}"); }) as never,
+    fetchImpl: (async () => { called = true; return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] })); }) as never,
     store,
     tokens,
   });
@@ -288,7 +308,7 @@ test("the caller's thinking setting reaches the provider, unlike its model", asy
   const { origin } = await mount({
     fetchImpl: (async (_url: string, init: RequestInit) => {
       seen.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
     }) as never,
     store,
     tokens,
@@ -323,7 +343,7 @@ test("a caller that says nothing about thinking has nothing added", async () => 
   const { origin } = await mount({
     fetchImpl: (async (_url: string, init: RequestInit) => {
       seen.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
     }) as never,
     store,
     tokens,
@@ -356,4 +376,20 @@ test("a run's two models get two tokens, and neither buys the other", async () =
   assert.equal(tokens.resolve("run-1", mutate), undefined);
   assert.equal(tokens.resolve("run-1", judge), undefined);
   assert.equal(tokens.size, 0);
+});
+
+test('provider errors preserve original status and bounded redacted causes for plain, primitive and JSON bodies', async () => {
+  for (const raw of ['original plain cause sk-provider-secret ' + 'x'.repeat(2500), 'null', '["original array cause"]', '"original string cause"', '{"error":"original JSON cause"}']) {
+    const tokens = new RunTokenRegistry();
+    const { store, recorded } = fakeStore();
+    const { origin } = await mount({ tokens, store, fetchImpl: (async () => new Response(raw, { status: 503 })) as never });
+    const response = await completion(origin, 'run', tokens.issue('run', 'session', 'model-1'));
+    assert.equal(response.status, 503);
+    const body = await response.json() as { error: string };
+    assert.equal(typeof body.error, 'string'); assert.ok(body.error.length <= 2000);
+    assert.ok(!body.error.includes('sk-provider-secret'));
+    if (raw.startsWith('original plain')) assert.match(body.error, /original plain cause \[redacted\]/);
+    else assert.match(body.error, /original|null/);
+    assert.equal(recorded.length, 0, 'Failed requests do not manufacture reported usage or zero cost');
+  }
 });

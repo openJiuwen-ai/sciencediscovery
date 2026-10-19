@@ -163,7 +163,7 @@
 .workspace-fold-body .trust-metrics { margin-top: 0; }
 .workspace-plan-section .workspace-fold-body { padding: 8px; }
 .workspace-plan-section .orchestration-panel { width: 100%; max-width: none; margin: 0; gap: 8px; }
-.workspace-plan-section .plan-card { padding: 9px; }
+.workspace-plan-section .plan-card { padding: 9px; overflow-wrap: anywhere; }
 .workspace-plan-section .plan-card-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .workspace-plan-section .plan-card-label { flex: 1 1 0; min-width: 0; gap: 3px; }
 .workspace-plan-section .plan-card-label strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

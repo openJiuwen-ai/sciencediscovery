@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { protocolProvider } from "../../../test/helpers/protocol-provider.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -198,4 +199,133 @@ test("coordinator coalesces concurrent tests and allows a later retest", async (
     return successful;
   });
   assert.equal(calls, 2);
+});
+
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`compatibility matrix independently verifies ${protocol} and leaves selection unchanged`, async () => {
+    const { protocolProvider } = await import("../../../test/helpers/protocol-provider.js");
+    const provider = await protocolProvider(protocol);
+    try {
+      const selected = { ...profile(provider.baseUrl), apiProtocol: protocol };
+      const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: selected, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+      const matching = tested.protocols!.find(p => p.apiProtocol === protocol)!;
+      assert.equal(tested.ok, true);
+      assert.equal(matching.basic.ok, true);
+      assert.equal(matching.streaming.ok, true);
+      assert.equal(matching.tools.ok, true);
+      assert.equal(matching.usage, "available");
+      assert.equal(selected.apiProtocol, protocol);
+      assert.equal(tested.protocols!.filter(p => p.basic.ok).length, 1);
+      assert.equal(provider.requests.length, 10, "4 matching requests plus three attempts for each incompatible protocol");
+      assert.doesNotMatch(JSON.stringify(tested), /fixture-secret-388|signature-required|encrypted-required/);
+    } finally { await provider.close(); }
+  });
+}
+
+for (const usage of ["missing", "malformed"] as const) test(`missing capability usage stays unknown: ${usage}`, async () => {
+  const { protocolProvider } = await import("../../../test/helpers/protocol-provider.js");
+  const provider = await protocolProvider("anthropic-messages", { usage });
+  try {
+    const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(provider.baseUrl), apiProtocol: "anthropic-messages" }, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    const matching = tested.protocols!.find(p => p.apiProtocol === "anthropic-messages")!;
+    assert.equal(matching.basic.ok, true); assert.equal(matching.tools.ok, true); assert.equal(matching.usage, "unknown");
+  } finally { await provider.close(); }
+});
+
+test("one endpoint can support multiple protocols without changing the saved selection", async () => {
+  const { protocolProvider } = await import("../../../test/helpers/protocol-provider.js");
+  const provider = await protocolProvider("all");
+  try {
+    const selected = { ...profile(provider.baseUrl), apiProtocol: "openai-responses" as const };
+    const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: selected, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    assert.equal(tested.protocols!.length, 3);
+    assert.ok(tested.protocols!.every(p => p.basic.ok && p.streaming.ok && p.tools.ok && p.usage === "available"));
+    assert.equal(selected.apiProtocol, "openai-responses"); assert.equal(provider.requests.length, 12);
+  } finally { await provider.close(); }
+});
+
+test("empty native and Chat successful payloads do not certify a basic capability", async () => {
+  for (const [apiProtocol, payload] of [
+    ["openai-chat-completions", { choices: [{ message: { content: "" } }] }],
+    ["openai-responses", { object: "response", status: "completed", output: [] }],
+    ["anthropic-messages", { type: "message", content: [] }],
+  ] as const) await withProvider(async (request, response) => {
+    await readRequest(request); response.end(JSON.stringify(payload));
+  }, async origin => {
+    const result = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy });
+    assert.equal(result.category, "invalid_response"); assert.equal(result.ok, false);
+  });
+});
+
+test("network errors are distinct from successful but malformed responses", async () => {
+  const tested = await testModelConnectivity({ apiToken: "fixture-secret-388", profile: profile("http://127.0.0.1:1"), resolveProxy: directProxy });
+  assert.equal(tested.category, "network");
+});
+
+test("malformed native blocks cannot certify a basic capability", async () => {
+  for (const [apiProtocol, payload] of [
+    ["openai-chat-completions", { choices: [{ message: { tool_calls: [null] } }] }],
+    ["openai-responses", { object: "response", output: [{ type: "not-a-model-item" }] }],
+    ["openai-responses", { object: "response", output: [{ type: "message", content: [{ type: "output_text", text: {} }] }] }],
+    ["anthropic-messages", { type: "message", content: [{ type: "not-a-model-block" }] }],
+    ["anthropic-messages", { type: "message", content: [{ type: "text", text: {} }] }],
+  ] as const) await withProvider(async (request, response) => { await readRequest(request); response.end(JSON.stringify(payload)); }, async origin => {
+    assert.equal((await testModelConnectivity({ apiToken: "fixture-secret-388", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy })).category, "invalid_response");
+  });
+});
+
+for (const apiProtocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) test(`${apiProtocol} known basic truncation is inconclusive while its usage stays independently available`, async () => {
+  await withProvider(async (request, response) => {
+    const body = JSON.parse(await readRequest(request));
+    response.setHeader("content-type", "application/json");
+    if (body.stream) { response.writeHead(403); response.end(JSON.stringify({ error: { message: "synthetic stream rejection" } })); return; }
+    response.end(JSON.stringify(apiProtocol === "openai-chat-completions"
+      ? { choices: [{ finish_reason: "length", message: { content: "partial" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }
+      : apiProtocol === "openai-responses" ? { object: "response", status: "incomplete", output: [{ type: "message", content: [{ type: "output_text", text: "partial" }] }], usage: { input_tokens: 1, output_tokens: 1 } }
+      : { type: "message", stop_reason: "max_tokens", content: [{ type: "text", text: "partial" }], usage: { input_tokens: 1, output_tokens: 1 } }));
+  }, async origin => {
+    const result = await testModelConnectivity({ apiToken: "synthetic", profile: { ...profile(origin), apiProtocol }, resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    const selected = result.protocols?.find(p => p.apiProtocol === apiProtocol); assert.ok(selected);
+    assert.equal(selected.basic.ok, false); assert.equal(selected.basic.category, "invalid_response"); assert.match(selected.basic.message, /truncated.*inconclusive/);
+    assert.equal(selected.streaming.category, "authorization"); assert.match(selected.streaming.message, /API key is invalid or is not authorized/); assert.equal(selected.tools.category, "authorization"); assert.equal(selected.usage, "available");
+  });
+});
+
+test('compatibility outer deadlines still stop healthy partial streams independently of normal header timeouts', async () => {
+  const server = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    if (body.stream) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': healthy but no terminal result\n\n');
+      const heartbeat = setInterval(() => res.write(': generating\n\n'), 10);
+      res.on('close', () => clearInterval(heartbeat)); return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(req.url?.endsWith('/messages')
+      ? { type: 'message', content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn' }
+      : req.url?.endsWith('/responses') ? { object: 'response', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }], status: 'completed' }
+      : { choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }));
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  try {
+    // Give immediate basic controls the ordinary success budget; these streams
+    // intentionally never terminate, so their outer-timeout result is deterministic.
+    const result = await testModelConnectivity({ apiToken: 'synthetic', profile: profile(`http://127.0.0.1:${(server.address() as any).port}/v1`), resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+    assert.equal(result.protocols?.length, 3);
+    for (const protocol of result.protocols!) { assert.equal(protocol.basic.ok, true); assert.equal(protocol.streaming.category, 'timeout'); assert.equal(protocol.tools.category, 'timeout'); }
+  } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});
+
+test('Responses basic uses the documented16-token probe minimum while runtime explicit budgets remain untouched', async () => {
+  const provider = await protocolProvider('openai-responses');
+  try {
+    const tested = await testModelConnectivity({ apiToken: 'synthetic', profile: { ...profile(provider.baseUrl), apiProtocol: 'openai-responses' }, resolveProxy: directProxy });
+    assert.equal(tested.ok, true); assert.equal(provider.requests.length, 1); assert.equal(provider.requests[0]!.body.max_output_tokens, 16);
+  } finally { await provider.close(); }
+});
+for (const acknowledgement of ['OK.', ' ok! ', 'unexpected answer']) test(`tool acknowledgement ${acknowledgement} retains identity/history checks without exact punctuation matching`, async () => {
+  const provider = await protocolProvider('all', { acknowledgement });
+  try {
+    const tested = await testModelConnectivity({ apiToken: 'synthetic', profile: profile(provider.baseUrl), resolveProxy: directProxy, compatibility: true });
+    assert.equal(provider.requests.length, 12); assert.ok(tested.protocols!.every(p => p.tools.ok === (acknowledgement !== 'unexpected answer')));
+  } finally { await provider.close(); }
 });

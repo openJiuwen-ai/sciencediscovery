@@ -1,9 +1,8 @@
 # BiomniBench-DA real Swarm E2E
 
-Two small-data tasks complement the literature-review suite. These tests are
-manual/benchmark opt-in, never part of the mocked PR gate. They use real data,
-real model calls and the running Swarm backend. This change does not add them to
-any currently running six-case research suite.
+Two small-data tasks complement the literature-review suite. These tests run
+in daily and release CI, never in the mocked PR gate. They use real data, real
+model calls and the running Swarm backend.
 
 | Task | Scientific scope | Input |
 | --- | --- | --- |
@@ -35,7 +34,8 @@ The hashes were checked against the official repository metadata on 2026-09-23.
 Preflight rejects changed/missing inputs before spending generator tokens. Only
 the instruction and CSV enter the Agent's workspace/context. Rubrics remain on
 the evaluation side. Source-paper answer lookup is prohibited by the original
-instructions; general background references remain allowed.
+instructions. Prompt-only Skill parameters request no knowledge-domain branch
+or web search.
 
 ## Run
 
@@ -60,28 +60,54 @@ cd .e2e
 Alternatively set `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_LLM_TOKEN` instead of a
 registered model ID. Playwright `--grep BiomniBench-da-13-3` selects one task
 locally. CI discovers both from source tags, independent of environment filters.
-`E2E_KEEP_RESEARCH_RECORDS=1` preserves application records. Both real cases
-are temporarily quarantined from daily CI while their sandbox environment and
-long-running literature searches are investigated. They remain manually
-runnable through the command above and never enter the PR gate; manual runs
-may enable rubric judging.
-Run timeout defaults to 30 minutes; override with `E2E_BIOMNI_RUN_TIMEOUT_MS`.
-The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
+`E2E_KEEP_RESEARCH_RECORDS=1` preserves application records. Daily and
+release CI prepare the two authorized datasets and enable rubric judging.
+Manual runs remain available through the command above. Run timeout defaults
+to 30 minutes locally; CI sets `E2E_BIOMNI_RUN_TIMEOUT_MS` to 80 minutes.
+The E2E follows deferred shell executions and automatic main-Agent wake Runs
+before checking final delivery.
+A task that exceeds this budget is cancelled; there is no automatic retry or monetary cap.
 
 ## Assertions and benchmark fidelity
 
-The pinned original instruction text is preserved verbatim. A platform delivery
+The pinned original instruction text is preserved verbatim. JiuwenSwarm exposes
+its installed Skill catalog to every Session, so this journey does not require a
+per-Session `selected` mode. The request attaches `science-research-team` using
+the same structured reference schema accepted by the Composer and validated by
+the API. The persisted Run must contain the resolved reference, and its effective
+settings snapshot must include the Skill ID, so per-message Skill selection does
+not depend on a natural-language request.
+
+Both tasks append this parameter block before the platform delivery appendix:
+
+```text
+<skill_invocation_parameters skill_id="science-research-team">
+knowledge_domain: disabled
+web_search: disabled
+</skill_invocation_parameters>
+```
+
+These are prompt-only Skill parameters. They guide orchestration but do not
+enforce a network boundary and do not make the benchmark fail merely because a
+knowledge-domain branch is observed. A platform delivery
 appendix only maps `/app` paths to the actual workspace and asks for declaration
 of the two originally required artifacts, `trace.md` and `answer.txt`. It adds
 no analysis method, ranking convention, JSON schema or delegation restriction.
 
-- Require a completed main run and at least one readable, nonempty persisted
-  artifact referenced in its final response. Fixed names are not completion
-  assertions. Failed/cancelled runs with outputs are partial deliveries.
+- Require a completed main Run chain and readable, nonempty declared versions
+  of both required outputs, `trace.md` and `answer.txt` (nested paths are fine),
+  from its final output handoff. For each Artifact name, select its newest
+  declaration across the main Run chain, including child versions attributed
+  to their parent Run. A later wake declaring a different file does not erase
+  earlier required outputs; a broken newer version of the same name cannot
+  fall back to an older one. The final reply need not repeat an Artifact link.
+  Unreadable supplementary files are recorded as delivery errors but do not
+  fail the required output check. A draft or intermediate file alone does not
+  pass the E2E. Failed/cancelled runs with outputs are partial deliveries.
 - Scientific correctness and completeness are evaluated by the unchanged upstream
-  rubric. The scorer still consumes the officially required `trace.md` and
-  `answer.txt`; unavailable scoring inputs record an evaluation error without
-  changing delivery success. No local numerical assertion blocks scoring.
+  rubric. The scorer consumes the officially required `trace.md` and
+  `answer.txt`; scoring errors and low scores remain separate from the final
+  output presence check. No local numerical assertion blocks scoring.
 - Retain raw artifacts and trajectories for investigation when needed. The legacy
   numerical verifier is available offline and is not automatically run.
 - Do not execute Agent-generated scripts on the host verifier.

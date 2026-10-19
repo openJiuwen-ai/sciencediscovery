@@ -75,7 +75,13 @@ When invoked directly from a terminal, text mode is the default:
 
 ### Non-interactive mode
 
-When used from a pipe or script, JSONL output is the default. A non-interactive process cannot answer permission cards, so the appropriate automatic-approval option must be set explicitly or the run is refused.
+When used from a pipe or script, JSONL output is the default. A non-interactive process cannot answer permission cards, so it must pass `--auto-approve` (or `--approval always_allow`) or the run is refused. Automatic approval applies to the tool actions of the run's session; direct host execution after a sandbox failure still needs explicit consent, so a non-interactive run that requests it waits.
+
+To write only the answer to a file, select text output explicitly:
+
+```bash
+./ScienceDiscovery run --auto-approve --output text "Explain what a p-value does and does not tell you, in one paragraph" > answer.md
+```
 
 For exact options in the current build, use:
 

@@ -39,6 +39,8 @@ implements ModelClient<TMessage, ModelInput<TMessage>, ModelUsage> {
     observer: ModelClientObserver,
   ): Promise<RuntimeModelTurn<TMessage, ModelUsage>> {
     const turn = await this.transport(this.endpoint, input.systemPrompt, input.history, input.tools, this.policy, signal, observer);
+    if (turn.streamDiagnostics?.unparseableSsePayloads) throw new Error("Model stream contained malformed event payloads");
+    if (turn.completionObserved === false) throw new Error("Model stream ended without a completion event");
     return { ...turn, assistantMessage: turn.assistantMessage as TMessage };
   }
 }

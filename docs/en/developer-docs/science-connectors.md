@@ -31,6 +31,12 @@ Three filters precede deferred model visibility.
 4. `createWorkspaceTools` marks MCP tools `deferred:true` with keyword/mode/priority routing; built-ins are not deferred.
 5. The native loop's `visibleToolSpecs()` sends name/description/schema with each model request; execution `await`s the same handler in-process.
 
+Unavailable or degraded effective sources (including Specialist additions) produce a visible run readiness diagnostic listing omitted tools. Healthy tools remain mounted. The agent assesses task importance with `mcp_readiness`: continue with a recorded reason for nonblocking omissions, or wait on a conversation repair card for important sources. Repair guidance points to MCP settings and catalog reload; rechecking does not grant permissions or modify the host. After repair, the same run can call formerly omitted tools through `mcp_recovered_call`, which retains the original source selection and normal broker authorization. Cancellation or a failed recheck is not successful recovery. This complements connector-picker readiness; it does not diagnose the original 0.2.0 deployment failure.
+
+The connector picker shows catalog errors and omitted tool IDs for selected unavailable or degraded sources, keeping partial availability distinct from total failure. Sources mounted by the selected Specialist are checked and labelled separately; change the Specialist to remove those sources. Plugin-disabled sources stay excluded. Opening the picker checks current status, and Reload MCP catalog retries discovery without changing server configuration or granting permission. MCP settings changes and completed runs also refresh readiness. A failed status request is shown as unknown, never as ready.
+
+JiuwenSwarm checks recovered-call approval at bridge dispatch using the concrete `mcp__<source>__<tool>` resource. Remembering one recovered tool does not authorize another source or tool; the generic recovery entry point never receives a standing grant.
+
 ### 3.2 Model visibility (native loop)
 
 Deferred-tool registration lives in `packages/tools/src/deferred-tools.ts` and `registry.ts`; see [Agent backend](agent-backend.md) §6. In the native loop, a catalog adds synthetic `tool_search` and a name-only `<available-deferred-tools>` prompt section. Unpromoted schemas stay out of the model's tool table; direct calls to them return a retryable search-first error. Promotions are run-scoped, and keyword `prefer` routing can promote the three highest-priority matches before the first model call.

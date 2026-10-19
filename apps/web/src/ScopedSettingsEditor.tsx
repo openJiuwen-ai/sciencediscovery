@@ -81,6 +81,7 @@ function SettingsSource({ details, field }: { details: RuntimeSettingsDetails; f
 
 export function globalSettingsDraft(details: RuntimeSettingsDetails): RuntimeSettingsOverrides {
   return {
+    ...(details.overrides.defaultApprovalMode ? { defaultApprovalMode: details.overrides.defaultApprovalMode } : {}),
     enabledConnectorIds: [...details.effective.enabledConnectorIds],
     ...(details.effective.plugins ? { plugins: structuredClone(details.effective.plugins) } : {}),
     ...(details.effective.modelId ? { modelId: details.effective.modelId } : {}),
@@ -209,6 +210,25 @@ export function ScopedSettingsEditor({
       </div>
 
       {typeof beforeFields === "function" ? beforeFields(draft) : beforeFields}
+
+      {skillScope !== "session" ? <label className="settings-field">
+        <span>{t("settings.defaultApprovalMode")}</span>
+        <select disabled={disabled || saving} value={draft.defaultApprovalMode ?? ""} onChange={(event) => {
+          const value = event.target.value;
+          setDraft((current) => {
+            const next = { ...current };
+            if (value === "always_allow" || value === "ask_for_dangerous") next.defaultApprovalMode = value;
+            else delete next.defaultApprovalMode;
+            return next;
+          });
+        }}>
+          <option value="">{allowInheritance ? t("settings.approvalInheritGlobal") : t("settings.approvalBuiltInAsk")}</option>
+          <option value="ask_for_dangerous">{t("timeline.approvalModeAsk")}</option>
+          <option value="always_allow">{t("timeline.approvalModeAlwaysAllow")}</option>
+        </select>
+        <small>{t("settings.defaultApprovalHelp")}</small>
+        <small>{t("settings.approvalEffective", { mode: t(details.effective.defaultApprovalMode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk"), source: sourceLabel(details.sources.defaultApprovalMode, t) })}</small>
+      </label> : null}
 
       <label className="settings-field">
         <span>{t(FIELD_LABELS.modelId)}</span>

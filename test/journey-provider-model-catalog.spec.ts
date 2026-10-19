@@ -149,8 +149,11 @@ function providerStub(): Promise<ProviderStub> {
           index: 0,
           delta: { type: "text_delta", text: "Claude Haiku 4.5 legacy thinking is active." },
         })}\n\n`);
-        response.write(`data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 5 } })}\n\n`);
-        response.end("data: [DONE]\n\n");
+        response.write(`data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
+        response.write(`data: ${JSON.stringify({
+          type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 },
+        })}\n\n`);
+        response.end(`data: ${JSON.stringify({ type: "message_stop" })}\n\n`);
         return;
       }
       response.writeHead(404, { "content-type": "application/json" });
@@ -368,7 +371,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       const footerRect = node.getBoundingClientRect();
       const groupSelectors = [
         { group: "model", selector: ".model-picker-trigger" },
-        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button, .composer-footer .approval-mode-toggle" },
+        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button, .composer-footer .approval-mode-toggle, .composer-footer .automatic-review-toggle" },
         { group: "run", selector: ".composer-run-actions button" },
       ];
       const controls = groupSelectors.flatMap(({ group, selector }) => (
@@ -440,7 +443,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       expect(geometry.approvalToggleHeight).toBeGreaterThanOrEqual(24);
       expect(geometry.approvalToggleHeight).toBeLessThanOrEqual(48);
     }
-    for (const label of labels) await expect(page.getByLabel(label)).toBeVisible();
+    for (const label of labels) await expect(page.locator(".composer-footer").getByLabel(label)).toBeVisible();
     await expect(page.getByRole("button", { name: runButton })).toBeVisible();
     return geometry;
   };

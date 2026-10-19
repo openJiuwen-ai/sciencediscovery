@@ -4,28 +4,49 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createTest } from "../test/support/tagged/compat.mjs";
-import { finalReferences, deliveryStatus, scoringArtifact } from "../test/helpers/real-delivery.mjs";
+import { finalAnswer, deliveryStatus, selectFinalOutputs, scoringArtifact,
+  requiredArtifacts, finalReportArtifact } from "../test/helpers/real-delivery.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:macos", "arch:amd64", "arch:arm64"] });
 const artifacts = [{ id: "report-id", logicalName: "results/research.md", versions: [{ id: "version-id" }] }, { id: "scratch-id", logicalName: "scratch.txt" }];
 const run = { assistantMessageId: "final", status: "completed" };
 const messages = answer => [{ id: "previous", role: "assistant", content: "scratch.txt" }, { id: "final", role: "assistant", content: answer }];
+const outputs = [
+  { artifact: artifacts[0], version: { id: "old-version", version: 1, turnId: "r" } },
+  { artifact: artifacts[0], version: { id: "version-id", version: 2, turnId: "r" } },
+  { artifact: artifacts[1], version: { id: "scratch-version", version: 1, turnId: "r" } },
+];
 
-test("delivery uses this run's final handoff, not merely an existing intermediate artifact", () => {
-  assert.deepEqual(finalReferences(run, messages("Done"), artifacts).selected, []);
+test("delivery uses the latest declared output, even when the final reply only acknowledges completion", () => {
+  assert.equal(finalAnswer(run, messages("Done")), "Done");
+  assert.deepEqual(selectFinalOutputs(outputs, ["r"], []), {
+    selected: [outputs[1], outputs[2]], producerRunId: "r",
+    producerRunIds: { "version-id": "r", "scratch-version": "r" }, errors: [],
+  });
   assert.equal(deliveryStatus("completed", []), "failed");
   assert.equal(deliveryStatus("failed", [artifacts[0]]), "partial");
   assert.equal(deliveryStatus("cancelled", [artifacts[0]]), "partial");
   assert.equal(deliveryStatus("completed", [artifacts[0]]), "passed");
 });
-test("final handoffs accept nested names, IDs and encoded version links", () => {
-  for (const answer of ["`research.md`", "[report](/workspace/results/research.md)", "artifact report-id", "[report](/artifact-versions/version-id/content)", "[report](results%2Fresearch.md)"]) {
-    assert.deepEqual(finalReferences(run, messages(answer), artifacts).selected, [artifacts[0]]);
-  }
+test("the final reply does not override the newest declared version", () => {
+  assert.equal(finalAnswer(run, messages("[report](/artifact-versions/old-version/content)")), "[report](/artifact-versions/old-version/content)");
+  assert.deepEqual(selectFinalOutputs(outputs, ["r"], []).selected[0], outputs[1]);
 });
+test("a renamed Artifact ID selects only its newest declaration", () => {
+  const renamed = [
+    { artifact: { id: "same", name: "draft.md" }, version: { id: "draft-v1", version: 1, turnId: "root" } },
+    { artifact: { id: "same", name: "final.md" }, version: { id: "final-v2", version: 2, turnId: "wake" } },
+  ];
+  assert.deepEqual(selectFinalOutputs(renamed, ["root", "wake"], []).selected, [renamed[1]]);
+});
+
 test("ambiguous basenames and substrings do not silently choose an artifact", () => {
-  const duplicates = [...artifacts, { id: "other", logicalName: "other/research.md" }];
-  assert.deepEqual(finalReferences(run, messages("research.md"), duplicates).selected, []);
-  assert.deepEqual(finalReferences(run, messages("notresearch.md"), artifacts).selected, []);
+  const duplicates = [...outputs, { artifact: { id: "other", logicalName: "other/research.md" },
+    version: { id: "other-version", version: 1, turnId: "r" } }];
+  const selected = selectFinalOutputs(duplicates, ["r"], []).selected.map(({ artifact, version }) =>
+    ({ id: artifact.id, logicalName: artifact.logicalName, version: version.id }));
+  assert.deepEqual(requiredArtifacts(selected, ["research.md"]).missing, ["research.md"]);
+  assert.equal(finalReportArtifact(selected, "missing.md", "Done"), undefined);
+  assert.deepEqual(selectFinalOutputs(outputs, ["unrelated"], []).selected, []);
   assert.equal(scoringArtifact(artifacts, "missing.md"), undefined);
   assert.equal(scoringArtifact([artifacts[0]], "legacy-name.md"), artifacts[0]);
 });

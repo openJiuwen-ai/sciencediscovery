@@ -8,6 +8,7 @@ import { requireRealEnv, requireRealStack, test } from './helpers/e2e.ts';
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal } from './helpers/journeys.ts';
 import { drbApi } from './helpers/deepresearchbench.ts';
 import { collectFinalDelivery } from './helpers/real-delivery.ts';
+import { finalAnswer } from './helpers/real-delivery.mjs';
 import { apiBaseUrl, authorizationHeader } from './e2e-auth.js';
 import { realApiProxy } from './helpers/real-api-proxy.mjs';
 
@@ -93,12 +94,18 @@ for (const [id,title] of scenarios) {
       });
       const prefix = `/api/sessions/${fixture!.session.id}`;
       const completedRuns: string[] = [];
-      const submit = async (prompt: string) => {
+      const submit = async (prompt: string, checkArtifact = false) => {
         const run = await sendUserMessage(page,fixture!.session.id,`${prompt} Keep the final answer brief. Do not delegate or use web search.`);
         const terminal = await waitForRunTerminal(page,fixture!.session.id,run.id,120_000);
         expect(terminal.status,terminal.error).toBe('completed');
         completedRuns.push(run.id);
-        return {run,delivery:await collectFinalDelivery(page,fixture!.session.id,run.id)};
+        // Reply-only turns have no required Artifact, including the follow-up
+        // acknowledgement after an Artifact was delivered.
+        const delivery = checkArtifact
+          ? await collectFinalDelivery(page,fixture!.session.id,run.id)
+          : { answer: finalAnswer(terminal,(await drbApi<any>(page,prefix)).messages ?? []),
+              status: terminal.status === 'completed' ? 'passed' : 'failed', artifacts: [] };
+        return {run,delivery};
       };
       await journey.step('Complete the basic user task', title, async () => {
         const marker = `probe-${randomUUID().slice(0,8)}`;
@@ -148,7 +155,7 @@ for (const [id,title] of scenarios) {
           expect(await readFile(page, fixture!.session.id, 'where.txt')).toBe(`${marker}\n`);
           expect(await readFile(page, neighbour.id, 'where.txt')).toBe(untouched);
         } else if (id==='artifact') {
-          const {delivery}=await submit(`Use workspace tools to write ${marker}.md containing the text ${marker}, declare it as an artifact and give its filename.`);
+          const {delivery}=await submit(`Use workspace tools to write ${marker}.md containing the text ${marker}, declare it as an artifact and give its filename.`,true);
           expect(delivery.status).toBe('passed');
           const artifact=delivery.artifacts.find(a=>a.logicalName.endsWith(`${marker}.md`));
           expect(artifact).toBeDefined();

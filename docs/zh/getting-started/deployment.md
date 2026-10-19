@@ -61,13 +61,25 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-启动成功后，终端会打印 `Open to sign in` 链接。用浏览器打开即可进入 ScienceDiscovery。
+启动成功后，直接打开 <http://127.0.0.1:4310>。如果出现连接引导，将 `<数据目录>/secrets/auth-token`（默认 `.sciencediscovery-data/secrets/auth-token`）中的本地服务访问令牌粘贴到连接页面并保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。终端打印的 `Open to sign in` 链接只是快捷方式，无需查找启动日志。
 
 ### 首次启动会做什么
 
 第一次 `serve` 会准备部分运行依赖，因此需要联网。后续启动会复用已准备好的环境。
 
 如果主机无法联网，请在联网环境提前准备数据目录，或配置可访问的软件源。相关变量见[配置参考](../reference/configuration.md)。
+
+### 命令
+
+```text
+ScienceDiscovery serve [options]        启动 Web UI、控制 API 和沙箱 Runner
+ScienceDiscovery run [input] [options]  向运行中的 serve 提交 Agent 任务
+ScienceDiscovery extract --to <dir>     解出内置运行时，但不启动服务
+ScienceDiscovery version                打印发布版本和内置运行时版本
+ScienceDiscovery help                   显示全部命令和选项
+```
+
+`run` 是面向脚本和管道的命令行客户端：在终端中输出文本，在管道中输出 JSONL；非交互运行必须传入 `--auto-approve`。选项和输出模式见 [CLI 参考](../reference/cli.md#run)。本地源码模式下，同一客户端的入口是 `node services/launcher/dist/main.js run`。
 
 ### 常用启动选项
 
@@ -147,7 +159,7 @@ scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-启动成功后，终端同样会打印 `Open to sign in` 链接。
+启动成功后，直接打开 <http://127.0.0.1:4310>，按连接引导填写 `.sciencediscovery-data/secrets/auth-token` 中的令牌（或自定义数据目录 / `SCIENCE_AGENT_AUTH_TOKEN` 配置值）。后台运行且原终端输出不可用时也可使用此方式。
 
 ### macOS 注意事项
 
@@ -243,15 +255,7 @@ docker compose logs --tail=200
 
 ### 3. 打开 Web UI
 
-查看日志，找到 `Open to sign in` 链接：
-
-```text
-docker compose logs -f
-```
-
-在浏览器打开打印出的 `Open to sign in` 链接。
-
-如果直接打开 <http://127.0.0.1:4310>，也可以按界面提示粘贴本地服务访问令牌。
+直接打开 <http://127.0.0.1:4310>。出现连接引导时，读取宿主机的 `./data/secrets/auth-token`（容器内为 `/app/data/secrets/auth-token`），粘贴本地服务访问令牌并保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。日志中的登录链接只是快捷方式。
 
 登录链接和令牌等同于密码，请勿分享。
 
@@ -282,13 +286,13 @@ ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>
 
 ## 二进制与本地模式的首次启动排障
 
-### 没有出现 `Open to sign in`
+### 服务未能启动
 
 先看启动终端中最早出现的错误。很多后续错误只是前一个启动失败的结果。
 
 ### 浏览器提示令牌无效
 
-重新打开启动日志中的 `Open to sign in` 链接。
+读取 `<数据目录>/secrets/auth-token`（Docker 宿主机为 `./data/secrets/auth-token`）中的当前令牌，或使用 `SCIENCE_AGENT_AUTH_TOKEN` 配置值，粘贴到连接页面并保存，无需查找启动日志。
 
 如果手动输入令牌，请确认填写的是**本地服务访问令牌**，不是模型 API Key。
 

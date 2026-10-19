@@ -13,12 +13,15 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm') {
 }
 
 export function gate(profile, needs) {
-  const required = ['l1', 'ut', 'st', 'e2e-plan', 'e2e'];
-  if (profile !== 'pr') required.push('real-plan', 'real-e2e', 'real-report', 'binary', 'docker');
+  const required = ['policy', 'l1', 'ut', 'st', 'e2e-plan', 'e2e'];
+  const realJob = profile === 'merge' ? 'real-merge' : profile === 'pr' ? null : 'real-scheduled';
+  if (realJob) required.push(realJob, 'binary', 'docker');
   const problems = required.filter(name => needs[name]?.result !== 'success').map(name => `${name}: ${needs[name]?.result ?? 'missing'}`);
   // A scheduled job may not quietly run (or fail) outside the selected policy.
-  for (const name of ['real-plan', 'real-e2e', 'real-report', 'binary', 'docker']) {
-    if (profile === 'pr' && needs[name]?.result !== 'skipped') problems.push(`${name}: expected skipped in PR policy`);
+  const inactive = ['real-merge', 'real-scheduled'].filter(name => name !== realJob);
+  if (profile === 'pr') inactive.push('binary', 'docker');
+  for (const name of inactive) {
+    if (needs[name]?.result !== 'skipped') problems.push(`${name}: expected skipped in ${profile} policy`);
   }
   return problems;
 }

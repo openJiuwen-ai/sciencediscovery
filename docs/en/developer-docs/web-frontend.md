@@ -83,3 +83,4 @@ The standalone Paper reader panel, Provenance statistics card and persistent iso
 
 - [Control plane](control-plane.md)
 - [Runtime architecture](architecture.md)
+- [Frontend quality guidance](frontend-quality.md) — Development skill and layout verification.

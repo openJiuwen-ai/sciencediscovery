@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import { loadLocalAccessToken } from "../src/local-access-token.js";
+import { loadLocalAccessToken, watchLocalAccessToken } from "../src/local-access-token.js";
 import { TOKEN_STORAGE_KEY } from "../src/browser-storage.js";
 
 function browser(href: string, saved?: string) {
@@ -68,4 +68,37 @@ test("a failed storage write does not discard the sign-in link", () => {
   b.storage.setItem = () => { throw new Error("storage unavailable"); };
   assert.throws(() => loadLocalAccessToken(b.storage, b.location, b.history), /storage unavailable/);
   assert.equal(new URL(b.location.href).hash, "#token=local-token");
+});
+
+
+test("same-document sign-in links replace mounted credentials and unsubscribe cleanly", () => {
+  const b = browser("http://localhost:4320/", "saved");
+  const target = Object.assign(new EventTarget(), { location: b.location, history: b.history, localStorage: b.storage });
+  const tokens: string[] = [];
+  const stop = watchLocalAccessToken(target, token => tokens.push(token));
+  b.location.href = "http://localhost:4320/#token=invalid-link-token&section=notes";
+  target.dispatchEvent(new Event("hashchange"));
+  assert.deepEqual(tokens, ["invalid-link-token"]);
+  assert.equal(b.storage.getItem(TOKEN_STORAGE_KEY), "invalid-link-token");
+  assert.equal(b.location.href, "http://localhost:4320/#section=notes");
+  b.location.href = "http://localhost:4320/#token=valid-link-token";
+  target.dispatchEvent(new Event("hashchange"));
+  assert.deepEqual(tokens, ["invalid-link-token", "valid-link-token"]);
+  target.dispatchEvent(new Event("hashchange"));
+  assert.equal(tokens.length, 2, "unrelated fragments do not reapply stored tokens");
+  stop();
+  b.location.href = "http://localhost:4320/#token=after-unmount";
+  target.dispatchEvent(new Event("hashchange"));
+  assert.equal(tokens.length, 2);
+});
+
+test("mounted links consume empty credentials without losing a saved token", () => {
+  const b = browser("http://localhost:4320/#token=%20&section=notes", "saved");
+  const target = Object.assign(new EventTarget(), { location: b.location, history: b.history, localStorage: b.storage });
+  const tokens: string[] = [];
+  const stop = watchLocalAccessToken(target, token => tokens.push(token));
+  target.dispatchEvent(new Event("hashchange"));
+  assert.deepEqual(tokens, ["saved"]);
+  assert.equal(b.location.href, "http://localhost:4320/#section=notes");
+  stop();
 });

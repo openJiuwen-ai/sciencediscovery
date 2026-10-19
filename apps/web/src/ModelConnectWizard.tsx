@@ -37,6 +37,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
+import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
 import {
@@ -88,6 +89,14 @@ export function ModelConnectWizard({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customName, setCustomName] = useState("");
   const [customModelId, setCustomModelId] = useState("");
+  const autoCustomRef = useRef(false);
+  // Automatic custom mode may yield to a preset only until the user edits a
+  // configuration field. Whether those fields are currently empty is the wrong
+  // signal: clearing one to retype it, or filling only the API key, is an edit.
+  const userConfiguredRef = useRef(false);
+  function noteUserConfigured() {
+    userConfiguredRef.current = true;
+  }
   // 「高级配置」在卡片内展开精细字段，永不收起向导本身。
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerRef = useRef<HTMLDivElement>(null);
@@ -120,9 +129,11 @@ export function ModelConnectWizard({
   }, [advancedOpen, preview]);
 
   const [testing, setTesting] = useState(false);
+  const [probeConsent, setProbeConsent] = useState(false);
+  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, proxyPolicy, baseUrlOverride, selectedPresetId]);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
-  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
+  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string; inconclusive?: boolean }>();
 
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
@@ -172,6 +183,24 @@ export function ModelConnectWizard({
       setApiVariant(preset?.apiVariant ?? DEFAULT_MODEL_API_VARIANT[CUSTOM_PROTOCOL]);
     }
   }
+
+  // A preset that is no longer offered (the list arrived late, changed, or is
+  // empty) would leave the select showing one option while the card acts on
+  // another, and re-picking the shown option fires no change event. Custom
+  // mode entered only for lack of presets yields to the first preset once
+  // one arrives, unless the user has edited a configuration field.
+  useEffect(() => {
+    if (isCustom) {
+      if (autoCustomRef.current && presets[0] && !userConfiguredRef.current) {
+        autoCustomRef.current = false;
+        handleProviderChange(presets[0].id);
+      }
+      return;
+    }
+    if (presets.some((preset) => preset.id === selectedPresetId)) return;
+    autoCustomRef.current = !presets[0];
+    handleProviderChange(presets[0]?.id ?? "custom");
+  }, [isCustom, presets, selectedPresetId]);
 
   function handleProtocolChange(value: string) {
     const nextProtocol = value as ModelApiProtocol;
@@ -312,6 +341,7 @@ export function ModelConnectWizard({
   }
 
   async function handleTestAndEnable(): Promise<void> {
+    if (!probeConsent) return;
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
@@ -330,16 +360,33 @@ export function ModelConnectWizard({
 
     let createdProviderId: string | undefined;
     const createdModelIds: string[] = [];
-    let initialOverrides: RuntimeSettingsOverrides = {};
+    // Taken before any provider or model is created. The first model claims
+    // the global default on the server, so a later delete is rejected until
+    // this snapshot is written back. A failed read has no snapshot: stop
+    // before creating anything instead of leaving a row that cannot be deleted.
+    let savedOverrides: RuntimeSettingsOverrides | undefined;
+    const restoreSavedOverrides = async (): Promise<void> => {
+      if (savedOverrides === undefined || typeof client.replaceGlobalSettings !== "function") return;
+      try {
+        await client.replaceGlobalSettings(savedOverrides);
+      } catch { /* ignore */ }
+    };
 
     try {
-      try {
-        if (typeof client.getGlobalSettings === "function") {
-          const currentDetails = await client.getGlobalSettings();
-          initialOverrides = currentDetails.overrides ?? {};
-        }
-      } catch { /* ignore */ }
+      if (typeof client.getGlobalSettings !== "function") {
+        throw new Error(t("wizard.error.settingsRead"));
+      }
+      const currentDetails = await client.getGlobalSettings();
+      savedOverrides = { ...(currentDetails.overrides ?? {}) };
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setValidationError(message);
+      onError?.(reason instanceof Error ? reason : message);
+      setTesting(false);
+      return;
+    }
 
+    try {
       // Whether the system already has models BEFORE this connect decides the
       // default: only the first model ever becomes the global default. When
       // the list cannot be read, stay conservative and leave the default alone.
@@ -361,14 +408,11 @@ export function ModelConnectWizard({
 
       const testOutcome = await client.testModel(firstProfile.id);
 
-      if (!testOutcome.ok) {
+      const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
+      if (!testOutcome.ok && !budgetLimited) {
         // Failed: roll back everything this attempt created.
         // Restore settings first so deleteModel is not blocked by runtime settings.
-        try {
-          if (typeof client.replaceGlobalSettings === "function") {
-            await client.replaceGlobalSettings(initialOverrides);
-          }
-        } catch { /* ignore */ }
+        await restoreSavedOverrides();
         for (const id of createdModelIds) {
           try { await client.deleteModel(id); } catch { /* ignore */ }
         }
@@ -392,7 +436,7 @@ export function ModelConnectWizard({
         if (onDefaultModelSet) {
           await onDefaultModelSet(firstProfile.id);
         } else {
-          await client.replaceGlobalSettings({ modelId: firstProfile.id });
+          await replaceDefaultModelOverride(client, firstProfile.id);
         }
       }
 
@@ -409,27 +453,24 @@ export function ModelConnectWizard({
       const count = createdModelIds.length;
       const defaultChanged = !hadModels;
       const successDesc = defaultChanged
-        ? t("wizard.successDesc", { count, model: firstProfile.name })
-        : t("wizard.successDescKeepDefault", { count });
+        ? t(budgetLimited ? "wizard.savedDesc" : "wizard.successDesc", { count, model: firstProfile.name })
+        : t(budgetLimited ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count });
 
       setSuccessInfo({
         count,
         defaultChanged,
         latencyMs: testOutcome.latencyMs,
+        inconclusive: budgetLimited,
         modelName: firstProfile.name,
       });
       // The plan belonged to the provider that now exists; the next connect
       // starts from a clean slate.
       resetPlan();
 
-      onNotice?.(t("wizard.successTitle"), successDesc);
+      onNotice?.(t(budgetLimited ? "wizard.savedInconclusive" : "wizard.successTitle"), successDesc + (budgetLimited ? " " + t("wizard.outputLimitNotice") : ""));
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
-      try {
-        if (typeof client.replaceGlobalSettings === "function") {
-          await client.replaceGlobalSettings(initialOverrides);
-        }
-      } catch { /* ignore */ }
+      await restoreSavedOverrides();
       for (const id of createdModelIds) {
         try { await client.deleteModel(id); } catch { /* ignore */ }
       }
@@ -483,7 +524,10 @@ export function ModelConnectWizard({
             <select
               disabled={busy}
               id="wizard-provider-select"
-              onChange={(e) => handleProviderChange(e.target.value)}
+              onChange={(e) => {
+                autoCustomRef.current = false;
+                handleProviderChange(e.target.value);
+              }}
               value={isCustom ? "custom" : selectedPresetId}
             >
               {presets.map((preset) => (
@@ -503,6 +547,7 @@ export function ModelConnectWizard({
               disabled={busy}
               id="wizard-api-key"
               onChange={(e) => {
+                noteUserConfigured();
                 setApiKey(e.target.value);
                 setValidationError(undefined);
               }}
@@ -535,7 +580,10 @@ export function ModelConnectWizard({
               <input
                 disabled={busy}
                 id="wizard-custom-name"
-                onChange={(e) => setCustomName(e.target.value)}
+                onChange={(e) => {
+                  noteUserConfigured();
+                  setCustomName(e.target.value);
+                }}
                 placeholder={t("wizard.customNamePlaceholder")}
                 type="text"
                 value={customName}
@@ -546,7 +594,10 @@ export function ModelConnectWizard({
               <input
                 disabled={busy}
                 id="wizard-custom-url"
-                onChange={(e) => setCustomBaseUrl(e.target.value)}
+                onChange={(e) => {
+                  noteUserConfigured();
+                  setCustomBaseUrl(e.target.value);
+                }}
                 placeholder={t("wizard.customBaseUrlPlaceholder")}
                 type="url"
                 value={customBaseUrl}
@@ -557,7 +608,10 @@ export function ModelConnectWizard({
               <input
                 disabled={busy}
                 id="wizard-custom-model"
-                onChange={(e) => setCustomModelId(e.target.value)}
+                onChange={(e) => {
+                  noteUserConfigured();
+                  setCustomModelId(e.target.value);
+                }}
                 placeholder={t("wizard.customModelPlaceholder")}
                 type="text"
                 value={customModelId}
@@ -631,7 +685,10 @@ export function ModelConnectWizard({
                       <input
                         disabled={busy}
                         id="wizard-preset-name"
-                        onChange={(e) => setPresetNameOverride(e.target.value)}
+                        onChange={(e) => {
+                          noteUserConfigured();
+                          setPresetNameOverride(e.target.value);
+                        }}
                         placeholder={selectedPreset.name}
                         type="text"
                         value={presetNameOverride}
@@ -642,7 +699,10 @@ export function ModelConnectWizard({
                       <input
                         disabled={busy}
                         id="wizard-base-url-override"
-                        onChange={(e) => setBaseUrlOverride(e.target.value)}
+                        onChange={(e) => {
+                          noteUserConfigured();
+                          setBaseUrlOverride(e.target.value);
+                        }}
                         placeholder={selectedPreset.baseUrl}
                         type="url"
                         value={baseUrlOverride}
@@ -655,7 +715,10 @@ export function ModelConnectWizard({
                   <select
                     disabled={busy}
                     id="wizard-api-protocol"
-                    onChange={(e) => handleProtocolChange(e.target.value)}
+                    onChange={(e) => {
+                      noteUserConfigured();
+                      handleProtocolChange(e.target.value);
+                    }}
                     value={apiProtocol}
                   >
                     <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
@@ -668,7 +731,10 @@ export function ModelConnectWizard({
                   <select
                     disabled={busy}
                     id="wizard-api-variant"
-                    onChange={(e) => setApiVariant(e.target.value as ModelApiVariant)}
+                    onChange={(e) => {
+                      noteUserConfigured();
+                      setApiVariant(e.target.value as ModelApiVariant);
+                    }}
                     value={apiVariant}
                   >
                     {MODEL_API_VARIANTS[apiProtocol].map((variant) => (
@@ -682,7 +748,10 @@ export function ModelConnectWizard({
                     <ProxyPolicySelect
                       disabled={busy}
                       id="wizard-proxy-policy"
-                      onChange={setProxyPolicy}
+                      onChange={(policy) => {
+                        noteUserConfigured();
+                        setProxyPolicy(policy);
+                      }}
                       settings={proxySettings}
                       value={proxyPolicy}
                     />
@@ -733,7 +802,10 @@ export function ModelConnectWizard({
                 <ManualModelFields
                   busy={busy}
                   form={manualForm}
-                  onChange={setManualForm}
+                  onChange={(form) => {
+                    noteUserConfigured();
+                    setManualForm(form);
+                  }}
                   onSubmit={addManualEntry}
                   presetId={selectedPreset?.id}
                   submitLabel={t("wizard.models.enqueue")}
@@ -755,15 +827,16 @@ export function ModelConnectWizard({
         {failureNode}
 
         {successInfo ? (
-          <div className="wizard-alert wizard-alert-success" role="status">
-            <CheckIcon size={16} />
+          <div className={successInfo.inconclusive ? "wizard-alert" : "wizard-alert wizard-alert-success"} role="status">
+            {successInfo.inconclusive ? <AlertCircleIcon size={16} /> : <CheckIcon size={16} />}
             <div className="wizard-alert-content">
-              <strong>{t("wizard.successTitle")}: </strong>
+              <strong>{t(successInfo.inconclusive ? "wizard.savedInconclusive" : "wizard.successTitle")}: </strong>
               <span>
                 {successInfo.defaultChanged
-                  ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
-                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
+                  ? t(successInfo.inconclusive ? "wizard.savedDesc" : "wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
+                  : t(successInfo.inconclusive ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count: successInfo.count })}
                 {" "}({successInfo.latencyMs} ms)
+                {successInfo.inconclusive ? <span className="wizard-alert-detail">{t("wizard.outputLimitNotice")}</span> : null}
               </span>
             </div>
           </div>
@@ -781,7 +854,10 @@ export function ModelConnectWizard({
             >
               {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
             </button>
-            <span className="wizard-plan-summary">{planSummary}</span>
+            <div className="wizard-fetch-copy">
+              <span className="wizard-plan-summary">{planSummary}</span>
+              <label className="wizard-probe-consent"><input type="checkbox" checked={probeConsent} onChange={e => setProbeConsent(e.target.checked)} disabled={busy} />{t("settings.modelTest.basicConsent")}</label>
+            </div>
           </div>
           {/* The surrounding settings dialog closes when a press lands on its
               backdrop; a press on the wizard's own buttons must never take
@@ -790,7 +866,7 @@ export function ModelConnectWizard({
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"
-              disabled={busy}
+              disabled={busy || !probeConsent}
               onClick={() => void handleTestAndEnable()}
               type="button"
             >

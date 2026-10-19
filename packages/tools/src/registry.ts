@@ -42,6 +42,7 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
   /** Run-scoped observation hook. It cannot alter the result returned to Runtime Core. */
+  onProgress?(call: RuntimeToolCall, chunk: string): void;
   onResult?(input: {
     call: RuntimeToolCall;
     content: string;
@@ -448,8 +449,14 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       };
     }
     const tool = this.tools.get(call.name)!;
+    let active = true;
     try {
-      const result = await tool.execute(call.id || randomUUID(), call.args as never, signal);
+      const result = await tool.execute(call.id || randomUUID(), call.args as never, signal, (chunk) => {
+        if (!active || signal.aborted || !chunk) return;
+        // Same category rule as the result content below: only "remote"
+        // chunks get tag neutralization; corpus categories stay byte-exact.
+        try { this.options.onProgress?.(call, category === "remote" ? neutralizeUntrustedTags(chunk) : chunk); } catch { /* Observers cannot fail tools. */ }
+      });
       const text = result.content.map((item) => item.text).join("\n");
       return {
         // Tag neutralization is tied to the "remote" category (web tools via
@@ -477,6 +484,8 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         retryable: invocation?.error?.retryable ?? false,
       } };
       return { content: JSON.stringify(details), details, frameworkGenerated: false, isError: true, selfBounded: true };
+    } finally {
+      active = false;
     }
   }
 }

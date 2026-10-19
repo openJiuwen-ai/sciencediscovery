@@ -186,7 +186,8 @@ test("multi-step persistent R executions create separate runs and an artifact de
     "completed execution must still be recorded when environment snapshot synchronization fails");
 });
 
-test("shell execution records authoritative code, logs, environment, and generated files", async (context) => {
+for (const direct of [false, true]) {
+test(`${direct ? "direct" : "sandboxed"} shell execution records authoritative code, logs, environment, and generated files`, async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `shell-provenance-${process.pid}-${Date.now()}`);
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const store = new SessionStore(dataDir);
@@ -229,8 +230,21 @@ test("shell execution records authoritative code, logs, environment, and generat
       };
     },
   } as unknown as RunnerClient;
-  const recorder = new ProvenanceRecorder(dataDir, store);
+  const executions: Array<{ toolName?: string; tool: string }> = [];
+  class CapturingClient extends MemoryGraphClient {
+    async observeExecution(payload: Parameters<MemoryGraphClient["observeExecution"]>[0]): Promise<void> {
+      executions.push(payload);
+    }
+  }
+  const sink = new MemoryGraphSink(new CapturingClient({ url: "http://127.0.0.1:1" }), () => true);
+  const recorder = new ProvenanceRecorder(dataDir, store, sink);
+  const toolName = direct ? "run_direct_shell" : "run_shell";
+  const directAuthorization = direct ? {
+    authorizationId: "consent", runId: "run", agentId: "main", target: "local:test",
+    account: "test", cwd: "", workspaceRoot,
+  } : undefined;
   await recorder.executeShell({
+    directAuthorization,
     agentId: "main",
     code: "/usr/bin/bash run_all.sh",
     permissionEpoch,
@@ -242,7 +256,10 @@ test("shell execution records authoritative code, logs, environment, and generat
   });
 
   const [run] = await store.listExecutionRuns(session.id);
-  assert.equal(run?.tool, "run_shell");
+  assert.equal(run?.tool, toolName);
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0]?.tool, toolName);
+  assert.equal(executions[0]?.toolName, toolName);
   assert.equal(run?.language, "shell");
   assert.equal(run?.environmentRevisionId, SYSTEM_SHELL_ENVIRONMENT_REVISION_ID);
   assert.equal(await recorder.cas.verify(run!.code.hash), true);
@@ -264,7 +281,7 @@ test("shell execution records authoritative code, logs, environment, and generat
   assert.equal(fileProvenance.currentRevision.executionRunId, run!.id);
   assert.equal(fileProvenance.currentRevision.runId, "turn-shell");
   assert.equal(fileProvenance.currentRevision.toolCallId, "shell-tool-call");
-  assert.equal(fileProvenance.currentRevision.toolName, "run_shell");
+  assert.equal(fileProvenance.currentRevision.toolName, toolName);
   const executeWithReceipt = runnerClient.executeShell.bind(runnerClient);
   runnerClient.executeShell = async (request) => {
     const result = await executeWithReceipt(request);
@@ -277,6 +294,8 @@ test("shell execution records authoritative code, logs, environment, and generat
   }), /committed Workspace snapshot/);
   assert.equal((await store.listArtifactDerivations(session.id)).length, 1, "missing receipt must not infer file provenance from the live path");
 });
+
+}
 
 test("execution provenance distinguishes runs by working directory and env snapshot", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `env-provenance-${process.pid}-${Date.now()}`);
@@ -448,7 +467,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
   const workspaceRoot = store.workspacePath(session.id);
   await mkdir(workspaceRoot, { recursive: true });
 
-  const chipMap: ComposerReference[] = [{ id: "ev-id-1", kind: "evidence", label: "ev1" }];
+  const chipMap: ComposerReference[] = [{ id: "ev-id-1", kind: "evidence", label: "ev1" }, { id: "file-id-1", kind: "evidence", label: "sourcefile1" }];
   const claimIds: string[] = ["claim-id-1"];
   // No memory-graph sink here (states edges are fire-and-forget; the drain is
   // what matters). The provider mirrors server.ts: splice on drain so a later
@@ -462,7 +481,7 @@ test("a report version drains the chip references + claim ids accumulated earlie
 
   const runnerClient = {
     executeShell: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
-      await writeFile(resolve(workspaceRoot, "report.md"), "# Brief\n[ev1]\n");
+      await writeFile(resolve(workspaceRoot, "report.md"), "# Brief\n[ev1] [sourcefile1]\n");
       const timestamp = new Date().toISOString();
       return {
         cgroupMode: "none", createdFiles: ["report.md"], environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
@@ -491,6 +510,16 @@ test("a report version drains the chip references + claim ids accumulated earlie
   assert.equal(version!.references![0]!.label, "ev1");
   assert.equal(chipMap.length, 0, "chip buffer drained (destructive) so a later report starts fresh");
   assert.equal(claimIds.length, 0, "claim ids drained");
+  // Current main retains mappings by the markers still present in a revision,
+  // even after the original turn's provider has already drained its chips.
+  await writeFile(resolve(workspaceRoot, "report.md"), "# Revised\n[sourcefile1]\n");
+  await recorder.declareWorkspaceArtifact({
+    artifactId: reportArtifact.id, baseVersionId: version!.id,
+    name: "report.md", path: "report.md", referencesProvider, sessionId: session.id,
+    sourcePath: "report.md", turnId: "revision", workspaceRoot,
+  });
+  const revised = store.listArtifactVersions(session.id, reportArtifact.id).at(-1)!;
+  assert.deepEqual(revised.references, [{ id: "file-id-1", kind: "evidence", label: "sourcefile1" }]);
   // A non-report artifact never carries chips.
   const dataRecorder = new ProvenanceRecorder(dataDir, store);
   const dataProvider: (turnId?: string) => { references: ComposerReference[]; claimIds: string[] } = () =>

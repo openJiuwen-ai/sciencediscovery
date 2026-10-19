@@ -176,7 +176,8 @@ class IdeaTreeEngine:
             try:
                 with urllib.request.urlopen(request, timeout=1230) as response:
                     result = json.load(response)
-                return result['choices'][0]['message']['content'], result.get('usage', {}).get('total_tokens')
+                usage = result.get('usage')
+                return result['choices'][0]['message']['content'], usage.get('total_tokens') if isinstance(usage, dict) else None
             except urllib.error.HTTPError as error:
                 if error.code >= 500 and attempt == 0:
                     continue
@@ -216,28 +217,32 @@ class IdeaTreeEngine:
             estimate = len((system + json.dumps(payload, ensure_ascii=False)).encode()) + ceiling + 256
             async with self.usage_lock:
                 budget = self.state['settings'].get('maxTokens')
-                if budget and self.state['tokens'] + self.reserved + estimate > budget:
+                if budget and self.state['tokens'] + self.state.get('unreportedBudgetEstimate', 0) + self.reserved + estimate > budget:
                     raise BudgetReached('Remaining token budget cannot fund the next stage')
                 self.reserved += estimate
-            usage = 0
+            usage = None
+            received = False
             try:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
                     raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling)
+                received = True
             finally:
                 async with self.usage_lock:
                     # Settle actual usage and release its reservation together.
-                    if isinstance(usage, int) and not isinstance(usage, bool) and usage >= 0:
+                    if isinstance(usage, int) and not isinstance(usage, bool) and 0 <= usage <= 2**53 - 1:
                         self.state['tokens'] += usage
                     else:
                         self.state['usageKnown'] = False
+                        # Admission reserve only, never reported usage or a cost estimate.
+                        if received:
+                            self.state['unreportedBudgetEstimate'] = self.state.get('unreportedBudgetEstimate', 0) + estimate
                     self.reserved -= estimate
-                    missing_usage = budget and not self.state['usageKnown']
             self.save()
             self.check_stop()
-            if missing_usage:
-                raise RuntimeError('Model did not report token usage; cannot enforce the configured token budget')
+            if raw is None or isinstance(raw, str) and not raw.strip():
+                raise ValueError(f'{role}: empty or truncated model output; stage cannot continue')
             try:
                 result = validate_result(role, parse_json(raw), {item['id'] for item in self.assessors()})
                 if check:

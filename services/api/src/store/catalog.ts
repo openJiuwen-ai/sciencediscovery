@@ -138,7 +138,7 @@ export function emptyCatalog(
     projects: [],
     quotaSettings: structuredClone(initialQuotaSettings),
     sandboxNetworkSettings: structuredClone(DEFAULT_SANDBOX_NETWORK_SETTINGS),
-    reviewerSpecialistEnabled: false,
+    reviewerSpecialistEnabled: true,
     reviewerSpecialistFeedbackPolicy: "record",
     reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
     remoteHosts: [],

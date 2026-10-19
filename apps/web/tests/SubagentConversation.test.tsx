@@ -91,7 +91,8 @@ test("the page-level SubAgent view reuses conversation and timeline UI without a
   assert.match(html, /Vitamin C study/);
   assert.match(html, /Evidence review/);
   assert.match(html, /Run method A and return the evidence/);
-  assert.match(html, /SUBAGENT · CODE-ENGINEER · SCIENCE MODEL/i);
+  assert.match(html, /<span class="message-role">SUBAGENT · CODE-ENGINEER<\/span>/i);
+  assert.match(html, /<details class="run-model-details"><summary>Details<\/summary>Science model<\/details>/);
   assert.match(html, /Thought process · turn 2/);
   assert.match(html, /run_python/);
   assert.match(html, /Method A completed successfully/);
@@ -141,7 +142,7 @@ test("running steps stay expanded and failed SubAgents expose their error", () =
     }],
   }));
   assert.equal(runningEntries[0]?.type === "tool" && runningEntries[0].expanded, true);
-  assert.equal(runningEntries[0]?.type === "tool" && runningEntries[0].trace.output, undefined);
+  assert.equal(runningEntries[0]?.type === "tool" && runningEntries[0].trace.output, "Waiting for results");
 
   const html = renderToStaticMarkup(createElement(SubagentConversation, {
     onBack: () => undefined,
@@ -151,4 +152,38 @@ test("running steps stay expanded and failed SubAgents expose their error", () =
   }));
   assert.match(html, /Provider interrupted the child run/);
   assert.match(html, /class="failed">failed<\/em>/);
+});
+
+
+test("completed child tool details retain progress without keeping a live failure", () => {
+  const entries = subagentTimelineEntries(buildSubagent({ steps: [{
+    id: "search", createdAt: timestamp, kind: "tool", status: "completed", input: "query",
+    content: "5 papers", progress: "Error: retrying\n", toolName: "search_pubmed",
+  }] }));
+  const entry = entries[0];
+  assert.ok(entry?.type === "tool");
+  assert.equal(entry.trace.output, "Error: retrying\n\n\n---\n\n5 papers");
+  assert.equal(entry.liveFailure, undefined);
+});
+
+test("child snapshots distinguish pending input, live evidence, and terminal results", () => {
+  const entry = (extra: Record<string, unknown>) => subagentTimelineEntries(buildSubagent({ status: "running", steps: [{
+    id: "tool", createdAt: timestamp, kind: "tool", status: "running", content: "query", input: "query", ...extra,
+  }] }))[0];
+  const pending = entry({ args: { query: "clinical" } });
+  assert.ok(pending?.type === "tool");
+  assert.equal(pending.trace.output, undefined);
+  assert.equal(pending.preview, undefined);
+  assert.deepEqual(pending.trace.args, { query: "clinical" });
+  const live = entry({ content: "Error: network unavailable" });
+  assert.ok(live?.type === "tool");
+  assert.equal(live.liveFailure, "Error: network unavailable");
+  assert.equal(live.trace.output, "Error: network unavailable");
+  const noInput = entry({ input: undefined, content: "query" });
+  assert.ok(noInput?.type === "tool");
+  assert.equal(noInput.trace.output, undefined);
+  const empty = entry({ status: "completed", content: "" });
+  assert.ok(empty?.type === "tool");
+  assert.equal(empty.trace.output, "");
+  assert.equal(empty.preview, undefined);
 });

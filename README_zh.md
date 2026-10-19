@@ -36,7 +36,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-打开 `serve` 输出的 **`Open to sign in`** 链接，浏览器将自动保存本地服务访问令牌，无需手动复制。该令牌不同于模型 API Key；此链接可访问本机工作区，请勿外传。Web 界面位于 <http://127.0.0.1:4310>，终端窗口仅运行服务进程。
+打开 <http://127.0.0.1:4310>。若浏览器尚未连接，可在「连接」页面粘贴 `.sciencediscovery-data/secrets/auth-token` 中的本地服务访问令牌；即使服务在后台运行、启动输出不可用也能完成连接。终端输出的 **`Open to sign in`** 链接仍可作为自动登录的快捷方式。该令牌不同于模型 API Key，可访问本机工作区，请勿外传。
 
 运行预打包二进制时，唯一需要自行安装的依赖是 Bubblewrap。[部署指南](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html)
 说明如何从源码构建便携二进制、以本地源码模式进行开发，以及使用 Docker 完成高级容器运维。
@@ -66,16 +66,38 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 | **沙箱内代码执行** | 智能体在 fail-closed 沙箱中编写、调试并运行 Python、R 与 Shell | [沙箱执行](https://sciencediscovery.github.io/zh/docs/developer-docs/sandbox-execution.html) |
 | **复杂任务拆解** | 任务规划与多智能体协同将任务分发给子智能体和跨领域 Skill 库 | [子智能体编排](https://sciencediscovery.github.io/zh/docs/developer-docs/subagent-orchestration.html) · [Skill](https://sciencediscovery.github.io/zh/docs/developer-docs/skill-progressive-disclosure.html) |
 | **全链路溯源** | 代码、环境、日志与引用证据按产物记录；开启记忆图谱后整条链路可点击追溯 | [审阅与溯源](https://sciencediscovery.github.io/zh/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
+| **脚本化与批量运行** | `ScienceDiscovery run` 从终端或作业脚本向运行中的 `serve` 提交任务，并以文本或 JSONL 流式输出结果 | [命令行](#命令行) · [CLI 参考](https://sciencediscovery.github.io/zh/docs/reference/cli.html) |
+
+## 命令行
+
+除浏览器外，运行中的 `serve` 也接受来自终端的任务。请在运行 `serve` 的目录中执行 `run`，使其读取同一数据目录和访问令牌；如果 `serve` 使用了 `--data-dir` 或 `--port`，请给 `run` 传入相同选项。
+
+```bash
+# 在终端中：答案流式写入 stdout，权限请求在终端中询问
+./ScienceDiscovery run "用三句话解释配对 t 检验和独立样本 t 检验的区别"
+
+# 在管道中：每行一个 JSON 事件；只保留最终答案
+./ScienceDiscovery run --auto-approve "列出 RNA-seq 读数计数的三种常用标准化方法，每种一行" \
+  | jq -r 'select(.type == "result") | .content'
+
+# 只把答案写入文件
+./ScienceDiscovery run --auto-approve --output text "用一段话解释 p 值能说明什么、不能说明什么" > answer.md
+```
+
+在终端中，`run` 把答案写入 stdout、进度写入 stderr，并逐一询问权限请求。stdout 被管道或重定向时，默认输出 JSONL（错误也是 JSON 行），且无法询问审批，因此必须传入 `--auto-approve`，否则拒绝启动。该选项会让本次运行所在会话的工具操作无需询问即获批准，但沙箱失效后直接在主机上执行仍须明确同意；请只用于你本来就会批准的任务和数据。全部命令参见 [CLI 参考](https://sciencediscovery.github.io/zh/docs/reference/cli.html)，`./ScienceDiscovery help` 会列出全部选项。
 
 ## 环境要求
 
 | 路径 | 运行环境要求 |
 |---|---|
 | **预打包二进制** | Linux x86_64/aarch64（Windows x64 可通过 WSL 2 运行）、Bubblewrap |
-| **本地源码模式** | Linux（含 WSL 2）或 macOS；Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git |
+| **本地源码模式** | Linux（含 WSL 2）或 macOS；Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git、curl；Linux 上还需 Bubblewrap |
 | **Docker** | Linux、macOS 或 Windows 上的 Linux 容器；容器内需支持 Bubblewrap 和非特权用户命名空间 |
 
 托管科学环境基于固定版本的 micromamba 运行，无需在系统中安装 Python、R 或 conda。
+
+> [!WARNING]
+> ScienceDiscovery 不是多用户生产服务。适配器与 API 默认只监听回环；访问使用一个 bearer token，且不终止 TLS。监听其他网卡必须是可信、受保护网络中的显式部署选择。Python、R 和 shell 命令在 fail-closed 的平台沙箱中运行（Linux 使用 Bubblewrap，macOS 源码模式使用 Seatbelt）；控制 API、适配器、JiuwenSwarm、PDF worker、你配置的 STDIO MCP 服务器，以及发往已配置模型/数据提供方的请求在沙箱外作为受信任控制面操作执行。沙箱不可用时，直接在主机上执行命令只是恢复手段，需要单独的明确批准，且不具备沙箱的任何隔离。边界说明参见[沙箱执行](https://sciencediscovery.github.io/zh/docs/developer-docs/sandbox-execution.html)。
 
 ## 文档
 
@@ -83,7 +105,7 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 |---|---|
 | **快速开始** | [快速开始](https://sciencediscovery.github.io/zh/docs/getting-started/quick-start.html) · [部署](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html) |
 | **进阶设置** | [自定义 MCP](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-custom-mcp.html) · [网络代理](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-network-proxy.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
-| **参考** | [配置](https://sciencediscovery.github.io/zh/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/zh/docs/reference/rest-api.html) · [内置工具](https://sciencediscovery.github.io/zh/docs/reference/builtin-tools.html) · [运行时行为](https://sciencediscovery.github.io/zh/docs/reference/runtime-behavior.html) |
+| **参考** | [CLI](https://sciencediscovery.github.io/zh/docs/reference/cli.html) · [配置](https://sciencediscovery.github.io/zh/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/zh/docs/reference/rest-api.html) · [内置工具](https://sciencediscovery.github.io/zh/docs/reference/builtin-tools.html) · [运行时行为](https://sciencediscovery.github.io/zh/docs/reference/runtime-behavior.html) |
 | **开发者文档** | [整体架构](https://sciencediscovery.github.io/zh/docs/developer-docs/architecture.html) 及[开发者文档导航](https://sciencediscovery.github.io/zh/docs/developer-docs/) |
 
 完整中文导航参见[文档站](https://sciencediscovery.github.io/zh/docs/)；开发环境与测试命令参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -103,3 +125,5 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 [Apache License 2.0](LICENSE)。
 
 本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
+
+[模型 API 协议兼容性、检查与费用](docs/zh/model-api-compatibility.md)

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -286,21 +287,41 @@ function clonedDetailsEntry(details: unknown): { details?: unknown } {
   return cloned !== undefined ? { details: cloned } : {};
 }
 
+/** Small replay metadata; full text continues to live in tool streams. */
+function completedToolEvidence(text: string): Pick<ToolTrace, "preview" | "paperCount"> {
+  const lines = text.split("\n").map(line => line.length > 160 ? line.slice(0, 80) + "…" + line.slice(-77) : line);
+  const preview = (lines.length > 5 ? [...lines.slice(0, 2), "…", ...lines.slice(-2)] : lines).join("\n");
+  let paperCount: number | undefined;
+  try {
+    const result = JSON.parse(text);
+    if (result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
+      && result.toolId === "search" && Array.isArray(result.records)) paperCount = result.records.length;
+  } catch { /* Plain tool text is still useful bounded evidence. */ }
+  return { preview, ...(paperCount !== undefined ? { paperCount } : {}) };
+}
+
 export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = aggregateToolText(event.result)): ToolTrace {
   return {
     id: event.toolCallId,
     name: event.toolName,
     ...clonedDetailsEntry(event.result.details),
     ...(text !== undefined
-      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId) }
+      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId), ...completedToolEvidence(text) }
       : {}),
     status: event.isError ? "failed" : "completed",
   };
 }
 
+/** Bounded head/tail snapshot; full main-tool transcripts remain delta streams. */
+export function appendToolProgress(previous: string, chunk: string): string {
+  const text = previous + chunk;
+  return text.length <= 16384 ? text : text.slice(0, 8192) + "\n…\n" + text.slice(-8189);
+}
+
 export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningStep?: SubagentStep): SubagentStep {
   return {
     content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
+    ...(runningStep?.progress ? { progress: runningStep.progress } : {}),
     createdAt: runningStep?.createdAt ?? new Date().toISOString(),
     ...clonedDetailsEntry(event.result.details),
     id: event.toolCallId,
@@ -731,7 +752,17 @@ async function executeAgentRun(
         sessionId,
       }, ideaTreeExecutor)
     : [];
-  const leadExtraTools = [...ideaTreeTools, ...authorityTools];
+  const leadExtraTools = [
+    ...ideaTreeTools,
+    ...authorityTools,
+    createSessionTitleTool(store, sessionId, async (updated) => {
+      await emit({ session: updated, type: "session.updated" });
+    }),
+  ];
+  const workflowInstructions = [
+    ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
+    sessionTitleInstructions(session.title),
+  ].filter(Boolean).join("\n\n");
   let leaseHeartbeatQueue = Promise.resolve();
   let leaseHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const sessionSpecialist = store.getSpecialist(session.specialistId);
@@ -916,7 +947,7 @@ async function executeAgentRun(
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
         : {}),
       subagentOrchestration: { maxConcurrent: maxConcurrentSubagents },
-      workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
+      workflowInstructions,
     },
   );
   const skillLibraryRefs = body.skillLibraryRefs?.length ? structuredClone(body.skillLibraryRefs) : undefined;
@@ -1167,7 +1198,7 @@ async function executeAgentRun(
     readEpoch: () => store.getSessionPermissionEpoch(sessionId),
     readAuthorization: (authorizationId) => store.getPermissionAuthorization(authorizationId),
     // With the JiuwenSwarm backend its permission engine decides before a tool runs; ScienceDiscovery records that.
-    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm
+    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code" && action !== "sandbox_network"
       ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
       : store.requestPermission(sessionId, action, resource, summary, context),
     waitForDecision: (permissionRequest, signal) =>
@@ -1379,7 +1410,7 @@ async function executeAgentRun(
   const reviewCheckpointRegistered = (reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent) || finishGateAuditDeclared)
     && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick");
   const agentOptions: WorkspaceAgentOptions = {
-    workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
+    workflowInstructions,
     pluginSettings: settingsSnapshot.plugins,
     config: agentConfig,
     createSkill: async (input) => {
@@ -1395,6 +1426,7 @@ async function executeAgentRun(
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
+      rootRunId: runId,
       beginExternalWait: () => {
         if (!mainExecution) throw new Error("No main AgentRun is active");
         return mainExecution.beginExternalWait();
@@ -1422,6 +1454,7 @@ async function executeAgentRun(
       broker: mcpBroker,
       catalog: mcpCatalog,
       enabledSourceIds: settingsSnapshot.enabledConnectorIds,
+      reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary }),
       emitPermissionRequest: (permissionRequest) => {
         responseSink.emit({ request: permissionRequest, type: "permission.required" });
       },
@@ -1522,6 +1555,10 @@ async function executeAgentRun(
         }),
       list: (filter) => store.listAgentMemories(filter),
     },
+    // Do not expose graph-only tools when their backing service is disabled:
+    // a registered callback otherwise turns a normal tool call into a
+    // memory_graph_disabled error visible to the user.
+    ...(memoryGraphSink.enabled ? {
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1610,6 +1647,7 @@ async function executeAgentRun(
       }
       return result;
     },
+    } : {}),
     // Level gate applies either way: quick is the minimum.
     // `reviewCheckpointRegistered` (hoisted above agentOptions) is the same
     // verdict the post-run finish gate evaluates its audit stage against.
@@ -1631,6 +1669,7 @@ async function executeAgentRun(
           broker: mcpBroker,
           catalog: mcpCatalog,
           enabledSourceIds: settingsSnapshot.enabledConnectorIds,
+          // Main-run setup already reports readiness for this same source selection.
           emitPermissionRequest: (permissionRequest) => {
             responseSink.emit({ request: permissionRequest, type: "permission.required" });
           },
@@ -1649,7 +1688,7 @@ async function executeAgentRun(
               modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
               runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
               skills: pluginEnabled(settingsSnapshot.plugins, "skill") ? skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]) : [],
-              workspace: { ...agentOptions, mcpTools: reviewerMcpTools.mcpTools },
+              workspace: { ...agentOptions, mcpTools: reviewerMcpTools.mcpTools, mcpReadiness: reviewerMcpTools.mcpReadiness },
             })
           : undefined;
         try {
@@ -1828,10 +1867,30 @@ async function executeAgentRun(
           void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(liveMessageEvidence ? { evidence: liveMessageEvidence } : {}) });
           liveMessageEvidence = undefined;
         };
-        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence) => {
+        const progressBroadcastAt = new Map<string, number>();
+        const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence, transient = false) => {
           recordStep(step);
           finalizeMessageStep();
-          void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) });
+          const broadcast = (current: SubagentStep) => {
+            if (transient) progressBroadcastAt.set(step.id, Date.now());
+            void emit({ step: current, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) }, { transient });
+          };
+          if (!transient) {
+            clearTimeout(progressTimers.get(step.id));
+            progressTimers.delete(step.id);
+            broadcast(step);
+          } else {
+            const delay = 250 - (Date.now() - (progressBroadcastAt.get(step.id) ?? -Infinity));
+            if (delay <= 0) broadcast(step);
+            else if (!progressTimers.has(step.id)) {
+              progressTimers.set(step.id, setTimeout(() => {
+                progressTimers.delete(step.id);
+                const latest = steps.find(candidate => candidate.id === step.id);
+                if (latest?.status === "running") broadcast(latest);
+              }, delay));
+            }
+          }
           scheduleProgressFlush();
         };
         const publishMessageDelta = (
@@ -1954,6 +2013,7 @@ async function executeAgentRun(
             researchProjectRoot: agentOptions.researchProjectRoot,
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
+              rootRunId: runId,
               beginExternalWait: () => {
                 if (!subagentRunHandle) throw new Error("No subagent AgentRun is active");
                 return subagentRunHandle.beginExternalWait();
@@ -1985,6 +2045,7 @@ async function executeAgentRun(
               broker: mcpBroker,
               catalog: mcpCatalog,
               enabledSourceIds: subagentConnectorIds,
+              reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary, agentId: subagent.id }),
               emitPermissionRequest: (permissionRequest) => {
                 responseSink.emit({ request: permissionRequest, type: "permission.required" });
               },
@@ -2165,6 +2226,13 @@ async function executeAgentRun(
               toolName: event.toolName,
             }, event.evidence);
           }
+          if (event.type === "tool_execution_progress") {
+            const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool" && step.status === "running");
+            if (runningStep) {
+              const progress = appendToolProgress(runningStep.progress ?? "", event.chunk);
+              publishStep({ ...runningStep, content: progress, progress }, event.evidence, true);
+            }
+          }
           if (event.type === "tool_execution_end") {
             activeMessageStep = undefined;
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
@@ -2259,6 +2327,8 @@ async function executeAgentRun(
             steps,
           };
         } finally {
+          for (const timer of progressTimers.values()) clearTimeout(timer);
+          progressTimers.clear();
           releaseParentWait?.();
         }
         externalWaitByExecution.delete(subagent.id);
@@ -2395,6 +2465,9 @@ async function executeAgentRun(
       };
       traces.set(trace.id, trace);
       void publish({ trace, type: "tool.started" });
+    }
+    if (event.type === "tool_execution_progress") {
+      void publish({ chunk: event.chunk, toolCallId: event.toolCallId, type: "tool.output", progress: true });
     }
     if (event.type === "tool_execution_end") {
       const text = aggregateToolText(event.result);
@@ -3087,10 +3160,11 @@ async function refineFirstSessionTitle(
     apiToken,
     firstMessage: firstRun.prompt,
     model,
+    proxy: resolveProxyForUrl(store.resolveProxy(model.proxyPolicy), model.baseUrl),
   });
   let updatedSession = store.getSession(session.id);
   if (refined.title !== provisionalTitle) {
-    updatedSession = await store.compareAndSetSessionTitle(session.id, provisionalTitle, refined.title)
+    updatedSession = await store.compareAndSetSessionTitle(session.id, provisionalTitle, refined.title, "refinement")
       ?? store.getSession(session.id);
   }
   await store.appendModelInvocationUsage({

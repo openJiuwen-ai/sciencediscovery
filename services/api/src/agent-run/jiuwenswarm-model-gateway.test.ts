@@ -65,6 +65,7 @@ test("invalid arguments retain private diagnostics without leaking payload into 
   const raw = '{"secret":"private-payload"';
   const { streamer } = fakeStreamer(answer({
     truncated: false,
+    streamDiagnostics: { protocol: "openai-chat-completions", unparseableSsePayloads: 1, toolCallDeltasWithoutIndex: 2 },
     assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad-call", type: "function", function: { name: "task", arguments: raw } }] },
     toolCalls: [{ id: "bad-call", name: "task", args: {}, argsParseError: "Unexpected private-payload" }],
   }));
@@ -76,6 +77,11 @@ test("invalid arguments retain private diagnostics without leaking payload into 
     assert.equal(entry.calls[0].rawArguments, raw);
     assert.equal(entry.calls[0].error, "Unexpected private-payload");
     assert.equal(entry.truncated, false);
+    assert.deepEqual(entry.streamDiagnostics, {
+      protocol: "openai-chat-completions", unparseableSsePayloads: 1, toolCallDeltasWithoutIndex: 2,
+    });
+    const warning = warnings.find(line => line.startsWith("[model-arguments] "))!;
+    assert.deepEqual(JSON.parse(warning.slice("[model-arguments] ".length)).streamDiagnostics, entry.streamDiagnostics);
     assert.equal(entry.calls[0].toolCallId, "bad-call");
     assert.match(entry.requestId, /^chatcmpl-/);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
@@ -660,3 +666,43 @@ for (const truncated of [false, true]) {
     } finally { release(); await g.close(); }
   });
 }
+
+test("gateway preserves explicit generation controls and refuses unsupported controls before dispatch", async () => {
+  const seen: unknown[] = [];
+  const gateway = await startModelGateway({ baseUrl: "http://127.0.0.1:1", model: "synthetic" }, { maxTokens: 100, maxRetries: 0, requestTimeoutMs: 1000 }, new AbortController().signal,
+    async (endpoint, _s, _h, _t, policy) => { seen.push({ endpoint, policy }); return { assistantMessage: { role: "assistant", content: "OK" }, toolCalls: [] }; });
+  try {
+    const post = (extra: unknown) => fetch(`${gateway.url}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${gateway.token}`, "content-type": "application/json" }, body: JSON.stringify({ messages: [{ role: "user", content: "synthetic" }], ...extra as object }) });
+    assert.equal((await post({ max_tokens: 33, temperature: .25, top_p: .8, thinking: { type: "disabled" } })).status, 200);
+    assert.equal((seen[0] as any).policy.maxTokens, 33); assert.equal((seen[0] as any).policy.temperature, .25); assert.equal((seen[0] as any).policy.topP, .8); assert.equal((seen[0] as any).endpoint.thinkingMode, "disabled");
+    for (const extra of [{ max_tokens: 101 }, { max_tokens: -1 }, { max_tokens: 10, max_completion_tokens: 20 }, { top_p: -1 }, { top_p: 1.1 }, { top_p: null }, { tool_choice: "required" }, { parallel_tool_calls: false }, { n: 2 }, { stream_options: { include_usage: false } }, { thinking: { type: "unknown" } }, { tools: [{}] }, { messages: {} }]) assert.equal((await post(extra)).status, 400);
+    assert.equal(seen.length, 1);
+  } finally { await gateway.close(); }
+});
+
+for (const incomplete of [false, true]) test(`gateway rejects ${incomplete ? "unterminated" : "malformed"} streams before reporting success`, async () => {
+  const { streamer } = fakeStreamer(answer(incomplete ? { completionObserved: false } : { streamDiagnostics: { protocol: "openai-responses", unparseableSsePayloads: 1 } }));
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { messages: [], stream: false });
+    assert.equal(response.status, 502); assert.match(await response.text(), /Model stream/);
+  } finally { await g.close(); }
+});
+
+for (const kind of ['missing-id', 'done-only', 'valid-finish'] as const) test(`actual Chat gateway preserves strict completion/replay contract: ${kind}`, async () => {
+  const { createServer } = await import('node:http');
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const choice = kind === 'missing-id' ? { delta: { tool_calls: [{ index: 0, id: '', function: { name: 'echo', arguments: '{}' } }] }, finish_reason: 'tool_calls' }
+      : { delta: { content: 'OK' }, ...(kind === 'valid-finish' ? { finish_reason: 'stop' } : {}) };
+    res.end(`data: ${JSON.stringify({ choices: [choice] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+  const gateway = await startModelGateway({ baseUrl: `http://127.0.0.1:${(server.address() as any).port}`, model: 'synthetic', proxy: { mode: 'direct' } }, POLICY, AbortSignal.timeout(3000));
+  try {
+    const r = await fetch(gateway.url + '/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${gateway.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'synthetic' }] }) });
+    assert.equal(r.status, kind === 'valid-finish' ? 200 : 502);
+    const text = await r.text(); assert.match(text, kind === 'missing-id' ? /omitted a tool call ID/ : kind === 'done-only' ? /without a completion event/ : /"content":"OK"/);
+  } finally { await gateway.close(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
+});

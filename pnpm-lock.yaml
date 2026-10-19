@@ -6,6 +6,7 @@ settings:
 
 overrides:
   ajv: 8.18.0
+  katex: 0.18.10
 
 importers:
 
@@ -81,8 +82,8 @@ importers:
         specifier: 0.8.3
         version: 0.8.3
       katex:
-        specifier: ^0.16.47
-        version: 0.16.47
+        specifier: 0.18.10
+        version: 0.18.10
       lucide-react:
         specifier: 1.26.0
         version: 1.26.0(react@19.2.7)
@@ -135,9 +136,6 @@ importers:
       '@types/d3-zoom':
         specifier: ^3.0.8
         version: 3.0.8
-      '@types/katex':
-        specifier: ^0.16.8
-        version: 0.16.8
       '@types/papaparse':
         specifier: 5.3.16
         version: 5.3.16
@@ -244,8 +242,8 @@ importers:
         specifier: workspace:*
         version: link:../schema
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.12.2
+        version: 8.12.2
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -390,8 +388,8 @@ importers:
         specifier: workspace:*
         version: link:../schema
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.12.2
+        version: 8.12.2
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -670,8 +668,8 @@ importers:
   services/api:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.30.0
-        version: 1.30.0(zod@4.4.3)
+        specifier: ^1.31.0
+        version: 1.31.0(zod@4.4.3)
       '@sciencediscovery/artifact-json':
         specifier: workspace:*
         version: link:../../packages/artifact-json
@@ -768,22 +766,25 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.12.2
+        version: 8.12.2
       yaml:
         specifier: 2.9.0
         version: 2.9.0
     devDependencies:
+      '@sciencediscovery/launcher':
+        specifier: workspace:*
+        version: link:../launcher
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
       tsx:
         specifier: 4.23.1
         version: 4.23.1
-      typebox:
-        specifier: 1.1.38
-        version: 1.1.38
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -1022,8 +1023,8 @@ packages:
     peerDependencies:
       hono: ^4
 
-  '@modelcontextprotocol/sdk@1.30.0':
-    resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
+  '@modelcontextprotocol/sdk@1.31.0':
+    resolution: {integrity: sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -1562,9 +1563,9 @@ packages:
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
 
-  commander@8.3.0:
-    resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
-    engines: {node: '>= 12'}
+  commander@15.0.0:
+    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
 
   commander@9.5.0:
     resolution: {integrity: sha512-KRs7WVDKg86PWiuAqhDrAQnTXZKraVcCc6vFdL14qrZ/DcWwuRo7VoiYXalXO7S5GKpqYiVEwCbgFDfxNHKJBQ==}
@@ -1990,8 +1991,8 @@ packages:
     resolution: {integrity: sha512-p/nXbhSEcu3pZRdkW1OfJhpsVtW1gd4Wa1fnQc9YLiTfAjn0312eMKimbdIQzuZl9aa9xUGaRlP9T/CJE/ditQ==}
     engines: {node: '>=0.10.0'}
 
-  katex@0.16.47:
-    resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
+  katex@0.18.10:
+    resolution: {integrity: sha512-/B6p9eY9DX7aHBfpkHdpirDTZ5QH9xTwL9y837PWuzuv41O5jFdqNQwVQEQsimY0/iVNkwBY4+4hMfhQ7d4Dbw==}
     hasBin: true
 
   lightningcss-android-arm64@1.32.0:
@@ -2619,8 +2620,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@8.9.0:
-    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
+  undici@8.12.2:
+    resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.4.0:
@@ -2851,7 +2852,7 @@ snapshots:
     dependencies:
       hono: 4.13.2
 
-  '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.31.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 2.1.1(hono@4.13.2)
       ajv: 8.18.0
@@ -3323,7 +3324,7 @@ snapshots:
 
   comma-separated-tokens@2.0.3: {}
 
-  commander@8.3.0: {}
+  commander@15.0.0: {}
 
   commander@9.5.0: {}
 
@@ -3797,9 +3798,9 @@ snapshots:
 
   jsonpointer@5.0.1: {}
 
-  katex@0.16.47:
+  katex@0.18.10:
     dependencies:
-      commander: 8.3.0
+      commander: 15.0.0
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -4178,7 +4179,7 @@ snapshots:
     dependencies:
       '@types/katex': 0.16.8
       devlop: 1.1.0
-      katex: 0.16.47
+      katex: 0.18.10
       micromark-factory-space: 2.0.1
       micromark-util-character: 2.1.1
       micromark-util-symbol: 2.0.1
@@ -4472,7 +4473,7 @@ snapshots:
       '@types/katex': 0.16.8
       hast-util-from-html-isomorphic: 2.0.0
       hast-util-to-text: 4.0.2
-      katex: 0.16.47
+      katex: 0.18.10
       unist-util-visit-parents: 6.0.2
       vfile: 6.0.3
 
@@ -4737,7 +4738,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@8.9.0: {}
+  undici@8.12.2: {}
 
   unicorn-magic@0.4.0: {}
 

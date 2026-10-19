@@ -69,6 +69,10 @@ export class WebApiClient extends KnowledgeEngineApiClient {
     return this.request("/api/mcp/sources");
   }
 
+  reloadMcpSources(): Promise<unknown> {
+    return this.request("/api/mcp/sources/reload", { method: "POST" });
+  }
+
   searchWorkbench(query = "", offset = 0, limit = 250): Promise<WorkbenchSearchResponse> {
     const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset), q: query });
     return this.request(`/api/search?${parameters.toString()}`);

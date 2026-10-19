@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
+import { isAuthFailure } from "./api/auth.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
 import { useLocale } from "./i18n/index.js";
 import { ideaResearchActivityStatusLabel, ideaResearchPhaseLabel, ideaResearchStatusLabel } from "./IdeaResearchLabels.js";
@@ -17,7 +18,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   const [error, setError] = useState<string>();
   const load = useCallback(async () => {
     try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); onResearchAvailability?.(result.items.length > 0); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setError(isAuthFailure(e) ? undefined : e instanceof Error ? e.message : String(e)); }
   }, [client, sessionId, onResearchAvailability]);
   useEffect(() => { void load(); }, [load]);
   const activeId = items.find(i => ["running", "pausing"].includes(i.research.status))?.research.id;
@@ -68,6 +69,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     {open && <IdeaTreeExplorer autonomous graph={view.graph} treeIds={items.map(i => i.research.id)} onClose={() => setOpen(false)} onSelectTree={setSelected}
       controls={<div className="idea-research-progress">
         <p>{ideaResearchStatusLabel(t, r.status)} · {t("ideaResearch.round", {round: r.round, total: r.settings.maxRounds})} · {t("ideaResearch.batchProgress", {completed: r.batchCompleted, total: r.batch.length || r.batchCompleted})}</p>
+        {r.unreportedBudgetEstimate ? <p>{t("ideaResearch.unreportedBudgetEstimate", { count: r.unreportedBudgetEstimate })}</p> : null}
         <p>{ideaResearchPhaseLabel(t, r, r.phase)} · {t("ideaResearch.candidatesEvaluated", {count: view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length})} · {t(r.usageKnown ? "ideaResearch.tokens" : "ideaResearch.tokensPartial", {count: r.tokens})}</p>
         {r.reason && <p>{r.reason}</p>}
         <ol aria-label={t("ideaResearch.progressAria")}>

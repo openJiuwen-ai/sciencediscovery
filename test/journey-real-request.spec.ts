@@ -15,6 +15,7 @@
 import { expect } from "@playwright/test";
 
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
 import {
   artifactTree,
   cleanupJourney,
@@ -33,7 +34,7 @@ test.describe("journey-real-request.spec", { tag: ["@category:e2e", "@os:linux",
  * E2E-META
  * Purpose: A real user request can generate measurements, calculate summary statistics, and deliver a referenced Markdown result through the full stack.
  * Steps:
- *   1. Gate real credentials/full-stack health, verify managed Python is ready, then register the requested model and prepare a Project/Session.
+ *   1. Gate real credentials/full-stack health, wait up to 180 seconds for managed Python readiness, then register the requested model and prepare a Project/Session.
  *   2. Ask naturally for generated measurement data, mean/standard deviation, and a Markdown report whose filename the model chooses.
  *   3. Observe running/terminal feedback and at least one user-visible code-execution-class tool step.
  *   4. Verify a non-empty answer, at least one previewable .md Artifact, and a filename mentioned by the answer that matches the Artifact catalog.
@@ -61,12 +62,12 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
   let real!: Record<string, string>;
   await journey.step(
     "确认真实模型凭据与整套栈的健康状态",
-    "缺少任一真实模型环境变量、栈不健康或托管 Python 未就绪时，本旅程判为前置未满足（BLOCKED），而不是通过。",
+    "缺少任一真实模型环境变量、栈不健康、托管 Python 安装失败或等待 180 秒仍未就绪时，本旅程判为前置未满足（BLOCKED），而不是通过。",
     async () => {
       real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
       await requireRealStack(testInfo);
       test.setTimeout(600_000);
-      const setup = await environmentSetup(page);
+      const setup = await waitForEnvironmentSetup(() => environmentSetup(page));
       testInfo.skip(
         setup.state !== "ready",
         `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,

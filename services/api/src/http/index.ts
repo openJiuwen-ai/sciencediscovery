@@ -1975,7 +1975,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
         const profile = store.getModel(modelId);
         if (!profile) return sendError(response, 404, "Model not found");
-        const tested = await modelConnectivityTests.run(modelId, () => testModelConnectivity({
+        const consent = await readJson<{ consent?: boolean; compatibility?: boolean }>(request);
+        if (consent.consent !== true) return sendError(response, 400, "Explicit consent is required: model checks may consume paid tokens");
+        const tested = await modelConnectivityTests.run(`${modelId}:${profile.updatedAt}:${consent.compatibility === true}`, () => testModelConnectivity({
+          compatibility: consent.compatibility === true,
           apiToken: store.getModelApiToken(modelId),
           profile,
           resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),

@@ -49,8 +49,9 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
   test.setTimeout(180_000);
   // Planning is JiuwenSwarm's own todo list, which the run shows as its Plan: todo_create starts the first item,
   // todo_modify moves statuses, and deleting every item clears the Plan. Delegation stays ScienceDiscovery's `task`.
+  const longSource = `https://example.test/research/${"a".repeat(140)}`;
   const mainTodos = [
-    { id: "scope", content: "Define the review scope", activeForm: "Defining the review scope", description: "Fix what the review covers." },
+    { id: "scope", content: `Define the review scope using ${longSource}`, activeForm: "Defining the review scope", description: "Fix what the review covers." },
     { id: "delegate", content: "Delegate evidence checks", activeForm: "Delegating evidence checks", description: "Hand each source to its own worker." },
     { id: "synthesize", content: "Synthesize findings", activeForm: "Synthesizing findings", description: "Combine both checks into one answer." },
   ];
@@ -147,6 +148,34 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
         await expect(mainCard.locator(".plan-item-status.completed")).toHaveCount(1);
         await expect(mainCard.locator(".plan-item-status.in_progress")).toHaveCount(1);
         await expect(mainCard.locator(".plan-item-status.pending")).toHaveCount(1);
+        // Check the active Plan before it is cleared. Unbroken task text must
+        // wrap inside the card instead of overflowing the clipped Tasks fold.
+        const originalViewport = page.viewportSize();
+        for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+          await page.setViewportSize(viewport);
+          for (const width of [260, 320]) {
+            await workspace.evaluate((el, width) => { el.style.width = `${width}px`; el.style.maxWidth = `${width}px`; }, width);
+            const layout = await mainCard.evaluate((el) => {
+              const panel = el.closest(".workspace-panel")!.getBoundingClientRect();
+              const card = el.getBoundingClientRect();
+              const selectors = [".plan-card-label strong", ".plan-card-label small", ".plan-card-heading > i", ".plan-card-body", ".plan-card-body p", ".plan-item-list li > span:last-child"];
+              const nodes = selectors.flatMap(selector => Array.from(el.querySelectorAll(selector)));
+              return {
+                cardInside: card.left >= panel.left && card.right <= panel.right,
+                contentInside: nodes.every(node => {
+                  const rect = node.getBoundingClientRect();
+                  return rect.left >= card.left && rect.right <= card.right && (node.matches("strong") || node.scrollWidth <= node.clientWidth + 1);
+                }),
+                step: el.querySelector(".plan-item-list li > span:last-child")?.textContent,
+              };
+            });
+            expect(layout.cardInside).toBe(true);
+            expect(layout.contentInside).toBe(true);
+            expect(layout.step).toContain(longSource);
+          }
+        }
+        await workspace.evaluate(el => { el.style.removeProperty("width"); el.style.removeProperty("max-width"); });
+        if (originalViewport) await page.setViewportSize(originalViewport);
       },
     );
 

@@ -32,7 +32,7 @@ export interface ModelConnectivityButtonProps {
   modelId: string;
   modelName: string;
   profileVersion: string;
-  testModel: (modelId: string) => Promise<ModelConnectivityTestResult>;
+  testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>;
 }
 
 export function failureCopy(category: ModelConnectivityTestCategory, t: Translate): { label: string; title: string } {
@@ -68,17 +68,21 @@ export function ModelConnectivityButton({
   const { t } = useLocale();
   const [state, setState] = useState<TestState>({ status: "idle" });
   const requestRevision = useRef(0);
+  const [consent, setConsent] = useState(false);
+  const [scope, setScope] = useState("selected");
 
   useEffect(() => {
     requestRevision.current += 1;
     setState({ status: "idle" });
+    setConsent(false);
   }, [modelId, profileVersion]);
 
   async function runTest(): Promise<void> {
+    if (!consent) return;
     const revision = ++requestRevision.current;
     setState({ status: "testing" });
     try {
-      const result = await testModel(modelId);
+      const result = await testModel(modelId, scope === "matrix");
       if (requestRevision.current === revision) setState({ result, status: "result" });
     } catch (reason) {
       if (requestRevision.current !== revision) return;
@@ -107,7 +111,7 @@ export function ModelConnectivityButton({
     label = t("settings.modelTest.success", { latency: state.result.latencyMs });
     title = t("settings.modelTest.successDetail", { latency: state.result.latencyMs });
   } else if (state.status === "result") {
-    const copy = failureCopy(state.result.category, t);
+    const copy = state.result.category === "invalid_response" ? { label: t("settings.modelTest.inconclusive"), title: t(state.result.inconclusiveReason === "output_limit" ? "wizard.outputLimitNotice" : "settings.modelTest.inconclusiveDetail") } : failureCopy(state.result.category, t);
     className += " failure";
     icon = <AlertCircleIcon size={14} />;
     label = copy.label;
@@ -120,11 +124,16 @@ export function ModelConnectivityButton({
   }
 
   return (
+    <div className="model-compatibility-check">
+    <label>{t("settings.modelTest.scope")} <select value={scope} disabled={state.status === "testing"} onChange={e => { requestRevision.current += 1; setScope(e.target.value); setConsent(false); setState({ status: "idle" }); }}>
+      <option value="selected">{t("settings.modelTest.selectedCheck")}</option><option value="matrix">{t("settings.modelTest.fullCheck")}</option>
+    </select></label>
+    <label><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} disabled={state.status === "testing"} />{t(scope === "matrix" ? "settings.modelTest.consent" : "settings.modelTest.basicConsent")}</label>
     <button
       aria-busy={state.status === "testing"}
       aria-label={title}
       className={className}
-      disabled={disabled || state.status === "testing"}
+      disabled={disabled || !consent || state.status === "testing"}
       onClick={() => void runTest()}
       title={title}
       type="button"
@@ -132,5 +141,22 @@ export function ModelConnectivityButton({
       {icon}
       <span aria-live="polite">{label}</span>
     </button>
+    {state.status === "result" && state.result.protocols ? <div role="status" className="model-compatibility-results">
+      <p>{t("settings.modelTest.selectionUnchanged")}</p>
+      <ul>{state.result.protocols.map(p => <li key={p.apiProtocol}>
+        <strong>{p.apiProtocol}</strong>
+        <ul>{(["basic", "streaming", "tools"] as const).map(cap => {
+          const outcome = p[cap];
+          const copy = failureCopy(outcome.category, t);
+          return <li key={cap}>{t(`settings.modelTest.${cap}`)}: {outcome.ok
+            ? t("settings.modelTest.supported")
+            : outcome.category === "invalid_response" ? t("settings.modelTest.inconclusive") : copy.label}
+            {" — "}{outcome.ok ? t(`settings.modelTest.${cap}Detail`)
+              : outcome.category === "invalid_response" ? t("settings.modelTest.inconclusiveDetail") : copy.title}</li>;
+        })}
+        <li>{t("settings.modelTest.usage")}: {t(p.usage === "available" ? "settings.modelTest.usageAvailable" : "settings.modelTest.usageUnknown")}</li></ul>
+      </li>)}</ul>
+    </div> : null}
+    </div>
   );
 }

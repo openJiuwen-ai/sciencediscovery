@@ -108,13 +108,30 @@ export type ModelConnectivityTestCategory =
   | "provider_error"
   | "invalid_response";
 
+export interface ModelCompatibilityOutcome {
+  /** Valid response exhausted the small synthetic budget; not confirmed compatible. */
+  inconclusiveReason?: "output_limit";
+  category: ModelConnectivityTestCategory;
+  message: string;
+  ok: boolean;
+  providerStatus?: number;
+}
+
 export interface ModelConnectivityTestResult {
+  inconclusiveReason?: ModelCompatibilityOutcome["inconclusiveReason"];
   category: ModelConnectivityTestCategory;
   latencyMs: number;
   message: string;
   ok: boolean;
   providerStatus?: number;
   testedAt: string;
+  protocols?: Array<{
+    apiProtocol: ModelApiProtocol;
+    basic: ModelCompatibilityOutcome;
+    streaming: ModelCompatibilityOutcome;
+    tools: ModelCompatibilityOutcome;
+    usage: "available" | "unknown";
+  }>;
 }
 
 export interface ModelRunInfo {

@@ -32,7 +32,7 @@ export interface AgentTool<S extends TSchema = TSchema> {
    * omitted means unfenced unless one of those applies.
    */
   untrustedCategory?: string;
-  execute(toolCallId: string, params: Static<S>, signal?: AbortSignal): Promise<AgentToolResult>;
+  execute(toolCallId: string, params: Static<S>, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<AgentToolResult>;
   /** Only an exact true permits overlap; omitted or throwing classifiers are exclusive. */
   isConcurrencySafe?(params: Static<S>): boolean;
 }

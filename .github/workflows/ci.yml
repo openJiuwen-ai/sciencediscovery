@@ -23,11 +23,11 @@ name: CI
 on:
   push:
     branches: [main, master]
-  # These are the activity types GitHub applies by default; naming them keeps
-  # the contract visible: every pull request is checked when it is opened,
-  # whenever new commits are pushed to it, and if it is reopened.
+  # Drafts run policy and L1. UT/ST, mocked E2E, coverage, binary, Docker and
+  # merge-gate skip drafts; ready_for_review and non-draft open/update/reopen
+  # events enable the remaining jobs according to the selected profile.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -77,10 +77,11 @@ defaults:
     shell: bash
 
 jobs:
-  l1:
-    name: L1 (static checks)
+  # Routing must survive a failing L1 check so L4/L5 can still collect real evidence.
+  policy:
+    name: Select CI policy
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     outputs:
       profile: ${{ steps.policy.outputs.profile }}
       backend: ${{ steps.policy.outputs.backend }}
@@ -88,16 +89,27 @@ jobs:
       distribution: ${{ steps.policy.outputs.distribution }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
       - id: policy
         env:
           CI_REQUESTED_PROFILE: ${{ inputs.profile || 'pr' }}
           CI_REQUESTED_BACKEND: ${{ inputs.backend || vars.CI_E2E_BACKEND || 'jiuwenswarm' }}
         run: node .ci/tier-policy.mjs
+
+  l1:
+    name: L1 (static checks)
+    needs: policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
       - name: Run the frozen L1 slice
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
@@ -113,14 +125,15 @@ jobs:
 
   e2e-plan:
     name: Freeze mocked E2E matrix
-    needs: l1
+    needs: [policy, l1]
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     env:
-      CI_PROFILE: ${{ needs.l1.outputs.profile }}
-      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
+      CI_PROFILE: ${{ needs.policy.outputs.profile }}
+      CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -139,161 +152,45 @@ jobs:
         with:
           name: mocked-e2e-plan
           path: .ci-mocked-plan
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
-  real-plan:
-    name: Freeze real E2E matrix
-    needs: [l1, ut, st, e2e-plan, e2e]
-    if: ${{ needs.l1.outputs.real == 'true' && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: nightly-ci-ds
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-    env:
-      CI_PROFILE: ${{ needs.l1.outputs.profile }}
-      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
-      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
-      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          cache: pnpm
-      - uses: actions/download-artifact@v4
-        with:
-          name: mocked-e2e-plan
-          path: .ci-mocked-plan
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: mocked-e2e-results-*
-          path: .ci-mocked-results
-      - name: Require complete mocked results before real API calls
-        run: node .ci/mocked-report.mjs .ci-mocked-plan/plan.json .ci-mocked-results
-      # Node collection imports tsx from the workspace, not the Playwright install.
-      - run: pnpm install --frozen-lockfile
-      - run: node test/sync-e2e.mjs --write
-      - run: npm ci --prefix .e2e
-      # Collection makes no API/model call and needs no credential.
-      - run: node test/support/tagged/shared.mjs list --profile "$CI_PROFILE" --slice e2e-real --output .ci-real-plan
-      - id: matrix
-        run: node .ci/real-matrix.mjs .ci-real-plan/plan.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: real-e2e-plan
-          path: .ci-real-plan/plan.json
-          include-hidden-files: true
-          if-no-files-found: error
-      - name: Upload real E2E collection diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: real-e2e-collection-diagnostics
-          path: .ci-real-plan
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+  # A fixed needs graph cannot be made profile-dependent with an if expression.
+  # Keep the entry points separate and the actual real suite in one workflow.
+  real-merge:
+    name: L3 real E2E
+    needs: [policy, l1, ut, st, e2e-plan, e2e]
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request' &&
+          needs.policy.outputs.profile == 'merge' && needs.policy.result == 'success' &&
+          needs.l1.result == 'success' && needs.ut.result == 'success' && needs.st.result == 'success' &&
+          needs.e2e-plan.result == 'success' && needs.e2e.result == 'success' }}
+    uses: ./.github/workflows/real-e2e.yml
+    secrets: inherit
+    with:
+      profile: ${{ needs.policy.outputs.profile }}
+      backend: ${{ needs.policy.outputs.backend }}
 
-  real-e2e:
-    name: Real E2E (${{ matrix.shard }})
-    needs: [l1, real-plan]
-    if: ${{ needs.l1.outputs.real == 'true' && github.event_name != 'pull_request' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout }}
-    environment: nightly-ci-ds
-    env:
-      CI_ALLOW_REAL: "1"
-      CI_PROFILE: ${{ needs.l1.outputs.profile }}
-      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
-      CI_REAL_SHARD: ${{ matrix.shard }}
-      E2E_COMMIT_SHA: ${{ github.sha }}
-      CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
-      CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
-      CI_PREPARE_BIOMNI: "0" # Existing Biomni cases remain quarantined.
-      E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
-      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
-      E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
-      E2E_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
-      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      E2E_JUDGE_TOKEN: ${{ secrets.E2E_JUDGE_TOKEN }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
-      E2E_DRB_EVALUATION: full
-      E2E_BIOMNI_EVALUATION: rubric
-      # Keep daily and release evaluation modes equal until L5 gains its own cases.
-      E2E_PUCT_LLM_EVALUATION: "0"
-      E2E_DRB_MAX_SUBAGENTS: "2"
-      E2E_TEAM_CONCURRENCY_HINT: "2"
-      E2E_DRB_RUN_TIMEOUT_MS: "3600000"
-      E2E_DRB_EVAL_TIMEOUT_MS: "600000"
-      E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
-      E2E_BIOMNI_RUN_TIMEOUT_MS: "1200000"
-      LLM_BACKEND: openai
-      OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
-      OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
-      RACE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      CLEAN_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      FACT_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      BIOMNI_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
-      BIOMNI_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          cache: pnpm
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-      - name: Prepare real-research prerequisites (no model calls)
-        if: ${{ matrix.shard != 'basic' }}
-        run: bash .ci/prepare-real-research.sh
-      - name: Provision sandbox
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
-          bwrap --ro-bind / / --dev /dev true
-      - name: Run the frozen real E2E shard
-        run: pnpm ci:e2e:real -- --profile "$CI_PROFILE" --shard "$CI_REAL_SHARD"
-      - name: Summarize actual planned and executed cases
-        if: always()
-        run: node .ci/tagged-summary.mjs
-      - name: Stage real E2E scores
-        if: always()
-        run: node .ci/prepare-real-e2e-results.mjs
-      - name: Upload real E2E results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: real-e2e-results-${{ matrix.shard }}
-          path: .tmp/real-e2e-results
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Upload real E2E evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: real-e2e-evidence-${{ matrix.shard }}
-          path: .ci-results
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+  real-scheduled:
+    name: L4/L5 real E2E
+    needs: [policy]
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request' && needs.policy.result == 'success' &&
+          (needs.policy.outputs.profile == 'daily' || needs.policy.outputs.profile == 'release') }}
+    uses: ./.github/workflows/real-e2e.yml
+    secrets: inherit
+    with:
+      profile: ${{ needs.policy.outputs.profile }}
+      backend: ${{ needs.policy.outputs.backend }}
 
   ut:
-    needs: l1
+    needs: [policy, l1]
     name: UT
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -344,7 +241,7 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:ut -- --profile ${{ needs.l1.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+        run: pnpm ci:ut -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -373,6 +270,9 @@ jobs:
         with:
           name: ut-coverage
           path: .ci-results/ut/tagged/coverage
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
           # A layer that passed has recorded its coverage: finding none means
@@ -388,7 +288,7 @@ jobs:
     # nothing to report. Release calls skip it: a tagged build publishes no
     # coverage.
     needs: [ut, st]
-    if: ${{ !cancelled() && github.workflow != 'Release' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -463,8 +363,9 @@ jobs:
           if-no-files-found: warn
 
   st:
-    needs: l1
+    needs: [policy, l1]
     name: ST
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -489,7 +390,7 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:st -- --profile ${{ needs.l1.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+        run: pnpm ci:st -- --profile ${{ needs.policy.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -515,6 +416,9 @@ jobs:
         with:
           name: st-coverage
           path: .ci-results/st/tagged/coverage
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
           # A layer that passed has recorded its coverage: finding none means
@@ -523,14 +427,15 @@ jobs:
           if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
 
   e2e:
-    needs: [l1, e2e-plan]
+    needs: [policy, l1, e2e-plan]
     name: L2 E2E (mocked, ${{ matrix.shard }})
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
-      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
+      CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -591,7 +496,7 @@ jobs:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-e2e
           E2E_COMMIT_SHA: ${{ github.sha }}
-        run: pnpm ci:e2e -- --profile ${{ needs.l1.outputs.profile }} --shard ${{ matrix.shard }}
+        run: pnpm ci:e2e -- --profile ${{ needs.policy.outputs.profile }} --shard ${{ matrix.shard }}
 
       # Playwright exits 0 on skips and produces no results.json at all when
       # the stack never came up, so neither its exit code nor its report can be
@@ -642,8 +547,8 @@ jobs:
   # binary needs — the gate spawns the packaged bubblewrap runner and exercises
   # the four entry points end to end.
   binary:
-    needs: l1
-    if: ${{ needs.l1.outputs.distribution == 'true' }}
+    needs: [policy, l1]
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -727,8 +632,8 @@ jobs:
   # the dependency install, the application build, and whether the image that
   # comes out actually serves.
   docker:
-    needs: l1
-    if: ${{ needs.l1.outputs.distribution == 'true' }}
+    needs: [policy, l1]
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -890,52 +795,10 @@ jobs:
         if: always()
         run: docker compose down
 
-  real-report:
-    name: Account for real cases
-    needs: [l1, real-plan, real-e2e]
-    if: ${{ always() && needs.l1.outputs.real == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-      - uses: actions/download-artifact@v4
-        with:
-          name: real-e2e-plan
-          path: .ci-real-plan
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: real-e2e-results-*
-          path: .ci-real-results
-      - name: Reconcile every planned identity
-        run: node .ci/real-report.mjs .ci-real-plan/plan.json .ci-real-results
-      - name: Stage combined real E2E scores
-        if: always()
-        run: node .ci/prepare-real-e2e-results.mjs
-      - name: Upload combined real E2E results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: real-e2e-results
-          path: .tmp/real-e2e-results
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Upload real suite verdict
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: real-e2e-verdict
-          path: .ci-real-results/verdict.json
-          include-hidden-files: true
-          if-no-files-found: warn
-
   merge-gate:
     name: merge-gate
-    needs: [l1, ut, st, e2e-plan, e2e, real-plan, real-e2e, real-report, binary, docker]
-    if: always()
+    needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker]
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -965,6 +828,6 @@ jobs:
       - name: Require all jobs selected by this event
         if: always()
         env:
-          CI_PROFILE: ${{ needs.l1.outputs.profile }}
+          CI_PROFILE: ${{ needs.policy.outputs.profile }}
           CI_JOB_RESULTS: ${{ toJSON(needs) }}
         run: node .ci/tier-policy.mjs gate

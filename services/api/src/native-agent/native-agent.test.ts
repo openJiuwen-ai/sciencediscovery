@@ -1185,3 +1185,145 @@ test("agentMemories and knowledgeBaseScope reach the EXECUTED system prompt, not
     restore();
   }
 });
+
+for (const action of ["continue", "wait"] as const) {
+  test(`MCP readiness reaches the model and records its ${action} decision`, async () => {
+    const decisions: string[] = [];
+    const options: NativeAgentOptions = { ...workspace(), mcpReadiness: {
+      summary: "arxiv unavailable; omitted tools: search",
+      decide: async choice => { decisions.push(choice); return { action: choice, omittedTools: ["arxiv/search"] }; },
+      invoke: async () => { throw new Error("No recovered call expected"); },
+    } };
+    const scripts: Array<(call: StreamerCall) => ModelTurn> = [
+      call => {
+        assert.ok(call.tools.some(tool => tool.name === "mcp_readiness"));
+        return toolTurn("mcp_readiness", { action, reason: "Assess importance", sourceIds: ["arxiv"] });
+      },
+      call => { assert.match(JSON.stringify(call.history), /omittedTools/); return textTurn("Readiness decision recorded."); },
+    ];
+    const restore = setModelTurnStreamerForTest(scriptStreamer(scripts).streamer);
+    try { await createNativeAgent(options).execute("Assess this missing source"); assert.deepEqual(decisions, [action]); }
+    finally { restore(); }
+  });
+}
+
+test("MCP recovery, sandbox network and scoped direct execution coexist in the native agent", async () => {
+  const calls: string[] = [];
+  const networkCalls: string[] = [];
+  const command = "printf science";
+  const scope = { authorizationId: "consent", command, cwd: "", target: "local", account: "test" };
+  const options: NativeAgentOptions = {
+    ...workspace(),
+    mcpReadiness: {
+      summary: "arxiv unavailable; omitted tools: search",
+      decide: async action => { calls.push(action); return { recovered: true }; },
+      invoke: async (sourceId, toolId, input) => {
+        assert.equal(sourceId, "arxiv"); assert.equal(toolId, "search");
+        assert.deepEqual(input, { query: "science" });
+        calls.push("recovered"); return { records: [] };
+      },
+    },
+    sandboxNetwork: { request: async input => {
+      assert.deepEqual(input.hosts, ["eutils.ncbi.nlm.nih.gov:443"]);
+      assert.equal(input.purpose, "Retrieve requested PubMed records");
+      networkCalls.push("permission");
+      return { state: "allowed", hosts: input.hosts, authorizationId: "network-consent", instruction: "Issue a safe new call" };
+    } },
+    executeShell: async (_code, _mode, _signal, _id, runnerId, environment) => {
+      assert.equal(runnerId, "local");
+      assert.equal(environment?.networkAuthorizationId, "network-consent");
+      assert.deepEqual(networkCalls, ["permission"]);
+      networkCalls.push("new-execution");
+      return { exitCode: 0, stdout: "retrieved", stderr: "", createdFiles: [], kernelMode: "ephemeral" } as never;
+    },
+    directExecution: {
+      request: async input => {
+        assert.deepEqual(input, { operationId: "failed-op", command, cwd: "" });
+        calls.push("consent"); return scope;
+      },
+      start: async input => {
+        assert.deepEqual(input, scope); calls.push("direct"); return { executionId: "exec" };
+      },
+    },
+  };
+  const scripts: Array<(call: StreamerCall) => ModelTurn> = [
+    call => {
+      for (const name of ["mcp_readiness", "mcp_recovered_call", "request_direct_execution", "run_direct_shell", "request_sandbox_network", "run_shell"]) {
+        assert.ok(call.tools.some(tool => tool.name === name), `${name} reaches the model`);
+      }
+      return toolTurn("mcp_readiness", { action: "check", reason: "Source repaired", sourceIds: ["arxiv"] });
+    },
+    () => toolTurn("mcp_recovered_call", { sourceId: "arxiv", toolId: "search", input: { query: "science" } }),
+    () => toolTurn("request_direct_execution", { operation_id: "failed-op", command, cwd: "" }),
+    () => {
+      assert.deepEqual(calls, ["check", "recovered", "consent"], "consent does not dispatch execution");
+      return toolTurn("run_direct_shell", { authorization_id: "consent", command, cwd: "", target: "local", account: "test" });
+    },
+    () => textTurn("Both operations completed."),
+  ];
+  scripts.splice(scripts.length - 1, 0,
+    () => toolTurn("request_sandbox_network", { hosts: ["eutils.ncbi.nlm.nih.gov:443"], purpose: "Retrieve requested PubMed records", runner_id: "local" }),
+    () => {
+      assert.deepEqual(networkCalls, ["permission"], "network approval alone never executes code");
+      return toolTurn("run_shell", { command: "printf retrieved", runner_id: "local", network_authorization_id: "network-consent" });
+    },
+  );
+  const restore = setModelTurnStreamerForTest(scriptStreamer(scripts).streamer);
+  try {
+    await createNativeAgent(options).execute("Use the repaired source and the separately approved command");
+    assert.deepEqual(calls, ["check", "recovered", "consent", "direct"]);
+    assert.deepEqual(networkCalls, ["permission", "new-execution"]);
+  } finally { restore(); }
+});
+
+
+test("native tool progress arrives before completion and ignores late callbacks", { timeout: 10_000 }, async () => {
+  const events: AgentEvent[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let observed!: () => void;
+  const progress = new Promise<void>((resolve) => { observed = resolve; });
+  let late: ((chunk: string) => void) | undefined;
+  const { streamer } = scriptStreamer([() => toolTurn("progress_probe", {}), () => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), extraTools: [{
+      name: "progress_probe", label: "Probe", description: "Probe", parameters: { type: "object", properties: {} } as never,
+      async execute(_id, _args, _signal, onProgress) {
+        late = onProgress;
+        onProgress?.("Searching PubMed\n");
+        onProgress?.("Error: source unavailable\n");
+        await gate;
+        return { content: [{ type: "text", text: "Recovered: 5 papers" }] };
+      },
+    }] } as NativeAgentOptions);
+    agent.subscribe((event) => { events.push(event); if (event.type === "tool_execution_progress" && event.chunk.includes("Error:")) observed(); });
+    const execution = agent.execute("search");
+    await progress;
+    assert.equal(events.some((event) => event.type === "tool_execution_end"), false);
+    assert.deepEqual(events.filter((event) => event.type === "tool_execution_progress").map((event) => event.chunk),
+      ["Searching PubMed\n", "Error: source unavailable\n"]);
+    release();
+    await execution;
+    const end = events.find((event) => event.type === "tool_execution_end");
+    assert.ok(end && end.type === "tool_execution_end");
+    assert.equal(end.result.content[0]?.text, "Recovered: 5 papers");
+    const count = events.length;
+    late?.("late");
+    assert.equal(events.length, count);
+  } finally { release(); restore(); }
+});
+
+test("native Agent exposes network consent and returns its blocked decision without dispatch", async () => {
+  let requests = 0;
+  const options = { ...workspace(), sandboxNetwork: { request: async (input: { hosts: string[]; purpose: string }) => {
+    requests++; assert.deepEqual(input.hosts, ["pypi.org:443"]);
+    return { state: "blocked", hosts: input.hosts, instruction: "Required retrieval is incomplete" };
+  } } } as NativeAgentOptions;
+  const restore = setModelTurnStreamerForTest(scriptStreamer([
+    call => { assert.ok(call.tools.some(t => t.name === "request_sandbox_network")); return toolTurn("request_sandbox_network", { hosts: ["pypi.org:443"], purpose: "Retrieve package metadata" }); },
+    call => { assert.match(JSON.stringify(call.history), /Required retrieval is incomplete/); return textTurn("Retrieval blocked; no silent fallback."); },
+  ]).streamer);
+  try { await createNativeAgent(options).execute("Ask for network consent before retrieval."); assert.equal(requests, 1); }
+  finally { restore(); }
+});

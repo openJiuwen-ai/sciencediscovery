@@ -213,7 +213,7 @@ report_dependency_problems() {
       echo
     done
     echo "  Requirements table: README.md#requirements"
-    echo "  Local source mode:  docs/en/how-to/deployment.md#local-mode-host-processes"
+    echo "  Local source mode:  docs/en/getting-started/deployment.md#local-source-mode-linux--macos"
   } >&2
   exit 1
 }
@@ -331,8 +331,10 @@ prepare_local() {
       *) echo "Native sandbox execution is unsupported on $(uname -s)." >&2; exit 1 ;;
     esac
   fi
-  # Installation/build do not require a working execution sandbox. The Runner
-  # probes in its own process and exposes a structured capability report.
+  # Installation/build do not require a working execution sandbox, so neither
+  # bubblewrap nor sandbox-exec is a preflight dependency here. The Runner
+  # probes in its own process, prints how to install a missing executable, and
+  # exposes the same text in its capability report.
   case "$sandbox_provider" in
     bubblewrap|seatbelt) ;;
     *) echo "SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt." >&2; exit 1 ;;

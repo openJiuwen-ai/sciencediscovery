@@ -23,6 +23,24 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                           reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         self.calls = []
 
+    async def test_empty_or_truncated_stage_preserves_usage_without_format_correction(self):
+        for raw in (None, '', '  '):
+            calls = []
+            async def truncated(role, payload):
+                calls.append(payload)
+                return raw, 14
+            self.state['tokens'] = 0
+            engine = IdeaTreeEngine(self.state, self.store, {}, truncated)
+            with self.assertRaisesRegex(ValueError, 'design: empty or truncated model output'):
+                await engine.ask('design', {})
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(self.state['tokens'], 14)
+            self.assertEqual(engine.reserved, 0)
+            persisted = self.store.read('p', 's', 'research-test')
+            self.assertEqual(persisted['tokens'], 14)
+            self.assertEqual(persisted['activities'][-1]['status'], 'failed')
+            self.assertIn('empty or truncated', persisted['activities'][-1]['error'])
+
     async def model(self, role, payload):
         self.calls.append((role, payload))
         if role == 'ideate':
@@ -94,8 +112,10 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             raw, _ = await self.model(role, payload)
             return raw, None
         await IdeaTreeEngine(self.state, self.store, {}, unknown).run()
-        self.assertEqual(self.state['status'], 'interrupted')
-        self.assertIn('did not report', self.state['reason'])
+        self.assertEqual(self.state['status'], 'paused')
+        self.assertIn('budget', self.state['reason'])
+        self.assertFalse(self.state['usageKnown'])
+        self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
 
     async def test_candidates_execute_before_max_depth_and_can_branch(self):
         self.state['settings']['maxDepth'] = 6
@@ -134,6 +154,20 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state['tokens'], calls * 100)
         self.assertEqual(engine.reserved, 0)
 
+    async def test_unknown_usage_preserves_scores_under_a_token_budget(self):
+        self.state['settings'].update(maxRounds=1, maxTokens=600000)
+        async def unknown_model(role, payload):
+            result, _usage = await self.model(role, payload)
+            return result, None
+        await IdeaTreeEngine(self.state, self.store, {}, unknown_model).run()
+        self.assertEqual(self.state['status'], 'completed')
+        self.assertFalse(self.state['usageKnown'])
+        self.assertEqual(self.state['tokens'], 0)  # No measured counts; explicitly partial.
+        self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
+        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
+        self.assertTrue(candidates)
+        self.assertTrue(all(n['score'] == 6.1 and n['cycleComplete'] for n in candidates))
+
     async def test_concurrent_usage_settlement_releases_failed_requests(self):
         async def model(role, payload):
             await asyncio.sleep(0)
@@ -147,6 +181,31 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state['tokens'], 300)
         self.assertFalse(self.state['usageKnown'])
         self.assertEqual(engine.reserved, 0)
+
+    async def test_failed_unknown_call_releases_admission_budget_and_persists_uncertainty(self):
+        calls = []
+        async def call(role, payload):
+            calls.append(role)
+            if len(calls) == 1:
+                raise RuntimeError('synthetic failure before I/O')
+            return '{"text":"valid design"}', 100
+        engine = IdeaTreeEngine(self.state, self.store, {}, call)
+        with self.assertRaisesRegex(RuntimeError, 'before I/O'):
+            await engine.ask('design', {})
+        self.assertEqual(engine.reserved, 0)
+        self.assertEqual(self.state.get('unreportedBudgetEstimate', 0), 0)
+        self.assertEqual(self.state['tokens'], 0)
+        self.assertFalse(self.state['usageKnown'])  # Failure is not proof of free provider usage.
+        persisted = self.store.read('p', 's', 'research-test')
+        self.assertEqual(persisted.get('unreportedBudgetEstimate', 0), 0)
+        self.assertFalse(persisted['usageKnown'])
+        self.assertEqual(persisted['activities'][-1]['status'], 'failed')
+        # Just enough for one stage; a stale failed-call reserve would block it.
+        self.state['settings']['maxTokens'] = len((engine.role_prompt('design') + '\nReturn JSON only, matching: {"text":"..."}' + '{}').encode()) + self.state['settings']['maxTokensPerCall'] + 256
+        self.assertEqual(await engine.ask('design', {}), {'text': 'valid design'})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(engine.reserved, 0)
+        self.assertEqual(self.state['tokens'], 100)
 
     async def test_shallow_candidate_runs_and_pending_parent_is_rejected(self):
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)

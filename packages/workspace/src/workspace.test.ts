@@ -45,6 +45,51 @@ import {
 import type { AgentTool } from "@sciencediscovery/tools";
 import { Type } from "typebox";
 
+test("direct recovery tools describe reachable remote scope and forward consent separately from submission", async () => {
+  const calls: unknown[] = [];
+  const controller = new AbortController();
+  const approved = { authorizationId: "approval", command: "printf hello", cwd: "sub", target: "instance", account: "user", dispatched: false };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
+    directExecution: {
+      request: async (...args) => { calls.push(args); return approved; },
+      start: async (...args) => { calls.push(args); return { id: "execution", state: "running" }; },
+    },
+  });
+  const consent = tools.find(tool => tool.name === "request_direct_execution")!;
+  assert.match(consent.description, /configured, reachable local or remote Runner/);
+  assert.match(consent.description, /failed operation pins the Runner/);
+  assert.match(consent.description, /Sandbox Always Allow does not apply/);
+  assert.match(consent.description, /PATH=\/usr\/bin:\/bin/);
+  assert.match(consent.description, /SSH is not provided/);
+  const result = await consent.execute("consent-call", { operation_id: "blocked", command: approved.command, cwd: approved.cwd }, controller.signal);
+  assert.deepEqual(result.details, approved);
+  assert.deepEqual(calls, [[{ operationId: "blocked", command: approved.command, cwd: approved.cwd }, controller.signal, "consent-call"]]);
+  await tools.find(tool => tool.name === "run_direct_shell")!.execute("new-call", {
+    authorization_id: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account,
+  }, controller.signal);
+  assert.deepEqual(calls[1], [{ authorizationId: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account }, controller.signal, "new-call"]);
+});
+
+test("Runner waiting instructions distinguish a requested card from repair authorization", async () => {
+  const calls: string[] = [];
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
+    runnerReadiness: {
+      check: async () => { throw new Error("Displaying a wait must not implicitly probe or execute"); },
+      wait: async (operationId) => { calls.push(operationId); return { action: "cancel" }; },
+    },
+  });
+  const wait = tools.find(tool => tool.name === "wait_for_runner")!;
+  assert.match(wait.description, /does NOT create a pending operation/);
+  assert.match(wait.description, /does NOT repair the host/);
+  assert.match(wait.description, /do not ask for extra permission/);
+  assert.match(wait.description, /explain the blocker and finish/);
+  assert.deepEqual(calls, []);
+  await wait.execute("call", { operation_id: "blocked-operation" });
+  assert.deepEqual(calls, ["blocked-operation"]);
+});
+
 test("normalizeWorkspaceRelativePath preserves nested names within each agent writable root", () => {
   const sessionRoot = resolve(process.cwd(), ".tmp", "session-root");
   const subagentRoot = resolve(sessionRoot, "subagents", "subagent-1");
@@ -876,6 +921,7 @@ test("artifact download and PDF extraction are separate tools", async () => {
 
 test("project artifact tools declare, list, and read catalog entries", async () => {
   const calls: unknown[] = [];
+  const aliasWorkspace = resolve(process.cwd(), ".tmp", `artifact-alias-${Date.now()}`);
   const artifact = {
     createdAt: "2026-01-01T00:00:00.000Z",
     createdInSessionId: "session-1",
@@ -906,6 +952,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   const tools = createWorkspaceTools(process.cwd(), {
     declareArtifact: async (input) => {
       calls.push(input);
+      if (input.path === "outputs/alias") assert.equal(await readFile(resolve(aliasWorkspace, input.path), "utf8"), "existing output");
       if (input.path === "outputs/missing") throw new Error("missing file");
       return { artifact, version };
     },
@@ -933,7 +980,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "base_version_id", "description", "name", "path", "paths"]);
+  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "artifacts", "base_version_id", "description", "name", "path", "paths"]);
   assert.deepEqual(declareSchema.required ?? [], []);
   assert.deepEqual(
     declareSchema.properties.paths,
@@ -972,6 +1019,26 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     { error: "missing file", ok: false, path: "outputs/missing" },
     { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/last", version: 1, version_id: "version-1" },
   ]);
+  const alias = { artifacts: [{ path: "outputs/alias", name: "ignored", description: "ignored" }] };
+  assert.ok(Check(declare.parameters, alias), "the alias must survive tool schema validation before execute");
+  await mkdir(resolve(aliasWorkspace, "outputs"), { recursive: true });
+  await writeFile(resolve(aliasWorkspace, "outputs/alias"), "existing output");
+  let aliased;
+  try {
+    aliased = await declare.execute("declare-alias", alias);
+  } finally {
+    await rm(aliasWorkspace, { recursive: true, force: true });
+  }
+  assert.deepEqual(calls.at(-1), { path: "outputs/alias" }, "alias items keep paths batch storage semantics");
+  assert.equal((aliased.details as typeof batchPayload).artifacts[0]?.path, "outputs/alias");
+  await declare.execute("declare-paths-priority", { ...alias, paths: ["outputs/priority"] });
+  assert.deepEqual(calls.at(-1), { path: "outputs/priority" });
+  const callCount = calls.length;
+  for (const artifacts of [null, {}, "result.md", [], [null], ["result.md"], [{}], [{ path: 42 }], [{ path: "" }], [{ path: "  " }], [{ path: "valid" }, {}]]) {
+    assert.ok(Check(declare.parameters, { artifacts }), "malformed aliases reach actionable runtime validation");
+    await assert.rejects(declare.execute("declare-bad-alias", { artifacts }), /path.*paths.*artifacts\[\]\.path/);
+  }
+  assert.equal(calls.length, callCount, "validate the complete alias before declaring any files");
   await assert.rejects(declare.execute("declare-empty", {}), /path or paths is required/);
   await assert.rejects(declare.execute("declare-empty-paths", { paths: [] }), /at least one path/);
   await assert.rejects(
@@ -980,6 +1047,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   );
   await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", path: "edit.dat" }), /required together/);
   await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", paths: ["edit.dat"] }), /cannot rename or batch/);
+  await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", ...alias }), /cannot rename or batch/);
   await declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", path: "edit.dat" });
   assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", toolCallId: "revision", path: "edit.dat" });
   const listed = await list.execute("list", {});
@@ -1736,8 +1804,11 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.match(task.description, /id: specialist-code; description: Builds and debugs analysis code/);
   assert.doesNotMatch(task.description, /Code implementer/);
   assert.match(task.description, /semantic match against specialist descriptions/);
+  assert.match(task.description, /Always include both description \(a short label\) and prompt/);
   assert.match(task.description, /Do not also request the complete report or source package/);
   assert.match(JSON.stringify(taskProperties.prompt), /concise handoff with its ID\/version/);
+  assert.match(JSON.stringify(taskProperties.prompt), /description is only a short label and never substitutes for prompt/);
+  assert.equal(Check(task.parameters, { description: "Compare method A" }), false, "prompt remains required by the task schema");
   const result = await task.execute("task-call", {
     brief: {
       collaborationRules: ["Work independently", "Return one final JSON object"],
@@ -2552,4 +2623,66 @@ test("tournament_rank proximity returns collapse suspects with caller-array indi
   assert.ok(details.mostSimilar[0]!.similarity > 0.7);
   const tooFew = await tool.execute("c", { action: "proximity", texts: ["only one"] });
   assert.match(tooFew.content[0]?.type === "text" ? tooFew.content[0].text : "", /at least 2/);
+});
+
+test("foreground Shell forwards incremental logs before completion without losing final output", async () => {
+  const job = { id: "job", state: "running" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const chunks: string[] = [];
+  const cursors: number[] = [];
+  let waits = 0;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("unused"); },
+    shellExecutions: {
+      start: async () => job,
+      wait: async (_id, ms) => {
+        assert.ok(ms <= 250);
+        waits++;
+        if (waits === 2) {
+          assert.deepEqual(chunks, ["Searching PubMed\nError: source unavailable\n"]);
+          return { ...job, state: "failed" };
+        }
+        return job;
+      },
+      logs: async (_id, cursor) => {
+        cursors.push(cursor!);
+        return { chunks: waits === 1 ? [
+          { cursor: 0, stream: "stdout" as const, text: "Searching PubMed\n" },
+          { cursor: 1, stream: "stderr" as const, text: "Error: source unavailable\n" },
+        ] : [], nextCursor: 2, retentionTruncated: false, truncated: false };
+      },
+      get: async () => job, list: () => [job], cancel: async () => job,
+    },
+  });
+  const result = await tools.find(tool => tool.name === "run_shell")!.execute("shell", { command: "search", wait_ms: 5000 }, undefined, chunk => chunks.push(chunk));
+  assert.equal(result.isError, true);
+  assert.deepEqual(cursors, [0, 2]);
+  assert.match(result.content[0]!.text, /failed/);
+});
+
+test("Shell progress observation failures and aborts preserve execution semantics", async () => {
+  const job = { id: "job", state: "running" } as import("@sciencediscovery/schema").AgentShellExecution;
+  let logs = 0;
+  let waits = 0;
+  const controller = new AbortController();
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("unused"); },
+    shellExecutions: {
+      start: async () => job,
+      wait: async () => { waits++; return { ...job, state: "completed" }; },
+      logs: async () => { logs++; throw new Error("observation unavailable"); },
+      get: async () => job, list: () => [job], cancel: async () => job,
+    },
+  });
+  const tool = tools.find(tool => tool.name === "run_shell")!;
+  const result = await tool.execute("shell", { command: "search" }, controller.signal, () => { throw new Error("observer"); });
+  assert.equal(result.isError, false);
+  assert.equal(logs, 1);
+  controller.abort(new Error("cancel requested"));
+  await assert.rejects(tool.execute("cancel", { command: "search" }, controller.signal, () => {}), /cancel requested/);
+  assert.equal(waits, 1, "an aborted foreground call never polls");
+  const withoutObserver = await tool.execute("plain", { command: "search" });
+  assert.equal(withoutObserver.isError, false);
+  assert.equal(logs, 1, "ordinary calls do not read live logs");
 });

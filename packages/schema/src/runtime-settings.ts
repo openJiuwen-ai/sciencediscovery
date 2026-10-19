@@ -19,6 +19,7 @@ import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
   | "agentMemoryBackgroundReview"
+  | "defaultApprovalMode"
   | "plugins"
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
@@ -57,6 +58,8 @@ export interface RuntimeSettingsOverrides {
    *  agent-memory candidates (human review gate before prompt use). Default
    *  false — opt-in, DeepAnalyze parity. */
   agentMemoryBackgroundReview?: boolean;
+  /** Global/Project default for new Sessions only; never changes existing Sessions. */
+  defaultApprovalMode?: import("./plan.js").ApprovalMode;
   /** Per-plugin overrides. Changes affect newly queued runs, never an active composition. */
   plugins?: Record<string, { enabled?: boolean; config?: Record<string, import("./mcp-result.js").JsonValue> }>;
   enabledConnectorIds?: ConnectorId[];
@@ -87,6 +90,7 @@ export interface RuntimeSettingsOverrides {
 
 export interface EffectiveRuntimeSettings {
   agentMemoryBackgroundReview?: boolean;
+  defaultApprovalMode?: import("./plan.js").ApprovalMode;
   plugins?: RuntimeSettingsOverrides["plugins"];
   enabledConnectorIds: ConnectorId[];
   /** Versioned skill libraries searched at run creation/execution time. */

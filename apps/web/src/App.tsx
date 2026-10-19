@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useMcpReadiness } from "./composer/useMcpReadiness.js";
 import { ExecutionBlockCards } from "./ExecutionReadiness.js";
 
 import {
@@ -119,6 +120,8 @@ import {
 const EVOLVE_CARD_POLL_MS = 3_000;
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
+import { replaceDefaultModelOverride } from "./default-model-override.js";
+import { settleLoads, startupLoads, systemSettingsLoads, workspaceCapabilitiesFromQuota } from "./settings-loads.js";
 import { isAuthFailure } from "./api/auth.js";
 import { TrajectoryViewer } from "@sciencediscovery/trajectory/web";
 import { createSessionActivity } from "./run-stream/session-activity.js";
@@ -253,6 +256,7 @@ import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
 import { ToastViewport, useToasts } from "./Toasts.js";
+import { watchLocalAccessToken } from "./local-access-token.js";
 import { createAuthTokenPromptGate } from "./auth-token-prompt.js";
 import { InlineErrorAlert, updateInlineErrors } from "./InlineErrorAlert.js";
 import { createSettingsErrorRouter } from "./settings-error-routing.js";
@@ -304,7 +308,6 @@ import {
   buildConversationBlocks,
   followSessionTitleRefinement,
   forgetSession,
-  getVisibleProjects,
   messageForSessionTitle,
   sortSessionRuns,
 } from "./session/model.js";
@@ -1185,7 +1188,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sandboxNetworkSettings, setSandboxNetworkSettings] = useState<SandboxNetworkSettings>();
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
-  const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
   const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
@@ -1307,6 +1309,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const authPromptGate = useRef(createAuthTokenPromptGate());
   const activeTokenRef = useRef(token);
   activeTokenRef.current = token;
+  useEffect(() => watchLocalAccessToken(window, (nextToken) => {
+    activeTokenRef.current = nextToken;
+    setToken(nextToken);
+  }), []);
   const promptForToken = useCallback(() => {
     if (activeTokenRef.current !== token) return; // Ignore a late verdict on the previous credential.
     setTokenRejected(Boolean(token));
@@ -1315,6 +1321,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const mcpReadiness = useMcpReadiness(client);
+  const mcpSources = mcpReadiness.sources;
+
   // With the JiuwenSwarm backend its language follows the UI's: on load, and whenever the user switches.
   useEffect(() => {
     if (webSettings?.backend !== "jiuwenswarm") return;
@@ -1471,40 +1480,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   useEffect(() => {
     if (!showConfig) return;
     let active = true;
-    void Promise.all([
-      client.listModels(),
-      client.listProviders(),
-      client.listConnectors(),
-      client.listSkills(),
-      client.listSkillLibraries(),
-      client.getGlobalSettings(),
-      client.getTimeoutSettings(),
-      client.getQuotaSettings(),
-      client.getSandboxNetworkSettings(),
-      client.getWebSettings(),
-      client.getMemoryGraphSettings(),
-      client.getIdeaTreeSettings(),
-    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
-      if (!active) return;
-      setModels(modelItems);
-      setModelProviders(providerRegistry.providers);
-      setModelProviderPresets(providerRegistry.presets);
-      setConnectors(connectorItems);
-      setSkills(skillItems);
-      setSkillLibraries(skillLibraryItems);
-      setGlobalSettings(settings);
-      setTimeoutSettings(timeouts);
-      setQuotaSettings(quotas);
-      setSandboxNetworkSettings(sandboxNetwork);
-      setWebSettings(web);
-      setMemoryGraphSettings(memoryGraph);
-      setIdeaTreeSettings(ideaTree);
-      setWorkspaceCapabilities({
-        maxFileBytes: quotas.uploadMaxFileBytes,
-        maxRequestBytes: quotas.uploadMaxRequestBytes,
-        maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
-      });
-    }).catch((reason: Error) => {
+    // Each read settles on its own. One settings endpoint failing must not
+    // discard the provider presets, models, global defaults, or any other panel that loaded.
+    const whenActive = <T,>(apply: (value: T) => void) => (value: T) => {
+      if (active) apply(value);
+    };
+    void settleLoads(systemSettingsLoads(client, {
+      providers: whenActive((registry) => {
+        setModelProviders(registry.providers);
+        setModelProviderPresets(registry.presets);
+      }),
+      models: whenActive(setModels),
+      connectors: whenActive(setConnectors),
+      skills: whenActive(setSkills),
+      skillLibraries: whenActive(setSkillLibraries),
+      globalSettings: whenActive(setGlobalSettings),
+      timeouts: whenActive(setTimeoutSettings),
+      quotas: whenActive((quotas) => {
+        setQuotaSettings(quotas);
+        setWorkspaceCapabilities(workspaceCapabilitiesFromQuota(quotas));
+      }),
+      sandboxNetwork: whenActive(setSandboxNetworkSettings),
+      web: whenActive(setWebSettings),
+      memoryGraph: whenActive(setMemoryGraphSettings),
+      ideaTree: whenActive(setIdeaTreeSettings),
+    }), (reason) => {
       if (active) reportSystemSettingsError(reason);
     });
     return () => { active = false; };
@@ -1863,70 +1863,58 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     setError(undefined);
-    void Promise.all([
-      client.listProjects(),
-      client.listModels(),
-      client.listProviders(),
-      client.getModelCatalog(),
-      client.listConnectors(),
-      client.listSkills(),
-      client.listSkillLibraries(),
-      client.getGlobalSettings(),
-      client.getTimeoutSettings(),
-      client.getQuotaSettings(),
-      client.getSandboxNetworkSettings(),
-      client.getProxySettings(),
-      client.getMcpProxyPolicies(),
-      client.listMcpSources(),
-      client.getWebSettings(),
-      client.getMemoryGraphSettings(),
-      client.getIdeaTreeSettings(),
-    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
-      setProjects(projectItems);
-      setModels(modelItems);
-      setModelProviders(providerRegistry.providers);
-      setModelProviderPresets(providerRegistry.presets);
-      applyModelCatalog(catalog);
-      setConnectors(connectorItems);
-      setSkills(skillItems);
-      setSkillLibraries(skillLibraryItems);
-      setGlobalSettings(settings);
-      setTimeoutSettings(timeouts);
-      setQuotaSettings(quotas);
-      setSandboxNetworkSettings(sandboxNetwork);
-      setProxySettings(proxies);
-      setMcpProxyPolicies(mcpPolicyDetails.policies);
-      setMcpSources(mcpSourceDetails.map((item) => item.manifest));
-      setWebSettings(web);
-      setMemoryGraphSettings(memoryGraph);
-      setIdeaTreeSettings(ideaTree);
-      setWorkspaceCapabilities({
-        maxFileBytes: quotas.uploadMaxFileBytes,
-        maxRequestBytes: quotas.uploadMaxRequestBytes,
-        maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
-      });
-      // A Project named by the URL wins over the "first item" default.
-      const pending = pendingSelectionRef.current;
-      const pendingProjectId = pending?.projectId && projectItems.some((item) => item.id === pending.projectId) ? pending.projectId : undefined;
-      if (pending?.projectId && !pendingProjectId) pendingSelectionRef.current = null; // URL Project is gone: drop its Session preference too
-      const nextProjectId = projectItems.some((item) => item.id === activeProjectIdRef.current) ? activeProjectIdRef.current : pendingProjectId ?? projectItems[0]?.id;
-      setActiveProjectId(nextProjectId);
-      // Project-scoped settings named by the URL open against this fresh list;
-      // a target that is not in it degrades to "dialog closed".
-      const pendingSettings = pendingSettingsRef.current;
-      if (pendingSettings?.kind === "project") {
-        pendingSettingsRef.current = null;
-        const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
-        if (target) void openScopedSettings(target);
-      }
-
-    }).catch((reason: Error) => {
+    const reportStartupError = (reason: Error) => {
       // A cold start directly into System settings is an explicit settings
       // load operation, so its failure belongs to that dialog. Other startup
       // failures remain global even if a dialog opens later.
       if (initialView.settingsKind === "system") reportSystemSettingsError(reason);
       else setError(reason);
-    }).finally(() => setProjectsLoaded(true));
+    };
+    void settleLoads(startupLoads(client, {
+      providers: (registry) => {
+        setModelProviders(registry.providers);
+        setModelProviderPresets(registry.presets);
+      },
+      projects: (projectItems) => {
+        setProjects(projectItems);
+        // A Project named by the URL wins over the "first item" default.
+        const pending = pendingSelectionRef.current;
+        const pendingProjectId = pending?.projectId && projectItems.some((item) => item.id === pending.projectId) ? pending.projectId : undefined;
+        if (pending?.projectId && !pendingProjectId) pendingSelectionRef.current = null; // URL Project is gone: drop its Session preference too
+        const nextProjectId = projectItems.some((item) => item.id === activeProjectIdRef.current) ? activeProjectIdRef.current : pendingProjectId ?? projectItems[0]?.id;
+        setActiveProjectId(nextProjectId);
+        // Project-scoped settings named by the URL open against this fresh list;
+        // a target that is not in it degrades to "dialog closed".
+        const pendingSettings = pendingSettingsRef.current;
+        if (pendingSettings?.kind === "project") {
+          pendingSettingsRef.current = null;
+          const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
+          if (target) void openScopedSettings(target);
+        }
+      },
+      models: setModels,
+      catalog: applyModelCatalog,
+      connectors: setConnectors,
+      skills: setSkills,
+      skillLibraries: setSkillLibraries,
+      globalSettings: setGlobalSettings,
+      timeouts: setTimeoutSettings,
+      quotas: (quotas) => {
+        setQuotaSettings(quotas);
+        setWorkspaceCapabilities(workspaceCapabilitiesFromQuota(quotas));
+      },
+      sandboxNetwork: setSandboxNetworkSettings,
+      proxies: setProxySettings,
+      mcpPolicies: (details) => setMcpProxyPolicies(details.policies),
+      mcpSources: mcpReadiness.applyListing,
+      web: setWebSettings,
+      memoryGraph: setMemoryGraphSettings,
+      ideaTree: setIdeaTreeSettings,
+      // The project sidebar and the address bar wait on this flag. It follows
+      // the project request alone, so a hung settings read cannot keep the
+      // sidebar on its skeleton after the project list has already arrived.
+      onProjectsSettled: () => setProjectsLoaded(true),
+    }), reportStartupError);
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {
@@ -3373,6 +3361,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
     if (!routing.updatesSessionView) return;
     if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
+      mcpReadiness.check();
       void refreshArtifactOutputs(sessionId).catch(() => undefined);
     }
     if (streamEvent.type === "artifact_review.completed") {
@@ -3477,9 +3466,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   ): Promise<string | undefined> {
     if (!runId || !trace.outputStream) return undefined;
     const records = await client.listRunStreamEvents(sessionId, runId, trace.outputStream);
-    return records
-      .flatMap((record) => record.event.type === "tool.output" ? [record.event.chunk] : [])
-      .join("") || undefined;
+    const outputs = records.flatMap(record => record.event.type === "tool.output" ? [record.event] : []);
+    const progress = outputs.filter(event => event.progress).map(event => event.chunk).join("");
+    const result = outputs.filter(event => !event.progress).map(event => event.chunk).join("");
+    return (progress && result ? `${progress}\n\n---\n\n${result}` : progress || result) || undefined;
   }
 
   function resumeSessionRun(
@@ -4181,7 +4171,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     projectId: activeProjectId,
     sessions: artifactSessions,
   });
-  const visibleProjects = getVisibleProjects(projects, activeProjectId, projectsExpanded);
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
     : t("app.workspace");
@@ -4355,17 +4344,22 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <div className={sidebarResourceClass} style={{ "--sidebar-split": `${sidebarSplit}%` } as CSSProperties}>
           <div className={projectsExpanded ? "sidebar-section projects" : "sidebar-section projects collapsed"}>
             <SidebarSectionHeader
+              addDisabled={!projectsLoaded || !globalSettings}
               addLabel={t("sidebar.addProject")}
-              count={projects.length}
+              count={projectsLoaded ? projects.length : undefined}
               expanded={projectsExpanded}
               label={t("sidebar.projects")}
-              onAdd={() => { setProjectsExpanded(true); setProjectCreationOpen(true); }}
+              onAdd={() => {
+                if (!projectsLoaded || !globalSettings) return;
+                setProjectsExpanded(true);
+                setProjectCreationOpen(true);
+              }}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
               panelId="projects-panel-content"
             />
-            <div className="sidebar-panel-content" id="projects-panel-content">
+            {projectsExpanded ? <div className="sidebar-panel-content" id="projects-panel-content">
               <div className="nav-list">
-              {!projectsLoaded ? <SkeletonRows className="nav-skeleton" count={3} /> : visibleProjects.map((project) => {
+              {!projectsLoaded ? <SkeletonRows className="nav-skeleton" count={3} /> : projects.map((project) => {
                 const target = { id: project.id, kind: "project" as const, label: project.name };
                 const inlineTarget = renameTarget?.kind === "project"
                   && renameTarget.id === project.id
@@ -4415,7 +4409,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </div>
               })}
               </div>
-            </div>
+            </div> : null}
           </div>
           {activeProject ? <>
             <SidebarPanelResizer
@@ -4642,9 +4636,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <div className="session-intro">
                       <span className="eyebrow">{t("empty.sessionReady")}</span>
                       <h2>{t("empty.investigate")}</h2>
-                      <p>{session.enabledConnectorIds.includes("pubmed") && session.enabledConnectorIds.includes("uniprot")
-                        ? t("app.sessionIntroPrompt")
-                        : t("empty.sessionCsvHelp")}</p>
                     </div>
                   ) : null}
                   {conversationBlocks.map((block) => block.kind === "message" ? (
@@ -4796,6 +4787,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
+                  {reviewerSpecialistSettings && !reviewerSpecialistSettings.enabled && session.reviewerAutomaticReviewEnabled
+                    ? <div className="composer-thinking-notice" role="status">{t("reviewer.automaticUnavailable")}</div>
+                    : null}
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
@@ -4817,6 +4811,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         disabled={isRunning || sessionArchived}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
+                        specialistIds={specialists.find(item => item.id === session.specialistId)?.connectorIds ?? []}
+                        sourceStatuses={mcpReadiness.sourceStatuses}
+                        onOpen={mcpReadiness.check}
+                        onReload={mcpReadiness.reload}
+                        refreshing={mcpReadiness.refreshing}
+                        refreshError={mcpReadiness.error}
                       />
                       <KbScopePicker
                         details={sessionSettings}
@@ -4831,6 +4831,23 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
+                    <button
+                      aria-checked={Boolean(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled)}
+                      aria-label={t("reviewer.automaticReview")}
+                      className="automatic-review-toggle"
+                      disabled={sessionArchived || reviewerSessionSettingsBusy || !reviewerSpecialistSettings}
+                      onClick={() => reviewerSpecialistSettings?.enabled
+                        ? void updateSessionReviewerSpecialistSettings({
+                          automaticReviewEnabled: !session.reviewerAutomaticReviewEnabled,
+                          level: session.reviewerSpecialistLevel,
+                        })
+                        : openSystemSettings("specialists")}
+                      role="switch"
+                      title={t(reviewerSpecialistSettings?.enabled ? "reviewer.automaticReview" : "reviewer.automaticUnavailable")}
+                      type="button"
+                    >
+                      {t("reviewer.automaticReview")}: {t(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled ? "common.on" : "common.off")}
+                    </button>
                     <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
                   </div>
                 </form>
@@ -5236,13 +5253,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   models={models}
                   onCatalogChange={applyModelCatalog}
                   onDefaultModelSet={async (modelId) => {
-                    // One setting, written from the wizard and from the
-                    // registry's default-model row alike; keep every other
-                    // global override instead of replacing the whole object.
-                    const overrides = { ...(globalSettings?.overrides ?? {}) };
-                    if (modelId) overrides.modelId = modelId;
-                    else delete overrides.modelId;
-                    const updated = await client.replaceGlobalSettings(overrides);
+                    // Read the stored overrides at save time. The in-memory
+                    // copy is empty when that load failed or has not returned,
+                    // and writing it would replace every other global override.
+                    const updated = await replaceDefaultModelOverride(client, modelId);
                     setGlobalSettings(updated);
                     if (activeProjectId) {
                       setProjectSettings(await client.getProjectSettings(activeProjectId));
@@ -5261,9 +5275,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 />
               </> : null}
               {systemSettingsGroup === "mcp" ? <McpServerSettings client={client} sources={mcpSources} sessionId={activeSessionId || undefined} sessionTitle={session?.title} onChanged={async () => {
-                const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
+                const [items] = await Promise.all([client.listConnectors(), mcpReadiness.refresh()]);
                 setConnectors(items);
-                setMcpSources(sourceDetails.map((item) => item.manifest));
               }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings
@@ -5432,7 +5445,6 @@ export {
   ComposerRunButton,
   followSessionTitleRefinement,
   forgetSession,
-  getVisibleProjects,
   hydrateSessionRunTimeline,
   hydrateTimelineSubagents,
   hydrateTerminalRunTimelines,

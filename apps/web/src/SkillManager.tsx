@@ -279,6 +279,8 @@ function SkillCatalogManager({
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const importInput = useRef<HTMLInputElement>(null);
   const importFolderInput = useRef<HTMLInputElement>(null);
+  const [folderImportSupported] = useState(() =>
+    typeof document !== "undefined" && "webkitdirectory" in document.createElement("input"));
   const nextResourceId = useRef(1);
 
   const visibleSkills = useMemo(() => {
@@ -542,12 +544,12 @@ function SkillCatalogManager({
         <div className="skill-toolbar-popover">
           <span className="skill-toolbar-popover-label">{t("skillManager.importGroupLabel")}</span>
           <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importInput.current?.click(); }} type="button"><span className="skill-action-icon">↥</span><span><strong>{t("skillManager.importFile")}</strong><small>{t("skillManager.importFileHint")}</small></span></button>
-          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importFolderInput.current?.click(); }} type="button"><span className="skill-action-icon">□</span><span><strong>{t("skillManager.importFolder")}</strong><small>{t("skillManager.importFolderHint")}</small></span></button>
+          <button disabled={busy || !folderImportSupported} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importFolderInput.current?.click(); }} type="button"><span className="skill-action-icon">□</span><span><strong>{t("skillManager.importFolder")}</strong><small>{t(folderImportSupported ? "skillManager.importFolderHint" : "skillManager.importFolderUnsupported")}</small></span></button>
           <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAuthoringMode("git"); setGitImport({ ref: "", repositoryUrl: "", subdirectory: "" }); setGitInspection(undefined); setGitLinkNotice(undefined); }} type="button"><span className="skill-action-icon">⑂</span><span><strong>{t("skillManager.importGit")}</strong><small>{t("skillManager.importGitHint")}</small></span></button>
         </div>
       </details>
       <input accept=".md,.zip,text/markdown,application/zip" aria-label={t("skillManager.importFileAria")} className="visually-hidden" onChange={(event) => void importSkill(event.target.files?.[0])} ref={importInput} type="file" />
-      <input {...{ webkitdirectory: "" }} aria-label={t("skillManager.importFolderAria")} className="visually-hidden" multiple onChange={(event) => void importSkillFolder(event.target.files)} ref={importFolderInput} type="file" />
+      <input disabled={!folderImportSupported} {...{ webkitdirectory: "" }} aria-label={t("skillManager.importFolderAria")} className="visually-hidden" multiple onChange={(event) => void importSkillFolder(event.target.files)} ref={importFolderInput} type="file" />
     </div>
     {reviewDrafts.length ? <section className="skill-review-queue"><span aria-hidden="true" className="skill-review-queue-icon">!</span><div><strong>{t(reviewDrafts.length === 1 ? "skillManager.pendingReviewOne" : "skillManager.pendingReviewMany", { count: reviewDrafts.length })}</strong><p>{t("skillManager.reviewQueueHint")}</p></div><button disabled={busy} onClick={() => openWorkspace(reviewDrafts[0]?.name)} type="button">{t("skillManager.openReviewWorkspace")} <span>{reviewDrafts.length}</span></button></section> : null}
     {authoringMode === "git" ? <form className="skill-authoring-panel skill-git-import-panel" onSubmit={(event) => void inspectGitRepository(event)}>

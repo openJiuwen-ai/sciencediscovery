@@ -188,10 +188,13 @@ export class PluginControl {
         const candidateSettings = candidate.pinnedProposed;
         if (digest((await this.pin(baselineSettings)).assets)!==digest(candidate.baselineAssets)
           || digest((await this.pin(candidateSettings)).assets)!==digest(candidate.proposedAssets)) throw new BridgeError("conflict","Skill assets changed; create a new candidate");
-        // Two ordinary isolated Sessions reuse the existing Run/Runner path and permissions.
-        const baseline = await this.ports.createSession(projectId, "Plugin experiment: baseline", baselineSettings, {}, { allowUnconfiguredModel: true });
+        // Defaults belong to Global/Project settings, never experiment Session overrides.
+        const { defaultApprovalMode: baselineDefault, ...baselineSessionSettings } = baselineSettings;
+        const { defaultApprovalMode: candidateDefault, ...candidateSessionSettings } = candidateSettings;
+        // Two ordinary isolated Sessions retain their explicit safe approval intent.
+        const baseline = await this.ports.createSession(projectId, "Plugin experiment: baseline", baselineSessionSettings, { approvalMode: "ask_for_dangerous" }, { allowUnconfiguredModel: true });
         let next;
-        try { next = await this.ports.createSession(projectId, "Plugin experiment: candidate", candidateSettings, {}, { allowUnconfiguredModel: true }); }
+        try { next = await this.ports.createSession(projectId, "Plugin experiment: candidate", candidateSessionSettings, { approvalMode: "ask_for_dangerous" }, { allowUnconfiguredModel: true }); }
         catch (error) {
           try { await this.ports.deleteSession(baseline.id, baseline.id); }
           catch (cleanup) { throw new AggregateError([error, cleanup], "Experiment preparation and cleanup failed"); }

@@ -17,14 +17,13 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { Project, RemoteHostTarget, Session, SessionDetail } from "@sciencediscovery/schema";
+import type { RemoteHostTarget, Session, SessionDetail } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   buildCreateSessionRequest,
   followSessionTitleRefinement,
-  getVisibleProjects,
   mergeRefreshedSessionDetail,
   mergeSessionDetailWithSummary,
   messageForSessionTitle,
@@ -135,16 +134,6 @@ test("a refined title that arrives after the run stream closes is applied by bou
   assert.deepEqual(updates.map((session) => session.title), [refined.title]);
   assert.deepEqual(waits, [500, 1_000]);
   assert.equal(responses.length, 0);
-});
-
-test("a collapsed Projects panel keeps only the selected project visible", () => {
-  const projects = [
-    { createdAt: "2026-01-01T00:00:00.000Z", id: "project-1", name: "First", settingsOverrides: {} },
-    { createdAt: "2026-01-02T00:00:00.000Z", id: "project-2", name: "Second", settingsOverrides: {} },
-  ] satisfies Project[];
-
-  assert.deepEqual(getVisibleProjects(projects, "project-2", false).map((project) => project.id), ["project-2"]);
-  assert.deepEqual(getVisibleProjects(projects, "project-2", true).map((project) => project.id), ["project-1", "project-2"]);
 });
 
 test("an inline rename draft is shared only with the matching resource", () => {

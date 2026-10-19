@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createLocalSessionTitle, type ModelProfile } from "@sciencediscovery/schema";
+import { completeChatRequest } from "@sciencediscovery/model";
+import { createLocalSessionTitle, type ModelProfile, type ResolvedProxy } from "@sciencediscovery/schema";
 
 import { parseProviderUsage, type ProviderUsageBreakdown } from "./provider-usage.js";
 
@@ -136,7 +137,7 @@ function aggregateProviderUsage(attempts: ProviderUsageBreakdown[]): ProviderUsa
       usageStatus: "provider-not-reported",
     };
   }
-  const sum = (field: keyof Omit<ProviderUsageBreakdown, "usageStatus">): number | null => {
+  const sum = (field: keyof Omit<ProviderUsageBreakdown, "usageStatus" | "aliasConflict">): number | null => {
     const values = attempts.map((usage) => usage[field]);
     return values.every((value): value is number => value !== null)
       ? values.reduce((total, value) => total + value, 0)
@@ -157,60 +158,50 @@ export async function generateRefinedSessionTitle(options: {
   fetchImpl?: typeof fetch;
   firstMessage: string;
   model: ModelProfile;
+  proxy?: ResolvedProxy;
 }): Promise<RefinedSessionTitle> {
   const startedAt = new Date().toISOString();
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const requestCompletion = (disableThinking: boolean, fixedTemperature = true) => fetchImpl(
-    `${options.model.baseUrl.replace(/\/$/, "")}/chat/completions`,
+  const fetchImpl = options.fetchImpl;
+  const requestCompletion = (disableThinking: boolean, fixedTemperature = true) => completeChatRequest(
+    { ...options.model, apiToken: options.apiToken, proxy: options.proxy },
     {
-      body: JSON.stringify({
-        messages: [
-          { content: SESSION_NAMING_SYSTEM_PROMPT, role: "system" },
-          { content: namingRequest(options.firstMessage), role: "user" },
-        ],
-        model: options.model.model,
-        ...(fixedTemperature ? { temperature: 0 } : {}),
-        ...(disableThinking
-          ? { max_tokens: 64, thinking: { type: "disabled" } }
-          : {}),
-      }),
-      headers: {
-        authorization: `Bearer ${options.apiToken}`,
-        "content-type": "application/json",
-      },
-      method: "POST",
-      signal: AbortSignal.timeout(30_000),
-    },
+      messages: [
+        { content: SESSION_NAMING_SYSTEM_PROMPT, role: "system" },
+        { content: namingRequest(options.firstMessage), role: "user" },
+      ],
+      ...(fixedTemperature ? { temperature: 0 } : {}),
+      ...(disableThinking ? { max_tokens: 64, thinking: { type: "disabled" } } : {}),
+    }, AbortSignal.timeout(30_000), fetchImpl,
   );
 
-  const disableThinking = supportsThinkingToggle(options.model);
+  const disableThinking = options.model.apiProtocol === "anthropic-messages" || options.model.apiProtocol === "openai-responses" || supportsThinkingToggle(options.model);
   let response = await requestCompletion(disableThinking);
-  let usedUnboundedFallback = false;
+  let usedDefaultBudgetFallback = false;
   // `thinking` is a provider extension. Strict OpenAI-compatible gateways may
-  // reject it. Let the provider choose the output budget on fallback so a
-  // reasoning model can reach its visible answer before we truncate locally.
+  // reject it. Use the shared bounded default budget on fallback so a
+  // reasoning model has room to reach its visible answer.
   if (disableThinking && (response.status === 400 || response.status === 422)) {
     response = await requestCompletion(false);
-    usedUnboundedFallback = true;
+    usedDefaultBudgetFallback = true;
   }
   // Some models take only their own temperature (Kimi's coding models answer 400 "only 1 is allowed"):
   // the last try leaves it to the provider.
   if (response.status === 400 || response.status === 422) {
     response = await requestCompletion(false, false);
-    usedUnboundedFallback = true;
+    usedDefaultBudgetFallback = true;
   }
-  if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
   let body = await response.json() as ChatCompletionBody;
-  const attemptUsages = [parseProviderUsage(body.usage)];
+  const attemptUsages = [parseProviderUsage(body.usage, "openai-chat-completions")];
   // Some compatible gateways accept unknown fields but silently ignore them.
-  // If all limited output was still reasoning, retry once without a provider
-  // limit and use only the visible content from that response.
-  if (disableThinking && !usedUnboundedFallback && reasoningConsumedVisibleAnswer(body)) {
+  // If all limited output was still reasoning, retry once with the shared
+  // bounded default budget and use only that response's visible content.
+  if (disableThinking && !usedDefaultBudgetFallback && reasoningConsumedVisibleAnswer(body)) {
     response = await requestCompletion(false);
-    usedUnboundedFallback = true;
-    if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
+    usedDefaultBudgetFallback = true;
+    if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
     body = await response.json() as ChatCompletionBody;
-    attemptUsages.push(parseProviderUsage(body.usage));
+    attemptUsages.push(parseProviderUsage(body.usage, "openai-chat-completions"));
   }
 
   const choice = body.choices?.[0];

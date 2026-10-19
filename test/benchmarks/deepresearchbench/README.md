@@ -84,9 +84,11 @@ the real project and configured generator/Judge credentials.
 The default run budget is one hour (`E2E_DRB_RUN_TIMEOUT_MS=3600000`).
 DRB-58, DRB-62, and DRB-75 default to 90 minutes; DRB-59 and DRB-64 default
 to 120 minutes. Their case-specific overrides (`E2E_DRB_<id>_RUN_TIMEOUT_MS`)
-take precedence over the suite-wide budget. The daily CI suite-wide budget is
-one hour, matching the default here. The separate evaluation budget is one hour
-(`E2E_DRB_EVAL_TIMEOUT_MS`). These
+take precedence over the suite-wide budget. The daily CI suite-wide run budget is
+one hour, matching the default here. The separate evaluation budget defaults to
+one hour (`E2E_DRB_EVAL_TIMEOUT_MS`). Daily CI sets it to 40 minutes
+(`2400000`): RACE and FACT share that deadline, and citation accuracy is recorded
+only when FACT finishes. These
 are harness deadlines, not injected research-count instructions. Judge mode
 `full` is the default and requests RACE and FACT. Missing Judge credentials
 record an evaluation error without preventing the research run or failing delivery.
@@ -95,8 +97,16 @@ records. Neither means a full quality assessment succeeded.
 
 ## Assertions and score semantics
 
-E2E success requires a completed main run whose final response references at least
-one readable, nonempty persisted artifact. Names and directories are unrestricted.
+E2E success requires a completed main Run chain with a readable, nonempty
+declared final report selected as the newest declaration of that Artifact
+name across the main Run chain. The requested `deepresearchbench-<id>.md`
+may be nested; a differently named Markdown/text report is accepted only when
+its producing Run explicitly hands it off as the final report. The official
+named report remains authoritative when a later wake merely mentions notes.
+An intermediate note alone cannot pass. A later wake declaring another file
+does not erase an earlier report; an unreadable newer declaration of the same
+name does not
+fall back to an older one. Broken supplementary files remain diagnostics.
 A failed or cancelled run with outputs is a partial delivery. Research activity,
 child counts, word counts, headings, URL counts and quality scores do not gate
 completion. Scoring uses the immutable report version selected by final delivery;

@@ -159,3 +159,34 @@ test("standing grants are listable and revocable", () => {
   assert.match(html, /pubmed · this Session/);
   assert.match(html, /Revoke/);
 });
+
+test("direct consent is visibly unsandboxed and retains exact command whitespace", () => {
+  const request: PermissionRequest = { id: "direct", action: "direct_code", createdAt: "2026-01-01T00:00:00Z",
+    resource: "direct:bound-scope", sessionId: "session", state: "pending",
+    summary: "DIRECT HOST EXECUTION: machine, account user, cwd workspace. No isolation.\nprintf 'a  b'\n" };
+  const html = renderToStaticMarkup(createElement(PermissionCards, {
+    expandedCards: {}, onDecision: async () => {}, onToggleCard: noopToggle, requests: [request],
+  }));
+  assert.match(html, /Execute directly on the host \(no sandbox\)/);
+  assert.match(html, /white-space:pre-wrap/);
+  assert.match(html, /a  b/);
+  assert.match(html, /Allow once/);
+  assert.match(html, /Deny/);
+  assert.notEqual(permissionMatchingKey(request), permissionMatchingKey({ ...request, resource: "direct:other-run" }));
+});
+
+test("network consent names hosts and purpose in the conversation without expanding details", () => {
+  const html = renderToStaticMarkup(createElement(PermissionCards, {
+    expandedCards: {}, onToggleCard: noopToggle, onDecision: async () => {},
+    requests: [{ action: "sandbox_network", createdAt: "2026-10-18T00:00:00Z", id: "network",
+      sessionId: "s", resource: "sandbox-network:scoped-digest", state: "pending",
+      summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records." }],
+  }));
+  assert.match(html, /Sandbox network access/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /sandbox-network:scoped-digest/);
+  assert.match(html, /for this Agent run/);
+  assert.match(html, /eutils.ncbi.nlm.nih.gov:443/);
+  assert.match(html, /Retrieve requested PubMed records/);
+  assert.match(html, /Allow once/); assert.match(html, /Deny/);
+});

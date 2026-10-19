@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
+import { completeChatRequest } from "@sciencediscovery/model";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -29,6 +31,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile, scanWorkspace } from "@sciencediscovery/workspace";
 import { CasStore } from "@sciencediscovery/cas";
+import { normalizeUsage } from "@sciencediscovery/model";
 
 import { SessionStore } from "./store.js";
 
@@ -39,24 +42,6 @@ const MAX_VISION_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VISION_TOTAL_BYTES = 12 * 1024 * 1024;
 const MAX_VISION_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_VISION_PROMPT = "Describe the scientific content of these extracted paper pages and figures. Transcribe only labels and values needed to explain plots, diagrams, or tables; do not invent unreadable details. Distinguish direct observations from interpretation.";
-
-function numberFromUsage(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
-}
-
-function extractOpenAiUsage(value: unknown): PaperVisionRun["modelUsage"] | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const usage = value as Record<string, unknown>;
-  const inputTokens = numberFromUsage(usage.prompt_tokens ?? usage.input_tokens);
-  const outputTokens = numberFromUsage(usage.completion_tokens ?? usage.output_tokens);
-  const totalTokens = numberFromUsage(usage.total_tokens);
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) return undefined;
-  return {
-    inputTokens: inputTokens ?? Math.max(0, (totalTokens ?? 0) - (outputTokens ?? 0)),
-    outputTokens: outputTokens ?? Math.max(0, (totalTokens ?? 0) - (inputTokens ?? 0)),
-    totalTokens: totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0),
-  };
-}
 
 interface StorePaperOptions {
   bytes: Buffer;
@@ -93,7 +78,7 @@ export class PaperService {
     private readonly store: SessionStore,
     private readonly pythonPath: string,
     private readonly workerPath: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl?: typeof fetch,
   ) {
     this.cas = new CasStore(store.dataDir);
     this.dataCas = new CasStore(store.dataDir, "data");
@@ -296,8 +281,7 @@ export class PaperService {
       paperId: acquisition.id,
       prompt,
     }));
-    const response = await this.fetchImpl(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      body: JSON.stringify({
+    const response = await completeChatRequest({ ...model, apiToken, proxy: resolveProxyForUrl(this.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, {
         messages: [{
           content: [
             { text: prompt, type: "text" },
@@ -308,22 +292,19 @@ export class PaperService {
           ],
           role: "user",
         }],
-        model: model.model,
         temperature: 0,
-      }),
-      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-      method: "POST",
-      signal: AbortSignal.timeout(90_000),
-    });
-    if (!response.ok) throw new Error(`Vision model failed with HTTP ${response.status}`);
+    }, AbortSignal.timeout(90_000), this.fetchImpl, MAX_VISION_RESPONSE_BYTES);
+    if (!response.ok) throw new Error(`Vision model failed with HTTP ${response.status}: ${(await response.text()).slice(0, 2000)}`);
     const declaredLength = Number(response.headers.get("content-length") || "0");
     if (declaredLength > MAX_VISION_RESPONSE_BYTES) throw new Error("Vision model response exceeds the byte limit");
     const responseBytes = Buffer.from(await response.arrayBuffer());
     if (responseBytes.length > MAX_VISION_RESPONSE_BYTES) throw new Error("Vision model response exceeds the byte limit");
-    const responseBody = JSON.parse(responseBytes.toString("utf8")) as { choices?: Array<{ message?: { content?: string } }>; usage?: unknown };
+    const responseBody = JSON.parse(responseBytes.toString("utf8")) as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }>; usage?: unknown };
+    if (responseBody.choices?.[0]?.finish_reason === "length") throw new Error("Vision model response was truncated at its output limit");
     const content = responseBody.choices?.[0]?.message?.content?.trim();
     if (!content) throw new Error("Vision model returned no content");
-    const modelUsage = extractOpenAiUsage(responseBody.usage);
+    const usage = normalizeUsage(responseBody.usage, "openai-chat-completions");
+    const modelUsage = usage && { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens };
 
     const id = randomUUID();
     const resultPath = `${dirname(acquisition.pdfPath)}/vision/${id}.md`;

@@ -183,6 +183,14 @@ test("web_fetch refuses private and loopback targets", async () => {
     assertPublicUrl("https://internal.example.test/x", async () => ["10.1.2.3"]),
     PublicUrlError,
   );
+  await assert.rejects(
+    assertPublicUrl("https://unresolved.example.test/x", async () => []),
+    { name: "PublicUrlError", message: "host could not be resolved" },
+  );
+  await assert.rejects(
+    assertPublicUrl("https://mixed.example.test/x", async () => ["93.184.216.34", "fd00::1"]),
+    { name: "PublicUrlError", message: "local and private network URLs are not allowed" },
+  );
   assert.equal(
     await assertPublicUrl("https://example.test/x", async () => ["93.184.216.34"]),
     "https://example.test/x",

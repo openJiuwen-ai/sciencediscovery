@@ -48,10 +48,11 @@ test("renders the search tiers in attempt order with write-only credentials", ()
   // Search is one aggregated capability now: no provider picker, no DDGS name.
   assert.doesNotMatch(html, /DDGS|Search provider|Search fallback/);
   assert.match(html, /Paid search providers \(tried first\)/);
-  assert.match(html, /Free search engines \(tried after paid\)/);
+  assert.match(html, /Free search engines \(no API key\)/);
   assert.match(html, /Tavily · key saved/);
   assert.match(html, /Exa · no key/);
   assert.match(html, /A provider without a saved API key is skipped/);
+  assert.match(html, /Keyed paid providers are tried first/);
   assert.match(html, /A switched-off engine is never requested/);
   assert.match(html, /WebSearch proxy selection is managed in Network proxies/);
   assert.doesNotMatch(html, /Web proxy|Inherit global default|Corporate proxy/);

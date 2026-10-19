@@ -38,3 +38,29 @@ test("RunnerClient retains an HTTP failure status even when the Runner supplies 
     return true;
   });
 });
+
+test("direct capability probes preserve target workspace scope and caller cancellation", async t => {
+  const requests: URL[] = [];
+  const server = createServer((request, response) => {
+    assert.equal(request.headers.authorization, "Bearer fixture-token");
+    const url = new URL(request.url!, "http://fixture"); requests.push(url);
+    assert.equal(url.pathname, "/direct-execution-capability");
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ available: true, target: "instance", account: "user",
+      ...(url.search ? { workspaceRoot: "/target/workspace", cwd: url.searchParams.get("cwd") } : {}) }));
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  t.after(() => new Promise<void>(done => { server.close(() => done()); server.closeAllConnections(); }));
+  const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "fixture-token");
+  assert.equal((await client.directExecutionCapability()).workspaceRoot, undefined);
+  const remote = { runnerWorkspaceKey: "session/a space+&", cwd: "sub directory" };
+  assert.equal((await client.directExecutionCapability(undefined, remote)).cwd, remote.cwd);
+  const local = { workspaceRoot: "/target/space & plus+", cwd: "" };
+  await client.directExecutionCapability(new AbortController().signal, local);
+  assert.equal(requests[0]!.search, "");
+  assert.deepEqual(Object.fromEntries(requests[1]!.searchParams), remote);
+  assert.deepEqual(Object.fromEntries(requests[2]!.searchParams), local);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(client.directExecutionCapability(controller.signal, remote), /abort/i);
+  assert.equal(requests.length, 3, "an aborted probe must not reach the target");
+});

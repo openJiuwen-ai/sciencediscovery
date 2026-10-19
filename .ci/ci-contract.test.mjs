@@ -246,7 +246,16 @@ function artifactUploads(workflow) {
       paths: listed.filter((path) => !path.startsWith("!")),
       excluded: listed.filter((path) => path.startsWith("!")).map((path) => path.slice(1)),
       hidden: /^\s*include-hidden-files:\s*true\s*$/m.test(step),
+      overwrite: /^\s*overwrite:\s*true\s*$/m.test(step),
     };
+  });
+}
+
+/** Artifact names a workflow downloads exactly, not by pattern. */
+function exactArtifactDownloads(workflow) {
+  return workflow.split(/\n(?= *- )/).filter((step) => /uses: actions\/download-artifact@/.test(step)).flatMap((step) => {
+    const name = step.match(/^\s+name:\s*(.+)$/m)?.[1];
+    return name && !name.includes("${{") ? [name] : [];
   });
 }
 
@@ -299,6 +308,25 @@ test("each layer uploads the coverage its run wrote, whichever profile ran it", 
   }
   // The directory does not depend on the profile: the runner takes none.
   assert.equal(resultsLabel.length, 1);
+});
+
+test("a later job downloads the artifact from the latest attempt", async () => {
+  // Re-running a job leaves the previous attempt's artifact beside the new one.
+  // download-artifact resolves a name to one package, and that package can be
+  // the older attempt: Coverage then treats a passed re-run as incomplete
+  // because the manifest still says the first attempt failed. overwrite
+  // deletes the previous package before the new upload.
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  const uploads = [];
+  const downloads = new Set();
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".yml"))) {
+    const workflow = await readFile(join(directory, file), "utf8");
+    for (const upload of artifactUploads(workflow)) uploads.push(upload);
+    for (const name of exactArtifactDownloads(workflow)) downloads.add(name);
+  }
+  assert.ok(downloads.has("ut-coverage") && downloads.has("st-coverage"));
+  const missing = [...downloads].filter((name) => !uploads.some((upload) => upload.artifact === name && upload.overwrite));
+  assert.deepEqual(missing, []);
 });
 
 const scoreUploadPath = ".tmp/real-e2e-results";
@@ -369,6 +397,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     "e2e-real/tagged/preflight.json",
   ].sort();
   const diagnostics = [
+    "model-invalid-arguments.jsonl", "model-invalid-arguments.jsonl.1",
     "real-research/e2e/test-results/benchmark-case/trace.zip",
     "real-research/e2e/playwright-report/data/trace.zip",
     "real-research/e2e/playwright-report/index.html",
@@ -431,7 +460,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
   const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], { cwd: root, encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Staged 7 real E2E score\/plan files/);
-  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "real-e2e.yml"), "utf8");
   const uploads = artifactUploads(workflowJobs(ci)["real-e2e"]);
   const scoreDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-results-")).paths[0]);
   const evidenceDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-evidence-")).paths[0]);
@@ -463,4 +492,66 @@ test("missing or diagnostic-only real E2E results leave an empty score directory
   assert.match(run.stderr, /Skipping an invalid real E2E score/);
   assert.doesNotMatch(run.stderr + run.stdout, /PRIVATE_FIXTURE/);
   assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), []);
+});
+
+for (const [name, review, expected] of [
+  ["scored", { evaluator: "puct-artifact-review-v1", status: "scored", total_score: 86.25, gating: false }, "scored | 86.25 | false"],
+  ["zero score", { status: "scored", total_score: 0, gating: false }, "scored | 0 | false"],
+  ["judge timeout", { status: "error", total_score: null, gating: false }, "error | N/A | false"],
+  ["review not reached", undefined, "not_run | N/A | false"],
+  ["invalid fields", { status: "PRIVATE_FIXTURE\n| response", total_score: "PRIVATE_FIXTURE", gating: "PRIVATE_FIXTURE" }, "unknown | N/A | false"],
+]) {
+  test(`PUCT worker summary reports ${name} without exposing judge evidence`, async (t) => {
+    await mkdir(testRoot, { recursive: true });
+    const root = await mkdtemp(join(testRoot, "puct-summary-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const relative = "e2e-real/test-results/puct/evolve-metrics.json";
+    const source = join(root, ".ci-results", relative);
+    const summaryPath = join(root, "step-summary.md");
+    const privateFields = { error: "PRIVATE_FIXTURE error", prompt: "PRIVATE_FIXTURE prompt",
+      request: { token: "PRIVATE_FIXTURE credential" }, response: "PRIVATE_FIXTURE model response" };
+    const scorecard = review ? { ...privateFields, evaluator: "PRIVATE_FIXTURE evaluator", ...review } : undefined;
+    const metrics = { case: "PUCT-COMPRESS", integration_status: "passed", ...privateFields,
+      ...(scorecard ? { llm_evaluation: scorecard } : {}) };
+    await mkdir(dirname(source), { recursive: true });
+    await writeFile(source, JSON.stringify(metrics));
+    if (scorecard) await writeFile(join(dirname(source), "llm-scorecard.json"), JSON.stringify(scorecard));
+    const priorSummary = "### Real E2E\n\nplanned: 1, passed: 1\n\n";
+    await writeFile(summaryPath, priorSummary);
+    const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], {
+      cwd: root, encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const summary = await readFile(summaryPath, "utf8");
+    assert.ok(summary.startsWith(priorSummary), "keep the existing case accounting summary");
+    assert.match(summary, /\| evaluator \| status \| total_score \| gating \|/);
+    assert.ok(summary.includes(`| puct-artifact-review-v1 | ${expected} |`), summary);
+    assert.match(summary, /Unofficial, non-gating/);
+    assert.doesNotMatch(summary + run.stdout + run.stderr, /PRIVATE_FIXTURE/);
+    assert.ok(!summary.includes(root), "do not expose local evidence paths");
+    const staged = JSON.parse(await readFile(join(root, scoreUploadPath, relative), "utf8"));
+    assert.equal(staged.integration_status, "passed", "judge outcome does not change delivery outcome");
+    if (review && typeof review.total_score !== "string") {
+      assert.equal(staged.llm_evaluation.total_score, review.total_score);
+      assert.equal(staged.llm_evaluation.gating, false);
+    }
+    assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), [relative]);
+    assert.deepEqual(JSON.parse(await readFile(source, "utf8")), metrics);
+    if (scorecard) assert.deepEqual(JSON.parse(await readFile(join(dirname(source), "llm-scorecard.json"), "utf8")), scorecard);
+  });
+}
+
+test("other real workers do not get a PUCT review summary", async (t) => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "other-review-summary-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const summaryPath = join(root, "step-summary.md");
+  await writeFile(summaryPath, "Existing summary\n");
+  await prepareRealE2EResults(root, { summaryPath });
+  await mkdir(join(root, ".ci-results"), { recursive: true });
+  await writeFile(join(root, ".ci-results", "team-metrics.json"), JSON.stringify({
+    case: "TC-E2E-01", llm_evaluation: { status: "scored", total_score: 92, gating: false },
+  }));
+  await prepareRealE2EResults(root, { summaryPath });
+  assert.equal(await readFile(summaryPath, "utf8"), "Existing summary\n");
 });

@@ -28,7 +28,6 @@ export function createIdeaResearchClient(options: {
       const modelId = previous?.research.modelId ?? options.store.resolveRuntimeSettings(sessionId).effective.modelId;
       const model = options.store.getModel(modelId);
       if (!model || !options.store.getModelApiToken(model.id)) throw new Error("Configure a model with an API token before starting research");
-      if (model.apiProtocol === "anthropic-messages") throw new Error("Idea Tree requires an OpenAI-compatible model endpoint");
       const researchId = previous?.research.id ?? `research-${randomUUID()}`;
       options.tokens.revoke(researchId);
       const token = options.tokens.issue(researchId, sessionId, model.id);

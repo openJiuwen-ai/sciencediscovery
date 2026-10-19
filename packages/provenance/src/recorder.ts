@@ -193,6 +193,7 @@ export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environm
   /** Trusted coordinator supplies a durable identity and joins the Runner result. */
   executionId?: string;
   dispatch?: RunnerClient["executeShell"];
+  directAuthorization?: import("@sciencediscovery/schema").DirectExecutionAuthorization;
   completionStatus?: () => "succeeded" | "failed" | "cancelled";
 };
 
@@ -301,7 +302,7 @@ export class ProvenanceRecorder {
       origin: options.origin ?? "user_upload",
       ...(options.originMeta ? { originMeta: options.originMeta } : {}),
       path: options.path,
-      ...(options.references?.length ? { references: options.references } : {}),
+      ...(options.references !== undefined ? { references: options.references } : {}),
       sessionId: options.sessionId,
       sourcePath: options.sourcePath ?? options.path,
       ...(options.title ? { title: options.title } : {}),
@@ -391,6 +392,26 @@ export class ProvenanceRecorder {
     const sourceFileInputs = this.inferredSourceFileInputs(options.sessionId, options.name, code);
     const kind = this.artifactKind(options.path);
     const isReportKind = kind === "markdown" || kind === "latex" || kind === "report";
+    // A report writer may redeclare the same logical artifact without carrying
+    // base_version_id.  Retain only the old chip mappings still named by the
+    // revised text; otherwise unchanged [evidenceN] markers become dead links.
+    let inheritedReferences: ComposerReference[] | undefined;
+    if (isReportKind) {
+      const existing = (await this.store.listArtifacts(options.sessionId)).find((item) =>
+        options.artifactId ? item.id === options.artifactId : item.name === options.name);
+      if (existing) {
+        const versions = (await this.store.listArtifactVersions(options.sessionId, existing.id))
+          .filter((version) => version.sessionId === options.sessionId);
+        const previous = options.baseVersionId
+          ? versions.find((version) => version.id === options.baseVersionId)
+          : versions.at(-1);
+        if (previous?.references?.length) {
+          const source = await readFile(resolveWorkspaceFile(options.workspaceRoot, options.path), "utf8");
+          const aliases = new Set([...source.matchAll(/\[([a-z]+\d+)\]/gi)].map((match) => match[1]!.toLowerCase()));
+          inheritedReferences = previous.references.filter((reference) => aliases.has(reference.label.toLowerCase()));
+        }
+      }
+    }
     // Register FIRST, drain AFTER. registerWorkspaceArtifact reads the file
     // (ENOENT if the LLM declared a path that doesn't exist yet) and throws
     // before any version lands. If we drained the chip/claim buffer before
@@ -413,6 +434,7 @@ export class ProvenanceRecorder {
       originMeta: { declaredPath: options.sourcePath, ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}) },
       parentSubagentId: options.parentSubagentId,
       path: options.path,
+      ...(inheritedReferences !== undefined ? { references: inheritedReferences } : {}),
       sessionId: options.sessionId,
       sourcePath: options.sourcePath,
       turnId: options.turnId,
@@ -572,7 +594,7 @@ export class ProvenanceRecorder {
     parentSubagentId?: string;
     sessionId: string;
     toolCallId?: string;
-    toolName: "run_python" | "run_r" | "run_shell";
+    toolName: "run_python" | "run_r" | "run_shell" | "run_direct_shell";
     turnId: string;
     workspaceRoot: string;
     workspaceSnapshot?: AgentStateRef;
@@ -774,6 +796,7 @@ export class ProvenanceRecorder {
     try {
       result = await (options.dispatch ?? options.runnerClient.executeShell.bind(options.runnerClient))({
         agentId: options.agentId,
+        ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
         code: options.code,
         ...(options.environmentId ? { environmentId: options.environmentId } : {}),
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
@@ -807,18 +830,19 @@ export class ProvenanceRecorder {
         language: "shell",
         modifiedFiles: [],
         networkAccessRevision: epochSandboxNetworkAccess(options.permissionEpoch).revision,
-        networkPolicy: options.permissionEpoch.networkPolicy,
+        networkPolicy: options.directAuthorization ? "host" : options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
         ...(options.runnerId ? { runnerId: options.runnerId } : {}),
         runnerVersion: "unavailable",
-        sandbox,
+        sandbox: options.directAuthorization ? "none" : sandbox,
+        ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
         sessionId: options.sessionId,
         startedAt: timestamp,
         status: options.completionStatus?.() ?? interruptedExecutionStatus(options.signal),
         stderr: await this.cas.put(error instanceof Error ? error.message : "Runner shell execution failed"),
         stdout: await this.cas.put(""),
-        tool: "run_shell",
+        tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         toolVersion: "1.1.0",
         turnId: options.turnId,
@@ -864,12 +888,13 @@ export class ProvenanceRecorder {
       ...(options.runnerId ? { runnerId: options.runnerId } : {}),
       runnerVersion: result.runnerVersion,
       sandbox: result.sandbox,
+      ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
       sessionId: options.sessionId,
       startedAt: result.startedAt,
       status: options.completionStatus?.() ?? (result.exitCode === 0 ? "succeeded" : "failed"),
       stderr,
       stdout,
-      tool: "run_shell",
+      tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
       ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
       toolVersion: "1.1.0",
       turnId: options.turnId,
@@ -888,7 +913,7 @@ export class ProvenanceRecorder {
         parentSubagentId: options.parentSubagentId,
         sessionId: options.sessionId,
         toolCallId: options.toolCallId,
-        toolName: "run_shell",
+        toolName: options.directAuthorization ? "run_direct_shell" : "run_shell",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
         workspaceSnapshot: result.workspaceSnapshot,
@@ -900,8 +925,8 @@ export class ProvenanceRecorder {
       executionId,
       sessionId: options.sessionId,
       turnId: options.turnId,
-      tool: "run_shell",
-      toolName: "run_shell",
+      tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
+      toolName: options.directAuthorization ? "run_direct_shell" : "run_shell",
       language: null,
       codeHash: code.hash,
       exitCode: result.exitCode,

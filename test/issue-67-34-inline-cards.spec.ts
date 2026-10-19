@@ -13,13 +13,16 @@
 // limitations under the License.
 
 import { expect, type Page } from "@playwright/test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage } from "./helpers/journeys.ts";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l4", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * Verification for the current run activity layout: Plans live in Workspace
@@ -43,7 +46,23 @@ async function api(path: string, init?: RequestInit) {
 
 async function waitRunIdle(page: Page, timeout = 420_000) {
   // While a run streams, the composer offers Stop; it disappears when idle.
-  await page.getByRole("button", { name: "Stop the current run" }).waitFor({ state: "hidden", timeout });
+  await waitForRunUi(page, async () => !await page.getByRole("button", { name: "Stop the current run" }).isVisible(), "the run to become idle", timeout);
+}
+
+async function waitForRunUi(page: Page, ready: () => Promise<boolean>, description: string, timeout = 420_000) {
+  let failure: string | undefined;
+  await expect.poll(async () => {
+    // The connection chip retains the original provider/gateway error in its
+    // title. Check it before success, including errors already visible at entry.
+    const error = page.locator(".connection.bad:visible").first();
+    if (await error.count()) {
+      failure = await error.getAttribute("title") ?? await error.innerText();
+      return "failed";
+    }
+    return await ready() ? "ready" : "waiting";
+  }, { intervals: [100, 250], message: `Waiting for ${description} or a visible run error`, timeout }).not.toBe("waiting");
+  // Throw outside expect.poll: exceptions inside its predicate are retried.
+  if (failure !== undefined) throw new Error(`Run failed while waiting for ${description}: ${failure}`);
 }
 
 async function flowOrder(page: Page) {
@@ -64,9 +83,12 @@ async function showWorkspacePlans(page: Page) {
   }
   await expect(workspace).toBeVisible();
   const folder = workspace.locator('[data-folder="tasks"]');
+  // The Tasks folder itself is hidden until there is activity. Guard this
+  // stage too, or clicking its summary would wait after an early model failure.
+  await waitForRunUi(page, () => folder.isVisible(), "Workspace Tasks");
   if (await folder.getAttribute("open") === null) await folder.locator(":scope > summary").click();
   const plans = folder.locator("details.workspace-plan-section");
-  await plans.waitFor({ state: "visible", timeout: 420_000 });
+  await waitForRunUi(page, () => plans.isVisible(), "Workspace Plans");
   if (await plans.getAttribute("open") === null) await plans.locator(":scope > summary").click();
   return plans;
 }
@@ -127,7 +149,7 @@ async function setupSession(page: Page, options: { alwaysAllow?: boolean } = {})
  * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; optional E2E_API_TOKEN.
  * CostSideEffects: Billable tokens, model rate limits, local projects/sessions/models, screenshots.
  */
-test("workspace plan and run-anchored subagent survive follow-up and reload", { tag: "@real" }, async ({ page }, testInfo) => {
+test("workspace plan and run-anchored subagent survive follow-up and reload", { tag: ["@real", "@model:real", "@tier:l4"] }, async ({ page }, testInfo) => {
   test.setTimeout(900_000);
   requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
   await requireRealStack(testInfo, API);
@@ -143,7 +165,7 @@ test("workspace plan and run-anchored subagent survive follow-up and reload", { 
   const plan = plans.locator("article.plan-card").first();
   await expect(plan).toBeVisible();
   const subagent = page.locator(".messages details.process-agent-record").first();
-  await expect(subagent.locator(":scope > summary")).toBeVisible({ timeout: 420_000 });
+  await waitForRunUi(page, () => subagent.locator(":scope > summary").isVisible(), "the run-anchored subagent");
   await waitRunIdle(page);
 
   // The Workspace Plan and terminal Subagent record start collapsed.
@@ -225,7 +247,7 @@ test("workspace plan and run-anchored subagent survive follow-up and reload", { 
  * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; optional E2E_API_TOKEN.
  * CostSideEffects: Billable tokens, model rate limits, local models/projects/sessions/files, screenshots.
  */
-test("markdown outputs anchor to their producing runs without duplicates", { tag: "@real" }, async ({ page }, testInfo) => {
+test("markdown outputs anchor to their producing runs without duplicates", { tag: ["@real", "@model:real", "@tier:l4"] }, async ({ page }, testInfo) => {
   test.setTimeout(900_000);
   requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
   await requireRealStack(testInfo, API);
@@ -279,5 +301,79 @@ test("markdown outputs anchor to their producing runs without duplicates", { tag
   expect(orderAfterReload).toEqual(order);
   await page.screenshot({ path: `${SCREENSHOTS}/08-artifacts-after-reload.png`, fullPage: true });
 });
+
+for (const phase of ["before waiting", "while waiting"]) {
+/**
+ * E2E-META
+ * Purpose: A visible model gateway error ends the workspace-plan wait promptly and preserves its cause.
+ * Steps:
+ *   1. Create a Project/Session with a local model endpoint that returns a controlled gateway 503.
+ *   2. Start a plan request and expose the error before or during the workspace-plan wait.
+ *   3. Verify the waiter rejects with the provider detail within three seconds of the error becoming visible.
+ * Environment: Isolated stack at E2E_BASE_URL and pinned Chromium; no live model credentials.
+ * Type: mocked
+ * LLM: Local HTTP stub returns 503 new_api_error; no external model calls.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none
+ * Credentials: E2E_API_TOKEN for the isolated stack.
+ * CostSideEffects: no external cost; temporary Project/Session/model removed in finally.
+ */
+test(`workspace plan ${phase}: visible gateway errors fail promptly`, { tag: ["@mocked", "@model:mock", "@isolation:session"] }, async ({ page, journey }, testInfo) => {
+  test.setTimeout(180_000);
+  const providerError = "No available channel for model inline-cards-regression under group default (distributor)";
+  let releaseError!: () => void;
+  const released = new Promise<void>(resolve => { releaseError = resolve; });
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", async () => {
+      await released;
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: providerError, type: "new_api_error" } }));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
+  journey.scenario({ goal: "模型网关失败后，工作区计划旅程立即给出错误原因，不再等待七分钟。", preconditions: ["隔离产品栈与本地 503 模型桩"] });
+  try {
+    await journey.step("启动计划请求", "会话开始请求计划，本地模型暂缓响应。", async () => {
+      fixture = await createProjectAndSession(page, { approvalMode: "always_allow",
+        model: { apiToken: "local-stub", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
+          model: "inline-cards-regression", name: `Plan error ${Date.now()}` },
+        projectName: `Plan error ${Date.now()}`, sessionTitle: "Workspace plan gateway error" });
+      await openProjectSession(page, fixture);
+      await sendUserMessage(page, fixture.session.id, "Create a two-step workspace plan.");
+    });
+    await journey.step("网关错误出现后立即结束等待", "页面保留网关原始错误，计划等待在错误可见后的三秒内失败。", async () => {
+      const errorChip = page.locator(".connection.bad:visible");
+      if (phase === "before waiting") {
+        releaseError();
+        await errorChip.waitFor({ state: "visible", timeout: 120_000 });
+      }
+      // Handle rejection immediately even while the browser is waiting for the error chip.
+      const outcome = showWorkspacePlans(page).then(
+        () => ({ error: undefined, finishedAt: Date.now() }),
+        (error: Error) => ({ error, finishedAt: Date.now() }),
+      );
+      releaseError();
+      await errorChip.waitFor({ state: "visible", timeout: 120_000 });
+      const visibleAt = Date.now();
+      const result = await outcome;
+      expect(result.error?.message).toContain(providerError);
+      const elapsed = Math.max(0, result.finishedAt - visibleAt);
+      expect(elapsed, "Visible model errors must end the plan wait promptly").toBeLessThan(3_000);
+      await testInfo.attach("plan-wait-timing", { body: JSON.stringify({ phase, error_visible_to_failure_ms: elapsed }), contentType: "application/json" });
+    });
+  } finally {
+    releaseError();
+    try { if (fixture) await cleanupJourney(page, fixture); }
+    finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  }
+});
+}
 
 });

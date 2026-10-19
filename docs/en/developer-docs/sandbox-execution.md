@@ -32,9 +32,11 @@ Each Runner probes its own executable and sandbox profile. `GET /health` include
 
 Runner settings show readiness and a **Recheck** button. The Agent can call `check_runner(runner_id?)` to refresh the same target-side capability report without using a sandbox. This tool is diagnostic only: it does not execute code or request user input. An unavailable pre-dispatch execution returns `RUNNER_UNAVAILABLE`, `dispatched: false`, an `operationId`, diagnostics and repair suggestions. The call is finished, not queued. The Agent chooses to continue other work, explain the blocker and finish, or explicitly call `wait_for_runner(operation_id)`.
 
+When the Agent chooses to wait for the user's decision, it must call the waiting tool; a final response saying “paused” does not create a pending operation. Displaying the card does not repair, install, switch machines or execute code, so showing requested choices does not require extra confirmation even when those actions are prohibited. Those user constraints still apply after a decision is returned. The framework does not force every Runner failure into a waiting state.
+
 Only `wait_for_runner` creates a conversation card and pauses the Agent's external-wait deadlines. The card identifies the Agent and attempted operation and offers repair/recheck, an available authorized Runner, or cancel-operation. Each operation has its own decision. All choices return to the Agent; retry and switch perform a fresh check but **never execute or replay code**. The Agent must issue a new execution call, preparing inputs and environments if the Runner changed. A failed recheck returns diagnostics; waiting again requires another explicit Agent call. There is no automatic repair polling. Run cancellation, process shutdown or a ten-minute decision timeout clears the wait. Cards survive browser reloads via `GET /api/sessions/{sessionId}/execution-blocks`; responses use `POST /api/sessions/{sessionId}/execution-blocks/{id}`. These are in-memory waits, not recovery across API restarts. Repeated/stale responses cannot dispatch code. Runner settings periodically read the cached report so Agent-initiated checks are reflected there too.
 
-The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Host execution and expanding authorization are separate future work.
+The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Local host recovery requires the separate explicit consent flow described below; remote host execution remains future work.
 
 ### Sandbox profile
 
@@ -88,6 +90,62 @@ Properties:
 - Boundary: **TLS is not intercepted**. Filtering is by CONNECT / absolute-URI host name, so a broad entry remains a broad grant.
 - Changing the policy rotates the Permission Epoch; new executions use the new policy snapshot.
 - Scientific environment install networking (conda channels, pip index, offline cache) is independent of this policy.
+
+#### In-conversation network consent
+
+Before a Skill script or command needs HTTP access, the Agent calls
+`request_sandbox_network` with exact `hosts` (optional `:port`), a short
+`purpose`, and the intended `runner_id`. In Ask mode this pauses on a
+conversation permission card showing the hosts and purpose. Allow once or
+Allow same type returns a one-use `authorizationId`; pass it as
+`network_authorization_id` on a **new** `run_shell` call. Always Allow
+automatically approves these exact-host permission requests.
+An explicit tool request declares hosts up front; an attributed allowlist denial
+can also create that request after the failed execution. It returns a token
+without replaying the execution. Only newly approved hosts are added; configured
+allowlist entries remain allowed, and configured `open` remains open. Wildcards,
+URLs and IP literals are not accepted by this consent path.
+
+Declare **all known required hosts together up front**. For example, if a script
+needs both `a.example.org` and `b.example.org`, request both in one `hosts` list.
+Approvals do not accumulate across executions: an observed denial includes only
+hosts attempted in that execution. A script that stops at its first failure can
+otherwise alternate between single-host requests. If another required host is
+discovered, reconcile the previous execution's effects, then request the complete
+known host set for a safe **new** execution. Consent never replays the script.
+
+The token belongs to this Agent, run and Runner. It is consumed before
+submission, including when the submission outcome is uncertain. Matching
+consent covers the identical host set and scope during that Agent run;
+revoking its grant invalidates unused tokens. It cannot pass to children,
+another Runner or a later run. The execution receives a separate immutable
+network epoch preserving configured access and adding approved hosts, with
+the deployment's private-address filter and
+outbound route. Neither the global setting nor the shared Session epoch is
+expanded, and calls without a token retain their normal policy.
+
+In allowlist mode each Shell execution has its own gateway. Missing-domain
+denials return `networkDeniedHosts`, mark managed execution as failed even if
+a script catches the HTTP error, and open the same permission card while the
+owning run is active. The resulting `networkPermission` contains a decision
+and, when approved, a token for a new call. **Nothing replays automatically**:
+inspect output, files and remote effects before deciding whether a new call is
+safe. Reconcile unknown execution outcomes before resubmitting. Unsupported
+observed host names stay blocked with per-host reasons in
+`networkPermission.blockedHosts`; they do not suppress cards for valid denied hosts.
+Private-address or outbound-route failures do not authorize a bypass through this card.
+
+Deny, cancellation or dismissal/expiry leaves egress blocked. Required
+retrieval must be reported as blocked/incomplete with its reason; do not
+silently substitute a web-search-only report that appears complete. In `none`
+mode the baseline socket filter, private namespace and absence of a bridge are
+unchanged. An opaque script cannot reliably reveal its intended hosts there:
+its failure remains visible, and the Agent/Skill must explicitly declare known
+hosts to request access. Automatic host-specific discovery is **not promised**.
+Skill authors should identify required hosts and instruct the Agent to request
+them before running their scripts. MCP/Web host-side access and durable System
+configuration → Sandbox network settings remain separate. A preflight banner
+may assist discovery but does not replace live conversation consent.
 
 ### 3.2 Ascend NPU inside the sandbox
 
@@ -213,3 +271,74 @@ a native-backend pass does not certify Swarm, or vice versa.
 - [Runtime architecture](architecture.md)
 - [Configuration reference](../reference/configuration.md)
 - [Ascend NPU Host Broker](ascend-npu-runner.md)
+
+## Explicit direct-execution recovery
+
+When a configured local or remote Runner is reachable but its sandbox is unavailable, the Agent can
+call `request_direct_execution` with its failed operation ID, an exact shell
+command and a workspace-relative working directory. The conversation displays
+separate host-execution consent, including the target Runner instance, OS account,
+workspace, command and loss of isolation. Declining executes nothing. Approval
+returns a decision only: the Agent must confirm the returned scope in a new
+`run_direct_shell` call. Python is available through the system shell.
+
+The direct shell starts with `PATH=/usr/bin:/bin` and does not load shell startup
+profiles or inherit an activated conda environment. For Homebrew or conda Python,
+include the installed interpreter's absolute path in the command submitted for
+consent, for example `/opt/homebrew/bin/python3 -c 'print(42)'` or
+`/usr/local/bin/python3 -c 'print(42)'` when that interpreter exists on the target.
+For conda, use the absolute path to the intended environment's `bin/python`.
+Bare `python3` only searches the minimal PATH; on macOS it may select the system
+stub or fail instead of using the intended installation. Changing the interpreter
+changes the command and requires matching direct-execution consent.
+
+Sandbox Always Allow and JiuwenSwarm's normal tool authorization cannot grant this
+permission. Allow matching covers only the exact command, target instance,
+account, workspace/cwd, Session, Agent and run. There is no fixed TTL. Grants can
+be revoked through the existing permission controls; they cannot authorize a
+later run or a child Agent. Each returned authorization is consumed before
+submission, including unsuccessful submissions. Run completion/cancellation
+invalidates unused consent. A Runner restart changes its target instance identity
+and requires new consent. Direct execution is recovery-only and uses the existing
+OS account without elevation.
+
+The normal Execution ID, logs, cancellation, timeout, workspace publication and
+artifact provenance remain available. Execution records identify `sandbox: none`,
+`networkPolicy: host`, and the authorization/target/account/run/Agent scope.
+Unknown dispatch outcomes must be reconciled before further host execution; neither
+approval nor recovery replays a command. Use `execution_status`, `execution_logs`
+and `execution_cancel` to observe or cancel accepted work.
+
+This is **not equivalent to sandbox execution**: host files, processes, credentials
+and network can be accessed; CPU, memory and network isolation are unavailable.
+The shell receives a minimal environment without injected Runner credentials, but
+this does not protect credentials stored on the host. Workspace quotas and artifact
+tracking cover only the workspace, not all host effects. Cancellation kills the
+process group; descendants that escape it are not guaranteed to terminate. Host
+changes cannot generally be rolled back.
+
+Delivered scope for issue #276 includes local and configured reachable remote
+Runner ephemeral system-shell recovery. The failed operation pins the Runner;
+consent includes its Runner ID and instance, OS account and target-side workspace.
+The Runner validates the logical remote workspace and canonical cwd before consent
+and revalidates them before execution. Grants cannot cross local/remote Runners,
+workspaces or accounts. Prepare remote inputs explicitly; no local files are
+implicitly copied. Remote output remains in its Runner workspace with a committed
+workspace version and execution audit; use explicit workspace transfer to retrieve
+files rather than treating remote paths as local artifacts.
+
+A disconnect before submission executes nothing. A lost submission acknowledgement
+or unresolved observation is an **unknown outcome**, not proof that nothing ran.
+The API retains the Execution ID and never resubmits; reconcile that ID and target
+workspace before any new host command. Unknown outcomes block further direct
+consent for that Agent on the affected Runner. Timeout/cancel uses the existing
+remote execution controls and preserves final errors and workspace versions.
+
+Managed-environment selection, independent SSH maintenance and pre-failure direct
+execution remain unavailable. An unreachable Runner requires an independently
+configured and authorized transport; this path neither creates SSH credentials nor
+repairs that connection. #276 remains open for the deferred maintenance scope.
+The API journey is `node test/api/direct-execution-journey.mjs` after committing and
+building the candidate. Its remote fixture is a separately configured Runner on
+loopback with its own data directory; it does not certify real-network or SSH
+behavior and uses only a local scripted model.

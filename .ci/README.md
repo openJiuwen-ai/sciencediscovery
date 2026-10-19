@@ -22,11 +22,11 @@ No workflow maintains its own list of case titles.
 
 | Tier | Event / authorization | Cumulative content | Gate / job ceiling |
 | --- | --- | --- | --- |
-| L1 | Every PR opened, synchronized or reopened | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
-| L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
+| L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
+| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
-| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + all ten previously eligible nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
+| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; each research worker 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -52,6 +52,14 @@ credentials. `ci:st:real` remains a separate native-agent compatibility smoke;
 it does not add a native E2E run. Adapter live UT is also accounted separately.
 
 ### Backend selection and exact accounting
+
+For a targeted reliability check, set `CI_E2E_SPEC` and optionally
+`CI_E2E_GREP`, then run `.ci/run-e2e.sh real` with `CI_E2E_REPEAT_EACH=10`.
+This repeats each selected case ten times (not ten retries); the browser
+configuration uses one worker and zero retries. Real runs require
+`CI_ALLOW_REAL=1` and the `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, and
+`E2E_LLM_TOKEN` credentials, and every repetition incurs model usage.
+Omitting `CI_E2E_REPEAT_EACH` leaves normal gate execution unchanged.
 
 Use `--backend jiuwenswarm|legacy`, `CI_E2E_BACKEND`, or the workflow's `backend`
 input. `legacy` means the native loop; JiuwenSwarm is the default. The backend
@@ -133,7 +141,20 @@ The existing `merge-gate` reconciles all four artifacts against the parent
 plan, requires exactly one PASS for every identity and verifies all nine
 supplemental checks, including their order (`skills` before `skill-switch`).
 Missing artifacts, changed identities/backends, skips or failed drivers fail
-the gate. Before paid real jobs start, `real-plan` makes the same check.
+the gate. The reusable `real-e2e.yml` owns real planning, workers and accounting.
+Its L3 (`merge`) caller waits for L1/L2 to succeed, then `real-plan` makes the
+same mocked-artifact check before paid calls. Its L4/L5 (`daily`/`release`)
+caller depends only on `policy`: real planning starts alongside L1, and real
+workers start as soon as their own plan is ready, without waiting for UT, ST
+or mocked E2E. They do not download or reconcile mocked results as a prerequisite.
+The two callers are mutually exclusive, so each run executes the real suite once.
+A separate credential-free `policy` job selects the profile/backend before L1,
+so a failed L1 check cannot hide the requested real suite. Real workers still
+require a successfully frozen real plan and respect workflow cancellation.
+This changes execution eligibility, not the final verdict: `merge-gate` still
+requires every selected job and complete mocked/real accounting; any failure
+continues to block creating the draft Release and its assets, which become
+public only after a person publishes the draft from the Releases page.
 No extra accounting job or human approval is added. The combined `e2e-results`
 artifact preserves worker HTML/image links and the suite-level plan/summary.
 
@@ -166,7 +187,7 @@ The credential-isolation regression checks every job that references a
 model token: it must declare an Environment and exclude pull-request events.
 The check intentionally does not pin Environment names. To change research
 endpoints, configure an Environment with the same variable/secret names and
-update the research Environment in both real-plan and real-e2e.
+update the research Environment in both real-plan and real-e2e in `real-e2e.yml`.
 
 Environment variables are also used by the credential-free real-plan job so
 its frozen configuration matches its workers. API secrets are injected only
@@ -225,8 +246,8 @@ echo, ordered-addition and numeric-argument probes; there is no external MCP
 server or AI judge. Each case owns its Project, Session, model and files. The
 basic Project disables optional skill, planning and delegation plugins through
 the public API. `--backend jiuwenswarm|legacy` changes execution only; the case
-list and assertions remain identical. L4/L5 inherit these seven cases and keep
-the ten existing nightly cases unchanged.
+list and assertions remain identical. L4/L5 inherit these seven basic cases and
+two Runner-recovery cases, then add twelve nightly cases.
 
 `journey-runner-recovery-real.spec.ts` adds two real API cases: the Agent chooses
 to wait after Runner execution is blocked, or explains the failure and finishes
@@ -245,7 +266,8 @@ These are failure bounds, not monetary limits.
 
 Research cost is separate and has not yet been measured. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
-minutes. Team generation allows 55 minutes; PUCT generation 120 minutes.
+minutes. Biomni generation allows 80 minutes, with up to 65 minutes for rubric
+evaluation. Team generation allows 55 minutes; PUCT generation 120 minutes.
 Its optional AI audit allows up to 65 more minutes when explicitly enabled
 locally; both daily and release leave that audit disabled. Job setup counts toward the four-hour worker
 ceiling. `fail-fast: false` retains evidence from independent workers; there
@@ -254,12 +276,12 @@ Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
 call counts, not timeout ceilings, determine money spent.
 
-`prepare-real-research.sh` runs only for research workers. It needs `HF_TOKEN`
-even while the Biomni download is disabled. Both daily and release keep
-`CI_PREPARE_BIOMNI=0` while the two existing cases are quarantined. The DRB
-evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs
-have committed blob checksums for later restoration. Missing prerequisites for
-selected cases fail; they do not filter selection.
+`prepare-real-research.sh` runs only for research workers. Daily and release
+set `CI_PREPARE_BIOMNI=1` only in the two Biomni shards and use
+`HF_TOKEN` to download their pinned inputs. The DRB evaluator is pinned to
+`852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs have
+committed blob checksums. Missing prerequisites for selected cases fail;
+they do not filter selection.
 
 ### Initial release scope and future quality calibration
 
@@ -270,16 +292,12 @@ quality baseline or apply a newly calibrated regression threshold. A green run
 certifies this selected suite, not measured capability non-regression or a
 complete upstream benchmark leaderboard.
 
-The real case counts are L3 **9**, L4 **19**, L5 **19**. L4 retains all ten
-previously eligible nightly cases and inherits the nine L3 cases. L5
-currently uses the same cases and evaluation modes as L4; its separate profile
-and `tier:l5` extension row remain available for future additions. Two Biomni cases and the seeded literature-review
-journey were already quarantined on main in commit `8bd4560d`; this change
-preserves their status and excludes them from all automatic profiles.
-Biomni needs scientific Python packages in the agent sandbox and citation
-search that completes within the test timeout. Literature review needs saved
-Pro/Flash models, the PubMed connector and the evidence-brief skill provisioned
-in CI. Repair and verify these prerequisites before restoring the cases.
+The real case counts are L3 **9**, L4 **21**, L5 **21**. L4 includes
+twelve nightly cases and inherits the nine L3 cases. L5 currently uses the
+same cases and evaluation modes as L4; its separate profile and `tier:l5`
+extension row remain available for future additions. The two Biomni cases
+return to daily and release; the seeded literature-review journey remains
+quarantined pending its CI prerequisites.
 
 Broader cases and measured quality regression thresholds are follow-up work.
 Stored scores retain generator, backend, judge and evaluator/input fingerprints
