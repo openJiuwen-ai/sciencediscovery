@@ -123,6 +123,18 @@ test("artifact preview stylesheet keeps the dialog on screen and wraps unbreakab
   assert.match(artifacts, /\.artifact-source-preview \{ overflow-wrap: anywhere; \}/);
 });
 
+// Issue #309: the artifact viewer is a content window, not a small centered
+// dialog — it should fill a large screen, while markdown prose keeps a
+// readable measure at that width and the narrow-screen rule stays fullscreen.
+test("artifact viewer stylesheet fills large screens and keeps prose readable", () => {
+  const dialogs = readFileSync(new URL("../src/styles/dialogs.css", import.meta.url), "utf8");
+  assert.match(dialogs, /\.artifact-modal-panel \{[^}]*width: min\(1600px, calc\(100vw - 80px\)\)/);
+  assert.match(dialogs, /\.artifact-modal-panel \{[^}]*height: min\(960px, calc\(100vh - 80px\)\)/);
+  assert.match(dialogs, /\.artifact-modal-body \.markdown-body > :is\(p, ul, ol, dl, blockquote\) \{ max-width: 76ch; \}/);
+  const responsive = readFileSync(new URL("../src/styles/responsive.css", import.meta.url), "utf8");
+  assert.match(responsive, /@media \(max-width: 900px\)[\s\S]*?\.artifact-modal-panel \{[^}]*width: 100%/);
+});
+
 test("dataset table replaces an empty grid with an explicit no-rows explanation", () => {
   const empty = renderToStaticMarkup(createElement(DatasetTable, {
     columns: [],

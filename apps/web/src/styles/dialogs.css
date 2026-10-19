@@ -45,7 +45,12 @@
  * the card bleeds off the right edge of the viewport with no scrollbar.
  * Capping the track keeps the dialog — and everything in it — on screen. */
 .artifact-modal-backdrop { z-index: var(--z-overlay-low); padding: 28px; grid-template-columns: minmax(0, 100%); }
-.artifact-modal-panel { display: flex; flex-direction: column; width: min(1080px, 100%); max-height: calc(100vh - 56px); }
+/* A content window, not a decision dialog: artifacts, evidence and node
+ * details are read here, so on a large screen it should use the space — and
+ * a fixed height (not max-height) gives short files the same big window.
+ * The 80px margins keep a visible frame around the card, while the 1600×960
+ * caps hold a pixel ceiling even on 4K displays. */
+.artifact-modal-panel { display: flex; flex-direction: column; width: min(1600px, calc(100vw - 80px)); height: min(960px, calc(100vh - 80px)); }
 .artifact-modal-header { padding: 22px 26px; border-bottom: 1px solid var(--border); }
 .artifact-modal-panel > .artifact-mode-tabs { padding-inline: 26px; }
 .artifact-modal-header h2 { margin: 3px 0 0; color: var(--text-strong); font-size: 20px; }
@@ -75,6 +80,10 @@
 .version-picker > span { color: var(--muted); font-size: 11px; }
 .version-picker select { min-width: 140px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 6px; font-size: 11px; }
 .artifact-modal-body { overflow-y: auto; padding: 22px 26px 32px; }
+/* The viewer is now a 1600px-wide content window, so markdown prose keeps a
+ * readable measure instead of running the full width; tables, code, images and
+ * plots still use the window. */
+.artifact-modal-body .markdown-body > :is(p, ul, ol, dl, blockquote) { max-width: 76ch; }
 .version-hint { margin-left: auto; color: var(--muted); font-size: 10px; }
 .parent-link { border: 0; background: none; color: var(--accent-ink); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; text-decoration-style: dotted; }
 .parent-link:hover { text-decoration-style: solid; }
