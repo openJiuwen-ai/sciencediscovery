@@ -36,7 +36,7 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
       request.signal.throwIfAborted();
     }
     const scratch = await mkdtemp(join(request.workspaceRoot ?? tmpdir(), ".sd-codex-"));
-    let dispatched = false;
+    let dispatched: boolean = false;
     try {
       const home = join(scratch, "home");
       const work = request.workspaceRoot ?? join(scratch, "work");
@@ -111,7 +111,7 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
         const id = randomUUID();
         await sink({ type: "tool_call", id, name: tool.name, args });
         request.signal.throwIfAborted();
-        const previouslyDispatched = dispatched;
+        const previouslyDispatched: boolean = dispatched;
         dispatched ||= ["run_shell", "run_python", "run_scientific", "run_direct_shell", "declare_artifact"].includes(tool.name);
         const toolResult = await tool.execute(id, args, request.signal);
         request.signal.throwIfAborted();

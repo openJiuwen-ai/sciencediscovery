@@ -66,22 +66,22 @@ export function codexAgentFactory(config: {
         execute: async () => ({ content: [{ type: "text" as const, text: "Required runtime tools are unavailable; requesting configured recovery." }], details: { runtimeUnavailable: true } }),
       };
       try {
-      const result = await (config.adapter ?? new CodexSpecialistAdapter()).invoke({
-        prompt: [options.specialist?.instructions, options.subagent?.instructions,
-          options.runContract && options.runContract !== prompt ? `Original delegation:\n${options.runContract}` : undefined,
-          options.gatewayHistory?.length ? `Prior platform conversation:\n${JSON.stringify(options.gatewayHistory)}` : undefined,
-          prompt].filter(Boolean).join("\n\n"),
-        workspaceRoot: options.workspaceRoot,
-        get execution() { return runtime.execution; }, authorizeDirect: config.authorizeDirect,
-        get model() { return runtime.model; }, get reasoningEffort() { return runtime.reasoningEffort; }, maxTurns: config.maxTurns, signal: controller.signal,
-        tools: [...buildTools(options).filter(tool => PLATFORM_TOOLS.has(tool.name)), configure, unavailable],
-        credential: async () => {
-          const key = await config.credential(controller.signal, () => sink({ type: "need_input", runtime: "codex" }));
-          runtime = config.readRuntime?.() ?? runtime;
-          return key;
-        },
-      }, sink);
-      return { finalMessages: [...(options.gatewayHistory ?? []), { role: "user", content: prompt }, { role: "assistant", content: result.summary }] };
+        const result = await (config.adapter ?? new CodexSpecialistAdapter()).invoke({
+          prompt: [options.specialist?.instructions, options.subagent?.instructions,
+            options.runContract && options.runContract !== prompt ? `Original delegation:\n${options.runContract}` : undefined,
+            options.gatewayHistory?.length ? `Prior platform conversation:\n${JSON.stringify(options.gatewayHistory)}` : undefined,
+            prompt].filter(Boolean).join("\n\n"),
+          workspaceRoot: options.workspaceRoot,
+          get execution() { return runtime.execution; }, authorizeDirect: config.authorizeDirect,
+          get model() { return runtime.model; }, get reasoningEffort() { return runtime.reasoningEffort; }, maxTurns: config.maxTurns, signal: controller.signal,
+          tools: [...buildTools(options).filter(tool => PLATFORM_TOOLS.has(tool.name)), configure, unavailable],
+          credential: async () => {
+            const key = await config.credential(controller.signal, () => sink({ type: "need_input", runtime: "codex" }));
+            runtime = config.readRuntime?.() ?? runtime;
+            return key;
+          },
+        }, sink);
+        return { finalMessages: [...(options.gatewayHistory ?? []), { role: "user", content: prompt }, { role: "assistant", content: result.summary }] };
       } catch (error) {
         if (controller.signal.aborted || !(error instanceof SpecialistUnavailableError) || runtime.fallback === false || !config.fallbackFactory) throw error;
         await sink({ type: "fallback", specialistId: "builtin-code-engineer" });

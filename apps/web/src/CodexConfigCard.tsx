@@ -11,7 +11,7 @@ export const RuntimeConfigClient = createContext<Pick<ApiClient, "configureCodex
 export function CodexConfigCard({ subagent }: { subagent: Subagent }) {
   const client = useContext(RuntimeConfigClient);
   const { t } = useLocale();
-  const [fallback, setFallback] = useState(true);
+  const [fallback, setFallback] = useState(subagent.runtimeOptions?.fallback ?? true);
   const [key, setKey] = useState("");
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState(false);

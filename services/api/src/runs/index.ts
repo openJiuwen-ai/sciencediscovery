@@ -1566,6 +1566,9 @@ async function executeAgentRun(
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
+        if (effectiveCodexRuntime && !subagent.runtimeOptions) {
+          subagent = await store.updateSubagent({ ...subagent, runtimeOptions: effectiveCodexRuntime });
+        }
         childId = subagent.id;
         if (codexRuntime) externalSpecialistExecutions.add(childId);
         const childController = new AbortController();

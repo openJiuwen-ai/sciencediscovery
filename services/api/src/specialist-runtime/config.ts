@@ -24,5 +24,5 @@ export function normalizeSpecialistRuntime(value: unknown): SpecialistRuntime | 
   if (runtime.reasoningEffort !== undefined && !["minimal", "low", "medium", "high", "xhigh"].includes(runtime.reasoningEffort as string)) throw new SpecialistRuntimeConfigError("Invalid reasoning effort");
   return { kind: "codex", ...(runtime.execution ? { execution: runtime.execution as "sandbox" | "direct" } : {}), ...("fallback" in runtime ? { fallback: runtime.fallback as boolean } : {}),
     ...("timeoutSeconds" in runtime ? { timeoutSeconds: runtime.timeoutSeconds as number } : {}),
-    ...("reasoningEffort" in runtime ? { reasoningEffort: runtime.reasoningEffort as "high" } : {}), ...(runtime.model ? { model: runtime.model as string } : {}) };
+    ...("reasoningEffort" in runtime ? { reasoningEffort: runtime.reasoningEffort as Extract<SpecialistRuntime, { kind: "codex" }>["reasoningEffort"] } : {}), ...(runtime.model ? { model: runtime.model as string } : {}) };
 }

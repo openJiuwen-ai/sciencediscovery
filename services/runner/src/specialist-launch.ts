@@ -37,8 +37,7 @@ export async function prepareSpecialistLauncher(options: {
   await writeFile(launcher, `#!${process.execPath}
 import { spawn } from 'node:child_process';
 import { openSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { dirname } from 'node:path';
 const args = ${JSON.stringify(launch.args)};
 const cliArgs = process.argv.slice(2);
 const index = cliArgs.indexOf('--output-schema');
