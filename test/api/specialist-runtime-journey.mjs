@@ -169,6 +169,7 @@ try {
       const stream = await streamPromise;
       assert.match(stream, /"type":"run.completed"/);
       const text = JSON.stringify(terminal);
+      if (real) assert.ok(terminal.runtimeSessionId, "Real provider cases must start the pinned Codex CLI/thread, not pass via a launch failure");
       assert.equal(text.includes(key), false);
       const fallback = terminal.steps.some(step => step.content?.includes("Falling back to builtin-code-engineer"));
       if (name === "handoff") {
