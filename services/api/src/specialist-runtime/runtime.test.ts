@@ -301,7 +301,7 @@ test("advanced settings requested in the conversation reach the next SDK turn", 
         return { async runStreamed() { return { events: (async function* () { yield* turns.shift()!; })() }; } };
       }),
     });
-    const handle = create({ config: { baseUrl: "http://unused", model: "unused", dataDir: root }, workspaceRoot: root, sessionId: "settings", enabledConnectorIds: [] });
+    const handle = create({ config: { baseUrl: "http://unused", model: "unused", dataDir: root }, workspaceRoot: root, sessionId: "settings", enabledConnectorIds: [], executePython: async () => { throw Error("unused"); }, executeShell: async () => { throw Error("unused"); } });
     const result = await handle.execute("Use new-model, low reasoning, 30 seconds and disable fallback.");
     assert.equal(result.finalMessages.at(-1)?.content, "Finished");
     assert.deepEqual(configured, { kind: "codex", model: "new-model", reasoningEffort: "low", timeoutSeconds: 30, fallback: false });
@@ -313,7 +313,7 @@ test("fallback handles runtime unavailability, respects opt-out, and never swall
   const { SpecialistUnavailableError, CodexRuntimeError } = await import("./codex.js");
   const root = await mkdtemp(join(tmpdir(), "sd-fallback-"));
   try {
-    const options = { config: { baseUrl: "http://unused", model: "unused", dataDir: root }, workspaceRoot: root, sessionId: "fallback", enabledConnectorIds: [] };
+    const options = { config: { baseUrl: "http://unused", model: "unused", dataDir: root }, workspaceRoot: root, sessionId: "fallback", enabledConnectorIds: [], executePython: async () => { throw Error("unused"); }, executeShell: async () => { throw Error("unused"); } };
     for (const [error, enabled, expected] of [
       [new SpecialistUnavailableError("Auth unavailable"), true, true],
       [new SpecialistUnavailableError("Process unavailable"), false, false],

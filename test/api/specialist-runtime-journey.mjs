@@ -171,6 +171,7 @@ try {
       else if (name === "timeout") { assert.equal(terminal.status, "timed_out", text); assert.equal(fallback, false); }
       else if (name === "fallback-on") { assert.equal(fallback, true, text); assert.equal(terminal.status, "completed", text); assert.match(text, /Native fallback completed/); }
       else { assert.equal(fallback, false); assert.equal(terminal.status, "failed", text); }
+      await json(`/api/sessions/${session.id}`, undefined, "DELETE");
       await json(`/api/specialists/${specialist.id}`, undefined, "DELETE");
       return `${terminal.status}; fallback=${fallback}; private config accepted; ${real ? "live Codex auth path" : "official SDK/CLI + local Responses"}`;
     });
