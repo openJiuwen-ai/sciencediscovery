@@ -25,25 +25,17 @@ pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 
 SETTINGS = Settings(host="127.0.0.1", port=4310, legacy_url="http://legacy.test")
 
 
-async def test_internal_clients_do_not_inherit_proxy_environment(monkeypatch):
-    created = []
+async def test_app_starts_with_socks_proxy_environment(monkeypatch):
+    from unittest.mock import AsyncMock
 
-    class Client:
-        def __init__(self, **kwargs):
-            created.append(kwargs)
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            return False
-
-    monkeypatch.setattr("sciencediscovery_adapter.app.httpx.AsyncClient", Client)
-    app = create_app(SETTINGS)
+    for name in ("ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, "socks5://127.0.0.1:1")
+    monkeypatch.setattr("sciencediscovery_adapter.app.forget_stale_aliases", AsyncMock())
+    app = create_app(SETTINGS, transport=legacy_transport(lambda _: streamed(200, b'{"status":"ok"}')))
     async with app.router.lifespan_context(app):
-        pass
-
-    assert [client["trust_env"] for client in created] == [False, False, True]
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
+            response = await client.get("/health")
+    assert response.status_code == 200 and response.json() == {"status": "ok"}
 
 
 def streamed(status: int, body: bytes = b"", headers=None) -> httpx.Response:

@@ -28,6 +28,7 @@ from .agent_runs import AgentRunner, agent_router
 from .config import Settings
 from .llm_proxy import DEFAULT_ALIAS, LlmRoutes, llm_router
 from .mcp_server import ToolsetRegistry, mcp_router
+from .network import loopback_mounts
 from .proxy import proxy_to_legacy
 
 
@@ -51,15 +52,18 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
     async def lifespan(app: FastAPI):
         # No read timeout: SSE runs stay open for the whole agent run.
         timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=5.0)
+        # Bypass environment proxies only for the local service addresses.
+        # Keep trust_env enabled for remote proxies and custom CA certificates.
+        mounts = loopback_mounts(settings.legacy_url)
         async with (
             # These clients connect to local companion services. Do not let an
             # ambient HTTP(S)/SOCKS proxy intercept loopback traffic.
             httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
-                              follow_redirects=False, trust_env=False) as legacy,
-            httpx.AsyncClient(timeout=timeout, trust_env=False) as bridge,
+                              follow_redirects=False, mounts=mounts) as legacy,
+            httpx.AsyncClient(timeout=timeout, mounts=mounts) as bridge,
             # Model routes are external destinations and must retain proxy
             # support, including SOCKS configured through the environment.
-            httpx.AsyncClient(timeout=timeout, trust_env=True) as models,
+            httpx.AsyncClient(timeout=timeout, trust_env=True, mounts=mounts) as models,
         ):
             app.state.legacy = legacy
             app.state.bridge = bridge

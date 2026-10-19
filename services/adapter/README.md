@@ -131,6 +131,14 @@ The adapter itself reads `SCIENCE_AGENT_HOST`, `SCIENCE_AGENT_PORT`, `SCIENCE_AG
 `SCIENCE_AGENT_ADAPTER_TOKEN`, `SCIENCE_AGENT_ADAPTER_TOOL_TIMEOUT_S`, `SCIENCE_AGENT_EXECUTOR` and
 `SCIENCE_AGENT_ADAPTER_DEBUG` (`config.py`).
 
+The adapter connects directly to loopback services (`localhost`, `127.0.0.1`,
+`::1`) for HTTP forwarding, tool/model callbacks and JiuwenSwarm WebSockets.
+These connections do not depend on `NO_PROXY` matching rules. Remote endpoints
+retain the HTTP/WebSocket libraries' environment proxy behavior, and HTTPX
+continues to honor custom CA certificate settings.
+The stack launcher's local health probes also bypass environment proxies while
+preserving existing `NO_PROXY` entries for remote runners.
+
 ## Tests
 
     UV_PROJECT_ENVIRONMENT=/tmp/adapter-venv uv sync --extra test

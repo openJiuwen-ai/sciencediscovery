@@ -83,11 +83,11 @@ SCIENCE_AGENT_ADAPTER_TOKEN="" JIUWENSWARM_GATEWAY_URL="$JIUWENSWARM_GATEWAY_URL
   "$adapter_env/bin/python" -m sciencediscovery_adapter.server >> "$log" 2>&1 &
 adapter_pid=$!
 for _ in $(seq 1 60); do
-  curl --silent --fail "http://127.0.0.1:$adapter_port/agent/info" >/dev/null 2>&1 && break
+  curl --noproxy 127.0.0.1 --silent --fail "http://127.0.0.1:$adapter_port/agent/info" >/dev/null 2>&1 && break
   kill -0 "$adapter_pid" 2>/dev/null || blocked "the adapter exited"
   sleep 0.5
 done
-curl --silent --fail "http://127.0.0.1:$adapter_port/agent/info" | grep -q '"reachable": *true' \
+curl --noproxy 127.0.0.1 --silent --fail "http://127.0.0.1:$adapter_port/agent/info" | grep -q '"reachable": *true' \
   || blocked "the adapter does not reach JiuwenSwarm"
 
 export SCIENCE_AGENT_EXECUTOR=jiuwenswarm

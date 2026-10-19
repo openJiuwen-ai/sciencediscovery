@@ -171,7 +171,10 @@ wait_healthy() { # <name> <url>
   fi
   local attempt
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    if curl --silent --fail "$2" >/dev/null 2>&1; then return 0; fi
+    # curl does not interpret NO_PROXY=127.* as a loopback wildcard. Keep
+    # existing exclusions for remote runners and explicitly bypass local probes.
+    if curl --noproxy "${no_proxy:-${NO_PROXY:-}},localhost,localhost.,127.0.0.1,::1" \
+      --silent --fail "$2" >/dev/null 2>&1; then return 0; fi
     sleep 0.2
   done
   echo "$1 did not become healthy at $2 after $((attempts / 5))s." >&2
