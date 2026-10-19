@@ -1973,16 +1973,15 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   })).json() as RunnerRuntimeStatus;
   const waitFor = async (predicate: (value: RunnerRuntimeStatus) => boolean) => {
     const startedAt = Date.now();
+    const deadline = startedAt + 5_000;
     let current: RunnerRuntimeStatus | undefined;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    while (Date.now() < deadline) {
       current = await status();
       if (predicate(current)) return current;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
-    // The state it did reach and how long it waited for it. This budget counts
-    // polls, so its wall time shrinks as the machine slows: without the
-    // elapsed figure a failure cannot say whether the runner never did the
-    // thing or whether this simply gave up early.
+    // The deadline is wall-clock based so CPU pressure cannot silently shorten
+    // the cancellation grace period by making individual status polls slower.
     throw new Error(`Runner status did not reach the expected state after ${Date.now() - startedAt} ms: `
       + JSON.stringify(current));
   };
@@ -1991,7 +1990,9 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   const running = fetch(`${origin}/execute`, {
     ...signedExecutionInit("runner-test-token", {
       agentId: "main",
-      code: "import time\ntime.sleep(30)",
+      // Keep the sandbox busy while the disconnect arrives. The runner itself
+      // must still observe the abort and kill the whole sandbox process group.
+      code: "while True:\n    pass",
       executionId: "cancel-running",
       executionTimeoutMs: 0,
       permissionEpoch: epoch(),

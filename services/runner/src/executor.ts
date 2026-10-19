@@ -570,6 +570,11 @@ async function runSandboxed(
       };
       // Do not release a writer or clean up its mounts until the process has exited.
       const abort = () => stop(new Error(`${timeoutLabel} aborted`));
+      // Subscribe before sandbox setup begins. Under CPU pressure a client can
+      // disconnect while opening the seccomp filter or starting bubblewrap;
+      // `stopError` retains that cancellation until the process group exists.
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
       const timeout = timeoutMs > 0
         ? setTimeout(() => {
             stop(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
@@ -602,8 +607,6 @@ async function runSandboxed(
           finish(new Error("Runner failed to create isolated process streams"));
           return;
         }
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) abort();
         child.stdout.on("data", (chunk: Buffer) => {
           try { onOutput?.("stdout", chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
           const next = appendBounded(stdout, chunk, maxOutputBytes, Buffer.byteLength(stderr));
