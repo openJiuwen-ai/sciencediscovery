@@ -45,3 +45,60 @@ Use the trial to improve the description, instructions, and resource scope, then
 
 - [Specialists](../core/specialists.md): built-in roles and use cases.
 - [Import and manage Skills](configure-skills.md): add your own methods and scripts.
+
+## Codex runtime MVP
+
+Custom specialists can opt into Codex through `POST /api/specialists` (there
+is no runtime picker yet):
+
+```json
+{
+  "name": "Codex coder",
+  "description": "Delegate coding work to Codex",
+  "instructions": "Implement and verify the requested change. Declare output artifacts.",
+  "runtime": { "kind": "codex" }
+}
+```
+
+An optional `runtime.model` selects the Codex model. Omit `runtime`, or use
+`{"kind":"native"}`, for the existing native behavior. Credentials, commands,
+argv and environment variables are rejected in runtime metadata. Supply no
+secrets in specialist instructions. Update and read APIs retain the runtime.
+Only non-native runtime metadata participates in `specialistConfigHash`;
+native and omitted runtime preserve the legacy hash.
+
+Ask the lead to delegate explicitly with `task(specialistId=…)`. Selecting a
+specialist for the lead does not switch the lead runtime. The child retains
+its own Workspace, selected input handoff, Brief, timeout, cancellation,
+timeline and platform Artifact registration. Codex requests a small set of
+platform tools through structured decisions; commands run through the same
+platform execution bindings and permission checks as native children. Codex
+has no enabled native shell, uses read-only permissions, and runs in a fresh
+private scratch directory rather than the product Workspace.
+
+If the Session has no Codex credential, an interactive **Connect Codex to
+continue** card appears in the conversation, including when the child card
+is collapsed. Enter an OpenAI API key there; the pending task continues. The
+key travels through the authenticated config endpoint and is encrypted in a
+separate platform secret table, scoped to the Session and removed on Session
+or Project deletion. It never enters chat messages, specialist metadata,
+argv, or the model prompt. Always-allow does not supply credentials. Setup
+waits count toward the task's wall-clock timeout; stop cancels the wait.
+The MVP supports API-key authentication, not ChatGPT browser/device login.
+A rejected key produces a child failure; fix the credential with a new Session
+or use `builtin-code-engineer`. Credential management beyond this focused
+card belongs to the later configuration work.
+
+Developer contract: `services/api/src/specialist-runtime/adapter.ts` defines
+`SpecialistRuntimeAdapter.invoke(request, sink)` and the normalized
+`started | progress | tool_call | file_change | need_input | done` events.
+The compatibility factory maps these onto the existing Subagent stream and
+returns `SpecialistResult` with summary, platform artifact receipts, usage
+and Codex thread ID. Artifact receipts originate only in `declare_artifact`;
+provider file paths are never adopted as artifacts. The pinned official
+TypeScript SDK runs on the API host with an explicit environment and a fresh
+Codex HOME. Host process confinement, durable Codex thread continuation,
+ACP, additional SDKs, runtime selection UI, and full Skills/MCP bridging are
+later phases. See [Issue #385](https://github.com/openJiuwen-ai/sciencediscovery/issues/385),
+[configuration follow-up #278](https://github.com/openJiuwen-ai/sciencediscovery/issues/278),
+and the separate [ACP Agent work #64](https://github.com/openJiuwen-ai/sciencediscovery/issues/64).

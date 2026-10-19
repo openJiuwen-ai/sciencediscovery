@@ -14,7 +14,11 @@
 
 import type { ConnectorId } from "./connectors.js";
 
+/** MVP runtime metadata is credential-free; omitted runtime means native. */
+export type SpecialistRuntime = { kind: "native" } | { kind: "codex"; model?: string };
+
 export interface Specialist {
+  runtime?: SpecialistRuntime;
   /** Optional one-line summary shown in settings and the task tool's specialist enum. */
   description: string;
   /** Built-in specialists are seeded by the application, read-only, and cannot be deleted. */
@@ -36,6 +40,7 @@ export interface Specialist {
 }
 
 export interface CreateSpecialistRequest {
+  runtime?: SpecialistRuntime;
   connectorIds?: ConnectorId[];
   description: string;
   enabledSkillIds?: string[];

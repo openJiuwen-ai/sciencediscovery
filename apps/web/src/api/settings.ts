@@ -154,6 +154,10 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/mcp/proxy-policies", { body: JSON.stringify(body), method: "PUT" });
   }
 
+  configureCodex(subagentId: string, inputId: string, apiKey: string): Promise<{ configured: boolean }> {
+    return this.request(`/api/subagents/${encodeURIComponent(subagentId)}/codex-config`, { method: "POST", body: JSON.stringify({ inputId, apiKey }) });
+  }
+
   listSpecialists(): Promise<Specialist[]> {
     return this.request("/api/specialists");
   }

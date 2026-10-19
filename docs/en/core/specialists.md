@@ -4,7 +4,7 @@ A research report often requires several kinds of work: finding papers, extracti
 
 Specialists separate these responsibilities and supply role instructions, Skills, and tool scope. The main Agent can choose roles suited to the task while retaining responsibility for the research objective and synthesis. Researchers spend less time repeating working requirements and gain clearer assignments and deliveries.
 
-The relationship to MCP and Skills is simple: **MCP is a tool, Skill is a method, and Specialist is a role.** A Specialist is not a new execution environment; it packages who owns a kind of work, which methods they can use, and which tools they can call.
+The relationship to MCP and Skills is simple: **MCP is a tool, Skill is a method, and Specialist is a role.** By default a Specialist uses the native model loop; it packages who owns a kind of work, which methods they can use, and which tools they can call.
 
 ## Preset roles are a starting point
 
@@ -27,3 +27,5 @@ Custom roles use the existing runtime and permission system; adding one does not
 - [Create and use custom Specialists](../advanced-setup/configure-specialists.md): define responsibilities, configure resources, and verify a task.
 - [Scientific MCP and Skills](mcp-skills.md): existing tools, methods, and extension options.
 - [Literature-research tutorial](../domains/literature-research.md): from a question to an inspectable report.
+
+Explicit delegated tasks can opt into the [Codex runtime MVP](../advanced-setup/configure-specialists.md#codex-runtime-mvp), while retaining platform Workspace, permissions and artifacts.

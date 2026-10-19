@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { setTimeout as runtimeDelay } from "node:timers/promises";
+import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
 import { randomUUID } from "node:crypto";
@@ -1548,7 +1550,9 @@ async function executeAgentRun(
         parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
-          model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
+          model: input.specialistId?.trim() && specialist?.runtime?.kind === "codex"
+            ? { id: "codex", model: specialist.runtime.model ?? "Codex default", name: "Codex" }
+            : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
@@ -2015,6 +2019,36 @@ async function executeAgentRun(
         subagentRunHandle = runSubagentTask({
           bindings: {
             pluginSettings: settingsSnapshot.plugins,
+            ...(input.specialistId?.trim() && specialist?.runtime?.kind === "codex" ? {
+              createAgent: codexAgentFactory({
+                model: specialist.runtime.model,
+                maxTurns: subagentConfig.maxTurns,
+                credential: async (runtimeSignal, needInput) => {
+                  let key = store.codexApiKey(sessionId);
+                  if (!key) {
+                    await needInput();
+                    while (!key) {
+                      await runtimeDelay(250, undefined, { signal: runtimeSignal });
+                      key = store.codexApiKey(sessionId);
+                    }
+                    subagent = { ...subagent, runtimeInput: { ...subagent.runtimeInput!, state: "configured" } };
+                    await store.updateSubagent({ ...subagent, steps });
+                    await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                  }
+                  return key;
+                },
+                onRuntimeEvent: async event => {
+                  if (event.type === "need_input") {
+                    subagent = { ...subagent, runtimeInput: { id: randomUUID(), runtime: "codex", state: "pending" } };
+                    await store.updateSubagent({ ...subagent, steps });
+                    await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                  }
+                  if (event.type === "started") subagent.runtimeSessionId = event.runtimeSessionId;
+                  if (event.type === "file_change") publishStep({ id: randomUUID(), kind: "system", status: "completed",
+                    content: "Platform execution changed Workspace files", details: event.details, createdAt: new Date().toISOString() });
+                },
+              }),
+            } : {}),
             abortSignal: childExecution.abortSignal,
             observer: observeSubagentEvent,
             recordEvent: async (event) => { finalizeMessageStep(); activeMessageStep = undefined; await emit(event); },

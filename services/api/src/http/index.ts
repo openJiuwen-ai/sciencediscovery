@@ -1667,6 +1667,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { discarded: draftId });
         return;
       }
+      const codexConfigMatch = url.pathname.match(/^\/api\/subagents\/([^/]+)\/codex-config$/);
+      if (codexConfigMatch && request.method === "POST") {
+        const input = await readJson<{ inputId: string; apiKey: string }>(request);
+        store.configureCodex(codexConfigMatch[1]!, input.inputId, input.apiKey);
+        sendJson(response, 200, { configured: true });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/specialists") {
         sendJson(response, 200, store.listSpecialists());
         return;

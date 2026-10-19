@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { CodexConfigCard } from "./CodexConfigCard.js";
 import type { ComposerReference, SkillReviewDraftSummary, Subagent } from "@sciencediscovery/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -154,6 +155,7 @@ export function SubagentConversation({
 
   const roleLabel = specialistName ? t("subagent.roleWithSpecialist", { name: specialistName }) : t("subagent.role");
   return <section aria-label={t("subagent.pageAria", { description: subagent.input.description })} className="conversation subagent-conversation">
+    <CodexConfigCard key={subagent.runtimeInput?.id} subagent={subagent} />
     <header className="session-bar subagent-session-bar">
       <div className="subagent-session-bar-title">
         <button aria-label={t("subagent.backToMain")} className="icon-button subagent-back-button" onClick={onBack} title={t("subagent.backToMain")} type="button"><ChevronRightIcon size={17} /></button>

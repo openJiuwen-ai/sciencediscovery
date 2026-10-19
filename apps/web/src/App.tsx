@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useMcpReadiness } from "./composer/useMcpReadiness.js";
 import { ExecutionBlockCards } from "./ExecutionReadiness.js";
@@ -4132,7 +4133,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   return (
-    <PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
+    <RuntimeConfigClient.Provider value={client}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
@@ -5202,7 +5203,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       /> : null}
 
     </div>
-    </PluginWebHost>
+    </PluginWebHost></RuntimeConfigClient.Provider>
   );
 }
 

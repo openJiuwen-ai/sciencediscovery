@@ -54,6 +54,7 @@ export function ideaTreeFingerprint(value: unknown): string {
 /** Hash only executable Specialist configuration; updatedAt is frozen separately. */
 export function specialistConfigHash(specialist: Specialist): string {
   return ideaTreeFingerprint({
+    ...(specialist.runtime && specialist.runtime.kind !== "native" ? { runtime: specialist.runtime } : {}),
     builtIn: specialist.builtIn === true,
     connectorIds: [...specialist.connectorIds].toSorted(),
     description: specialist.description,

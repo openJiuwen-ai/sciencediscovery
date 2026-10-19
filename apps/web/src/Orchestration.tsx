@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { CodexConfigCard } from "./CodexConfigCard.js";
 import { compactStatus, reasoningStatus, reportedFailure, researchLabel, returnedPaperCount } from "./timeline/research-label.js";
 import { ProjectRecordSlot } from "./plugins/project-views.js";
 import { useEffect, useState, type FormEvent } from "react";
@@ -106,6 +107,7 @@ export function SubagentCards({
 
   return <section className={`subagent-list process-subagents${className ? ` ${className}` : ""}`} aria-label={t("subagent.sectionAria")}>
     {!hideHeading && subagents.some((item) => item.status === "running") ? <div className="subagent-list-heading"><strong>{heading ?? t("subagent.headingPlural")}</strong><span>{t("subagent.listStats", { running: subagents.filter((subagent) => subagent.status === "running").length, total: subagents.length })}</span></div> : null}
+    {subagents.filter(item => item.status === "running" && item.runtimeInput?.state === "pending").map(item => <CodexConfigCard key={`${item.id}:${item.runtimeInput!.id}`} subagent={item} />)}
     {subagents.map((subagent) => {
       const summary = subagentSummary(subagent, t);
       const statusLabel = subagentStatusLabel(t, subagent.status);

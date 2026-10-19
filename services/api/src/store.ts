@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -552,6 +553,10 @@ export class SessionStore {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         json TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS specialist_runtime_secrets (
+        session_id TEXT PRIMARY KEY,
+        encrypted_value TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS model_secrets (
         model_id TEXT PRIMARY KEY,
         encrypted_token TEXT NOT NULL
@@ -867,7 +872,7 @@ export class SessionStore {
     // (every other field is overwritten by the pinned definition on each load,
     // so pinned upgrades always propagate).
     const specialists = [
-      ...savedSpecialists.filter((specialist) => !specialist.builtIn),
+      ...savedSpecialists.filter((specialist) => !specialist.builtIn).map(specialist => ({ ...specialist, runtime: normalizeSpecialistRuntime(specialist.runtime) })),
       ...BUILTIN_SPECIALISTS.map((builtin) => {
         const existing = savedSpecialists.find((candidate) => candidate.id === builtin.id);
         return existing?.builtIn
@@ -2822,6 +2827,27 @@ export class SessionStore {
     return this.catalog.sessions.find((session) => session.id === sessionId);
   }
 
+  /** Session-scoped Codex credential uses the platform encrypted secret channel. */
+  codexApiKey(sessionId: string): string | undefined {
+    const row = this.database?.prepare("SELECT encrypted_value FROM specialist_runtime_secrets WHERE session_id = ?")
+      .get(sessionId) as { encrypted_value: string } | undefined;
+    return row && this.secretKey ? decryptSecretValue(this.secretKey, `codex:${sessionId}`, row.encrypted_value) : undefined;
+  }
+
+  configureCodex(subagentId: string, inputId: string, apiKey: string): void {
+    const child = this.catalog.subagents.find(candidate => candidate.id === subagentId);
+    if (!child || child.status !== "running" || child.runtimeInput?.state !== "pending" || child.runtimeInput.id !== inputId) {
+      throw new Error("Codex configuration request is no longer pending");
+    }
+    this.assertSessionWritable(child.sessionId);
+    const key = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!key || key.length > 16384) throw new Error("Codex API key must be 1-16384 characters");
+    if (!this.database || !this.secretKey) throw new Error("Secret storage is unavailable");
+    this.database.prepare("INSERT INTO specialist_runtime_secrets (session_id, encrypted_value) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET encrypted_value = excluded.encrypted_value")
+      .run(child.sessionId, encryptSecretValue(this.secretKey, `codex:${child.sessionId}`, key));
+    child.runtimeInput.state = "configured";
+  }
+
   listSpecialists(): Specialist[] {
     return structuredClone(this.catalog.specialists).toSorted((left, right) => left.name.localeCompare(right.name));
   }
@@ -2843,7 +2869,7 @@ export class SessionStore {
     const connectorIds = [...new Set(input.connectorIds ?? [])];
     const unavailableConnectors = connectorIds.filter((id) => !this.connectorIds.has(id));
     if (unavailableConnectors.length) throw new Error(`Specialist connectors are unavailable: ${unavailableConnectors.join(", ")}`);
-    return { connectorIds, description, enabledSkillIds, instructions, name };
+    return { connectorIds, description, enabledSkillIds, instructions, name, runtime: normalizeSpecialistRuntime(input.runtime) };
   }
 
   async createSpecialist(input: CreateSpecialistRequest): Promise<Specialist> {
@@ -2864,7 +2890,7 @@ export class SessionStore {
     if (specialist.builtIn) {
       // Built-in specialists are read-only except for the on/off `enabled` toggle.
       const touchedCoreField = "name" in input || "description" in input || "instructions" in input
-        || "connectorIds" in input || "enabledSkillIds" in input;
+        || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input;
       if (touchedCoreField) {
         throw new Error("Built-in specialists are read-only; only their enabled flag can be toggled");
       }
@@ -2877,7 +2903,7 @@ export class SessionStore {
       await this.saveCatalog();
       return structuredClone(specialist);
     }
-    const normalized = this.normalizeSpecialistInput(input);
+    const normalized = this.normalizeSpecialistInput({ ...specialist, ...input });
     if (this.catalog.specialists.some((candidate) => candidate.id !== specialistId
       && candidate.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
       throw new Error("Specialist name already exists");
@@ -4231,6 +4257,7 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
+    this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id = ?").run(session.id);
     this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
     });
@@ -4303,7 +4330,10 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
-    for (const session of sessions) this.notifications.deleteSession(session.id);
+    for (const session of sessions) {
+      this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id = ?").run(session.id);
+      this.notifications.deleteSession(session.id);
+    }
     await this.finishStagedDeletion(operation);
     }, projectId);
   }

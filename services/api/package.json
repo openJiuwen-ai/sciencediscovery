@@ -44,7 +44,8 @@
     "@sciencediscovery/skill": "workspace:*",
     "@sciencediscovery/mcp": "workspace:*",
     "@sciencediscovery/scheduler": "workspace:*",
-    "@sciencediscovery/artifact-json": "workspace:*"
+    "@sciencediscovery/artifact-json": "workspace:*",
+    "@openai/codex-sdk": "0.162.1"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

@@ -88,6 +88,9 @@ export interface SubagentStep {
 }
 
 export interface Subagent {
+  /** Credential-free interactive setup state; the secret travels over a dedicated API. */
+  runtimeInput?: { id: string; runtime: "codex"; state: "pending" | "configured" };
+  runtimeSessionId?: string;
   /** Closed model history in the existing agent-state pool, never executable replay. */
   contextRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   createdAt: string;
