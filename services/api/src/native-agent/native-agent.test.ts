@@ -1156,8 +1156,9 @@ for (const action of ["continue", "wait"] as const) {
   });
 }
 
-test("MCP recovery and scoped direct execution coexist in the native agent", async () => {
+test("MCP recovery, sandbox network and scoped direct execution coexist in the native agent", async () => {
   const calls: string[] = [];
+  const networkCalls: string[] = [];
   const command = "printf science";
   const scope = { authorizationId: "consent", command, cwd: "", target: "local", account: "test" };
   const options: NativeAgentOptions = {
@@ -1171,6 +1172,19 @@ test("MCP recovery and scoped direct execution coexist in the native agent", asy
         calls.push("recovered"); return { records: [] };
       },
     },
+    sandboxNetwork: { request: async input => {
+      assert.deepEqual(input.hosts, ["eutils.ncbi.nlm.nih.gov:443"]);
+      assert.equal(input.purpose, "Retrieve requested PubMed records");
+      networkCalls.push("permission");
+      return { state: "allowed", hosts: input.hosts, authorizationId: "network-consent", instruction: "Issue a safe new call" };
+    } },
+    executeShell: async (_code, _mode, _signal, _id, runnerId, environment) => {
+      assert.equal(runnerId, "local");
+      assert.equal(environment?.networkAuthorizationId, "network-consent");
+      assert.deepEqual(networkCalls, ["permission"]);
+      networkCalls.push("new-execution");
+      return { exitCode: 0, stdout: "retrieved", stderr: "", createdFiles: [], kernelMode: "ephemeral" } as never;
+    },
     directExecution: {
       request: async input => {
         assert.deepEqual(input, { operationId: "failed-op", command, cwd: "" });
@@ -1183,7 +1197,7 @@ test("MCP recovery and scoped direct execution coexist in the native agent", asy
   };
   const scripts: Array<(call: StreamerCall) => ModelTurn> = [
     call => {
-      for (const name of ["mcp_readiness", "mcp_recovered_call", "request_direct_execution", "run_direct_shell"]) {
+      for (const name of ["mcp_readiness", "mcp_recovered_call", "request_direct_execution", "run_direct_shell", "request_sandbox_network", "run_shell"]) {
         assert.ok(call.tools.some(tool => tool.name === name), `${name} reaches the model`);
       }
       return toolTurn("mcp_readiness", { action: "check", reason: "Source repaired", sourceIds: ["arxiv"] });
@@ -1196,10 +1210,18 @@ test("MCP recovery and scoped direct execution coexist in the native agent", asy
     },
     () => textTurn("Both operations completed."),
   ];
+  scripts.splice(scripts.length - 1, 0,
+    () => toolTurn("request_sandbox_network", { hosts: ["eutils.ncbi.nlm.nih.gov:443"], purpose: "Retrieve requested PubMed records", runner_id: "local" }),
+    () => {
+      assert.deepEqual(networkCalls, ["permission"], "network approval alone never executes code");
+      return toolTurn("run_shell", { command: "printf retrieved", runner_id: "local", network_authorization_id: "network-consent" });
+    },
+  );
   const restore = setModelTurnStreamerForTest(scriptStreamer(scripts).streamer);
   try {
     await createNativeAgent(options).execute("Use the repaired source and the separately approved command");
     assert.deepEqual(calls, ["check", "recovered", "consent", "direct"]);
+    assert.deepEqual(networkCalls, ["permission", "new-execution"]);
   } finally { restore(); }
 });
 
