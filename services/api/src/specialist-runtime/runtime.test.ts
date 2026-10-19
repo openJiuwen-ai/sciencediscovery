@@ -99,20 +99,49 @@ test("adapter maps SDK events, validates tool requests, accumulates usage and ac
   assert.deepEqual(observed.map(e => e.type), ["progress", "started", "tool_call", "tool_call", "progress", "started", "done"]);
 });
 
-for (const [name, stream, pattern] of [
-  ["invalid JSON", events("{"), /invalid platform decision/],
-  ["invalid shape", events('{}'), /invalid platform decision/],
-  ["unknown tool", events(decision("host_shell")), /unavailable platform tool/],
-  ["incomplete stream", [], /incomplete/],
-  ["oversized decision", events("x".repeat(100001)), /oversized/],
-  ["provider error", [{ type: "error", message: "test-secret" }], /provider request failed/],
-  ["failed turn", [{ type: "turn.failed", error: { message: "test-secret" } }], /provider request failed/],
-  ["native tool", [{ type: "item.started", item: { type: "command_execution", id: "bad", command: "touch host", aggregated_output: "", status: "in_progress" } }], /disabled native tool/],
-] as const) {
-  test(`adapter rejects ${name} without credential leakage`, async () => {
-    await assert.rejects(new CodexSpecialistAdapter(factory([[...stream] as ThreadEvent[]])).invoke(request(), async () => {}), pattern);
-  });
+async function assertAdapterRejects(stream: ThreadEvent[], pattern: RegExp) {
+  await assert.rejects(
+    new CodexSpecialistAdapter(factory([stream])).invoke(request(), async () => {}),
+    error => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, pattern);
+      assert.equal(error.message.includes("test-secret"), false);
+      return true;
+    },
+  );
 }
+
+test("adapter rejects invalid JSON without credential leakage", async () => {
+  await assertAdapterRejects(events("{"), /invalid platform decision/);
+});
+
+test("adapter rejects invalid shape without credential leakage", async () => {
+  await assertAdapterRejects(events('{}'), /invalid platform decision/);
+});
+
+test("adapter rejects unknown tool without credential leakage", async () => {
+  await assertAdapterRejects(events(decision("host_shell")), /unavailable platform tool/);
+});
+
+test("adapter rejects incomplete stream without credential leakage", async () => {
+  await assertAdapterRejects([], /incomplete/);
+});
+
+test("adapter rejects oversized decision without credential leakage", async () => {
+  await assertAdapterRejects(events("x".repeat(100001)), /oversized/);
+});
+
+test("adapter rejects provider error without credential leakage", async () => {
+  await assertAdapterRejects([{ type: "error", message: "test-secret" }], /provider request failed/);
+});
+
+test("adapter rejects failed turn without credential leakage", async () => {
+  await assertAdapterRejects([{ type: "turn.failed", error: { message: "test-secret" } }], /provider request failed/);
+});
+
+test("adapter rejects native tool without credential leakage", async () => {
+  await assertAdapterRejects([{ type: "item.started", item: { type: "command_execution", id: "bad", command: "touch host", aggregated_output: "", status: "in_progress" } }], /disabled native tool/);
+});
 
 test("invalid JSON and schema arguments cannot reach tool execution", async () => {
   const tool: AgentTool = { name: "test", label: "Test", description: "Test", parameters: Type.Object({ path: Type.String() }), execute: async () => { assert.fail("must not execute"); } };
