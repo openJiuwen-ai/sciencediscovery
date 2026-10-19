@@ -74,3 +74,29 @@ SCIENCE_AGENT_CODEX_BASE_URL，专家元数据不接受此字段。
 
 持久 SDK 线程恢复、多运行时/ACP、共享沙箱和完整可观测性不属于 Phase 2。
 参见 [English configuration guide](../../en/advanced-setup/configure-specialists.md)。
+
+### Phase 3：Claude Code 与 ACP
+
+`runtime.kind` 现在支持 `claude-code` 和 `acp`，沿用显式 `task`、平台工具、
+权限请求及 `declare_artifact` 交付契约。主智能体可在委派前调用
+`configure_specialist_runtime(specialistId, settings)`，配置只影响后续任务。
+密钥通过同会话配密卡提交，按会话与运行时分别加密保存，不进入专家配置、
+目录、命令参数或配置工具入参。通用端点为
+`POST /api/subagents/:id/runtime-config`，旧 `codex-config` 继续兼容。
+
+服务端通过 `SCIENCE_AGENT_CLAUDE_BINARY`、`SCIENCE_AGENT_ACP_BINARY` 设置独立
+可执行文件的绝对路径；`SCIENCE_AGENT_ACP_ARGS` 只接收非密钥 JSON 参数数组。
+Claude 使用 `ANTHROPIC_API_KEY`，ACP 可执行程序需自行从 `SD_ACP_TOKEN` 读取凭据，
+无需认证时卡片填 `none`。不支持交互 OAuth 登录。可执行文件必须适配 Runner
+最小文件系统，任意宿主包目录不会挂载。Claude 需支持 bare 模式和 JSON Schema
+输出，建议使用含 bare 隔离修复的 v2.1.286 或更新版本。Claude 禁用原生工具；
+ACP 不声明文件/终端能力，拒绝原生工具审批和调用更新。所有实际工作经过平台
+工具和权限总线。ACP 的模型及推理选项必须由会话配置选项提供；不支持时明确失败。
+
+并发子任务各有独立 Workspace、Runner 执行身份和私有模型进程目录，复用已有并发
+调度，不引入共享沙箱。`runtimeDiagnostics` 提供结构化失败类别、任务回退次数与
+外层运行时启动探针结果。探针不代表认证成功或逃逸测试通过，不请求内层沙箱。
+验证使用协议桩及真实 API/Runner；真实 Claude/ACP 成功认证仍需获批凭据与兼容程序。
+iCode 因打包、认证和工具隔离需要独立验证而延后；完整监控、P1/P2 编排、界面润色
+及压力/逃逸验收矩阵均留待后续。详细配置见
+[英文说明](../../en/advanced-setup/configure-specialists.md#phase-3-claude-code-and-acp)。

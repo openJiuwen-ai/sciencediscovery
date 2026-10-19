@@ -2828,25 +2828,34 @@ export class SessionStore {
   }
 
   /** Session-scoped Codex credential uses the platform encrypted secret channel. */
-  codexApiKey(sessionId: string): string | undefined {
+  codexApiKey(sessionId: string): string | undefined { return this.runtimeApiKey(sessionId, "codex"); }
+
+  runtimeApiKey(sessionId: string, kind: "codex" | "claude-code" | "acp"): string | undefined {
+    const secretId = kind === "codex" ? sessionId : `${kind}:${sessionId}`;
     const row = this.database?.prepare("SELECT encrypted_value FROM specialist_runtime_secrets WHERE session_id = ?")
-      .get(sessionId) as { encrypted_value: string } | undefined;
-    return row && this.secretKey ? decryptSecretValue(this.secretKey, `codex:${sessionId}`, row.encrypted_value) : undefined;
+      .get(secretId) as { encrypted_value: string } | undefined;
+    return row && this.secretKey ? decryptSecretValue(this.secretKey, `${kind}:${sessionId}`, row.encrypted_value) : undefined;
   }
 
   configureCodex(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): void {
+    return this.configureRuntime(subagentId, inputId, apiKey, fallback);
+  }
+
+  configureRuntime(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): void {
     const child = this.catalog.subagents.find(candidate => candidate.id === subagentId);
     if (!child || child.status !== "running" || child.runtimeInput?.state !== "pending" || child.runtimeInput.id !== inputId) {
       throw new SessionStoreHttpError("Codex configuration request is no longer pending", 409);
     }
     this.assertSessionWritable(child.sessionId);
+    const kind = child.runtimeInput!.runtime;
+    const secretId = kind === "codex" ? child.sessionId : `${kind}:${child.sessionId}`;
     if (fallback !== undefined && typeof fallback !== "boolean") throw new SessionStoreHttpError("Invalid Codex fallback option", 400);
     const key = typeof apiKey === "string" ? apiKey.trim() : "";
     if (!key || key.length > 16384) throw new SessionStoreHttpError("Codex API key must be 1-16384 characters", 400);
     if (!this.database || !this.secretKey) throw new Error("Secret storage is unavailable");
     this.database.prepare("INSERT INTO specialist_runtime_secrets (session_id, encrypted_value) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET encrypted_value = excluded.encrypted_value")
-      .run(child.sessionId, encryptSecretValue(this.secretKey, `codex:${child.sessionId}`, key));
-    if (fallback !== undefined) child.runtimeOptions = { kind: "codex", ...this.getSpecialist(child.specialistId)?.runtime, ...child.runtimeOptions, fallback } as NonNullable<Subagent["runtimeOptions"]>;
+      .run(secretId, encryptSecretValue(this.secretKey, `${kind}:${child.sessionId}`, key));
+    if (fallback !== undefined) child.runtimeOptions = { kind, ...this.getSpecialist(child.specialistId)?.runtime, ...child.runtimeOptions, fallback } as NonNullable<Subagent["runtimeOptions"]>;
     child.runtimeInput.state = "configured";
   }
 
@@ -4259,7 +4268,7 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
-    this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id = ?").run(session.id);
+    this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id IN (?, ?, ?)").run(session.id, `claude-code:${session.id}`, `acp:${session.id}`);
     this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
     });
@@ -4333,7 +4342,7 @@ export class SessionStore {
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
     for (const session of sessions) {
-      this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id = ?").run(session.id);
+      this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id IN (?, ?, ?)").run(session.id, `claude-code:${session.id}`, `acp:${session.id}`);
       this.notifications.deleteSession(session.id);
     }
     await this.finishStagedDeletion(operation);

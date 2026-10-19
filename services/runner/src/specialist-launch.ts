@@ -52,7 +52,7 @@ if (index !== -1) {
   args.push('--ro-bind', dirname(schema), dirname(schema));
 }
 const child = spawn(${JSON.stringify(bwrapPath)}, [...args, '/opt/sd-codex', ...cliArgs], {
-  env: { ...${JSON.stringify(launch.env)}, ...Object.fromEntries(['PATH', 'HOME', 'CODEX_HOME', 'CODEX_API_KEY'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }, detached: true, stdio: ['inherit', 'inherit', 'inherit', openSync(${JSON.stringify(filter)}, 'r')]
+  env: { ...${JSON.stringify(launch.env)}, ...Object.fromEntries(['PATH', 'HOME', 'CODEX_HOME', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'SD_ACP_TOKEN'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }, detached: true, stdio: ['inherit', 'inherit', 'inherit', openSync(${JSON.stringify(filter)}, 'r')]
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} });
 child.on('error', () => process.exit(70));

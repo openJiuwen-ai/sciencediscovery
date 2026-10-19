@@ -37,6 +37,7 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
     }
     const scratch = await mkdtemp(join(request.workspaceRoot ?? tmpdir(), ".sd-codex-"));
     let dispatched: boolean = false;
+    let probed = false;
     try {
       const home = join(scratch, "home");
       const work = request.workspaceRoot ?? join(scratch, "work");
@@ -74,6 +75,7 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
         for await (const event of stream.events) {
           request.signal.throwIfAborted();
           if (event.type === "thread.started") {
+            if (!probed) { probed = true; await sink({ type: "sandbox_probe", ok: true, mode: request.execution ?? "sandbox" }); }
             result.runtimeSessionId = event.thread_id;
             await sink({ type: "started", runtimeSessionId: event.thread_id });
           }
@@ -129,6 +131,7 @@ export class CodexSpecialistAdapter implements SpecialistRuntimeAdapter {
       throw new CodexRuntimeError(`Codex exceeded maximum turns (${request.maxTurns})`);
     } catch (error) {
       if (request.signal.aborted) request.signal.throwIfAborted();
+      if (!probed) await sink({ type: "sandbox_probe", ok: false, mode: request.execution ?? "sandbox" }).catch(() => {});
       // SDK stderr/provider errors may contain credentials. Do not persist them.
       if (error instanceof CodexRuntimeError && !error.message.includes(apiKey)) {
         if (dispatched && error instanceof SpecialistUnavailableError) throw new CodexRuntimeError(error.message);

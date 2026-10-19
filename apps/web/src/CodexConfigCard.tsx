@@ -17,18 +17,20 @@ export function CodexConfigCard({ subagent }: { subagent: Subagent }) {
   const [error, setError] = useState(false);
   if (!client || subagent.status !== "running" || subagent.runtimeInput?.state !== "pending") return null;
   const inputId = subagent.runtimeInput.id;
-  return <form className="model-editor codex-config-card" aria-label={t("codex.configure")} onSubmit={async event => {
+  const runtime = subagent.runtimeInput.runtime;
+  const title = runtime === "codex" ? t("codex.configure") : `${t("runtime.configure")} · ${runtime === "claude-code" ? "Claude Code" : "ACP"}`;
+  return <form className="model-editor codex-config-card" aria-label={title} onSubmit={async event => {
     event.preventDefault();
     if (state !== "idle" || !key.trim()) return;
     setState("saving"); setError(false);
     try { await client.configureCodex(subagent.id, inputId, key, fallback); setKey(""); setState("saved"); }
     catch { setState("idle"); setError(true); }
   }}>
-    <strong>{t("codex.configure")}</strong>
-    <p>{t("codex.configHelp")}</p>
+    <strong>{title}</strong>
+    <p>{t("runtime.configHelp")}</p>
     {state === "saved" ? <p role="status">{t("codex.configured")}</p> : <>
-      <label><span>{t("codex.apiKey")}</span><input type="password" autoComplete="off" required value={key} onChange={event => setKey(event.target.value)} disabled={state === "saving"} /></label>
-      <label className="skill-library-checkbox"><input type="checkbox" checked={fallback} onChange={event => setFallback(event.target.checked)} disabled={state === "saving"} /><span>{t("codex.fallback")}</span></label>
+      <label><span>{t(runtime === "codex" ? "codex.apiKey" : "runtime.apiKey")}</span><input type="password" autoComplete="off" required value={key} onChange={event => setKey(event.target.value)} disabled={state === "saving"} /></label>
+      <label className="skill-library-checkbox"><input type="checkbox" checked={fallback} onChange={event => setFallback(event.target.checked)} disabled={state === "saving"} /><span>{t(runtime === "codex" ? "codex.fallback" : "runtime.fallback")}</span></label>
       {error ? <p role="alert">{t("codex.configError")}</p> : null}
       <button className="primary-button" type="submit" disabled={state === "saving" || !key.trim()}>{t(state === "saving" ? "codex.saving" : "codex.continue")}</button>
     </>}

@@ -11,8 +11,8 @@ export function normalizeSpecialistRuntime(value: unknown): SpecialistRuntime | 
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new SpecialistRuntimeConfigError("Invalid Specialist runtime");
   const runtime = value as Record<string, unknown>;
-  if (runtime.kind !== "native" && runtime.kind !== "codex") throw new SpecialistRuntimeConfigError("Unsupported Specialist runtime");
-  const allowed = runtime.kind === "codex" ? ["kind", "model", "fallback", "timeoutSeconds", "reasoningEffort", "execution"] : ["kind"];
+  if (!["native", "codex", "claude-code", "acp"].includes(runtime.kind as string)) throw new SpecialistRuntimeConfigError("Unsupported Specialist runtime");
+  const allowed = runtime.kind !== "native" ? ["kind", "model", "fallback", "timeoutSeconds", "reasoningEffort", "execution"] : ["kind"];
   if (Object.keys(runtime).some(key => !allowed.includes(key))) throw new SpecialistRuntimeConfigError("Unknown runtime option; use the secret channel for credentials");
   if (runtime.kind === "native") return { kind: "native" };
   if (runtime.model !== undefined && (typeof runtime.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(runtime.model))) {
@@ -22,7 +22,7 @@ export function normalizeSpecialistRuntime(value: unknown): SpecialistRuntime | 
   if (runtime.fallback !== undefined && typeof runtime.fallback !== "boolean") throw new SpecialistRuntimeConfigError("Invalid fallback option");
   if (runtime.timeoutSeconds !== undefined && (!Number.isSafeInteger(runtime.timeoutSeconds) || (runtime.timeoutSeconds as number) < 1 || (runtime.timeoutSeconds as number) > 86400)) throw new SpecialistRuntimeConfigError("Invalid runtime timeout (1-86400 seconds)");
   if (runtime.reasoningEffort !== undefined && !["minimal", "low", "medium", "high", "xhigh"].includes(runtime.reasoningEffort as string)) throw new SpecialistRuntimeConfigError("Invalid reasoning effort");
-  return { kind: "codex", ...(runtime.execution ? { execution: runtime.execution as "sandbox" | "direct" } : {}), ...("fallback" in runtime ? { fallback: runtime.fallback as boolean } : {}),
+  return { kind: runtime.kind as "codex" | "claude-code" | "acp", ...(runtime.execution ? { execution: runtime.execution as "sandbox" | "direct" } : {}), ...("fallback" in runtime ? { fallback: runtime.fallback as boolean } : {}),
     ...("timeoutSeconds" in runtime ? { timeoutSeconds: runtime.timeoutSeconds as number } : {}),
-    ...("reasoningEffort" in runtime ? { reasoningEffort: runtime.reasoningEffort as Extract<SpecialistRuntime, { kind: "codex" }>["reasoningEffort"] } : {}), ...(runtime.model ? { model: runtime.model as string } : {}) };
+    ...("reasoningEffort" in runtime ? { reasoningEffort: runtime.reasoningEffort as Exclude<SpecialistRuntime, { kind: "native" }>["reasoningEffort"] } : {}), ...(runtime.model ? { model: runtime.model as string } : {}) };
 }

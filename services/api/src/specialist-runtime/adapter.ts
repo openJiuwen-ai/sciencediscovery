@@ -15,7 +15,9 @@ export type SpecialistRuntimeEvent =
   | { type: "progress"; text: string }
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown>; result?: AgentToolResult }
   | { type: "fallback"; specialistId: "builtin-code-engineer" }
-  | { type: "need_input"; runtime: "codex" }
+  | { type: "need_input"; runtime: "codex" | "claude-code" | "acp" }
+  | { type: "failure"; reason: "unavailable" | "policy_or_task" | "cancelled" | "timeout" }
+  | { type: "sandbox_probe"; ok: boolean; mode: "sandbox" | "direct" }
   | { type: "done"; result: SpecialistResult };
 export type SpecialistEventSink = (event: SpecialistRuntimeEvent) => Promise<void>;
 export interface SpecialistRuntimeRequest {

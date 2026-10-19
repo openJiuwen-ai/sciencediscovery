@@ -122,3 +122,64 @@ sandboxes, additional SDKs/ACP, full observability and full Skills/MCP bridging
 remain outside Phase 2. See [Issue #385](https://github.com/openJiuwen-ai/sciencediscovery/issues/385),
 [configuration follow-up #278](https://github.com/openJiuwen-ai/sciencediscovery/issues/278),
 and the separate [ACP Agent work #64](https://github.com/openJiuwen-ai/sciencediscovery/issues/64).
+
+### Phase 3: Claude Code and ACP
+
+`runtime.kind` also accepts `claude-code` and `acp`, with the same platform
+options, explicit delegation, permission requests and declared-artifact handoff.
+Ask the **main agent** to use `configure_specialist_runtime(specialistId, settings)`
+before delegation. This changes future tasks; active tasks retain their snapshot.
+Enter credentials in the private runtime card in the same conversation. The
+runtime-neutral endpoint is `POST /api/subagents/:id/runtime-config` with
+`inputId`, `apiKey`, and optional `fallback`; `codex-config` remains compatible.
+Keys are encrypted and scoped independently by Session **and runtime**. Never
+copy tokens from chat into Specialist instructions, model IDs, command arguments
+or configuration metadata. The main-agent tool intentionally has no secret field.
+
+Server operators configure executables outside the Specialist catalog:
+
+- `SCIENCE_AGENT_CLAUDE_BINARY`: absolute path to a standalone Claude Code binary
+  supporting `--bare`, `--tools`, `--strict-mcp-config` and `--json-schema`.
+  Use a release with the documented bare-mode isolation fixes (v2.1.286 or later).
+- `SCIENCE_AGENT_ACP_BINARY`: absolute path to an unattended ACP v1 executable.
+  `SCIENCE_AGENT_ACP_ARGS` is an optional JSON string array of non-secret arguments.
+  A standalone binary or self-contained executable wrapper must work in the
+  Runner's minimal filesystem; arbitrary host package directories are not mounted.
+
+Claude receives `ANTHROPIC_API_KEY`; ACP receives `SD_ACP_TOKEN`. The ACP
+executable/wrapper must consume that environment variable for unattended auth;
+interactive OAuth and agent-specific login flows are not implemented. For an
+unauthenticated local ACP agent, submit `none` on the card. Host HOME, user MCP
+configuration and ambient provider secrets are not inherited. Claude's native
+tools are disabled. ACP advertises no filesystem/terminal capabilities, denies
+native permission requests and rejects native tool-call updates. ACP agents must
+support JSON decisions in text messages; requested model/reasoning values must be
+advertised through session config options or the task fails with configuration
+feedback. Claude maps `minimal` reasoning effort to `low`.
+
+Each concurrent child uses its own Workspace, Runner execution identity and
+private model-process directory. This reuses existing concurrent task scheduling;
+there is no shared sandbox or session pool. Provider processes only exchange
+model decisions. Commands, file operations and artifact declaration go through
+validated platform tools, including `run_shell` and the main permission bus.
+Transport API networking remains separate from tool egress policy.
+
+`Subagent.runtimeDiagnostics` exposes structured failure categories
+(`unavailable`, `policy_or_task`, `cancelled`, `timeout`), the task's
+`fallbackCount`, and `sandboxProbe` (`ok`, `mode`). The probe records whether the
+model transport bootstrapped inside the selected outer execution mode; it does
+not claim successful provider authentication, sandbox escape coverage or nested
+user-namespace support. No inner sandbox is requested. Failed bootstrap records
+`ok=false`; no SDK stderr, credentials or raw provider errors are persisted.
+
+Validation uses protocol fixtures with real API/Runner execution. Live successful
+Claude/ACP authentication still requires approved credentials and installed
+compatible executables; a fixture pass does not certify live provider support.
+iCode is deferred because its packaging/auth/tool isolation need separate adapter
+validation. Orchestration priority/quotas/task graphs, shared sandboxes/pools,
+full metrics/cluster/multi-tenant monitoring, UX polish and the expanded stress/
+escape acceptance matrix remain follow-up work.
+
+Protocol references: [Claude Code CLI](https://code.claude.com/docs/en/headless),
+[ACP v1 session setup](https://agentclientprotocol.com/protocol/v1/session-setup),
+[ACP configuration](https://agentclientprotocol.com/protocol/v1/session-config-options).

@@ -164,10 +164,11 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
     ...(specialistId ? { specialistId } : {}),
     ...(typeof value.specialistConfigHash === "string" ? { specialistConfigHash: value.specialistConfigHash } : {}),
     ...(typeof value.runtimeSessionId === "string" ? { runtimeSessionId: value.runtimeSessionId } : {}),
-    ...(isRecord(value.runtimeOptions) && value.runtimeOptions.kind === "codex" ? { runtimeOptions: value.runtimeOptions as unknown as NonNullable<Subagent["runtimeOptions"]> } : {}),
-    ...(isRecord(value.runtimeInput) && typeof value.runtimeInput.id === "string" && value.runtimeInput.runtime === "codex"
+    ...(isRecord(value.runtimeDiagnostics) ? { runtimeDiagnostics: value.runtimeDiagnostics as unknown as NonNullable<Subagent["runtimeDiagnostics"]> } : {}),
+    ...(isRecord(value.runtimeOptions) && ["codex", "claude-code", "acp"].includes(String(value.runtimeOptions.kind)) ? { runtimeOptions: value.runtimeOptions as unknown as NonNullable<Subagent["runtimeOptions"]> } : {}),
+    ...(isRecord(value.runtimeInput) && typeof value.runtimeInput.id === "string" && ["codex", "claude-code", "acp"].includes(String(value.runtimeInput.runtime))
       && (value.runtimeInput.state === "pending" || value.runtimeInput.state === "configured")
-      ? { runtimeInput: { id: value.runtimeInput.id, runtime: "codex" as const, state: value.runtimeInput.state } } : {}),
+      ? { runtimeInput: { id: value.runtimeInput.id, runtime: value.runtimeInput.runtime as "codex" | "claude-code" | "acp", state: value.runtimeInput.state } } : {}),
     status,
     steps: rawSteps as Subagent["steps"],
     timeoutSeconds: typeof value.timeoutSeconds === "number" && value.timeoutSeconds > 0 ? value.timeoutSeconds : DEFAULT_SUBAGENT_TIMEOUT_SECONDS,

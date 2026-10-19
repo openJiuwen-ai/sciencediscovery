@@ -39,7 +39,7 @@ test("runtime validation rejects credentials, argv, unsupported adapters and inv
   assert.equal(normalizeSpecialistRuntime(undefined), undefined);
   assert.deepEqual(normalizeSpecialistRuntime({ kind: "native" }), { kind: "native" });
   assert.deepEqual(normalizeSpecialistRuntime({ kind: "codex", model: "gpt-code" }), { kind: "codex", model: "gpt-code" });
-  for (const value of [null, [], "codex", { kind: "acp" }, { kind: "codex", apiKey: "secret" }, { kind: "codex", args: ["secret"] }, { kind: "native", model: "x" }, { kind: "codex", model: "--evil" }, { kind: "codex", model: 1 }]) {
+  for (const value of [null, [], "codex", { kind: "acp", command: "untrusted" }, { kind: "codex", apiKey: "secret" }, { kind: "codex", args: ["secret"] }, { kind: "native", model: "x" }, { kind: "codex", model: "--evil" }, { kind: "codex", model: 1 }]) {
     assert.throws(() => normalizeSpecialistRuntime(value));
   }
 });
@@ -96,7 +96,7 @@ test("adapter maps SDK events, validates tool requests, accumulates usage and ac
   const result = await new CodexSpecialistAdapter(factory([events(decision("declare_artifact", '{"path":"result.txt"}')), events(decision())])).invoke(request({ tools: [tool] }), async event => { observed.push(event); });
   assert.equal(calls, 1); assert.equal(result.summary, "Finished"); assert.equal(result.runtimeSessionId, "codex-thread");
   assert.equal(result.artifacts.length, 1); assert.equal(result.usage?.totalTokens, 10);
-  assert.deepEqual(observed.map(e => e.type), ["progress", "started", "tool_call", "tool_call", "progress", "started", "done"]);
+  assert.deepEqual(observed.filter(e => e.type !== "sandbox_probe").map(e => e.type), ["progress", "started", "tool_call", "tool_call", "progress", "started", "done"]);
 });
 
 async function assertAdapterRejects(stream: ThreadEvent[], pattern: RegExp) {

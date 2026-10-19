@@ -88,10 +88,15 @@ export interface SubagentStep {
 }
 
 export interface Subagent {
-  runtimeOptions?: Extract<import("./specialist.js").SpecialistRuntime, { kind: "codex" }>;
+  runtimeOptions?: Exclude<import("./specialist.js").SpecialistRuntime, { kind: "native" }>;
   /** Credential-free interactive setup state; the secret travels over a dedicated API. */
-  runtimeInput?: { id: string; runtime: "codex"; state: "pending" | "configured" };
+  runtimeInput?: { id: string; runtime: "codex" | "claude-code" | "acp"; state: "pending" | "configured" };
   runtimeSessionId?: string;
+  runtimeDiagnostics?: {
+    failureReason?: "unavailable" | "policy_or_task" | "cancelled" | "timeout";
+    fallbackCount: number;
+    sandboxProbe?: { ok: boolean; mode: "sandbox" | "direct" };
+  };
   /** Closed model history in the existing agent-state pool, never executable replay. */
   contextRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   createdAt: string;

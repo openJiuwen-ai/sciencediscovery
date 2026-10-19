@@ -155,7 +155,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
   }
 
   configureCodex(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): Promise<{ configured: boolean }> {
-    return this.request(`/api/subagents/${encodeURIComponent(subagentId)}/codex-config`, { method: "POST", body: JSON.stringify({ inputId, apiKey, fallback }) });
+    return this.request(`/api/subagents/${encodeURIComponent(subagentId)}/runtime-config`, { method: "POST", body: JSON.stringify({ inputId, apiKey, fallback }) });
   }
 
   listSpecialists(): Promise<Specialist[]> {

@@ -1667,7 +1667,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { discarded: draftId });
         return;
       }
-      const codexConfigMatch = url.pathname.match(/^\/api\/subagents\/([^/]+)\/codex-config$/);
+      const codexConfigMatch = url.pathname.match(/^\/api\/subagents\/([^/]+)\/(?:codex-config|runtime-config)$/);
       if (codexConfigMatch && request.method === "POST") {
         const input = await readJson<{ inputId: string; apiKey: string; fallback?: boolean }>(request).catch(() => {
           throw new ApiStatusError(400, "Invalid Codex configuration request");

@@ -6,6 +6,10 @@ import { scriptedModel, createProjectAndSession, openProjectSession, sendUserMes
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+  for (const runtime of ["codex", "claude-code", "acp"] as const) {
+  const title = runtime === "codex" ? "Connect Codex to continue" : `Connect Specialist runtime · ${runtime === "claude-code" ? "Claude Code" : "ACP"}`;
+  const credentialLabel = runtime === "codex" ? "OpenAI API key" : "Runtime API key or token";
+  const fallbackLabel = runtime === "codex" ? "Use code-engineer if Codex cannot run" : "Use code-engineer if the runtime cannot run";
   /**
    * E2E-META
    * Purpose: Surface missing Codex credentials in conversation and cancel safely.
@@ -23,10 +27,10 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
    * Credentials: E2E_API_TOKEN and a synthetic value submitted only after cancellation.
    * CostSideEffects: Creates a specialist, Project/Session/model; removes them in finally.
    */
-  test("Show Codex auth card and cancel pending setup", { tag: "@mocked" }, async ({ page, journey }) => {
+  test(`Show ${runtime} auth card and cancel pending setup`, { tag: "@mocked" }, async ({ page, journey }) => {
     journey.scenario({ goal: "Configure an explicit Codex delegation without exposing secrets in chat", preconditions: ["Isolated API/Runner", "Local scripted lead"] });
     const headers = authorizationHeader();
-    const created = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: { name: `Codex ${Date.now()}`, description: "Coding runtime", instructions: "Solve the task", runtime: { kind: "codex" } } });
+    const created = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: { name: `Codex ${Date.now()}`, description: "Coding runtime", instructions: "Solve the task", runtime: { kind: runtime } } });
     expect(created.ok()).toBeTruthy();
     const specialist = await created.json();
     const stub = await scriptedModel([{ tool: "task", arguments: { description: "Codex work", prompt: "Produce a result", specialistId: specialist.id } }, { text: "Delegation ended." }]);
@@ -36,7 +40,7 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
       await journey.step("Delegate to Codex", "An interactive config card appears even under Always-allow", async () => {
         await openProjectSession(page, fixture);
         await sendUserMessage(page, fixture.session.id, "Use the Codex specialist for this task.");
-        await expect(page.getByRole("form", { name: "Connect Codex to continue" }).first()).toBeVisible({ timeout: 60000 });
+        await expect(page.getByRole("form", { name: title }).first()).toBeVisible({ timeout: 60000 });
         const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/subagents`, { headers });
         child = (await response.json())[0];
         expect(child.runtimeInput.state).toBe("pending");
@@ -44,15 +48,15 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
       for (const width of [390, 1440]) {
         await journey.step(`Inspect private credential entry at ${width}px`, "Password input and submit remain visible and within the viewport", async () => {
           await page.setViewportSize({ width, height: 900 });
-          const card = page.getByRole("form", { name: "Connect Codex to continue" }).first();
-          await expect(card.getByLabel("OpenAI API key")).toHaveAttribute("type", "password");
+          const card = page.getByRole("form", { name: title }).first();
+          await expect(card.getByLabel(credentialLabel)).toHaveAttribute("type", "password");
           await expect(card.getByRole("button", { name: "Connect and continue" })).toBeVisible();
           await expect(card.getByRole("button", { name: "Connect and continue" })).toBeDisabled();
-          const fallback = card.getByRole("checkbox", { name: "Use code-engineer if Codex cannot run" });
+          const fallback = card.getByRole("checkbox", { name: fallbackLabel });
           await expect(fallback).toBeVisible();
           if (width === 390) { await expect(fallback).toBeChecked(); await fallback.uncheck(); }
           await expect(fallback).not.toBeChecked();
-          const box = await card.getByLabel("OpenAI API key").boundingBox();
+          const box = await card.getByLabel(credentialLabel).boundingBox();
           expect(box).not.toBeNull();
           expect(box!.x).toBeGreaterThanOrEqual(0);
           expect(box!.x + box!.width).toBeLessThanOrEqual(width);
@@ -68,7 +72,7 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
         }).toBe("cancelled");
         const stale = await page.request.post(`${apiBaseUrl()}/api/subagents/${child.id}/codex-config`, { headers, data: { inputId: child.runtimeInput.id, apiKey: "synthetic-stale-secret" } });
         expect(stale.status()).toBe(409);
-        await expect(page.getByRole("form", { name: "Connect Codex to continue" })).toHaveCount(0);
+        await expect(page.getByRole("form", { name: title })).toHaveCount(0);
       });
     } finally {
       await cleanupJourney(page, fixture);
@@ -76,4 +80,5 @@ test.describe("Codex specialist configuration", { tag: ["@fixture:standard", "@i
       await page.request.delete(`${apiBaseUrl()}/api/specialists/${specialist.id}`, { headers });
     }
   });
+  }
 });

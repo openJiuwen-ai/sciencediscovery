@@ -15,6 +15,7 @@
 import { setTimeout as runtimeDelay } from "node:timers/promises";
 import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
 import { createNativeAgent } from "../native-agent/index.js";
+import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
 import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
@@ -1253,7 +1254,7 @@ async function executeAgentRun(
     },
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
     ...(approvalsByJiuwenSwarm ? { requestApproval } : {}),
-    ...(leadExtraTools.length ? { extraTools: leadExtraTools } : {}),
+    extraTools: [...leadExtraTools, mainRuntimeConfigTool(store)],
     memoryGraphEnabled: memoryGraphSink.enabled,
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
@@ -1547,7 +1548,7 @@ async function executeAgentRun(
       }
       const subagentConfig = resolveSubagentConfig(input);
       const specialist = resolveSubagentSpecialist(store, session.specialistId, input);
-      const codexRuntime = input.specialistId?.trim() && specialist?.runtime?.kind === "codex" ? specialist.runtime : undefined;
+      const codexRuntime = input.specialistId?.trim() && specialist?.runtime && specialist.runtime.kind !== "native" ? specialist.runtime : undefined;
       const effectiveCodexRuntime = continuation?.runtimeOptions ?? codexRuntime;
       if (effectiveCodexRuntime?.timeoutSeconds) subagentConfig.timeoutSeconds = effectiveCodexRuntime.timeoutSeconds;
       const subagentInput: SubagentInput = specialist && input.specialistId?.trim() !== specialist.id
@@ -1561,7 +1562,7 @@ async function executeAgentRun(
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: codexRuntime
-            ? { id: "codex", model: codexRuntime.model ?? "Codex default", name: "Codex" }
+            ? { id: codexRuntime.kind, model: codexRuntime.model ?? `${codexRuntime.kind} default`, name: codexRuntime.kind }
             : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
           timeoutSeconds: subagentConfig.timeoutSeconds,
@@ -2050,8 +2051,8 @@ async function executeAgentRun(
                 readRuntime: () => store.listSubagents(sessionId).find(child => child.id === subagent.id)?.runtimeOptions ?? effectiveCodexRuntime,
                 authorizeDirect: async () => { await childExecution.permission.requirePrivilege({
                   action: "direct_code", executionId: subagent.id, signal: childSignal,
-                  resource: `codex-runtime:${subagent.id}:${subagentWorkspaceRoot}`,
-                  summary: `Run Codex directly on the API host in ${subagentWorkspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
+                  resource: `specialist-runtime:${subagent.id}:${subagentWorkspaceRoot}`,
+                  summary: `Run ${codexRuntime.kind} directly on the API host in ${subagentWorkspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
                 }); },
                 configure: async runtime => {
                   subagent = { ...subagent, runtimeOptions: runtime, timeoutSeconds: runtime.timeoutSeconds ?? subagent.timeoutSeconds };
@@ -2068,12 +2069,12 @@ async function executeAgentRun(
                 },
                 maxTurns: subagentConfig.maxTurns,
                 credential: async (runtimeSignal, needInput) => {
-                  let key = store.codexApiKey(sessionId);
+                  let key = store.runtimeApiKey(sessionId, codexRuntime.kind);
                   if (!key) {
                     await needInput();
                     while (!key) {
                       await runtimeDelay(250, undefined, { signal: runtimeSignal });
-                      key = store.codexApiKey(sessionId);
+                      key = store.runtimeApiKey(sessionId, codexRuntime.kind);
                     }
                     subagent = { ...subagent, runtimeOptions: store.listSubagents(sessionId).find(child => child.id === subagent.id)?.runtimeOptions ?? effectiveCodexRuntime, runtimeInput: { ...subagent.runtimeInput!, state: "configured" } };
                     await store.updateSubagent({ ...subagent, steps });
@@ -2083,7 +2084,17 @@ async function executeAgentRun(
                 },
                 onRuntimeEvent: async event => {
                   if (event.type === "need_input") {
-                    subagent = { ...subagent, runtimeInput: { id: randomUUID(), runtime: "codex", state: "pending" } };
+                    subagent = { ...subagent, runtimeInput: { id: randomUUID(), runtime: codexRuntime.kind, state: "pending" } };
+                    await store.updateSubagent({ ...subagent, steps });
+                    await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                  }
+                  if (event.type === "failure" || event.type === "sandbox_probe" || event.type === "fallback") {
+                    const diagnostics = subagent.runtimeDiagnostics ?? { fallbackCount: 0 };
+                    subagent.runtimeDiagnostics = { ...diagnostics,
+                      ...(event.type === "failure" ? { failureReason: event.reason } : {}),
+                      ...(event.type === "sandbox_probe" ? { sandboxProbe: { ok: event.ok, mode: event.mode } } : {}),
+                      ...(event.type === "fallback" ? { fallbackCount: diagnostics.fallbackCount + 1 } : {}),
+                    };
                     await store.updateSubagent({ ...subagent, steps });
                     await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
                   }
@@ -2091,7 +2102,7 @@ async function executeAgentRun(
                   if (event.type === "fallback") {
                     subagent.runtimeInput = undefined;
                     publishStep({ id: randomUUID(), kind: "system", status: "completed",
-                      content: "Codex cannot run. Falling back to builtin-code-engineer.", createdAt: new Date().toISOString() });
+                      content: `${codexRuntime.kind} cannot run. Falling back to builtin-code-engineer.`, createdAt: new Date().toISOString() });
                   }
                 },
               }),
@@ -2165,6 +2176,8 @@ async function executeAgentRun(
           });
           subagent = {
             ...subagent,
+            ...(codexRuntime ? { runtimeDiagnostics: { ...subagent.runtimeDiagnostics, fallbackCount: subagent.runtimeDiagnostics?.fallbackCount ?? 0,
+              failureReason: failure.status === "timed_out" ? "timeout" as const : failure.status === "cancelled" ? "cancelled" as const : subagent.runtimeDiagnostics?.failureReason ?? "policy_or_task" as const } } : {}),
             error: failure.error,
             finishedAt: new Date().toISOString(),
             status: failure.status,

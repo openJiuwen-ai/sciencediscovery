@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { ClaudeCodeSpecialistAdapter, AcpSpecialistAdapter } from "./process-adapters.js";
 import { Type } from "typebox";
 import type { SpecialistRuntime } from "@sciencediscovery/schema";
 import { normalizeSpecialistRuntime } from "./config.js";
@@ -14,9 +15,9 @@ const PLATFORM_TOOLS = new Set(["request_sandbox_network", "request_direct_execu
 /** Replace only the model-loop factory; execution and artifact bindings remain platform-owned. */
 export function codexAgentFactory(config: {
   model?: string;
-  readRuntime?(): Extract<SpecialistRuntime, { kind: "codex" }> | undefined;
-  runtime?: Extract<SpecialistRuntime, { kind: "codex" }>;
-  configure?(runtime: Extract<SpecialistRuntime, { kind: "codex" }>): Promise<void>;
+  readRuntime?(): Exclude<SpecialistRuntime, { kind: "native" }> | undefined;
+  runtime?: Exclude<SpecialistRuntime, { kind: "native" }>;
+  configure?(runtime: Exclude<SpecialistRuntime, { kind: "native" }>): Promise<void>;
   authorizeDirect?(): Promise<void>;
   fallbackFactory?: (options: NativeAgentOptions) => NativeAgentHandle;
   maxTurns: number;
@@ -27,7 +28,7 @@ export function codexAgentFactory(config: {
   return options => {
     const controller = new AbortController();
     let fallback: NativeAgentHandle | undefined;
-    let runtime = { kind: "codex" as const, ...(config.model ? { model: config.model } : {}), ...config.runtime };
+    let runtime: Exclude<SpecialistRuntime, { kind: "native" }> = { kind: "codex" as const, ...(config.model ? { model: config.model } : {}), ...config.runtime };
     const listeners = new Set<(event: AgentEvent) => void>();
     const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
     const sink = async (event: SpecialistRuntimeEvent) => {
@@ -66,7 +67,7 @@ export function codexAgentFactory(config: {
         execute: async () => ({ content: [{ type: "text" as const, text: "Required runtime tools are unavailable; requesting configured recovery." }], details: { runtimeUnavailable: true } }),
       };
       try {
-        const result = await (config.adapter ?? new CodexSpecialistAdapter()).invoke({
+        const result = await (config.adapter ?? (runtime.kind === "claude-code" ? new ClaudeCodeSpecialistAdapter() : runtime.kind === "acp" ? new AcpSpecialistAdapter() : new CodexSpecialistAdapter())).invoke({
           prompt: [options.specialist?.instructions, options.subagent?.instructions,
             options.runContract && options.runContract !== prompt ? `Original delegation:\n${options.runContract}` : undefined,
             options.gatewayHistory?.length ? `Prior platform conversation:\n${JSON.stringify(options.gatewayHistory)}` : undefined,
@@ -76,13 +77,14 @@ export function codexAgentFactory(config: {
           get model() { return runtime.model; }, get reasoningEffort() { return runtime.reasoningEffort; }, maxTurns: config.maxTurns, signal: controller.signal,
           tools: [...buildTools(options).filter(tool => PLATFORM_TOOLS.has(tool.name)), configure, unavailable],
           credential: async () => {
-            const key = await config.credential(controller.signal, () => sink({ type: "need_input", runtime: "codex" }));
+            const key = await config.credential(controller.signal, () => sink({ type: "need_input", runtime: runtime.kind }));
             runtime = config.readRuntime?.() ?? runtime;
             return key;
           },
         }, sink);
         return { finalMessages: [...(options.gatewayHistory ?? []), { role: "user", content: prompt }, { role: "assistant", content: result.summary }] };
       } catch (error) {
+        await sink({ type: "failure", reason: controller.signal.aborted || (error instanceof Error && error.name === "AbortError") ? "cancelled" : error instanceof Error && error.name === "TimeoutError" ? "timeout" : error instanceof SpecialistUnavailableError ? "unavailable" : "policy_or_task" });
         if (controller.signal.aborted || !(error instanceof SpecialistUnavailableError) || runtime.fallback === false || !config.fallbackFactory) throw error;
         await sink({ type: "fallback", specialistId: "builtin-code-engineer" });
         controller.signal.throwIfAborted();
