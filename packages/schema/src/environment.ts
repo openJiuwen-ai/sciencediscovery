@@ -458,6 +458,7 @@ export interface ScientificEnvironmentSetup {
 
 export interface SetupScientificEnvironmentsRequest {
   confirmed: boolean;
+  networkProxy?: ResolvedProxy;
 }
 
 export interface ScientificEnvsCapability {

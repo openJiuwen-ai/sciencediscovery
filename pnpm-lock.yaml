@@ -238,6 +238,9 @@ importers:
       '@sciencediscovery/memory':
         specifier: workspace:*
         version: link:../memory
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../network
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
@@ -375,6 +378,9 @@ importers:
 
   packages/model:
     dependencies:
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../network
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
@@ -388,6 +394,12 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+
+  packages/network:
+    dependencies:
+      undici:
+        specifier: 8.9.0
+        version: 8.9.0
 
   packages/operational-logging:
     devDependencies:
@@ -681,6 +693,9 @@ importers:
       '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../../packages/model
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
@@ -782,6 +797,9 @@ importers:
       '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../../packages/cas
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging

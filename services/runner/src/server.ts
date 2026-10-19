@@ -112,7 +112,7 @@ const MAX_BODY_BYTES = 2_000_000;
  * scripts, and 64 MiB of base64 is far past anything a Session should select.
  */
 const MAX_SKILL_BUNDLE_BYTES = 67_108_864;
-type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
+type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string; networkProxy?: import("@sciencediscovery/schema").ResolvedProxy };
 interface NpuJobSessionRequest {
   sessionId?: string;
 }
@@ -835,7 +835,7 @@ export function createRunnerServer(
         if (!environmentStore) throw new Error("Scientific environments are unavailable");
         const input = JSON.parse(await readBody(request)) as SetupScientificEnvironmentsRequest;
         if (input.confirmed !== true) throw new Error("Scientific environment setup requires explicit confirmation");
-        sendJson(response, 202, environmentStore.startManagedEnvironmentSetup());
+        sendJson(response, 202, environmentStore.withNetworkProxy(input.networkProxy, () => environmentStore.startManagedEnvironmentSetup()));
         return;
       }
       if (request.method === "GET" && url.pathname === "/environment-revisions") {
@@ -894,8 +894,8 @@ export function createRunnerServer(
       }
       if (request.method === "POST" && url.pathname === "/environments") {
         if (!environmentStore) throw new Error("Scientific environments are unavailable");
-        const input = JSON.parse(await readBody(request)) as CreateEnvironmentRequest;
-        sendJson(response, 201, await environmentStore.createTask(input.name, input.language, input.baseEnvironmentId));
+        const input = JSON.parse(await readBody(request)) as CreateEnvironmentRequest & { networkProxy?: import("@sciencediscovery/schema").ResolvedProxy };
+        sendJson(response, 201, await environmentStore.withNetworkProxy(input.networkProxy, () => environmentStore.createTask(input.name, input.language, input.baseEnvironmentId)));
         return;
       }
       const environmentMatch = url.pathname.match(/^\/environments\/([^/]+)$/);
@@ -923,14 +923,14 @@ export function createRunnerServer(
           ? await validatedWorkspace(config.dataDir, await remoteWorkspaceRoot(config.dataDir, input.runnerWorkspaceKey))
           : input.workspaceRoot ? await validatedWorkspace(config.dataDir, input.workspaceRoot) : undefined;
         const previousRevisionId = environmentStore.list().find((environment) => environment.id === environmentId)?.currentRevisionId;
-        const revision = await environmentStore.install(
+        const revision = await environmentStore.withNetworkProxy(input.networkProxy, () => environmentStore.install(
           environmentId,
           input.packages,
           input.channels,
           input.manager,
           workspaceRoot,
           input.indexUrl,
-        );
+        ));
         if (kernelManager && previousRevisionId) {
           await kernelManager.teardownRevision(previousRevisionId, "Environment Revision changed; persistent memory was lost");
         }

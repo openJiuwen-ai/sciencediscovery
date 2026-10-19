@@ -164,11 +164,14 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 |---|---|---|
 | `GET /api/proxy/settings` | 无 | `200`，`{defaultPolicy, servers}`；认证设置响应会包含可用的完整代理 URL |
 | `PUT /api/proxy/settings` | `{"defaultPolicy":"none"}` 或 `proxy:<id>` | `200`，更新后的设置 |
+| `POST /api/proxy/test` | `{mode: "environment" \| "direct" \| "url", url?, noProxy?}` | 下载源连通性诊断；不保存设置 |
 | `POST /api/proxy/servers` | `{name, kind, url?}` | `201`，创建后的代理记录 |
 | `PUT /api/proxy/servers/:id` | `{name?, kind?, url?}` | `200`，更新后的代理记录 |
 | `DELETE /api/proxy/servers/:id` | 无 | `200`，`{"deleted":"<id>"}`；仍被引用时为 `409` |
 | `GET /api/mcp/proxy-policies` | 无 | `200`，`{"policies":{...}}` |
 | `PUT /api/mcp/proxy-policies` | `{"policies":{"server-id":"inherit|none|proxy:<id>"}}` | `200`，规范化后的策略 map |
+
+`GET/PUT /api/proxy/settings` 还支持可选的 `noProxy`（逗号分隔的绕过代理主机）。环境变量摘要会隐藏代理凭据。
 
 `kind` 只能是 `custom_url`、`environment` 或 `system`；`custom_url` 创建时必须提供 `url`。示例：
 

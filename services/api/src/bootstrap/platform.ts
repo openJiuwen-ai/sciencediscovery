@@ -17,6 +17,7 @@ import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { isLoopback } from "@sciencediscovery/network";
 import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
 import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
 import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
@@ -143,7 +144,7 @@ export function createPlatformServices(
     uploadMaxRequestBytes: config.workspaceUpload.maxRequestBytes,
   }, config.memoryGraph.neo4jPassword, config.memoryGraph.available !== false);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
-  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken, () => store.resolveProxy());
   const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 
   mgLog.setDataDir(config.dataDir);
@@ -469,6 +470,13 @@ export function createPlatformServices(
         // provisioner themselves; this installation keeps one per architecture
         // and hands it over when it deploys their Runner.
         provisionerCacheDir: resolve(config.dataDir, "provisioners"),
+        environmentProxy: () => {
+          const proxy = store.resolveProxy();
+          if (proxy.mode === "url" && isLoopback(proxy.url)) {
+            throw new Error("The global proxy uses localhost on the API host and cannot be forwarded to a remote Runner. Use a proxy address reachable from the remote machine, or select environment configuration so the Runner uses its own proxy variables.");
+          }
+          return proxy;
+        },
       },
     ),
     runnerClient,

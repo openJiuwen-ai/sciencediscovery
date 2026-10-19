@@ -859,8 +859,14 @@ test("remote wheel installation resolves the Runner workspace key instead of a c
   const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-wheel-"));
   context.after(() => rm(dataDir, { recursive: true, force: true }));
   let installedRoot: string | undefined;
+  let proxyScopes = 0;
   const store = {
     list: () => [],
+    withNetworkProxy<T>(proxy: Parameters<EnvironmentStore["withNetworkProxy"]>[0], action: () => T): T {
+      assert.deepEqual(proxy, { mode: "direct" });
+      proxyScopes++;
+      return action();
+    },
     install: async (_id: string, packages: string[], _channels: string[], _manager: string, workspaceRoot: string) => {
       installedRoot = workspaceRoot;
       assert.equal(await readFile(resolve(workspaceRoot, packages[0]!), "utf8"), "explicitly transferred");
@@ -879,11 +885,13 @@ test("remote wheel installation resolves the Runner workspace key instead of a c
   const installed = await fetch(`${origin}/environments/task-test/install`, {
     method: "POST", headers, body: JSON.stringify({
       runnerWorkspaceKey: "project/session/agents/child", workspaceRoot: "/control/host/path",
+      networkProxy: { mode: "direct" },
       manager: "pip", packages: ["wheels/pkg.whl"],
     }),
   });
   assert.equal(installed.status, 201, await installed.text());
   assert.equal(installedRoot, resolve(dataDir, "remote-workspaces", "project/session/agents/child"));
+  assert.equal(proxyScopes, 1, "installation must run inside the requested proxy scope");
   const escaped = await fetch(`${origin}/environments/task-test/install`, {
     method: "POST", headers, body: JSON.stringify({ runnerWorkspaceKey: "../escape", packages: ["pkg.whl"], manager: "pip" }),
   });

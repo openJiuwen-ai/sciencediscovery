@@ -77,6 +77,7 @@ export interface Catalog {
   permissionEpochs: PermissionEpoch[];
   providers: ModelProvider[];
   proxyDefaultPolicy: ProxyDefaultPolicy;
+  proxyNoProxy?: string;
   proxyServers: ProxyServer[];
   permissionGrants: PermissionGrant[];
   permissionRequests: PermissionRequest[];
