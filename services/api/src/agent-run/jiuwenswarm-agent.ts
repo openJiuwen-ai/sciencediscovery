@@ -141,6 +141,10 @@ export const JIUWENSWARM_ASK_TOOLS: ReadonlySet<string> = new Set([
   "run_shell", "execute", "environment_setup", "run_npu_job", "execution_cancel", "workspace_transfer",
   "sync_remote_workspace", "artifact_download", "arxiv_prepare_paper_download", "pubmed_prepare_paper_download",
   "pdb_prepare_structure_download",
+  // A search spends real budget (mutations + sandboxed evaluations), so the
+  // user must confirm before any path starts one, even when they typed the
+  // /evolve-design command themselves.
+  "create_evolve_run",
 ]);
 
 // mcp_recovered_call enforces concrete source/tool approval inside its bridge callback.

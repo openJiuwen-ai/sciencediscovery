@@ -236,6 +236,8 @@ import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
 import { isMemoryGraphVisible, MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
 import { EvolveAlgorithmPicker } from "./evolve/EvolveAlgorithmPicker.js";
+import { EvolveSuggestionBar } from "./evolve/EvolveSuggestionBar.js";
+import { detectEvolveIntent, isEvolveDesignCommand } from "./evolve/intent.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // The full-screen explorer is heavy (d3-force + the artifacts panel) and only
@@ -1132,12 +1134,20 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
-  const showEvolveAlgorithmPicker =
-    /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
+  const [evolveSuggested, setEvolveSuggested] = useState(false);
+  const isEvolveCommand = isEvolveDesignCommand(message) && !message.includes("--algorithm");
+  // An explicit /evolve-design command is an unambiguous user request: open the
+  // algorithm picker directly. A natural-language improvement sentence needs
+  // confirmation first — starting a search spends real budget, so detection
+  // only offers, and the user's explicit accept opens the picker.
+  const hasEvolveIntent = detectEvolveIntent(message) && !message.includes("--algorithm");
+  const showEvolveSuggestion = hasEvolveIntent && !isEvolveCommand && !evolvePickerDismissed && !evolveSuggested;
+  const showEvolveAlgorithmPicker = (isEvolveCommand || evolveSuggested) && !evolvePickerDismissed;
 
   function selectEvolveAlgorithm(algorithm: "puct" | "openevolve"): void {
     const afterCommand = message.replace(/^\/evolve-design\s*/, "");
     setMessage(`/evolve-design --algorithm ${algorithm} ${afterCommand}`.trimEnd());
+    setEvolveSuggested(false);
     setEvolvePickerDismissed(false);
     requestAnimationFrame(() => composerTextarea.current?.focus());
   }
@@ -4586,6 +4596,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
+                  {showEvolveSuggestion ? <EvolveSuggestionBar
+                    onAccept={() => { setEvolvePickerDismissed(false); setEvolveSuggested(true); }}
+                    onDismiss={() => { setEvolvePickerDismissed(true); setEvolveSuggested(false); }}
+                  /> : null}
                   {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
@@ -4593,7 +4607,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
-                    if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
+                    if (!detectEvolveIntent(value)) {
+                      setEvolvePickerDismissed(false);
+                      setEvolveSuggested(false);
+                    }
                   }} onKeyDown={(event) => {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                     if (composerTrigger) return;
@@ -4639,6 +4656,21 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         refreshing={mcpReadiness.refreshing}
                         refreshError={mcpReadiness.error}
                       />
+                      <button
+                        aria-label={t("evolve.entry.label")}
+                        className="evolve-entry-button"
+                        disabled={isRunning || sessionArchived}
+                        onClick={() => {
+                          setMessage(t("evolve.entry.prompt"));
+                          setEvolveSuggested(false);
+                          setEvolvePickerDismissed(false);
+                          requestAnimationFrame(() => composerTextarea.current?.focus());
+                        }}
+                        title={t("evolve.entry.hint")}
+                        type="button"
+                      >
+                        <SparkleIcon size={14} />
+                      </button>
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
                     <ApprovalModeToggle
@@ -4914,9 +4946,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             // only thing this button owes the user is a sentence pointing at
             // the thing they were looking at. Left unsent on purpose: what
             // "better" means is the one question only they can answer.
+            // Natural-language fill, not a slash command: detectEvolveIntent
+            // recognises it and offers the evolution suggestion bar.
             setArtifactModalName(undefined);
             setArtifactModalVersion(undefined);
-            setMessage(`/evolve-design make the artifact ${seed.label} better: `);
+            setMessage(t("app.evolveSeedPrompt", { label: seed.label }));
+            setEvolveSuggested(false);
+            setEvolvePickerDismissed(false);
           }}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name, version) => {

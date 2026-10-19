@@ -647,6 +647,52 @@
    refusal rather than as a note. */
 
 /* --- Algorithm picker popover ---------------------------------------------- */
+.evolve-suggestion-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--accent-border-soft);
+  background: var(--accent-softer);
+  padding: 6px 17px;
+  color: var(--accent-ink);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.evolve-suggestion-icon { display: inline-flex; flex: 0 0 auto; color: var(--accent); }
+.evolve-suggestion-text { flex: 1 1 auto; min-width: 0; }
+.evolve-suggestion-accept {
+  flex: 0 0 auto;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 4px 9px;
+  color: var(--accent-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+}
+.evolve-suggestion-accept:hover { background: var(--accent-soft); }
+.evolve-suggestion-bar .icon-button { width: 22px; height: 22px; flex: 0 0 auto; }
+.evolve-entry-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  width: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+.evolve-entry-button:hover, .evolve-entry-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
 .evolve-algorithm-picker {
   background: var(--surface, #fff);
   border: 1px solid var(--border, #ddd);
