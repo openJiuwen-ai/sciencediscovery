@@ -52,7 +52,13 @@ for (const decision of ["Deny", "Allow once"] as const) {
     try {
       await journey.step("Request PubMed retrieval", "The conversation pauses on a card naming the host and purpose before any command runs.", async () => {
         await openProjectSession(page, fixture);
-        runId = (await sendUserMessage(page, fixture.session.id, "Ask me for permission to retrieve PubMed records before executing anything.")).id;
+        const prompt = "Ask me for permission to retrieve PubMed records before executing anything.";
+        // The composer warning is an earlier, offline preflight. Acknowledge
+        // it so this journey can exercise the distinct run-level consent card.
+        await page.locator("form.composer").getByRole("textbox").fill(prompt);
+        await expect(page.getByRole("alert")).toContainText("Research network access is disabled");
+        await page.getByRole("button", { name: "Continue without network" }).click();
+        runId = (await sendUserMessage(page, fixture.session.id, prompt)).id;
         const card = page.locator("article.permission-card").filter({ hasText: "eutils.ncbi.nlm.nih.gov:443" }).first();
         await expect(card).toBeVisible(); await expect(card).toContainText("Retrieve requested PubMed records");
         expect((await get(`/api/sessions/${fixture.session.id}/agent-activity`)).executions).toHaveLength(0);

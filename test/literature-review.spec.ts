@@ -319,7 +319,14 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
       });
 
       await journey.step("请 Agent 检索 arXiv", "运行正常结束；对 arXiv 的调用显示为失败，模型从未拿到 arXiv 工具，也没有任何 arXiv 调用记录。", async () => {
-        const run = await sendUserMessage(page, fixture.session.id, "在 arXiv 上检索 CRISPR TP53 的论文。");
+        const prompt = "在 arXiv 上检索 CRISPR TP53 的论文。";
+        // This fixture intentionally keeps the sandbox offline. The composer
+        // preflight must be acknowledged before the journey can demonstrate
+        // the separate, in-run disabled-connector feedback it owns.
+        await page.locator("form.composer").getByRole("textbox").fill(prompt);
+        await expect(page.getByRole("alert")).toContainText("研究网络访问已被禁用");
+        await page.getByRole("button", { name: "在无网络情况下继续" }).click();
+        const run = await sendUserMessage(page, fixture.session.id, prompt);
         expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
         expect(offeredArxiv(0)).toEqual([]);
         const failed = page.locator(".timeline-disclosure.tool.failed").filter({ hasText: /arxiv/i });
