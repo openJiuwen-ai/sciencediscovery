@@ -22,20 +22,33 @@
   .skill-workspace-layout { grid-template-columns: 200px 180px minmax(360px, 1fr) 220px; }
 }
 
+/* Below ~1024px the sidebar leaves the grid and becomes an off-canvas drawer
+   so the conversation and the composer always fill the first screen. The
+   drawer keeps the desktop sidebar layout; only its presentation changes. */
+@media (max-width: 1024px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: fixed; top: 0; bottom: 0; left: 0; z-index: var(--z-overlay-high); width: min(320px, 88vw); max-width: 100vw; transform: translateX(-102%); visibility: hidden; transition: transform .2s ease, visibility 0s .2s; box-shadow: none; }
+  .sidebar.drawer-open { transform: translateX(0); visibility: visible; transition: transform .2s ease; box-shadow: var(--shadow-3); }
+  .sidebar-drawer-toggle { display: grid; }
+  .sidebar-drawer-backdrop { display: block; }
+  .sidebar-drawer-close { display: grid; }
+  /* The drawer toggle floats over the top-left corner of the main area, so
+     the bars and pages beneath it make room for it. */
+  .session-bar { padding-left: 58px; }
+  .archived-banner { padding-left: 58px; }
+  .usage-page { padding-top: 60px; }
+}
+
 @media (max-width: 900px) {
-  .app-shell { display: block; }
-  .sidebar { position: relative; width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 18px; }
-  .brand { padding-bottom: 16px; }
-  .sidebar-resources { display: flex; flex-direction: column; margin-bottom: 0; }
-  .sidebar-section { max-height: 220px; margin-bottom: 14px; }
-  .sidebar-resizer { display: none; }
-  .main-area { height: auto; min-height: 100vh; }
   .content-grid { display: flex; flex-direction: column; }
-  .conversation { min-height: 720px; border-right: 0; }
-  .workspace-panel { border-top: 1px solid var(--border); }
+  /* The conversation owns the remaining viewport height: messages scroll
+     internally and the composer stays pinned inside the first screen. The
+     workspace panel becomes a capped bottom strip with its own scroll. */
+  .conversation { flex: 1 1 auto; min-height: 0; border-right: 0; }
+  .workspace-panel { flex: 0 0 auto; max-height: 42vh; border-top: 1px solid var(--border); }
   .workflow-controls > label { grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); }
   .workspace-resizer, .composer-hint { display: none; }
-  .session-bar { padding: 6px 14px; }
+  .session-bar { padding: 6px 14px 6px 58px; }
   .session-bar .connection { display: none; }
   .messages { padding: 26px 22px; }
   .composer { margin-inline: 18px; }
@@ -175,6 +188,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  .sidebar { transition: none !important; }
 }
 
 /* Keep the composer compact so the message list owns the vertical space. */

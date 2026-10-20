@@ -141,6 +141,7 @@ import {
   ImageIcon,
   InfoIcon,
   MarkdownIcon,
+  MenuIcon,
   NotebookIcon,
   PanelRightIcon,
   ProjectIcon,
@@ -855,10 +856,16 @@ export function remoteCredentialDraftSaveError(editing: boolean): string | undef
 
 function measureWorkspaceMaxWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_WIDTH;
-  const sidebarWidth = typeof document === "undefined"
+  const sidebar = typeof document === "undefined"
+    ? undefined
+    : document.querySelector<HTMLElement>(".sidebar") ?? undefined;
+  // Below the 1024px breakpoint the sidebar is a fixed off-canvas drawer and
+  // no longer takes layout width, so it must not shrink the workspace budget.
+  const sidebarWidth = sidebar === undefined
     ? fallbackSidebarWidth(window.innerWidth)
-    : document.querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().width
-      ?? fallbackSidebarWidth(window.innerWidth);
+    : getComputedStyle(sidebar).position === "fixed"
+      ? 0
+      : sidebar.getBoundingClientRect().width;
   return workspaceMaxWidth(window.innerWidth, sidebarWidth);
 }
 
@@ -1195,6 +1202,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [sidebarSplit, setSidebarSplit] = useState(36);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [sidebarDrawerOpen, setSidebarDrawerOpen] = useState(false);
+  const sidebarDrawerToggleRef = useRef<HTMLButtonElement>(null);
+  const sidebarDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const [projectCreationOpen, setProjectCreationOpen] = useState(false);
   const [sessionCreationPending, setSessionCreationPending] = useState(false);
   const [markdownDocument, setMarkdownDocument] = useState<{ content: string; path: string }>();
@@ -1340,6 +1350,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
   }, [artifacts, client, session?.id]);
   const openMarkdownImageArtifacts = useCallback(() => {
+    setSidebarDrawerOpen(false);
     setWorkspaceView("session");
     setWorkspaceCollapsed(false);
     window.requestAnimationFrame(() => {
@@ -1620,6 +1631,36 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       sidebarObserver?.disconnect();
     };
   }, []);
+
+  // Below the 1024px breakpoint the sidebar leaves the grid and becomes an
+  // off-canvas drawer (see responsive.css). Keep the drawer's state in
+  // lockstep with that media query so a widened viewport cannot leave an
+  // invisible drawer marked open.
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1024px)");
+    const closeWhenWide = () => { if (!media.matches) setSidebarDrawerOpen(false); };
+    media.addEventListener("change", closeWhenWide);
+    return () => media.removeEventListener("change", closeWhenWide);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarDrawerOpen) return;
+    sidebarDrawerCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSidebarDrawerOpen(false);
+      sidebarDrawerToggleRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [sidebarDrawerOpen]);
+
+  // Picking a destination closes the drawer, whether the navigation came from
+  // the drawer itself, the address bar, or the Usage page. Section
+  // expand/collapse and the in-drawer menus are not destinations.
+  useEffect(() => {
+    setSidebarDrawerOpen(false);
+  }, [activeProjectId, activeSessionId, workspaceView]);
 
   // Main view → URL: the address bar is a shareable, reload-safe projection of
   // where the user is. The path carries the resource identity (Project /
@@ -2540,6 +2581,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [modelWizardRequested, setModelWizardRequested] = useState(false);
 
   function openSystemSettings(group?: SystemSettingsGroup, options?: { wizard?: boolean }): void {
+    setSidebarDrawerOpen(false);
     reportSystemSettingsError();
     if (group) setSystemSettingsGroup(group);
     setModelWizardRequested(options?.wizard === true);
@@ -2944,6 +2986,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function openScopedSettings(target: ResourceTarget): Promise<void> {
+    setSidebarDrawerOpen(false);
     setSettingsTarget(target);
     setScopedSettings(undefined);
     setScopedSettingsRevision(undefined);
@@ -3007,6 +3050,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function openDeletion(target: ResourceTarget): Promise<void> {
+    setSidebarDrawerOpen(false);
     setDeletionTarget(target);
     setDeletionImpact(undefined);
     setDeletionConfirmation("");
@@ -3703,6 +3747,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   function openGlobalSearch(): void {
+    setSidebarDrawerOpen(false);
     setGlobalSearchOpen(true);
     setGlobalSearchQuery("");
   }
@@ -4135,10 +4180,35 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   return (
     <RuntimeConfigClient.Provider value={client}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
-      <aside className="sidebar">
+      <button
+        aria-controls="app-sidebar"
+        aria-expanded={sidebarDrawerOpen}
+        aria-label={t("app.openNavigation")}
+        className="sidebar-drawer-toggle"
+        onClick={() => setSidebarDrawerOpen(true)}
+        ref={sidebarDrawerToggleRef}
+        title={t("app.openNavigation")}
+        type="button"
+      ><MenuIcon size={18} /></button>
+      {sidebarDrawerOpen ? <div className="sidebar-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSidebarDrawerOpen(false); }} /> : null}
+      <aside
+        aria-label={sidebarDrawerOpen ? t("app.workbenchNavigation") : undefined}
+        aria-modal={sidebarDrawerOpen ? "true" : undefined}
+        className={sidebarDrawerOpen ? "sidebar drawer-open" : "sidebar"}
+        id="app-sidebar"
+        role={sidebarDrawerOpen ? "dialog" : undefined}
+      >
         <div className="brand">
           <div className="brand-mark"><BrandIcon size={24} /></div>
           <div><strong>ScienceDiscovery</strong><span>{t("app.localRuntime")}</span></div>
+          <button
+            aria-label={t("app.closeNavigation")}
+            className="icon-button sidebar-drawer-close"
+            onClick={() => setSidebarDrawerOpen(false)}
+            ref={sidebarDrawerCloseRef}
+            title={t("app.closeNavigation")}
+            type="button"
+          ><CloseIcon size={18} /></button>
         </div>
 
         <div className={sidebarResourceClass} style={{ "--sidebar-split": `${sidebarSplit}%` } as CSSProperties}>
@@ -4152,6 +4222,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               onAdd={() => {
                 if (!projectsLoaded || !globalSettings) return;
                 setProjectsExpanded(true);
+                setSidebarDrawerOpen(false);
                 setProjectCreationOpen(true);
               }}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
@@ -4183,6 +4254,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     onClick={() => {
                       setOpenSubagentId(undefined);
                       setActiveProjectId(project.id);
+                      setSidebarDrawerOpen(false);
                       setOpenProjectMenuId(undefined);
                       setOpenSessionMenuId(undefined);
                       setSessionFilterOpen(false);
@@ -4269,7 +4341,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       />
                     </div> : <button
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
-                      onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
+                      onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setSidebarDrawerOpen(false); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
                       title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item.title) })}
                       type="button"
@@ -4419,9 +4491,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             ) : trajectorySession && session.id === trajectorySession.id ? (
               <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session.title)} port={client.trajectory} locale={locale} onClose={() => {
                 setTrajectorySession(undefined);
-                // The inline view lives in the document flow, so on narrow stacked
-                // layouts the page may sit scrolled past the session bar; bring the
-                // conversation toggle back into view after the messages remount.
+                // The trajectory replaces the message list in the document flow;
+                // make sure the conversation toggle is back in view after the
+                // messages remount.
                 requestAnimationFrame(() => document.querySelector(".session-trajectory-button")?.scrollIntoView({ block: "nearest" }));
               }} />
             ) : (

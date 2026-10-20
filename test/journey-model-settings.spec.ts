@@ -88,6 +88,9 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
   const openModelRegistry = async () => {
     const dialog = page.getByRole("dialog", { name: "系统设置" });
     if (!await dialog.isVisible()) {
+      // 1024px 以下侧栏收成抽屉，先打开抽屉再进入系统设置。
+      const drawerToggle = page.getByRole("button", { name: "打开导航" });
+      if (await drawerToggle.isVisible()) await drawerToggle.click();
       await page.getByRole("button", { name: /^系统设置/ }).click();
     }
     await expect(dialog).toBeVisible();

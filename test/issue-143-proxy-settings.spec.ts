@@ -24,9 +24,17 @@ const screenshotDirectory = process.env.E2E_SCREENSHOT_DIR ?? "screenshots";
 async function openProxySettings(page: Page) {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
+  // Below the 1024px breakpoint the sidebar is an off-canvas drawer: open it
+  // before reaching for its entries.
+  const drawerToggle = page.getByRole("button", { name: "Open navigation" });
+  if (await drawerToggle.isVisible()) await drawerToggle.click();
   await page.getByRole("button", { name: "System configuration" }).click();
   const configuration = page.getByRole("dialog", { name: "System configuration" });
-  await configuration.getByRole("button", { name: "Network proxies" }).click();
+  // Below 900px the settings tree is display:none behind the directory button,
+  // which also takes its group buttons out of the accessibility tree.
+  const navigation = configuration.getByRole("navigation", { name: "Setting groups" });
+  if (!await navigation.isVisible()) await configuration.getByRole("button", { name: /^Settings directory/ }).click();
+  await navigation.getByRole("button", { name: "Network proxies" }).click();
   await expect(configuration.getByRole("heading", { name: "Network proxies" })).toBeVisible();
   return configuration;
 }

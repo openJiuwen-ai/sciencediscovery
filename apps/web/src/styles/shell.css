@@ -72,6 +72,12 @@
 .settings-button:hover { border-color: var(--border-strong); background: var(--surface-sunk); }
 .settings-button > span:first-child { display: grid; place-items: center; color: var(--text-faint); }
 .mode-chip { min-width: 24px; border-radius: 999px; background: var(--surface-hover); padding: 3px 7px; color: var(--text-secondary); font: 600 12px ui-monospace, monospace; text-align: center; }
+/* Narrow-viewport drawer chrome: all three stay hidden until the 1024px
+   media query in responsive.css turns the sidebar into an off-canvas drawer. */
+.sidebar-drawer-toggle { position: fixed; z-index: var(--z-panel); top: 9px; left: 10px; width: 38px; height: 38px; display: none; place-items: center; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text-secondary); box-shadow: var(--shadow-1); cursor: pointer; }
+.sidebar-drawer-toggle:hover { border-color: var(--border-strong); background: var(--surface-sunk); color: var(--text-heading); }
+.sidebar-drawer-backdrop { position: fixed; z-index: var(--z-overlay-low); inset: 0; display: none; background: rgba(15, 23, 42, .42); }
+.sidebar-drawer-close { display: none; margin-left: auto; }
 
 .main-area { min-width: 0; display: flex; flex-direction: column; height: 100vh; background: var(--surface); }
 .eyebrow { display: block; margin-bottom: 5px; color: var(--accent-ink); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
