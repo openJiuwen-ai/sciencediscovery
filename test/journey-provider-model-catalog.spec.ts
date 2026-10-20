@@ -254,6 +254,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   const openModelRegistry = async () => {
     const dialog = page.getByRole("dialog", { name: /^(系统设置|System configuration)$/ });
     if (!await dialog.isVisible()) {
+      const drawerToggle = page.getByRole("button", { name: /^(打开导航|Open navigation)$/ });
+      if (await drawerToggle.isVisible()) await drawerToggle.click();
       await page.getByRole("button", { name: /^(系统设置|System configuration)/ }).click();
     }
     await expect(dialog).toBeVisible();
