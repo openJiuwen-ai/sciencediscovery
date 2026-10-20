@@ -217,4 +217,76 @@ test("工作区里的 CSV 直接在交互表格中打开", { tag: "@mocked" }, a
   }
 });
 
+/**
+ * E2E-META
+ * Purpose: Open a large numeric CSV, reject files above one million data records with recovery guidance, and continue using the workspace.
+ * Steps:
+ *   1. Create an isolated Project/Session and upload large, oversized and small CSVs through the workspace drop zone.
+ *   2. Open the 150,000-row numeric CSV and verify its row count and rendered chart.
+ *   3. Open the 1,000,001-row CSV and verify an actionable limit error without a partial table.
+ *   4. Close the error and open the small CSV to verify the viewer remains usable.
+ * Environment: Isolated local Web/API at E2E_BASE_URL; English browser locale.
+ * Type: mocked
+ * LLM: none; this journey does not start a Run.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none; non-local browser requests are aborted.
+ * Credentials: E2E_API_TOKEN for the isolated local API only.
+ * CostSideEffects: no external cost; a temporary Project and uploads are deleted in finally.
+ */
+test("large numeric CSV opens and oversized CSV gives recoverable guidance", { tag: "@mocked" }, async ({ journey, page }) => {
+  test.setTimeout(180_000);
+  journey.scenario({
+    goal: "Inspect a large numeric CSV without a JavaScript argument-limit failure, and recover from an oversized input.",
+    preconditions: ["Isolated Web/API with an English locale; no model calls are needed"],
+  });
+  await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "en"));
+  let fixture: JourneyFixture | undefined;
+  try {
+    await journey.step("Upload the CSV files", "All three CSV files appear in the workspace file tree.", async () => {
+      fixture = await createProjectAndSession(page, {
+        projectName: "Large CSV bounds",
+        sessionTitle: "Inspect bounded CSV inputs",
+      });
+      await openProjectSession(page, fixture);
+      await page.locator("aside.workspace-panel label.drop-zone input[type=file]").setInputFiles([
+        { buffer: Buffer.from(`value\n${"1\n".repeat(149_999)}7\n`), mimeType: "text/csv", name: "large.csv" },
+        { buffer: Buffer.from(`value\n${"1\n".repeat(1_000_001)}`), mimeType: "text/csv", name: "oversized.csv" },
+        { buffer: Buffer.from(MEASUREMENTS_CSV), mimeType: "text/csv", name: "small.csv" },
+      ]);
+      await (await artifactTree(page)).openPhysicalFiles();
+      for (const name of ["large.csv", "oversized.csv", "small.csv"]) {
+        await expect(workspaceFile(page, name)).toBeVisible();
+      }
+    });
+    await journey.step("Inspect the large numeric CSV", "The viewer shows all 150,000 records and a rendered histogram.", async () => {
+      await workspaceFile(page, "large.csv").click();
+      const viewer = csvViewer(page, "large.csv");
+      await expect(viewer).toBeVisible();
+      await expect(viewer.locator(".csva-source-strip")).toContainText("150,000 rows");
+      await expect(viewer.locator(".csva-chart-stage svg.main-svg").first()).toBeVisible({ timeout: 30_000 });
+      await expect(viewer.locator(".csva-parse-error")).toHaveCount(0);
+    });
+    await journey.step("Reject an oversized CSV", "The viewer explains the 1,000,000-row cap and recommends local processing or splitting/sampling, with no partial chart.", async () => {
+      await csvViewer(page, "large.csv").getByRole("button", { name: "Close CSV Visualization Workspace" }).click();
+      await workspaceFile(page, "oversized.csv").click();
+      const viewer = csvViewer(page, "oversized.csv");
+      await expect(viewer.locator(".csva-parse-error")).toContainText("more than 1,000,000 data rows", { timeout: 30_000 });
+      await expect(viewer.locator(".csva-parse-error")).toContainText("process it locally or split/sample it");
+      await expect(viewer.locator(".csva-chart-stage")).toHaveCount(0);
+    });
+    await journey.step("Continue with a small CSV", "The viewer opens the small CSV normally after the error.", async () => {
+      await csvViewer(page, "oversized.csv").getByRole("button", { name: "Close CSV Visualization Workspace" }).click();
+      await workspaceFile(page, "small.csv").click();
+      const viewer = csvViewer(page, "small.csv");
+      await expect(viewer.locator(".csva-source-strip")).toContainText("5 rows");
+      await expect(viewer.locator(".csva-chart-stage svg.main-svg").first()).toBeVisible();
+      await expect(viewer.locator(".csva-parse-error")).toHaveCount(0);
+    });
+  } finally {
+    if (fixture) await cleanupJourney(page, fixture);
+  }
+});
+
 });

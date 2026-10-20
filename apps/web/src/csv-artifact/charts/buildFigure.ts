@@ -115,8 +115,12 @@ function sizeValues(
 ): number[] {
   if (!field) return rows.map(() => Math.max(minSize, 8));
   const values = rows.map((row) => numeric(row[field] ?? null) ?? 0);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of values) {
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
   if (min === max) return values.map(() => (minSize + maxSize) / 2);
   return values.map((value) => minSize + (value - min) / (max - min) * (maxSize - minSize));
 }

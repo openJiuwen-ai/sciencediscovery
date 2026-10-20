@@ -35,7 +35,8 @@ import {
 } from "../src/csv-artifact/charts/selection.js";
 import { ChartConfigPanel } from "../src/csv-artifact/components/ChartConfigPanel.js";
 import { VirtualDataTable } from "../src/csv-artifact/components/VirtualDataTable.js";
-import { parseCsvText } from "../src/csv-artifact/csv/inferCsv.js";
+import { MAX_CSV_DATA_ROWS, parseCsvText } from "../src/csv-artifact/csv/inferCsv.js";
+import { setActiveLocale } from "../src/i18n/index.js";
 import { csvSourceRecord } from "../src/csv-artifact/source.js";
 import {
   DEFAULT_CHART_DRAG_MODE,
@@ -126,6 +127,48 @@ test("profiles common scientific missing-value tokens as null", () => {
   assert.equal(table.columns.find((column) => column.id === "value")?.kind, "quantitative");
   assert.equal(table.columns.find((column) => column.id === "value")?.missingCount, 3);
   assert.deepEqual(table.rows.map((row) => row.value), [1.5, null, null, null, 3.5]);
+});
+
+test("imports one million numeric records, excluding the header and blank lines", () => {
+  assert.equal(MAX_CSV_DATA_ROWS, 1_000_000);
+  const table = parse("million.csv", `value\r\n \r\n${"-2\r\n".repeat(MAX_CSV_DATA_ROWS - 1)}7\r\n\r\n`);
+  assert.equal(table.rows.length, MAX_CSV_DATA_ROWS);
+  assert.equal(table.rows.at(-1)?.value, 7);
+  assert.equal(table.columns[0]?.min, -2);
+  assert.equal(table.columns[0]?.max, 7);
+});
+
+test("rejects oversized CSVs with localized recovery guidance instead of truncating them", () => {
+  const csv = `value\n${"1\n".repeat(MAX_CSV_DATA_ROWS + 1)}`;
+  try {
+    setActiveLocale("en");
+    assert.throws(() => parse("oversized.csv", csv), /more than 1,000,000 data rows.*locally.*split\/sample/);
+    setActiveLocale("zh-CN");
+    assert.throws(() => parse("oversized.csv", csv), /超过 1,000,000 行数据.*本地处理.*拆分\/抽样/);
+  } finally {
+    setActiveLocale("en");
+  }
+  assert.equal(parse("small.csv", "value\n42\n").rows[0]?.value, 42);
+});
+
+test("counts quoted newlines as part of one data record when enforcing the CSV cap", () => {
+  const record = '"two\nlines"\n';
+  const csv = `label\n${record.repeat(MAX_CSV_DATA_ROWS)}`;
+  const table = parse("multiline.csv", csv);
+  assert.equal(table.rows.length, MAX_CSV_DATA_ROWS);
+  assert.equal(table.rows.at(-1)?.label, "two\nlines");
+  assert.throws(() => parse("multiline-overflow.csv", `${csv}${record}`), /more than 1,000,000 data rows/);
+});
+
+test("large scatter size mappings preserve their range without expanding function arguments", () => {
+  const table = parse("large-scatter.csv", `x,y\n${"-2,0\n".repeat(149_999)}7,1\n`);
+  const scatter = createCustomSpec(table, 1);
+  scatter.mappings.sizeBy = "x";
+  const figure = buildFigure(table, scatter);
+  const sizes = (figure.data[0]?.marker as { size: number[] }).size;
+  assert.equal(sizes.length, 150_000);
+  assert.equal(sizes[0], scatter.appearance.pointMin);
+  assert.equal(sizes.at(-1), scatter.appearance.pointMax);
 });
 
 test("derives UMAP, t-SNE, PCA, distribution, and table views from cell data", () => {
