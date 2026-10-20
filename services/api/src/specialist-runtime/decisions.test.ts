@@ -47,8 +47,8 @@ for (const transport of ["codex", "shared Claude/ACP"] as const) {
     assert.match(prompts[1], /first output/); assert.match(prompts[1], /second output/);
   });
 
-  for (const invalid of ["{", '{}', JSON.stringify({ summary: "Mixed garbage", tools: [call("first"), { tool: "host_shell", arguments: "{}" }] }), JSON.stringify({ summary: "Bad args", tools: [call("first"), { tool: "run_shell", arguments: '{"command":1}' }] }), JSON.stringify({ summary: "Extra intent", tools: [call("first")], tool: "other" })]) {
-    test(`${transport}: corrects invalid output once before any batch dispatch: ${invalid.slice(0, 55)}`, async () => {
+  test(`${transport}: corrects malformed and mixed-intent output once, then fails with zero dispatch on a second invalid response`, async () => {
+    for (const invalid of ["{", '{}', JSON.stringify({ summary: "Mixed garbage", tools: [call("first"), { tool: "host_shell", arguments: "{}" }] }), JSON.stringify({ summary: "Bad args", tools: [call("first"), { tool: "run_shell", arguments: '{"command":1}' }] }), JSON.stringify({ summary: "Extra intent", tools: [call("first")], tool: "other" })]) {
       let executions = 0;
       const { result, prompts } = await run([invalid, batch, finish], tool(async () => { executions++; return { content: [] }; }));
       await result;
@@ -57,8 +57,8 @@ for (const transport of ["codex", "shared Claude/ACP"] as const) {
       const failed = await run([invalid, invalid], tool(async () => { rejectedExecutions++; return { content: [] }; }), [], 1);
       await assert.rejects(failed.result, /invalid platform decision after one correction attempt/i);
       assert.equal(failed.prompts.length, 2); assert.equal(rejectedExecutions, 0);
-    });
-  }
+    }
+  });
 
   test(`${transport}: permission/execution failure stops the batch without correction or duplicate dispatch`, async () => {
     let executions = 0;
