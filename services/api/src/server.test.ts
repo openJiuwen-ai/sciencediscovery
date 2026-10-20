@@ -693,6 +693,82 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<{ body: 
   return { body: (await response.json()) as T, response };
 }
 
+// Metadata-only requests never start a specialist or contact a model provider.
+for (const kind of ["codex", "claude-code", "acp"] as const) {
+  test(`specialist runtime HTTP contract retains ${kind} metadata after an unrelated update`, async (context) => {
+    const root = resolve(process.cwd(), ".tmp", `api-specialist-runtime-${kind}-${randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const { origin } = await startTestApi(context, root);
+    const headers = { ...authorization, "content-type": "application/json" };
+    const runtime = {
+      kind,
+      model: "test-model",
+      execution: "sandbox",
+      fallback: false,
+      timeoutSeconds: 120,
+      reasoningEffort: "high",
+    };
+    const created = await jsonRequest<Specialist>(`${origin}/api/specialists`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: `${kind} contract`, description: "Original", instructions: "Test only", runtime }),
+    });
+    assert.equal(created.response.status, 201);
+    assert.deepEqual(created.body.runtime, runtime);
+
+    // PUT is the specialist API's partial-update route; omit runtime entirely.
+    const updated = await jsonRequest<Specialist>(`${origin}/api/specialists/${created.body.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ description: "Updated description" }),
+    });
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.body.description, "Updated description");
+    assert.deepEqual(updated.body.runtime, runtime);
+
+    const listed = await jsonRequest<Specialist[]>(`${origin}/api/specialists`, { headers });
+    assert.equal(listed.response.status, 200);
+    assert.deepEqual(listed.body.find(({ id }) => id === created.body.id)?.runtime, runtime);
+  });
+}
+
+for (const method of ["POST", "PUT"] as const) {
+  for (const invalid of [
+    { name: "credential fields", runtime: { kind: "codex", apiKey: "synthetic-not-a-secret" }, error: /Unknown runtime option/ },
+    { name: "unsupported kinds", runtime: { kind: "unsupported-runtime" }, error: /Unsupported Specialist runtime/ },
+  ]) {
+    test(`specialist runtime HTTP contract rejects ${invalid.name} on ${method}`, async (context) => {
+      const root = resolve(process.cwd(), ".tmp", `api-specialist-runtime-invalid-${randomUUID()}`);
+      await mkdir(root, { recursive: true });
+      const { origin } = await startTestApi(context, root);
+      const headers = { ...authorization, "content-type": "application/json" };
+      const created = await jsonRequest<Specialist>(`${origin}/api/specialists`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "Valid specialist", description: "Original", instructions: "Test only", runtime: { kind: "codex" } }),
+      });
+      assert.equal(created.response.status, 201);
+      const before = await jsonRequest<Specialist[]>(`${origin}/api/specialists`, { headers });
+      assert.equal(before.response.status, 200);
+
+      const rejected = await jsonRequest<ApiError>(
+        `${origin}/api/specialists${method === "PUT" ? `/${created.body.id}` : ""}`,
+        {
+          method,
+          headers,
+          body: JSON.stringify({ name: "Rejected specialist", description: "Must not persist", instructions: "Test only", runtime: invalid.runtime }),
+        },
+      );
+      assert.equal(rejected.response.status, 400);
+      // HTTP exposes the runtime validation message rather than its internal code.
+      assert.match(rejected.body.error, invalid.error);
+      const after = await jsonRequest<Specialist[]>(`${origin}/api/specialists`, { headers });
+      assert.equal(after.response.status, 200);
+      assert.deepEqual(after.body, before.body);
+    });
+  }
+}
+
 test("global Runner management routes remotely, requires authentication and never falls back locally", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `runner-management-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
