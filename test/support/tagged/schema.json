@@ -79,6 +79,14 @@
       ],
       "default": "none"
     },
+    "swarm": {
+      "multiple": false,
+      "values": [
+        "none",
+        "required"
+      ],
+      "default": "none"
+    },
     "isolation": {
       "multiple": false,
       "values": [

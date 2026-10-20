@@ -130,7 +130,8 @@ cd services/api && pnpm build && node --test dist/agent-run/jiuwenswarm-agent.te
 node --test test/contract/*.test.mjs                              # tooling of the contract tests
 E2E_BASE_URL=... E2E_API_TOKEN=... node test/contract/run.mjs --compare test/contract/baselines/legacy-linux.json
 
-# UT (server.test.ts and the rest of the shared plan) runs against a real JiuwenSwarm and
-# adapter through scripts/with-jiuwenswarm.sh, which pnpm ci:ut wraps around the shared runner:
-scripts/with-jiuwenswarm.sh pnpm --filter @sciencediscovery/api test
+# UT starts one real JiuwenSwarm and adapter (scripts/with-jiuwenswarm.sh) for the tests that
+# declare swarm:required and runs them on it one at a time; the rest of the plan runs without it.
+# Only the declaring tests:
+pnpm test:run --category ut --swarm required
 ```

@@ -22,10 +22,14 @@
 # exports SCIENCE_AGENT_EXECUTOR=jiuwenswarm and SCIENCE_AGENT_ADAPTER_URL for the
 # command, and stops what it started afterwards. The command's exit code is kept.
 #
-# One instance and one adapter serve every process the command starts: a test
-# runner's parallel files share them, as the product's sessions do. JiuwenSwarm has
-# one tool server per instance, so two adapters on one instance would take it from
-# each other.
+# One instance and one adapter serve every process the command starts. JiuwenSwarm
+# has one tool server per instance, so two adapters on one instance would take it
+# from each other.
+#
+# The shared test runner starts it this way for the tests that declare
+# `swarm:required`, and only for them (test/support/tagged/swarm.mjs): the command
+# it runs here hands these exports back and holds the instance, and the runner
+# gives them to those tests one at a time. No CI layer wraps a whole run in it.
 set -uo pipefail
 
 repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"

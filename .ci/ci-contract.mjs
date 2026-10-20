@@ -189,17 +189,16 @@ export async function utContractProblems(catalog = defaultCatalog, repositoryRoo
     }
   }
 
-  // Every layer runs a slice of the one shared plan. Anything else here is the
-  // second, hand-maintained list of cases the tags replaced. The one prefix
-  // allowed in front of it is the JiuwenSwarm wrapper, which starts the agent
-  // backend for the whole run and selects nothing.
-  const wrapper = catalog.jiuwenSwarmWrapper ?? [];
+  // Every layer runs a slice of the one shared plan, directly. Anything else
+  // here is the second, hand-maintained list of cases the tags replaced, or a
+  // wrapper handing every process of the run an environment only the tests
+  // that declare it should get (the shared runner starts JiuwenSwarm itself
+  // for `swarm:required` tests).
   for (const [name, steps] of Object.entries(layers)) {
     if (optInLayers.has(name)) continue;
     for (const [command, args] of steps) {
       const full = [command, ...args];
-      const wrapped = wrapper.length > 0 && wrapper.every((part, index) => full[index] === part);
-      const [runner, script] = wrapped ? full.slice(wrapper.length) : full;
+      const [runner, script] = full;
       if (runner !== "node" || script !== sharedRunner) {
         problems.push(`layer ${name} runs ${full.join(" ")}, which is not a slice of the shared plan`);
       }

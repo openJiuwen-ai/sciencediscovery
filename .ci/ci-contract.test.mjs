@@ -97,7 +97,6 @@ function mutableCatalog() {
     layers: structuredClone(catalog.layers),
     tagDimensions: structuredClone(catalog.tagDimensions),
     testCases: structuredClone(catalog.testCases),
-    jiuwenSwarmWrapper: [...catalog.jiuwenSwarmWrapper],
   };
 }
 
@@ -137,9 +136,8 @@ test("UT is one layer case and it runs the UT slice", () => {
   const utCases = catalog.testCases.filter((testCase) => testCase.tags.includes("layer:ut"));
   assert.deepEqual(utCases.map((testCase) => testCase.id), ["ut.all"]);
   assert.deepEqual(utCases[0].command, ["pnpm", "ci:ut"]);
-  // Agent turns in the UT slice run on JiuwenSwarm; the wrapper starts it and selects nothing.
-  assert.deepEqual(catalog.layers.ut,
-    [["bash", ["scripts/with-jiuwenswarm.sh", "node", "test/support/tagged/shared.mjs", "run", "--slice", "ut"]]]);
+  // No wrapper: the shared runner starts JiuwenSwarm only for tests that declare it.
+  assert.deepEqual(catalog.layers.ut, [["node", ["test/support/tagged/shared.mjs", "run", "--slice", "ut"]]]);
 });
 
 test("a layer:ut case that runs something other than ci:ut is rejected", async () => {
@@ -170,11 +168,11 @@ test("a layer that runs something other than a slice of the shared plan is rejec
   assert.match(problems.join("\n"), /layer ut runs pnpm --recursive test, which is not a slice of the shared plan/);
 });
 
-test("the JiuwenSwarm wrapper may start the backend but may not replace the shared runner", async () => {
+test("no wrapper may hand JiuwenSwarm to every process of a layer", async () => {
   const copy = mutableCatalog();
-  copy.layers.ut = [["bash", ["scripts/with-jiuwenswarm.sh", "pnpm", "--recursive", "test"]]];
+  copy.layers.ut = [["bash", ["scripts/with-jiuwenswarm.sh", "node", "test/support/tagged/shared.mjs", "run", "--slice", "ut"]]];
   const problems = await utContractProblems(copy);
-  assert.match(problems.join("\n"), /layer ut runs bash scripts\/with-jiuwenswarm\.sh pnpm --recursive test, which is not a slice of the shared plan/);
+  assert.match(problems.join("\n"), /layer ut runs bash scripts\/with-jiuwenswarm\.sh node test\/support\/tagged\/shared\.mjs run --slice ut, which is not a slice of the shared plan/);
   copy.layers.ut = [["bash", ["scripts/some-other-wrapper.sh", "node", "test/support/tagged/shared.mjs", "run", "--slice", "ut"]]];
   assert.match((await utContractProblems(copy)).join("\n"), /some-other-wrapper\.sh .* is not a slice of the shared plan/);
 });
@@ -359,6 +357,14 @@ test("real E2E uploads only staged scores and keeps complete evidence separately
     }
   }
   assert.ok(checked > 0, "no real E2E uploads checked");
+});
+
+test("no workflow gives UT a worker count of its own", async () => {
+  // The scheduler's one default is the GitHub runner's; a local `pnpm ci:ut` uses it too.
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  for (const name of await readdir(directory)) {
+    assert.doesNotMatch(await readFile(join(directory, name), "utf8"), /CI_UT_WORKERS/, name);
+  }
 });
 
 test("mocked E2E keeps the complete HTML and results upload", async () => {

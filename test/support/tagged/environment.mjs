@@ -48,6 +48,11 @@ export async function preflight(plan, {
       problems.push({ key: entry.key, code: 'HOST_MISMATCH', required: entry.target, actual: actualHost });
     }
     if (entry.tags.includes('npu:required')) await check(entry, 'npu');
+    // The shared runner lends its JiuwenSwarm instance to Node and Python workers;
+    // a browser journey or command check brings its own stack, so it cannot declare one.
+    if (entry.tags.includes('swarm:required') && !['node', 'python'].includes(entry.runner)) {
+      problems.push({ key: entry.key, code: 'SWARM_INSTANCE_UNSUPPORTED', runner: entry.runner });
+    }
     if (entry.tags.includes('model:real')) {
       needEnv(entry, ['E2E_LLM_BASE_URL', 'E2E_LLM_MODEL', 'E2E_LLM_TOKEN']);
       if (env.CI_ALLOW_REAL !== '1') problems.push({ key: entry.key, code: 'OPT_IN_REQUIRED', requirement: 'CI_ALLOW_REAL=1' });

@@ -127,8 +127,10 @@ const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
 
 /**
- * Agent turns run on JiuwenSwarm (behind a real adapter) when this suite is invoked under
- * scripts/with-jiuwenswarm.sh (which `pnpm ci:ut` wraps around the shared runner). Some assertions are true only
+ * Agent turns run on JiuwenSwarm (behind a real adapter) in the tests that declare `swarm:required`: the shared
+ * runner starts one instance for them and gives only their process SCIENCE_AGENT_EXECUTOR=jiuwenswarm, one test
+ * at a time; every other test here runs on the built-in loop. A test that starts a gateway turn declares it.
+ * Some assertions are true only
  * of one backend and are branched on this: JiuwenSwarm has one set of skills for every session
  * (Settings > Skills, not per-Project/Session selection),
  * and it runs behind extra process hops (Node API -> Python adapter -> JiuwenSwarm gateway), which
@@ -1676,7 +1678,7 @@ test("loadServerConfig validates gateway timeout bounds", () => {
   );
 });
 
-test("creating a Project opens an implicit Session and refines its first-message title", async (context) => {
+test("creating a Project opens an implicit Session and refines its first-message title", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1747,7 +1749,7 @@ test("creating a Project opens an implicit Session and refines its first-message
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("every later unnamed Session independently reuses first-message automatic naming", async (context) => {
+test("every later unnamed Session independently reuses first-message automatic naming", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `later-session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1823,7 +1825,7 @@ test("every later unnamed Session independently reuses first-message automatic n
   assert.equal(namingModel.namingRequests.length, firstMessages.length);
 });
 
-test("Session title refinement completes while the first task is still running", async (context) => {
+test("Session title refinement completes while the first task is still running", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-concurrent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1876,7 +1878,7 @@ test("Session title refinement completes while the first task is still running",
   assert.match(await run.text(), /"status":"completed"/);
 });
 
-test("Session title refinement persists when the naming model finishes after the run stream closes", async (context) => {
+test("Session title refinement persists when the naming model finishes after the run stream closes", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-after-terminal-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1947,7 +1949,7 @@ test("Session title refinement persists when the naming model finishes after the
   assert.ok(refinedEvent.sequence > terminalEvent.sequence);
 });
 
-test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
+test("concurrent first messages keep every run and auto-name only once from queue order one", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-first-message-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2009,7 +2011,7 @@ test("concurrent first messages keep every run and auto-name only once from queu
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("an asynchronous title refinement never overwrites a manual rename", async (context) => {
+test("an asynchronous title refinement never overwrites a manual rename", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-manual-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2061,7 +2063,7 @@ test("an asynchronous title refinement never overwrites a manual rename", async 
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("a second message never triggers another naming request", async (context) => {
+test("a second message never triggers another naming request", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-dedupe-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2108,7 +2110,7 @@ test("a second message never triggers another naming request", async (context) =
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("an explicitly named Session is never auto-renamed", async (context) => {
+test("an explicitly named Session is never auto-renamed", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-explicit-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2260,7 +2262,7 @@ test("runtime-status Kernel teardown is authenticated and proxied to the Runner"
   });
 });
 
-test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", async (context) => {
+test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `timeout-runtime-status-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2549,7 +2551,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.deepEqual(afterCancellation.body.sessions, []);
 });
 
-test("native MCP literature flow produces an audited cited summary", async (context) => {
+test("native MCP literature flow produces an audited cited summary", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `literature-review-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2784,7 +2786,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
   assert.match(systemPrompt, /never invent a paper or identifier/i);
 });
 
-test("workbench search and Composer references use authenticated authoritative identities", async (context) => {
+test("workbench search and Composer references use authenticated authoritative identities", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `workbench-search-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2877,7 +2879,7 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.match(await invalid.text(), /Referenced Project artifact is unavailable/);
 });
 
-test("running sessions accept queued runs and start them after the active run completes", async (context) => {
+test("running sessions accept queued runs and start them after the active run completes", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `queued-runs-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2933,7 +2935,7 @@ test("running sessions accept queued runs and start them after the active run co
   ]);
 });
 
-test("completed runs persist the assistant message identity used by hydrated timeline deduplication", async (context) => {
+test("completed runs persist the assistant message identity used by hydrated timeline deduplication", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `completed-run-message-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3235,7 +3237,7 @@ test("the built-in Runner answers setup queries before its scientific environmen
   assert.deepEqual(mirrored.body.map((item) => item.id), ["starter-python"]);
 });
 
-test("an active run keeps its effective settings snapshot while later runs use updates", { timeout: 60_000 }, async (context) => {
+test("an active run keeps its effective settings snapshot while later runs use updates", { timeout: 60_000, tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3579,7 +3581,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
 });
 
-test("Agent-created Skill stays in draft until review publishes it to a Skill Library", async (context) => {
+test("Agent-created Skill stays in draft until review publishes it to a Skill Library", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3760,7 +3762,7 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
   assert.doesNotMatch(await readFile(resolve(tempRoot, "catalog.sqlite"), "utf8"), /ephemeral-vision-token/);
 });
 
-test("legacy Reviewer does not inject findings or block the main agent", async (context) => {
+test("legacy Reviewer does not inject findings or block the main agent", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `review-loop-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3804,7 +3806,7 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
   assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/reviews`, { headers: authorization })).status, 404);
 });
 
-test("API runs a configured OpenAI-compatible model through the gateway and Python", async (context) => {
+test("API runs a configured OpenAI-compatible model through the gateway and Python", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -4288,7 +4290,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.doesNotMatch(taskResultContent, /"steps"|"prompt"/);
 });
 
-test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", async (context) => {
+test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-wall-clock-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5201,7 +5203,7 @@ async function startTwoPythonCallModel(
   };
 }
 
-test("switching to always-allow during a run stops asking for the tool calls that follow", async (context) => {
+test("switching to always-allow during a run stops asking for the tool calls that follow", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-always-allow-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5342,7 +5344,7 @@ test("switching to always-allow during a run stops asking for the tool calls tha
   );
 });
 
-test("switching to ask during a run stops the tool calls that follow for approval", async (context) => {
+test("switching to ask during a run stops the tool calls that follow for approval", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-ask-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));

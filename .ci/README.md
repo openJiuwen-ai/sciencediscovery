@@ -84,25 +84,39 @@ before freezing the plan and are never counted as passed.
 
 ### Parallel UT processes inside one job
 
-`pnpm ci:ut` runs a bounded pool of two child processes by default. Set
-`CI_UT_WORKERS=1` for serial diagnosis, or `2` through `4` to compare concurrency
-on the same machine. The standard public Linux runner has four vCPUs and
-16 GB RAM; two workers leave capacity for the shared SDK/adapter and for
-subprocesses started by a test. This does not create additional Actions jobs.
+`pnpm ci:ut` runs a pool of four child processes, locally and in the GitHub
+Actions UT job alike. The number is `UT_WORKERS` in
+`test/support/tagged/scheduler.mjs`, sized for the public GitHub-hosted
+`ubuntu-latest` runner the job uses (four vCPUs, 16 GB RAM), never for the host
+running it; the workflow sets no second value. `CI_UT_WORKERS` can narrow it
+(`1` for serial diagnosis) but not exceed it. This does not create additional
+Actions jobs.
 
-Node files remain separate processes, with serial tests inside each file.
-All API files retain their order because they share the wrapper's JiuwenSwarm
-instance. Python projects also retain their order, while their lane overlaps
-Node execution. Other Node files can use free pool slots. Every group has its
-own product-data directory and reports; the SDK instance remains shared.
-Dependency preparation, collection, command checks and coverage aggregation
-remain outside the pool. Other slices retain serial execution.
+Each Node file is a process of its own, with serial tests inside it, and each
+Python project is one pytest process. These groups start independently and
+share the pool. A test that needs a real JiuwenSwarm declares
+`swarm:required` on itself; its directory or file is never a declaration. The
+runner then starts one instance and one adapter through
+`scripts/with-jiuwenswarm.sh`, beside the other groups rather than ahead of
+them, and only a run whose plan holds such a test starts it. A file's declaring
+tests get a process of their own that holds the instance's lock, so they run
+one at a time across all files, while the same file's other tests run in the
+pool without it. Only declaring processes receive `SCIENCE_AGENT_EXECUTOR`,
+`SCIENCE_AGENT_ADAPTER_URL` and the instance's endpoints; every other worker
+has them removed, even if the calling shell exported them, so a test that
+boots `createApiServer` without declaring stays on the built-in loop. Every
+group has its own product-data directory and reports. Dependency preparation,
+collection, command checks and coverage aggregation remain outside the pool.
+Other slices retain serial execution.
 
 The frozen plan and exact result/coverage checks are unchanged. A failed
 group does not discard remaining groups; cancellation stops queued groups and
 terminates running worker process groups. `ut/tagged/timing.json` records the
-worker limit, peak active groups, CPU/memory information and each group's
-duration. Worker logs and timing records stay in their original group folders.
+worker limit, peak active groups, CPU/memory information, each group's
+duration, and how many tests declared JiuwenSwarm and how long it took to be
+ready; the instance's startup log is `ut/tagged/swarm.log`. If it cannot start,
+the declaring tests fail with `SWARM_UNAVAILABLE` and the rest still run.
+Worker logs and timing records stay in their original group folders.
 The recorded host memory is capacity, not measured peak usage.
 
 ### Parallel mocked browser workers
@@ -453,9 +467,10 @@ still exists, with reports under `e2e[-group]-legacy`. The layer installs and
 starts JiuwenSwarm itself (`scripts/jiuwenswarm.sh setup` then `start`) before
 the stack comes up, so nothing needs to be running beforehand; cache
 `.sciencediscovery-data/jiuwenswarm` to avoid repeating the ~1.5 GB install on
-every run. UT's agent turns run on JiuwenSwarm too: `pnpm ci:ut` wraps the
-shared runner in `scripts/with-jiuwenswarm.sh`, which starts one instance and
-one adapter for the whole run.
+every run. UT's tests that declare `swarm:required` run their agent turns on
+JiuwenSwarm too: the shared runner starts one instance and one adapter through
+`scripts/with-jiuwenswarm.sh` and gives it to them one at a time (see
+[Parallel UT processes inside one job](#parallel-ut-processes-inside-one-job)).
 
 ## The sandbox capability
 

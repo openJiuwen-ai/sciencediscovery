@@ -98,7 +98,8 @@ plan. No assertion was weakened and no test was deleted to get there.
 The branch formerly named `feat/jiuwenswarm` is now `main`. It runs agent turns
 on JiuwenSwarm, behind the adapter, and the plan
 came to it with that as a fixed part of the layers rather than a choice of the
-machine: `pnpm ci:ut` wraps the shared runner in `scripts/with-jiuwenswarm.sh`,
+machine: `pnpm ci:ut` starts one instance (`scripts/with-jiuwenswarm.sh`) for
+the tests that declare `swarm:required` and runs them on it one at a time,
 and the E2E slice drives `run-e2e.sh`, whose backend is JiuwenSwarm unless
 `CI_E2E_BACKEND=legacy` asks for the built-in loop. The adapter's own suite,
 which no CI step ran before, is collected as a fifth Python project.
@@ -106,14 +107,12 @@ which no CI step ran before, is collected as a fifth Python project.
 Two things here still do what the plan exists to stop, and are left for the
 change that adds the `executor` dimension from issue #126:
 
-- `services/api/src/server.test.ts`, `run-cancel.test.ts`,
-  `agent-run/jiuwenswarm-agent.test.ts` and `services/launcher`'s
-  `cli-options.test.ts` and `serve.test.ts` branch their assertions on
-  `SCIENCE_AGENT_EXECUTOR`. Selection does not read it, and the layer sets it
-  the same way everywhere, so a gated run always takes the JiuwenSwarm branch;
-  the built-in-loop branch of those assertions is exercised by nobody. With
-  `executor:native|jiuwenswarm` as a planned dimension each would be an
-  instance of its own, told its backend by the plan.
+- `services/api/src/server.test.ts` and `run-cancel.test.ts` branch some
+  assertions on `SCIENCE_AGENT_EXECUTOR`. The runner sets it only for a test
+  that declares `swarm:required`, so such a test takes the JiuwenSwarm branch
+  and every other test the built-in loop's, but each test still runs on one
+  backend only. With `executor:native|jiuwenswarm` as a planned dimension each
+  would be an instance of its own, told its backend by the plan.
 - `run-e2e.sh` runs the JiuwenSwarm checks (`test/contract/jw-only/live.mjs`)
   after the journeys. Their outcome is part of the layer's exit code, but they
   are a list in a script, not planned identities, and `CI_E2E_JIUWENSWARM_CHECKS`

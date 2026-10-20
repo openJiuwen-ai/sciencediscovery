@@ -219,10 +219,11 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
-      # Agent turns in the UT slice run on JiuwenSwarm: `pnpm ci:ut` wraps the
-      # shared runner in scripts/with-jiuwenswarm.sh, which installs the pinned
-      # release when missing (about 1.5 GB with its virtualenv), starts one
-      # instance and one adapter for the whole run, and stops them afterwards.
+      # UT tests that declare `swarm:required` run their agent turns on
+      # JiuwenSwarm: the shared runner starts it through
+      # scripts/with-jiuwenswarm.sh, which installs the pinned release when
+      # missing (about 1.5 GB with its virtualenv), starts one instance and one
+      # adapter for those tests, and stops them afterwards.
       - name: Cache the JiuwenSwarm install
         uses: actions/cache@v4
         with:

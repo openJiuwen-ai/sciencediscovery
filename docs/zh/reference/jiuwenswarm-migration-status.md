@@ -122,7 +122,8 @@ cd services/api && pnpm build && node --test dist/agent-run/jiuwenswarm-agent.te
 node --test test/contract/*.test.mjs                              # 契约测试工具自身
 E2E_BASE_URL=... E2E_API_TOKEN=... node test/contract/run.mjs --compare test/contract/baselines/legacy-linux.json
 
-# UT（server.test.ts 及共享计划里的其余用例）通过 scripts/with-jiuwenswarm.sh 跑在真实的
-# JiuwenSwarm 和适配器上，pnpm ci:ut 把共享 runner 包在这一层里：
-scripts/with-jiuwenswarm.sh pnpm --filter @sciencediscovery/api test
+# UT 只为声明了 swarm:required 的用例启动一个真实的 JiuwenSwarm 和适配器
+# （scripts/with-jiuwenswarm.sh），这些用例在它上面逐个执行；计划里的其余用例不连它。
+# 只跑声明了的用例：
+pnpm test:run --category ut --swarm required
 ```

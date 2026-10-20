@@ -53,6 +53,7 @@ pytest phases cannot be collapsed into an apparently clean pass.
 | `judge` | `none`, `llm` | `none` | Whether the test uses an LLM assertion. |
 | `status` | `reviewed`, `external`, `quarantined`, `legacy`, `unreviewed` | `reviewed` | Only `reviewed` is in the shared PR suite. `external` needs a live third-party service, `quarantined` is a reviewed case temporarily excluded from scheduled gates while a failure is investigated, `legacy` is the unaudited quarantine, and `unreviewed` is not yet fit to run. |
 | `sandbox` | `none`, `bubblewrap`, `seatbelt` | `none` | The execution sandbox the test itself drives. A plan holding `sandbox:bubblewrap` fails preflight on a host where `bwrap` cannot start. |
+| `swarm` | `none`, `required` | `none` | Whether a Node or Python test needs a real JiuwenSwarm instance behind the adapter, declared on the test that starts a gateway turn. The shared runner starts one instance for the plan's `swarm:required` tests and runs them on it one at a time; no other test gets its variables. A browser journey or command check cannot declare it. |
 
 **A group with a default is declared only where a test deviates from it.** A
 declaration therefore names `category`, `os`, `arch`, and then whatever is
@@ -78,7 +79,9 @@ matrix — a repeated target does not produce a second instance.
 Backend is deliberately not a tag. `--backend jiuwenswarm|legacy` or
 `CI_E2E_BACKEND` selects execution without changing the cases. `legacy` is the
 native loop. A missing backend capability is a preflight failure, never a
-selection filter or implicit fallback.
+selection filter or implicit fallback. `swarm:required` is not a backend choice
+either: like `npu:required`, it names something the test needs, and the runner
+provides it rather than selecting on it.
 
 ## Node declarations
 
