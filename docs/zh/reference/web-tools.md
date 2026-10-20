@@ -133,4 +133,4 @@ Node 原生 Agent Loop 会在远程工具结果进入历史和 UI 之前净化�
 
 两条路径均按[官方 Search 与 Fetch 文档](https://api-docs.deepseek.com/zh-cn/guides/search/)发送 Bearer 鉴权：搜索调用 `POST https://api.deepseek.com/v1/tools/search`，body 为 `query`、`count`；抓取调用 `POST https://api.deepseek.com/v1/tools/fetch`，body 只有 `url`。搜索 query 最多 128 个 Unicode 字符。空 `results` 继续现有免费兜底；Swarm 返回无匹配并建议 `free_search`，不视为服务商故障。
 
-错误提示区分：缺凭证 `MISSING_CREDENTIALS`、401 鉴权失败 `UNAUTHORIZED`、402 余额不足 `INSUFFICIENT_BALANCE`、429 限流 `RATE_LIMITED`、408/504 或传输截止时间 `TIMEOUT`、404 或无可用 Markdown `FETCH_FAILED`。Native 抓取被关闭时报告 `PROVIDER_DISABLED`。搜索可由其他已启用的供应商恢复，Native 审计保留各次尝试。工具错误不包含密钥或上游原始错误正文。
+错误提示区分：缺凭证 `MISSING_CREDENTIALS`、401 鉴权失败 `UNAUTHORIZED`、402 余额不足 `INSUFFICIENT_BALANCE`、429 限流 `RATE_LIMITED`、408/504 或传输截止时间 `TIMEOUT`、403 安全策略拒绝、404 或无可用 Markdown `FETCH_FAILED`。Native 抓取被关闭时报告 `PROVIDER_DISABLED`。搜索可由其他已启用的供应商恢复，Native 审计保留各次尝试。工具错误不包含密钥或上游原始错误正文。

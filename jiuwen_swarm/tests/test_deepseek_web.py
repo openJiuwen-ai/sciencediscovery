@@ -24,6 +24,7 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
         self.bad_content = False
         self.delay = False
         self.body_delay = False
+        self.malformed = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -42,6 +43,9 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
                 if owner.body_delay:
                     self.wfile.flush()
                     threading.Event().wait(0.2)
+                    return
+                if owner.malformed:
+                    self.wfile.write(b'local-test-key')
                     return
                 if self.path.endswith('search'):
                     data = {'results': [] if owner.empty else [{'title': 'Catalyst study', 'url': 'https://example.com/catalyst', 'summary': 'The model-facing summary.', 'snippet': 'Short display snippet'}]}
@@ -130,12 +134,14 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('free_search', answer)
 
     async def test_http_errors_remain_distinct_on_both_tools(self):
-        for status, code in [(401, 'UNAUTHORIZED'), (402, 'INSUFFICIENT_BALANCE'), (429, 'RATE_LIMITED'), (408, 'TIMEOUT'), (504, 'TIMEOUT'), (404, 'FETCH_FAILED')]:
+        for status, code in [(401, 'UNAUTHORIZED'), (402, 'INSUFFICIENT_BALANCE'), (429, 'RATE_LIMITED'), (408, 'TIMEOUT'), (504, 'TIMEOUT'), (403, 'FETCH_FAILED'), (404, 'FETCH_FAILED')]:
             self.status = status
             with self.subTest(status=status):
                 result = await WebFetchWebpageTool().invoke({'url': 'https://example.com/catalyst'})
                 self.assertIn(code, result)
-                if status != 404:
+                if status == 403:
+                    self.assertIn('security policy', result)
+                if status not in (403, 404):
                     result = await WebPaidSearchTool().invoke({'query': 'x', 'provider': 'deepseek'})
                     self.assertIn(code, result)
         self.status = 200
@@ -150,6 +156,17 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('**93%**', data['content'])
         search_tools.refresh_paid_search_metadata()
         self.assertIn('deepseek', search_tools.mcp_paid_search.card.input_params['properties']['provider']['enum'])
+
+    async def test_invalid_json_does_not_expose_response_bodies(self):
+        self.malformed = True
+        results = [
+            await WebPaidSearchTool().invoke({'query': 'x', 'provider': 'deepseek'}),
+            await WebFetchWebpageTool().invoke({'url': 'https://example.com/catalyst'}),
+        ]
+        for result in results:
+            self.assertIn('PROVIDER_ERROR', result)
+            self.assertIn('invalid JSON', result)
+            self.assertNotIn('local-test-key', result)
 
     async def test_real_read_timeout_is_classified(self):
         for phase in ('headers', 'body'):

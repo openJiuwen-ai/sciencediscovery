@@ -43,7 +43,7 @@ test("DeepSeek 设置可保存、关闭，密钥不回显", { tag: "@mocked" }, 
       await dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true }).check();
       const search = dialog.getByRole("checkbox", { name: /^DeepSeek ·/ });
       if (!await search.isChecked()) await search.check();
-      await dialog.getByLabel("Fetch provider", { exact: true }).selectOption("deepseek");
+      await dialog.getByRole("combobox", { name: "Fetch provider", exact: true }).selectOption("deepseek");
       await dialog.getByLabel("DeepSeek API key", { exact: true }).fill("e2e-local-test-key");
     });
     await journey.step("重新打开核对配置", "DeepSeek 已启用，抓取选择和已保存密钥状态保留，密钥输入为空。", async () => {
@@ -52,11 +52,12 @@ test("DeepSeek 设置可保存、关闭，密钥不回显", { tag: "@mocked" }, 
       await openWebSettings();
       await dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true }).scrollIntoViewIfNeeded();
       await expect(dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true })).toBeChecked();
-      await expect(dialog.getByLabel("Fetch provider", { exact: true })).toHaveValue("deepseek");
+      await expect(dialog.getByRole("combobox", { name: "Fetch provider", exact: true })).toHaveValue("deepseek");
       await expect(dialog.getByLabel("DeepSeek API key", { exact: true })).toHaveValue("");
       await expect(dialog.getByRole("checkbox", { name: "DeepSeek · key saved", exact: true })).toBeChecked();
       const response = await (await page.request.get(endpoint, { headers })).json();
       expect(JSON.stringify(response)).not.toContain("e2e-local-test-key");
+      await dialog.getByRole("combobox", { name: "Fetch provider", exact: true }).scrollIntoViewIfNeeded();
     });
     await journey.step("窄窗口关闭 DeepSeek", "开关在窄窗口可读，关闭后仍可操作。", async () => {
       await page.setViewportSize({ width: 600, height: 900 });

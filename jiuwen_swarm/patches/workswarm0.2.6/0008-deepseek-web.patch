@@ -2,7 +2,7 @@ diff --git a/jiuwenswarm/agents/harness/common/tools/deepseek_web.py b/jiuwenswa
 new file mode 100644
 --- /dev/null
 +++ b/jiuwenswarm/agents/harness/common/tools/deepseek_web.py
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,150 @@
 +# Copyright (C) 2026 Huawei Technologies Co., Ltd
 +# SPDX-License-Identifier: Apache-2.0
 +"""Opt-in DeepSeek tools for the pinned Swarm runtime and its MCP toolkit."""
@@ -56,6 +56,7 @@ new file mode 100644
 +                    429: ("RATE_LIMITED", "rate limit exceeded; retry after the cooldown"),
 +                    408: ("TIMEOUT", "request timed out"),
 +                    504: ("TIMEOUT", "request timed out"),
++                    403: ("FETCH_FAILED" if operation == "fetch" else "PROVIDER_ERROR", "request rejected by DeepSeek's security policy"),
 +                    404: ("FETCH_FAILED", "could not retrieve usable Markdown from this page") if operation == "fetch" else ("PROVIDER_ERROR", "search endpoint not found"),
 +                }.get(status, ("PROVIDER_ERROR", "request failed"))
 +                raise ValueError(f"DeepSeek {operation}: {reason} (HTTP {status}, {code}).")
@@ -65,7 +66,10 @@ new file mode 100644
 +                if size > 1_000_000:
 +                    raise ValueError("DeepSeek response exceeds 1 MB (PROVIDER_ERROR).")
 +                chunks.append(chunk)
-+            data = json.loads(b"".join(chunks))
++            try:
++                data = json.loads(b"".join(chunks))
++            except (json.JSONDecodeError, UnicodeDecodeError):
++                raise ValueError("DeepSeek returned invalid JSON (PROVIDER_ERROR).") from None
 +            if not isinstance(data, dict):
 +                raise ValueError("DeepSeek returned an invalid response (PROVIDER_ERROR).")
 +            return data

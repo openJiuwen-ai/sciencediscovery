@@ -22,6 +22,7 @@ test("DeepSeek search → fetch evidence, settings guards, fallback and classifi
   let empty = false;
   let delay = false;
   let legacyHits = false;
+  let malformed = false;
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -37,6 +38,7 @@ test("DeepSeek search → fetch evidence, settings guards, fallback and classifi
       return;
     }
     response.writeHead(status, { "content-type": "application/json" });
+    if (malformed) { response.end("local-test-key"); return; }
     response.end(JSON.stringify(request.url === "/v1/tools/search"
       ? { results: empty ? [] : [{ title: "Catalyst study", url: "https://1.1.1.1/catalyst", summary: "Model-facing summary.", snippet: "Short snippet." }] }
       : { title: "Catalyst study", content: "# Results\n\nThe yield was **93%**." }));
@@ -103,10 +105,19 @@ test("DeepSeek search → fetch evidence, settings guards, fallback and classifi
   }
   assert.equal(calls.length, 2, "missing credentials produce no requests");
   await store.updateWebSettings({ providerApiKeys: { deepseek: "local-test-key" }, searchCacheTtlSeconds: 0, fetchCacheTtlSeconds: 0 });
-  for (const [httpStatus, code] of [[401, "UNAUTHORIZED"], [402, "INSUFFICIENT_BALANCE"], [429, "RATE_LIMITED"], [408, "TIMEOUT"], [504, "TIMEOUT"], [404, "FETCH_FAILED"]] as const) {
+  malformed = true;
+  await assert.rejects(tools.webSearch("malformed-json", "malformed response"), (error: unknown) => {
+    assert.ok(error instanceof WebInvocationError);
+    assert.equal(error.invocation.error?.code, "PROVIDER_ERROR");
+    assert.match(error.message, /invalid JSON/);
+    assert.equal(JSON.stringify(error.invocation).includes("local-test-key"), false, "upstream body must not leak into tool errors or audit");
+    return true;
+  });
+  malformed = false;
+  for (const [httpStatus, code] of [[401, "UNAUTHORIZED"], [402, "INSUFFICIENT_BALANCE"], [429, "RATE_LIMITED"], [408, "TIMEOUT"], [504, "TIMEOUT"], [403, "FETCH_FAILED"], [404, "FETCH_FAILED"]] as const) {
     status = httpStatus;
     await assert.rejects(tools.webFetch(`http-${httpStatus}`, `https://1.1.1.1/${httpStatus}`), (error: unknown) => error instanceof WebInvocationError && error.invocation.error?.code === code);
-    if (httpStatus !== 404) await assert.rejects(tools.webSearch(`http-search-${httpStatus}`, `case ${httpStatus}`), (error: unknown) => error instanceof WebInvocationError && error.invocation.error?.code === code);
+    if (httpStatus !== 404 && httpStatus !== 403) await assert.rejects(tools.webSearch(`http-search-${httpStatus}`, `case ${httpStatus}`), (error: unknown) => error instanceof WebInvocationError && error.invocation.error?.code === code);
   }
   status = 200; empty = true;
   await store.updateWebSettings({ freeSearchEngines: { bing: false, duckduckgo: true, "brave-html": false } });

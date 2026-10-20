@@ -29,11 +29,13 @@ async function callDeepSeek(operation: "search" | "fetch", body: object, options
     timeoutMs: options.timeoutMs,
   });
   if (response.statusCode !== 200) {
-    const code = response.statusCode === 402 ? "insufficient-balance"
-      : response.statusCode === 408 || response.statusCode === 504 ? "timeout"
-        : operation === "fetch" && response.statusCode === 404 ? "fetch-failed"
-          : statusErrorCode(response.statusCode);
-    const reason = code === "insufficient-balance" ? "insufficient balance; top up your DeepSeek account"
+    let code = statusErrorCode(response.statusCode);
+    if (response.statusCode === 402) code = "insufficient-balance";
+    else if (response.statusCode === 408 || response.statusCode === 504) code = "timeout";
+    else if (response.statusCode === 403) code = operation === "fetch" ? "fetch-failed" : "semantic-error";
+    else if (operation === "fetch" && response.statusCode === 404) code = "fetch-failed";
+    const reason = response.statusCode === 403 ? "request rejected by DeepSeek's security policy"
+      : code === "insufficient-balance" ? "insufficient balance; top up your DeepSeek account"
       : code === "unauthorized" ? "authentication failed; check your DeepSeek API key"
         : code === "rate-limited" ? "rate limit exceeded; retry after the cooldown"
           : code === "timeout" ? "request timed out"
@@ -42,7 +44,13 @@ async function callDeepSeek(operation: "search" | "fetch", body: object, options
     // Do not echo provider bodies: an upstream may include credentials or request data.
     throw new ProviderRequestError(`DeepSeek ${operation}: ${reason} (HTTP ${response.statusCode})`, code);
   }
-  const payload: unknown = JSON.parse(response.body);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(response.body);
+  } catch {
+    // SyntaxError messages can quote the response, including echoed credentials.
+    throw new ProviderRequestError(`DeepSeek ${operation} returned invalid JSON`, "semantic-error");
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new ProviderRequestError(`DeepSeek ${operation} returned an invalid response`, "semantic-error");
   }
