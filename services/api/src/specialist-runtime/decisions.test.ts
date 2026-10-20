@@ -8,6 +8,7 @@ import type { AgentTool } from "@sciencediscovery/tools";
 import type { SpecialistRuntimeEvent, SpecialistRuntimeRequest } from "./adapter.js";
 import { CodexSpecialistAdapter } from "./codex.js";
 import { runPlatformDecisions } from "./decisions.js";
+import { platformDecisionSchema } from "./decision-contract.js";
 
 const call = (command: string) => ({ tool: "run_shell", arguments: JSON.stringify({ command }) });
 const batch = JSON.stringify({ summary: "Do both", tools: [call("first"), call("second")] });
@@ -21,11 +22,11 @@ for (const transport of ["codex", "shared Claude/ACP"] as const) {
     const sink = async (event: SpecialistRuntimeEvent) => { observed.push(event); };
     const result = transport === "codex"
       ? new CodexSpecialistAdapter(() => ({ async runStreamed(input, options) {
-        assert.equal(options?.outputSchema?.properties.tools.type, "array");
+        assert.deepEqual(options?.outputSchema, platformDecisionSchema);
         const text = await decide(String(input));
         return { events: (async function* () {
           yield { type: "item.completed" as const, item: { type: "agent_message" as const, id: "message", text } };
-          yield { type: "turn.completed" as const, usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 } };
+          yield { type: "turn.completed" as const, usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 } };
         })() };
       } })).invoke(request, sink)
       : runPlatformDecisions(request, sink, decide);
@@ -36,15 +37,16 @@ for (const transport of ["codex", "shared Claude/ACP"] as const) {
   test(`${transport}: a single decision executes two platform calls serially with distinct audit IDs and complete history`, async () => {
     const order: string[] = []; const observed: SpecialistRuntimeEvent[] = [];
     const { result, prompts } = await run([batch, finish], tool(async (_id, args) => {
-      order.push(`start:${args.command}`); await new Promise(resolve => setImmediate(resolve)); order.push(`end:${args.command}`);
-      return { content: [{ type: "text", text: `${args.command} output` }] };
+      const { command } = args as { command: string };
+      order.push(`start:${command}`); await new Promise(resolve => setImmediate(resolve)); order.push(`end:${command}`);
+      return { content: [{ type: "text", text: `${command} output` }] };
     }), observed);
     assert.equal((await result).summary, "Finished");
     assert.deepEqual(order, ["start:first", "end:first", "start:second", "end:second"]);
     const calls = observed.filter(e => e.type === "tool_call");
     assert.equal(calls.length, 4);
     assert.equal(new Set(calls.map(e => e.id)).size, 2);
-    assert.match(prompts[1], /first output/); assert.match(prompts[1], /second output/);
+    assert.match(prompts[1]!, /first output/); assert.match(prompts[1]!, /second output/);
   });
 
   test(`${transport}: corrects malformed and mixed-intent output once, then fails with zero dispatch on a second invalid response`, async () => {
@@ -52,7 +54,7 @@ for (const transport of ["codex", "shared Claude/ACP"] as const) {
       let executions = 0;
       const { result, prompts } = await run([invalid, batch, finish], tool(async () => { executions++; return { content: [] }; }));
       await result;
-      assert.equal(executions, 2); assert.equal(prompts.length, 3); assert.match(prompts[1], /Correct the entire decision once/);
+      assert.equal(executions, 2); assert.equal(prompts.length, 3); assert.match(prompts[1]!, /Correct the entire decision once/);
       let rejectedExecutions = 0;
       const failed = await run([invalid, invalid], tool(async () => { rejectedExecutions++; return { content: [] }; }), [], 1);
       await assert.rejects(failed.result, /invalid platform decision after one correction attempt/i);
