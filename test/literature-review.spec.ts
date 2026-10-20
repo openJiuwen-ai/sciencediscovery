@@ -341,7 +341,13 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
 
       await journey.step("启用 arXiv 后再问一次", "勾选 arXiv 后，下一次运行的模型拿到了 arXiv 的工具。", async () => {
         await setArxiv(true);
-        const run = await sendUserMessage(page, fixture.session.id, "现在可以用 arXiv 了吗？");
+        const prompt = "现在可以用 arXiv 了吗？";
+        // Enabling arXiv changes the session's requested host set, so the
+        // preflight correctly asks again before this separate run.
+        await page.locator("form.composer").getByRole("textbox").fill(prompt);
+        await expect(page.getByRole("alert")).toContainText("研究网络访问已被禁用");
+        await page.getByRole("button", { name: "在无网络情况下继续" }).click();
+        const run = await sendUserMessage(page, fixture.session.id, prompt);
         expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
         expect(offeredArxiv(1)).toContain("mcp__arxiv__search");
       });
