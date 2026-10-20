@@ -865,8 +865,7 @@ export function ArtifactModal({
       content={source}
       fileName={artifact.logicalName}
       onClose={() => setCsvWindowOpen(false)}
-      provenance={provenance}
-      version={version}
+      source={{ kind: "artifact", provenance, version }}
     />
   </Suspense> : null;
 

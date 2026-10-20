@@ -244,6 +244,24 @@ test("workspace file leaves always use the workspace reader regardless of previe
   assert.match(app, /<ArtifactTreeList[\s\S]*?onOpen=\{openArtifact\}/);
 });
 
+test("the workspace reader opens CSV files in the interactive viewer and hands other files to the browser", () => {
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const readerStart = app.indexOf("async function openWorkspacePath(");
+  const readerEnd = app.indexOf("\n  }\n", readerStart);
+  assert.notEqual(readerStart, -1);
+  const reader = app.slice(readerStart, readerEnd);
+
+  // One read through the existing workspace file endpoint feeds every branch.
+  assert.equal(reader.match(/client\.readFile\(/g)?.length, 1);
+  const csvBranch = reader.indexOf("if (opensInCsvViewer(path, file.type))");
+  const browserHandOff = reader.indexOf('window.open(url, "_blank", "noopener,noreferrer")');
+  assert.notEqual(csvBranch, -1);
+  assert.notEqual(browserHandOff, -1);
+  assert.ok(csvBranch < browserHandOff);
+  assert.match(reader.slice(csvBranch, browserHandOff), /setWorkspaceTable\(\{[\s\S]*kind: "workspace"[\s\S]*\}\);\s*return;/);
+  assert.match(app, /<CsvArtifactWindow[\s\S]*?onClose=\{closeWorkspaceTable\}[\s\S]*?source=\{workspaceTable\.source\}/);
+});
+
 test("workspace file tree selection exposes folder and leaf checkboxes independently", () => {
   const tree = buildWorkspaceFileTree([
     workspaceFile("inputs/a.csv", "dataset"),

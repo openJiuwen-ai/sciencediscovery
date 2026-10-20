@@ -19,6 +19,8 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
+
 import { rowsToCsv } from "../src/csv-artifact/chart-spec/filters.js";
 import {
   createCustomSpec,
@@ -34,6 +36,7 @@ import {
 import { ChartConfigPanel } from "../src/csv-artifact/components/ChartConfigPanel.js";
 import { VirtualDataTable } from "../src/csv-artifact/components/VirtualDataTable.js";
 import { parseCsvText } from "../src/csv-artifact/csv/inferCsv.js";
+import { csvSourceRecord } from "../src/csv-artifact/source.js";
 import {
   DEFAULT_CHART_DRAG_MODE,
   type DataSourceRecord,
@@ -44,7 +47,7 @@ import {
   saveWorkspaceState,
   workspaceCacheKey,
 } from "../src/csv-artifact/workspaceCache.js";
-import { detectCsvArtifact } from "../src/csvArtifact.js";
+import { detectCsvArtifact, opensInCsvViewer } from "../src/csvArtifact.js";
 
 class MemoryStorage {
   private readonly values = new Map<string, string>();
@@ -244,6 +247,94 @@ test("persists chart configuration per Artifact Version", () => {
 
   storage.setItem(workspaceCacheKey(table.source.sourceArtifactVersionId), "{not-json");
   assert.deepEqual(loadWorkspaceState(storage, table, defaults).specs, defaults);
+});
+
+test("workspace files open in the CSV viewer by name or served media type only", () => {
+  assert.equal(opensInCsvViewer("uploads/measurements.csv"), true);
+  assert.equal(opensInCsvViewer("RESULTS.CSV", "application/octet-stream"), true);
+  assert.equal(opensInCsvViewer("exports/table", "text/csv; charset=utf-8"), true);
+  // No format the viewer does not already take is routed to it, and nothing
+  // is promoted by sniffing comma-separated content.
+  for (const [path, mediaType] of [
+    ["notes.txt", "text/plain; charset=utf-8"],
+    ["tables/expression.tsv", "application/octet-stream"],
+    ["records.json", "application/json; charset=utf-8"],
+    ["results/summary.md", "application/octet-stream"],
+    ["README", "application/octet-stream"],
+  ] as const) {
+    assert.equal(opensInCsvViewer(path, mediaType), false, path);
+  }
+});
+
+test("workspace CSV sources carry no artifact identity and key layouts by revision", () => {
+  const workspace = {
+    kind: "workspace" as const,
+    modifiedAt: "2026-10-20T01:00:00.000Z",
+    openedAt: "2026-10-20T02:00:00.000Z",
+    path: "uploads/measurements.csv",
+    revisionId: "revision-1",
+    sessionId: "session-1",
+    size: 42,
+  };
+  assert.deepEqual(csvSourceRecord(workspace, "measurements.csv"), {
+    fileHash: "",
+    fileName: "measurements.csv",
+    fileSize: 42,
+    importedAt: "2026-10-20T02:00:00.000Z",
+    sourceArtifactVersionId: "workspace:session-1:revision-1",
+  });
+  assert.equal(
+    csvSourceRecord({ ...workspace, revisionId: undefined }, "measurements.csv").sourceArtifactVersionId,
+    "workspace:session-1:uploads/measurements.csv@2026-10-20T01:00:00.000Z",
+  );
+  assert.equal(
+    csvSourceRecord({ ...workspace, modifiedAt: undefined, revisionId: undefined }, "measurements.csv").sourceArtifactVersionId,
+    "workspace:session-1:uploads/measurements.csv",
+  );
+
+  const version: ScientificArtifactVersion = {
+    artifactId: "artifact-1",
+    content: { hash: "b".repeat(64), size: 128 },
+    createdAt: "2026-10-19T00:00:00.000Z",
+    executionRunIds: [],
+    id: "version-1",
+    inputArtifactVersionIds: [],
+    mediaType: "text/csv",
+    projectId: "project-1",
+    sessionId: "session-1",
+    version: 3,
+  };
+  assert.deepEqual(csvSourceRecord({ kind: "artifact", version }, "marker.csv"), {
+    fileHash: "b".repeat(64),
+    fileName: "marker.csv",
+    fileSize: 128,
+    importedAt: "2026-10-19T00:00:00.000Z",
+    sourceArtifactVersionId: "version-1",
+  });
+});
+
+test("charts saved for one workspace revision do not carry over to an edited file", () => {
+  const content = ["id,x,y,group", "row-1,1,2,A", "row-2,2,3,B"].join("\n");
+  const workspaceTable = (revisionId: string) => parseCsvText(content, csvSourceRecord({
+    kind: "workspace",
+    openedAt: "2026-10-20T02:00:00.000Z",
+    path: "uploads/cached.csv",
+    revisionId,
+    sessionId: "session-1",
+    size: content.length,
+  }, "cached.csv"));
+  const table = workspaceTable("revision-1");
+  const defaults = createDefaultSpecs(table);
+  const custom = createCustomSpec(table, 1);
+  custom.displayName = "Saved comparison";
+  const storage = new MemoryStorage();
+  saveWorkspaceState(storage, table.source.sourceArtifactVersionId, { activeSpecId: custom.id, specs: [defaults[0]!, custom] });
+
+  const reopened = workspaceTable("revision-1");
+  assert.equal(loadWorkspaceState(storage, reopened, createDefaultSpecs(reopened)).specs[1]?.displayName, "Saved comparison");
+  const edited = workspaceTable("revision-2");
+  const editedDefaults = createDefaultSpecs(edited);
+  assert.deepEqual(loadWorkspaceState(storage, edited, editedDefaults).specs, editedDefaults);
 });
 
 test("deletes charts while retaining a valid active view and one required chart", () => {

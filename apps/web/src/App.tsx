@@ -240,6 +240,10 @@ import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // App layer so the right-rail card can open it directly (previously the only
 // entries were the per-product modals).
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
+// The interactive CSV viewer carries Plotly; it loads only when a table opens.
+const CsvArtifactWindow = lazy(() => import("./csv-artifact/CsvArtifactWindow.js"));
+import type { CsvViewerSource } from "./csv-artifact/types.js";
+import { opensInCsvViewer } from "./csvArtifact.js";
 import { IdeaTreeView } from "./IdeaTreeView.js";
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
@@ -1198,6 +1202,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [projectCreationOpen, setProjectCreationOpen] = useState(false);
   const [sessionCreationPending, setSessionCreationPending] = useState(false);
   const [markdownDocument, setMarkdownDocument] = useState<{ content: string; path: string }>();
+  const [workspaceTable, setWorkspaceTable] = useState<{
+    content: string;
+    fileName: string;
+    source: Extract<CsvViewerSource, { kind: "workspace" }>;
+  }>();
+  // Stable so the viewer's open/close effect (body scroll lock, initial focus)
+  // does not re-run on every App render while a run streams.
+  const closeWorkspaceTable = useCallback(() => setWorkspaceTable(undefined), []);
   const [artifactModalName, setArtifactModalName] = useState<string | undefined>(() => initialView.artifact);
   // The version a chip pinned (the one its claim cited) so the ArtifactModal
   // opens that version instead of the drifted-latest. Cleared on navigation.
@@ -2125,6 +2137,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     // its steps on screen when the user returns to it.
     setIsFollowingOutput(true);
     setMarkdownDocument(undefined);
+    setWorkspaceTable(undefined);
     void refreshSession(visibleSessionId).catch((reason: Error) => {
       if (shouldApplySessionScopedUpdate(visibleSessionId, activeSessionIdRef.current)) setError(reason);
     });
@@ -3109,6 +3122,28 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const file = await client.readFile(targetSessionId, path);
     if (/\.(md|markdown)$/i.test(path)) {
       setMarkdownDocument({ content: await file.text(), path });
+      return;
+    }
+    // Tables the interactive CSV viewer already handles open there from the
+    // bytes just read, with no Artifact declaration; every other file keeps
+    // the browser hand-off below.
+    if (opensInCsvViewer(path, file.type)) {
+      const entry = targetSessionId === activeSessionId
+        ? files.find((item) => item.path === path)
+        : undefined;
+      setWorkspaceTable({
+        content: await file.text(),
+        fileName: path.split("/").at(-1) || path,
+        source: {
+          kind: "workspace",
+          modifiedAt: entry?.modifiedAt,
+          openedAt: new Date().toISOString(),
+          path,
+          revisionId: entry?.provenance?.revisionId,
+          sessionId: targetSessionId,
+          size: file.size,
+        },
+      });
       return;
     }
     const url = URL.createObjectURL(file);
@@ -4869,6 +4904,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             <MarkdownRenderer className="document-markdown" content={markdownDocument.content} />
           </section>
         </div>
+      ) : null}
+
+      {workspaceTable ? (
+        <Suspense fallback={<div className="csv-artifact-loading" role="status"><span>{t("artifact.loadingCsvWorkspace")}</span></div>}>
+          <CsvArtifactWindow
+            content={workspaceTable.content}
+            fileName={workspaceTable.fileName}
+            onClose={closeWorkspaceTable}
+            source={workspaceTable.source}
+          />
+        </Suspense>
       ) : null}
 
       {artifactModalName && activeSessionId ? (
