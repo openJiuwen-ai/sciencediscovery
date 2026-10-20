@@ -114,6 +114,15 @@ for different per-run Swarm policies. Platform user approval modes continue to
 be handled by the existing approval bridge. Permission RPC failures are retried
 on the next registration attempt before publishing the tool.
 
+Compatibility patch `0009-batch-tool-permissions.patch` adds incremental batches
+to the existing management methods: `permissions.tools.update` accepts a `tools`
+map of names to levels, and `permissions.tools.delete` accepts a `tools` list of
+names. Each batch validates before one locked YAML transaction and preserves
+unrelated rules. The single-tool forms remain supported. The adapter sends one
+batch per new generation and one per inactive generation's retirement; unchanged
+catalogs retain their permissions and existing MCP connection. Failed retirement
+batches are retried without removing any live generation's rules.
+
 ### Cross-framework boundary regression checks
 
 Run the deterministic adapter checks without a model or live Swarm service:

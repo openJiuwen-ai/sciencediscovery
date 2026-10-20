@@ -269,9 +269,9 @@ async def test_new_mcp_generation_retries_after_a_failed_connect(harness):
     assert recovered != first
     assert ("mcp.connect", recovered) in [(method, params["name"]) for _, method, params in rpcs
                                            if method.startswith("mcp.")]
-    assert ("permissions.tools.update", f"mcp_{recovered}_second") in [
-        (method, params["tool"]) for _, method, params in rpcs if method == "permissions.tools.update"
-    ]
+    assert [params["tools"] for _, method, params in rpcs if method == "permissions.tools.update"] == [{
+        f"mcp_{recovered}_first": "allow", f"mcp_{recovered}_second": "allow",
+    }]
     await runner.release_shared_tools(recovered)
 
 
@@ -317,9 +317,10 @@ async def test_retired_generations_remove_persisted_permissions_without_touching
     async def track_permissions(url, method, params=None, **kwargs):
         result = await original_rpc(url, method, params, **kwargs)
         if method == "permissions.tools.update":
-            persisted[params["tool"]] = params["level"]
+            persisted.update(params["tools"])
         elif method == "permissions.tools.delete":
-            del persisted[params["tool"]]
+            for tool in params["tools"]:
+                persisted.pop(tool, None)
         return result
 
     runner.rpc = track_permissions
@@ -334,6 +335,61 @@ async def test_retired_generations_remove_persisted_permissions_without_touching
         server = await runner.ensure_shared_tools([{"name": f"next_{index}"}], 60)
         await runner.release_shared_tools(server)
         assert persisted == {"unrelated_user_tool": "ask", f"mcp_{server}_next_{index}": "allow"}
+
+
+async def test_generation_batches_all_levels_and_retires_once_after_its_last_run(harness):
+    _, runner, rpcs = harness
+    levels = ("allow", "ask", "deny")
+    tools = [{"name": f"tool_{i}", "approval": levels[i % 3]} for i in range(44)]
+    parent = await runner.ensure_shared_tools(tools, 60)
+    updates = [params for _, method, params in rpcs if method == "permissions.tools.update"]
+    assert updates == [{"tools": {f"mcp_{parent}_{tool['name']}": tool["approval"] for tool in tools}}]
+
+    rpcs.clear()
+    assert await runner.ensure_shared_tools(tools, 120) == parent
+    assert rpcs == [], "Unchanged catalogs reuse permissions and the connected MCP server"
+    child = await runner.ensure_shared_tools([*tools, {"name": "child", "approval": "deny"}], 60)
+    assert len([method for _, method, _ in rpcs if method == "permissions.tools.update"]) == 1
+    assert not any(method == "mcp.disconnect" and params["name"] == parent for _, method, params in rpcs)
+    rpcs.clear()
+    await runner.release_shared_tools(parent)
+    assert rpcs == [], "The second parent run still holds its generation"
+    await runner.release_shared_tools(parent)
+    assert [(method, params) for _, method, params in rpcs] == [
+        ("mcp.disconnect", {"name": parent}),
+        ("mcp.delete_custom", {"name": parent}),
+        ("permissions.tools.delete", {"tools": sorted(f"mcp_{parent}_{tool['name']}" for tool in tools)}),
+    ]
+    assert runner._server_runs[child] == 1
+    assert runner._tool_approvals[(child, "child")] == "deny"
+
+
+async def test_failed_retirement_retries_the_whole_batch_without_reconnecting_live_server(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+    _, runner, rpcs = harness
+    parent_tools = [{"name": "first"}, {"name": "second", "approval": "deny"}]
+    parent = await runner.ensure_shared_tools(parent_tools, 60)
+    child_tools = [*parent_tools, {"name": "child", "approval": "ask"}]
+    child = await runner.ensure_shared_tools(child_tools, 60)
+    original_rpc = runner.rpc
+    failed = False
+
+    async def fail_once(url, method, params=None, **kwargs):
+        nonlocal failed
+        if method == "permissions.tools.delete" and not failed:
+            failed = True
+            raise GatewayError("retirement not acknowledged")
+        return await original_rpc(url, method, params, **kwargs)
+
+    runner.rpc = fail_once
+    await runner.release_shared_tools(parent)
+    assert runner._pending_permission_deletes == {f"mcp_{parent}_first", f"mcp_{parent}_second"}
+    rpcs.clear()
+    assert await runner.ensure_shared_tools(child_tools, 60) == child
+    assert [(method, params) for _, method, params in rpcs] == [
+        ("permissions.tools.delete", {"tools": sorted([f"mcp_{parent}_first", f"mcp_{parent}_second"])}),
+    ]
+    assert not runner._pending_permission_deletes
 
 
 async def test_tools_without_a_bridge_fail_the_run_cleanly(harness):
@@ -645,11 +701,11 @@ async def test_jiuwenswarms_permission_engine_is_switched_on_and_each_new_tool_g
     # each still the one it was first given.
     assert calls == [
         ("config.set", {"permissions_enabled": True}),
-        ("permissions.tools.update", {"tool": "mcp_sci_run_shell", "level": "ask"}),
-        ("permissions.tools.update", {"tool": "mcp_sci_read_file", "level": "allow"}),
-        ("permissions.tools.update", {"tool": "mcp_sci0000000001_run_shell", "level": "ask"}),
-        ("permissions.tools.update", {"tool": "mcp_sci0000000001_read_file", "level": "allow"}),
-        ("permissions.tools.update", {"tool": "mcp_sci0000000001_declare_claim", "level": "allow"}),
+        ("permissions.tools.update", {"tools": {"mcp_sci_run_shell": "ask", "mcp_sci_read_file": "allow"}}),
+        ("permissions.tools.update", {"tools": {
+            "mcp_sci0000000001_run_shell": "ask", "mcp_sci0000000001_read_file": "allow",
+            "mcp_sci0000000001_declare_claim": "allow",
+        }}),
     ]
 
 
@@ -819,6 +875,35 @@ async def test_permission_rpc_failure_is_retried_without_publishing_unconfigured
     await runner.ensure_shared_tools(tools, 3600)
     assert len(calls) == 2
     assert runner._tool_approvals[("sci", "run_shell")] == "ask"
+
+
+async def test_recovered_initial_generation_is_not_deleted_by_an_old_cleanup_retry(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+    _, runner, rpcs = harness
+    original_rpc = runner.rpc
+    failed_update = False
+
+    async def lost_ack(url, method, params=None, **kwargs):
+        nonlocal failed_update
+        if method == "permissions.tools.delete":
+            raise GatewayError("cleanup unavailable")
+        if method == "permissions.tools.update" and not failed_update:
+            failed_update = True
+            raise GatewayError("update acknowledgement lost")
+        return await original_rpc(url, method, params, **kwargs)
+
+    runner.rpc = lost_ack
+    tools = [{"name": "shell", "approval": "ask"}, {"name": "blocked", "approval": "deny"}]
+    with pytest.raises(GatewayError, match="acknowledgement lost"):
+        await runner.ensure_shared_tools(tools, 60)
+    assert runner._pending_permission_deletes == {"mcp_sci_shell", "mcp_sci_blocked"}
+    assert not runner._tool_approvals
+    assert await runner.ensure_shared_tools(tools, 60) == "sci"
+    assert not runner._pending_permission_deletes, "Reapplied rules now belong to a live generation"
+    runner.rpc = original_rpc
+    rpcs.clear()
+    assert await runner.ensure_shared_tools(tools, 60) == "sci"
+    assert not rpcs, "A stale cleanup retry must not delete the recovered live rules"
 
 
 @pytest.mark.parametrize("same_run", [True, False])

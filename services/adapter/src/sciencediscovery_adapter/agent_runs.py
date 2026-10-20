@@ -230,6 +230,7 @@ class AgentRunner:
         self._approval_levels: dict[str, str] = {}
         self._permissions_on = False
         self._tool_approvals: dict[tuple[str, str], str] = {}
+        self._pending_permission_deletes: set[str] = set()
         # Gateway question ids are model tool-call ids and can repeat across runs.
         # Expose a fresh adapter id to callers and retain the gateway id for the answer.
         self.pending_approvals: dict[str, tuple[Any, RunEventMapper, str]] = {}
@@ -259,6 +260,7 @@ class AgentRunner:
         if timeout_s <= 0:
             raise ValueError("Tool timeout must be positive")
         async with self._shared_lock:
+            await self._delete_retired_permissions()
             previous = self._server if self._shared_registered else None
             old_shared = self.registry.shared.copy()
             old_approvals = self._approval_levels.copy()
@@ -311,6 +313,10 @@ class AgentRunner:
                     self._permissions_on = old_permissions_on
                     for key in [key for key in self._tool_approvals if key[0] == candidate]:
                         self._tool_approvals.pop(key, None)
+                    # A lost acknowledgement may have persisted the batch. The
+                    # failed candidate never served a run, so its rules can go.
+                    self._pending_permission_deletes.update(f"mcp_{candidate}_{name}" for name in policies)
+                    await self._delete_retired_permissions()
                     for method in ("mcp.disconnect", "mcp.delete_custom"):
                         try:
                             await self.rpc(self.settings.mgmt_url, method, {"name": candidate})
@@ -345,14 +351,23 @@ class AgentRunner:
         # Dropping only our cache leaves an ever-growing config that every new
         # tool registration has to parse and rewrite. Retire only this inactive
         # generation's rules; live generations and unrelated policies stay put.
+        self._pending_permission_deletes.update(f"mcp_{server}_{name}" for _, name in retired_approvals)
+        await self._delete_retired_permissions()
         for key in retired_approvals:
-            try:
-                await self.rpc(self.settings.mgmt_url, "permissions.tools.delete", {
-                    "tool": f"mcp_{server}_{key[1]}",
-                })
-            except Exception:
-                logger.warning("Could not retire an inactive MCP tool permission")
             self._tool_approvals.pop(key, None)
+
+    async def _delete_retired_permissions(self) -> None:
+        if not self._pending_permission_deletes:
+            return
+        tools = sorted(self._pending_permission_deletes)
+        try:
+            await self.rpc(self.settings.mgmt_url, "permissions.tools.delete", {"tools": tools})
+        except Exception:
+            # Retry the idempotent batch on the next registration; forgetting a
+            # failed delete would leave persisted generation names indefinitely.
+            logger.warning("Could not retire inactive MCP tool permissions")
+        else:
+            self._pending_permission_deletes.difference_update(tools)
 
     def register_approval(self, event: dict[str, Any], run: Any, mapper: RunEventMapper) -> None:
         gateway_id = event["request"]["id"]
@@ -404,14 +419,16 @@ class AgentRunner:
         if not self._permissions_on:
             await self.rpc(self.settings.mgmt_url, "config.set", {"permissions_enabled": True})
             self._permissions_on = True
-        for tool in tools:
-            key = (server, tool["name"])
-            if key in self._tool_approvals:
-                continue
+        pending = {(server, tool["name"]): tool.get("approval") or "allow"
+                   for tool in tools if (server, tool["name"]) not in self._tool_approvals}
+        if pending:
             await self.rpc(self.settings.mgmt_url, "permissions.tools.update", {
-                "tool": f"mcp_{server}_{tool['name']}", "level": tool.get("approval") or "allow",
+                "tools": {f"mcp_{server}_{name}": level for (_, name), level in pending.items()},
             })
-            self._tool_approvals[key] = tool.get("approval") or "allow"
+            # Publish the whole generation only after Swarm confirms persistence.
+            self._tool_approvals.update(pending)
+            self._pending_permission_deletes.difference_update(
+                f"mcp_{server}_{name}" for _, name in pending)
         trace_boundary("mcp.permissions.ready", tool_count=len(tools),
                        elapsed_ms=round((asyncio.get_running_loop().time() - started) * 1000))
 
