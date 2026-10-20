@@ -162,7 +162,7 @@ export function WebSettingsEditor({
     {KEYS_BY_BACKEND[jiuwenswarm ? "jiuwenswarm" : "native"].map((provider) => {
       const saved = settings.providers.some((item) => item.provider === provider && item.hasApiKey);
       return <div key={provider}>
-        {provider === "deepseek" ? <label><input type="checkbox" checked={values.deepseekEnabled === true} onChange={(event) => onChange({ ...draft, values: { ...values, deepseekEnabled: event.target.checked } })} /><span>{t("webSettings.deepseekEnabled")}</span></label> : null}
+        {provider === "deepseek" ? <label className="provider-token-optional"><input type="checkbox" checked={values.deepseekEnabled === true} onChange={(event) => onChange({ ...draft, values: { ...values, deepseekEnabled: event.target.checked } })} /><span>{t("webSettings.deepseekEnabled")}</span></label> : null}
         <label><span>{t("webSettings.providerApiKey", { provider: KEY_LABELS[provider] })}</span><input
           type="password"
           value={draft.keys[provider]}
