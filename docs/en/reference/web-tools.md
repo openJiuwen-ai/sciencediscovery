@@ -18,7 +18,7 @@ There is no Python sidecar hop: `POST /internal/web/invoke` and the gateway web 
 
 Search is no longer a provider the user picks. `web_search` walks a fixed list of engines and returns the first one that produces results:
 
-1. **Paid tier**, in order: Tavily → Exa → Brave Search API. A provider is attempted only if it is switched on *and* has a stored API key; an unkeyed provider is skipped without a request.
+1. **Paid tier**, in order: Tavily → Exa → Brave Search API → DeepSeek. A provider is attempted only if it is switched on *and* has a stored API key; an unkeyed provider is skipped without a request.
 2. **Free tier**, in order: DuckDuckGo → Bing → Brave (public result page). Each engine has its own switch; a switched-off engine is never requested.
 
 Paid before free is deliberate: a keyed vendor gives a stable API contract and better results, and the free engines are there so search still works when no key is configured, a key is exhausted, or one engine starts rate-limiting.
@@ -31,10 +31,10 @@ If no engine is available at all — no paid key and every free engine off — t
 
 **System configuration → Web providers** offers:
 
-- Paid search providers: Tavily, Exa, Brave Search API — each with a switch, and a key entered below.
+- Paid search providers: Tavily, Exa, Brave Search API, DeepSeek — each with a switch, and a key entered below.
 - Free search engines: DuckDuckGo, Bing, Brave (free) — switches only, no key.
-- Fetch: Jina Reader (default), Tavily, and Exa. Fetch is still a single configured provider, not an aggregation. Jina tries `https://r.jinaai.cn`, then `https://r.jina.ai` only after network errors, timeout, 429, 5xx, or empty response; 401/403 and other 4xx fail directly.
-- Jina key is optional. Jina/Tavily/Exa/Brave keys are encrypted with AES-256-GCM, and APIs return only `hasApiKey`.
+- Fetch: Jina Reader (default), Tavily, Exa, and DeepSeek. Fetch is still a single configured provider, not an aggregation. Jina tries `https://r.jinaai.cn`, then `https://r.jina.ai` only after network errors, timeout, 429, 5xx, or empty response; 401/403 and other 4xx fail directly.
+- Jina key is optional. Jina/Tavily/Exa/Brave/DeepSeek keys are encrypted with AES-256-GCM, and APIs return only `hasApiKey`.
 - Web-only proxy modes are `environment` (standard proxy variables), `custom` (HTTP/HTTPS/SOCKS5 URL), and `direct`. A custom URL is encrypted and write-only and does not affect models, MCP, downloaders, or other processes.
 - Default cache durations are one hour for search and 24 hours for fetch.
 
@@ -69,3 +69,31 @@ The native Node loop neutralizes framework tags in remote tool results before th
 - `/web-usage` calls no model and reports local search/fetch, cache-hit, fallback, and failure counts; it does not estimate provider quota or cost.
 
 The first version does not support JavaScript browser rendering, authenticated pages, Browserless/Crawl4AI, SearXNG, or automatic MemoryGraph writes.
+
+## DeepSeek on both backends
+
+In **System configuration → Web providers**, save a **DeepSeek API key** and switch on **Enable DeepSeek Search and Fetch** (off by default). Include DeepSeek in the paid search selection to use Search, and select **DeepSeek** as the Fetch provider to retrieve Markdown. Saving a key alone never enables DeepSeek. The master switch controls both uses; removing the key or switching it off prevents all DeepSeek requests. A different Fetch selection never sends DeepSeek Fetch requests.
+
+For example, send this partial update to `PUT /api/web/settings` with your instance's normal authorization header. Replace the placeholder locally; do not put a real key in source control:
+
+```json
+{
+  "deepseekEnabled": true,
+  "paidSearchProviders": ["deepseek"],
+  "fetchProvider": "deepseek",
+  "providerApiKeys": { "deepseek": "<YOUR_DEEPSEEK_API_KEY>" }
+}
+```
+
+Keep `["tavily", "exa", "brave", "deepseek"]` to retain all native paid providers in their existing order. Free engines remain available as configured. Set `"deepseekEnabled": false` to disable both DeepSeek operations while retaining the encrypted key. Select `"fetchProvider": "jina"` to keep the previous default fetching behavior.
+
+| Backend | Search and Fetch integration |
+| --- | --- |
+| Native product tools | `WebBroker` calls the native DeepSeek provider; existing permissions, resolved proxy policy, cache, CAS and `web_invocations` audit apply. Search maps `summary` (falling back to `snippet`) to the existing `content` field alongside `title` and `url`. Fetch returns the title and Markdown body. |
+| Default JiuwenSwarm tools | The same saved settings pass through `jiuwenSwarmWebConfig` and the adapter's `config.set` to `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_ENABLED` and `DEEPSEEK_FETCH_ENABLED`. The shipped `workswarm0.2.6` compatibility patch extends the actual default Agent's `paid_search`/`fetch_webpage` and the MCP equivalents. `auto` tries Bocha → Perplexity → Serper → Jina first, then DeepSeek. With only DeepSeek configured, it is used directly. Product cache/audit behavior is not added to Swarm's independent transport. |
+
+No `SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours` override is needed for the default backend. After upgrading, rerun `scripts/jiuwenswarm.sh setup` and restart Swarm; Docker and binary packages build the patched wheel automatically. Existing Bocha/Perplexity/Serper/Jina execution stays intact; default Fetch remains direct page retrieval with its existing Jina fallback unless DeepSeek is selected. Tavily/Exa fetch selection remains native-only.
+
+Both routes use Bearer authentication with the [official Search and Fetch APIs](https://api-docs.deepseek.com/guides/search): `POST https://api.deepseek.com/v1/tools/search` with `query` and `count`, and `POST https://api.deepseek.com/v1/tools/fetch` with only `url`. Search queries support up to 128 Unicode characters. A successful search with empty `results` proceeds to the existing free fallback (Swarm reports no matches and suggests `free_search`); it is not a provider outage.
+
+Errors identify the action to take: `MISSING_CREDENTIALS` asks for a key; `UNAUTHORIZED` (401) asks for a valid key; `INSUFFICIENT_BALANCE` (402) asks for an account top-up; `RATE_LIMITED` (429) asks for a cooldown; `TIMEOUT` covers 408/504 and transport deadlines; `FETCH_FAILED` (404 or missing Markdown) means the target page could not be retrieved. A disabled native Fetch reports `PROVIDER_DISABLED`. Search may recover through another enabled provider; individual attempts remain visible in native audit records. Keys and upstream error bodies are never included in tool errors.

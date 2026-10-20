@@ -614,7 +614,8 @@ async def post_config(app, values, headers=None):
 
 async def test_web_settings_are_applied_to_jiuwenswarm_with_config_set(harness):
     app, _, rpcs = harness
-    values = {"free_search_ddg_enabled": "true", "bocha_api_key": "k"}
+    values = {"free_search_ddg_enabled": "true", "bocha_api_key": "k",
+              "deepseek_api_key": "test-deepseek", "deepseek_search_enabled": "true", "deepseek_fetch_enabled": "true"}
     response = await post_config(app, values)
     assert response.status_code == 200
     assert [(m, p) for _, m, p in rpcs if m == "config.set"] == [("config.set", values)]

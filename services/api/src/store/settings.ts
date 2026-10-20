@@ -342,8 +342,9 @@ export function normalizeMemoryGraphSettings(value: unknown): MemoryGraphSetting
   return { enabled, backend, neo4jHttp, neo4jUser };
 }
 
-const WEB_FETCH_PROVIDERS = new Set<WebFetchProvider>(["jina", "tavily", "exa"]);
+const WEB_FETCH_PROVIDERS = new Set<WebFetchProvider>(["jina", "tavily", "exa", "deepseek"]);
 const WEB_SETTING_FIELDS = new Set([
+  "deepseekEnabled",
   "fetchCacheTtlSeconds",
   "fetchProvider",
   "freeSearchEngines",
@@ -359,6 +360,8 @@ export function normalizeWebSettings(value: unknown): WebSettings {
   const migrated = migrateLegacyWebSettings(value);
   const unknown = Object.keys(migrated).find((key) => !WEB_SETTING_FIELDS.has(key));
   if (unknown) throw new Error(`Unknown web setting: ${unknown}`);
+  const deepseekEnabled = migrated.deepseekEnabled ?? false;
+  if (typeof deepseekEnabled !== "boolean") throw new Error("deepseekEnabled must be a boolean");
   const fetchProvider = migrated.fetchProvider;
   const proxyPolicy = normalizeProxyPolicy(migrated.proxyPolicy ?? "inherit", "proxyPolicy");
   if (!WEB_FETCH_PROVIDERS.has(fetchProvider as WebFetchProvider)) {
@@ -391,6 +394,7 @@ export function normalizeWebSettings(value: unknown): WebSettings {
     }
   }
   return {
+    deepseekEnabled,
     fetchCacheTtlSeconds: migrated.fetchCacheTtlSeconds as number,
     fetchProvider: fetchProvider as WebFetchProvider,
     freeSearchEngines,

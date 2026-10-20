@@ -116,7 +116,9 @@
       "https://r.jina.ai"
     ],
     "tavily_extract_endpoint": "https://api.tavily.com/extract",
-    "tavily_search_endpoint": "https://api.tavily.com/search"
+    "tavily_search_endpoint": "https://api.tavily.com/search",
+    "deepseek_search_endpoint": "https://api.deepseek.com/v1/tools/search",
+    "deepseek_fetch_endpoint": "https://api.deepseek.com/v1/tools/fetch"
   },
   "terms": {
     "arxiv": "https://info.arxiv.org/help/api/tou.html",

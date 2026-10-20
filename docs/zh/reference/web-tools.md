@@ -24,7 +24,7 @@ Agent tool → WebBroker ──────────────→ NativeWeb
 Search 不再由用户选择某一个 Provider。`web_search` 按固定顺序依次尝试引擎，
 取第一个真正出结果的引擎返回：
 
-1. **付费层**，顺序为 Tavily → Exa → Brave Search API。只有「开关打开且已保存
+1. **付费层**，顺序为 Tavily → Exa → Brave Search API → DeepSeek。只有「开关打开且已保存
    API key」的 Provider 才会被尝试；没有 key 的 Provider 直接跳过，不发请求。
 2. **免费层**，顺序为 DuckDuckGo → Bing → Brave（公开结果页）。每个引擎有独立
    开关；**关掉的引擎不会被请求**。
@@ -106,3 +106,31 @@ Node 原生 Agent Loop 会在远程工具结果进入历史和 UI 之前净化�
 
 首版不支持 JS 浏览器渲染、登录态网页、Browserless/Crawl4AI、SearXNG
 或自动写入 MemoryGraph。
+
+## 两种后端接入 DeepSeek
+
+在**系统设置 → Web 服务商**保存 **DeepSeek API key**，打开**启用 DeepSeek 搜索与抓取**（默认关闭）。付费搜索列表勾选 DeepSeek 后可用 Search；抓取服务商显式选择 **DeepSeek** 后可用 Fetch。只保存密钥不会启用请求。总开关关闭或删除密钥后，两种后端都不会发出 DeepSeek 请求；抓取没有选择 DeepSeek 时不会调用它。
+
+可以通过 `PUT /api/web/settings` 发送以下局部更新，携带实例正常使用的鉴权 header。请仅在本机替换占位符，不要将真实密钥提交到仓库：
+
+```json
+{
+  "deepseekEnabled": true,
+  "paidSearchProviders": ["deepseek"],
+  "fetchProvider": "deepseek",
+  "providerApiKeys": { "deepseek": "<YOUR_DEEPSEEK_API_KEY>" }
+}
+```
+
+如需保留全部 Native 付费搜索，使用 `["tavily", "exa", "brave", "deepseek"]`，顺序保持不变。免费引擎依现有设置继续兜底。设置 `"deepseekEnabled": false` 可关闭两种操作并保留加密密钥；将 `"fetchProvider"` 改为 `"jina"` 可继续使用原默认抓取行为。
+
+| 后端 | 搜索与抓取调用链 |
+| --- | --- |
+| 产品自有工具 | `WebBroker` 调用 Node DeepSeek provider，沿用权限、已解析代理策略、缓存、CAS 和 `web_invocations` 审计。搜索把 `summary`（缺少时用 `snippet`）映射为现有 `content`，同时保留 `title` 与 `url`；抓取返回标题和 Markdown 正文。 |
+| 默认 JiuwenSwarm 工具 | 同一设置经 `jiuwenSwarmWebConfig`、adapter 的 `config.set` 写入 `DEEPSEEK_API_KEY`、`DEEPSEEK_SEARCH_ENABLED`、`DEEPSEEK_FETCH_ENABLED`。随产品交付的 `workswarm0.2.6` 兼容补丁扩展默认 Agent 真正使用的 `paid_search`、`fetch_webpage` 和 MCP 对应工具。`auto` 保持 Bocha → Perplexity → Serper → Jina，再尝试 DeepSeek；只配置 DeepSeek 时直接使用。Swarm 自有传输不复用产品 broker 的缓存和审计。 |
+
+默认后端无需 `SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours`。升级后重新运行 `scripts/jiuwenswarm.sh setup` 并重启 Swarm；Docker 和二进制包自动构建补丁 wheel。既有 Bocha/Perplexity/Serper/Jina 代码路径保持不变；未选 DeepSeek 时，抓取仍直接获取网页并按原规则回退 Jina。Tavily/Exa 抓取选项仍只适用于 Native。
+
+两条路径均按[官方 Search 与 Fetch 文档](https://api-docs.deepseek.com/zh-cn/guides/search/)发送 Bearer 鉴权：搜索调用 `POST https://api.deepseek.com/v1/tools/search`，body 为 `query`、`count`；抓取调用 `POST https://api.deepseek.com/v1/tools/fetch`，body 只有 `url`。搜索 query 最多 128 个 Unicode 字符。空 `results` 继续现有免费兜底；Swarm 返回无匹配并建议 `free_search`，不视为服务商故障。
+
+错误提示区分：缺凭证 `MISSING_CREDENTIALS`、401 鉴权失败 `UNAUTHORIZED`、402 余额不足 `INSUFFICIENT_BALANCE`、429 限流 `RATE_LIMITED`、408/504 或传输截止时间 `TIMEOUT`、404 或无可用 Markdown `FETCH_FAILED`。Native 抓取被关闭时报告 `PROVIDER_DISABLED`。搜索可由其他已启用的供应商恢复，Native 审计保留各次尝试。工具错误不包含密钥或上游原始错误正文。

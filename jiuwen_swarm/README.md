@@ -473,3 +473,25 @@ docstring lists the local stub scripts and gateway configuration needed.
   outcome. The action may already have executed; inspect state before replay.
 - External source failures (for example, an arXiv HTTP 406) are not repaired
   by these changes. They remain visible tool failures the model can handle.
+
+## DeepSeek Web tools
+
+Compatibility patch `0008-deepseek-web.patch` extends the actual default
+Agent web classes and the MCP toolkit on the pinned tag. Web settings reach
+`config.set` as `deepseek_api_key`, `deepseek_search_enabled` and
+`deepseek_fetch_enabled`; management and live search metadata reload recognize
+all three. DeepSeek is appended to auto paid search; Fetch uses it only when
+explicitly selected. Existing providers keep their original implementations.
+The shared request helper bounds responses to 1 MB, does not follow redirects
+with credentials, and classifies authentication, balance, rate, timeout and
+fetch errors without returning upstream response bodies. See the
+[Web tools reference](../docs/en/reference/web-tools.md) for configuration.
+
+Run the HTTP-stub checks using the patched source and its virtualenv:
+
+```bash
+JIUWENSWARM_DATA_DIR="$PWD/.tmp/deepseek-swarm" \
+PYTHONPATH="$JIUWENSWARM_SRC" \
+  "$JIUWENSWARM_SRC/.venv/bin/python" -m unittest discover \
+  -s jiuwen_swarm/tests -p test_deepseek_web.py
+```

@@ -45,7 +45,7 @@ import { NativeWebProviderClient, WebProviderError, isPaidSearchProvider } from 
 
 /** Secrets and settings boundary consumed by governed web providers. */
 export interface WebBrokerStore {
-  getWebProviderApiKey(provider: "brave" | "exa" | "jina" | "tavily"): string | undefined;
+  getWebProviderApiKey(provider: "brave" | "exa" | "jina" | "tavily" | "deepseek"): string | undefined;
   getWebSettings(): WebSettingsDetails;
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy;
 }
@@ -65,6 +65,11 @@ export interface WebCallContext {
 
 const TRANSIENT = new Set(["rate-limited", "timeout", "server-error", "transport-error"]);
 const ERROR_CODES: Partial<Record<WebAttemptStatus, WebError["code"]>> = {
+  "insufficient-balance": "INSUFFICIENT_BALANCE",
+  "missing-credentials": "MISSING_CREDENTIALS",
+  "provider-disabled": "PROVIDER_DISABLED",
+  "fetch-failed": "FETCH_FAILED",
+  "no-results": "NO_RESULTS",
   "rate-limited": "RATE_LIMITED",
   timeout: "TIMEOUT",
   unauthorized: "UNAUTHORIZED",
@@ -84,6 +89,7 @@ export class WebInvocationError extends Error {
 
 function status(value: string | undefined): WebAttemptStatus {
   const allowed = new Set<WebAttemptStatus>([
+    "insufficient-balance", "missing-credentials", "provider-disabled", "fetch-failed", "no-results",
     "unauthorized", "rate-limited", "timeout", "server-error", "transport-error", "semantic-error",
   ]);
   return allowed.has(value as WebAttemptStatus) ? value as WebAttemptStatus : "semantic-error";
@@ -407,19 +413,22 @@ export class WebBroker {
       const proxyEnvironment = resolved.mode === "environment"
         ? proxyEnvOverlay(resolved, this.proxyEnvironment)
         : undefined;
-      const apiKey = provider === "brave" || provider === "exa" || provider === "jina" || provider === "tavily"
+      const apiKey = provider === "brave" || provider === "exa" || provider === "jina" || provider === "tavily" || provider === "deepseek"
         ? this.store.getWebProviderApiKey(provider)
         : undefined;
-      if ((provider === "brave" || provider === "exa" || provider === "tavily") && !apiKey) {
+      if (provider === "deepseek" && !settings.deepseekEnabled) {
+        throw new WebProviderError("DeepSeek is disabled in Web settings.", "provider-disabled", false);
+      }
+      if ((provider === "brave" || provider === "exa" || provider === "tavily" || provider === "deepseek") && !apiKey?.trim()) {
         return {
           attempts: [{
             durationMs: Date.now() - started,
-            errorCode: "unauthorized",
+            errorCode: provider === "deepseek" ? "missing-credentials" : "unauthorized",
             errorMessage: `${provider} does not have a configured API key`,
             provider,
             proxyMode,
             proxyUsed: false,
-            status: "unauthorized" as const,
+            status: provider === "deepseek" ? "missing-credentials" as const : "unauthorized" as const,
             tier,
           }],
           content: "",
@@ -519,7 +528,8 @@ export class WebBroker {
     const candidates = this.searchCandidates(settings);
     if (!candidates.length) {
       invocation.error = {
-        code: "INVALID_INPUT",
+        code: settings.deepseekEnabled && settings.paidSearchProviders.includes("deepseek")
+          && !this.store.getWebProviderApiKey("deepseek")?.trim() ? "MISSING_CREDENTIALS" : "INVALID_INPUT",
         message: "No search engine is available. Configure an API key or enable a free engine in Web settings.",
         retryable: false,
       };
@@ -589,6 +599,7 @@ export class WebBroker {
   private searchCandidates(settings: WebSettingsDetails): WebSearchProvider[] {
     const paid = PAID_SEARCH_ORDER
       .filter((provider) => settings.paidSearchProviders.includes(provider))
+      .filter((provider) => provider !== "deepseek" || settings.deepseekEnabled === true)
       .filter((provider) => Boolean(this.store.getWebProviderApiKey(provider)));
     const free = FREE_SEARCH_ORDER.filter((engine) => settings.freeSearchEngines[engine]);
     return [...paid, ...free];
@@ -633,6 +644,15 @@ export class WebBroker {
       toolCallId: context.toolCallId,
       turnId: context.turnId,
     };
+    if (settings.fetchProvider === "deepseek" && (!settings.deepseekEnabled || !this.store.getWebProviderApiKey("deepseek")?.trim())) {
+      invocation.error = {
+        code: settings.deepseekEnabled ? "MISSING_CREDENTIALS" : "PROVIDER_DISABLED",
+        message: settings.deepseekEnabled ? "DeepSeek requires an API key in Web settings." : "DeepSeek is disabled in Web settings.",
+        retryable: false,
+      };
+      this.save(invocation);
+      throw new WebInvocationError(invocation.error.message, invocation);
+    }
     const key = webCacheKey("fetch", settings.fetchProvider, url);
     if (!context.forceRefresh) {
       const cached = this.cache.get(key);

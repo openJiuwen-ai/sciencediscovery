@@ -21,13 +21,16 @@ import type { JiuwenSwarmAgentConfig } from "./jiuwenswarm-agent.js";
  *
  * With the JiuwenSwarm backend web search is JiuwenSwarm's, so the settings page is where its search is
  * configured: its two free engines (DuckDuckGo, Bing) and the keys of its paid search (Jina, Bocha, Serper,
- * Perplexity). A key that is not saved is sent empty, which clears it there. Nothing else in the web settings
- * has a JiuwenSwarm counterpart.
+ * Perplexity), plus opt-in DeepSeek search/fetch. A key that is not saved is sent empty, which clears it there. Nothing else in the web settings
+ * has a JiuwenSwarm counterpart except the DeepSeek enable/selection fields below.
  */
 export function jiuwenSwarmWebConfig(settings: WebSettings, key: (provider: WebKeyProvider) => string | undefined): Record<string, string> {
   return {
     free_search_ddg_enabled: String(settings.freeSearchEngines.duckduckgo === true),
     free_search_bing_enabled: String(settings.freeSearchEngines.bing === true),
+    deepseek_api_key: settings.deepseekEnabled ? key("deepseek")?.trim() ?? "" : "",
+    deepseek_search_enabled: String(settings.deepseekEnabled === true && settings.paidSearchProviders.includes("deepseek")),
+    deepseek_fetch_enabled: String(settings.deepseekEnabled === true && settings.fetchProvider === "deepseek"),
     jina_api_key: key("jina") ?? "",
     bocha_api_key: key("bocha") ?? "",
     serper_api_key: key("serper") ?? "",

@@ -1,0 +1,294 @@
+diff --git a/jiuwenswarm/agents/harness/common/tools/deepseek_web.py b/jiuwenswarm/agents/harness/common/tools/deepseek_web.py
+new file mode 100644
+--- /dev/null
++++ b/jiuwenswarm/agents/harness/common/tools/deepseek_web.py
+@@ -0,0 +1,142 @@
++# Copyright (C) 2026 Huawei Technologies Co., Ltd
++# SPDX-License-Identifier: Apache-2.0
++"""Opt-in DeepSeek tools for the pinned Swarm runtime and its MCP toolkit."""
++from __future__ import annotations
++
++import asyncio
++import json
++import os
++from urllib.parse import urlsplit
++
++import requests
++from openjiuwen.harness.tools import WebPaidSearchTool as _CorePaidSearch
++from openjiuwen.harness.tools import WebFetchWebpageTool as _CoreFetch
++from openjiuwen.harness.tools.web._common import _domain_allowed
++
++
++def _flag(name: str) -> bool:
++    return os.environ.get(name, "").strip().lower() in {"true", "1", "yes", "on"}
++
++
++def deepseek_search_enabled() -> bool:
++    return _flag("DEEPSEEK_SEARCH_ENABLED") and bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
++
++
++def is_paid_search_enabled() -> bool:
++    return deepseek_search_enabled() or any(
++        os.environ.get(name + "_API_KEY", "").strip()
++        for name in ("BOCHA", "PERPLEXITY", "SERPER", "JINA")
++    )
++
++
++def _request(operation: str, payload: dict, timeout: float, proxy_url=None) -> dict:
++    if not _flag(f"DEEPSEEK_{operation.upper()}_ENABLED"):
++        raise ValueError("DeepSeek is disabled in Web settings (PROVIDER_DISABLED).")
++    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
++    if not key:
++        raise ValueError("Configure a DeepSeek API key in Web settings (MISSING_CREDENTIALS).")
++    endpoint = os.environ.get(f"DEEPSEEK_{operation.upper()}_URL", "").strip() or f"https://api.deepseek.com/v1/tools/{operation}"
++    try:
++        with requests.post(
++            endpoint, json=payload,
++            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
++            timeout=timeout, stream=True, allow_redirects=False,
++            **({"proxies": {"http": proxy_url, "https": proxy_url}} if proxy_url else {}),
++        ) as response:
++            status = response.status_code
++            if status != 200:
++                code, reason = {
++                    401: ("UNAUTHORIZED", "authentication failed; check your API key"),
++                    402: ("INSUFFICIENT_BALANCE", "insufficient balance; top up your account"),
++                    429: ("RATE_LIMITED", "rate limit exceeded; retry after the cooldown"),
++                    408: ("TIMEOUT", "request timed out"),
++                    504: ("TIMEOUT", "request timed out"),
++                    404: ("FETCH_FAILED", "could not retrieve usable Markdown from this page"),
++                }.get(status, ("PROVIDER_ERROR", "request failed"))
++                raise ValueError(f"DeepSeek {operation}: {reason} (HTTP {status}, {code}).")
++            chunks, size = [], 0
++            for chunk in response.iter_content(65536):
++                size += len(chunk)
++                if size > 1_000_000:
++                    raise ValueError("DeepSeek response exceeds 1 MB (PROVIDER_ERROR).")
++                chunks.append(chunk)
++            data = json.loads(b"".join(chunks))
++            if not isinstance(data, dict):
++                raise ValueError("DeepSeek returned an invalid response (PROVIDER_ERROR).")
++            return data
++    except requests.Timeout:
++        raise ValueError("DeepSeek request timed out (TIMEOUT).") from None
++    except requests.RequestException:
++        # Transport exceptions can contain proxy credentials; never return them to the model.
++        raise ValueError("DeepSeek could not be reached (UPSTREAM_UNAVAILABLE).") from None
++
++
++def deepseek_search(query: str, max_results: int = 8, timeout_seconds: float = 45, proxy_url=None) -> dict:
++    query = str(query or "").strip()
++    if not query or len(query) > 128:
++        raise ValueError("DeepSeek query must contain 1 to 128 Unicode characters (INVALID_INPUT).")
++    data = _request("search", {"query": query, "count": max(1, min(int(max_results), 50))}, timeout_seconds, proxy_url)
++    rows = data.get("results")
++    if not isinstance(rows, list):
++        raise ValueError("DeepSeek search response is missing results (PROVIDER_ERROR).")
++    lines, urls = [], []
++    for row in rows[:max_results]:
++        if not isinstance(row, dict) or not isinstance(row.get("url"), str):
++            continue
++        urls.append(row["url"])
++        lines.append(f"{len(urls)}. {row.get('title', '')}\n   URL: {row['url']}\n   Summary: {row.get('summary') or row.get('snippet') or ''}")
++    return {"provider": "deepseek", "answer": "\n".join(lines), "urls": urls}
++
++
++def deepseek_fetch(url: str, timeout_seconds: float = 30, proxy_url=None) -> dict:
++    parsed = urlsplit(url)
++    if len(url) > 8192 or parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
++        raise ValueError("DeepSeek fetch requires an HTTP(S) URL without credentials (INVALID_INPUT).")
++    data = _request("fetch", {"url": url}, timeout_seconds, proxy_url)
++    if not isinstance(data.get("content"), str) or not data["content"].strip():
++        raise ValueError("DeepSeek returned no usable Markdown content (FETCH_FAILED).")
++    return {"url": url, "status_code": 200, "title": data.get("title", ""), "content": data["content"]}
++
++
++class WebPaidSearchTool(_CorePaidSearch):
++    """Keep agent-core providers intact and append DeepSeek to auto fallback."""
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        if deepseek_search_enabled():
++            self.card.input_params["properties"]["provider"]["enum"].append("deepseek")
++            self.card.description += " DeepSeek Search is also configured; auto tries it after the other paid providers."
++
++    async def invoke(self, inputs, **kwargs):
++        provider = str(inputs.get("provider", "auto") or "auto").strip().lower()
++        if provider != "deepseek":
++            result = await super().invoke(inputs, **kwargs)
++            if provider != "auto" or not deepseek_search_enabled() or not result.startswith("[ERROR]"):
++                return result
++        try:
++            data = await asyncio.to_thread(
++                deepseek_search, str(inputs.get("query", "")),
++                max(1, min(int(inputs.get("max_results", 8) or 8), 20)),
++                max(1, min(float(inputs.get("timeout_seconds", 45) or 45), 120)), self._proxy_url,
++            )
++            if not data["urls"]:
++                return "No search results for this query. Try different search terms or free_search."
++            return "Paid search provider: deepseek\nAnswer:\n" + data["answer"] + "\nURLs:\n" + "\n".join(f"{i}. {url}" for i, url in enumerate(data["urls"], 1))
++        except Exception as exc:
++            return f"[ERROR]: {exc}"
++
++
++class WebFetchWebpageTool(_CoreFetch):
++    """Use the existing fetch path unless DeepSeek is explicitly selected."""
++    async def invoke(self, inputs, **kwargs):
++        if not _flag("DEEPSEEK_FETCH_ENABLED"):
++            return await super().invoke(inputs, **kwargs)
++        try:
++            url = self._normalize_url(str(inputs.get("url", "") or ""))
++            if self._allowed_domains and not _domain_allowed(url, self._allowed_domains):
++                raise ValueError("URL is outside the configured domestic academic source domains")
++            data = await asyncio.to_thread(deepseek_fetch, url,
++                max(1, min(float(inputs.get("timeout_seconds", 30) or 30), 120)), self._proxy_url)
++            content = self._clip_text(data["content"], max(0, int(inputs.get("max_chars", 0) or 0)))
++            return f"URL: {url}\nStatus: 200\nTitle: {data['title']}\nContent:\n{content}"
++        except Exception as exc:
++            return f"[ERROR]: {exc}"
+diff --git a/jiuwenswarm/agents/harness/common/tools/search_tools.py b/jiuwenswarm/agents/harness/common/tools/search_tools.py
+--- a/jiuwenswarm/agents/harness/common/tools/search_tools.py
++++ b/jiuwenswarm/agents/harness/common/tools/search_tools.py
+@@ -20,6 +20,7 @@
+
+ from jiuwenswarm.agents.harness.common.tools.ssl_config import get_requests_verify
+ from jiuwenswarm.common.utils import env_url
++from jiuwenswarm.agents.harness.common.tools.deepseek_web import deepseek_search, deepseek_search_enabled
+
+ _USER_AGENT = (
+     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+@@ -535,8 +536,9 @@
+     """Return providers with nonblank keys in the MCP fallback order."""
+     return [
+         provider
+-        for provider in ("bocha", "perplexity", "serper", "jina")
++        for provider in ("bocha", "perplexity", "serper", "jina", "deepseek")
+         if str(os.environ.get(f"{provider.upper()}_API_KEY", "") or "").strip()
++        and (provider != "deepseek" or deepseek_search_enabled())
+     ]
+
+
+@@ -552,13 +554,14 @@
+         raise ValueError("query cannot be empty.")
+
+     provider = (provider or "auto").strip().lower()
+-    if provider not in {"auto", "bocha", "jina", "serper", "perplexity"}:
++    if provider not in {"auto", "bocha", "jina", "serper", "perplexity", "deepseek"}:
+         raise ValueError("provider must be auto or a configured search provider.")
+
+     timeout_seconds = max(10, min(timeout_seconds, 120))
+     max_results = max(1, min(max_results, 20))
+
+     runners = {
++        "deepseek": lambda: deepseek_search(query, max_results, timeout_seconds),
+         "bocha": lambda: _bocha_search_sync(
+             query=query, max_results=max_results, timeout_seconds=timeout_seconds
+         ),
+@@ -595,8 +598,12 @@
+
+         answer = str(result.get("answer", "") or "").strip()
+         urls = [str(u) for u in (result.get("urls", []) or []) if u][:max_results]
++        if name == "deepseek" and not urls:
++            continue
+         return name, answer, urls
+
++    if not errors:
++        return "deepseek", "No search results for this query. Try free_search.", []
+     raise RuntimeError("paid search failed. " + " | ".join(errors))
+
+
+@@ -635,7 +642,7 @@
+
+     async def invoke(self, inputs, **kwargs):
+         provider = str(inputs.get("provider", "auto") or "auto").strip().lower()
+-        if provider in {"auto", "bocha", "perplexity", "serper", "jina"}:
++        if provider in {"auto", "bocha", "perplexity", "serper", "jina", "deepseek"}:
+             if provider != "auto" and provider not in configured_paid_search_providers():
+                 provider = "auto"
+             inputs = {**inputs, "provider": provider}
+@@ -655,7 +662,10 @@
+     """Refresh the shared MCP card after environment configuration is loaded."""
+     mcp_paid_search.card.description = get_tool_description("paid_search", "en")
+     params = deepcopy(mcp_paid_search.card.input_params)
+-    params["properties"]["provider"] = get_tool_input_params("paid_search", "en")["properties"]["provider"]
++    params["properties"]["provider"] = deepcopy(get_tool_input_params("paid_search", "en")["properties"]["provider"])
++    if deepseek_search_enabled():
++        params["properties"]["provider"]["enum"].append("deepseek")
++        mcp_paid_search.card.description += " DeepSeek is tried last in auto mode."
+     mcp_paid_search.card.input_params = params
+
+
+diff --git a/jiuwenswarm/agents/harness/common/tools/web_fetch_tools.py b/jiuwenswarm/agents/harness/common/tools/web_fetch_tools.py
+--- a/jiuwenswarm/agents/harness/common/tools/web_fetch_tools.py
++++ b/jiuwenswarm/agents/harness/common/tools/web_fetch_tools.py
+@@ -201,6 +201,9 @@
+
+
+ def _fetch_webpage_sync(url: str, timeout_seconds: int) -> dict[str, str | int]:
++    from jiuwenswarm.agents.harness.common.tools.deepseek_web import _flag, deepseek_fetch
++    if _flag("DEEPSEEK_FETCH_ENABLED"):
++        return deepseek_fetch(url, timeout_seconds)
+     response = _http_get(url, headers=_REQUEST_HEADERS, timeout=timeout_seconds)
+     if response.status_code in {401, 403, 429}:
+         return _fetch_via_jina_reader_sync(url, timeout_seconds)
+diff --git a/jiuwenswarm/gateway/channel_manager/tui/tui_connect.py b/jiuwenswarm/gateway/channel_manager/tui/tui_connect.py
+--- a/jiuwenswarm/gateway/channel_manager/tui/tui_connect.py
++++ b/jiuwenswarm/gateway/channel_manager/tui/tui_connect.py
+@@ -573,6 +573,9 @@
+     "embed_api_base": "EMBED_API_BASE",
+     "embed_model": "EMBED_MODEL",
+     "jina_api_key": "JINA_API_KEY",
++    "deepseek_api_key": "DEEPSEEK_API_KEY",
++    "deepseek_search_enabled": "DEEPSEEK_SEARCH_ENABLED",
++    "deepseek_fetch_enabled": "DEEPSEEK_FETCH_ENABLED",
+     "serper_api_key": "SERPER_API_KEY",
+     "perplexity_api_key": "PERPLEXITY_API_KEY",
+     "github_token": "GITHUB_TOKEN",
+diff --git a/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py b/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py
+--- a/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py
++++ b/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py
+@@ -130,6 +130,7 @@
+ _WEB_CONFIG_RELOAD_CHANNEL_ID = "web"
+ _SEARCH_RELOAD_ENV_KEYS = {
+     "BOCHA_API_KEY", "PERPLEXITY_API_KEY", "SERPER_API_KEY", "JINA_API_KEY",
++    "DEEPSEEK_API_KEY", "DEEPSEEK_SEARCH_ENABLED", "DEEPSEEK_FETCH_ENABLED",
+ }
+ _MODEL_RELOAD_ENV_KEYS = {
+     "MODEL_PROVIDER",
+@@ -1066,6 +1067,9 @@
+     "embed_api_base": "EMBED_API_BASE",
+     "embed_model": "EMBED_MODEL",
+     "jina_api_key": "JINA_API_KEY",
++    "deepseek_api_key": "DEEPSEEK_API_KEY",
++    "deepseek_search_enabled": "DEEPSEEK_SEARCH_ENABLED",
++    "deepseek_fetch_enabled": "DEEPSEEK_FETCH_ENABLED",
+     "bocha_api_key": "BOCHA_API_KEY",
+     "serper_api_key": "SERPER_API_KEY",
+     "perplexity_api_key": "PERPLEXITY_API_KEY",
+diff --git a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+--- a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
++++ b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+@@ -166,6 +166,10 @@
+                     return True
+             return False
+
++
++from jiuwenswarm.agents.harness.common.tools.deepseek_web import (
++    WebPaidSearchTool, WebFetchWebpageTool, is_paid_search_enabled,
++)
+
+ from openjiuwen.harness.schema.task import TodoStatus
+ from openjiuwen.harness.workspace.workspace import Workspace, WorkspaceNode
+diff --git a/jiuwenswarm/server/runtime/agent_manager.py b/jiuwenswarm/server/runtime/agent_manager.py
+--- a/jiuwenswarm/server/runtime/agent_manager.py
++++ b/jiuwenswarm/server/runtime/agent_manager.py
+@@ -1302,8 +1302,8 @@
+             scope_set = set(reload_scopes) if reload_scopes else set()
+             search_changed = any(
+                 f"{provider}_API_KEY" in self._latest_env_overrides
+-                for provider in ("BOCHA", "PERPLEXITY", "SERPER", "JINA")
+-            )
++                for provider in ("BOCHA", "PERPLEXITY", "SERPER", "JINA", "DEEPSEEK")
++            ) or bool({"DEEPSEEK_SEARCH_ENABLED", "DEEPSEEK_FETCH_ENABLED"} & self._latest_env_overrides.keys())
+             # Older callers can omit scopes; keep their full-reload semantics.
+             if search_changed and scope_set:
+                 scope_set.add("search")

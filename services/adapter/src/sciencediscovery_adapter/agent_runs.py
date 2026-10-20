@@ -121,6 +121,7 @@ JIUWENSWARM_HOST_TOOLS = frozenset({"bash", "read_file", "write_file", "edit_fil
 JIUWENSWARM_WEB_CONFIG_KEYS = frozenset({
     "free_search_ddg_enabled", "free_search_bing_enabled",
     "jina_api_key", "bocha_api_key", "serper_api_key", "perplexity_api_key",
+    "deepseek_api_key", "deepseek_search_enabled", "deepseek_fetch_enabled",
 })
 
 

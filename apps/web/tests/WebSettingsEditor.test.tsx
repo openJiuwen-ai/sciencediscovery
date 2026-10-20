@@ -24,6 +24,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest } from "../src/WebSettingsEditor.js";
 
 const settings = {
+  deepseekEnabled: false,
   fetchCacheTtlSeconds: 86_400,
   fetchProvider: "jina",
   freeSearchEngines: { bing: true, "brave-html": false, duckduckgo: true },
@@ -70,9 +71,9 @@ test("free engine switches reflect the stored per-engine state", () => {
 
   // brave-html is off in the fixture; the other two are on.
   const checkboxes = [...html.matchAll(/<input type="checkbox"([^>]*)\/?>/g)].map((match) => match[1] ?? "");
-  assert.equal(checkboxes.length, 6);
+  assert.equal(checkboxes.length, 8);
   assert.deepEqual(
-    checkboxes.slice(3).map((attributes) => attributes.includes("checked")),
+    checkboxes.slice(4, 7).map((attributes) => attributes.includes("checked")),
     [true, true, false],
   );
 });

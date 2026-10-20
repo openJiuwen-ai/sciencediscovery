@@ -798,7 +798,7 @@ test("SessionStore persists global web settings while keeping provider keys writ
   const store = new SessionStore(tempRoot);
   await store.load();
   const defaults = store.getWebSettings();
-  assert.deepEqual(defaults.paidSearchProviders, ["tavily", "exa", "brave"]);
+  assert.deepEqual(defaults.paidSearchProviders, ["tavily", "exa", "brave", "deepseek"]);
   assert.deepEqual(defaults.freeSearchEngines, { bing: true, "brave-html": true, duckduckgo: true });
   assert.equal(defaults.fetchProvider, "jina");
   assert.equal(defaults.proxyPolicy, "inherit");

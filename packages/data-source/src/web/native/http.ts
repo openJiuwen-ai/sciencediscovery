@@ -32,6 +32,8 @@ import { proxyDispatcher } from "../../proxy/index.js";
 export const MAX_PROVIDER_RESPONSE_BYTES = 1_000_000;
 
 export type ProviderErrorCode =
+  | "insufficient-balance"
+  | "fetch-failed"
   | "rate-limited"
   | "semantic-error"
   | "server-error"
