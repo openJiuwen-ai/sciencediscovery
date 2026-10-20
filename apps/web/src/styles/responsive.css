@@ -51,7 +51,7 @@
   /* Give the inline trajectory the available height before the workspace;
      scroll the stack so the workspace cannot cover the viewer's controls. */
   .content-grid:has(.trajectory-view) { overflow-y: auto; }
-  .conversation:has(.trajectory-view) { flex: 0 0 100%; }
+  .conversation:has(.trajectory-view) { flex: 0 0 auto; min-height: 100%; }
   .workflow-controls > label { grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); }
   .workspace-resizer, .composer-hint { display: none; }
   .session-bar { padding: 6px 14px 6px 58px; }
