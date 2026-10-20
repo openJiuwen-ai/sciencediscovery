@@ -761,6 +761,11 @@
 
 .scoped-settings { margin: 22px 0 28px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
 .scoped-settings label { margin: 0; }
+.scoped-settings-advanced { margin: 0 0 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 11px 13px; }
+.scoped-settings-advanced > summary { color: var(--text-heading); cursor: pointer; font-size: 13px; font-weight: 700; }
+.scoped-settings-advanced > summary:hover { color: var(--accent); }
+.scoped-settings-advanced[open] > summary { margin-bottom: 14px; }
+.scoped-settings-advanced .settings-field:last-child, .scoped-settings-advanced .settings-array:last-child { margin-bottom: 0; }
 .settings-field, .settings-array { display: block; margin: 0 0 18px; }
 .settings-field > span, .settings-array legend { display: block; margin-bottom: 7px; color: var(--text-heading); font-size: 13px; font-weight: 700; }
 .settings-field select, .settings-array select { width: 100%; min-height: 41px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-heading); padding: 8px 10px; font-size: 13px; }

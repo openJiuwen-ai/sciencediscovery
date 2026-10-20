@@ -2106,7 +2106,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/projects") {
         const body = await readJson<CreateProjectRequest>(request);
-        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds, body.runnerIds);
+        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds, body.runnerIds, body.description);
         try {
           const firstSession = await store.createSession(
             project.id,

@@ -17,6 +17,8 @@ import type { Session } from "./session.js";
 
 export interface Project {
   createdAt: string;
+  /** Optional free-form research description collected at creation. */
+  description?: string;
   id: string;
   name: string;
   /** Default remote hosts for inheriting Sessions; not a ceiling on Session overrides. */
@@ -27,6 +29,7 @@ export interface Project {
 }
 
 export interface CreateProjectRequest {
+  description?: string;
   name: string;
   remoteRunnerHostIds?: string[];
   runnerIds?: string[];

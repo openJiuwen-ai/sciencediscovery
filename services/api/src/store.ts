@@ -2620,12 +2620,16 @@ export class SessionStore {
     input: RuntimeSettingsOverrides = {},
     remoteRunnerHostIds: string[] = [],
     runnerIds?: string[],
+    description?: string,
   ): Promise<Project> {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
     const allowedRunners = runnerIds === undefined ? undefined : this.validateRunnerIds(runnerIds);
     const allowedHosts = this.validateProjectRemoteRunnerHosts(allowedRunners?.filter((id) => id !== "local") ?? remoteRunnerHostIds);
+    const trimmedDescription = description?.trim() ?? "";
+    if (trimmedDescription.length > 2_000) throw new Error("Project description must be at most 2000 characters");
     const project: Project = {
       createdAt: new Date().toISOString(),
+      ...(trimmedDescription ? { description: trimmedDescription } : {}),
       id: randomUUID(),
       name: cleanLabel(name, "Untitled project"),
       remoteRunnerHostIds: allowedHosts,

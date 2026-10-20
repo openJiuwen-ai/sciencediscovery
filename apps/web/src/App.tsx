@@ -2289,9 +2289,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setSession((current) => current?.id === summary.id ? mergeSessionDetailWithSummary(current, summary) : current);
   }
 
-  async function createProject(name: string, settingsOverrides: RuntimeSettingsOverrides): Promise<void> {
+  async function createProject(name: string, description: string, settingsOverrides: RuntimeSettingsOverrides): Promise<void> {
     try {
-      const { firstSession, project } = await client.createProject({ name, settingsOverrides });
+      const { firstSession, project } = await client.createProject({ name, ...(description ? { description } : {}), settingsOverrides });
       setProjects((current) => [...current, project]);
       setSessionListState("active");
       setSessions([firstSession]);

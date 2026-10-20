@@ -267,12 +267,13 @@ export function ProjectCreationDialog({
   details: RuntimeSettingsDetails;
   models: ModelProfile[];
   onCancel: () => void;
-  onCreate: (name: string, settingsOverrides: RuntimeSettingsOverrides) => Promise<void> | void;
+  onCreate: (name: string, description: string, settingsOverrides: RuntimeSettingsOverrides) => Promise<void> | void;
   skillLibraries?: SkillLibrary[];
   skills: SkillDescriptor[];
 }) {
   const { t } = useLocale();
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const inheritedDetails = { ...details, overrides: {} } satisfies RuntimeSettingsDetails;
 
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
@@ -280,22 +281,35 @@ export function ProjectCreationDialog({
       <span className="eyebrow">{t("project.new")}</span>
       <h2>{t("project.create")}</h2>
       <ScopedSettingsEditor
-        beforeFields={<label className="creation-name">
-          <span>{t("project.name")}</span>
-          <input
-            autoFocus
-            required
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder={t("project.placeholder")}
-          />
-        </label>}
+        beforeFields={<>
+          <label className="creation-name">
+            <span>{t("project.name")}</span>
+            <input
+              autoFocus
+              required
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder={t("project.placeholder")}
+            />
+          </label>
+          <label className="creation-name creation-description">
+            <span>{t("project.description")}</span>
+            <textarea
+              maxLength={2000}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder={t("project.descriptionPlaceholder")}
+              rows={2}
+              value={description}
+            />
+          </label>
+        </>}
+        collapseAdvancedFields
         connectors={connectors}
         description={t("project.inheritanceHelp")}
         details={inheritedDetails}
         models={models}
         onCancel={onCancel}
-        onSave={(settingsOverrides) => onCreate(name.trim(), settingsOverrides)}
+        onSave={(settingsOverrides) => onCreate(name.trim(), description.trim(), settingsOverrides)}
         scopeLabel={t("settings.project")}
         skillLibraries={skillLibraries}
         skillScope="project"

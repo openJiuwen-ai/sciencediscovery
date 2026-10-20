@@ -92,6 +92,7 @@ export function ScopedSettingsEditor({
   allowInheritance = true,
   beforeFields,
   afterFields,
+  collapseAdvancedFields = false,
   connectors,
   description,
   details,
@@ -112,6 +113,8 @@ export function ScopedSettingsEditor({
   allowInheritance?: boolean;
   beforeFields?: ReactNode | ((draft: RuntimeSettingsOverrides) => ReactNode);
   afterFields?: ReactNode;
+  /** Fold the runtime inheritance fields into a collapsed-by-default "Advanced settings" section. */
+  collapseAdvancedFields?: boolean;
   connectors: ConnectorManifest[];
   description?: string;
   details: RuntimeSettingsDetails;
@@ -167,46 +170,54 @@ export function ScopedSettingsEditor({
   }
 
   const skillLibraryMounts = normalizeSkillLibraryMounts(draft.enabledSkillLibraries ?? details.effective.enabledSkillLibraries, skillLibraries);
+  const editorHeading = (
+    <div className="editor-heading">
+      <strong>{t("settings.runtimeTitle", { scope: scopeLabel })}</strong>
+      <small>{description ?? (allowInheritance
+        ? t("settings.runtimeInheritedHelp")
+        : t("settings.runtimeGlobalHelp"))}</small>
+    </div>
+  );
+  const advancedFields = <>
+    {skillScope !== "session" ? <label className="settings-field">
+      <span>{t("settings.defaultApprovalMode")}</span>
+      <select disabled={disabled || saving} value={draft.defaultApprovalMode ?? ""} onChange={(event) => {
+        const value = event.target.value;
+        setDraft((current) => {
+          const next = { ...current };
+          if (value === "always_allow" || value === "ask_for_dangerous") next.defaultApprovalMode = value;
+          else delete next.defaultApprovalMode;
+          return next;
+        });
+      }}>
+        <option value="">{allowInheritance ? t("settings.approvalInheritGlobal") : t("settings.approvalBuiltInAsk")}</option>
+        <option value="ask_for_dangerous">{t("timeline.approvalModeAsk")}</option>
+        <option value="always_allow">{t("timeline.approvalModeAlwaysAllow")}</option>
+      </select>
+      <small>{t("settings.defaultApprovalHelp")}</small>
+      <small>{t("settings.approvalEffective", { mode: t(details.effective.defaultApprovalMode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk"), source: sourceLabel(details.sources.defaultApprovalMode, t) })}</small>
+    </label> : null}
+
+    <label className="settings-field">
+      <span>{t(FIELD_LABELS.modelId)}</span>
+      <select disabled={disabled || saving} value={draft.modelId ?? ""} onChange={(event) => setScalar("modelId", event.target.value)}>
+        <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models, t)) : t("common.notConfigured")}</option>
+        {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? t("scopedSettings.overrideOption", { label: modelOptionLabel(model, models, t) }) : modelOptionLabel(model, models, t)}</option>)}
+      </select>
+      {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
+    </label>
+
+    <PluginSettingsSections {...{ details, draft, setDraft, connectors, allowInheritance, disabled: disabled || saving, t, skillLibraries, skills, skillScope, skillsBackend }} renderSource={(field) => <SettingsSource details={details} field={field} />} />
+  </>;
   return (
     <form className="scoped-settings" onSubmit={(event) => void submit(event)}>
-      <div className="editor-heading">
-        <strong>{t("settings.runtimeTitle", { scope: scopeLabel })}</strong>
-        <small>{description ?? (allowInheritance
-          ? t("settings.runtimeInheritedHelp")
-          : t("settings.runtimeGlobalHelp"))}</small>
-      </div>
+      {collapseAdvancedFields ? null : editorHeading}
 
       {typeof beforeFields === "function" ? beforeFields(draft) : beforeFields}
 
-      {skillScope !== "session" ? <label className="settings-field">
-        <span>{t("settings.defaultApprovalMode")}</span>
-        <select disabled={disabled || saving} value={draft.defaultApprovalMode ?? ""} onChange={(event) => {
-          const value = event.target.value;
-          setDraft((current) => {
-            const next = { ...current };
-            if (value === "always_allow" || value === "ask_for_dangerous") next.defaultApprovalMode = value;
-            else delete next.defaultApprovalMode;
-            return next;
-          });
-        }}>
-          <option value="">{allowInheritance ? t("settings.approvalInheritGlobal") : t("settings.approvalBuiltInAsk")}</option>
-          <option value="ask_for_dangerous">{t("timeline.approvalModeAsk")}</option>
-          <option value="always_allow">{t("timeline.approvalModeAlwaysAllow")}</option>
-        </select>
-        <small>{t("settings.defaultApprovalHelp")}</small>
-        <small>{t("settings.approvalEffective", { mode: t(details.effective.defaultApprovalMode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk"), source: sourceLabel(details.sources.defaultApprovalMode, t) })}</small>
-      </label> : null}
-
-      <label className="settings-field">
-        <span>{t(FIELD_LABELS.modelId)}</span>
-        <select disabled={disabled || saving} value={draft.modelId ?? ""} onChange={(event) => setScalar("modelId", event.target.value)}>
-          <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models, t)) : t("common.notConfigured")}</option>
-          {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? t("scopedSettings.overrideOption", { label: modelOptionLabel(model, models, t) }) : modelOptionLabel(model, models, t)}</option>)}
-        </select>
-        {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
-      </label>
-
-      <PluginSettingsSections {...{ details, draft, setDraft, connectors, allowInheritance, disabled: disabled || saving, t, skillLibraries, skills, skillScope, skillsBackend }} renderSource={(field) => <SettingsSource details={details} field={field} />} />
+      {collapseAdvancedFields
+        ? <details className="scoped-settings-advanced"><summary>{t("settings.advancedSettings")}</summary>{editorHeading}{advancedFields}</details>
+        : advancedFields}
       {afterFields}
       {disabled ? <p className="settings-readonly">{t("settings.archivedReadonly")}</p> : null}
       {!showActions ? null : onCancel ? <div className="dialog-actions">

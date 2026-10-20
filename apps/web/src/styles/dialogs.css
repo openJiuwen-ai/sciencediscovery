@@ -143,6 +143,7 @@
 .creation-name { display: block; margin-bottom: 20px !important; }
 .creation-name > span { display: block; margin-bottom: 7px; color: var(--text-heading); font-size: 13px; font-weight: 700; }
 .creation-name input { width: 100%; min-height: 42px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); padding: 9px 11px; }
+.creation-name textarea { width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); padding: 9px 11px; font: inherit; resize: vertical; }
 .rename-dialog { width: min(480px, 100%); padding: 28px; }
 .rename-dialog h2 { margin-bottom: 22px; color: var(--text-strong); font-size: 23px; }
 .rename-dialog label > span { display: block; margin-bottom: 7px; color: var(--text-secondary); font-size: 13px; font-weight: 700; }

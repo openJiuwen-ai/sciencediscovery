@@ -263,6 +263,22 @@ test("late execution provenance retains history without rolling back the latest 
   await assert.rejects(store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: unrooted }), /not rooted/);
 });
 
+test("createProject persists an optional trimmed description and omits blank ones", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `project-description-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const described = await store.createProject("Described project", {}, [], undefined, "  Compare tumor vs normal samples.  ");
+  assert.equal(described.description, "Compare tumor vs normal samples.");
+  const plain = await store.createProject("Plain project");
+  assert.equal(plain.description, undefined);
+  const blank = await store.createProject("Blank project", {}, [], undefined, "   ");
+  assert.equal(blank.description, undefined);
+
+  const reloaded = new SessionStore(root); await reloaded.load();
+  assert.equal(reloaded.listProjects().find((project) => project.id === described.id)?.description, "Compare tumor vs normal samples.");
+  assert.equal(reloaded.listProjects().find((project) => project.id === plain.id)?.description, undefined);
+});
+
 test("Reviewer Specialist levels are cumulative", () => {
   assert.equal(reviewerSpecialistSupportsLevel("quick", "quick"), true);
   assert.equal(reviewerSpecialistSupportsLevel("quick", "deep"), false);
