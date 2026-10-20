@@ -12,7 +12,8 @@ test.describe("journey-deepseek-web-settings.spec", { tag: ["@isolation:global",
  * Steps:
  *   1. Open Web provider settings and enable DeepSeek Search and Fetch with a local dummy key.
  *   2. Save, reopen, and confirm the switches, fetch selection and write-only key state persist.
- *   3. At a narrow viewport disable DeepSeek and verify the saved disabled state.
+ *   3. At a narrow viewport disable DeepSeek and inspect the controls.
+ *   4. Save the disabled state and verify it through the public settings API.
  * Environment: Isolated local API/Web stack at E2E_BASE_URL; global settings restored in finally.
  * Type: mocked
  * LLM: none
@@ -36,7 +37,7 @@ test("DeepSeek 设置可保存、关闭，密钥不回显", { tag: "@mocked" }, 
     await dialog.getByRole("navigation", { name: "Setting groups" }).getByRole("button", { name: /^Web providers/ }).click();
   }
   try {
-    await journey.step("启用并保存 DeepSeek", "总开关、抓取选项与密钥输入可操作，保存成功。", async () => {
+    await journey.step("启用并保存 DeepSeek", "总开关、抓取选项与密钥输入可操作。", async () => {
       await openProjectSession(page, fixture);
       await openWebSettings();
       await dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true }).check();
@@ -44,11 +45,12 @@ test("DeepSeek 设置可保存、关闭，密钥不回显", { tag: "@mocked" }, 
       if (!await search.isChecked()) await search.check();
       await dialog.getByLabel("Fetch provider", { exact: true }).selectOption("deepseek");
       await dialog.getByLabel("DeepSeek API key", { exact: true }).fill("e2e-local-test-key");
-      await dialog.getByRole("button", { name: "Save and close", exact: true }).click();
-      await expect(dialog).toBeHidden();
     });
     await journey.step("重新打开核对配置", "DeepSeek 已启用，抓取选择和已保存密钥状态保留，密钥输入为空。", async () => {
+      await dialog.getByRole("button", { name: "Save and close", exact: true }).click();
+      await expect(dialog).toBeHidden();
       await openWebSettings();
+      await dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true }).scrollIntoViewIfNeeded();
       await expect(dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true })).toBeChecked();
       await expect(dialog.getByLabel("Fetch provider", { exact: true })).toHaveValue("deepseek");
       await expect(dialog.getByLabel("DeepSeek API key", { exact: true })).toHaveValue("");
@@ -56,13 +58,15 @@ test("DeepSeek 设置可保存、关闭，密钥不回显", { tag: "@mocked" }, 
       const response = await (await page.request.get(endpoint, { headers })).json();
       expect(JSON.stringify(response)).not.toContain("e2e-local-test-key");
     });
-    await journey.step("窄窗口关闭 DeepSeek", "开关和选择控件在窄窗口可读，关闭状态成功保存。", async () => {
+    await journey.step("窄窗口关闭 DeepSeek", "开关在窄窗口可读，关闭后仍可操作。", async () => {
       await page.setViewportSize({ width: 600, height: 900 });
       const enabled = dialog.getByLabel("Enable DeepSeek Search and Fetch", { exact: true });
       await enabled.scrollIntoViewIfNeeded();
       await expect(enabled).toBeVisible();
       await enabled.uncheck();
       expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    });
+    await journey.step("保存关闭状态", "公开设置 API 确认 DeepSeek 已关闭。", async () => {
       await dialog.getByRole("button", { name: "Save and close", exact: true }).click();
       await expect(dialog).toBeHidden();
       expect((await (await page.request.get(endpoint, { headers })).json()).deepseekEnabled).toBe(false);

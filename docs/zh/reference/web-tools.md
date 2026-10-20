@@ -38,18 +38,18 @@ Search 不再由用户选择某一个 Provider。`web_search` 按固定顺序依
 解回真实地址，避免引用和 `web_fetch` 拿到的是跟踪链接而不是原页面。
 
 如果一个可用引擎都没有（没有付费 key，且免费引擎全部关闭），调用会以
-`INVALID_INPUT` 失败并指向 Web 设置，不会对外发起任何请求。
+`INVALID_INPUT` 失败并指向 Web 设置，不会对外发起任何请求。若唯一选中的付费引擎是已启用但缺少 key 的 DeepSeek，则为 `MISSING_CREDENTIALS`。
 
 ## Provider 与配置
 
 在 **System configuration → Web providers** 设置：
 
-- 付费搜索 Provider：Tavily、Exa、Brave Search API，各有开关，key 在下方输入；
+- 付费搜索 Provider：Tavily、Exa、Brave Search API、DeepSeek，各有开关，key 在下方输入；
 - 免费搜索引擎：DuckDuckGo、Bing、Brave（免费），只有开关，不需要 key；
-- Fetch：Jina Reader（默认）、Tavily、Exa。Fetch 仍是单一 Provider，不做聚合。
+- Fetch：Jina Reader（默认）、Tavily、Exa、DeepSeek。Fetch 仍是单一 Provider，不做聚合。
   Jina 先请求国内入口 `https://r.jinaai.cn`，仅在网络错误、超时、429、5xx 或空
   响应时顺序尝试 `https://r.jina.ai`，401/403 和其他 4xx 直接失败；
-- Jina key 可选，匿名调用可用；Jina/Tavily/Exa/Brave 的 key 由后端
+- Jina key 可选，匿名调用可用；Jina/Tavily/Exa/Brave/DeepSeek 的 key 由后端
   AES-256-GCM 加密，API 只返回 `hasApiKey`；
 - Web 专用代理支持 `environment`（默认，读取标准 HTTP(S)/ALL proxy 环境变量）、
   `custom`（http/https/socks5 URL）与 `direct`。自定义地址同样加密且只写，不会

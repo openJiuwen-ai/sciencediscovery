@@ -23,6 +23,7 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
         self.empty = False
         self.bad_content = False
         self.delay = False
+        self.body_delay = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -38,6 +39,10 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
                 self.send_response(owner.status)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
+                if owner.body_delay:
+                    self.wfile.flush()
+                    threading.Event().wait(0.2)
+                    return
                 if self.path.endswith('search'):
                     data = {'results': [] if owner.empty else [{'title': 'Catalyst study', 'url': 'https://example.com/catalyst', 'summary': 'The model-facing summary.', 'snippet': 'Short display snippet'}]}
                 elif self.path.endswith('fetch'):
@@ -147,7 +152,10 @@ class DeepSeekWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('deepseek', search_tools.mcp_paid_search.card.input_params['properties']['provider']['enum'])
 
     async def test_real_read_timeout_is_classified(self):
-        self.delay = True
-        for function, value in [(deepseek_search, 'x'), (deepseek_fetch, 'https://example.com')]:
-            with self.assertRaisesRegex(ValueError, 'TIMEOUT'):
-                await asyncio.to_thread(function, value, timeout_seconds=0.02)
+        for phase in ('headers', 'body'):
+            self.delay = phase == 'headers'
+            self.body_delay = phase == 'body'
+            for function, value in [(deepseek_search, 'x'), (deepseek_fetch, 'https://example.com')]:
+                with self.subTest(phase=phase, operation=function.__name__):
+                    with self.assertRaisesRegex(ValueError, 'TIMEOUT'):
+                        await asyncio.to_thread(function, value, timeout_seconds=0.02)

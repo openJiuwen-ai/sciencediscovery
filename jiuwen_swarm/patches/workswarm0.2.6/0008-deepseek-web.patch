@@ -2,7 +2,7 @@ diff --git a/jiuwenswarm/agents/harness/common/tools/deepseek_web.py b/jiuwenswa
 new file mode 100644
 --- /dev/null
 +++ b/jiuwenswarm/agents/harness/common/tools/deepseek_web.py
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,146 @@
 +# Copyright (C) 2026 Huawei Technologies Co., Ltd
 +# SPDX-License-Identifier: Apache-2.0
 +"""Opt-in DeepSeek tools for the pinned Swarm runtime and its MCP toolkit."""
@@ -56,7 +56,7 @@ new file mode 100644
 +                    429: ("RATE_LIMITED", "rate limit exceeded; retry after the cooldown"),
 +                    408: ("TIMEOUT", "request timed out"),
 +                    504: ("TIMEOUT", "request timed out"),
-+                    404: ("FETCH_FAILED", "could not retrieve usable Markdown from this page"),
++                    404: ("FETCH_FAILED", "could not retrieve usable Markdown from this page") if operation == "fetch" else ("PROVIDER_ERROR", "search endpoint not found"),
 +                }.get(status, ("PROVIDER_ERROR", "request failed"))
 +                raise ValueError(f"DeepSeek {operation}: {reason} (HTTP {status}, {code}).")
 +            chunks, size = [], 0
@@ -71,7 +71,11 @@ new file mode 100644
 +            return data
 +    except requests.Timeout:
 +        raise ValueError("DeepSeek request timed out (TIMEOUT).") from None
-+    except requests.RequestException:
++    except requests.RequestException as exc:
++        # requests wraps a streamed body read timeout in ConnectionError. Classify
++        # the cause without returning exception text (which can contain secrets).
++        if "timed out" in str(exc).lower() or "timeout" in str(exc).lower():
++            raise ValueError("DeepSeek request timed out (TIMEOUT).") from None
 +        # Transport exceptions can contain proxy credentials; never return them to the model.
 +        raise ValueError("DeepSeek could not be reached (UPSTREAM_UNAVAILABLE).") from None
 +

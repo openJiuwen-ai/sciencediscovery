@@ -25,7 +25,7 @@ Paid before free is deliberate: a keyed vendor gives a stable API contract and b
 
 The free engines read the vendors' public result pages, so all three share one failure mode — a layout change yields zero rows. That is treated as a failed attempt, and the aggregation moves to the next engine; only when every candidate fails does the call fail. Bing's organic links are wrapped in `bing.com/ck/a` redirects, which the client decodes back to the destination so that citations and `web_fetch` see the real page rather than a tracker.
 
-If no engine is available at all — no paid key and every free engine off — the call fails as `INVALID_INPUT` pointing at Web settings, without contacting anyone.
+If no engine is available at all — no paid key and every free engine off — the call fails as `INVALID_INPUT` pointing at Web settings, without contacting anyone. If enabled DeepSeek is the only selected paid engine and lacks a key, the error is `MISSING_CREDENTIALS`.
 
 ## Providers and configuration
 
