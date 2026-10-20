@@ -58,6 +58,8 @@ function browserFixture(context, autoRestore = true) {
     location,
     localStorage: storage,
     innerWidth: 1440,
+    // These mounted integration scenarios use a desktop viewport.
+    matchMedia: (media) => Object.assign(new EventTarget(), { media, matches: false }),
     history: { state: null, replaceState(_s, _t, path) {
       url = new URL(path, url);
     }, pushState(_s, _t, path) {

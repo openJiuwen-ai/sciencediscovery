@@ -30,11 +30,7 @@ async function openProxySettings(page: Page) {
   if (await drawerToggle.isVisible()) await drawerToggle.click();
   await page.getByRole("button", { name: "System configuration" }).click();
   const configuration = page.getByRole("dialog", { name: "System configuration" });
-  // Below 900px the settings tree is display:none behind the directory button,
-  // which also takes its group buttons out of the accessibility tree.
-  const navigation = configuration.getByRole("navigation", { name: "Setting groups" });
-  if (!await navigation.isVisible()) await configuration.getByRole("button", { name: /^Settings directory/ }).click();
-  await navigation.getByRole("button", { name: "Network proxies" }).click();
+  await configuration.getByRole("button", { name: "Network proxies" }).click();
   await expect(configuration.getByRole("heading", { name: "Network proxies" })).toBeVisible();
   return configuration;
 }
