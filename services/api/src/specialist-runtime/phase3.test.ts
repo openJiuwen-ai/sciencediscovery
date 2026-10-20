@@ -14,7 +14,7 @@ import { runPlatformDecisions } from "./decisions.js";
 import { SpecialistUnavailableError } from "./codex.js";
 import type { SpecialistRuntimeRequest } from "./adapter.js";
 const request = (overrides: Partial<SpecialistRuntimeRequest> = {}): SpecialistRuntimeRequest => ({ prompt: "Task", maxTurns: 4, tools: [], credential: async () => "secret", signal: new AbortController().signal, ...overrides });
-const decision = (tool: string | null = null, args = "{}") => JSON.stringify({ tool, arguments: args, summary: "done" });
+const decision = (tool: string | null = null, args = "{}") => JSON.stringify({ tools: tool === null ? [] : [{ tool, arguments: args }], summary: "done" });
 
 test("all runtimes accept only credential-free metadata", () => {
   for (const kind of ["codex", "claude-code", "acp"]) {

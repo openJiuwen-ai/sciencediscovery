@@ -60,10 +60,12 @@ const stub = createServer(async (req, res) => {
       if (active.name.startsWith("fallback")) return res.writeHead(401).end(JSON.stringify({ error: { message: "Invalid API key", type: "invalid_request_error" } }));
       if (active.name === "cancel" || active.name === "timeout") return; // held until process cancellation
       const choices = [
-        { tool: "configure_specialist_runtime", arguments: JSON.stringify({ reasoningEffort: "low", timeoutSeconds: 45, fallback: false }), summary: "Applying requested settings" },
-        { tool: "run_shell", arguments: JSON.stringify({ command: "printf declared > result.txt; printf private > scratch.txt; echo handoff-ready" }), summary: "Write outputs" },
-        { tool: "declare_artifact", arguments: JSON.stringify({ path: "result.txt" }), summary: "Explicit handoff" },
-        { tool: null, arguments: "{}", summary: "Delivered declared result only." },
+        { summary: "Configure, write and declare in one ordered turn", tools: [
+          { tool: "configure_specialist_runtime", arguments: JSON.stringify({ reasoningEffort: "low", timeoutSeconds: 45, fallback: false }) },
+          { tool: "run_shell", arguments: JSON.stringify({ command: "printf declared > result.txt; printf private > scratch.txt; echo handoff-ready" }) },
+          { tool: "declare_artifact", arguments: JSON.stringify({ path: "result.txt" }) },
+        ] },
+        { tools: [], summary: "Delivered declared result only." },
       ];
       const output = JSON.stringify(choices[active.turn++]);
       assert.ok(output, "unexpected Codex turn");
@@ -178,6 +180,13 @@ try {
         assert.equal(terminal.timeoutSeconds, 45, "visible timeout must match the applied task budget");
         assert.equal(terminal.runtimeOptions?.fallback, false);
         assert.ok(terminal.runtimeSessionId);
+        if (!real) assert.equal(active.turn, 2, "three platform calls must fit in one work decision plus final answer");
+        const authorizations = await json(`/api/sessions/${session.id}/permission-authorizations?executionId=${child.id}`);
+        assert.ok(authorizations.some(item => item.action === "code" && item.outcome === "allowed"), "batch shell must retain platform permission audit");
+        const shell = terminal.steps.find(step => step.toolName === "run_shell");
+        assert.equal(shell?.status, "completed");
+        assert.ok(shell.details?.id, "batch shell must have a Runner execution receipt");
+
         const artifacts = await json(`/api/sessions/${session.id}/artifacts`);
         assert.equal(artifacts.length, 1, JSON.stringify(artifacts));
         assert.equal(artifacts[0].logicalName, "result.txt");

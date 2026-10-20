@@ -29,3 +29,47 @@ Custom roles use the existing runtime and permission system; adding one does not
 - [Literature-research tutorial](../domains/literature-research.md): from a question to an inspectable report.
 
 Explicit delegated tasks can opt into the [Codex Specialist runtime](../advanced-setup/configure-specialists.md#codex-specialist-runtime), while retaining platform Workspace, permissions and artifacts.
+
+### Platform decision turns
+
+Codex, Claude Code and ACP use the same structured decision contract:
+
+```json
+{"summary":"Check then run","tools":[{"tool":"run_shell","arguments":"{\"command\":\"pwd\"}"},{"tool":"run_shell","arguments":"{\"command\":\"ls\"}"}]}
+```
+
+`tools` is an ordered array; each `arguments` value is a JSON-encoded object
+matching the named platform tool's schema. All calls are validated before any
+call in that turn executes. Calls run serially, including exclusive tools,
+through the existing platform permission, Runner and audit bindings. Results
+for every call are returned in the next decision's history. Use
+`{"summary":"Final answer","tools":[]}` to finish; a nonempty list always
+requests work and its summary is not a final answer. Native shell/file tools
+remain disabled. The main agent's parallel limits are unchanged.
+
+Malformed JSON, unexpected fields, unknown tools and invalid arguments get
+one correction request within the same decision turn. A second invalid output
+fails explicitly without executing any part of that decision. Execution or
+permission failures do not trigger this correction retry. The former singular
+`tool`/`arguments` envelope is replaced by `tools`; runtime prompts and Codex's
+output schema supply this contract automatically, with no runtime-kind tiers
+or user configuration migration.
+
+To verify the free-form brief / DSV-compatible endpoint improvement without
+provider secrets, run:
+
+```bash
+pnpm build
+pnpm exec tsx --test services/api/src/specialist-runtime/decisions.test.ts
+```
+
+The fixtures ask for two checks in a free-form brief. A valid two-call response
+now succeeds on its first attempt (the former singular schema rejected it).
+Malformed or mixed-intent responses followed by a corrected two-call response
+complete instead of terminating on the first invalid output; two invalid
+responses fail after exactly two attempts, with zero calls dispatched. These
+are deterministic contract/recovery results, not a measured live-provider
+failure rate. For a live DSV comparison, run the same saved brief set and model
+settings before/after, record invalid first responses separately from terminal
+`invalid platform decision` failures, and count correction successes and tool
+calls in the platform audit. Do not enable native tools for either run.

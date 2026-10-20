@@ -11,9 +11,11 @@ const secret = process.env[acp ? 'SD_ACP_TOKEN' : 'ANTHROPIC_API_KEY'];
 if (secret !== 'phase3-fixture-secret' || process.argv.join(' ').includes(secret)) process.exit(12);
 function decision(turn) {
   return [
-    { tool: 'run_shell', arguments: JSON.stringify({ command: `sleep 1; printf ${kind} > result.txt; printf private > scratch.txt` }), summary: 'Write private output' },
-    { tool: 'declare_artifact', arguments: JSON.stringify({ path: 'result.txt', name: `${kind}-result.txt` }), summary: 'Explicit deliverable' },
-    { tool: null, arguments: '{}', summary: `${kind} completed` },
+    { summary: 'Write and declare output in one ordered turn', tools: [
+      { tool: 'run_shell', arguments: JSON.stringify({ command: `sleep 1; printf ${kind} > result.txt; printf private > scratch.txt` }) },
+      { tool: 'declare_artifact', arguments: JSON.stringify({ path: 'result.txt', name: `${kind}-result.txt` }) },
+    ] },
+    { tools: [], summary: `${kind} completed` },
   ][turn];
 }
 if (!acp) {
@@ -31,7 +33,7 @@ if (!acp) {
     if (!message.method) {
       if (message.id === 'native-permission') {
         if ((!message.result || !message.result.outcome || message.result.outcome.outcome !== 'cancelled')) process.exit(17);
-        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'acp-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify({ tool: null, arguments: '{}', summary: 'permission denied' }) } } } });
+        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'acp-fixture-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify({ tools: [], summary: 'permission denied' }) } } } });
         send({ jsonrpc: '2.0', id: permissionPrompt, result: { stopReason: 'end_turn' } });
       }
       continue;

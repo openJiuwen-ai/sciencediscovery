@@ -27,7 +27,7 @@ import { normalizePersistedSubagent } from "../store/subagents.js";
 
 const specialist: Specialist = { id: "custom", name: "Coder", description: "Code", instructions: "Solve it", connectorIds: [], enabledSkillIds: [], createdAt: "old", updatedAt: "new" };
 const request = (overrides: Partial<SpecialistRuntimeRequest> = {}): SpecialistRuntimeRequest => ({ prompt: "Task", signal: new AbortController().signal, credential: async () => "test-secret", maxTurns: 4, tools: [], ...overrides });
-const decision = (tool: string | null = null, args = "{}") => JSON.stringify({ tool, arguments: args, summary: "Finished" });
+const decision = (tool: string | null = null, args = "{}") => JSON.stringify({ tools: tool === null ? [] : [{ tool, arguments: args }], summary: "Finished" });
 const events = (text: string): ThreadEvent[] => [
   { type: "thread.started", thread_id: "codex-thread" },
   { type: "item.completed", item: { type: "agent_message", id: "msg", text } },
@@ -101,7 +101,7 @@ test("adapter maps SDK events, validates tool requests, accumulates usage and ac
 
 async function assertAdapterRejects(stream: ThreadEvent[], pattern: RegExp) {
   await assert.rejects(
-    new CodexSpecialistAdapter(factory([stream])).invoke(request(), async () => {}),
+    new CodexSpecialistAdapter(factory([stream, stream])).invoke(request(), async () => {}),
     error => {
       assert.ok(error instanceof Error);
       assert.match(error.message, pattern);
@@ -146,7 +146,7 @@ test("adapter rejects native tool without credential leakage", async () => {
 test("invalid JSON and schema arguments cannot reach tool execution", async () => {
   const tool: AgentTool = { name: "test", label: "Test", description: "Test", parameters: Type.Object({ path: Type.String() }), execute: async () => { assert.fail("must not execute"); } };
   for (const args of ["{", '{"path":1}']) {
-    await assert.rejects(new CodexSpecialistAdapter(factory([events(decision("test", args))])).invoke(request({ tools: [tool] }), async () => {}), /Invalid platform tool arguments/);
+    await assert.rejects(new CodexSpecialistAdapter(factory([events(decision("test", args)), events(decision("test", args))])).invoke(request({ tools: [tool] }), async () => {}), /invalid platform tool arguments/);
   }
 });
 
@@ -203,7 +203,7 @@ test("existing Subagent AgentRun receives normalized events and executes through
     let executed = false;
     const createAgent = codexAgentFactory({ maxTurns: 3, credential: async (_signal, need) => { await need(); return "test-secret"; },
       onRuntimeEvent: async e => { runtimeEvents.push(e); },
-      adapter: new CodexSpecialistAdapter(factory([events(decision("run_shell", '{"command":"echo output"}')), events(decision("declare_artifact", '{"path":"result.txt"}')), events(decision())])) });
+      adapter: new CodexSpecialistAdapter(factory([events(JSON.stringify({ summary: "Write then declare", tools: [{ tool: "run_shell", arguments: '{"command":"echo output"}' }, { tool: "declare_artifact", arguments: '{"path":"result.txt"}' }] })), events(decision())])) });
     const handle = runSubagentTask({ bindings: { createAgent, observer: e => { observed.push(e); }, workspace: {
       config: { baseUrl: "http://unused.test", dataDir: root, model: "unused" }, enabledConnectorIds: [],
       workspaceRoot: store.agentWorkspacePath(session.id, child.id),

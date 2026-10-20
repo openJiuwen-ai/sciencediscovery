@@ -25,7 +25,7 @@ test("Runner outer sandbox and inner Codex full access complete a provider turn 
     const offered = JSON.stringify(body.tools);
     assert.doesNotMatch(offered, /"(?:exec_command|shell_command|shell|local_shell|write_stdin)"/);
     calls++;
-    const output = JSON.stringify({ summary: "Local Codex result", tool: null, arguments: "{}" });
+    const output = JSON.stringify({ summary: "Local Codex result", tools: [] });
     const message = { id: "msg_fixture", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: output, annotations: [] }] };
     res.writeHead(200, { "content-type": "text/event-stream" });
     const send = (event: object) => res.write(`data: ${JSON.stringify(event)}\n\n`);
