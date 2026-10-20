@@ -45,7 +45,21 @@
  * the card bleeds off the right edge of the viewport with no scrollbar.
  * Capping the track keeps the dialog — and everything in it — on screen. */
 .artifact-modal-backdrop { z-index: var(--z-overlay-low); padding: 28px; grid-template-columns: minmax(0, 100%); }
-.artifact-modal-panel { display: flex; flex-direction: column; width: min(1080px, 100%); max-height: calc(100vh - 56px); }
+/* A content viewer, not a decision dialog: sized like the CSV workspace and the
+ * molecule window, one step larger. The height is fixed so the window does not
+ * resize with each file, and the 80px total margin keeps the dimmed page (and
+ * its click-outside close) visible around it. Evidence and node-detail viewers
+ * share this shell; at 900px and below responsive.css makes it full viewport. */
+.artifact-modal-panel {
+  /* What one preview can use below the header (~110px), tabs (~31px) and body
+   * padding (54px), with ~45px left for a preview's own sub-tabs or notice. */
+  --artifact-viewer-height: min(960px, calc(100vh - 80px));
+  --artifact-viewer-content-height: max(240px, calc(var(--artifact-viewer-height) - 240px));
+  display: flex;
+  flex-direction: column;
+  width: min(1600px, calc(100vw - 80px));
+  height: var(--artifact-viewer-height);
+}
 .artifact-modal-header { padding: 22px 26px; border-bottom: 1px solid var(--border); }
 .artifact-modal-panel > .artifact-mode-tabs { padding-inline: 26px; }
 .artifact-modal-header h2 { margin: 3px 0 0; color: var(--text-strong); font-size: 20px; }
@@ -74,7 +88,19 @@
 .version-picker { display: flex; align-items: center; gap: 6px; }
 .version-picker > span { color: var(--muted); font-size: 11px; }
 .version-picker select { min-width: 140px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 6px; font-size: 11px; }
-.artifact-modal-body { overflow-y: auto; padding: 22px 26px 32px; }
+.artifact-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 22px 26px 32px; }
+/* The previews' own caps were sized for the old ~1080px card. In the viewer each
+ * scroll region stops where the body runs out, so a long file scrolls inside its
+ * frame (table headers stay sticky) instead of leaving the window half empty. */
+.artifact-modal-panel :is(.manuscript-preview, .artifact-source-preview, .dataset-table-wrapper, .notebook-cells) { max-height: var(--artifact-viewer-content-height); }
+.artifact-modal-panel .report-frame { height: var(--artifact-viewer-content-height); }
+/* Figures keep their annotation row, and structures their rotation sliders, in view. */
+.artifact-modal-panel .annotatable-figure img { max-height: calc(var(--artifact-viewer-content-height) - 48px); }
+.artifact-modal-panel .structure-viewer svg { max-height: calc(var(--artifact-viewer-content-height) - 64px); }
+/* Tables, code, images and plots take the window width; body copy keeps a
+ * readable measure rather than running 1500px lines. */
+.artifact-modal-panel .markdown-body > :is(p:not(:has(img, .markdown-image-state)), ul, ol, blockquote),
+.artifact-modal-panel :is(.evidence-content-text, .evidence-source-paper-abstract) { max-width: 76ch; }
 .version-hint { margin-left: auto; color: var(--muted); font-size: 10px; }
 .parent-link { border: 0; background: none; color: var(--accent-ink); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; text-decoration-style: dotted; }
 .parent-link:hover { text-decoration-style: solid; }

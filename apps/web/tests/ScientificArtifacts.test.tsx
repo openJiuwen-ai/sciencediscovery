@@ -22,6 +22,9 @@ import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, Sc
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { ApiClient } from "../src/api.js";
+import { DetailModal } from "../src/DetailModal.js";
+import { EvidenceModal } from "../src/EvidenceModal.js";
 import { findArtifactNodeInGraph, findCodeNodeInGraph } from "../src/MemoryGraphExplorer.js";
 import {
   ArtifactDownloadButton,
@@ -121,6 +124,43 @@ test("artifact preview stylesheet keeps the dialog on screen and wraps unbreakab
   assert.match(dialogs, /\.artifact-modal-backdrop \{[^}]*grid-template-columns: minmax\(0, 100%\)/);
   const artifacts = readFileSync(new URL("../src/styles/artifacts.css", import.meta.url), "utf8");
   assert.match(artifacts, /\.artifact-source-preview \{ overflow-wrap: anywhere; \}/);
+});
+
+// Issue #309: the artifact viewer is a content window, not a decision dialog.
+// On a large screen it is 1600×960, otherwise the viewport less 80px; at 900px
+// and below the existing full-viewport rule still wins. Body copy keeps a
+// readable measure while previews fill the window, and the small dialogs keep
+// their own sizes.
+test("artifact viewer stylesheet sizes a large content window with readable body copy", () => {
+  const dialogs = readFileSync(new URL("../src/styles/dialogs.css", import.meta.url), "utf8");
+  const responsive = readFileSync(new URL("../src/styles/responsive.css", import.meta.url), "utf8");
+  assert.match(dialogs, /\.artifact-modal-panel \{[^}]*--artifact-viewer-height: min\(960px, calc\(100vh - 80px\)\);[^}]*width: min\(1600px, calc\(100vw - 80px\)\);\s*height: var\(--artifact-viewer-height\);/);
+  assert.doesNotMatch(dialogs, /min\(1080px/);
+  assert.match(dialogs, /\.artifact-modal-body \{ flex: 1 1 auto; min-height: 0; overflow-y: auto;/);
+  assert.match(dialogs, /\.artifact-modal-panel :is\(\.manuscript-preview, \.artifact-source-preview, \.dataset-table-wrapper, \.notebook-cells\) \{ max-height: var\(--artifact-viewer-content-height\); \}/);
+  assert.match(dialogs, /\.artifact-modal-panel \.markdown-body > :is\(p:not\(:has\(img, \.markdown-image-state\)\), ul, ol, blockquote\),[^{]*\{ max-width: 76ch; \}/);
+  assert.match(responsive, /@media \(max-width: 900px\)[\s\S]*?\.document-panel, \.artifact-modal-panel \{ width: 100%; min-height: 100vh; max-height: 100vh;/);
+  assert.match(dialogs, /\.config-panel \{ width: min\(680px, 100%\);/);
+  assert.match(dialogs, /\.system-config-dialog \{ width: min\(80vw, 1600px\); height: min\(80vh, 1000px\);/);
+  assert.match(dialogs, /\.creation-dialog \{ width: min\(680px, 100%\);/);
+  assert.match(dialogs, /\.deletion-dialog \{ width: min\(520px, 100%\);/);
+});
+
+test("evidence and node-detail viewers open in the artifact viewer's window", () => {
+  const detail = renderToStaticMarkup(createElement(DetailModal, {
+    children: "body",
+    eyebrow: "Workspace file provenance",
+    onClose: () => undefined,
+    title: "report.md",
+  }));
+  assert.match(detail, /class="artifact-modal-panel" role="dialog"/);
+  const evidence = renderToStaticMarkup(createElement(EvidenceModal, {
+    client: {} as ApiClient,
+    evidenceId: "ce56d339-0b41-4e79-ab39-32fb141fab5e",
+    onClose: () => undefined,
+    sessionId: "34d745f1-3a74-4e31-9347-6a3993746fe8",
+  }));
+  assert.match(evidence, /class="artifact-modal-panel" role="dialog"/);
 });
 
 test("dataset table replaces an empty grid with an explicit no-rows explanation", () => {

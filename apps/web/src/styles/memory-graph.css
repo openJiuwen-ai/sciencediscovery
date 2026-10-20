@@ -324,8 +324,8 @@
 /* Header title: one line, ellipsis on overflow; full content on hover via
    the native title attribute (see EvidenceModal titleText/titleHover). The
    header is not a flex container in the standalone panel, so constrain the
-   width here directly (the panel is ~1080px; leave room for the close
-   button on the right). */
+   width here directly. The viewer is up to 1600px wide; the cap keeps a long
+   claim to a scannable title and leaves room for the close button. */
 .evidence-title { display: block; max-width: min(560px, 60vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* --- Node detail panels (per-label semantic rendering) -------------------- */
