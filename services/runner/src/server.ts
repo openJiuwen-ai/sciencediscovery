@@ -67,7 +67,7 @@ import {
   verifyExecutionSignature,
 } from "./request-auth.js";
 import { resolveEgressInterpreter } from "./egress-bridge.js";
-import { EgressGatewayRegistry } from "./egress-gateway.js";
+import { assertUnixSocketPathFits, EgressGatewayRegistry } from "./egress-gateway.js";
 import { SECCOMP_BASELINE_VERSION } from "./seccomp.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { collectRunnerResources } from "./resources.js";
@@ -553,7 +553,7 @@ export function createRunnerServer(
           platform: process.platform,
           runnerVersion: RUNNER_VERSION,
           sandbox: executorSandboxKind(config),
-          sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config)),
+          sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config), config.dataDir),
           scientificEnvs: environmentStore?.capability ?? DISABLED_SCIENTIFIC_ENVS,
           seccompBaseline: executorSandboxKind(config) === "bubblewrap" ? SECCOMP_BASELINE_VERSION : null,
           status: "ok",
@@ -1085,7 +1085,19 @@ export function createRunnerServer(
  * the process-wide interpreter probe: no subprocess per request, and no data
  * directory writes. Staging the bridge script stays on the launch path.
  */
-async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt"): Promise<SandboxNetworkCapability> {
+async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt", dataDir: string): Promise<SandboxNetworkCapability> {
+  try {
+    // Every egress-enabled execution needs this exact socket layout. Check it
+    // before the interpreter probe so /health never advertises a mode whose
+    // first command would fail solely because the data directory is too deep.
+    assertUnixSocketPathFits(new EgressGatewayRegistry(dataDir).socketPath("capability"));
+  } catch (error) {
+    return {
+      available: false,
+      modes: ["none"],
+      unavailableReason: error instanceof Error ? error.message : "The sandbox egress socket path is unavailable",
+    };
+  }
   if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist", "open"] };
   try {
     await resolveEgressInterpreter();
@@ -1198,7 +1210,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const outputLabel = config.maxOutputBytes === 0
     ? "unlimited (no truncation)"
     : `${config.maxOutputBytes} bytes (truncate)`;
-  const sandboxNetwork = await sandboxNetworkCapability(sandbox);
+  const sandboxNetwork = await sandboxNetworkCapability(sandbox, config.dataDir);
   console.log(
     `Sandbox: ${sandbox} (${RUNNER_VERSION}); sandbox network access: default none`
     + `${sandboxNetwork.available ? ", domain-allowlist and open available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
