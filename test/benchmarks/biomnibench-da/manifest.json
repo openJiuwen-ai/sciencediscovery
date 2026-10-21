@@ -1,0 +1,3931 @@
+{
+  "schema_version": 1,
+  "repository": "phylobio/BiomniBench-DA",
+  "revision": "e1c8ca5e11a620087bc48d97888eb69176a1f235",
+  "scope": "public-50",
+  "license": "CC-BY-4.0; underlying datasets retain their original terms",
+  "tasks": [
+    {
+      "id": "da-1-3",
+      "title": "Public analysis da-1-3",
+      "files": [
+        {
+          "path": "environment/data/clinical.xlsx",
+          "bytes": 26941,
+          "oid": "14b03493fee2f1db801c0980c0dd4dcaf633febb"
+        },
+        {
+          "path": "environment/data/GSE236581_barcodes.tsv",
+          "bytes": 27122075,
+          "oid": "8d21658afada3bebf979af7cfcef71cfe87a9175",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE236581_counts.mtx",
+          "bytes": 19178745260,
+          "oid": "b5488a09e5716ab6ac011e9f556c1427bfe0333b",
+          "lfs_pointer_bytes": 136
+        },
+        {
+          "path": "environment/data/GSE236581_CRC-ICB_metadata.txt",
+          "bytes": 108122935,
+          "oid": "df1751bc871fcba06fe3f05be623ab07485c4b3d",
+          "lfs_pointer_bytes": 134
+        },
+        {
+          "path": "environment/data/GSE236581_features.tsv",
+          "bytes": 1182020,
+          "oid": "7c76543cb91d9fd75c0770c3344582f2f636b3af"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 517,
+          "oid": "37f63abb51825560e9e494aa7e1b915606ba62de"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5329,
+          "oid": "5848cd26b857e8372620aac263c07e43fb7ad1a4"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 602,
+          "oid": "0f935efb167ba01743fb825a2ff577141bd0c639"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 14494,
+          "oid": "517b3497042a7c6155c773f4e1c96d290a1f97e2"
+        }
+      ]
+    },
+    {
+      "id": "da-1-4",
+      "title": "Public analysis da-1-4",
+      "files": [
+        {
+          "path": "environment/data/clinical.xlsx",
+          "bytes": 26941,
+          "oid": "14b03493fee2f1db801c0980c0dd4dcaf633febb"
+        },
+        {
+          "path": "environment/data/GSE236581_barcodes.tsv",
+          "bytes": 27122075,
+          "oid": "8d21658afada3bebf979af7cfcef71cfe87a9175",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE236581_counts.mtx",
+          "bytes": 19178745260,
+          "oid": "b5488a09e5716ab6ac011e9f556c1427bfe0333b",
+          "lfs_pointer_bytes": 136
+        },
+        {
+          "path": "environment/data/GSE236581_CRC-ICB_metadata.txt",
+          "bytes": 108122935,
+          "oid": "df1751bc871fcba06fe3f05be623ab07485c4b3d",
+          "lfs_pointer_bytes": 134
+        },
+        {
+          "path": "environment/data/GSE236581_features.tsv",
+          "bytes": 1182020,
+          "oid": "7c76543cb91d9fd75c0770c3344582f2f636b3af"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 517,
+          "oid": "37f63abb51825560e9e494aa7e1b915606ba62de"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5309,
+          "oid": "fdde3a4a2945cbf59c8ff9564eb988109436cab2"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 605,
+          "oid": "398b31d59ea0ac0332bfc98723183fee136e1dad"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 11703,
+          "oid": "55c7ab9d19dbfd57ebd281a1df0ed9c9d8593cef"
+        }
+      ]
+    },
+    {
+      "id": "da-3-4",
+      "title": "Public analysis da-3-4",
+      "files": [
+        {
+          "path": "environment/data/supplementary_tables.xls",
+          "bytes": 15276032,
+          "oid": "26ee32b4a078cf0d629255d529b7dd5ada202b30",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 341,
+          "oid": "af6510c80b2e62b218e174b74a3806d93a324f73"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5462,
+          "oid": "cd9bcbe66ec33f38d31f7c537c5256beda069d74"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 603,
+          "oid": "b3a1b50ee9af71b6b816daea732bbd6d4022040b"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6653,
+          "oid": "7b40f0dc9605222a2aa23323f14f65d726ec6983"
+        }
+      ]
+    },
+    {
+      "id": "da-3-5",
+      "title": "Public analysis da-3-5",
+      "files": [
+        {
+          "path": "environment/data/CGAN_mmc3.xlsx",
+          "bytes": 4907673,
+          "oid": "3887a1681c8d79439928042e582721d644deee3e",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Hodis_mmc2.txt",
+          "bytes": 56220306,
+          "oid": "b611079197286ceb7e5689244fc1808d74b0f358",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/supplementary_tables.xls",
+          "bytes": 15276032,
+          "oid": "26ee32b4a078cf0d629255d529b7dd5ada202b30",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 419,
+          "oid": "3ec46a6acf49be351c481ee3c1ccd5878eb78fc1"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6336,
+          "oid": "20eb809938f93c1bdf584b9ff8a7280f1b88877f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 605,
+          "oid": "57d76f53c2224cf33e406b3e4d787e898802aeab"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7604,
+          "oid": "a28a499ec7d2d6a2ee50e38c21bc8fba1b12f1c6"
+        }
+      ]
+    },
+    {
+      "id": "da-4-1",
+      "title": "Public analysis da-4-1",
+      "files": [
+        {
+          "path": "environment/data/GSE243013_NSCLC_immune_scRNA_metadata.csv.gz",
+          "bytes": 40701210,
+          "oid": "a8f520338ec7e2a14ba53acaad0237925aad5db2",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 366,
+          "oid": "1c874a8b3b5f9877214e41f31020fade1ef5fe48"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4672,
+          "oid": "463b94fcd3051cbb13df818a5ec9eadbee86a9e9"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 596,
+          "oid": "45a9bf8db62f44e36f31b85936097516da3b8073"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8339,
+          "oid": "85ba01e36df3e4d16b7139244dba9c6f8f3f2061"
+        }
+      ]
+    },
+    {
+      "id": "da-4-6",
+      "title": "Public analysis da-4-6",
+      "files": [
+        {
+          "path": "environment/data/mmc5.csv",
+          "bytes": 134173,
+          "oid": "83cf44935766ad583dde0e49a060fd334e249a42"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 330,
+          "oid": "a08bff4d2a3d0a2c2a0aacb810ae71809d828d34"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5158,
+          "oid": "3a05e0e10fe8e4686286330f8f31d4bcf6b1a56f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 605,
+          "oid": "e9110dddeebbd1c70351287fc12d5fec5e99dba5"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6495,
+          "oid": "c45e5c4234aabbf89bad4497c999b6fd33dc5bdb"
+        }
+      ]
+    },
+    {
+      "id": "da-4-7",
+      "title": "Public analysis da-4-7",
+      "files": [
+        {
+          "path": "environment/data/GSE243013_T_with_TCR_annotation.csv.gz",
+          "bytes": 15940803,
+          "oid": "741f02977fbfe45ed22dad8a80577d1b84144d0d",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/mmc1.csv",
+          "bytes": 45522,
+          "oid": "eeb04a78e1de47a23f987d9e4d05681fc51fc07d"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 390,
+          "oid": "44b137c461fa8a7c89b990cee28a679cf181506e"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4779,
+          "oid": "ec3a36b1735c23b5baf8ef508fe80d6c045f7cc4"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 600,
+          "oid": "38fc7b6c8bf7760254916b6bbcea93154cb7e639"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8109,
+          "oid": "e13598af95380e8602500749ef31df3379b93dd8"
+        }
+      ]
+    },
+    {
+      "id": "da-5-1",
+      "title": "Public analysis da-5-1",
+      "files": [
+        {
+          "path": "environment/data/mmc2.xlsx",
+          "bytes": 360530,
+          "oid": "ff703e39d8963444413282177836e699c6d091e1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/mmc3.xlsx",
+          "bytes": 1670368,
+          "oid": "4e7935181885c112a9f1fd9fb59d6cfcdfeaea18",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 363,
+          "oid": "ebf3fd32996e6932015cda87002de63d4953f32d"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6159,
+          "oid": "a3e4ae8c9bad36f74d7c1fa9e160682f239f61ac"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 610,
+          "oid": "9196d6c81210b5c5b41310a1f75efdf6471a3e24"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6874,
+          "oid": "a9f4cf9d070695014a13a491fd9038ea4405f6dc"
+        }
+      ]
+    },
+    {
+      "id": "da-5-3",
+      "title": "Public analysis da-5-3",
+      "files": [
+        {
+          "path": "environment/data/mmc2.xlsx",
+          "bytes": 361506,
+          "oid": "1cd294ea1ad5535ec7c9f83e17e3c4f8e55a0d02",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/mmc4.xlsx",
+          "bytes": 2097966,
+          "oid": "2a409de8bcad279e0b4c4231da94f90c0ec5e30b",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 363,
+          "oid": "f3774ac420b26095cfd85872e0cda5368eaa1f52"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6501,
+          "oid": "e7ac8fc1a8a3c14ed4c759d09f65e806ae59502d"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 608,
+          "oid": "ee52a37b77add0c1ffbdc5ff9bfd28c90edd61f8"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7132,
+          "oid": "837f0411ae0ba5e052bb7b032ef3293e4691be6d"
+        }
+      ]
+    },
+    {
+      "id": "da-6-2",
+      "title": "Public analysis da-6-2",
+      "files": [
+        {
+          "path": "environment/data/paper_deg.xlsx",
+          "bytes": 34845424,
+          "oid": "16f50b27628740b7e61725203b02fe43dd735137",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 336,
+          "oid": "8462e5e917243bf99a4695ee96148904325eecdd"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4868,
+          "oid": "2a4bcbb2e3992fa376473b9760e3c877ef603225"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 613,
+          "oid": "7b7353d7d35a6daf76824c5ab85d506ddc020d77"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6081,
+          "oid": "f75523570890b2447f68e7beca4788d689cad827"
+        }
+      ]
+    },
+    {
+      "id": "da-6-5",
+      "title": "Public analysis da-6-5",
+      "files": [
+        {
+          "path": "environment/data/paper_deg.xlsx",
+          "bytes": 34845424,
+          "oid": "16f50b27628740b7e61725203b02fe43dd735137",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 336,
+          "oid": "8462e5e917243bf99a4695ee96148904325eecdd"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4798,
+          "oid": "95171f5f27ad059fca1785b98d5a5f38a69416e7"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 616,
+          "oid": "b6408c2bfa0c107e27edc165b401e97285df66dd"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5678,
+          "oid": "e7bbcdf18e54086394d0e6575186666b6e530a65"
+        }
+      ]
+    },
+    {
+      "id": "da-8-1",
+      "title": "Public analysis da-8-1",
+      "files": [
+        {
+          "path": "environment/data/data_cgm.csv",
+          "bytes": 1234124,
+          "oid": "89c5924e6e159b40bc3d1109a6b7286b6658e428"
+        },
+        {
+          "path": "environment/data/data_meta.csv",
+          "bytes": 8036,
+          "oid": "b2a622e860daf283d2b34c09215dc964ea9a8c2e"
+        },
+        {
+          "path": "environment/data/data_metabolomics.csv",
+          "bytes": 1545177,
+          "oid": "4a3cd3143c8b97b093f8335a351329b814ac1aca"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 412,
+          "oid": "e58cb4d65b817c52365e53ebc99bc61201babd25"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5749,
+          "oid": "82c481368c96eada213873dacee54fd5df3644d9"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 606,
+          "oid": "d6f47942ed23ee0dbf053afb6b69556429772650"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 11298,
+          "oid": "bdfcbc3ae8c2079646c3145f97cf116685032ee4"
+        }
+      ]
+    },
+    {
+      "id": "da-8-2",
+      "title": "Public analysis da-8-2",
+      "files": [
+        {
+          "path": "environment/data/data_cgm.csv",
+          "bytes": 1234124,
+          "oid": "89c5924e6e159b40bc3d1109a6b7286b6658e428"
+        },
+        {
+          "path": "environment/data/data_meta.csv",
+          "bytes": 8036,
+          "oid": "b2a622e860daf283d2b34c09215dc964ea9a8c2e"
+        },
+        {
+          "path": "environment/data/data_olink.csv",
+          "bytes": 4535478,
+          "oid": "13c09a53e7967bf6ef64df34a8c06866a65150d5"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 405,
+          "oid": "699d913ae9e68ce58ac81fbb57da8ed484115ded"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5261,
+          "oid": "5ee0b485c1720f9f0d03e217bbecc2f77636d336"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 608,
+          "oid": "d6aa97bfa9fed8a15b8bba6aab7d05b6ae355dcf"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6650,
+          "oid": "31516b592ee4ac1aa69eb098ea3d066d98617ec8"
+        }
+      ]
+    },
+    {
+      "id": "da-8-3",
+      "title": "Public analysis da-8-3",
+      "files": [
+        {
+          "path": "environment/data/data_cgm.csv",
+          "bytes": 1234124,
+          "oid": "89c5924e6e159b40bc3d1109a6b7286b6658e428"
+        },
+        {
+          "path": "environment/data/data_lipids.csv",
+          "bytes": 1291546,
+          "oid": "d83e1c65b881e10114a94af49fe9f9f69dc123b7"
+        },
+        {
+          "path": "environment/data/data_meta.csv",
+          "bytes": 8036,
+          "oid": "b2a622e860daf283d2b34c09215dc964ea9a8c2e"
+        },
+        {
+          "path": "environment/data/data_metabolomics.csv",
+          "bytes": 1545177,
+          "oid": "4a3cd3143c8b97b093f8335a351329b814ac1aca"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 449,
+          "oid": "b67748bc88d7776863ebfcf29edb0734308afe3e"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5646,
+          "oid": "90c10853081e703266beede201ddca2a51d08ea1"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 612,
+          "oid": "8a647df8a1d26b85b7eb08b963f7e702557b2e4f"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8821,
+          "oid": "aa64c230321d6037ea092be991eb8d7e4b135d32"
+        }
+      ]
+    },
+    {
+      "id": "da-9-1",
+      "title": "Public analysis da-9-1",
+      "files": [
+        {
+          "path": "environment/data/NatureMed_CyTOF_metadata.csv",
+          "bytes": 25344,
+          "oid": "69ef1ba0d2a453b9bfc39be20d4f1203f9520ce1"
+        },
+        {
+          "path": "environment/data/NatureMed_CyTOF_select_cell_populations.csv",
+          "bytes": 93000,
+          "oid": "abbf0652bcd27e916460ab61536ac4ebd64765c8"
+        },
+        {
+          "path": "environment/data/PICI0002_ph2_clinical.csv",
+          "bytes": 26560,
+          "oid": "46ae77695883ae0c69a255b05989b3894ff17825"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 463,
+          "oid": "a1a9936f36ebdbbb9ed58e3ebed8dc2f8b75b841"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5469,
+          "oid": "4cf3295f4df2cf076e77b774e37ba8157d09a9fa"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 605,
+          "oid": "8f344b1ba099896b030029df7d9e5355fb55db8d"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7408,
+          "oid": "80188f65214c00f39a1e4277084cf8e20ad0db20"
+        }
+      ]
+    },
+    {
+      "id": "da-9-7",
+      "title": "Public analysis da-9-7",
+      "files": [
+        {
+          "path": "environment/data/NatureMed_CyTOF_metadata.csv",
+          "bytes": 25344,
+          "oid": "69ef1ba0d2a453b9bfc39be20d4f1203f9520ce1"
+        },
+        {
+          "path": "environment/data/NatureMed_CyTOF_select_cell_populations.csv",
+          "bytes": 93000,
+          "oid": "abbf0652bcd27e916460ab61536ac4ebd64765c8"
+        },
+        {
+          "path": "environment/data/NatureMed_CyTOF_select_MSI.csv",
+          "bytes": 29343,
+          "oid": "77d7ff58e6251f4576530b3a0488b3e72dd56cc7"
+        },
+        {
+          "path": "environment/data/NatureMed_Olink_metadata.csv",
+          "bytes": 17981,
+          "oid": "982ff960009c68e411520bf2ef216f46e1194901"
+        },
+        {
+          "path": "environment/data/NatureMed_Olink_select_proteins.csv",
+          "bytes": 199709,
+          "oid": "b6998a4e72c34f3f76007639030be1c9cc9b13cb"
+        },
+        {
+          "path": "environment/data/PICI0002_ph2_clinical.csv",
+          "bytes": 26560,
+          "oid": "46ae77695883ae0c69a255b05989b3894ff17825"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 621,
+          "oid": "ee6cbd8acd386cab5738c34bc6190e9096641aba"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5890,
+          "oid": "1a7a6f45a8b7d3915f3074d9e0f8aed71aee7689"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 607,
+          "oid": "2ed1784b788391160e0f364b3824f8b8eb71a26c"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7455,
+          "oid": "f6bab78a9f8dd6d5c77922cbcb912c1ec9ba6bfc"
+        }
+      ]
+    },
+    {
+      "id": "da-10-1",
+      "title": "Public analysis da-10-1",
+      "files": [
+        {
+          "path": "environment/data/idr_ranges.xlsx",
+          "bytes": 1067490,
+          "oid": "4a3643a2c32740181d171362232239906d54dbd5",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/sequence_prediction_filtered.xlsx",
+          "bytes": 21342806,
+          "oid": "f2c95998c69df0fbe13af98d307ce1c37c99a471",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 392,
+          "oid": "9895685787c7dbd490c0bdbf5d9e6c9d3fee118d"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5064,
+          "oid": "571787517a7500e9b13639e640fc4308252c2bcb"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 613,
+          "oid": "ef1c7b4517df3820f0ca23782f39b9522630c91e"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 20042,
+          "oid": "42655c0aaedd0b5228ae63d69d060611b3693cd0"
+        }
+      ]
+    },
+    {
+      "id": "da-10-3",
+      "title": "Public analysis da-10-3",
+      "files": [
+        {
+          "path": "environment/data/h_combined_with_flags.xlsx",
+          "bytes": 1040332,
+          "oid": "5b510860f8d5047afc8f2680f94187150bc63a2d",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/List_of_proteins_for_comparing_MLO_enrichment.xlsx",
+          "bytes": 208157,
+          "oid": "082b326732c094d8b7f5572deb336c54a4c11119",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/sequence_prediction.xlsx",
+          "bytes": 45375047,
+          "oid": "8936c784170d276d9ee68b3deb62872bc308b53d",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 466,
+          "oid": "770741061cf95ba577054d6df50ae1004a90dde1"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5937,
+          "oid": "93dbaed5ef5f0ac1edadf31ee6a18185e62e7495"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 613,
+          "oid": "9caab33cb98aa0464d92c6ba80a28353402db80f"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 13104,
+          "oid": "2f9f9ad2ecce6d1657cfe65d114d188bd102e2b2"
+        }
+      ]
+    },
+    {
+      "id": "da-11-1",
+      "title": "Public analysis da-11-1",
+      "files": [
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820724_MS01092019_counts.txt.gz",
+          "bytes": 10657215,
+          "oid": "53dfa6b2262ade13f8afc992f878ce4be6599cc1",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820725_MS08162018_counts.txt.gz",
+          "bytes": 9872472,
+          "oid": "152c75f255098c4da2820fda760b41521a0fd43d",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820726_MS09102018_counts.txt.gz",
+          "bytes": 12332649,
+          "oid": "741b39c527b94cdc5196deb684fa20608a8c0b74",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820727_MS11132018_counts.txt.gz",
+          "bytes": 12118557,
+          "oid": "e289d98056bd592e59fcc223c55734d38a36ebb9",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820728_MS658_counts.txt.gz",
+          "bytes": 10633692,
+          "oid": "417b5666ae7eb821655711ec12a2a9def5b2eb8d",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820729_MS9020_counts.txt.gz",
+          "bytes": 9757930,
+          "oid": "8cbe9a4530a272d6777a9823a8d400538c9256bf",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820730_HC11_counts.txt.gz",
+          "bytes": 8997435,
+          "oid": "94bbb613294c1151d9608a545d2cb36fef662150",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820731_HC12_counts.txt.gz",
+          "bytes": 10269329,
+          "oid": "f0deef6349ceb42204655675a1d0777af8e4d43d",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820732_HC13_counts.txt.gz",
+          "bytes": 10808431,
+          "oid": "d3acbc1b6e5c098cf61de45de2589d1b9af2e0e6",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE193442_RAW/GSM5820733_HC14_counts.txt.gz",
+          "bytes": 10808967,
+          "oid": "9a19cc6bccea42bbbbefd1ab712986a802a8891c",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 350,
+          "oid": "8a72affbb4f03c5a959d4fb5720c2ae3d56599d2"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5037,
+          "oid": "80052fdce06d532ceac8f65a2b0e03ca00feeb91"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 612,
+          "oid": "b4b6aa501a2e26a4e7357cf508ea3c6f1bd77c3f"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 11062,
+          "oid": "4ff19b26da3ec45393c231319fba4d103764270e"
+        }
+      ]
+    },
+    {
+      "id": "da-12-2",
+      "title": "Public analysis da-12-2",
+      "files": [
+        {
+          "path": "environment/data/GSEA_gmt.gmt",
+          "bytes": 48690,
+          "oid": "b2a0b49fb07b7596d5137208bdfbce9d067545dc"
+        },
+        {
+          "path": "environment/data/TS7.xlsx",
+          "bytes": 226797,
+          "oid": "80aa0cc86e915094b5314fe5d72607843813645d",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 364,
+          "oid": "2a5649f79c49ba90ad89ff85e6b6bc0c8d1d0881"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4628,
+          "oid": "9de1fe4526937fe765ad22e3489c9d691ac66ec1"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 607,
+          "oid": "234264a499670065e340a478f789671f592e597c"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6968,
+          "oid": "dd4b2a83c3a5bbb6824e456f98a6c56c4b416a33"
+        }
+      ]
+    },
+    {
+      "id": "da-12-4",
+      "title": "Public analysis da-12-4",
+      "files": [
+        {
+          "path": "environment/data/TCGA_microbiota-01A.csv",
+          "bytes": 365382,
+          "oid": "e93e011efabac36a03906d18f1b5d149b886b7a3"
+        },
+        {
+          "path": "environment/data/TCGA_RNA-01A.csv",
+          "bytes": 37502767,
+          "oid": "0b584b464bd0ed3f7b3b15f37487ddad02368fec",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 383,
+          "oid": "a8cf8279161cf2f5d2217d60a7ddac81d816f963"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4445,
+          "oid": "5fe2b7b36e7cb0eeb5cf3abd1b17a77cb71d444d"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 605,
+          "oid": "f6d3c8740c68685a9833f0a504e9598bdbbbd465"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 3923,
+          "oid": "10a1ed04d2c46918b5f7112bf32f1aa055a2d872"
+        }
+      ]
+    },
+    {
+      "id": "da-13-1",
+      "title": "Public analysis da-13-1",
+      "files": [
+        {
+          "path": "environment/data/GAHT_pregnancy_metadata_SDRF.tsv",
+          "bytes": 11768,
+          "oid": "257e87baa11d34fb5242588af3d4df5a4ce338f1"
+        },
+        {
+          "path": "environment/data/Olink_CPA_SPIRO_GAHT_and_pregnancy.npx.csv",
+          "bytes": 106225158,
+          "oid": "7e9cec4aebb791c3ef3bd7fda0954735e742d6c5",
+          "lfs_pointer_bytes": 134
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 418,
+          "oid": "34c456e7310821677c9ecad7d806d96031dd2990"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5403,
+          "oid": "b59aceb46adc5fcd3f5f414e76b05d623648a5c5"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 611,
+          "oid": "03f6a22343f5bd7c78c9491a1c51a935e38a2974"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7408,
+          "oid": "b32a97a7bdfb6c0560db14af8b5e898c00d87c46"
+        }
+      ]
+    },
+    {
+      "id": "da-13-3",
+      "title": "Protein–body composition associations",
+      "files": [
+        {
+          "path": "environment/data/41591_2025_4023_MOESM2_ESM(Supplementary Table 4).csv",
+          "bytes": 295386,
+          "oid": "19ea87551b23b83220c4f2fa483489c6ae9399a9"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 322,
+          "oid": "93f46e1e81490331a4915a4ef4aeb62161f4d529"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4780,
+          "oid": "387cea6de4a2f5ce61176277be4e75119c9b6ea9"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 607,
+          "oid": "60b62693cf9be3d0bfa168d88c5596b6eeb62ecf"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8932,
+          "oid": "b54c2480ba3da6f95a64fa2a49bd8aa9bdd76082"
+        }
+      ]
+    },
+    {
+      "id": "da-13-5",
+      "title": "Public analysis da-13-5",
+      "files": [
+        {
+          "path": "environment/data/41591_2025_4023_MOESM2_ESM(Supplementary Table 1).csv",
+          "bytes": 328818,
+          "oid": "3e98e7c7497f9024b86c7f3358ca0fc68dee3335"
+        },
+        {
+          "path": "environment/data/41591_2025_4023_MOESM2_ESM(Supplementary Table 5).csv",
+          "bytes": 468182,
+          "oid": "17bbdc80fbabeb420fe4d9bcd640d806cfb7d052"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 322,
+          "oid": "93f46e1e81490331a4915a4ef4aeb62161f4d529"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5068,
+          "oid": "5917659da1f13cb88ac45062f7b090179bd8577f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 613,
+          "oid": "71cd5f7851b936452c4b4345f4825bbc3579a6a4"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10387,
+          "oid": "2ea5c08eb7926cd5f765728962f03d089fa9a47c"
+        }
+      ]
+    },
+    {
+      "id": "da-13-6",
+      "title": "Public analysis da-13-6",
+      "files": [
+        {
+          "path": "environment/data/41591_2025_4023_MOESM2_ESM(Supplementary Table 1).csv",
+          "bytes": 328818,
+          "oid": "3e98e7c7497f9024b86c7f3358ca0fc68dee3335"
+        },
+        {
+          "path": "environment/data/41591_2025_4023_MOESM2_ESM(Supplementary Table 7).csv",
+          "bytes": 732943,
+          "oid": "684efcdf01543d79241ca41a0bdca2b1b8f0649c"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 322,
+          "oid": "93f46e1e81490331a4915a4ef4aeb62161f4d529"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5133,
+          "oid": "e8b6be479396fa0ccecfeb643276c03253fd6c59"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 613,
+          "oid": "696ff0a670c89c1fad0f19aa775e3a19fbbaa2d2"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10423,
+          "oid": "0b9f09e89acbc5ca3a4c9a5770167b00c404e990"
+        }
+      ]
+    },
+    {
+      "id": "da-14-1",
+      "title": "Sepsis endotype score clustering",
+      "files": [
+        {
+          "path": "environment/data/subspace_score_table.csv",
+          "bytes": 2307055,
+          "oid": "407614681347795b6a200746c275239a617f1764"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 346,
+          "oid": "016ea6fa9032632ed8db390f13b7270ec43fcc44"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5059,
+          "oid": "29747ddf4d164521bcf0510da82b5b169ac1e964"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 599,
+          "oid": "b2431616c07a5e186901abadc6d1f262299744ff"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 13439,
+          "oid": "003bdfb90af0d3b13df50aeb137c51c4bf7d3ea3"
+        }
+      ]
+    },
+    {
+      "id": "da-14-3",
+      "title": "Public analysis da-14-3",
+      "files": [
+        {
+          "path": "environment/data/subspace_score_table.csv",
+          "bytes": 2307055,
+          "oid": "407614681347795b6a200746c275239a617f1764"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 346,
+          "oid": "016ea6fa9032632ed8db390f13b7270ec43fcc44"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 3998,
+          "oid": "0489fdcb01aa05ca8488cb0ecd53e63439b674d5"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 609,
+          "oid": "b56fa760f4df44457d0698c71972879881f4e8e5"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5365,
+          "oid": "79a086d73cd2243c555a81d35e7cde07fa1934eb"
+        }
+      ]
+    },
+    {
+      "id": "da-14-8",
+      "title": "Public analysis da-14-8",
+      "files": [
+        {
+          "path": "environment/data/subspace_genes.csv",
+          "bytes": 9493443,
+          "oid": "abf503759e10f4e81ea85f3630cb32c69cd7ded3"
+        },
+        {
+          "path": "environment/data/subspace_score_table.csv",
+          "bytes": 2307055,
+          "oid": "407614681347795b6a200746c275239a617f1764"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 386,
+          "oid": "04a4dca926a73159ed0cc79daedfc88469f4a0e8"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5376,
+          "oid": "846892160aa60c0618ac4b4d5b93170b98e2447f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 610,
+          "oid": "d93e44e9f80598decd85ff6fb2b03832bc9c9ac7"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 16231,
+          "oid": "6029083c805788ca1b965bb7b9865f503955e38c"
+        }
+      ]
+    },
+    {
+      "id": "da-15-1",
+      "title": "Public analysis da-15-1",
+      "files": [
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 8444867,
+          "oid": "4ef4aa01f0c918f6680fb1e4e50f20098f005731",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 8084174,
+          "oid": "1f916a584059ba7e9f2e14edef61ae3e349d15f5",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 18915,
+          "oid": "c5ee67a614ed3477897a6bbbf91c71c4b09cbd21",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/gencode.v30.gene_meta.tsv.gz",
+          "bytes": 452487,
+          "oid": "775a0995bbeeb678d5e286f87e46b0b9f928bda0",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 527,
+          "oid": "ef3d0b4c5afd6c34442d4be97f64ecaaa9f4e214"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5460,
+          "oid": "11ef7775598dbbf620e2ab975e82c9510f4638d3"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 611,
+          "oid": "e337dce0115422abda65a13e318ffca7892d70b8"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6532,
+          "oid": "ed96e960b15e32f9cdfc9a38f6c35266bcca9db2"
+        }
+      ]
+    },
+    {
+      "id": "da-15-2",
+      "title": "Public analysis da-15-2",
+      "files": [
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 8444867,
+          "oid": "4ef4aa01f0c918f6680fb1e4e50f20098f005731",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 8084174,
+          "oid": "1f916a584059ba7e9f2e14edef61ae3e349d15f5",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 18915,
+          "oid": "c5ee67a614ed3477897a6bbbf91c71c4b09cbd21",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/gencode.v30.annotation.gtf.gz",
+          "bytes": 40122079,
+          "oid": "2645c0944fe048575e46ef3801e84afd06e2e3a1",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/gencode.v30.gene_meta.tsv.gz",
+          "bytes": 452487,
+          "oid": "775a0995bbeeb678d5e286f87e46b0b9f928bda0",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/Lumbar_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 7644488,
+          "oid": "cd51d1092a8c4ba31f65be9861bb4ccfe105e4ec",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Lumbar_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 7186426,
+          "oid": "bb0b3a0ef3b224e76d2461102cd5ee028edc6483",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Lumbar_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 16807,
+          "oid": "270bbb49a507965b51ac175e31167e66c83604b2",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/Mathys_single_nucleus.RData",
+          "bytes": 3615,
+          "oid": "823e6a3c135c5bee73aa41ee3192d4b47b70330d"
+        },
+        {
+          "path": "environment/data/Thoracic_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 2817330,
+          "oid": "94b8518c9d7ed254757c29c504ae6c3fb09710c7",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Thoracic_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 2809664,
+          "oid": "cdfd8dfb9b30b91562cd9f29126eb92b4bf5ab12",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Thoracic_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 6553,
+          "oid": "a2ca46791c6e837d6951eb02a3d2f6cfb2fc823c",
+          "lfs_pointer_bytes": 129
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 975,
+          "oid": "ce3e79103b3a82cd5fcc2593a63125ba718ca0bc"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 7470,
+          "oid": "d13f171586a94bdcaff8c7deb68ec77655599ead"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 612,
+          "oid": "01b87c179dce905628d7048ff1d4c354da03a284"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5059,
+          "oid": "715197f2777e5a4118e6e677452a58709fa68425"
+        }
+      ]
+    },
+    {
+      "id": "da-15-7",
+      "title": "Public analysis da-15-7",
+      "files": [
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 8444867,
+          "oid": "4ef4aa01f0c918f6680fb1e4e50f20098f005731",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 8084174,
+          "oid": "1f916a584059ba7e9f2e14edef61ae3e349d15f5",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 18915,
+          "oid": "c5ee67a614ed3477897a6bbbf91c71c4b09cbd21",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/gencode.v30.gene_meta.tsv.gz",
+          "bytes": 452487,
+          "oid": "775a0995bbeeb678d5e286f87e46b0b9f928bda0",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/Lumbar_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 7644488,
+          "oid": "cd51d1092a8c4ba31f65be9861bb4ccfe105e4ec",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Lumbar_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 7186426,
+          "oid": "bb0b3a0ef3b224e76d2461102cd5ee028edc6483",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Lumbar_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 16807,
+          "oid": "270bbb49a507965b51ac175e31167e66c83604b2",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/Thoracic_Spinal_Cord_gene_counts.tsv.gz",
+          "bytes": 2817330,
+          "oid": "94b8518c9d7ed254757c29c504ae6c3fb09710c7",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Thoracic_Spinal_Cord_gene_tpm.tsv.gz",
+          "bytes": 2809664,
+          "oid": "cdfd8dfb9b30b91562cd9f29126eb92b4bf5ab12",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/Thoracic_Spinal_Cord_metadata.tsv.gz",
+          "bytes": 6553,
+          "oid": "a2ca46791c6e837d6951eb02a3d2f6cfb2fc823c",
+          "lfs_pointer_bytes": 129
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 875,
+          "oid": "6e1489f242671da2b6fd3f3cc2cfa8ab64f08b8b"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 7136,
+          "oid": "4185c09ebc39aa0af501b375e45e0a0db0f3c907"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 609,
+          "oid": "72c7e85463ab82d76db2c6bca833c8baead2b895"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 15705,
+          "oid": "1df30be9846f979ed91ad7934ca8b7ebc95544e4"
+        }
+      ]
+    },
+    {
+      "id": "da-15-8",
+      "title": "Public analysis da-15-8",
+      "files": [
+        {
+          "path": "environment/data/401_2019_2093_MOESM2_ESM.xlsx",
+          "bytes": 744162,
+          "oid": "7ddeedb9ac7edd313fe04663befcf74449ce340b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/401_2019_2093_MOESM5_ESM.xlsx",
+          "bytes": 36827,
+          "oid": "b30e5dca5c5ad9c2e3767db2f2e958b9983cf9ea"
+        },
+        {
+          "path": "environment/data/Cervical_Spinal_Cord_DE_results.tsv",
+          "bytes": 3579670,
+          "oid": "3753f0de4648335822526f9a4b28ebda88bd712e"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 459,
+          "oid": "d345534ad6a0c8aa4e928f71f3276c09923b4070"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5432,
+          "oid": "9bd7271a9563adef554da5d5b29f493c384401bf"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 612,
+          "oid": "5e8718f952cd116787619d8bc6c23cb2ca2fe57a"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10424,
+          "oid": "e86dfa66bff9f5ed8aff9a665c1c8592b9771dcb"
+        }
+      ]
+    },
+    {
+      "id": "da-16-1",
+      "title": "Public analysis da-16-1",
+      "files": [
+        {
+          "path": "environment/data/geo/GSE135251_family.soft.gz",
+          "bytes": 14162,
+          "oid": "b9d24d9303637e38cd8d00f501c2569d11aa8ed5",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/geo/GSE135251_series_matrix.txt.gz",
+          "bytes": 11529,
+          "oid": "6591c5e620ab094a28378a5f5206adc4eedfdbac",
+          "lfs_pointer_bytes": 130
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998167_017-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 212070,
+          "oid": "1396079c1280c89d080a338b1588dd96ee6b5938",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998168_018-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 211405,
+          "oid": "b5ae8747e05e0531d61ae5c385ad2c8150f4e166",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998169_029-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 212338,
+          "oid": "b12f4848a33fe3bdc75a3eb6b4614ed52070bf00",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998170_030-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 213435,
+          "oid": "fd621e67a289d6362f7f77ba846276b2f3f69d99",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998171_031-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 213097,
+          "oid": "d6b9db0f3fafe4df7fec92c9b0ccba9f929d6c8f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998172_032-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 211053,
+          "oid": "4e294950d945c600871cea71b8653fb8e65fd09c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998173_033-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 212858,
+          "oid": "b599e70894dff021dc9fdb43fda1d7f3048170ae",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998174_035-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 211412,
+          "oid": "c113cd6303dfbe27cc4fbb8a5c0ac61fb40e92ac",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998175_036-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 208546,
+          "oid": "e2618066b91e57f6d1aaa3e45f6983ae5c6f9b04",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998176_037-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 210315,
+          "oid": "31f53c500c81cece08d1a933068943d34f0e18e8",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998177_038-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 211237,
+          "oid": "92f7976dc48fe953c81872be8a256ef905f7b9dc",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998178_040-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 210792,
+          "oid": "e1fcda153c27fe6bca2ef7c5f85ecc9625321bf9",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998179_041-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 210420,
+          "oid": "f8d423f9a627f5d7c9ca3996a546a5c038cf6b22",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998180_042-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 210813,
+          "oid": "db703479219a8503d7c90cf4cd61a7ad63906d18",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998181_043-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 210020,
+          "oid": "a93c69bb68acbb267609e523c88369a8a9573cfc",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998182_044-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 210376,
+          "oid": "3312185893fe5fe55f97f2cbdd2df126bff6d506",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998183_046-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 209589,
+          "oid": "3433bc7407d41bb13b1feb66beccf93f84d99040",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998184_047-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 211839,
+          "oid": "30ea09343ba3e545f479676a0c691e657abd93cd",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998185_048-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 211835,
+          "oid": "8e5b2ec59f3c37312a7801d75d68e3643520f5c5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998186_049-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 211118,
+          "oid": "94eb1f67e7e362dd0f28661078ead433ab665ba9",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998187_051-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 211345,
+          "oid": "eb230b5d571c4194f0db2afe8b97f60c1d5b9f51",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998188_053-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 212807,
+          "oid": "1c947c4ec029fc034b589a54de144dc3ea4bd90d",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998189_054-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 211945,
+          "oid": "4b64e2d03a48066dc933b85229594b2c9612168b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998190_055-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 210359,
+          "oid": "7860127fd676aca0bc6a21bac040758031af6bd7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998191_059-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 213450,
+          "oid": "3b428d13633093d8851ad8bb2bfedc6bca9976dd",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998192_060-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 210935,
+          "oid": "3b6ec6f48da6a24d31f1ee243be717d8dcb42875",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998193_061-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 210368,
+          "oid": "41e17b0ff1ea1e3bda449708d828b52b2276cd60",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998194_062-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 210536,
+          "oid": "b17d430957ff8b087b7a14ec25683bbfb06c60f5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998195_075-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 212327,
+          "oid": "a3a5db6651fc989e487b34193199ff88dd456b54",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998196_076-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 210695,
+          "oid": "8fc1f46f56785cdfd7b84ecf54ad6c84fd0442ef",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998197_1_20.counts.txt.gz",
+          "bytes": 212835,
+          "oid": "5a451c4cb380b28b3df9db8d87b72ed6825042fb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998198_10_352.counts.txt.gz",
+          "bytes": 213520,
+          "oid": "36f158cd72205340936bb64c437313025e08c4e2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998199_101-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 213353,
+          "oid": "f90085e1105fda6087d0a7eb9fd58a55878d21a8",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998200_102-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 212225,
+          "oid": "9ffb2076973502a57cff5864134b01914f34abb1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998201_103-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 212062,
+          "oid": "d9679c048a2f68ca7e0fdbdf173ba8da12cc4520",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998202_104-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 211290,
+          "oid": "5daa47a8daec102aeebbf27daf0ba0e6de4b64f6",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998203_105-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 211263,
+          "oid": "a0a9262deb8bf047a58ab8197e7d880d542af632",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998204_106-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 209697,
+          "oid": "6e9d25fb98ff86eb4e8ca05122f0d25c3aff3dcd",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998205_108-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 210268,
+          "oid": "9201a077fa80f98965c88b45050dbcc671ac31ad",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998206_109-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 212031,
+          "oid": "dda6877dee027a41c4753f0f7fac4a8c47b7dcf3",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998207_110-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 212055,
+          "oid": "1246e611ce2db77fab023bed27120077159f9649",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998208_111-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 210722,
+          "oid": "8b83da3b46e38b9f9c7dcf0ff928530a840c7856",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998209_112-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 212196,
+          "oid": "9d114952761332ee7a248319f85629beb51591b7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998210_114-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 210352,
+          "oid": "c2c08f222227b075323a85b70ac4b09a373a9d56",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998211_115-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 210742,
+          "oid": "395f36e6ade842f1bc9c16206e46dbba4218c627",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998212_116-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 211179,
+          "oid": "ad53b34ca90082292f4fbd0268153a044ceb0f35",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998213_12_469.counts.txt.gz",
+          "bytes": 212433,
+          "oid": "61ec8d0a7663009c7996695aec3fcffbd6b06ba6",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998214_120-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 210570,
+          "oid": "6affe38d7d79034e0fceadf02e95bb2172756311",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998215_124-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 210645,
+          "oid": "10b74755a60952af8ee306ef30f257bac6e0efff",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998216_127-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 211612,
+          "oid": "3d6f52cc090ad27507f53059d7bb29e35eff902a",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998217_128-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 210134,
+          "oid": "dc39c472bd64f1da51582eff97e665737de648db",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998218_129-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 212158,
+          "oid": "262964b047b8c051b535b43258bdb838ad2389c1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998219_13_470.counts.txt.gz",
+          "bytes": 211706,
+          "oid": "af19b24890206ae19093d916ed872d45482a2d68",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998220_130-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 210108,
+          "oid": "4c96d03d54b4573ab6f396616711f00bca66e51f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998221_132-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 209480,
+          "oid": "353b0b99e9f9cacc32478239a5ecec6e83ee92c1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998222_133-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 210163,
+          "oid": "e4a8d46d086db5aa4f7ec3f50ef7af880113473b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998223_134-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 211544,
+          "oid": "0d1ee591e5dc24a08a1491b3ec771d28918a5eae",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998224_135-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 209682,
+          "oid": "0e56e641379622182b6aff741f8f45780fd70cb2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998225_136-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 216899,
+          "oid": "56f87021680c4e95a7114b2e69983ed44c8b894f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998226_14_472.counts.txt.gz",
+          "bytes": 213376,
+          "oid": "09d8c707416344bd13a9c5ee0dcdefb6a53d7a07",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998227_141-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 212547,
+          "oid": "1c701312dfc575809e550aa316e6ffa619d799ef",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998228_15_473.counts.txt.gz",
+          "bytes": 212285,
+          "oid": "3d0ba3b8cd023295b5134d748938cabcb3305748",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998229_152-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 211039,
+          "oid": "0c99a64fe217a4c2b35ec87ac552e4504329f6ba",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998230_155-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 208264,
+          "oid": "1c0ef0acf14b83e7c551adbb38abc69645d6351c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998231_169-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 210419,
+          "oid": "5135e5e320131dbe81ba63b1749dd7e2225276b4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998232_17_82.counts.txt.gz",
+          "bytes": 211593,
+          "oid": "5801ec8a9b3a5ab095bbbd2a02e7ac52cb735263",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998233_172-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 212925,
+          "oid": "fac1dd800b92b251279122a7afd8066747a586f1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998234_176-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 210263,
+          "oid": "2f8ca8c53178ae2baefb2ae4975c92b47f754fe1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998235_177-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 212794,
+          "oid": "26734f9b220fb36c3fa4efba6835e5aea1aea49b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998236_179-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 211480,
+          "oid": "e89a476f2cfaa8192f3c9562a428e1c0eac33644",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998237_184-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 210420,
+          "oid": "061525aafd1bd7ac97f684e9733858a0d6e8b905",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998238_185-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 211442,
+          "oid": "2d8f7da79cade854d84dc65aa3acd939dbe0e0d7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998239_186-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 210297,
+          "oid": "ca7cc1b09498354c99358e8ff4ed8e62720f6943",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998240_187-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 211073,
+          "oid": "a370621ad7ada5fef22c1f1a4a0b0cfcf16524b2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998241_188-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 212040,
+          "oid": "0a116e0a782cb2c348e39c1d2f6e725b5ab1f2cf",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998242_19_138.counts.txt.gz",
+          "bytes": 210566,
+          "oid": "b425103841c6587b17b33aa820b0c6dd50c32f9c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998243_191-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 211616,
+          "oid": "b3c9cb42683703b508ffd4b080f98f43ffd438b5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998244_193-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 211094,
+          "oid": "6ee6aeed8f68d64867984414cb2d1d1ff094ec5f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998245_197-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 212640,
+          "oid": "9bb4512a3d9157f84f4111364b232906160cc8f9",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998246_199-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 212444,
+          "oid": "79322b6b9ecdfaea5ef26dd79cc9385c88ee9182",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998247_2_23.counts.txt.gz",
+          "bytes": 213211,
+          "oid": "1baeafccaa1b7d442b1c39fb88c080b97a20a2be",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998248_200-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 213241,
+          "oid": "363bb8453c1f614f8518c65ae8f884ad5e15b57c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998249_201-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 213630,
+          "oid": "cbbf3db7bf31298a2a9180683f7fb2e263a7d397",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998250_202-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 213466,
+          "oid": "b94df535beeb6884183ee6988416ff92ddde1d39",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998251_204-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 212983,
+          "oid": "66d3cdc1d875fa491b5882ea3a1d9e00db26fd35",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998252_205-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 210707,
+          "oid": "186c49020df543784374c63eb5c40919a50864df",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998253_207-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 210425,
+          "oid": "556f06edb4c22a74fd314fb188cf139e5d67c045",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998254_208-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 213750,
+          "oid": "05338052a969272903e1917d16100f08d7ab85ac",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998255_211-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 211599,
+          "oid": "7505364faab589a678dc8919a0d70904312d2d7d",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998256_214-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 209857,
+          "oid": "5aab7d4c0857940ce148cbca62a0399ada313af2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998257_215-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 213400,
+          "oid": "17a1acd4feae43452fa91da003e9a3e29fa8294f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998258_216-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 214621,
+          "oid": "282c620691a2a3604cd7bdbffd52358ef71f6258",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998259_22_151.counts.txt.gz",
+          "bytes": 207799,
+          "oid": "4b852071d6cb43356fe299689fbb68f1f3c8cbf1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998260_23_154.counts.txt.gz",
+          "bytes": 211963,
+          "oid": "57e03c58e03c4fecccb1bc54ff7b18f66b580b62",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998261_233-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 211520,
+          "oid": "42627d6c93709accc4bdfc55502d5532c6a305b4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998262_234-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 211456,
+          "oid": "7aeba2f61754d9b24efc7143f1535d57d7c1c52f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998263_235-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 212385,
+          "oid": "26158988be8fd77de739d1f9ce13eac66d634f71",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998264_236-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 212405,
+          "oid": "7c8126a7e69b738d5c5ada87e5f5dd7ebd4a2102",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998265_237-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 210640,
+          "oid": "c41ce19c005c4be24be2ca66424ec9d53cbc7ce4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998266_238-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 209732,
+          "oid": "774b33bb9b81edba5675bf157b2b27ca568b84e9",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998267_239-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 211575,
+          "oid": "325b71d6494ac8d82cdefefa732a6233b5ad6ae7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998268_24_160.counts.txt.gz",
+          "bytes": 209624,
+          "oid": "5c753513744b8a7e7213a9bb842938378d026050",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998269_240-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 211945,
+          "oid": "56a9c6bb276cd07979a53077371fca384d8a088b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998270_241-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 212683,
+          "oid": "fc2ec54d4d702fc4834858363972d9921d8e6c2c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998271_242-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 213398,
+          "oid": "e867c509627316ab0af840adbabda291faad6c40",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998272_243-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 210142,
+          "oid": "30ddc8f9fda33507728589b6e17cd8bf13b8e8bf",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998273_244-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 207395,
+          "oid": "f175f0f03c3e26957083425391511858bee553d0",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998274_245-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 210457,
+          "oid": "ae4283c87431daf03539b5014482eac11033f794",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998275_246-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 210737,
+          "oid": "ae222b87e933de0069161334bdaf22c95988b342",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998276_247-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 210861,
+          "oid": "33663e4e4667ed9a9aeefbd4895b51d4e4e6f99d",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998277_25_164.counts.txt.gz",
+          "bytes": 208018,
+          "oid": "fc376c03d012e27b038b19827f8a6fb1998019b4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998278_252-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 209076,
+          "oid": "feac3404ebb25469ec5139192694d953a560ec53",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998279_255-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 210255,
+          "oid": "49487395825b282278e7e6c66fc73801c60c20bb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998280_26_171.counts.txt.gz",
+          "bytes": 206206,
+          "oid": "80778549c3106461e881d57f51fd4ececdd62e61",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998281_260-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 212118,
+          "oid": "8c92f72bff46af36b15961a674f004e27c7834ec",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998282_264-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 211924,
+          "oid": "989c018e9b26a55bdc944d8529ec7e0bf4c172c5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998283_266-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 207622,
+          "oid": "b06d24605da16b33995b9312a1f518446bd142a4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998284_268-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 209991,
+          "oid": "166a1cd55ddfc353ad874c476b27f850751616fc",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998285_27_181.counts.txt.gz",
+          "bytes": 212490,
+          "oid": "59d61cc94dbe47f71f3a4d606eb4bcf8bf92a461",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998286_274-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 212490,
+          "oid": "48afb19267dd686ade339f0e81088fcfa2fe42d5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998287_277-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 212606,
+          "oid": "84aa0970a0f081a2d14cfc5252c269a9dbd5db7f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998288_278-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 209861,
+          "oid": "e744052083965077654e995edda5c24ff31da3fb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998289_279-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 210711,
+          "oid": "e2aef7f18130327de0670b57afdd204e0a774b6c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998290_280-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 215599,
+          "oid": "d84d3c10ca6e826e53da7f648833ba4676fb797e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998291_281-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 212439,
+          "oid": "4c32b31333e4c765d7f72bd9f26008ec423eccaf",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998292_282-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 209808,
+          "oid": "50a43c74b3df45f8706b305372450528ca55a899",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998293_284-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 209275,
+          "oid": "0f694686f891f68a8307e1c4f0624fddae450fda",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998294_285-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 210349,
+          "oid": "ad663ae9083fdfabc379248bf218ac0f345e48fe",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998295_286-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 209971,
+          "oid": "2617b6baeb270849f675f8f3d929e0be64549731",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998296_287-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 210631,
+          "oid": "945c156213976c514bccb2102fad270476c457eb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998297_288-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 210304,
+          "oid": "0b2f9bfc2cff11f92ec3cfbcf19ef4a90b26d909",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998298_289-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 211780,
+          "oid": "dd67447bf7b810242a67cd5c8e300070a033565f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998299_29_474.counts.txt.gz",
+          "bytes": 210897,
+          "oid": "fbe05cdef662fdccac29a0ca782a814d00c57c5b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998300_290-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 212051,
+          "oid": "f79e25b4c775c81f4578cab9832a8b5c19f45399",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998301_291-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 212652,
+          "oid": "e01f79feef97182052728936510da306f97d573b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998302_293-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 211723,
+          "oid": "2e9d8c31754eb886f77479975bb65da922995ceb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998303_295-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 211445,
+          "oid": "acdbdeaa332815570ad8ab89d16e278fc5ebc0b5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998304_296-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 211589,
+          "oid": "14eb2eef0810660ad08d28b4ec629ff00583bfab",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998305_299-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 212975,
+          "oid": "92940d514f1fb9acfa4a168816c590bf0e6fae72",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998306_3_45.counts.txt.gz",
+          "bytes": 210697,
+          "oid": "c9d5554d25c2a325d48d3e7edb9901ceb6c62f5a",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998307_300-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 213411,
+          "oid": "bdb1e5756d41558f20756cc3180ebf3a77d03b41",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998308_303-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 213166,
+          "oid": "fa9e1e0f165804975543c67740bc13790a13fd8e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998309_304-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 212121,
+          "oid": "913e6c0eac64a909a5afaeb1f62efab16bf2e740",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998310_306-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 210015,
+          "oid": "1ca726e25bf6209c90c092492194d5ebb4f74583",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998311_31_477.counts.txt.gz",
+          "bytes": 213327,
+          "oid": "fade32820f238f990945de178b3af077329daf17",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998312_319-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 212300,
+          "oid": "1b0a07bbf1b59d2034f3b704af49458655263483",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998313_32_478.counts.txt.gz",
+          "bytes": 212100,
+          "oid": "1182d4442f508f2b10a4c1c791b2779942d92e0e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998314_345-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 212635,
+          "oid": "51b71ab1b0dd38388d84c4eb417e9e973475def3",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998315_350-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 211655,
+          "oid": "3dfbea11adbd15e684778a0671b62b0b6045d227",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998316_354-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 212413,
+          "oid": "4a3ec43b29382d9c255bfc4d61ce333f209d4ee2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998317_355-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 212603,
+          "oid": "a871e67758748440f294a4a6625a355218edd5a8",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998318_361-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 213155,
+          "oid": "b63ce2b86a86fbdbb314a422237e7125f6c533de",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998319_373-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 209613,
+          "oid": "f215ff230924cb46860dc2c9631970355716b0a7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998320_384-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 212506,
+          "oid": "94460c72156520ab5de180d85e978d542b1a6104",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998321_4_67.counts.txt.gz",
+          "bytes": 212386,
+          "oid": "71a013f661874963519c07975d3c48a487f1ed41",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998322_402-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 212199,
+          "oid": "946e7c5b6701eb59baad0bebb0bdd625c90f23b8",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998323_407-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 210718,
+          "oid": "9cf0a229d1f771a6b6876341e3dfe464a7ad9dc5",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998324_408-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 213177,
+          "oid": "97cc85df5eea42c1763ca923d03b81717f329169",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998325_416-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 212245,
+          "oid": "bc43f6862893d285f586ef6ec84ffa4c8f0abe85",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998326_418-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 211111,
+          "oid": "3f11150c5a071507b880ad17b147714908715c3e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998327_424-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 214473,
+          "oid": "908bd112a1a9b56093b688e5256b3bd2242e33f1",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998328_425-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 213497,
+          "oid": "b194df9fbcdd21a0cd405534cf0d5ca457e707d8",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998329_431-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 212723,
+          "oid": "8675867192a28c6aeea1a7280ae062352fd6d4db",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998330_443-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 208870,
+          "oid": "8a181852c9394ec354d67c9778888103a04c25e0",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998331_5_74.counts.txt.gz",
+          "bytes": 212959,
+          "oid": "b0063f540df4fcc895544823c5759897b798b96d",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998332_6_139.counts.txt.gz",
+          "bytes": 215330,
+          "oid": "ba4f1896b403a18a32858e85e9501de82dd4a441",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998333_7_162.counts.txt.gz",
+          "bytes": 211732,
+          "oid": "c0e971ad144c2c172ed83a84ed27b516053e8fba",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998334_8_344.counts.txt.gz",
+          "bytes": 213888,
+          "oid": "3d2dc877df9176e73eca8b2087027e0917cd6dce",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998335_84-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 210703,
+          "oid": "ff3b87772304545cfa70d36172c3c10ebf882a14",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998336_85-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 210141,
+          "oid": "358696503d76d1bd9c2a43a123ce8d823f1d2fa4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998337_9_346.counts.txt.gz",
+          "bytes": 212129,
+          "oid": "3e3f4ac69393ecc3cec06eb7eceeeb5b48065716",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998338_98-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 209816,
+          "oid": "0f43fca0097e0d3723d8f0674980c99786315706",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998339_s5_Olivier-Govaere_S5.counts.txt.gz",
+          "bytes": 214061,
+          "oid": "8da7b870d3436e5805632b6e35e0faeb747aead2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998340_s2_Olivier-Govaere_S2.counts.txt.gz",
+          "bytes": 213290,
+          "oid": "df68916ceac9124a78136509818b9e60d0006f13",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998341_078-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 208196,
+          "oid": "45eff577add9bdc206746a2b0e58cd47e057dad6",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998342_085-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 213018,
+          "oid": "b3bc0c83c4a268a0c0121c008ef188a5408609d7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998343_C100-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 208624,
+          "oid": "cefa6fff016ab3728a9c22f33ecf49e0617b2d9c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998344_C101-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 211124,
+          "oid": "d150a10abb24964a5c80ee6ffa06ae8a989a7feb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998345_C102-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 209151,
+          "oid": "59b641988df2e98284470c32753918b8f6ae7cbc",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998346_C103-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 211867,
+          "oid": "10ee7bb844dc022dc3e3c76caa58723d42bf6dac",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998347_C107-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 211111,
+          "oid": "d112b355d9bee6b94680a1b18553a2bb66f9dab2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998348_C108-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 212201,
+          "oid": "645f1d84281df72c3898624a290c1b6cef1286cf",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998349_C109-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 212345,
+          "oid": "1ff76fa245a9bdfb6a53219339e84f12b7799605",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998350_C110-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 210942,
+          "oid": "b7e1a8d617277f9bdec4aeec33975d5e59b77113",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998351_C122-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 211404,
+          "oid": "33ac011bc5886e1d60334f9e4b2c8a11a4c2c4c4",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998352_C123-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 212770,
+          "oid": "511651686b29a1f64c41dae2795c1f869f436930",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998353_C124-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 209700,
+          "oid": "095a79947c595969a754931f52bb77bab79201fb",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998354_C125-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 211682,
+          "oid": "66c5bf11aaa57b1fd6556a7683255823781b5b51",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998355_C126-Ann-Daly_S14.counts.txt.gz",
+          "bytes": 211362,
+          "oid": "301c3811b60e4339f188ee09fdb6399d7311aeb2",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998356_C128-Ann-Daly_S1.counts.txt.gz",
+          "bytes": 210704,
+          "oid": "b4324f0dd67d193d5872b86a766eaf9c6d71a629",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998357_C129-Ann-Daly_S2.counts.txt.gz",
+          "bytes": 210093,
+          "oid": "6ad1c450bc9c153046b2d24480c8350dce1a04b3",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998358_C131-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 212867,
+          "oid": "71d4c0e1e555be77c518bcafefa4f94ddeaabf07",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998359_C133-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 214777,
+          "oid": "4ac8dc764ac8f26a2e84e38b654c52e1c0eb603e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998360_C134_S5.counts.txt.gz",
+          "bytes": 209627,
+          "oid": "01a049be226534fb9ba4ea8612ca7f3dc4fbde3a",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998361_C135-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 207904,
+          "oid": "ad6959de1a61f666d6d1fa831119b0e6e72f6eee",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998362_C136-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 209240,
+          "oid": "0e561a22e1e3dce112e00afef299abe1b817fc00",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998363_C137-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 210958,
+          "oid": "a28f544bbacf4caf0ea6f5caa4a02f88871e4ef7",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998364_C139-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 210807,
+          "oid": "246e8d50b7327f6e94bfcec3e7981c072803a13b",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998365_C143-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 212447,
+          "oid": "113431e19ebc21fcd670ed0632a5cbc5d64d400e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998366_C145-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 210749,
+          "oid": "ddb4d69d17f687e0f261e2b9bbe645e381f07a00",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998367_C150-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 212231,
+          "oid": "48b1af79aca43716a7062354f115a75d7d92a383",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998368_C171-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 212304,
+          "oid": "77bee176a2e5d02ae58b1c1dad2b598ebd0d101f",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998369_C173-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 208795,
+          "oid": "1277fa9fd9a128c40fa06541d95d5555b42a8eca",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998370_C18-Ann-Daly_S3.counts.txt.gz",
+          "bytes": 214589,
+          "oid": "e11ae3428977adecc67ce897335ef016535d0365",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998371_C29-Ann-Daly_S4.counts.txt.gz",
+          "bytes": 212196,
+          "oid": "e56ffe66c7e05d5ada48d43b50c9529f70242c9c",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998372_C61-Ann-Daly_S5.counts.txt.gz",
+          "bytes": 213131,
+          "oid": "6bebe4097ee2489d24a14d991511238c6950e235",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998373_C68-Ann-Daly_S6.counts.txt.gz",
+          "bytes": 211404,
+          "oid": "d59e99f22231c8fd5cecf436b9359fc4b090dff9",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998374_C69-Ann-Daly_S7.counts.txt.gz",
+          "bytes": 211289,
+          "oid": "3d45acd3b84e9bba39ffbc49195261526d9fe27e",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998375_C73-Ann-Daly_S8.counts.txt.gz",
+          "bytes": 212294,
+          "oid": "d21e1f57e554e7229364bc4f51fbc68d20da0697",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998376_C76-Ann-Daly_S9.counts.txt.gz",
+          "bytes": 212397,
+          "oid": "162ec844263e65b96880c2fd6b70c136b44135cc",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998377_C81-Ann-Daly_S10.counts.txt.gz",
+          "bytes": 213210,
+          "oid": "ba6f586d196168418193e6dfcd3da80593a81305",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998378_C82-Ann-Daly_S11.counts.txt.gz",
+          "bytes": 212034,
+          "oid": "b3c26d9cb5bad904226fc09d45aa4733d8e318ee",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998379_C90-Ann-Daly_S12.counts.txt.gz",
+          "bytes": 213256,
+          "oid": "b906554dd5a43514b007010a9a9c8e89445b3cf3",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998380_C93-Ann-Daly_S13.counts.txt.gz",
+          "bytes": 212756,
+          "oid": "a4df8ad7f17fb3d0c16d9c5f2444eb6e7982330a",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998381_C94-Ann-Daly_S15.counts.txt.gz",
+          "bytes": 212494,
+          "oid": "5f5d364cbe9a85f4ac4f578f0957ddb037321aa6",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/data/GSE135251/GSM3998382_C99-Ann-Daly_S16.counts.txt.gz",
+          "bytes": 214497,
+          "oid": "8d5d51f3ae21f84ec2935b715d08135a0eae62a8",
+          "lfs_pointer_bytes": 131
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 240,
+          "oid": "ede7127a8e424f31d6f9233fb46a815a034e02f7"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5501,
+          "oid": "79abc76d4e314f5e09788106e468c53ede7147ce"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 598,
+          "oid": "4e96db3a8cafa62906a1da11bb83ab3921c22aa3"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10278,
+          "oid": "e4decf0e6dad26eb6131beab12e1cf0e8f0356d0"
+        }
+      ]
+    },
+    {
+      "id": "da-17-1",
+      "title": "Public analysis da-17-1",
+      "files": [
+        {
+          "path": "environment/data/4118e166-34f5-4c1f-9eed-c64b90a3dace.h5ad",
+          "bytes": 12218251667,
+          "oid": "2b8aa1b0a9b60e31e98611c4b478aab5058422bc",
+          "lfs_pointer_bytes": 136
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 363,
+          "oid": "9a33b4c083c38da2dc0e4ff027f0b1803b0271f9"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4490,
+          "oid": "e6d6443aa140c1f24bec9f7b129f56bc832120e2"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 607,
+          "oid": "7697a593edee883824699aebba5e5639638511c2"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6986,
+          "oid": "8f8ca0c6feab158e29a1e5252d342e6bd1cb2329"
+        }
+      ]
+    },
+    {
+      "id": "da-17-3",
+      "title": "Public analysis da-17-3",
+      "files": [
+        {
+          "path": "environment/data/4118e166-34f5-4c1f-9eed-c64b90a3dace.h5ad",
+          "bytes": 12218251667,
+          "oid": "2b8aa1b0a9b60e31e98611c4b478aab5058422bc",
+          "lfs_pointer_bytes": 136
+        },
+        {
+          "path": "environment/data/type1_isg_signature.txt",
+          "bytes": 351,
+          "oid": "76e3b20517c08d2f6924f9e00a9db21aa2f7ca5f"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 408,
+          "oid": "4bb451d3dbd30d0e7960c5bf25f57932691214e6"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4608,
+          "oid": "18c9b52f4ec53ee6ee05a1c40a9d4a402ce74198"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 612,
+          "oid": "003cf839ce83adc8750ce11215c3c8d3992675a4"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7236,
+          "oid": "7165b441e2396d46586840f622f9deffa026f4fe"
+        }
+      ]
+    },
+    {
+      "id": "da-17-5",
+      "title": "Public analysis da-17-5",
+      "files": [
+        {
+          "path": "environment/data/4118e166-34f5-4c1f-9eed-c64b90a3dace.h5ad",
+          "bytes": 12218251667,
+          "oid": "2b8aa1b0a9b60e31e98611c4b478aab5058422bc",
+          "lfs_pointer_bytes": 136
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 363,
+          "oid": "9a33b4c083c38da2dc0e4ff027f0b1803b0271f9"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4451,
+          "oid": "8e4d96c78aad269b25c9f126ee890e8a3216599f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 605,
+          "oid": "428072c025217a64b19c81b3f9e7a36d96c2b346"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8615,
+          "oid": "29869b6700a6b423579897831a6282e451a2659f"
+        }
+      ]
+    },
+    {
+      "id": "da-18-1",
+      "title": "Public analysis da-18-1",
+      "files": [
+        {
+          "path": "environment/data/data_clinical_sample.txt",
+          "bytes": 742508,
+          "oid": "7465e334d15e63e74a5e98dc784df98f116bedbd"
+        },
+        {
+          "path": "environment/data/data_cna.txt",
+          "bytes": 1856420,
+          "oid": "5896cd63c0eeceed71414caea9df0d359eee739d"
+        },
+        {
+          "path": "environment/data/data_mutations.txt",
+          "bytes": 2433396,
+          "oid": "4b8450b01351edcaf7946a08161dca37073b29a5"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 475,
+          "oid": "80218ad76e1c25605b1cb8e08e660344e4050364"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6218,
+          "oid": "0d7bdffb511faf2886aefe4535a485f549aae4b0"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 604,
+          "oid": "b9c69c1add99e068f1e6e0924cc117f000e6723d"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5373,
+          "oid": "6663b0cdbee739bebdeaf1ee67686292e4c3d149"
+        }
+      ]
+    },
+    {
+      "id": "da-18-5",
+      "title": "Public analysis da-18-5",
+      "files": [
+        {
+          "path": "environment/data/data_clinical_sample.txt",
+          "bytes": 742508,
+          "oid": "7465e334d15e63e74a5e98dc784df98f116bedbd"
+        },
+        {
+          "path": "environment/data/data_cna.txt",
+          "bytes": 1856420,
+          "oid": "5896cd63c0eeceed71414caea9df0d359eee739d"
+        },
+        {
+          "path": "environment/data/data_mutations.txt",
+          "bytes": 2433396,
+          "oid": "4b8450b01351edcaf7946a08161dca37073b29a5"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 475,
+          "oid": "80218ad76e1c25605b1cb8e08e660344e4050364"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6133,
+          "oid": "6ea24999ecb038eebd573a60147a7d04c3eabb6e"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 604,
+          "oid": "1f08ca96f228a1ccfd57bdf1d2c786e40a040cc3"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5886,
+          "oid": "6da9cae9267019084c20f1909888aea1bd8bab41"
+        }
+      ]
+    },
+    {
+      "id": "da-18-7",
+      "title": "Public analysis da-18-7",
+      "files": [
+        {
+          "path": "environment/data/data_clinical_sample.txt",
+          "bytes": 742508,
+          "oid": "7465e334d15e63e74a5e98dc784df98f116bedbd"
+        },
+        {
+          "path": "environment/data/data_cna.txt",
+          "bytes": 1856420,
+          "oid": "5896cd63c0eeceed71414caea9df0d359eee739d"
+        },
+        {
+          "path": "environment/data/data_mutations.txt",
+          "bytes": 2433396,
+          "oid": "4b8450b01351edcaf7946a08161dca37073b29a5"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 475,
+          "oid": "80218ad76e1c25605b1cb8e08e660344e4050364"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6142,
+          "oid": "a3a49e84e4f42cee2a3a63d1690bac37f18240f4"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 606,
+          "oid": "3d7eae60e83b0cb3e919b55506c94f84733c0419"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5123,
+          "oid": "5f49472a8f4feb3b2151fbc1ebac42a14c1b06c2"
+        }
+      ]
+    },
+    {
+      "id": "da-19-1",
+      "title": "Public analysis da-19-1",
+      "files": [
+        {
+          "path": "environment/data/processed_data/rnaseq/cuffdiff/gene_exp.diff",
+          "bytes": 6883031,
+          "oid": "001cc651a3a40356b8abbe2f187aa6188115beed"
+        },
+        {
+          "path": "environment/data/processed_data/rnaseq/cuffdiff/run.info",
+          "bytes": 460,
+          "oid": "f969232c5195911ca84678c78ec25e09cdd17550"
+        },
+        {
+          "path": "environment/data/processed_data/rnaseq/rnaseq_alignment_manifest.tsv",
+          "bytes": 1049,
+          "oid": "638dd29f2979e41741b038172172955cd4bacd39"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 734,
+          "oid": "b076240a6503535e3e30f2a9a886b4f954a7ebd2"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5788,
+          "oid": "821a52eaf1dd3dc99d0c568795336a147c29179d"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 610,
+          "oid": "8e2f05cf088574068955452a7bcd8b9e9fa8b59a"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10323,
+          "oid": "036fd1db6d5479025e6890b55a18e80450de74fe"
+        }
+      ]
+    },
+    {
+      "id": "da-19-3",
+      "title": "Public analysis da-19-3",
+      "files": [
+        {
+          "path": "environment/data/data/genes.gtf",
+          "bytes": 1175571066,
+          "oid": "995428f52cf82378dba9a7f5b151b540fe050568",
+          "lfs_pointer_bytes": 135
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/chipseq_peak_calls.tsv",
+          "bytes": 1230,
+          "oid": "01e7781279e93e9a06ee71180fab7e2fd759dbc8"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715535_vs_input_peaks.narrowPeak",
+          "bytes": 5101432,
+          "oid": "fc153599bf172469f951423d108b641b5e726a6a"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715536_vs_input_peaks.narrowPeak",
+          "bytes": 4952462,
+          "oid": "a8adfb5b7e85c61e70aa314d0f3b0a5975ac4ee0"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715537_vs_input_peaks.narrowPeak",
+          "bytes": 114244,
+          "oid": "06eacc9249176529008a53033ab2c4fb22090401"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715538_vs_input_peaks.narrowPeak",
+          "bytes": 796348,
+          "oid": "6f65dbaa27a53596ce469d1e69e6fb49cad3c626"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 1163,
+          "oid": "3f1b44e88ac329b62dcc4feb993fc4059e65745f"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6170,
+          "oid": "9ba322e858b042a004e961d7fb290c0cbd3bb060"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 608,
+          "oid": "50367508ceb8c068d10a0a7ddd52e79e8bd868a4"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 9225,
+          "oid": "97a1f114256d4aa62b2523dad53ece28b407eff8"
+        }
+      ]
+    },
+    {
+      "id": "da-19-4",
+      "title": "Public analysis da-19-4",
+      "files": [
+        {
+          "path": "environment/data/data/genes.gtf",
+          "bytes": 1175571066,
+          "oid": "995428f52cf82378dba9a7f5b151b540fe050568",
+          "lfs_pointer_bytes": 135
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/bam/GSM2715535.q20.rmdup.bam",
+          "bytes": 1152597512,
+          "oid": "789e62097650006ed59c82c9657640cdc0bf3fad",
+          "lfs_pointer_bytes": 135
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/bam/GSM2715535.q20.rmdup.bam.bai",
+          "bytes": 2792552,
+          "oid": "53688a39137620db67a3f334125f4af5288f9949",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/bam/GSM2715536.q20.rmdup.bam",
+          "bytes": 1281714038,
+          "oid": "24c0d06405e27e0011fc8ab33be2e00708f7618a",
+          "lfs_pointer_bytes": 135
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/bam/GSM2715536.q20.rmdup.bam.bai",
+          "bytes": 2379712,
+          "oid": "cd54d16f94a7f16b5f940afe1041fde0295e8207",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/chipseq_peak_calls.tsv",
+          "bytes": 1230,
+          "oid": "01e7781279e93e9a06ee71180fab7e2fd759dbc8"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715535_vs_input_peaks.narrowPeak",
+          "bytes": 5101432,
+          "oid": "fc153599bf172469f951423d108b641b5e726a6a"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715536_vs_input_peaks.narrowPeak",
+          "bytes": 4952462,
+          "oid": "a8adfb5b7e85c61e70aa314d0f3b0a5975ac4ee0"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715537_vs_input_peaks.narrowPeak",
+          "bytes": 114244,
+          "oid": "06eacc9249176529008a53033ab2c4fb22090401"
+        },
+        {
+          "path": "environment/data/processed_data/chipseq/peaks/GSM2715538_vs_input_peaks.narrowPeak",
+          "bytes": 796348,
+          "oid": "6f65dbaa27a53596ce469d1e69e6fb49cad3c626"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 1725,
+          "oid": "4b2dd2f9ca82e90bb011e0e137e65980453a336a"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 6977,
+          "oid": "6dddc0005bf5ee87a2925428c0881e483d9e2c8f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 606,
+          "oid": "ef05e062645bf4d3d0a0ec7941098d5c532a2056"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10727,
+          "oid": "7a7c536257a6f4aa9f7946fc8b39db31ff51cbb1"
+        }
+      ]
+    },
+    {
+      "id": "da-19-6",
+      "title": "Public analysis da-19-6",
+      "files": [
+        {
+          "path": "environment/data/data/sample_sheet_all.tsv",
+          "bytes": 3790,
+          "oid": "e5d8ed4a7823f5531a7dcb51e5b294b54a6e1228"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/atacseq_peak_calls.tsv",
+          "bytes": 1079,
+          "oid": "8eda5d8a2c54da7712b2741ee143f97a0046423c"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715541_atac_peaks.narrowPeak",
+          "bytes": 5544895,
+          "oid": "3856d6672d83aae25aa3367ba095201892acd5ae"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715541_atac_peaks.xls",
+          "bytes": 5992328,
+          "oid": "96dd701934d0bc64dc85ad159fb834f134d61687"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715541_atac_summits.bed",
+          "bytes": 3925676,
+          "oid": "056b4939821fd98469b05c301d1d49e060dfcf6b"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715542_atac_peaks.narrowPeak",
+          "bytes": 5371398,
+          "oid": "b2aeef2196e75d30c5b988b51a8518a4e17dba83"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715542_atac_peaks.xls",
+          "bytes": 5804337,
+          "oid": "08052729ea57d129122678711aca93a76ee9f46d"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715542_atac_summits.bed",
+          "bytes": 3807022,
+          "oid": "b04c7fe9449cc1fab11a3bb0078492a425d11eb2"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715543_atac_peaks.narrowPeak",
+          "bytes": 4036672,
+          "oid": "38a6845c21c0bfe406d96d0e3c7dd30dd729adcf"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715543_atac_peaks.xls",
+          "bytes": 4362945,
+          "oid": "83f29677a729bb41f03c91c7eb2972ad08f18134"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715543_atac_summits.bed",
+          "bytes": 2853447,
+          "oid": "fcd77dec4d20700684004c19c927f2966c6096a3"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715544_atac_peaks.narrowPeak",
+          "bytes": 4408062,
+          "oid": "640d253cd23f6b179b8e805f4e88e483aa588393"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715544_atac_peaks.xls",
+          "bytes": 4765111,
+          "oid": "8a0a61d165c2fa1b9bdadcc96b93f7a88290e034"
+        },
+        {
+          "path": "environment/data/processed_data/atacseq/peaks/GSM2715544_atac_summits.bed",
+          "bytes": 3114556,
+          "oid": "880baeef3a7ccba925ea8873408c0324564f387b"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 2209,
+          "oid": "2aaf0844f21700fbdb1e0a773a9b9e4058c9cd9d"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 7603,
+          "oid": "61068fbcc59b549a44556accdd6f8ecc5be4569c"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 608,
+          "oid": "cbdb6587a0ed65e1095ccf55465a5a6abdc2fee7"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 10441,
+          "oid": "71cdcf1460029349e6e5dd9a3c4d004c7432b17a"
+        }
+      ]
+    },
+    {
+      "id": "da-20-1",
+      "title": "Public analysis da-20-1",
+      "files": [
+        {
+          "path": "environment/data/GDPx2-GeneCounts.h5",
+          "bytes": 569401878,
+          "oid": "1ec0c4c2238b5688e473d4d6d1e1722923545172",
+          "lfs_pointer_bytes": 134
+        },
+        {
+          "path": "environment/data/Metadata.csv",
+          "bytes": 5206109,
+          "oid": "103ff1fffdabe334a0f7f4b37843878d7ec5b85c"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 407,
+          "oid": "663abe7ac882fb1c17ec597c56d64f6d4af6a6ee"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5355,
+          "oid": "d21925037a6595a66d28d0f22300c48b5f125119"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 604,
+          "oid": "cf281118c0b6ac39d5d16877f138fc31018c399c"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8458,
+          "oid": "13ed73ba066db4d6ab5b8cea71491d5096d83787"
+        }
+      ]
+    },
+    {
+      "id": "da-20-3",
+      "title": "Public analysis da-20-3",
+      "files": [
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Brefeldin-A_28.5.csv",
+          "bytes": 1972506,
+          "oid": "17933c4af28634c5e25f24a719b66a94da147c06"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Brefeldin-A_300.csv",
+          "bytes": 2007446,
+          "oid": "bebb54d187e4ead38675988a4615031b65de2748"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Brefeldin-A_3000.csv",
+          "bytes": 1966808,
+          "oid": "2fb97a7ba4c35a12c49a2b7677f74496913221b9"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Brefeldin-A_9.5.csv",
+          "bytes": 1874410,
+          "oid": "d00c6d08202af37a54bc4460086a92518eb9a194"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Brefeldin-A_900.csv",
+          "bytes": 2019720,
+          "oid": "2076c7ad6bebb2eb244e04e8ee2dc78e0c4afdb4"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Brefeldin-A_95.csv",
+          "bytes": 1935881,
+          "oid": "71d37bf4272521773e44b26ab2d7d0e88498b54f"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Dexamethasone_28.5.csv",
+          "bytes": 1913111,
+          "oid": "33470a04170f148bdd685219333838107ac8a840"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Dexamethasone_300.csv",
+          "bytes": 1926642,
+          "oid": "ba3adaf89306fdb7049a1ce7b0e831040d93784f"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Dexamethasone_3000.csv",
+          "bytes": 1878699,
+          "oid": "b2a700bcf7db57bfc0510642df5e06285f243a56"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Dexamethasone_9.5.csv",
+          "bytes": 1914199,
+          "oid": "10b87aa42930dfa34541c5e257d295687c0f6dd7"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Dexamethasone_900.csv",
+          "bytes": 1912827,
+          "oid": "a76c28e68f03490f37dbd0db4a44dbe0882dc1a0"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Dexamethasone_95.csv",
+          "bytes": 1850753,
+          "oid": "fad773ffa03735831215590ea730f2f18bbaeb9d"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Trichostatin A_28.5.csv",
+          "bytes": 1899066,
+          "oid": "01cbf4dc12250820c2ac532adafddef3b61df48b"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Trichostatin A_300.csv",
+          "bytes": 1938774,
+          "oid": "7aed338c8f1aec8aefc011f8391b0bd7520cfded"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Trichostatin A_3000.csv",
+          "bytes": 2158038,
+          "oid": "7c4e0eb9aa1c1f5ded2eb20d8d9a650eb060b436"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Trichostatin A_9.5.csv",
+          "bytes": 1941421,
+          "oid": "e060b36376ea52ba5f9881d9fae23959dd0e6a4b"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Trichostatin A_900.csv",
+          "bytes": 2140495,
+          "oid": "49be20b91afd36a6bb1bb54b09689422f4df7f44"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_aortic_smooth_muscle_cells_Trichostatin A_95.csv",
+          "bytes": 1866117,
+          "oid": "157a4311fdb09efa1458290f2d06d2d887968a06"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Brefeldin-A_28.5.csv",
+          "bytes": 1872178,
+          "oid": "1b8a42814464b701354192e2d7eca6cdb87548fa"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Brefeldin-A_300.csv",
+          "bytes": 1855387,
+          "oid": "836be03322548e29697490885388c4829ae56899"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Brefeldin-A_3000.csv",
+          "bytes": 1853017,
+          "oid": "a6fe48690fde11e0396419d471d11ba7d56e9f7b"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Brefeldin-A_9.5.csv",
+          "bytes": 1699363,
+          "oid": "42cd072cff3d7a0166ea815d8fb36a07713263ef"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Brefeldin-A_900.csv",
+          "bytes": 1861895,
+          "oid": "905bd195db54f9bcb834f6804d0a0539f61e5e19"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Brefeldin-A_95.csv",
+          "bytes": 1817962,
+          "oid": "b36b326203e104aeace8cce13952c027dd660b51"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Dexamethasone_28.5.csv",
+          "bytes": 1835382,
+          "oid": "c39d57ce3eb362c8cb5e374f5ec7f28be476098d"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Dexamethasone_300.csv",
+          "bytes": 1701687,
+          "oid": "a69539610a59786cc12167d33a41e1e235f2fbd4"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Dexamethasone_3000.csv",
+          "bytes": 1761009,
+          "oid": "65f6f6ed0f06435c88c6b0da0f5bc4f629cc9cf7"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Dexamethasone_9.5.csv",
+          "bytes": 1836112,
+          "oid": "67a992d7ca6ebe44f88c83a8e4b0fbc8fe0896a9"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Dexamethasone_900.csv",
+          "bytes": 1757066,
+          "oid": "62b31658e210bcd9bcf106610df03dafd8e2c79f"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Dexamethasone_95.csv",
+          "bytes": 1788374,
+          "oid": "c32d872e5b32ab931931708b847238f80a14c95b"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Trichostatin A_28.5.csv",
+          "bytes": 1808308,
+          "oid": "be5f16f9f3e1f68ffbeea263cd328e0882f2b79f"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Trichostatin A_300.csv",
+          "bytes": 1905502,
+          "oid": "cb5b60f753f4e76b2d86da593bb47ec2e1d8f44a"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Trichostatin A_3000.csv",
+          "bytes": 2042267,
+          "oid": "38ea742dcd7eaa781b5a43dd8fa3f5bb68c6c618"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Trichostatin A_9.5.csv",
+          "bytes": 1739684,
+          "oid": "58da9160db992b18897a439d99cf7c76c046daf9"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Trichostatin A_900.csv",
+          "bytes": 2049696,
+          "oid": "c1adee5a109f599e6f69414f4132c8699f86486e"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_dermal_fibroblast_Trichostatin A_95.csv",
+          "bytes": 1800934,
+          "oid": "e51c50456349afd708309ed30245fd0de9e97e9b"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Brefeldin-A_28.5.csv",
+          "bytes": 1908537,
+          "oid": "5985063d1755af7a2171fa267965ce62096a1e18"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Brefeldin-A_300.csv",
+          "bytes": 1931246,
+          "oid": "26f121a4051ba7ceaa9c794896270de88f20bdd5"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Brefeldin-A_3000.csv",
+          "bytes": 1940812,
+          "oid": "d57d2bbf28d78105d7a89b4cfb1a7bc8785860e2"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Brefeldin-A_9.5.csv",
+          "bytes": 1921645,
+          "oid": "898e93cf4c48792b0d73f25c49e1fece1bbff922"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Brefeldin-A_900.csv",
+          "bytes": 1947860,
+          "oid": "b761c5b288447e00b125a60e2e70913555ac9048"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Brefeldin-A_95.csv",
+          "bytes": 1897551,
+          "oid": "f999707b22d06513fcbae394a14c08b26d11b47c"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Dexamethasone_28.5.csv",
+          "bytes": 1947133,
+          "oid": "c3e4a0b4ffc3b8177cc6f08de0a89c04733e7765"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Dexamethasone_300.csv",
+          "bytes": 1872231,
+          "oid": "490cc6f035076c77fc0e54318ff04a28fb00a757"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Dexamethasone_3000.csv",
+          "bytes": 1853098,
+          "oid": "941d21cfe9507493b7261453125871b071a25e01"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Dexamethasone_9.5.csv",
+          "bytes": 1938027,
+          "oid": "ae8a80d5c459516242820ebfce6d69ae2e573c79"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Dexamethasone_900.csv",
+          "bytes": 1868929,
+          "oid": "a8f290faaa19de3c0c688851efc68a176dc8dfaf"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Dexamethasone_95.csv",
+          "bytes": 1895601,
+          "oid": "3050bc2cdf725fb7ac876c19b32fe533d6ffbec3"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Trichostatin A_28.5.csv",
+          "bytes": 1939222,
+          "oid": "ee7b9f355e15717e5fbfea47a53515c20a9409a9"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Trichostatin A_300.csv",
+          "bytes": 2133376,
+          "oid": "970dbade5c7eaf9efb0303c74d3b075e4317fd2d"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Trichostatin A_3000.csv",
+          "bytes": 2128595,
+          "oid": "a8e0e80d189aa5bb0da82fddebc14d546d8f9415"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Trichostatin A_9.5.csv",
+          "bytes": 1907954,
+          "oid": "30b167265bc0bec9fcff5d58475280fde80dbc24"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Trichostatin A_900.csv",
+          "bytes": 2181508,
+          "oid": "1020b76bdd377679dad0ddcf5c67dadf4f201cbf"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_epithelial_melanocytes_Trichostatin A_95.csv",
+          "bytes": 2032118,
+          "oid": "9f09f751157d60bd04b12b4fbba79e88f3bf1bd3"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Brefeldin-A_28.5.csv",
+          "bytes": 1909851,
+          "oid": "51c8a46a7f9e8f1e8e8ef1a583751553ab1562a6"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Brefeldin-A_300.csv",
+          "bytes": 1920342,
+          "oid": "2441459a8b2b83fe8c33cac2cc766ef49bd2875e"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Brefeldin-A_3000.csv",
+          "bytes": 1902815,
+          "oid": "c22ac220edfd3db3bfff47399580fdffcba15ab2"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Brefeldin-A_9.5.csv",
+          "bytes": 1748113,
+          "oid": "f356455caf3c4441a3209c5ccafbc8190b794ab4"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Brefeldin-A_900.csv",
+          "bytes": 1953034,
+          "oid": "f3913e1d57a0fd12bf5613b487ade72d313c8067"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Brefeldin-A_95.csv",
+          "bytes": 1869581,
+          "oid": "9ab521df6d0a8e6e936bf57890be34a43164aa7d"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Dexamethasone_28.5.csv",
+          "bytes": 1896538,
+          "oid": "c19a0a1223aee416a35d393a3d172a03d363e1c0"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Dexamethasone_300.csv",
+          "bytes": 1859025,
+          "oid": "754fb842170df0d41a8fae40cbba9cb786b7d0bf"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Dexamethasone_3000.csv",
+          "bytes": 1868874,
+          "oid": "51c38da071a2af6334d638619284f81de32d8811"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Dexamethasone_9.5.csv",
+          "bytes": 1866320,
+          "oid": "5ca3fc6a0de7787b2d343097afa1cc131aedb842"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Dexamethasone_900.csv",
+          "bytes": 1889752,
+          "oid": "d418723b63137aea8f420a6372b9ec62e054b18d"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Dexamethasone_95.csv",
+          "bytes": 1839000,
+          "oid": "ba65ef521a3d0fdb4411ccbf523437b5aefe8a57"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Trichostatin A_28.5.csv",
+          "bytes": 1792224,
+          "oid": "f2f1349e9ce37c264ef023846ec377acd8617fb9"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Trichostatin A_300.csv",
+          "bytes": 1862289,
+          "oid": "622ce519245d7b04297946c39e92ef9333ded01a"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Trichostatin A_3000.csv",
+          "bytes": 2026512,
+          "oid": "4f8ef6fd557aae5ddeac1d5b9cdceaebdaab7643"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Trichostatin A_9.5.csv",
+          "bytes": 1888106,
+          "oid": "284f1d664f942190b53214e46c43a2ca30f25514"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Trichostatin A_900.csv",
+          "bytes": 1985869,
+          "oid": "ea58c257964cef8ea5f7846ff31ffdb9e653784e"
+        },
+        {
+          "path": "environment/data/pos_de_res/DE_results_human_skeletal_muscle_myoblasts_Trichostatin A_95.csv",
+          "bytes": 1824652,
+          "oid": "cd1d9f513179e38195ae6e0130ebc1ed4a55114b"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 12841,
+          "oid": "220897154475909b2e8fa7c7fa43d86fe739f9c2"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 17522,
+          "oid": "704bf972438ac4d7471cc4b263f6fdcb7eac7fbb"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 614,
+          "oid": "ffc36a91d7aeed94c1fa435ff4944910273f23b2"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 8638,
+          "oid": "6ca82b5efaafa2063e9b81a14d96acaf199257e6"
+        }
+      ]
+    },
+    {
+      "id": "da-20-4",
+      "title": "Public analysis da-20-4",
+      "files": [
+        {
+          "path": "environment/data/GDPx2-GeneCounts.h5",
+          "bytes": 569401878,
+          "oid": "1ec0c4c2238b5688e473d4d6d1e1722923545172",
+          "lfs_pointer_bytes": 134
+        },
+        {
+          "path": "environment/data/Metadata.csv",
+          "bytes": 5206109,
+          "oid": "103ff1fffdabe334a0f7f4b37843878d7ec5b85c"
+        },
+        {
+          "path": "environment/data/utils.R",
+          "bytes": 2980,
+          "oid": "a8d651a44e102ffdd95b893ebf9e6e3dca2421e5"
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 443,
+          "oid": "5ec7bd3e32817206c4b69b38fce78020f5bac967"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5555,
+          "oid": "6f5dfd21ca373be48ae3da59bcf827e403fcda7f"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 612,
+          "oid": "bf22c9b4c62ab4a51be3171836ec855affa975b8"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 7316,
+          "oid": "2ac6b0e6530f0bd71eb2ada44fac32ba742ca9b5"
+        }
+      ]
+    },
+    {
+      "id": "da-24-3",
+      "title": "Public analysis da-24-3",
+      "files": [
+        {
+          "path": "environment/data/discovery.summary.gz",
+          "bytes": 9594863,
+          "oid": "349a4316dfaed19c7213d6acd7218bff2d7978e5",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/metabolite.gz",
+          "bytes": 2036140,
+          "oid": "35d5b8a73ac5dabca73e09f09ef6e2bef3bb98fb",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/replication.summary.gz",
+          "bytes": 9757950,
+          "oid": "1fe788db3bea52e5711217a7629a9fdeb9a60349",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 289,
+          "oid": "a12356a7afe51446fd981af1fdf108afc08971f9"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 4831,
+          "oid": "e563971c361582c3acc72ca569779527f935e0cd"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 597,
+          "oid": "ec58dfc1d2cce07296a41e5755cab4d8bca52bdb"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5783,
+          "oid": "d7177f470c9a338b2decfde3b4325665ed0fe716"
+        }
+      ]
+    },
+    {
+      "id": "da-25-1",
+      "title": "Public analysis da-25-1",
+      "files": [
+        {
+          "path": "environment/data/data_clinical_patient_TCGA.txt",
+          "bytes": 387144,
+          "oid": "2fbdb5fbc9aa65ef959d502f9c0be73019cccdbd"
+        },
+        {
+          "path": "environment/data/data_mrna_seq_v2_rsem_TCGA.txt",
+          "bytes": 87308566,
+          "oid": "0b0477feca472e6fa152a4ed6d4d5b4724019eff",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/data_mutations_TCGA.txt",
+          "bytes": 40061566,
+          "oid": "c0b67e397ab52a526bea95be1acf08cab8c52b8b",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE118435_RAW.tar",
+          "bytes": 28170240,
+          "oid": "a4f94ebeee9297dbadfe25231f83c9f83b7623a3",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/GSE120741_Porto_ge_table.txt.gz",
+          "bytes": 7492027,
+          "oid": "f27f163cd4a3b598f525058a6185037dad5542b7",
+          "lfs_pointer_bytes": 132
+        },
+        {
+          "path": "environment/data/GSE126078_CRPC.zip",
+          "bytes": 69044102,
+          "oid": "88cb54d98219a8c689e88db8e52283ecaf915223",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 449,
+          "oid": "5d497b1c8f0c1ea8dff644ab0bbd4d74a1c387ae"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5981,
+          "oid": "43749ff7480dbb4786ea884787361a14e8bfb1fc"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 606,
+          "oid": "6636380749841a9508df0dd08c151b582bf3d6ae"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6781,
+          "oid": "e0c3cd89ef464e4a7527c0b2a3dea30633aff533"
+        }
+      ]
+    },
+    {
+      "id": "da-26-2",
+      "title": "Public analysis da-26-2",
+      "files": [
+        {
+          "path": "environment/data/sub_CCLE_depmapscore.txt",
+          "bytes": 66856157,
+          "oid": "02cfc608bae8a71b07b095811a7b66f8c05deb39",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/sub_CCLE_exp.Rdata",
+          "bytes": 39179056,
+          "oid": "cf759b68822d4a7b7cd002e2fa501b8f62c4d128",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/sub_CCLE_TCGA_ID_meta.csv",
+          "bytes": 323582,
+          "oid": "22c8e8d447ee91de1d63e2741599a995c25ae8c2"
+        },
+        {
+          "path": "environment/data/sub_TCGA_depmapscore.txt",
+          "bytes": 88279539,
+          "oid": "bd7d4b5e7b2a75df4819447f0458f8a24080651e",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/sub_TCGA_exp.txt",
+          "bytes": 40728136,
+          "oid": "e2a31f11a718f056dbbf0b66a962efca118ce986",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 385,
+          "oid": "c26e89b908892e444e79f7a161981ca92e6dff73"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5316,
+          "oid": "83a24fb7c27b532692306c8caf9b72d0035b55a2"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 606,
+          "oid": "9261798c2d98a19f83a5763e84c4c91bbd860146"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 5399,
+          "oid": "46e17373f73994cd7e7c654d92d428f1c81d1a56"
+        }
+      ]
+    },
+    {
+      "id": "da-26-4",
+      "title": "Public analysis da-26-4",
+      "files": [
+        {
+          "path": "environment/data/BRCA_damaging_mut.csv",
+          "bytes": 5358689,
+          "oid": "8b646ab457c178784f5222f48192fc4c6546c5b1"
+        },
+        {
+          "path": "environment/data/sub_CCLE_depmapscore.txt",
+          "bytes": 66856157,
+          "oid": "02cfc608bae8a71b07b095811a7b66f8c05deb39",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/sub_CCLE_exp.Rdata",
+          "bytes": 39179056,
+          "oid": "cf759b68822d4a7b7cd002e2fa501b8f62c4d128",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/sub_CCLE_TCGA_ID_meta.csv",
+          "bytes": 323582,
+          "oid": "22c8e8d447ee91de1d63e2741599a995c25ae8c2"
+        },
+        {
+          "path": "environment/data/sub_TCGA_depmapscore.txt",
+          "bytes": 88279539,
+          "oid": "bd7d4b5e7b2a75df4819447f0458f8a24080651e",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/data/sub_TCGA_exp.txt",
+          "bytes": 40728136,
+          "oid": "e2a31f11a718f056dbbf0b66a962efca118ce986",
+          "lfs_pointer_bytes": 133
+        },
+        {
+          "path": "environment/Dockerfile",
+          "bytes": 428,
+          "oid": "40566ba18c0349bbbe31f0e4f2ab637b20f1d717"
+        },
+        {
+          "path": "instruction.md",
+          "bytes": 5588,
+          "oid": "e44799f9ff5287f67f11c0022de4bb223baeff31"
+        },
+        {
+          "path": "task.toml",
+          "bytes": 606,
+          "oid": "84f1695562e7f9645d3b9ec07cf6d9fcb3dab053"
+        },
+        {
+          "path": "tests/rubric.txt",
+          "bytes": 6337,
+          "oid": "51ea5d68ed7348da0e3276f3052ff56889c947f9"
+        }
+      ]
+    }
+  ]
+}

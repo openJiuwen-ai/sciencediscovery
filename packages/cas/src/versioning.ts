@@ -3,7 +3,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, readdir, readFile, readlink, rm } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, readFile, readlink, rm, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -100,7 +100,26 @@ export class VersionStore {
    * dependency graph, but unchanged objects need not be read and hashed again.
    */
   private readonly commitValidationCache = new Map<string, VerifiedObject>();
+  private readonly workspaceFiles = new Map<string, { source: ObjectIdentity; object: ObjectIdentity; ref: DataRef }>();
   constructor(readonly dataDir: string) {}
+
+  /** Reuse only bytes already hashed by this store, while both file identities remain unchanged. */
+  async putWorkspaceFile(path: Buffer, file: FileHandle): Promise<DataRef> {
+    const key = path.toString("base64");
+    const before = await file.stat({ bigint: true });
+    const cached = this.workspaceFiles.get(key);
+    if (cached && this.sameIdentity(before, cached.source)) {
+      let object: ObjectIdentity | undefined;
+      try { object = await this.objectIdentity(cached.ref); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (object && this.sameIdentity(object, cached.object)) return cached.ref;
+    }
+    const ref = await this.putStream("data", file.createReadStream({ autoClose: false, start: 0 }));
+    const after = await file.stat({ bigint: true });
+    if (!this.sameIdentity(before, after)) throw new Error("Workspace changed during snapshot");
+    this.workspaceFiles.set(key, { source: after, object: await this.objectIdentity(ref), ref });
+    return ref;
+  }
 
   poolRoot(pool: Pool): string { return resolve(this.dataDir, "versioning", pool); }
 
@@ -315,7 +334,7 @@ export async function snapshotWorkspace(store: VersionStore, root: string): Prom
         try {
           const opened = await file.stat({ bigint: true });
           if (!opened.isFile() || opened.ino !== info.ino || opened.dev !== info.dev) throw new Error("Workspace changed during snapshot");
-          content = await store.putStream("data", file.createReadStream({ autoClose: false }));
+          content = await store.putWorkspaceFile(child, file);
           const after = await file.stat({ bigint: true });
           if (opened.size !== after.size || opened.mtimeNs !== after.mtimeNs || opened.ctimeNs !== after.ctimeNs) throw new Error("Workspace changed during snapshot");
         } finally { await file.close(); }

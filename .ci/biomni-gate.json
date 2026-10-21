@@ -1,0 +1,22 @@
+{
+  "mode": "temporary",
+  "baseline": null,
+  "score_drop_points": 0,
+  "resource_increase_ratio": 0,
+  "temporary_baseline": {
+    "name": "a3-two-complete-runs-2026-10-21",
+    "scope": "final-valid-results-excluding-earlier-failed-attempts",
+    "mean_score": 67.7,
+    "total_tokens": 195099712,
+    "tool_rounds": 2042,
+    "sum_e2e_ms": 78765208.349233,
+    "p95_peak_rss_gib": 11.201639801025376
+  },
+  "thresholds": {
+    "score_drop": { "warning": 3, "block": 5 },
+    "total_tokens": { "warning": 0.15, "block": 0.25 },
+    "tool_rounds": { "warning": 0.3, "block": 0.5 },
+    "sum_e2e_ms": { "warning": 0.2, "block": 0.3 },
+    "p95_peak_rss_gib": { "warning": 0.2, "block": 0.3, "warning_min_gib": 1, "block_min_gib": 2 }
+  }
+}

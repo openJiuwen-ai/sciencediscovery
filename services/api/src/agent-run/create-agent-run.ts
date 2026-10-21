@@ -102,7 +102,11 @@ export function createAgentRun(
     },
     workspaceRoot: profile.workspaceRoot,
   });
-  const unsubscribe = bindings.observer ? agent.subscribe(bindings.observer) : () => undefined;
+  const unsubscribe = bindings.observer ? agent.subscribe((event) => {
+    // Run observers retain one invocation record. The final summary is the whole loop, not its last call.
+    if (event.type === "usage") bindings.observer!({ ...event, type: "model_usage", usageReported: true });
+    bindings.observer!(event);
+  }) : () => undefined;
   const abort = () => agent.abort();
   bindings.abortSignal?.addEventListener("abort", abort, { once: true });
   if (bindings.abortSignal?.aborted) abort();

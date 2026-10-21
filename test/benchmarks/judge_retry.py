@@ -21,19 +21,21 @@ def write_json(path, value):
         json.dump(value, stream, ensure_ascii=False, indent=2)
 
 
-def judge_with_retries(body, request, validate, output, *, sleep=time.sleep):
+def judge_with_retries(body, request, validate, output, *, sleep=time.sleep, max_retries=MAX_RETRIES):
     """Same evidence/rubric on every attempt, first valid answer wins.
 
     request accepts a JSON body and must impose REQUEST_TIMEOUT_SECONDS.
     validate parses the message content and enforces the case's scoring contract.
     """
+    if not isinstance(max_retries, int) or isinstance(max_retries, bool) or not 0 <= max_retries <= MAX_RETRIES:
+        raise ValueError('max_retries must be an integer between 0 and 3')
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     body = copy.deepcopy(body)
     body["max_tokens"] = MAX_TOKENS
     write_json(output / "request.json", body)
     attempts = []
-    for attempt in range(1, MAX_RETRIES + 2):
+    for attempt in range(1, max_retries + 2):
         started = time.monotonic()
         entry = {"attempt": attempt}
         retryable = True
@@ -46,7 +48,7 @@ def judge_with_retries(body, request, validate, output, *, sleep=time.sleep):
                 raise ValueError(f"Judge response incomplete: finish_reason={choice.get('finish_reason')}")
             result = validate(choice["message"].get("content") or "")
             result.update(usage=raw.get("usage"), model=body["model"],
-                          judge_recovery={"max_tokens": MAX_TOKENS, "max_retries": MAX_RETRIES,
+                          judge_recovery={"max_tokens": MAX_TOKENS, "max_retries": max_retries,
                                           "attempt": attempt, "records": str(output)})
             entry["status"] = "scored"
         except urllib.error.HTTPError as error:
@@ -59,6 +61,6 @@ def judge_with_retries(body, request, validate, output, *, sleep=time.sleep):
         write_json(output / "attempts.json", attempts)
         if entry["status"] == "scored":
             return result, raw
-        if not retryable or attempt == MAX_RETRIES + 1:
+        if not retryable or attempt == max_retries + 1:
             raise ValueError(f"Judge failed after {attempt} attempt(s): {entry['error']}; see {output}")
         sleep(5 * attempt)

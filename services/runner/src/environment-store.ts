@@ -305,6 +305,14 @@ function emptyCatalog(): EnvironmentCatalog {
   return { environments: [], revisions: [], version: CATALOG_VERSION };
 }
 
+/** External environment commands must fail before the gateway's default idle deadline. */
+export async function executeEnvironmentCommand(executable: string, args: string[], environment: NodeJS.ProcessEnv,
+  timeoutMs = 180_000): Promise<string> {
+  const result = await execFileAsync(executable, args, { encoding: "utf8", env: environment,
+    timeout: timeoutMs, killSignal: "SIGTERM", maxBuffer: 8 * 1024 * 1024 });
+  return result.stdout;
+}
+
 export class EnvironmentStore {
   private catalog = emptyCatalog();
   private initialized = false;
@@ -358,16 +366,11 @@ export class EnvironmentStore {
     };
     this.provisionerInstaller = provisionerInstaller;
     this.provisioner = provisioner ?? (async (provisionerPath, arguments_, _jobId, environment) => {
-      const result = await execFileAsync(provisionerPath, arguments_, {
-        encoding: "utf8",
-        env: {
-          ...(environment ?? process.env),
-          MAMBA_ROOT_PREFIX: resolve(config.root, "provisioner"),
-          ...(config.packageCacheDir ? { CONDA_PKGS_DIRS: config.packageCacheDir } : {}),
-        },
-        maxBuffer: 8 * 1024 * 1024,
+      return executeEnvironmentCommand(provisionerPath, arguments_, {
+        ...(environment ?? process.env),
+        MAMBA_ROOT_PREFIX: resolve(config.root, "provisioner"),
+        ...(config.packageCacheDir ? { CONDA_PKGS_DIRS: config.packageCacheDir } : {}),
       });
-      return result.stdout;
     });
   }
 
@@ -681,7 +684,7 @@ export class EnvironmentStore {
     if (indexUrl !== undefined && manager !== "pip") throw new Error("indexUrl can only be used with manager=pip");
     const normalizedIndexUrl = manager === "pip" && indexUrl !== undefined
       ? normalizePipIndexUrl(indexUrl)
-      : externalUrl("package_indexes.pypi_simple");
+      : normalizePipIndexUrl(process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || externalUrl("package_indexes.pypi_simple"));
     if (manager !== "conda") {
       const executable = manager === "pip" ? "python" : "R";
       await access(resolve(this.revisionPath(id, environment.runtimeRevisionId ?? environment.currentRevisionId), "bin", executable), constants.X_OK)
@@ -1182,7 +1185,7 @@ export class EnvironmentStore {
   }
 
   private async runManagedCommand(executable: string, arguments_: string[], jobId: string): Promise<string> {
-    const environment = { ...process.env };
+    const environment: NodeJS.ProcessEnv = { ...process.env, PIP_DEFAULT_TIMEOUT: process.env.PIP_DEFAULT_TIMEOUT || "20", PIP_RETRIES: process.env.PIP_RETRIES || "1" };
     delete environment.PYTHONHOME;
     delete environment.PYTHONPATH;
     delete environment.PYTHONUSERBASE;

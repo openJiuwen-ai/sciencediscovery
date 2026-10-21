@@ -138,7 +138,7 @@ export function resultsLabel(slice, query=false) {
 }
 
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard;const query={};
+  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard,targetArch;const query={};
   while(args.length){
     const flag=args.shift();
     // pnpm versions differ on whether the conventional separator is stripped,
@@ -150,6 +150,10 @@ export async function main(args=process.argv.slice(2)) {
     else if(flag==='--coverage')coverage=true;
     else if(flag==='--backend')backend=args.shift();
     else if(flag==='--shard')shard=args.shift();
+    else if(flag==='--target-arch'){
+      targetArch=args.shift();
+      if(!['amd64','arm64'].includes(targetArch))throw new Error('Invalid --target-arch; use amd64 or arm64');
+    }
     else if(flag?.startsWith('--')&&schema.groups[flag.slice(2)]){
       const group=flag.slice(2),value=args.shift();
       if(!schema.groups[group].values.includes(value))throw new Error(`Unknown ${group}: ${value}; expected ${schema.groups[group].values.join('|')}`);
@@ -243,12 +247,12 @@ export async function main(args=process.argv.slice(2)) {
   // selector is then evaluated on that concrete instance.
   const targets=dimensions.length
     ?(requestedOs??[profile.targets[0].os]).flatMap(os=>(requestedArch??[profile.targets[0].arch]).map(arch=>({os,arch})))
-    :profile.targets;
+    :profile.targets.map(t=>targetArch?{...t,arch:targetArch}:t);
   let plan=createPlan(catalog,{revision,selector:selector||'',targets,execution,...(dimensions.length?{}:{profile:profileName})});
   if(needPW){
     // Pin the evaluator/input implementation independently of the candidate
     // product SHA so stored scores identify their judge/rubric version.
-    const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/helpers/*result.mjs'],{cwd:root})].sort();
+    const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/benchmarks/**/*.mjs','test/helpers/*result.mjs','test/helpers/real-delivery.*','test/biomnibench-da-swarm.spec.ts','.ci/biomni-gate.mjs'],{cwd:root})].sort();
     const evaluatorRevision=fileDigest(sources.map(p=>p+'\n'+fileDigest(readFileSync(join(root,p)))).join('\n'));
     plan=subplan({...plan,evaluatorRevision},plan.entries);
   }

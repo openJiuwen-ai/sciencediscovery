@@ -333,3 +333,27 @@ test("runSubagentTask returns an unstarted handle visible before synchronous max
   assert.equal(turnCount, 2);
   assert.equal(abortCount, 1);
 });
+
+
+test("the retained invocation uses the complete loop summary instead of only its last model call", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  let retained: unknown;
+  const profile = createMainAgentProfile({ connectorIds: [], gatewayThreadId: "usage-test", runTimeoutMs: 1000, workspaceRoot: "/workspace" });
+  const usage = { inputTokens: 30, outputTokens: 3, totalTokens: 33, cacheReadTokens: null, cacheWriteTokens: null };
+  const handle = createAgentRun(profile, {
+    workspace: workspaceBindings(),
+    observer(event) { if (event.type === "model_usage") retained = event.usage; },
+    createAgent() { return {
+      abort() {}, beginExternalWait: () => () => undefined, async prompt() {},
+      subscribe(next) { listener = next; return () => undefined; },
+      async execute() {
+        listener!({ type: "model_usage", usage: { ...usage, inputTokens: 10, outputTokens: 1, totalTokens: 11 }, usageReported: true } as AgentEvent);
+        listener!({ type: "model_usage", usage: { ...usage, inputTokens: 20, outputTokens: 2, totalTokens: 22 }, usageReported: true } as AgentEvent);
+        listener!({ type: "usage", usage } as AgentEvent);
+        return { finalMessages: [] };
+      },
+    }; },
+  }, { agentRunId: "usage-loop", history: [], prompt: "inspect", purpose: "initial", requestExecutionId: "usage-execution" });
+  await handle.execute();
+  assert.deepEqual(retained, usage);
+});

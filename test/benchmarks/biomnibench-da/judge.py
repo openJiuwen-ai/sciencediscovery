@@ -58,7 +58,8 @@ def main():
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.load(response)
     result, raw = judge_with_retries(body, request, lambda content: score_response(json.loads(content), rubric),
-                                    Path(args.output).with_suffix(".attempts"))
+                                    Path(args.output).with_suffix(".attempts"),
+                                    max_retries=int(os.environ.get("BIOMNI_JUDGE_MAX_RETRIES", "3")))
     raw_path = Path(args.output).with_name("judge-response.json")
     with raw_path.open("w") as stream:
         os.chmod(raw_path, 0o600)
