@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+research_python="${SCIENCE_TEST_PYTHON:-3.12}"
+printf 'research test Python: %s\n' "$research_python"
 prepare_upstream() {
   if [[ -z "${DRB_UPSTREAM_DIR:-}" ]]; then
     export DRB_UPSTREAM_DIR="${CI_RUNTIME_DIR:-$PWD/.test-runs}/drb-evaluator"
@@ -13,7 +15,7 @@ prepare_upstream() {
   fi
 }
 race_unit() {
-  uv run --no-project --python "${SCIENCE_TEST_PYTHON:-3.12}" --with requests==2.32.3 --with python-dotenv==1.0.1 --with tqdm==4.67.1 \
+  uv run --no-project --python "$research_python" --with requests==2.32.3 --with python-dotenv==1.0.1 --with tqdm==4.67.1 \
     python .ci/research-unittest.py test/benchmarks/deepresearchbench
 }
 case "${1:-}" in
@@ -23,7 +25,7 @@ case "${1:-}" in
     fi
     prepare_upstream
     if [[ "$1" == unit ]]; then
-      uv run --no-project --python "${SCIENCE_TEST_PYTHON:-3.12}" --with pandas==2.3.3 --with numpy==2.2.6 --with scipy==1.15.3 \
+      uv run --no-project --python "$research_python" --with pandas==2.3.3 --with numpy==2.2.6 --with scipy==1.15.3 \
         python .ci/research-unittest.py test/benchmarks/biomnibench-da
     fi
     race_unit
