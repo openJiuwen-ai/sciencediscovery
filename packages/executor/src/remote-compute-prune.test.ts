@@ -15,7 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdtemp, readdir, readlink, rm, writeFile } from "node:fs/promises";
@@ -52,26 +52,36 @@ async function binDirectory(context: TestContext): Promise<string> {
   await writeFile(resolve(root, "sciencediscovery-runner"), "a pre-installed runner");
   await writeFile(resolve(root, name("e").slice(0, 63)), "63 hex characters");
   await writeFile(resolve(root, `.upload-${"f".repeat(24)}`), "an interrupted transfer");
-  await copyFile("/bin/sleep", resolve(root, BUSY));
+  // Ubuntu 26.04's /bin/sleep is the uutils multi-call binary. Executing a copy
+  // whose name is not "sleep" returns immediately, so the prune script is right
+  // to treat that file as idle. bash stays on this path when its command is not
+  // one simple command: bash would otherwise exec that command and replace itself.
+  await copyFile("/bin/bash", resolve(root, BUSY));
   await chmod(resolve(root, BUSY), 0o700);
   return root;
 }
 
 /** A process genuinely executing a binary out of the directory under test. */
-async function runningBinary(context: TestContext, directory: string): Promise<void> {
+async function runningBinary(context: TestContext, directory: string): Promise<ChildProcess> {
   const path = resolve(directory, BUSY);
-  const child = spawn(path, ["30"], { stdio: "ignore" });
+  const child = spawn(path, ["-c", "sleep 30 & wait"], { stdio: "ignore" });
   context.after(() => void child.kill("SIGKILL"));
   await once(child, "spawn");
   const deadline = Date.now() + 5_000;
   let executable: string | undefined;
   do {
     executable = await readlink(`/proc/${child.pid}/exe`).catch(() => undefined);
-    if (executable === path) return;
+    if (executable === path) return child;
     assert.ok(child.exitCode === null && child.signalCode === null && Date.now() < deadline,
       `Expected /proc/${child.pid}/exe to become ${path}; last observed exe: ${executable ?? "<unreadable>"}`);
     await delay(10);
   } while (true);
+}
+
+function assertStillRunning(child: ChildProcess, result: ScriptResult): void {
+  const evidence = scriptEvidence(result);
+  assert.equal(child.exitCode, null, evidence);
+  assert.equal(child.signalCode, null, evidence);
 }
 
 interface ScriptResult { code: number; stdout: string; stderr: string }
@@ -145,11 +155,12 @@ async function assertDeployments(directory: string, result: ScriptResult, extraP
 for (const shell of SHELLS) {
   test(`pruning under ${shell} keeps the current and the busy binary and removes the rest`, async (context) => {
     const directory = await binDirectory(context);
-    await runningBinary(context, directory);
+    const child = await runningBinary(context, directory);
 
     const result = await runScript(shell, pruneRunnerBinariesScript(resolve(directory, CURRENT)));
 
     await assertDeployments(directory, result);
+    assertStillRunning(child, result);
   });
 
   test(`pruning under ${shell} rechecks a binary that starts after the first busy scan`, async (context) => {
@@ -159,25 +170,28 @@ for (const shell of SHELLS) {
     const first = name("0");
     await writeFile(resolve(directory, first), "superseded");
     let started = false;
+    let child: ChildProcess | undefined;
     const result = await runScript(shell, pruneRunnerBinariesScript(resolve(directory, CURRENT)), {
       beforeFirstRemoval: async () => {
-        await runningBinary(context, directory);
+        child = await runningBinary(context, directory);
         started = true;
       },
     });
 
-    assert.ok(started, scriptEvidence(result));
+    assert.ok(started && child, scriptEvidence(result));
     await assertDeployments(directory, result, [first]);
+    assertStillRunning(child, result);
   });
 
   test(`pruning under ${shell} preserves busy entries when another process is unreadable`, async (context) => {
     const directory = await binDirectory(context);
-    await runningBinary(context, directory);
+    const child = await runningBinary(context, directory);
 
     const result = await runScript(shell, pruneRunnerBinariesScript(resolve(directory, CURRENT)), { unreadableSelf: true });
 
     assert.match(result.stderr, /=> <unreadable>/, scriptEvidence(result));
     await assertDeployments(directory, result);
+    assertStillRunning(child, result);
   });
 }
 
