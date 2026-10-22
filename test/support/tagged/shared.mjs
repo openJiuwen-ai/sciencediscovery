@@ -184,9 +184,9 @@ export async function main(args=process.argv.slice(2)) {
   const env={...process.env,CI:'1',UV_CACHE_DIR:process.env.UV_CACHE_DIR||join(root,'.tmp/cache/uv'),
     UV_PYTHON_INSTALL_DIR:join(root,'.tmp/python'),npm_config_cache:join(root,'.tmp/cache/npm'),
     PLAYWRIGHT_BROWSERS_PATH:join(root,'.e2e/browsers'),CI_RESULTS_DIR:outputDir,
-    // The harness self-test needs an interpreter with pytest; the project
-    // virtualenvs preparation just built are the ones this revision pins.
-    SCIENCE_TEST_PYTHON:python('paper'),
+    // Gateway pins Python 3.12 and includes pytest. Paper may use newer Python
+    // versions incompatible with the research check's scientific dependencies.
+    SCIENCE_TEST_PYTHON:process.env.SCIENCE_TEST_PYTHON||python('gateway'),
     SCIENCE_DISCOVERY_DATA_DIR:join(outputDir,'runtime'),SCIENCE_AGENT_DATA_DIR:join(outputDir,'runtime')};
   // Collection scope follows the categories asked for, whichever way they were
   // asked: a query for `--category e2e` needs Chromium and not the Python
