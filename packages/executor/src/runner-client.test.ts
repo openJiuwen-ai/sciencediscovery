@@ -64,3 +64,28 @@ test("direct capability probes preserve target workspace scope and caller cancel
   await assert.rejects(client.directExecutionCapability(controller.signal, remote), /abort/i);
   assert.equal(requests.length, 3, "an aborted probe must not reach the target");
 });
+
+test("managed result integrity is checked before clock conversion and structured conflicts survive HTTP", async t => {
+  const { createHash } = await import("node:crypto");
+  const result = { stdout: "original", startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z" };
+  const canonical = JSON.stringify(Object.fromEntries(Object.entries(result).sort(([a], [b]) => a.localeCompare(b))));
+  const digest = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+  let tamper = false; let conflict = false;
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.setHeader("date", "Thu, 01 Jan 2026 01:00:00 GMT");
+    if (conflict) { response.statusCode = 409; response.end(JSON.stringify({ code: "EXECUTION_ID_CONFLICT", error: "conflict" })); return; }
+    response.end(JSON.stringify({ id: "job", sessionId: "session", agentId: "main", state: "completed", queuedAt: "now",
+      evidence: { resultDigest: digest }, result: { ...result, stdout: tamper ? "changed" : result.stdout } }));
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  t.after(() => new Promise<void>(done => { server.close(() => done()); server.closeAllConnections(); }));
+  const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "fixture-token");
+  const value = await client.getShellExecution("job", { sessionId: "session", agentId: "main" });
+  assert.equal(value.result!.stdout, "original");
+  assert.notEqual(value.result!.startedAt, result.startedAt, "clock adjustment occurs after verification");
+  tamper = true;
+  await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), { code: "RESULT_DIGEST_MISMATCH" });
+  conflict = true;
+  await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), { statusCode: 409, code: "EXECUTION_ID_CONFLICT" });
+});

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createHash } from "node:crypto";
+
 import {
   createExecutionSignature,
   skillBundleIdentity,
@@ -116,6 +118,13 @@ export class RunnerClient {
 
   /** A managed execution record and its nested result, on this machine's clock. */
   private managedExecutionTimes(execution: ManagedExecution): ManagedExecution {
+    // Verify Runner-owned immutable bytes before converting timestamps to the API clock.
+    if (execution.evidence?.resultDigest && execution.result) {
+      const canonical = JSON.stringify(execution.result, (_key, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value);
+      const digest = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+      if (digest !== execution.evidence.resultDigest) throw Object.assign(new Error("Runner execution result digest mismatch"), { code: "RESULT_DIGEST_MISMATCH" });
+    }
     return {
       ...this.localExecutionTimes(execution),
       ...(execution.result ? { result: this.localExecutionTimes(execution.result) } : {}),
@@ -309,8 +318,8 @@ export class RunnerClient {
     });
     this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) {
-      const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
-      throw Object.assign(new Error(body.error || `Runner request failed (${response.status})`), { statusCode: response.status });
+      const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string; code?: string };
+      throw Object.assign(new Error(body.error || `Runner request failed (${response.status})`), { statusCode: response.status, code: body.code });
     }
     return await response.json() as T;
   }

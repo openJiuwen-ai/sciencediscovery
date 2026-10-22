@@ -177,13 +177,14 @@ test("multi-step persistent R executions create separate runs and an artifact de
   assert.equal(shellRun.tool, "run_shell");
   assert.equal(await recorder.cas.verify(revision.snapshot.hash), true);
   assert.deepEqual(store.listEnvironments(), [localEnvironment], "remote catalog must not replace local environments");
+  const verifiedRuns = await store.listExecutionRuns(session.id);
   runnerClient.environmentSnapshot = async () => Buffer.from("corrupt snapshot");
   await assert.rejects(recorder.executeShell({
     agentId: "main", code: "Rscript analysis.R", environmentId: environment.id, cwd: "analysis",
     permissionEpoch, runnerClient, sessionId: session.id, turnId: "turn-bad-snapshot", workspaceRoot,
   }), /snapshot/i);
-  assert.equal((await store.listExecutionRuns(session.id)).at(-1)?.turnId, "turn-bad-snapshot",
-    "completed execution must still be recorded when environment snapshot synchronization fails");
+  assert.deepEqual(await store.listExecutionRuns(session.id), verifiedRuns,
+    "unverified environment snapshots must not commit successful shell provenance");
 });
 
 for (const direct of [false, true]) {

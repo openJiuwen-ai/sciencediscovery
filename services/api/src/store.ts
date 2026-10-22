@@ -21,7 +21,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
 import { PluginControl } from "./plugins/control.js";
-import { type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
+import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -1191,6 +1191,7 @@ export class SessionStore {
   }
 
   close(): void {
+    this.shellExecutionStore?.close();
     this.executionBlocks.close();
     this.database?.close();
     this.database = undefined;
@@ -3271,6 +3272,26 @@ export class SessionStore {
         }
       } finally { refs.close(); }
       for (const { input, path } of prepared) {
+        // Finalization can be retried after a later writer has already advanced
+        // this path. Reuse the original execution revision without moving the
+        // current pointer backwards or minting another output revision.
+        const prior = input.mode === "write" && input.executionRunId
+          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.sessionId === sessionId
+            && candidate.path === path && candidate.executionRunId === input.executionRunId)
+          : undefined;
+        if (prior) {
+          if (prior.contentHash !== input.contentHash || prior.size !== input.size
+            || prior.origin !== input.origin || prior.runId !== input.runId
+            || prior.toolCallId !== input.toolCallId || prior.toolName !== input.toolName
+            || prior.subagentId !== input.subagentId) {
+            throw new Error("EXECUTION_RESULT_CONFLICT: Workspace execution output changed");
+          }
+          // A prior save may have failed after mutating the in-memory catalog.
+          // Reflush it before acknowledging an idempotent recovery commit.
+          catalogChanged = true;
+          revisions.push(structuredClone(prior));
+          continue;
+        }
         const parent = input.parentRevisionId
           ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === input.parentRevisionId)
           : undefined;
@@ -5232,6 +5253,13 @@ export class SessionStore {
   async appendExecutionRun(run: ExecutionRun): Promise<void> {
     this.assertSessionWritable(run.sessionId);
     await this.mutateArray<ExecutionRun, void>(this.executionRunsPath(run.sessionId), (runs) => {
+      const existing = runs.find((candidate) => candidate.id === run.id);
+      if (existing) {
+        if (canonicalize(JSON.parse(JSON.stringify(existing))) !== canonicalize(JSON.parse(JSON.stringify(run)))) {
+          throw new Error("EXECUTION_RESULT_CONFLICT: execution already has different provenance");
+        }
+        return;
+      }
       runs.push(run);
     });
   }
@@ -5306,9 +5334,18 @@ export class SessionStore {
 
   async appendArtifactDerivations(sessionId: string, additions: ArtifactDerivation[]): Promise<void> {
     this.assertSessionWritable(sessionId);
-    const derivations = await this.listArtifactDerivations(sessionId);
-    derivations.push(...additions);
-    await this.writeArray(this.artifactDerivationsPath(sessionId), derivations);
+    await this.mutateArray<ArtifactDerivation, void>(this.artifactDerivationsPath(sessionId), (derivations) => {
+      for (const addition of additions) {
+        const existing = derivations.find((candidate) => candidate.id === addition.id);
+        if (existing) {
+          if (canonicalize(JSON.parse(JSON.stringify(existing))) !== canonicalize(JSON.parse(JSON.stringify(addition)))) {
+            throw new Error("EXECUTION_RESULT_CONFLICT: output derivation already has different content");
+          }
+          continue;
+        }
+        derivations.push(addition);
+      }
+    });
   }
 
   async listPromptManifests(sessionId: string): Promise<PromptManifest[]> {

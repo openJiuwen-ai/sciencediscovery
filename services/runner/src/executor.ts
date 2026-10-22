@@ -162,7 +162,15 @@ export async function workspaceSnapshot(workspaceRoot: string): Promise<Map<stri
   const snapshot = new Map<string, string>();
 
   async function visit(directory: string): Promise<void> {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
+    // This is a live metadata/quota scan, not the committed CAS snapshot. Writers
+    // may atomically rename files or remove a child directory after enumeration.
+    // A vanished child contributes no current bytes; genuine I/O/permission
+    // errors and an unavailable workspace root must still stop the execution.
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (directory !== workspaceRoot && error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const entry of entries) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -170,12 +178,21 @@ export async function workspaceSnapshot(workspaceRoot: string): Promise<Map<stri
         continue;
       }
       if (!entry.isFile()) continue;
-      const metadata = await stat(fullPath);
+      const metadata = await stat(fullPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!metadata) continue;
       snapshot.set(relative(workspaceRoot, fullPath).split(sep).join("/"), `${metadata.size}:${metadata.mtimeMs}`);
     }
   }
 
   await visit(workspaceRoot);
+  // Do not mistake removal of the whole workspace during the scan for an empty
+  // workspace merely because all of its enumerated children disappeared.
+  if (!(await stat(workspaceRoot)).isDirectory()) {
+    throw Object.assign(new Error("Workspace root must remain a directory during the scan"), { code: "ENOTDIR", path: workspaceRoot });
+  }
   return snapshot;
 }
 

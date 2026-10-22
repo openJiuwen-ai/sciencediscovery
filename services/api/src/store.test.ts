@@ -22,7 +22,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from "@sciencediscovery/cas";
 
-import type { ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
+import type { ArtifactDerivation, ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import {
   lookupModelCatalog,
   resolveModelFacts,
@@ -1357,6 +1357,61 @@ test("SessionStore serializes concurrent execution appends without losing proven
   }));
   await Promise.all(runs.map((run) => store.appendExecutionRun(run)));
   assert.deepEqual((await store.listExecutionRuns(session.id)).map((run) => run.id), runs.map((run) => run.id));
+  await Promise.all(Array.from({ length: 20 }, () => store.appendExecutionRun(structuredClone(runs[0]!))));
+  assert.equal((await store.listExecutionRuns(session.id)).length, runs.length, "recovery commits do not duplicate a run");
+  await assert.rejects(store.appendExecutionRun({ ...runs[0]!, exitCode: 1 }), /EXECUTION_RESULT_CONFLICT/);
+  assert.equal((await store.listExecutionRuns(session.id))[0]!.exitCode, 0, "a conflicting retry cannot replace immutable provenance");
+});
+
+test("SessionStore recovery deduplicates derivations and does not rewind later Workspace outputs", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `execution-recovery-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Recovery provenance");
+  const session = await store.createSession(project.id, "Recovery", {}, {}, { allowUnconfiguredModel: true });
+  const derivation: ArtifactDerivation = {
+    id: "execution-output:stable-key", sessionId: session.id, content: { hash: "a".repeat(64), size: 4 },
+    createdAt: "2026-10-20T01:00:00.000Z", executionRunIds: ["execution-original"],
+    path: "output.txt", sourceType: "generated", turnId: "turn-original",
+  };
+  await Promise.all(Array.from({ length: 20 }, () => store.appendArtifactDerivations(session.id, [derivation])));
+  assert.equal((await store.listArtifactDerivations(session.id)).length, 1);
+  await assert.rejects(store.appendArtifactDerivations(session.id, [{ ...derivation,
+    content: { hash: "b".repeat(64), size: 4 } }]), /EXECUTION_RESULT_CONFLICT/);
+  const input = { contentHash: derivation.content.hash, executionRunId: "execution-original", mode: "write" as const,
+    modifiedAt: derivation.createdAt, origin: "tool" as const, path: derivation.path, runId: derivation.turnId,
+    size: 4, toolCallId: "tool-original", toolName: "run_shell" };
+  // Fail after the revision was added in memory but before its durable save.
+  // An immediate retry must reflush, not just return the cached revision.
+  const persistence = store as unknown as { saveCatalog(): Promise<void> };
+  const saveCatalog = persistence.saveCatalog.bind(store);
+  let failSave = true;
+  persistence.saveCatalog = async () => {
+    if (failSave) { failSave = false; throw new Error("injected catalog write failure"); }
+    await saveCatalog();
+  };
+  await assert.rejects(store.recordWorkspaceFileRevision(session.id, input), /injected catalog write failure/);
+  const original = await store.recordWorkspaceFileRevision(session.id, input);
+  const afterRetry = new SessionStore(tempRoot);
+  await afterRetry.load();
+  assert.equal(afterRetry.getWorkspaceFileProvenance(session.id, input.path)!.currentRevision.id, original.id);
+  const newer = await store.recordWorkspaceFileRevision(session.id, { ...input, contentHash: "b".repeat(64),
+    executionRunId: "execution-newer", modifiedAt: "2026-10-20T01:01:00.000Z" });
+  const restarted = new SessionStore(tempRoot);
+  await restarted.load();
+  // A retry may see a different live mtime; the receipt must keep the original
+  // immutable attribution and must not project an old execution as current.
+  const retries = await Promise.all(Array.from({ length: 20 }, () => restarted.recordWorkspaceFileRevision(session.id,
+    { ...input, modifiedAt: "2026-10-20T01:02:00.000Z" })));
+  assert.ok(retries.every((entry) => entry.id === original.id));
+  const provenance = restarted.getWorkspaceFileProvenance(session.id, input.path)!;
+  assert.equal(provenance.revisions.length, 2);
+  assert.equal(provenance.currentRevision.id, newer.id);
+  await assert.rejects(restarted.recordWorkspaceFileRevision(session.id,
+    { ...input, contentHash: "c".repeat(64) }), /EXECUTION_RESULT_CONFLICT/);
+  await restarted.appendArtifactDerivations(session.id, [structuredClone(derivation)]);
+  assert.equal((await restarted.listArtifactDerivations(session.id)).length, 1);
 });
 
 test("SessionStore encrypts model API tokens and preserves them across reloads", async (context) => {
