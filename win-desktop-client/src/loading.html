@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ScienceDiscovery — 正在启动</title>
+<style>
+  body { font-family: system-ui, "Segoe UI", sans-serif; margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; background: #f5f6f8; }
+  .wrap { text-align: center; }
+  .logo { font-size: 30px; font-weight: 700; color: #1c2233; letter-spacing: .5px; margin: 0 0 26px; }
+  .logo em { font-style: normal; color: #2f54eb; }
+  .ring { width: 42px; height: 42px; margin: 0 auto 22px; border-radius: 50%;
+          border: 4px solid #dfe3ec; border-top-color: #2f54eb; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #stage { font-size: 15px; color: #2a3245; min-height: 22px; margin: 0; }
+  #stage.error { color: #b3261e; }
+  .hint { font-size: 12.5px; color: #8a91a3; margin: 10px 0 0; line-height: 1.7; }
+  .ring.stopped { animation: none; border-top-color: #dfe3ec; }
+  /* W8: `#retry { display:inline-block }` alone would override the hidden
+     attribute's UA display:none (classic bug) — the button then shows from
+     page load regardless of state, which reads as "startup failed". */
+  #retry { display: inline-block; margin-top: 20px; padding: 8px 26px; font-size: 14px;
+           border: 1px solid #2f54eb; background: #2f54eb; color: #fff; border-radius: 6px;
+           cursor: pointer; }
+  #retry[hidden] { display: none; }
+  #retry:disabled { opacity: .6; cursor: default; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="logo">Science<em>Discovery</em></p>
+    <div class="ring"></div>
+    <p id="stage">正在连接后端…</p>
+    <p id="progress" class="hint" style="margin:6px 0 0; min-height:18px;"></p>
+    <p class="hint">首次启动需要准备运行环境，可能需要几分钟；<br />之后每次启动约 15 秒。启动期间窗口可以最小化。</p>
+    <button id="retry" hidden>重试</button>
+  </div>
+  <script>
+    // F10.6e: stage texts arrive from the main process as the stack comes up
+    // (start-stack say() lines mapped in loading-stage.ts). F10.6e3: the
+    // payload also carries step N/M and a remaining-time hint.
+    // W8: the retry button only appears on the "error" stage — a real failure.
+    // The "slow" stage (startup timed out) self-heals via the background
+    // watcher, so no button there; an always-visible button reads as
+    // "it failed" and invites misclicks mid-startup.
+    // W9: elapsed time is always on (page-side timer), and the remaining
+    // estimate counts down live between pushes: every push resets the
+    // deadline (only when the step changes or the deadline already passed,
+    // so same-stage heartbeats don't re-inflate it), and an overrun shows
+    // "仍在推进" instead of a stale wrong number.
+    const stage = document.getElementById("stage");
+    const progress = document.getElementById("progress");
+    const ring = document.querySelector(".ring");
+    const retry = document.getElementById("retry");
+    const pageStart = Date.now();
+    let estimateDeadline = 0;
+    let lastStepKey = "";
+    let stepLabel = "";
+
+    function renderProgress() {
+      const parts = [];
+      if (stepLabel) parts.push(stepLabel);
+      if (estimateDeadline > 0) {
+        const left = Math.ceil((estimateDeadline - Date.now()) / 1000);
+        if (left > 0) parts.push(left < 90 ? `约还需 ${left} 秒` : `约还需 ${Math.round(left / 60)} 分钟`);
+        else parts.push("仍在推进，请稍候…");
+      }
+      const s = Math.max(0, Math.floor((Date.now() - pageStart) / 1000));
+      parts.push(`已耗时 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
+      progress.textContent = parts.join(" · ");
+    }
+    setInterval(renderProgress, 1000);
+
+    if (window.sdShell && window.sdShell.onLoadingStage) {
+      window.sdShell.onLoadingStage((s) => {
+        stage.textContent = s.text;
+        stage.classList.toggle("error", s.stage === "error");
+        ring.classList.toggle("stopped", s.stage === "error");
+        const failed = s.stage === "error";
+        retry.hidden = !failed;
+        if (failed) { retry.disabled = false; retry.textContent = "重试"; }
+        const stepKey = s.current + "/" + s.total;
+        const sec = s.estimateSec || 0;
+        stepLabel = (s.total > 0 && s.current > 0) ? `第 ${s.current} / ${s.total} 步` : "";
+        if (sec > 0 && (stepKey !== lastStepKey || estimateDeadline <= Date.now())) {
+          estimateDeadline = Date.now() + sec * 1000;
+        } else if (sec <= 0) {
+          estimateDeadline = 0;
+        }
+        lastStepKey = stepKey;
+        renderProgress();
+      });
+    }
+    if (window.sdShell && window.sdShell.retryBackend) {
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "正在重试…";
+        void window.sdShell.retryBackend();
+      });
+    }
+  </script>
+</body>
+</html>

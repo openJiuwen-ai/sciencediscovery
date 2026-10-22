@@ -1,0 +1,187 @@
+diff --git a/templates/nsis/include/extractAppPackage.nsh b/templates/nsis/include/extractAppPackage.nsh
+index f5470bf52e923dc47266cea4684c76ef78ced451..f1d0da40eb65e343eed34b1a9ead6fe8afa2f673 100644
+--- a/templates/nsis/include/extractAppPackage.nsh
++++ b/templates/nsis/include/extractAppPackage.nsh
+@@ -6,6 +6,33 @@
+   Var /GLOBAL packageArch
+   
+   !insertmacro identify_package
++
++  # [SD F10.6w] phase ② — THE one visible bar run (owner 2026-10-20: "只保
++  # 留最长的那段进度"). ⓪/① collapse the bar control to 0x0 (the runtime's
++  # forced SHOW during File instructions cannot restore a zero size, which
++  # SW_HIDE never survived). This is the longest phase of the install
++  # (~2:48 field data), so re-inflate the control from the saved rect right
++  # before Nnis7z takes over and drives it monotonically 0→100%. Phase ③
++  # collapses it again. No narration (F10.6w2, owner 2026-10-20): the title
++  # stays at the stock "ScienceDiscovery 安装".
++  !ifndef ONE_CLICK
++    ${IfNot} ${Silent}
++      FindWindow $0 "#32770" "" $HWNDPARENT
++      GetDlgItem $0 $0 1006
++      StrCpy $2 $sdBarX
++      StrCpy $3 $sdBarY
++      StrCpy $4 $sdBarW
++      StrCpy $5 $sdBarH
++      System::Call 'user32::SetWindowPos(p r0, p 0, i r2, i r3, i r4, i r5, i 0x14)'
++      ShowWindow $0 ${SW_SHOW}
++      # [SD F10.6z] Remove the default gray track: disable themes so color
++      # messages take effect, then set green bar on white background.
++      System::Call 'uxtheme::SetWindowTheme(p r0, t "", t "") i .r6'
++      SendMessage $0 0x409 0 0x00AA00
++      SendMessage $0 0x406 0 0xFFFFFF
++    ${endif}
++  !endif
++
+   !insertmacro compute_files_for_current_arch
+ 
+   !ifdef COMPRESS
+@@ -90,6 +117,22 @@
+ !macroend
+ 
+ !macro extractUsing7za FILE
++  # [sciencediscovery F10.6t patch] Fast path: extract straight into $OUTDIR
++  # (= $INSTDIR at this point). The stock flow below extracts the whole
++  # payload to $PLUGINSDIR\7z-out and then CopyFiles's it to the install dir
++  # — a silent SECOND full write (ScienceDiscovery ships ~1.7GB / 75k files:
++  # minutes of extra I/O plus a second AV pass) with near-zero progress-bar
++  # coverage: field 2026-10-19, bar frozen at ~75% for the whole copy phase,
++  # then a jump to done, and non-monotonic "multi-round" bar behavior.
++  # CHECK_APP_RUNNING has already run, so the target is not in use. Nsis7z
++  # pushes no result (stock's "Pop $R0" retrieves its own "Push $OUTDIR"),
++  # so nothing needs popping here. If the main exe did not land (partial
++  # failure / locked file corner case), fall through to the stock flow,
++  # kept verbatim below.
++  Nsis7z::Extract "${FILE}"
++  IfFileExists "$OUTDIR\${APP_EXECUTABLE_FILENAME}" DoneExtract7za 0
++
++  # --- stock flow (unchanged fallback) ---
+   Push $OUTDIR
+   CreateDirectory "$PLUGINSDIR\7z-out"
+   ClearErrors
+diff --git a/templates/nsis/installSection.nsh b/templates/nsis/installSection.nsh
+index 053772f55ca6ece52f0a34c4fa0f05c9a5f07bd2..1190f2f4f77ea79071bbfca7d5885b4777a8044d 100644
+--- a/templates/nsis/installSection.nsh
++++ b/templates/nsis/installSection.nsh
+@@ -3,11 +3,77 @@
+ InitPluginsDir
+ 
+ ${IfNot} ${Silent}
+-  SetDetailsPrint none
++  # [SD F10.6x] MUST stay listonly — with none the NSIS runtime re-inflates
++  # the collapsed InstFiles bar during File instructions (dist25 field probe:
++  # phase-① bar visible 450px, 0→20155 in ~30s, and the ③ tail bar too).
++  # listonly keeps the collapse alive (dist24 proved it); the details view is
++  # left collapsed (no SetDetailsView show since F10.6w2), so the file lines
++  # are written but never shown to the user.
++  SetDetailsPrint listonly
+ ${endif}
+ 
+ StrCpy $appExe "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+ 
++# [SD F10.6w] One-bar install progress (owner request 2026-10-20: "只保留
++# 最长的那段进度"). Field data (dist22-24, bar-watch4/6): the NSIS runtime
++# force-SHOWs and drives the InstFiles bar during File instructions and
++# Nnis7z drives it during extraction — SW_HIDE never survives either, so
++# earlier phases leaked short visible bar runs (① ~19s write blip, ③ tail
++# blip) around the one run that matters. New contract:
++#   ⓪ old-version removal — bar collapsed to 0x0 (a forced SHOW cannot
++#      restore the size);
++#   ① data materialization (fast, ~19s) — bar stays collapsed;
++#   ② main extraction (the longest run, ~2:48) — THE one visible bar:
++#      re-inflated just before Nnis7z takes over (see extractAppPackage),
++#      monotonic 0→100%;
++#   ③ registry/shortcut tail — collapsed again.
++# [SD F10.6w2] No phase narration (owner 2026-10-20: "把安装页面的提示词
++# 去掉，就正在安装就行了") — the window title stays at the stock
++# "ScienceDiscovery 安装" and the InstFiles page keeps its stock
++# "正在安装，请等候。" text; only the ② bar run speaks.
++Var /GLOBAL sdBarX
++Var /GLOBAL sdBarY
++Var /GLOBAL sdBarW
++Var /GLOBAL sdBarH
++Var /GLOBAL sdMarquee
++!ifndef ONE_CLICK
++  ${IfNot} ${Silent}
++    FindWindow $1 "#32770" "" $HWNDPARENT
++    GetDlgItem $0 $1 1006
++    # Remember the bar's rect (client coords of the #32770 dialog) — the ②
++    # restore in extractAppPackage.nsh needs it in BOTH branches below.
++    System::Call '*(i, i, i, i) i .r2'
++    System::Call 'user32::GetWindowRect(p r0, p r2)'
++    System::Call 'user32::MapWindowPoints(p 0, p r1, p r2, i 2)'
++    System::Call '*$2(i .r3, i .r4, i .r5, i .r6)'
++    System::Free $2
++    StrCpy $sdBarX $3
++    StrCpy $sdBarY $4
++    IntOp $sdBarW $5 - $3
++    IntOp $sdBarH $6 - $4
++    # [SD F10.6y] Two-bar upgrade (owner 2026-10-20: "先调用卸载的程序，
++    # 再调用安装的程序" — show the old-version removal AND the install):
++    #   upgrade → marquee bar for ⓪ (the old uninstaller is a separate
++    #             process, no real percentage is observable — a scrolling
++    #             marquee says "working, unknown duration"), collapse before ①;
++    #   fresh   → collapse to 0x0 right away (only the ② bar run is visible).
++    # dist24 proved that 0x0 collapse works as long as SetDetailsView show is
++    # kept (installer.nsh preInit); without it the NSIS runtime re-inflates
++    # the bar during File instructions (dist25/26/27/28).
++    ReadRegStr $9 SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
++    ${If} $9 != ""
++      StrCpy $sdMarquee "1"
++      System::Call 'user32::GetWindowLongW(p r0, i -16) i .r6'
++      IntOp $6 $6 | 8
++      System::Call 'user32::SetWindowLongW(p r0, i -16, i r6)'
++      SendMessage $0 0x040A 1 60
++    ${Else}
++      StrCpy $sdMarquee "0"
++      System::Call 'user32::SetWindowPos(p r0, p 0, i 0, i 0, i 0, i 0, i 0x16)'
++    ${EndIf}
++  ${endif}
++!endif
++
+ # must be called before uninstallOldVersion
+ !insertmacro setLinkVars
+ 
+@@ -57,6 +123,23 @@ ${if} $installMode == "all"
+   !insertmacro handleUninstallResult HKEY_CURRENT_USER
+ ${endIf}
+ 
++# [SD F10.6y] ⓪ done — stop the marquee, strip PBS_MARQUEE (a marquee-styled
++# bar ignores PBM_SETPOS, so ①'s runtime ticks and ②'s Nnis7z drive would be
++# swallowed), then collapse the bar to 0x0 for ①. Fresh installs are already
++# collapsed and skip this via $sdMarquee.
++!ifndef ONE_CLICK
++  ${If} $sdMarquee == "1"
++  ${AndIfNot} ${Silent}
++    FindWindow $1 "#32770" "" $HWNDPARENT
++    GetDlgItem $0 $1 1006
++    SendMessage $0 0x040A 0 0
++    System::Call 'user32::GetWindowLongW(p r0, i -16) i .r6'
++    IntOp $6 $6 & 0xFFFFFFF7
++    System::Call 'user32::SetWindowLongW(p r0, i -16, i r6)'
++    System::Call 'user32::SetWindowPos(p r0, p 0, i 0, i 0, i 0, i 0, i 0x16)'
++  ${EndIf}
++!endif
++
+ SetOutPath $INSTDIR
+ 
+ !ifdef UNINSTALLER_ICON
+@@ -64,6 +147,18 @@ SetOutPath $INSTDIR
+ !endif
+ 
+ !insertmacro installApplicationFiles
++
++# [SD F10.6y] phase ③: collapse the bar to 0x0 again (SW_HIDE alone gets
++# overridden by the tail's instruction ticks; a zero-size control cannot be
++# re-inflated by the runtime). No narration (F10.6w2).
++!ifndef ONE_CLICK
++  ${IfNot} ${Silent}
++    FindWindow $0 "#32770" "" $HWNDPARENT
++    GetDlgItem $0 $0 1006
++    System::Call 'user32::SetWindowPos(p r0, p 0, i 0, i 0, i 0, i 0, i 0x16)'
++  ${endif}
++!endif
++
+ !insertmacro registryAddInstallInfo
+ !insertmacro addStartMenuLink $keepShortcuts
+ !insertmacro addDesktopLink $keepShortcuts
