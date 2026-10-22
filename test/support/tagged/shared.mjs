@@ -181,7 +181,7 @@ export async function main(args=process.argv.slice(2)) {
   // the sandbox network tests fail on the path length rather than on anything
   // they assert. The system temporary directory is what these suites used
   // before they were planned, and it is what they keep.
-  const env={...process.env,CI:'1',UV_CACHE_DIR:join(root,'.tmp/cache/uv'),
+  const env={...process.env,CI:'1',UV_CACHE_DIR:process.env.UV_CACHE_DIR||join(root,'.tmp/cache/uv'),
     UV_PYTHON_INSTALL_DIR:join(root,'.tmp/python'),npm_config_cache:join(root,'.tmp/cache/npm'),
     PLAYWRIGHT_BROWSERS_PATH:join(root,'.e2e/browsers'),CI_RESULTS_DIR:outputDir,
     // The harness self-test needs an interpreter with pytest; the project

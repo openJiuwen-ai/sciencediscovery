@@ -1114,21 +1114,11 @@ async function startSkillCreatorModel(context: TestContext): Promise<{
     toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
     const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
     const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
-    // With the JiuwenSwarm backend skill-creator is imported there as
-    // "sciencediscovery-skill-creator" (to avoid its built-in name clash) and normally loaded
-    // with skill_tool; our read_skill remains available as a fallback.
+    // Exercise ScienceDiscovery's public read_skill contract on both executors.
+    // SDK-local import aliases depend on which built-in skills its distribution
+    // contains; they are not the identity of this platform-owned skill.
     const delta = toolResultCount === 0
-      ? onJiuwenSwarm
-        ? {
-            role: "assistant",
-            tool_calls: [{
-              function: { arguments: JSON.stringify({ skill_name: "sciencediscovery-skill-creator" }), name: "skill_tool" },
-              id: "call-read-skill-creator",
-              index: 0,
-              type: "function",
-            }],
-          }
-        : {
+      ? {
           role: "assistant",
           tool_calls: [{
             function: { arguments: JSON.stringify({ skillId: "skill-creator" }), name: "read_skill" },
@@ -3688,7 +3678,7 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
   assert.equal(run.status, 200);
   const stream = await run.text();
   assert.match(stream, /pending agent-created-demo draft/);
-  assert.ok(modelServer.toolNames.some((names) => names.includes(onJiuwenSwarm ? "skill_tool" : "read_skill")), JSON.stringify(modelServer.toolNames));
+  assert.ok(modelServer.toolNames.some((names) => names.includes("read_skill")), JSON.stringify(modelServer.toolNames));
   assert.ok(modelServer.toolNames.some((names) => names.includes("create_skill")), JSON.stringify(modelServer.toolNames));
 
   assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);

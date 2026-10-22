@@ -2,6 +2,12 @@
 
 This directory defines a source-free CI toolchain image and the repository
 entry points for unit tests (UT), hermetic system tests (ST), and browser E2E.
+Local hosts can set `SCIENCE_AGENT_BWRAP_PATH` and `SCIENCE_TEST_DASH` when
+those binaries are outside their usual paths. Research Python checks and the
+Evolve distribution journey honor `SCIENCE_AGENT_PYPI_INDEX`; the distribution
+journey also honors `BINARY_CACHE_DIR` for checksum-verified runtime archives
+and `evolve-<pinned-commit>.tar.gz` release sources; the installer verifies the
+source's pinned size and hash before using cached bytes.
 Here the `e2e` layer is the mocked browser subset, not the definition of all
 E2E: public API, CLI and local-stack user journeys also qualify when they use
 the real product entry path and assert user outcomes. Their separate driver

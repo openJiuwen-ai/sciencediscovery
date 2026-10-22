@@ -16,7 +16,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeTags, inheritTags, compileSelector } from '../tags.mjs';
 import { createPlan, validatePlan, verifyResults, digest } from '../plan.mjs';
-import { preflight, hostPlatform } from '../environment.mjs';
+import { preflight, hostPlatform, hostArch } from '../environment.mjs';
 import { parse } from '../cli.mjs';
 
 const tags = ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'npu:none', 'model:none', 'judge:none'];
@@ -153,7 +153,8 @@ test('the plan ignores the host platform while the compatibility shim honours it
   assert.notEqual(inert.test, test);
   // Registering would make this file fail: the body throws if it ever runs.
   assert.equal(inert.test('never registered on this host', () => { throw new Error('must not run'); }), undefined);
-  assert.equal(createTest(import.meta.url, { tags: [...base, `os:${here}`] }).test, test);
+  const nativeTags = base.filter(tag => !tag.startsWith('arch:'));
+  assert.equal(createTest(import.meta.url, { tags: [...nativeTags, `os:${here}`, `arch:${hostArch(process.arch)}`] }).test, test);
 });
 
 test('a plan frozen from a CI profile records the profile inside its digest', () => {
