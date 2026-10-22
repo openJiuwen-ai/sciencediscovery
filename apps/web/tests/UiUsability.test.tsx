@@ -128,7 +128,7 @@ test("the session bar constrains long names and preserves their full hover text"
   const app = source("App.tsx");
   const conversation = source("styles/conversation.css");
 
-  assert.match(conversation, /\.session-bar-session \{[^}]*min-width: 0;[^}]*flex: 1 1 0;/);
+  assert.match(conversation, /\.session-bar-session \{[^}]*min-width: 0;[^}]*flex: 1 1 120px;/, "reserve title width beside the full-loop usage chip");
   assert.match(conversation, /\.session-bar-session-title \{[^}]*width: 100%;[^}]*max-width: 100%;/);
   assert.match(app, /title=\{t\("app\.renameProjectHint", \{ name: activeProjectLabel \}\)\}/);
   assert.match(app, /title=\{t\("app\.renameSessionTitle", \{ name: activeSessionLabel \}\)\}/);
