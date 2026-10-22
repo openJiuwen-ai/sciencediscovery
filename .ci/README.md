@@ -185,6 +185,8 @@ parallel distribution jobs. Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.
 
+merge-gate also reads the commit status whose context is exactly `license/cla`. A missing context does not fail the gate, and `success` passes. Any other state fails unless the pull request author has `type` `Bot` and login exactly `sciencediscovery-bot[bot]`; `pending`, `failure`, and `error` all pass for that one account. A failed or missing status response fails closed for every author, including that bot, and is not treated as a missing context. On `merge_group`, statuses are read from the queue head SHA, not from the original pull request head. Do not add `license/cla` as a ruleset required check; `merge-gate` remains the required check.
+
 L3, L4 and L5 reuse the existing **nightly-ci-ds** Environment, with **no required
 reviewers and no final approval job**, as agreed in
 [issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):

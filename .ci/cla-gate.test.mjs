@@ -151,3 +151,18 @@ test('CLA command exposes the policy failure as a nonzero exit code', () => {
   assert.equal(run.status, 1);
   assert.match(run.stderr, /CI gate failed: license\/cla: pending/);
 });
+
+test('CLA command rejects an empty collection result', () => {
+  const run = spawnSync(process.execPath, [fileURLToPath(new URL('./tier-policy.mjs', import.meta.url)), 'cla'], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request', CI_CLA_RESULT: '' },
+  });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /missing response/);
+});
+
+test('workflow requires the CLA policy without a condition and passes the exact collected result', () => {
+  const step = workflow.split('      - name: Require CLA policy\n')[1]?.split(/\n(?=      - )/)[0];
+  assert.ok(step, 'Require CLA policy step must exist');
+  assert.doesNotMatch(step, /^\s*if\s*:/m);
+  assert.equal(step.match(/^          CI_CLA_RESULT: (.+)$/m)?.[1], '${{ steps.cla.outputs.result }}');
+});
