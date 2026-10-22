@@ -14,13 +14,13 @@ const status = state => ({ context: 'license/cla', state });
 
 for (const [name, statuses, user, ok, message] of [
   ['absent context', [{ context: 'other', state: 'pending' }], human, true, /context absent/],
-  ['success', [status('success')], human, true, /success/],
-  ['pending Bot', [status('pending')], bot, true, /pending; allowed for Bot PR author sciencediscovery-bot\[bot\]/],
-  ['pending human', [status('pending')], human, false, /pending/],
-  ['failure Bot', [status('failure')], bot, true, /failure; allowed for Bot PR author/],
-  ['error human', [status('error')], human, false, /error/],
-  ['Bot-like login is not a Bot type', [status('pending')], { ...bot, type: 'User' }, false, /pending/],
-  ['unknown author', [status('pending')], null, false, /no Bot PR author exemption/],
+  ['success', [{ context: 'license/cla', state: 'success' }], human, true, /success/],
+  ['pending Bot', [{ context: 'license/cla', state: 'pending' }], bot, true, /pending; allowed for Bot PR author sciencediscovery-bot\[bot\]/],
+  ['pending human', [{ context: 'license/cla', state: 'pending' }], human, false, /pending/],
+  ['failure Bot', [{ context: 'license/cla', state: 'failure' }], bot, true, /failure; allowed for Bot PR author/],
+  ['error human', [{ context: 'license/cla', state: 'error' }], human, false, /error/],
+  ['Bot-like login is not a Bot type', [{ context: 'license/cla', state: 'pending' }], { login: 'sciencediscovery-bot[bot]', type: 'User' }, false, /pending/],
+  ['unknown author', [{ context: 'license/cla', state: 'pending' }], null, false, /no Bot PR author exemption/],
 ]) {
   test(`CLA policy: ${name}`, () => {
     for (const event of ['pull_request', 'merge_group']) {
