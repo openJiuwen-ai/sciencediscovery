@@ -191,6 +191,8 @@ test("renders settings and lifecycle actions behind every Session ellipsis", () 
     onArchive: () => undefined,
     onDelete: () => undefined,
     onRename: () => undefined,
+    onExportConversation: () => undefined,
+    onExportResearchPackage: () => undefined,
     onRestore: () => undefined,
     onSettings: () => undefined,
     onToggle: () => undefined,
@@ -203,6 +205,8 @@ test("renders settings and lifecycle actions behind every Session ellipsis", () 
     onArchive: () => undefined,
     onDelete: () => undefined,
     onRename: () => undefined,
+    onExportConversation: () => undefined,
+    onExportResearchPackage: () => undefined,
     onRestore: () => undefined,
     onSettings: () => undefined,
     onToggle: () => undefined,
@@ -213,11 +217,33 @@ test("renders settings and lifecycle actions behind every Session ellipsis", () 
   assert.match(menu, /aria-label="More actions for Literature review"/);
   assert.match(menu, /class="resource-menu session-menu open"/);
   assert.match(menu, />Rename<\/span>/);
+  assert.match(menu, />导出<\/span>/);
+  assert.match(menu, />导出会话<\/span>/);
+  assert.match(menu, />导出证据包<\/span>/);
+  assert.doesNotMatch(menu, />导入证据包<\/span>/);
   assert.match(menu, />Settings<\/span>/);
   assert.match(menu, />Archive<\/span>/);
   assert.match(menu, />Delete<\/span>/);
   assert.match(archivedMenu, /disabled=""[^>]*><span aria-hidden="true"><svg.*<\/svg><\/span><span>Rename<\/span>/);
   assert.match(archivedMenu, />Restore<\/span>/);
+
+  const emptyMenu = renderToStaticMarkup(createElement(SessionOverflowMenu, {
+    archived: false,
+    canImportResearchPackage: true,
+    label: "New session",
+    onArchive: () => undefined,
+    onDelete: () => undefined,
+    onExportConversation: () => undefined,
+    onExportResearchPackage: () => undefined,
+    onImportResearchPackage: () => undefined,
+    onRename: () => undefined,
+    onRestore: () => undefined,
+    onSettings: () => undefined,
+    onToggle: () => undefined,
+    open: true,
+    sessionId: "session-empty",
+  }));
+  assert.match(emptyMenu, />导入证据包<\/span>/);
 });
 
 test("renders a compact inline rename input without confirmation controls", () => {
@@ -274,6 +300,8 @@ test("keeps every session lifecycle action reachable from the sidebar overflow m
     onArchive: () => undefined,
     onDelete: () => undefined,
     onRename: () => undefined,
+    onExportConversation: () => undefined,
+    onExportResearchPackage: () => undefined,
     onRestore: () => undefined,
     onSettings: () => undefined,
     onToggle: () => undefined,
@@ -286,6 +314,8 @@ test("keeps every session lifecycle action reachable from the sidebar overflow m
     onArchive: () => undefined,
     onDelete: () => undefined,
     onRename: () => undefined,
+    onExportConversation: () => undefined,
+    onExportResearchPackage: () => undefined,
     onRestore: () => undefined,
     onSettings: () => undefined,
     onToggle: () => undefined,

@@ -107,6 +107,7 @@ export class VersionStore {
   /** Bumped when admission is revoked, so an in-flight validation cannot re-admit a stale closure. */
   private admissionGeneration = 0;
   private readonly workspaceFiles = new Map<string, { source: ObjectIdentity; object: ObjectIdentity; ref: DataRef }>();
+  private readonly writtenObjects = new Map<string, ObjectIdentity>();
   constructor(readonly dataDir: string) {}
 
   /** Reuse only bytes already hashed by this store, while both file identities remain unchanged. */
@@ -154,7 +155,23 @@ export class VersionStore {
     await this.initialize();
     const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
     const ref: ObjectRef<P> = { pool, digest: `sha256:${hash(bytes)}`, size: bytes.length, mediaType };
-    await this.checked(ref, () => publish(this.objectPath(ref), bytes));
+    const path = this.objectPath(ref);
+    // Reuse a duplicate only while the existing object's full filesystem
+    // identity is unchanged. This avoids rereading large immutable imports but
+    // still detects replacements before trusting a previously written object.
+    await this.checked(ref, async () => {
+      const key = admissionKey(ref);
+      try {
+        const current = await this.objectIdentity(ref);
+        const written = this.writtenObjects.get(key);
+        if (written && this.sameIdentity(current, written)) return;
+      }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await publish(path, bytes);
+      this.writtenObjects.set(key, await this.objectIdentity(ref));
+    });
     return ref;
   }
 

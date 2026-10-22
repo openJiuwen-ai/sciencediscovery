@@ -538,6 +538,19 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/research-package:
+    dependencies:
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   packages/runtime-core:
     devDependencies:
       '@types/node':
@@ -751,6 +764,9 @@ importers:
       '@sciencediscovery/provenance':
         specifier: workspace:*
         version: link:../../packages/provenance
+      '@sciencediscovery/research-package':
+        specifier: workspace:*
+        version: link:../../packages/research-package
       '@sciencediscovery/runner':
         specifier: workspace:*
         version: link:../runner

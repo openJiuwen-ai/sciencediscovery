@@ -54,6 +54,27 @@ function close(server: http.Server): Promise<void> {
 
 // --- Read endpoints --------------------------------------------------------
 
+test("export snapshot revisions change only after successful writes to the affected sessions", async () => {
+  let status = 200;
+  const server = await startFakeMemoryGraph((path) => ({ status, json: path.endsWith("/export") ? { nodes: [], edges: [] } : { status: "ok" } }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}` });
+    const snapshot = { nodes: [], edges: [] };
+    assert.deepEqual(client.snapshotRevision(["s1", "s2"]), [0, 0]);
+    await client.validateSnapshot(["s1"], snapshot);
+    await client.exportSnapshot(["s1"]);
+    assert.deepEqual(client.snapshotRevision(["s1", "s2"]), [0, 0], "reads and validation do not invalidate previews");
+    await client.importSnapshot(["s1"], snapshot);
+    await client.linkClaimsToReport("a", 1, [], "s2");
+    await client.discardSnapshot(["s1"]);
+    assert.deepEqual(client.snapshotRevision(["s1", "s2"]), [2, 1]);
+    status = 503;
+    await assert.rejects(client.importSnapshot(["s1"], snapshot));
+    await assert.rejects(client.linkClaimsToReport("a", 1, [], "s2"));
+    assert.deepEqual(client.snapshotRevision(["s1", "s2"]), [2, 1], "failed writes retain the cached content revision");
+  } finally { await close(server); }
+});
+
 test("queryMatch degrades to an empty result with a reason when the sidecar errors", async () => {
   const server = await startFakeMemoryGraph(() => ({ status: 500, json: { detail: "boom" } }));
   const url = `http://127.0.0.1:${portOf(server)}`;

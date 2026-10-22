@@ -92,6 +92,74 @@ log = get_logger("server")
 app = FastAPI(title="sciencediscovery-memory-graph")
 
 
+class PackageScope(BaseModel):
+    session_ids: list[str]
+
+
+class PackageNode(BaseModel):
+    id: str
+    labels: list[str]
+    properties: dict[str, Any]
+
+
+class PackageEdge(BaseModel):
+    source: str
+    target: str
+    type: str
+    properties: dict[str, Any]
+
+
+class PackageSnapshot(PackageScope):
+    nodes: list[PackageNode]
+    edges: list[PackageEdge]
+
+
+@app.post("/internal/research-package/export", dependencies=[Depends(require_internal_token)])
+def export_research_package(body: PackageScope) -> dict[str, Any]:
+    from .research_package import export_snapshot
+    try:
+        return export_snapshot(body.session_ids)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/internal/research-package/import", dependencies=[Depends(require_internal_token)])
+def import_research_package(body: PackageSnapshot) -> dict[str, bool]:
+    from .research_package import import_snapshot
+    try:
+        import_snapshot(body.session_ids, [node.model_dump() for node in body.nodes],
+                        [edge.model_dump() for edge in body.edges])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/internal/research-package/validate", dependencies=[Depends(require_internal_token)])
+def validate_research_package(body: PackageSnapshot) -> dict[str, bool]:
+    from .research_package import validate_snapshot
+    try:
+        validate_snapshot(body.session_ids, [node.model_dump() for node in body.nodes],
+                          [edge.model_dump() for edge in body.edges])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from .backend import handle
+    if not handle().is_reachable():
+        raise HTTPException(status_code=503, detail="Memory graph is unavailable")
+    return {"ok": True}
+
+
+@app.post("/internal/research-package/discard", dependencies=[Depends(require_internal_token)])
+def discard_research_package(body: PackageScope) -> dict[str, bool]:
+    from .research_package import discard_snapshot
+    try:
+        discard_snapshot(body.session_ids)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @app.exception_handler(CypherBudgetExceeded)
 async def _query_budget_exceeded(_request: Request, _exc: CypherBudgetExceeded) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": {
