@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— rename 覆盖的 EPERM 退避重试走 platform/os。
+import { renameReplace } from "./platform/os/index.js";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 import {
@@ -203,7 +205,7 @@ export async function prepareSkillSandbox(
     }
     await writeFile(resolve(staging, SKILL_SNAPSHOT_MANIFEST), expectedManifest, { flag: "wx", mode: 0o444 });
     try {
-      await rename(staging, root);
+      await renameReplace(staging, root);
     } catch (error) {
       // Concurrent runs sharing one content-addressed root race here; POSIX
       // reports a non-empty destination as ENOTEMPTY or EEXIST depending on the

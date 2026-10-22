@@ -1,4 +1,6 @@
-import { appendFile, chmod, rename, stat } from "node:fs/promises";
+import { appendFile, chmod, stat } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— rename 覆盖的 EPERM 退避重试走 platform/os。
+import { renameReplace } from "../platform/os/index.js";
 import type { ModelTurn } from "@sciencediscovery/model";
 
 // Serialize rotation across concurrent main/child gateways. Never retain turns in the queue.
@@ -37,7 +39,7 @@ export async function recordInvalidArguments(turn: ModelTurn, requestId: string)
       throw error;
     });
     if (size) await chmod(file, 0o600);
-    if (size + Buffer.byteLength(line) > 5 * 1024 * 1024) await rename(file, `${file}.1`);
+    if (size + Buffer.byteLength(line) > 5 * 1024 * 1024) await renameReplace(file, `${file}.1`);
     await appendFile(file, line, { mode: 0o600 });
   }).catch(() => { console.warn("[model-arguments] diagnostic file write failed"); });
   await writes;

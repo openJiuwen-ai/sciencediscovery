@@ -19,6 +19,25 @@ _fields = frozenset({"run_id", "agent_id", "session_id", "swarm_session", "run_t
     "result_chars", "tool_count", "terminal", "event_type", "tool_call_id"})
 
 
+def _restrict_to_owner(path: Path) -> None:
+    """0600 equivalent; runs inside emit()'s guard so failures never change semantics.
+
+    [windows-desktop] reason: F3.3 —— NTFS 无 POSIX 权限位，os.chmod 在 Windows
+    只影响只读属性；等价物是去掉继承 + 仅当前用户的 ACL（icacls 系统自带）。
+    """
+    if os.name != "nt":
+        os.chmod(path, 0o600)
+        return
+    import subprocess
+    principal = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}".strip("\\")
+    if not principal:
+        return
+    subprocess.run(
+        ["icacls", str(path), "/inheritance:r", "/grant:r", f"{principal}:F"],
+        capture_output=True, timeout=10, check=False,
+    )
+
+
 def emit(event: str, **fields) -> None:
     if os.environ.get("SCIENCE_AGENT_BOUNDARY_TRACE") != "1":
         return
@@ -29,7 +48,7 @@ def emit(event: str, **fields) -> None:
             path = Path(destination)
             path.parent.mkdir(parents=True, exist_ok=True)
             _handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8")
-            os.chmod(path, 0o600)
+            _restrict_to_owner(path)
             _handler.setFormatter(logging.Formatter("%(message)s"))
             logger.addHandler(_handler)
         logger.setLevel(logging.INFO)

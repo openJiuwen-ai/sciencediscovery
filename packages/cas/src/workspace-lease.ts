@@ -7,6 +7,9 @@ import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
+// [windows-desktop] 炸点③-15: shortened lock basename keeps the SQLite journal
+// path under Windows MAX_PATH (260).
+import { lockFileName } from "./platform/index.js";
 import { RefStore, snapshotWorkspace, type AgentStateRef, type VersionStore } from "./versioning.js";
 import { withWorkspaceAdmission } from "./workspace-lifecycle.js";
 
@@ -16,7 +19,7 @@ async function coordinationPath(root: string) {
   const canonical = await realpath(root);
   const locks = join(dirname(canonical), ".workspace-coordination");
   await mkdir(locks, { recursive: true, mode: 0o700 });
-  return { canonical, path: join(locks, createHash("sha256").update(canonical).digest("hex")) };
+  return { canonical, path: join(locks, lockFileName(canonical)) };
 }
 const poisoned = new Set<string>();
 export async function poisonWorkspace(root: string): Promise<void> {

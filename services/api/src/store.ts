@@ -16,7 +16,10 @@ import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, realpath, rm, stat, truncate, writeFile } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— Windows 上 rename 覆盖会被 AV/索引器
+// 短暂持锁打成 EPERM；统一走 platform/os 的 renameReplace（posix 透传，win32 退避重试）。
+import { renameReplace } from "./platform/os/index.js";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
@@ -1455,7 +1458,7 @@ export class SessionStore {
         throw new Error(`Cannot restore staged data because ${entry.source} already exists`);
       }
       await mkdir(dirname(entry.source), { recursive: true });
-      await rename(entry.staged, entry.source);
+      await renameReplace(entry.staged, entry.source);
     }
   }
 
@@ -1499,7 +1502,7 @@ export class SessionStore {
             operation.entries.push({ source, staged: resolve(root, "data", relativePath) });
           }
           await writeFile(resolve(root, "operation.next.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
-          await rename(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
+          await renameReplace(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
           for (const workspace of roots) {
             if (await this.pathExists(workspace)) await this.mutateWorkspace(workspace, "pre-deletion", async () => {});
           }
@@ -1521,7 +1524,7 @@ export class SessionStore {
   private async stageDeletion(operation: StagedDeletion): Promise<void> {
     for (const entry of operation.entries) {
       await mkdir(dirname(entry.staged), { recursive: true });
-      await rename(entry.source, entry.staged);
+      await renameReplace(entry.source, entry.staged);
     }
   }
 
@@ -1585,7 +1588,7 @@ export class SessionStore {
     await mkdir(directory, { recursive: true });
     try {
       await writeFile(temporaryPath, `${JSON.stringify(values, null, 2)}\n`, "utf8");
-      await rename(temporaryPath, path);
+      await renameReplace(temporaryPath, path);
     } finally {
       await rm(temporaryPath, { force: true });
     }
