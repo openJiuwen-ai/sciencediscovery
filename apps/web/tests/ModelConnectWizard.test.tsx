@@ -1633,7 +1633,9 @@ test("a failed settings read after the probe rolls back the created provider and
   assert.equal(replaceCalls, 0);
   assert.deepEqual(rollbackCalls, [
     "clear:profile-settings-read-provider-listed-model-first",
+    "clear:profile-settings-read-provider-listed-model-second",
     "delete:profile-settings-read-provider-listed-model-first",
+    "delete:profile-settings-read-provider-listed-model-second",
     "provider:settings-read-provider",
   ]);
   assert.equal(errors.length, 1);
