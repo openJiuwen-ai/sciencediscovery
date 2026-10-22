@@ -21,6 +21,7 @@ import type {
 } from "@sciencediscovery/schema";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import { RunnerUnavailableError } from "@sciencediscovery/workspace";
+import { epochSandboxNetworkAccess } from "@sciencediscovery/schema";
 import { createHash, randomUUID } from "node:crypto";
 import { createOperationalLogger } from "@sciencediscovery/operational-logging";
 
@@ -236,7 +237,7 @@ export function createWorkspaceExecutionBindings(
       signal?: AbortSignal,
       toolCallId?: string,
       machine?: string,
-      environment?: { environmentId?: string; cwd?: string; networkAuthorizationId?: string },
+      environment?: { environmentId?: string; cwd?: string; networkAuthorizationId?: string } & import("@sciencediscovery/schema").ShellRecoveryOptions,
     ) => {
       options.store.assertSessionWritable(options.sessionId);
       let target = resolveExecutionTarget(machine);
@@ -253,6 +254,8 @@ export function createWorkspaceExecutionBindings(
       return {
         agentId: options.agentId,
         code,
+        ...(environment?.recoveryMetadataPath ? { recoveryMetadataPath: environment.recoveryMetadataPath } : {}),
+        ...(environment?.recoveryContext ? { recoveryContext: environment.recoveryContext } : {}),
         ...(environment?.environmentId ? { environmentId: environment.environmentId } : {}),
         ...(environment?.cwd !== undefined ? { cwd: environment.cwd } : {}),
         artifactPathPrefix: options.artifactPathPrefix,
@@ -591,7 +594,19 @@ export function createWorkspaceExecutionBindings(
           runnerId: prepared.runnerId!, turnId: options.executionId,
           workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
         }, () => resolveExecutionTarget(runnerId).runnerClient,
-        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId)));
+        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId),
+        environment.recoveryContext ? { context: environment.recoveryContext,
+          requestDigest: createHash("sha256").update(JSON.stringify({
+            code, cwd: environment.cwd ?? ".", environmentId: environment.environmentId ?? null,
+            recoveryMetadataPath: environment.recoveryMetadataPath ?? null,
+            context: { parentExecutionId: environment.recoveryContext.parentExecutionId,
+              recoveryPointId: environment.recoveryContext.recoveryPointId, manifestDigest: environment.recoveryContext.manifestDigest },
+            runnerId: prepared.runnerId, workspaceRoot: prepared.workspaceRoot, runnerWorkspaceKey: prepared.runnerWorkspaceKey ?? null,
+            readOnlyWorkspaceRoot: prepared.readOnlyWorkspaceRoot ?? null, skillPackagesRoot: prepared.skillPackagesRoot ?? null,
+            npuDevices: prepared.npuDevices ?? [], networkAccess: epochSandboxNetworkAccess(prepared.permissionEpoch),
+            mounts: prepared.permissionEpoch.mounts, explicitHandoff: prepared.explicitHandoff ?? false,
+            maxOutputBytes: prepared.maxOutputBytes ?? null, maxWorkspaceBytes: prepared.maxWorkspaceBytes ?? null,
+          })).digest("hex") } : undefined));
       },
       wait: async (id, waitMs, signal) => {
         const record = await options.store.shellExecutions.get(id, executionOwner);

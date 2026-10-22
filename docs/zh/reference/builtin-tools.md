@@ -24,6 +24,11 @@
 
 `run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传与 MCP 下载由控制面在入口处注册；远程文件必须先显式复制到本地 Workspace，再声明 Artifact，复制本身不自动声明。
 
+`run_shell.recovery_metadata_path` 可选采集适配器提供的失败恢复证据；
+`execution_status` 返回持久化的能力、完成/失败工作及固定检查点引用。
+显式 `recovery_context` 仅在当前前提条件与正常权限通过后建立关联的新尝试；
+读取元数据不会启动任务。详见[长任务失败恢复](../developer-docs/execution-recovery.md)。
+
 ## 产品 Web 工具（native 默认可见；JiuwenSwarm 可使用自有工具）
 
 | 工具 | 参数 | 行为与边界 |
