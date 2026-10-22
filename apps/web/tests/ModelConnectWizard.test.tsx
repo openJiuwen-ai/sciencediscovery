@@ -1566,14 +1566,39 @@ test("an API key entered before presets arrive keeps automatic custom mode and t
   assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-kept");
 });
 
-test("a failed settings read stops before creating a provider or model", async () => {
+test("a failed settings read after the probe rolls back the created provider and model", async () => {
   let replaceCalls = 0;
   let createCalls = 0;
+  const rollbackCalls: string[] = [];
   const errors: unknown[] = [];
   const client = createMockClient({
-    createProvider: async () => {
+    createProvider: async (body: any) => {
       createCalls += 1;
-      throw new Error("should not create a provider");
+      return {
+        apiProtocol: body.apiProtocol,
+        apiVariant: body.apiVariant,
+        baseUrl: body.baseUrl,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        id: "settings-read-provider",
+        modelDiscovery: body.modelDiscovery,
+        name: body.name,
+        presetId: body.presetId,
+        proxyPolicy: "inherit",
+        tokenOptional: false,
+        updatedAt: "2026-09-17T00:00:00.000Z",
+      } as ModelProvider;
+    },
+    clearGlobalModelIfCurrent: async (modelId: string) => {
+      rollbackCalls.push(`clear:${modelId}`);
+      return { cleared: true };
+    },
+    deleteModel: async (modelId: string) => {
+      rollbackCalls.push(`delete:${modelId}`);
+      return { deleted: modelId };
+    },
+    deleteProvider: async (providerId: string) => {
+      rollbackCalls.push(`provider:${providerId}`);
+      return { deleted: providerId };
     },
     getGlobalSettings: async () => { throw new Error("settings 500"); },
     replaceGlobalSettings: async () => {
@@ -1604,8 +1629,13 @@ test("a failed settings read stops before creating a provider or model", async (
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
 
-  assert.equal(createCalls, 0);
+  assert.equal(createCalls, 1);
   assert.equal(replaceCalls, 0);
+  assert.deepEqual(rollbackCalls, [
+    "clear:profile-settings-read-provider-listed-model-first",
+    "delete:profile-settings-read-provider-listed-model-first",
+    "provider:settings-read-provider",
+  ]);
   assert.equal(errors.length, 1);
   assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
   const alert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });

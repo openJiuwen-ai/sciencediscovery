@@ -2285,16 +2285,8 @@ test("SessionStore clears an auto-default only while the attempted model still o
   const attempted = await store.createModel({
     apiToken: "token-attempted", baseUrl: "https://models.example.test/v1", model: "attempted", name: "Attempted model",
   });
-  await store.replaceGlobalSettings({
-    enabledConnectorIds: [], modelId: attempted.id, semanticReviewEnabled: true, thinkingEffort: "low",
-  });
-
-  const cleared = await store.clearGlobalModelIfCurrent(attempted.id);
-  assert.equal(cleared.cleared, true);
-  assert.deepEqual(store.getGlobalSettings().overrides, {
-    enabledConnectorIds: [], semanticReviewEnabled: true, thinkingEffort: "low",
-  });
-
+  // A second writer commits a replacement between this attempt's model
+  // creation and its cleanup. The cleanup must not erase that newer choice.
   const replacement = await store.createModel({
     apiToken: "token-replacement", baseUrl: "https://models.example.test/v1", model: "replacement", name: "Replacement model",
   });
@@ -2308,6 +2300,12 @@ test("SessionStore clears an auto-default only while the attempted model still o
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
   assert.deepEqual(reopened.getGlobalSettings().overrides, store.getGlobalSettings().overrides);
+
+  const cleared = await reopened.clearGlobalModelIfCurrent(replacement.id);
+  assert.equal(cleared.cleared, true);
+  assert.deepEqual(reopened.getGlobalSettings().overrides, {
+    enabledConnectorIds: [], thinkingEffort: "high",
+  });
 });
 
 test("SessionStore persists validated Project and Session renames", async (context) => {
