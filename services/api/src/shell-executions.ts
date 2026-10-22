@@ -8,7 +8,7 @@ import type { RunnerClient } from "@sciencediscovery/executor";
 import type { AgentShellExecution, ExecutionOwner, ManagedExecution, ShellExecutionResult } from "@sciencediscovery/schema";
 import type { AgentNotifications } from "./agent-notifications.js";
 
-type Record = Omit<AgentShellExecution, "result"> & { resultRef?: AgentStateRef };
+type Record = Omit<AgentShellExecution, "result"> & { resultRef?: AgentStateRef; historical?: boolean };
 type RecordExecution = (id: string, dispatch: RunnerClient["executeShell"], status: () => "succeeded" | "failed" | "cancelled") => Promise<ShellExecutionResult>;
 const terminal = (state: ManagedExecution["state"]) => state !== "queued" && state !== "running";
 const MAX_CONSECUTIVE_OBSERVATION_FAILURES = 5;
@@ -91,17 +91,17 @@ export class ShellExecutions {
   }
 
   list(owner: ExecutionOwner): AgentShellExecution[] {
-    return this.snapshot(owner.sessionId).filter((item) => item.agentId === owner.agentId).map(({ resultRef: _, ...item }) => item);
+    return this.snapshot(owner.sessionId).filter((item) => item.agentId === owner.agentId).map(({ resultRef: _, historical: _historical, ...item }) => item);
   }
 
   /** The catalog entry alone: state and timestamps without reading the result payload. */
   find(id: string, owner: ExecutionOwner): AgentShellExecution {
-    const { resultRef: _, ...execution } = this.record(id, owner);
+    const { resultRef: _, historical: _historical, ...execution } = this.record(id, owner);
     return execution;
   }
 
   async get(id: string, owner: ExecutionOwner): Promise<AgentShellExecution> {
-    const { resultRef, ...execution } = this.record(id, owner);
+    const { resultRef, historical: _historical, ...execution } = this.record(id, owner);
     if (!resultRef) return execution;
     const result = JSON.parse((await this.versions.readState(resultRef)).toString()) as ShellExecutionResult;
     if (execution.runnerId === "local") return { ...execution, result };
@@ -114,6 +114,17 @@ export class ShellExecutions {
       ...(workspaceSnapshot ? { workspaceSnapshot: scoped(workspaceSnapshot) } : {}),
       ...(workspaceVersion ? { workspaceVersion: scoped(workspaceVersion) } : {}),
     } };
+  }
+
+  async restoreHistorical(source: AgentShellExecution): Promise<void> {
+    const { result, runnerVersionId: _version, ...execution } = source;
+    // Runner workspace receipts address another installation, not this one.
+    const { workspaceSnapshot: _snapshot, workspaceVersion: _workspaceVersion, ...output } = result ?? {};
+    const resultRef = result ? await this.versions.put("agent-state", JSON.stringify(output), "application/json") : undefined;
+    this.save({ ...execution, historical: true, resultRef,
+      state: terminal(source.state) && source.state !== "unknown" ? source.state : "cancelled",
+      finishedAt: source.finishedAt ?? new Date().toISOString(),
+    });
   }
 
   /** Return only after the Runner acknowledges acceptance (or an explicit unknown outcome). */
@@ -230,13 +241,19 @@ export class ShellExecutions {
 
   async logs(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient, cursor = 0) {
     const execution = this.record(id, owner);
+    if (execution.historical) {
+      const { result } = await this.get(id, owner);
+      const chunks = ([{ stream: "stdout" as const, text: result?.stdout ?? "" }, { stream: "stderr" as const, text: result?.stderr ?? "" }])
+        .map((chunk, index) => ({ ...chunk, cursor: index + 1 })).filter((chunk) => chunk.cursor > cursor && chunk.text);
+      return { chunks, nextCursor: Math.max(cursor, 2), truncated: false, retentionTruncated: false };
+    }
     return runner(execution.runnerId).shellExecutionLogs(id, owner, cursor, AbortSignal.timeout(10_000));
   }
 
   async cancel(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient): Promise<AgentShellExecution> {
     const execution = this.record(id, owner);
     // Unknown after restart may still be running remotely; cancellation is safe, resubmission is not.
-    if (!terminal(execution.state) || execution.state === "unknown") {
+    if (!execution.historical && (!terminal(execution.state) || execution.state === "unknown")) {
       await runner(execution.runnerId).cancelShellExecution(id, owner, AbortSignal.timeout(10_000));
     }
     return this.get(id, owner);

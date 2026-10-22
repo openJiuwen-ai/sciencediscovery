@@ -8,6 +8,8 @@ import { readAgentJournal, type JournalEvent } from "./journal.js";
 export interface RecordedEvent { id: string; agentId: string; createdAt: string; runId: string; event: unknown; streamId?: string; sequence?: number }
 export interface SessionTrajectorySource {
   sessionId: string; agents: TrajectoryAgent[]; events: RecordedEvent[];
+  /** Server-owned relocation of imported evidence; never used to discover source refs. */
+  agentAliases?: Record<string, string>;
 }
 interface Assembly { capturedAt?: string; state: AgentStateRef; modelContext: AgentStateRef; turn: number }
 function timestamp(value: unknown): string | null {
@@ -25,6 +27,8 @@ function toolRecord(value: unknown): { type: unknown; trace: Record<string, unkn
 
 /** A read projection over an authorized Session's refs. Never accepts arbitrary client CAS refs. */
 export async function openSessionTrajectory(dataDir: string, source: SessionTrajectorySource, signal: AbortSignal) {
+  const owner = (agentId: unknown) => typeof agentId === "string" && source.agentAliases && Object.hasOwn(source.agentAliases, agentId)
+    ? source.agentAliases[agentId] : agentId;
   const store = new VersionStore(dataDir);
   const entries: TrajectoryEntry[] = [], historicalEntries: TrajectoryEntry[] = [], loaders = new Map<string, () => Promise<unknown>>();
   const states = new Map<string, AgentStateRef>(), linkedContexts = new Set<string>();
@@ -72,11 +76,11 @@ export async function openSessionTrajectory(dataDir: string, source: SessionTraj
     }
     const assembly = await record(ref, "ContextAssemblyRecord") as Assembly;
     const state = object(await record(assembly.state, "AgentStateSnapshot"));
-    if (state.agentId !== agentId) throw new Error("Context ownership mismatch");
+    if (owner(state.agentId) !== agentId) throw new Error("Context ownership mismatch");
     let requestId: string | undefined;
     if (state.agentRevision) {
       const revision = object(await record(state.agentRevision as AgentStateRef, "AgentRevision"));
-      if (revision.agentId !== agentId) throw new Error("Revision ownership mismatch");
+      if (owner(revision.agentId) !== agentId) throw new Error("Revision ownership mismatch");
       if (typeof revision.requestExecutionId === "string") requestId = revision.requestExecutionId;
     }
     // A snapshot is not an event, even if an old producer embedded a timestamp.
@@ -344,7 +348,7 @@ export async function openSessionTrajectory(dataDir: string, source: SessionTraj
     }
     if (states.has(id)) {
       const snapshot = await record(states.get(id)!, "AgentStateSnapshot");
-      if (object(snapshot).agentId !== entry.agentId) throw new Error("State ownership mismatch");
+      if (owner(object(snapshot).agentId) !== entry.agentId) throw new Error("State ownership mismatch");
       if (result.context) result.context.state = redact(snapshot);
       if (entry.kind === "state") result.value = redact(snapshot);
     }

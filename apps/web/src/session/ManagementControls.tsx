@@ -16,7 +16,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 
 import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDetails, RuntimeSettingsOverrides, SessionListState, SkillDescriptor, SkillLibrary } from "@sciencediscovery/schema";
 
-import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, EditIcon, EllipsisIcon, PlusIcon, RestoreIcon, SettingsIcon, TrashIcon } from "../icons.js";
+import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, DownloadIcon, EditIcon, EllipsisIcon, PlusIcon, RestoreIcon, SettingsIcon, TrashIcon } from "../icons.js";
 import { ScopedSettingsEditor } from "../ScopedSettingsEditor.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
 
@@ -110,7 +110,7 @@ export function SidebarSectionHeader({
   </div>;
 }
 
-function useAnchoredPopover(open: boolean) {
+export function useAnchoredPopover(open: boolean) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
@@ -326,6 +326,7 @@ interface OverflowMenuAction {
   icon: ReactNode;
   label: string;
   onSelect: () => void;
+  submenu?: OverflowMenuAction[];
 }
 
 function ResourceOverflowMenu({
@@ -345,6 +346,7 @@ function ResourceOverflowMenu({
 }) {
   const { t } = useLocale();
   const menuId = `${kind}-menu-${resourceId}`;
+  const [expandedSubmenu, setExpandedSubmenu] = useState<string>();
   const { popoverRef, style, triggerRef } = useAnchoredPopover(open);
   return <div className={open ? `resource-menu ${kind}-menu open` : `resource-menu ${kind}-menu`}>
     <button
@@ -359,7 +361,26 @@ function ResourceOverflowMenu({
       type="button"
     ><EllipsisIcon size={17} /></button>
     {open ? <div aria-label={t("resource.actionsFor", { label })} className="resource-menu-popover" id={menuId} ref={popoverRef} role="menu" style={style}>
-      {actions.map((action) => <button
+      {actions.map((action) => action.submenu ? <div className={expandedSubmenu === action.label ? "resource-menu-submenu expanded" : "resource-menu-submenu"} key={action.label}>
+        <button
+          className={action.danger ? "danger" : undefined}
+          disabled={action.disabled}
+          aria-expanded={expandedSubmenu === action.label}
+          onClick={() => setExpandedSubmenu((current) => current === action.label ? undefined : action.label)}
+          role="menuitem"
+          type="button"
+        ><span aria-hidden="true">{action.icon}</span><span>{action.label}</span><ChevronRightIcon aria-hidden="true" size={13} /></button>
+        <div className="resource-menu-submenu-popover" role="menu">
+          {action.submenu.map((child) => <button
+            className={child.danger ? "danger" : undefined}
+            disabled={child.disabled}
+            key={child.label}
+            onClick={child.onSelect}
+            role="menuitem"
+            type="button"
+          ><span aria-hidden="true">{child.icon}</span><span>{child.label}</span></button>)}
+        </div>
+      </div> : <button
         className={action.danger ? "danger" : undefined}
         disabled={action.disabled}
         key={action.label}
@@ -404,11 +425,16 @@ export function ProjectOverflowMenu({
 }
 
 export function SessionOverflowMenu({
+  evidenceLocked = false,
   archived,
   busy = false,
   label,
   onArchive,
   onDelete,
+  onExportConversation,
+  onExportResearchPackage,
+  onImportResearchPackage = () => undefined,
+  canImportResearchPackage = false,
   onRename,
   onRestore,
   onSettings,
@@ -417,10 +443,15 @@ export function SessionOverflowMenu({
   sessionId,
 }: {
   archived: boolean;
+  evidenceLocked?: boolean;
   busy?: boolean;
   label: string;
   onArchive: () => void;
   onDelete: () => void;
+  onExportConversation: () => void;
+  onExportResearchPackage: () => void;
+  onImportResearchPackage?: () => void;
+  canImportResearchPackage?: boolean;
   onRename: () => void;
   onRestore: () => void;
   onSettings: () => void;
@@ -431,8 +462,13 @@ export function SessionOverflowMenu({
   const { t } = useLocale();
   return <ResourceOverflowMenu
     actions={[
-      { disabled: archived, icon: <EditIcon size={15} />, label: t("resource.rename"), onSelect: onRename },
-      { disabled: busy, icon: <SettingsIcon size={15} />, label: t("resource.settings"), onSelect: onSettings },
+      { disabled: archived || evidenceLocked, icon: <EditIcon size={15} />, label: t("resource.rename"), onSelect: onRename },
+      { icon: <DownloadIcon size={15} />, label: "导出", onSelect: () => undefined, submenu: [
+        { icon: <DownloadIcon size={15} />, label: "导出会话", onSelect: onExportConversation },
+        { icon: <DownloadIcon size={15} />, label: "导出证据包", onSelect: onExportResearchPackage },
+      ] },
+      ...(canImportResearchPackage ? [{ icon: <DownloadIcon size={15} />, label: "导入证据包", onSelect: onImportResearchPackage }] : []),
+      { disabled: busy || evidenceLocked, icon: <SettingsIcon size={15} />, label: t("resource.settings"), onSelect: onSettings },
       archived
         ? { disabled: busy, icon: <RestoreIcon size={15} />, label: t("resource.restore"), onSelect: onRestore }
         : { disabled: busy, icon: <ArchiveIcon size={15} />, label: t("resource.archive"), onSelect: onArchive },

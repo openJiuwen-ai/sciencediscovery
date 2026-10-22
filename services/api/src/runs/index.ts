@@ -20,6 +20,7 @@ import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
 import { randomUUID } from "node:crypto";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -3193,11 +3194,12 @@ export function scheduleSessionRuns(
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
 ): void {
-  if (scheduledSessions.has(sessionId)) return;
+  if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
   void (async () => {
     try {
       while (true) {
+        if (isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
         const next = (await store.listSessionRuns(sessionId)).find((run) => run.status === "queued");
         if (!next) return;
         if (next.automaticWake && (!next.notificationDelivery || !store.notifications.deliveryAllowed(next.notificationDelivery))) {
@@ -3336,6 +3338,7 @@ export function scheduleSessionRuns(
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
+      if (isEvidenceSessionReadOnly(session)) continue;
       // A crashed child has no live process holding its busy state. Recover only
       // closed, committed turn context; never replay the unfinished model/tool call.
       for (const child of store.listSubagents(session.id)) {

@@ -265,6 +265,10 @@ export function EllipsisIcon(props: IconProps) {
   );
 }
 
+export function BranchIcon(props: IconProps) {
+  return <IconBase {...props}><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><path d="M6 7v10M18 7v1a5 5 0 0 1-5 5H6" /></IconBase>;
+}
+
 export function CheckIcon(props: IconProps) {
   return (
     <IconBase {...props}>
