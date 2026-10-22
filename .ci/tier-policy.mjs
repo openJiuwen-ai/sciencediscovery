@@ -26,11 +26,39 @@ export function gate(profile, needs) {
   return problems;
 }
 
+export function mergeGroupPullRequestNumber(headRef = '') {
+  const match = /^refs\/heads\/gh-readonly-queue\/.+\/pr-([1-9]\d*)-[^/]+$/.exec(headRef);
+  const number = Number(match?.[1]);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+export function claGate(event, { statuses, user, error } = {}) {
+  if (!['pull_request', 'merge_group'].includes(event)) {
+    return { ok: true, message: `license/cla: not applicable to ${event}` };
+  }
+  // An unreadable response must never look like an absent context, even for bots.
+  if (error || !Array.isArray(statuses)) {
+    return { ok: false, message: `license/cla: could not read commit statuses: ${error || 'missing response'}` };
+  }
+  // GitHub lists statuses newest first; the workflow supplies every page.
+  const status = statuses.find(item => item.context === 'license/cla');
+  if (!status) return { ok: true, message: 'license/cla: context absent' };
+  if (status.state === 'success') return { ok: true, message: 'license/cla: success' };
+  if (user?.type === 'Bot') {
+    return { ok: true, message: `license/cla: ${status.state}; allowed for Bot PR author ${user.login}` };
+  }
+  return { ok: false, message: `license/cla: ${status.state}; no Bot PR author exemption` };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv[2] === 'gate') {
     const problems = gate(process.env.CI_PROFILE, JSON.parse(process.env.CI_JOB_RESULTS));
     if (problems.length) throw new Error(`CI gate failed: ${problems.join('; ')}`);
     console.log(`PASS: ${process.env.CI_PROFILE} at ${process.env.GITHUB_SHA}`);
+  } else if (process.argv[2] === 'cla') {
+    const result = claGate(process.env.GITHUB_EVENT_NAME, JSON.parse(process.env.CI_CLA_RESULT || '{}'));
+    if (!result.ok) throw new Error(`CI gate failed: ${result.message}`);
+    console.log(result.message);
   } else {
     const result = route(process.env.GITHUB_EVENT_NAME, process.env.CI_REQUESTED_PROFILE || 'pr', process.env.CI_REQUESTED_BACKEND || 'jiuwenswarm');
     for (const [key,value] of Object.entries(result)) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
