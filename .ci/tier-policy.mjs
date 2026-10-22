@@ -44,7 +44,7 @@ export function claGate(event, { statuses, user, error } = {}) {
   const status = statuses.find(item => item.context === 'license/cla');
   if (!status) return { ok: true, message: 'license/cla: context absent' };
   if (status.state === 'success') return { ok: true, message: 'license/cla: success' };
-  if (user?.type === 'Bot') {
+  if (user?.type === 'Bot' && user.login === 'sciencediscovery-bot[bot]') {
     return { ok: true, message: `license/cla: ${status.state}; allowed for Bot PR author ${user.login}` };
   }
   return { ok: false, message: `license/cla: ${status.state}; no Bot PR author exemption` };
