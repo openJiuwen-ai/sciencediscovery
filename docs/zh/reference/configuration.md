@@ -125,7 +125,7 @@ Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把�
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
 | `SCIENCE_AGENT_SSH_CONFIG_PATH` | — | 远程 runner 的 SSH 配置文件（容器内路径）；放在宿主 `./data/ssh` 下即已在 `/app/data/ssh` 可见 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |
-| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | 用量看板 USD/CNY 汇率源，默认使用无需 API key 的 Frankfurter；自定义 URL 时汇率来源按 URL host 标注 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | 用量看板 USD/CNY 汇率源，默认使用无需 API key 的 Frankfurter；自定义 URL 时汇率来源按 URL host 标注；也可设为 `https://allratestoday.com/api/open/latest/USD`（AllRatesToday，ECB 参考汇率，同样无需 API key） |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | 用量看板汇率缓存 TTL，默认 6 小时 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | 用量看板汇率请求超时 |
 
