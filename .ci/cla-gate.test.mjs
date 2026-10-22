@@ -64,6 +64,20 @@ test('merge-group PR numbers come only from queue refs', () => {
 
 // Execute the actual workflow's collection step with API fixtures; no network calls.
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+test('merge-gate has exactly the CLA read permissions while workflow defaults stay contents-only', () => {
+  const mergeGateJob = workflow.split('\n  merge-gate:\n')[1].split(/\n(?=  [\w-]+:\n)/)[0];
+  const defaults = workflow.match(/^permissions:\n((?: {2}\S[^\n]*\n)+)/m)?.[1];
+  const jobPermissions = mergeGateJob.match(/^    permissions:\n((?: {6}\S[^\n]*\n)+)/m)?.[1];
+  assert.ok(defaults, 'workflow-level permissions must remain explicit');
+  assert.ok(jobPermissions, 'merge-gate must grant its own read permissions');
+  const entries = block => block.trim().split('\n').map(line => line.trim()).sort();
+  assert.deepEqual(entries(defaults), ['contents: read']);
+  assert.deepEqual(entries(jobPermissions), ['contents: read', 'pull-requests: read', 'statuses: read']);
+  for (const block of [defaults, mergeGateJob]) {
+    assert.doesNotMatch(block, /\b(?:statuses|pull-requests):\s*write\b/);
+  }
+});
+
 const collectionStep = workflow.split('      - name: Read CLA inputs\n')[1].split('\n      - name: Require CLA policy')[0];
 const script = collectionStep.split('          script: |\n')[1].replace(/^ {12}/gm, '');
 const collect = new (async () => {}).constructor('github', 'context', 'core', 'process', script);
