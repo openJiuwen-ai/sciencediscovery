@@ -113,6 +113,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
+import { sessionDisplayTitle } from "./session-title.js";
 import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { settleLoads, startupLoads, systemSettingsLoads, workspaceCapabilitiesFromQuota } from "./settings-loads.js";
 import { isAuthFailure } from "./api/auth.js";
@@ -2385,7 +2386,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isInFlight: () => sessionCreationInFlight.current,
       onCreated: (created) => {
         if (activeProjectIdRef.current !== projectId) {
-          pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
+          pushToast("success", t("app.sessionCreated"), sessionTitle(created, [...artifactSessions, created]));
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
@@ -2398,7 +2399,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setMessage(initialMessage);
           setComposerReferences([]);
         }
-        pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
+        pushToast("success", t("app.sessionCreated"), sessionTitle(created, [...artifactSessions, created]));
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
@@ -4071,10 +4072,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
     : t("app.workspace");
-  // A new session is stored as UNTITLED_SESSION_TITLE until it is named; shown in the UI's language.
-  const sessionTitle = (title: string) => title === UNTITLED_SESSION_TITLE ? t("app.untitledSession") : title;
+  // A new session is stored as UNTITLED_SESSION_TITLE until it is named. Multiple
+  // such sessions receive display-only ordinals without changing that sentinel.
+  const sessionTitle = (
+    item: Pick<Session, "createdAt" | "id" | "title">,
+    candidates = artifactSessions,
+  ) => sessionDisplayTitle(item, candidates, t("app.untitledSession"));
   const activeSessionLabel = session
-    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, sessionTitle(session.title))
+    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, sessionTitle(session))
     : t("app.startResearchSession");
   const mainProjectRenameTarget = activeProject
     && renameTarget?.kind === "project"
@@ -4369,12 +4374,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     && renameTarget.location === "sidebar"
                     ? renameTarget
                     : undefined;
-                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, sessionTitle(item.title));
+                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, sessionTitle(item));
                   return <div className="nav-resource" key={item.id}>
                     {inlineTarget && !item.archivedAt ? <div className={item.id === activeSessionId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                       <span className="nav-icon"><SessionIcon size={15} /></span>
                       <InlineRenameInput
-                        ariaLabel={t("app.renameSessionAria", { name: sessionTitle(item.title) })}
+                        ariaLabel={t("app.renameSessionAria", { name: sessionTitle(item) })}
                         className="nav-inline-rename"
                         disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                         onChange={setRenameDraft}
@@ -4385,17 +4390,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
                       onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setSidebarDrawerOpen(false); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
-                      title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item.title) })}
+                      title={item.archivedAt ? `${sessionTitle(item)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item) })}
                       type="button"
                     >
-                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : sessionTitle(item.title)}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
+                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${sessionTitle(item)} · ${t("sidebar.archived")}` : sessionTitle(item)}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
                       busy={runningSessionIds.has(item.id) || lifecycleBusy}
                       label={label}
                       onArchive={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("archive", item.id); }}
-                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item.title) }); }}
+                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item) }); }}
                       onRename={() => { setOpenSessionMenuId(undefined); beginInlineRename(target, "sidebar"); }}
                       onRestore={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("restore", item.id); }}
                       onSettings={() => { setOpenSessionMenuId(undefined); void openScopedSettings({ id: item.id, kind: "session", label: item.title }); }}
@@ -4501,7 +4506,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: sessionTitle(session.title) })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
+                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: sessionTitle(session) })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
                 {session ? <span className="session-runner-target" title={selectedRunnerIds.length
                   ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
                   : t("app.runnerSelectionEmpty")}>
@@ -4531,7 +4536,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </ol>
               </div>
             ) : trajectorySession && session.id === trajectorySession.id ? (
-              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session.title)} port={client.trajectory} locale={locale} onClose={() => {
+              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session)} port={client.trajectory} locale={locale} onClose={() => {
                 setTrajectorySession(undefined);
                 // The trajectory replaces the message list in the document flow;
                 // make sure the conversation toggle is back in view after the
