@@ -139,6 +139,12 @@ function interruptedExecutionStatus(signal: AbortSignal | undefined): "cancelled
   return signal?.aborted ? "cancelled" : "failed";
 }
 
+/** A permanent provenance conflict: the existing immutable result cannot be
+ * replaced. Carries a structured code so recovery layers can map it to a
+ * non-retryable block instead of treating it as a transient storage failure. */
+const executionResultConflict = (message: string) =>
+  Object.assign(new Error(message), { code: "EXECUTION_RESULT_CONFLICT" as const });
+
 async function runnerSandboxKind(runnerClient: RunnerClient): Promise<SandboxKind> {
   try {
     return (await runnerClient.health()).sandbox;
@@ -910,7 +916,7 @@ export class ProvenanceRecorder {
     })))).digest("hex");
     const existing = (await this.store.listExecutionRuns(options.sessionId)).find((run) => run.id === options.executionId);
     if (existing?.resultDigest && existing.resultDigest !== resultDigest) {
-      throw new Error("EXECUTION_RESULT_CONFLICT: existing result digest differs");
+      throw executionResultConflict("EXECUTION_RESULT_CONFLICT: existing result digest differs");
     }
     // A missing result provides no measured exit code, runtime environment,
     // sandbox or kernel identity. Keep those unknown, not fabricated success.
@@ -963,7 +969,7 @@ export class ProvenanceRecorder {
     options = structuredClone(options);
     result = structuredClone(result);
     const executionId = options.executionId;
-    if (result.executionId !== executionId) throw new Error("EXECUTION_RESULT_CONFLICT: execution identity mismatch");
+    if (result.executionId !== executionId) throw executionResultConflict("EXECUTION_RESULT_CONFLICT: execution identity mismatch");
     // JSON round-tripping matches the persisted context and strips optional
     // undefined properties; canonical ordering makes restarts/order irrelevant.
     const resultDigest = createHash("sha256").update(canonicalize(JSON.parse(JSON.stringify({
@@ -971,7 +977,7 @@ export class ProvenanceRecorder {
     })))).digest("hex");
     const existing = (await this.store.listExecutionRuns(options.sessionId)).find((run) => run.id === executionId);
     if (existing?.resultDigest && existing.resultDigest !== resultDigest) {
-      throw new Error("EXECUTION_RESULT_CONFLICT: existing result digest differs");
+      throw executionResultConflict("EXECUTION_RESULT_CONFLICT: existing result digest differs");
     }
     const shellSpec = await this.cas.put(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC);
     if (shellSpec.hash !== DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH) {

@@ -133,6 +133,24 @@ test("existing shell result rejects changed identity, result, status, or workspa
   assert.equal(f.runs.get(f.context.executionId)!.status, "succeeded");
 });
 
+test("provenance conflicts carry a structured EXECUTION_RESULT_CONFLICT code and keep the original run untouched", async (t) => {
+  const f = await fixture(t);
+  const conflict = (promise: Promise<unknown>) => assert.rejects(promise, (error: unknown) => {
+    assert.ok(error instanceof Error, "conflict must be an Error");
+    assert.equal((error as Error & { code?: string }).code, "EXECUTION_RESULT_CONFLICT");
+    assert.match(error.message, /EXECUTION_RESULT_CONFLICT/);
+    return true;
+  });
+  await f.recorder.commitExistingShellExecutionResult(f.context, f.result, f.reader);
+  await conflict(f.recorder.commitExistingShellExecutionResult(f.context, { ...f.result, stdout: "different output" }, f.reader));
+  await conflict(f.recorder.commitExistingShellExecutionResult(f.context, f.result, f.reader, "cancelled"));
+  await conflict(f.recorder.commitExistingShellExecutionResult(f.context, { ...f.result, executionId: "another-execution" }, f.reader));
+  await conflict(f.recorder.commitExistingShellExecutionFailure(f.context, { state: "failed", error: "changed failure", finishedAt: timestamp }));
+  assert.equal(f.runs.size, 1, "a conflict must not append or replace the existing immutable run");
+  assert.equal(f.runs.get(f.context.executionId)!.status, "succeeded");
+  assert.equal(f.derivations.size, 0);
+});
+
 test("environment snapshot failure leaves no execution provenance and retries the original revision", async (t) => {
   const f = await fixture(t);
   const bytes = Buffer.from('{"version":"original"}');

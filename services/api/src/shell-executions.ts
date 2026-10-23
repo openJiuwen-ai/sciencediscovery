@@ -38,6 +38,19 @@ type RecordExecution = (id: string, dispatch: RunnerClient["executeShell"], stat
 const terminal = (state: ManagedExecution["state"]) => state !== "queued" && state !== "running";
 const MAX_CONSECUTIVE_OBSERVATION_FAILURES = 5;
 const MAX_OBSERVATION_RETRY_DELAY_MS = 5_000;
+// Fixed safe display text for the structured non-retryable conflict codes, used
+// at the persistence boundary. Whatever the source of the error (a remote
+// Runner body or a local finalizer), the raw message is never written into
+// execution.error / lastError.message under these codes — only this fixed text.
+// Written as an object literal type because the local `Record` type below
+// shadows the global `Record<K, V>` utility here.
+const RUNNER_CONFLICT_MESSAGES: Readonly<{
+  RESULT_DIGEST_MISMATCH: string;
+  EXECUTION_RESULT_CONFLICT: string;
+}> = {
+  RESULT_DIGEST_MISMATCH: "Runner execution result digest mismatch",
+  EXECUTION_RESULT_CONFLICT: "Runner execution result conflict",
+};
 class RecordedRunnerFailure extends Error {}
 type ObservationFailure = { cause?: unknown; code?: unknown; message?: unknown; name?: unknown; statusCode?: unknown };
 const observationFailureChain = (error: unknown): ObservationFailure[] => {
@@ -263,11 +276,14 @@ export class ShellExecutions {
     const httpStatus = observationHttpStatus(observationFailureChain(error));
     const authorization = error instanceof Error && /not allowed|may not run|may only run|Session.*(?:not found|archived)|not writable|not available to this Agent|Runner.*not.*allow/i.test(error.message);
     const explicitCode = (error as { code?: unknown } | undefined)?.code;
-    const code = error instanceof RecoveryError ? error.code : explicitCode === "RESULT_DIGEST_MISMATCH" ? explicitCode : authorization ? "AUTHORIZATION_REVOKED"
+    const code = error instanceof RecoveryError ? error.code
+      : explicitCode === "RESULT_DIGEST_MISMATCH" || explicitCode === "EXECUTION_RESULT_CONFLICT" ? explicitCode
+      : authorization ? "AUTHORIZATION_REVOKED"
       : httpStatus === 401 || httpStatus === 403 ? "AUTHORIZATION_REVOKED"
       : httpStatus === 404 ? "EXECUTION_NOT_FOUND" : fallback;
     const retryable = !["AUTHORIZATION_REVOKED", "EXECUTION_NOT_FOUND", "ORIGINAL_RUNNER_MISMATCH",
-      "EXECUTION_IDENTITY_MISMATCH", "EXECUTION_ID_CONFLICT", "RESULT_DIGEST_MISMATCH", "PROCESS_STATE_UNVERIFIABLE", "RECOVERY_CONTEXT_UNAVAILABLE"].includes(code)
+      "EXECUTION_IDENTITY_MISMATCH", "EXECUTION_ID_CONFLICT", "RESULT_DIGEST_MISMATCH", "EXECUTION_RESULT_CONFLICT",
+      "PROCESS_STATE_UNVERIFIABLE", "RECOVERY_CONTEXT_UNAVAILABLE"].includes(code)
       && (httpStatus === undefined || httpStatus >= 500);
     const failureCount = (execution.observation?.failureCount ?? 0) + 1;
     // Never retain arbitrary HTTP bodies, command arguments or authentication values.
@@ -275,6 +291,8 @@ export class ShellExecutions {
       .find((value): value is string => typeof value === "string" && /^(?:E[A-Z0-9_]{1,30}|UND_ERR_[A-Z0-9_]+)$/.test(value));
     const exhausted = error instanceof Error ? /Runner status remained unavailable after (\d+) consecutive attempts/.exec(error.message) : null;
     const detail = error instanceof RecoveryError ? error.message
+      : explicitCode === "RESULT_DIGEST_MISMATCH" || explicitCode === "EXECUTION_RESULT_CONFLICT"
+        ? RUNNER_CONFLICT_MESSAGES[explicitCode]
       : httpStatus ? `Runner observation returned HTTP ${httpStatus}`
       : `${exhausted ? exhausted[0] : fallback === "PROVENANCE_COMMIT_FAILED"
         ? "Existing execution result could not be committed; retry uses the same result"
@@ -415,8 +433,20 @@ export class ShellExecutions {
         if (original.submissionDigest === execution.submissionDigest) return this.get(execution.id, owner);
         throw new RecoveryError("EXECUTION_ID_CONFLICT", "Logical submission identity was already used with a different request");
       }
-      if (uncertain) throw new RecoveryError("ORIGINAL_EXECUTION_UNCONFIRMED",
-        `Execution ${uncertain.id} has an unconfirmed outcome. Inspect execution_status before starting more work in this workspace; no replacement was submitted.`);
+      // Any unconfirmed outcome in this workspace blocks new work: it must be
+      // inspected first and a replacement is never submitted automatically. When
+      // the record also lacks a recovery context there is no auto-recovery path
+      // at all, so the message explains that limit and how to proceed safely.
+      // snapshot() strips recoveryContext via publicRecord, so read the full
+      // record here to distinguish a recoverable unknown from a legacy one.
+      if (uncertain) {
+        const row = this.db.prepare("SELECT record FROM shell_executions WHERE id = ? AND session = ?").get(uncertain.id, owner.sessionId);
+        const full = row ? JSON.parse(String(row.record)) as Record : undefined;
+        const message = full?.recoveryContext
+          ? `Execution ${uncertain.id} has an unconfirmed outcome. Inspect execution_status before starting more work in this workspace; no replacement was submitted.`
+          : `Execution ${uncertain.id} has an unconfirmed outcome and no recovery context; it cannot be auto-recovered and keeps this workspace blocked. Inspect execution_status/execution_logs before continuing; no replacement was submitted. New work in a separate workspace is only safe when it shares no mutable resources or external side effects (such as the same external target or remote resource) with this unknown task — switching workspaces is not a generally safe way to re-run it.`;
+        throw new RecoveryError("ORIGINAL_EXECUTION_UNCONFIRMED", message);
+      }
     }
     try { this.save(execution); } // intent precedes the only submission attempt
     catch (error) {

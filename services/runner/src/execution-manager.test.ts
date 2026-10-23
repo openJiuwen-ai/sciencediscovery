@@ -26,10 +26,10 @@ function result(id: string): ShellExecutionResult {
     cgroupMode: "none", sandbox: "bubblewrap", environmentVariables: {}, networkPolicy: "none", runnerVersion: "test",
     workingDirectory: "/workspace", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() };
 }
-async function until(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
+async function until(check: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!check()) {
-    if (Date.now() > deadline) throw new Error("Execution did not reach expected state");
+    if (Date.now() > deadline) throw new Error(`Execution did not reach expected state within ${timeoutMs}ms`);
     await new Promise((done) => setTimeout(done, 5));
   }
 }
@@ -399,7 +399,11 @@ test("Unicode log cursors remain stable across pagination, duplicate submission 
     for (let offset = 0; offset < bytes.length; offset += 11) log("stdout", bytes.subarray(offset, offset + 11));
     return result("unicode");
   });
-  await until(() => manager.get("unicode", owner).state === "completed");
+  // The 55 KB log is written in 11-byte chunks and committed through CAS plus a
+  // workspace snapshot. That is ~11 s on slow disks (observed in PR #472
+  // verification), so the completion wait needs a bound sized for it; every
+  // content/cursor/dedup/restart assertion below still checks exact bytes.
+  await until(() => manager.get("unicode", owner).state === "completed", 30_000);
   const first = manager.logs("unicode", owner);
   const terminal = manager.get("unicode", owner);
   await manager.close();

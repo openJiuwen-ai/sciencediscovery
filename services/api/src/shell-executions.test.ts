@@ -3,14 +3,16 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TestContext } from "node:test";
 
 import { RefStore, VersionStore } from "@sciencediscovery/cas";
-import type { RunnerClient } from "@sciencediscovery/executor";
+import { RunnerClient } from "@sciencediscovery/executor";
 import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
@@ -457,6 +459,188 @@ test("failed finalization retries pinned bytes across restart despite later Runn
   const restarted = new ShellExecutions(f.db, f.versions, f.notices);
   const final = await restarted.reconcile(lost.job.id, owner, { runner: () => lost.runner, finalize: async (_, result) => { assert.deepEqual(result, first); return result; } });
   assert.equal(final.state, "completed"); assert.equal(lost.submissions(), 1); assert.equal(reads, 2);
+});
+
+test("provenance conflict is a non-retryable block and background scans never re-finalize it", async context => {
+  const f = await fixture(context); let finalizeAttempts = 0;
+  const lost = await lostAck(f, async id => recoveredTerminal(id, f));
+  const conflict = Object.assign(new Error("EXECUTION_RESULT_CONFLICT: existing result digest differs"),
+    { code: "EXECUTION_RESULT_CONFLICT" });
+  const handlers = { runner: () => lost.runner,
+    finalize: async (_: unknown, result: ShellExecutionResult) => { finalizeAttempts++; throw conflict; } };
+  const record = await f.service.reconcile(lost.job.id, owner, handlers);
+  assert.equal(record.state, "unknown"); assert.equal(record.provenance, "unconfirmed");
+  assert.equal(record.observation?.lastError?.code, "EXECUTION_RESULT_CONFLICT");
+  assert.equal(record.observation?.lastError?.retryable, false);
+  assert.equal(record.observation?.nextRetryAt, undefined);
+  assert.equal(record.observation?.lastError?.message, "Runner execution result conflict", "a conflict is persisted as the fixed safe string");
+  assert.equal(record.error, "Runner execution result conflict");
+  assert.doesNotMatch(JSON.stringify(record), /digest differs/, "the raw conflict message is not persisted");
+  assert.equal(finalizeAttempts, 1); assert.equal(lost.submissions(), 1);
+  assert.equal(f.notices.unread(owner).length, 0, "a conflict is not a completion notice");
+  f.service.configureRecovery(handlers); context.after(() => f.service.close());
+  // configureRecovery already kicks off the restart-level force scan; await it
+  // without issuing another force request (which would coalesce into the same
+  // scan and re-check the record a second time).
+  await f.service.reconcilePending();
+  assert.equal(finalizeAttempts, 2, "a restart-level force scan re-checks the record once");
+  assert.equal((await f.service.get(lost.job.id, owner)).observation?.lastError?.retryable, false);
+  await f.service.reconcilePending();
+  assert.equal(finalizeAttempts, 2, "background scans must not re-finalize a non-retryable conflict");
+  assert.equal(lost.submissions(), 1);
+});
+
+test("the observation guard pins a committed digest: a changed result digest on the same version is a non-retryable conflict", async context => {
+  const f = await fixture(context);
+  let changedDigest = false;
+  const lookup = async (id: string) => {
+    const value = recoveredTerminal(id, f);
+    if (changedDigest) {
+      value.result = { ...f.result, stdout: "different bytes" };
+      value.evidence = { ...value.evidence!, resultDigest: "sha256:changed" };
+    }
+    return value;
+  };
+  const lost = await lostAck(f, lookup);
+  let finalizeAttempts = 0;
+  const handlers = { runner: () => lost.runner,
+    finalize: async (_: unknown, result: ShellExecutionResult) => { finalizeAttempts++; throw new Error("storage unavailable"); } };
+  const interrupted = await f.service.reconcile(lost.job.id, owner, handlers);
+  assert.equal(interrupted.state, "unknown"); assert.equal(interrupted.finalization, "failed");
+  assert.equal(finalizeAttempts, 1);
+  changedDigest = true;
+  const record = await f.service.reconcile(lost.job.id, owner, handlers);
+  assert.equal(record.observation?.lastError?.code, "EXECUTION_ID_CONFLICT");
+  assert.equal(record.observation?.lastError?.retryable, false);
+  assert.equal(record.observation?.nextRetryAt, undefined);
+  assert.equal(finalizeAttempts, 1, "the changed digest must never reach the finalizer");
+  assert.equal(lost.submissions(), 1, "a digest conflict must not re-dispatch");
+  assert.equal(record.result, undefined);
+  assert.equal(f.notices.unread(owner).length, 0);
+});
+
+test("a legacy unknown record without recovery context blocks new work and is never cleared or resubmitted", async context => {
+  const f = await fixture(context);
+  const legacy = { ...owner, ...identity, id: "legacy-unknown", state: "unknown", queuedAt: "2026-01-01T00:00:00.000Z",
+    accepted: true, provenance: "unconfirmed", dispatchPhase: "accepted", finalization: "pending",
+    error: "API restarted before finalization; no recovery context", observation: { status: "stale", failureCount: 0 } };
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run(legacy.id, owner.sessionId, owner.agentId, JSON.stringify(legacy));
+  let submissions = 0;
+  const runner = { startShellExecution: async () => { submissions++; throw new Error("must not submit"); } } as unknown as RunnerClient;
+  const startInWorkspace = () => f.service.start(owner, identity, () => runner, async (id, dispatch) => dispatch(request(id)), recoveryContext);
+  await assert.rejects(startInWorkspace(), { code: "ORIGINAL_EXECUTION_UNCONFIRMED" });
+  const message = await startInWorkspace().then(
+    () => "unexpected success",
+    (error: Error) => error.message,
+  );
+  assert.match(message, /no recovery context/, "the legacy limit must be named");
+  assert.match(message, /separate workspace/, "the error must name the safe independent-work path");
+  assert.match(message, /not a generally safe way to re-run/, "switching workspaces must not be presented as a safe bypass");
+  assert.equal(submissions, 0, "no replacement command is submitted while the outcome is unconfirmed");
+  const record = await f.service.get(legacy.id, owner);
+  assert.equal(record.state, "unknown"); assert.equal(record.provenance, "unconfirmed");
+  assert.equal(record.finishedAt, undefined, "the legacy record is not fabricated as completed");
+  // New work in an isolated workspace is not blocked.
+  let isolatedSubmissions = 0;
+  const isolatedRunner = { startShellExecution: async (r: ShellExecutionRequest) => {
+    isolatedSubmissions++; return { ...owner, id: r.executionId, state: "completed", queuedAt: "now", result: f.result, version: f.ref };
+  } } as unknown as RunnerClient;
+  const isolated = await f.service.start(owner, { ...identity, workspaceId: "other-workspace" }, () => isolatedRunner,
+    async (id, dispatch) => dispatch(request(id)), recoveryContext);
+  assert.equal((await f.service.wait(isolated.id, owner, 1000)).state, "completed");
+  assert.equal(isolatedSubmissions, 1);
+});
+
+test("an unknown record that still has recovery context blocks new work with a generic message", async context => {
+  const f = await fixture(context);
+  const contextFor = recoveryContext("recoverable-unknown");
+  const recoverable = { ...owner, ...identity, id: "recoverable-unknown", state: "unknown", queuedAt: "2026-01-01T00:00:00.000Z",
+    accepted: true, provenance: "unconfirmed", dispatchPhase: "accepted", finalization: "pending",
+    recoveryContext: contextFor, expectedRunnerInstanceId: "original-ledger", receipt: receipt(),
+    observation: { status: "stale", failureCount: 0 } };
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run(recoverable.id, owner.sessionId, owner.agentId, JSON.stringify(recoverable));
+  let submissions = 0;
+  const runner = { startShellExecution: async () => { submissions++; throw new Error("must not submit"); } } as unknown as RunnerClient;
+  const startInWorkspace = () => f.service.start(owner, identity, () => runner, async (id, dispatch) => dispatch(request(id)), recoveryContext);
+  await assert.rejects(startInWorkspace(), { code: "ORIGINAL_EXECUTION_UNCONFIRMED" });
+  const message = await startInWorkspace().then(
+    () => "unexpected success",
+    (error: Error) => error.message,
+  );
+  assert.match(message, /unconfirmed outcome/, "the generic reason must be shown");
+  assert.doesNotMatch(message, /no recovery context/, "a recoverable record must not be described as lacking recovery context");
+  assert.equal(submissions, 0);
+});
+
+test("remote Runner error text never reaches execution records or logs", async context => {
+  // A real HTTP mock Runner whose error bodies carry an allowlisted code and a
+  // sensitive sentinel. The RunnerClient sanitizes the message; the API record
+  // must not contain the sentinel anywhere.
+  const sentinel = "SENTINEL_SECRET_XYZ";
+  let mode: "conflict" | "digest" | "unavailable" = "conflict";
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (mode === "conflict") {
+      response.statusCode = 409;
+      response.end(JSON.stringify({ code: "EXECUTION_RESULT_CONFLICT", error: `${sentinel} forged conflict` }));
+    } else if (mode === "digest") {
+      response.statusCode = 409;
+      response.end(JSON.stringify({ code: "RESULT_DIGEST_MISMATCH", error: `${sentinel} forged digest` }));
+    } else {
+      response.statusCode = 503;
+      response.end(JSON.stringify({ error: `${sentinel} forged unavailable` }));
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }));
+  const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "fixture-token");
+  const f = await fixture(context);
+  const seeded = (id: string) => ({ ...owner, ...identity, id, state: "unknown", queuedAt: "now",
+    accepted: true, provenance: "unconfirmed", dispatchPhase: "accepted", finalization: "pending",
+    recoveryContext: recoveryContext(id), expectedRunnerInstanceId: "original-ledger", receipt: receipt(),
+    observation: { status: "stale", failureCount: 0 } });
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run("conflict-id", owner.sessionId, owner.agentId, JSON.stringify(seeded("conflict-id")));
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run("digest-id", owner.sessionId, owner.agentId, JSON.stringify(seeded("digest-id")));
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run("unavailable-id", owner.sessionId, owner.agentId, JSON.stringify(seeded("unavailable-id")));
+  const handlers = { runner: () => client, finalize: async () => { throw new Error("must not finalize"); } };
+  const conflict = await f.service.reconcile("conflict-id", owner, handlers);
+  assert.equal(conflict.observation?.lastError?.code, "EXECUTION_RESULT_CONFLICT");
+  assert.equal(conflict.observation?.lastError?.retryable, false);
+  assert.doesNotMatch(conflict.error ?? "", /SENTINEL/, "the forged message must not reach execution.error");
+  assert.doesNotMatch(conflict.observation?.lastError?.message ?? "", /SENTINEL/, "the forged message must not reach lastError.message");
+  assert.equal(conflict.observation?.lastError?.message, "Runner execution result conflict", "an allowlisted code maps to a fixed safe message");
+  mode = "digest";
+  const digest = await f.service.reconcile("digest-id", owner, handlers);
+  assert.equal(digest.observation?.lastError?.code, "RESULT_DIGEST_MISMATCH");
+  assert.equal(digest.observation?.lastError?.retryable, false, "a digest mismatch is a permanent conflict");
+  assert.doesNotMatch(digest.error ?? "", /SENTINEL/, "a forged digest mismatch must not reach execution.error");
+  assert.doesNotMatch(digest.observation?.lastError?.message ?? "", /SENTINEL/, "a forged digest mismatch must not reach lastError.message");
+  assert.equal(digest.observation?.lastError?.message, "Runner execution result digest mismatch", "a digest mismatch maps to a fixed safe message");
+  mode = "unavailable";
+  const unavailable = await f.service.reconcile("unavailable-id", owner, handlers);
+  assert.equal(unavailable.observation?.lastError?.retryable, true, "an unallowlisted 503 stays retryable via its status");
+  assert.doesNotMatch(unavailable.error ?? "", /SENTINEL/, "an unallowlisted remote message must not reach execution.error");
+  assert.doesNotMatch(unavailable.observation?.lastError?.message ?? "", /SENTINEL/);
+  assert.match(unavailable.observation?.lastError?.message ?? "", /HTTP 503/, "the record keeps the status, not the remote text");
+  assert.equal(JSON.stringify(unavailable).includes(sentinel), false, "the sentinel is absent from the whole record");
+});
+
+test("a local code-bearing finalizer error persists only the fixed safe string, never its raw message", async context => {
+  // The persistence boundary is unavailable(): even a LOCAL code-bearing error
+  // (here thrown by the finalizer) must not write its raw message into
+  // execution.error / lastError.message under the allowlisted conflict codes.
+  const f = await fixture(context);
+  const lost = await lostAck(f, async id => recoveredTerminal(id, f));
+  const sentinel = "SENTINEL_SECRET_XYZ";
+  const conflict = Object.assign(new Error(`EXECUTION_RESULT_CONFLICT: ${sentinel} digest differs`), { code: "EXECUTION_RESULT_CONFLICT" });
+  const record = await f.service.reconcile(lost.job.id, owner, { runner: () => lost.runner, finalize: async () => { throw conflict; } });
+  assert.equal(record.state, "unknown"); assert.equal(record.provenance, "unconfirmed");
+  assert.equal(record.observation?.lastError?.code, "EXECUTION_RESULT_CONFLICT");
+  assert.equal(record.observation?.lastError?.retryable, false);
+  assert.equal(record.observation?.lastError?.message, "Runner execution result conflict", "the fixed safe string replaces the raw message");
+  assert.equal(record.error, "Runner execution result conflict");
+  assert.doesNotMatch(JSON.stringify(record), /SENTINEL/, "the raw finalizer message never reaches the record");
+  assert.doesNotMatch(JSON.stringify(record), /digest differs/);
 });
 
 test("SQLite observation lease prevents two API instances finalizing the same record", async context => {

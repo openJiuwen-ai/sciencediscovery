@@ -20,10 +20,10 @@ import type { AddressInfo } from "node:net";
 
 import { RunnerClient } from "./runner-client.js";
 
-test("RunnerClient retains an HTTP failure status even when the Runner supplies an error message", async (context) => {
+test("RunnerClient retains an HTTP failure status but never copies the remote error text", async (context) => {
   const server = createServer((_request, response) => {
     response.writeHead(503, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: "temporarily unavailable" }));
+    response.end(JSON.stringify({ error: "SENTINEL_SECRET_XYZ temporarily unavailable" }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise<void>((resolve) => {
@@ -33,10 +33,49 @@ test("RunnerClient retains an HTTP failure status even when the Runner supplies 
   const port = (server.address() as AddressInfo).port;
   const client = new RunnerClient(`http://127.0.0.1:${port}`, "test-token");
   await assert.rejects(client.status(), (error: unknown) => {
-    assert.equal((error as Error).message, "temporarily unavailable");
+    assert.match((error as Error).message, /Runner request failed \(503\)/);
     assert.equal((error as Error & { statusCode?: number }).statusCode, 503);
+    assert.equal((error as Error & { code?: string }).code, undefined, "an unallowlisted remote code is not trusted");
+    assert.doesNotMatch((error as Error).message, /SENTINEL_SECRET_XYZ/);
     return true;
   });
+});
+
+test("allowlisted remote conflict codes survive classification but never carry remote text", async t => {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.statusCode = 409;
+    response.end(JSON.stringify({ code: "EXECUTION_ID_CONFLICT", error: "SENTINEL_SECRET_XYZ conflict" }));
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  t.after(() => new Promise<void>(done => { server.close(() => done()); server.closeAllConnections(); }));
+  const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "fixture-token");
+  await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), (error: unknown) => {
+    assert.equal((error as Error & { statusCode?: number }).statusCode, 409);
+    assert.equal((error as Error & { code?: string }).code, "EXECUTION_ID_CONFLICT");
+    assert.equal((error as Error).message, "Runner execution identity conflict");
+    assert.doesNotMatch((error as Error).message, /SENTINEL_SECRET_XYZ/);
+    return true;
+  });
+});
+
+test("prototype-chain keys are never accepted as a remote code", async t => {
+  for (const forged of ["constructor", "toString", "__proto__"]) {
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.statusCode = 409;
+      response.end(JSON.stringify({ code: forged, error: "SENTINEL_SECRET_XYZ" }));
+    });
+    await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+    t.after(() => new Promise<void>(done => { server.close(() => done()); server.closeAllConnections(); }));
+    const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "fixture-token");
+    await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), (error: unknown) => {
+      assert.equal((error as Error & { code?: string }).code, undefined, `${forged} is not an allowlisted code`);
+      assert.equal((error as Error).message, "Runner request failed (409)");
+      assert.doesNotMatch((error as Error).message, /SENTINEL_SECRET_XYZ/);
+      return true;
+    });
+  }
 });
 
 test("direct capability probes preserve target workspace scope and caller cancellation", async t => {
@@ -87,5 +126,11 @@ test("managed result integrity is checked before clock conversion and structured
   tamper = true;
   await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), { code: "RESULT_DIGEST_MISMATCH" });
   conflict = true;
-  await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), { statusCode: 409, code: "EXECUTION_ID_CONFLICT" });
+  await assert.rejects(client.getShellExecution("job", { sessionId: "session", agentId: "main" }), (error: unknown) => {
+    assert.equal((error as Error & { statusCode?: number }).statusCode, 409);
+    assert.equal((error as Error & { code?: string }).code, "EXECUTION_ID_CONFLICT");
+    assert.equal((error as Error).message, "Runner execution identity conflict");
+    assert.doesNotMatch((error as Error).message, /^conflict$/);
+    return true;
+  });
 });

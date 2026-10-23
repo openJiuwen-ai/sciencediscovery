@@ -53,6 +53,20 @@ import type {
 
 export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
 
+/**
+ * Error codes a Runner response may carry that map to a stable non-retryable
+ * classification on the API side. Each is translated to a fixed local message:
+ * the remote Runner's own error text is untrusted (it can be forged or carry
+ * sensitive content) and is never copied into Error.message. Codes outside
+ * this allowlist are treated as absent and get the fixed default message; the
+ * HTTP status is always preserved and drives retryability in the API.
+ */
+const RUNNER_ERROR_CODE_MESSAGES: Readonly<Record<string, string>> = {
+  RESULT_DIGEST_MISMATCH: "Runner execution result digest mismatch",
+  EXECUTION_RESULT_CONFLICT: "Runner execution result conflict",
+  EXECUTION_ID_CONFLICT: "Runner execution identity conflict",
+};
+
 /** HTTP adapter for the isolated execution service. */
 export class RunnerClient {
   #clockOffsetMs = 0;
@@ -319,7 +333,15 @@ export class RunnerClient {
     this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) {
       const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string; code?: string };
-      throw Object.assign(new Error(body.error || `Runner request failed (${response.status})`), { statusCode: response.status, code: body.code });
+      // The remote error text and any code outside the allowlist are untrusted:
+      // only an allowlisted code survives (for non-retryable classification),
+      // each mapped to a fixed local message. The remote body's message is never
+      // copied, so forged or sensitive content cannot reach execution records
+      // or logs through this error. `Object.hasOwn` (not `in`) keeps prototype
+      // keys such as constructor/toString/__proto__ from being accepted.
+      const code = typeof body.code === "string" && Object.hasOwn(RUNNER_ERROR_CODE_MESSAGES, body.code) ? body.code : undefined;
+      const message = code ? RUNNER_ERROR_CODE_MESSAGES[code] : `Runner request failed (${response.status})`;
+      throw Object.assign(new Error(message), { statusCode: response.status, ...(code ? { code } : {}) });
     }
     return await response.json() as T;
   }
