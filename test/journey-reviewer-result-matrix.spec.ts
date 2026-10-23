@@ -65,8 +65,10 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
       await openProjectSession(page, fixture);
       await expect(page.locator(".reviewer-specialist-panel")).toHaveCount(5);
     });
-    await journey.step("核对 Quick 的通过与告警", "Quick 通过项显示通过，缺引用标识符显示告警。", async () => {
-      await expect(page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-pass.md" })).toContainText("Quick review passed");
+    await journey.step("核对 Quick 的通过与告警", "仅检查引用格式的 Quick 项会说明结论支撑未检查，缺引用标识符显示告警。", async () => {
+      const quickPass = page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-pass.md" });
+      await expect(quickPass).toContainText("Citation-format checks passed");
+      await expect(quickPass).toContainText("claim support was not checked");
       await expect(page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-warning.md" })).toContainText("Citation identifier missing");
     });
     await journey.step("核对 Deep 的矛盾、降级与失败", "数值矛盾可见；来源降级不伪装成报告缺陷；失败项保留失败状态。", async () => {
