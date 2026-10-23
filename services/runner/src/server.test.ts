@@ -38,6 +38,7 @@ import type {
 
 import { appendBounded, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
+import { EgressGatewayRegistry, MAX_UNIX_SOCKET_PATH_BYTES } from "./egress-gateway.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
@@ -2146,4 +2147,21 @@ test("the runner socket is configured by environment like every other listener s
   }, "/tmp");
   assert.equal(socketConfig.socketPath, "/tmp/data/run/runner.sock");
   assert.equal(loadRunnerConfig({}, "/tmp").socketPath, undefined);
+});
+
+test("health marks egress unavailable when the configured data directory cannot hold its socket", async (context) => {
+  const dataDir = resolve(tmpdir(), "x".repeat(MAX_UNIX_SOCKET_PATH_BYTES));
+  const socketPath = new EgressGatewayRegistry(dataDir).socketPath("capability");
+  assert.ok(Buffer.byteLength(socketPath) > MAX_UNIX_SOCKET_PATH_BYTES);
+
+  const server = createRunnerServer(config(dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const health = await (await fetch(`${origin}/health`)).json() as RunnerHealth;
+
+  assert.equal(health.sandboxNetwork.available, false);
+  assert.deepEqual(health.sandboxNetwork.modes, ["none"]);
+  assert.match(health.sandboxNetwork.unavailableReason ?? "", /Unix socket path limit/);
+  assert.match(health.sandboxNetwork.unavailableReason ?? "", /SCIENCE_DISCOVERY_DATA_DIR/);
 });
