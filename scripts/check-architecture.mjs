@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { extname } from "node:path";
 import { checkComponentBoundaries } from "./component-boundaries.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -12,7 +12,10 @@ async function sourceFiles(path) {
   const files = [];
   for (const entry of entries) {
     if (entry.isDirectory() && ["dist", "node_modules"].includes(entry.name)) continue;
-    const child = join(path, entry.name);
+    // [windows-desktop] reason: 路径兼容性问题 —— keep forward slashes on Windows too:
+    // component-boundaries.mjs is posix-only by design (imports `node:path`.posix),
+    // so backslashes from path.join break owner()/localFile() lookups there.
+    const child = `${path}/${entry.name}`;
     if (entry.isDirectory()) files.push(...await sourceFiles(child));
     else if ([".ts", ".tsx", ".js", ".mjs"].includes(extname(entry.name))) files.push(child);
   }
