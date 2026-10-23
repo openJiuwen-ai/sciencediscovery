@@ -3098,15 +3098,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         await client.deleteSession(deletionTarget.id);
         latestSessionSummaries.current.delete(deletionTarget.id);
         const remaining = sessions.filter((item) => item.id !== deletionTarget.id);
+        const nextSessionId = selectAfterRemoval(sessions, deletionTarget.id, activeSessionId);
+        // A refresh begun for the deleted Session can finish after its DELETE
+        // response. Update the ref immediately so that stale request cannot
+        // surface its expected 404 as a deletion failure.
+        activeSessionIdRef.current = nextSessionId;
         setSessions(remaining);
-        setActiveSessionId(selectAfterRemoval(sessions, deletionTarget.id, activeSessionId));
+        setArtifactSessions((current) => current.filter((item) => item.id !== deletionTarget.id));
+        setActiveSessionId(nextSessionId);
         setRunTimelines((current) => forgetSession(current, deletionTarget.id));
         setTimelineMessageIds((current) => forgetSession(current, deletionTarget.id));
-        if (activeProjectId) {
-          setArtifactSessions(await client.listSessions(activeProjectId, "all"));
-          setArtifactSessionCatalogProjectId(activeProjectId);
-          setArtifacts(await client.listProjectArtifacts(activeProjectId));
-        }
       }
       setDeletionTarget(undefined);
       setDeletionImpact(undefined);

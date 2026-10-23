@@ -124,6 +124,16 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   assert.doesNotMatch(app, /ModelDraftFields/);
 });
 
+test("a completed session deletion closes its dialog without a follow-up catalog refresh", () => {
+  const app = source("App.tsx");
+  const deletionHandler = app.slice(app.indexOf("async function confirmDeletion"), app.indexOf("function toggleConnector"));
+
+  assert.match(deletionHandler, /await client\.deleteSession\(deletionTarget\.id\);[\s\S]*?const nextSessionId = selectAfterRemoval\(sessions, deletionTarget\.id, activeSessionId\);[\s\S]*?activeSessionIdRef\.current = nextSessionId;[\s\S]*?setArtifactSessions\(\(current\) => current\.filter\(\(item\) => item\.id !== deletionTarget\.id\)\);/);
+  assert.doesNotMatch(deletionHandler, /setArtifactSessions\(await client\.listSessions\(activeProjectId, "all"\)\);/);
+  assert.doesNotMatch(deletionHandler, /setArtifacts\(await client\.listProjectArtifacts\(activeProjectId\)\);/);
+  assert.match(deletionHandler, /setDeletionTarget\(undefined\);[\s\S]*?setDeletionImpact\(undefined\);[\s\S]*?setDeletionConfirmation\(""\);/);
+});
+
 test("the session bar constrains long names and preserves their full hover text", () => {
   const app = source("App.tsx");
   const conversation = source("styles/conversation.css");
