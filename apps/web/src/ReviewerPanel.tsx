@@ -50,7 +50,9 @@ function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; 
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
   if (review.decision === "ACCEPT_AND_PROCEED") {
     return {
-      label: review.smartStatus === "inconclusive"
+      label: isCitationOnlyQuickReview(review)
+        ? t("reviewer.result.citationOnlyPassed")
+        : review.smartStatus === "inconclusive"
         ? t("reviewer.result.quickPassed")
         : t("reviewer.result.levelPassed", { level: levelLabel(review, t) }),
       tone: "passed",
@@ -58,6 +60,13 @@ function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; 
   }
   if (review.decision === "SKIPPED") return { label: t("reviewer.result.noChecks"), tone: "skipped" };
   return { label: t("reviewer.result.revisionRequired"), tone: "warning" };
+}
+
+function isCitationOnlyQuickReview(review: ArtifactReviewRun): boolean {
+  return review.reviewLevel === "quick"
+    && review.checks?.includes("citation") === true
+    && !review.checks.includes("computation")
+    && !review.checks.includes("structure");
 }
 
 const FINDING_KEYS: Record<string, MessageKey> = {
@@ -145,6 +154,8 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
               ? t("reviewer.summary.deepPassed")
               : review.checks?.includes("structure")
                 ? t("reviewer.summary.structurePassed")
+                : isCitationOnlyQuickReview(review)
+                  ? t("reviewer.summary.citationOnlyPassed")
                 : t("reviewer.summary.citationPassed")}</p>
         ) : null}
         <footer>
