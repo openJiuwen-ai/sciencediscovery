@@ -250,7 +250,7 @@ Local fixtures validate protocol and product behavior, not interoperability with
 
 ## 13. Current implementation scope
 
-Included: one Registry/Catalog replacing legacy brokers/direct providers; 12 public Sources with actual discovery/schema compatibility; Node permission/rate/cache/retry/CAS/audit/envelope checks; explicit download and separate extraction with persistent state; independent same-turn concurrency; governed Evidence consumption; per-action/default approval and Session matching Grants; Authorization/epoch/disconnect audit; plan/permission separation.
+Included: one Registry/Catalog replacing legacy brokers/direct providers; 12 public Sources with actual discovery/schema compatibility; Node permission/rate/cache/retry/CAS/audit/envelope checks; explicit download and separate extraction with persistent state; independent same-turn concurrency for explicitly classified read-only PubMed and Europe PMC metadata searches (other MCP tools remain exclusive, and source-side limits still apply); governed Evidence consumption; per-action/default approval and Session matching Grants; Authorization/epoch/disconnect audit; plan/permission separation.
 
 Also included: custom STDIO, Streamable HTTP, and SSE servers; encrypted configuration, dynamic discovery, connection tests and JSON import; HTTP/SSE OAuth login/refresh; and a governed tool Inspector (section 5).
 

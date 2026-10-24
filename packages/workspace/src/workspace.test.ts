@@ -33,7 +33,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
+import { createMcpTools, createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -1198,6 +1198,30 @@ test("MCP tools retain metadata and remain exclusive unless explicitly classifie
   const result = await tool.execute("call-1", { accession: "P04637" });
   assert.deepEqual(received, { accession: "P04637" });
   assert.match(result.content[0]?.text ?? "", /\"sourceId\":\"uniprot\"/);
+});
+
+test("only built-in PubMed and Europe PMC metadata search MCP tools can overlap", () => {
+  const mcpTools = [
+    ["pubmed", "search"],
+    ["europe-pmc", "search"],
+    ["pubmed", "prepare_paper_download"],
+    ["europe-pmc", "prepare_paper_download"],
+    ["uniprot", "lookup"],
+    ["custom", "search"],
+  ].map(([sourceId, toolId]) => ({
+    description: "fixture",
+    displayName: "Fixture",
+    execute: async () => ({}),
+    inputSchema: { type: "object" },
+    name: `mcp__${sourceId}__${toolId}`,
+    routing: { keywords: [], mode: "off" as const, priority: 0 },
+    sourceId: sourceId!,
+    toolId: toolId!,
+  }));
+  const tools = createMcpTools({ mcpTools });
+  assert.deepEqual(tools.map((tool) => tool.isConcurrencySafe?.() === true), [
+    true, true, false, false, false, false,
+  ]);
 });
 
 test("all scientific environment tools forward runner_id and setup retries are explicit", async () => {
