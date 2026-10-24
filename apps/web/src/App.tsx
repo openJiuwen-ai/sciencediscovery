@@ -1061,6 +1061,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [, setPermissionEpoch] = useState<PermissionEpoch>();
   const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
+  // The governed-download poll needs to know which permissions the UI already
+  // holds. A ref, not the array as a dependency: depending on it would restart
+  // that poll on every permission change.
+  const permissionRequestIdsRef = useRef<ReadonlySet<string>>(new Set());
+  permissionRequestIdsRef.current = new Set(permissionRequests.map((request) => request.id));
   const [executionRuns, setExecutionRuns] = useState<ExecutionRun[]>([]);
   const [derivations, setDerivations] = useState<ArtifactDerivation[]>([]);
   const [promptManifests, setPromptManifests] = useState<PromptManifest[]>([]);
@@ -1563,6 +1568,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const memoryRefreshKey = `exec:${executionRuns.length}:msg:${session?.messages.length ?? 0}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`;
   const { subgraph: memorySubgraph, health: memoryHealth } = useMemorySubgraph(client, session?.id, memoryRefreshKey, reportError, isRunning);
 
+  // Fetch the approvals that manual downloads are waiting on. It merges rather
+  // than replaces, so a plan noticed by the poll cannot drop unrelated
+  // approvals, and the Session guard still keeps another Session's state out.
+  const reconcilePendingDownloadApprovals = useCallback(async (sessionId: string, requestIds: readonly string[]): Promise<void> => {
+    if (!requestIds.length) return;
+    const wanted = new Set(requestIds);
+    const snapshots = (await client.listPermissionRequests(sessionId)).filter((request) => wanted.has(request.id));
+    if (snapshots.length) reconcilePermissionSnapshots(sessionId, snapshots);
+  }, [client]);
+
   const refreshGovernedDownloads = useCallback(async (sessionId: string): Promise<void> => {
     const [candidates, jobs, plans, invocations] = await Promise.all([
       client.listMcpArtifactCandidates(sessionId),
@@ -1570,6 +1585,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.listMcpArtifactPlans(sessionId),
       client.listMcpInvocations(sessionId),
     ]);
+    // A plan can wait on a permission the UI has never seen: the request is
+    // created when a download is prepared, which for a manual click happens
+    // outside any Agent event stream. Without this the card would keep showing
+    // an approval nobody can act on until the Session is reloaded.
+    const undecided = plans.filter((plan) => plan.state === "awaiting_approval"
+      && plan.permissionRequestId
+      && !permissionRequestIdsRef.current.has(plan.permissionRequestId));
+    if (undecided.length) await reconcilePendingDownloadApprovals(sessionId, undecided.map((plan) => plan.permissionRequestId));
     if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
     // Polling keeps long downloads current after the Agent turn finishes. Keep
     // object identity when nothing changed so a quiet poll neither rerenders
@@ -1578,7 +1601,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setDownloadJobs((current) => preserveEqualSnapshot(current, jobs));
     setDownloadPlans((current) => preserveEqualSnapshot(current, plans));
     setMcpInvocations((current) => preserveEqualSnapshot(current, invocations));
-  }, [client]);
+  }, [client, reconcilePendingDownloadApprovals]);
 
   useEffect(() => {
     setDownloadCandidates([]);
@@ -4015,6 +4038,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     ...runTimeline,
     ...Object.values(sessionReplayTimelines).flatMap((timeline) => timeline.entries),
   ]);
+  // A download awaiting approval offers that decision on its own card, so the
+  // generic approvals panel would repeat it. Keep one entry point per download.
+  const downloadApprovalRequestIds = new Set(downloadPlans
+    .filter((plan) => plan.state === "awaiting_approval" && plan.permissionRequestId)
+    .map((plan) => plan.permissionRequestId));
   const queuedRuns = sessionRuns.filter((run) => run.status === "queued");
   // Timeline activity cards (subagents, remote jobs, permission prompts, and
   // result previews) are attributed to the run that produced them and rendered right
@@ -4026,7 +4054,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     downloadCandidates,
     downloadJobs,
     downloadPlans,
-    permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)),
+    permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)
+      && !downloadApprovalRequestIds.has(request.id)),
     plans: [],
     previewFiles: [],
     remoteJobs,
@@ -4158,11 +4187,15 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function prepareGovernedDownload(item: GovernedDownloadCandidate): Promise<void> {
     if (!session) return;
     try {
-      await client.createMcpArtifactPlan(session.id, {
+      const created = await client.createMcpArtifactPlan(session.id, {
         candidateId: item.candidate.id,
         destination: { path: `downloads/${item.candidate.logicalName}`, type: "workspace" },
         mcpInvocationId: item.invocationId,
       });
+      // The consent policy may have answered this click with a new permission.
+      // No Agent event stream covers a manual click, so adopt the request the
+      // response already carries instead of waiting for a poll or a reload.
+      if (created.permissionRequest) reconcilePermissionSnapshots(session.id, [created.permissionRequest]);
       await refreshGovernedDownloads(session.id);
     } catch (error) {
       reportError(error instanceof Error ? error : t("error.prepareDownload"));
@@ -4216,8 +4249,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           groupId={group.runId ?? "unattributed"}
           jobs={group.downloadJobs}
           onAction={actOnGovernedDownload}
+          onDecision={decidePermission}
           onPrepare={prepareGovernedDownload}
           onToggleCard={toggleActivityCard}
+          permissionRequests={permissionRequests}
           plans={group.downloadPlans}
         />
 

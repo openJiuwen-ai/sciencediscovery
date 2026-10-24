@@ -1523,7 +1523,10 @@ export const en = {
   "downloads.bytes": "{count} bytes",
   "downloads.preparing": "Preparing…",
   "downloads.prepare": "Prepare download",
-  "downloads.waitingApproval": "Waiting for approval",
+  "downloads.approvalRequired": "You must approve this download: {name} → {path}",
+  "downloads.approvalGranted": "Approved — the download is starting",
+  "downloads.approvalDenied": "Denied — nothing was downloaded",
+  "downloads.approvalLoading": "Looking for the approval request…",
   "downloads.retrying": "Retrying…",
   "downloads.retry": "Retry",
 
@@ -4346,7 +4349,10 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "downloads.bytes": "{count} 字节",
   "downloads.preparing": "正在准备…",
   "downloads.prepare": "准备下载",
-  "downloads.waitingApproval": "等待审批",
+  "downloads.approvalRequired": "需要你批准此下载：{name} → {path}",
+  "downloads.approvalGranted": "已批准 —— 正在开始下载",
+  "downloads.approvalDenied": "已拒绝 —— 未下载任何文件",
+  "downloads.approvalLoading": "正在查找审批请求…",
   "downloads.retrying": "正在重试…",
   "downloads.retry": "重试",
 

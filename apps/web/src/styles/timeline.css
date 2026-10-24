@@ -412,6 +412,14 @@ button[aria-expanded="true"] .card-chevron > svg, details[open] > summary .card-
 .governed-download-item.completed { border-inline-start-color: var(--success-bright); }
 .governed-download-item.failed { border-inline-start-color: var(--danger-deep); background: var(--danger-soft); }
 .governed-download-item.cancelled { border-inline-start-color: var(--muted-light); }
+.governed-download-item.awaiting-approval { border-inline-start-color: var(--warning); }
+.governed-download-item.approval-granted { border-inline-start-color: var(--success-bright); }
+.governed-download-item.approval-denied { border-inline-start-color: var(--danger-deep); background: var(--danger-soft); }
+/* The approval belongs to the download beside it, so it sits on that row
+   instead of taking the run-timeline spacing. */
+.governed-download-item.awaiting-approval .permission-decision-actions { justify-content: flex-end; margin-top: 0; }
+.governed-download-approval { color: var(--warning); font-weight: 600; }
+.governed-download-item.approval-denied .governed-download-approval { color: var(--danger-deep); }
 .governed-download-error { color: var(--danger-deep) !important; }
 .reviewer-specialist-panel { width: calc(100% - 55px); max-width: 765px; margin: 2px 0 22px 55px; overflow: hidden; border: 1px solid #b8d7f5; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f5fbff 100%); box-shadow: 0 10px 28px rgba(29, 102, 184, .10); }
 .reviewer-specialist-panel > header { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; min-height: 66px; border-bottom: 1px solid #d8e9f8; padding: 11px 14px; }

@@ -17,11 +17,12 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ArtifactCandidate, ArtifactJob, ArtifactPlan } from "@sciencediscovery/schema";
+import type { ArtifactCandidate, ArtifactJob, ArtifactPlan, PermissionRequest } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { GovernedDownloadCards } from "../src/GovernedDownloadCards.js";
+import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
 
 function job(state: ArtifactJob["state"]): ArtifactJob {
   return {
@@ -46,9 +47,39 @@ const common = {
   expandedCards: {},
   groupId: "run-1",
   onAction: async () => undefined,
+  onDecision: async () => undefined,
   onPrepare: async () => undefined,
   onToggleCard: () => undefined,
+  permissionRequests: [],
 };
+
+function approvalRequest(state: PermissionRequest["state"]): PermissionRequest {
+  return {
+    action: "artifact_download",
+    createdAt: "2026-08-05T00:00:00.000Z",
+    id: "permission-1",
+    resource: "artifact:arxiv:candidate-1:workspace:downloads/paper.pdf",
+    sessionId: "session-1",
+    state,
+    summary: "Download paper.pdf to workspace path downloads/paper.pdf",
+  };
+}
+
+function awaitingApprovalPlan(): ArtifactPlan {
+  return {
+    candidates: [{ id: "candidate-1", kind: "paper", logicalName: "paper.pdf", sourceId: "arxiv", sourceRecordId: "2501.00001", sourceUrl: "https://arxiv.org/pdf/2501.00001" }] as ArtifactCandidate[],
+    createdAt: "2026-08-05T00:00:00.000Z",
+    destination: { path: "downloads/paper.pdf", type: "workspace" },
+    id: "plan-1",
+    mcpInvocationId: "invocation-1",
+    permissionRequestId: "permission-1",
+    selectedCandidateId: "candidate-1",
+    sessionId: "session-1",
+    sourceId: "arxiv",
+    sourceRecordId: "2501.00001",
+    state: "awaiting_approval",
+  } as ArtifactPlan;
+}
 
 test("renders an actionable candidate in one expanded timeline card", () => {
   const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
@@ -95,4 +126,66 @@ test("collapses a completed historical download by default", () => {
   assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /governed-downloads-body/);
   assert.match(html, /1 completed/);
+});
+
+test("offers the pending download's own approval decisions beside the file it covers", () => {
+  const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
+    ...common,
+    candidates: [],
+    jobs: [],
+    permissionRequests: [approvalRequest("pending")],
+    plans: [awaitingApprovalPlan()],
+  }));
+
+  // The card must name who decides and what the permission covers, not say it
+  // is "waiting" for an approval nobody can locate.
+  assert.match(html, /You must approve this download: paper\.pdf → downloads\/paper\.pdf/);
+  assert.match(html, />Allow once<\/button>/);
+  assert.match(html, />Allow same type<\/button>/);
+  assert.match(html, />Deny<\/button>/);
+  assert.doesNotMatch(html, /Waiting for approval/);
+});
+
+test("localizes the manual download approval for a Chinese Session", () => {
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" },
+    createElement(GovernedDownloadCards, {
+      ...common,
+      candidates: [],
+      jobs: [],
+      permissionRequests: [approvalRequest("pending")],
+      plans: [awaitingApprovalPlan()],
+    })));
+
+  assert.match(html, /需要你批准此下载：paper\.pdf → downloads\/paper\.pdf/);
+  assert.doesNotMatch(html, /等待审批/);
+});
+
+test("reports a decided download instead of an approval that will never arrive", () => {
+  for (const [state, expected] of [["denied", "Denied — nothing was downloaded"], ["allowed", "Approved — the download is starting"]] as const) {
+    const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
+      ...common,
+      candidates: [],
+      expandedCards: { "governed-downloads:run-1": true },
+      jobs: [],
+      permissionRequests: [approvalRequest(state)],
+      plans: [awaitingApprovalPlan()],
+    }));
+
+    assert.match(html, new RegExp(expected.replaceAll(/[—.]/g, (match) => `\\${match}`)));
+    assert.doesNotMatch(html, /Waiting for approval/, `a ${state} download must not keep waiting for approval`);
+    assert.doesNotMatch(html, />Deny<\/button>/, `a ${state} download must not still offer a decision`);
+  }
+});
+
+test("keeps a decided download out of the actions-needed count", () => {
+  const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
+    ...common,
+    candidates: [],
+    jobs: [job("completed")],
+    permissionRequests: [approvalRequest("denied")],
+    plans: [awaitingApprovalPlan()],
+  }));
+
+  assert.match(html, /aria-expanded="false"/, "a resolved approval is history, not work in progress");
+  assert.doesNotMatch(html, /actions needed|action needed/);
 });

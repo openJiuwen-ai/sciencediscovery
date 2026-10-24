@@ -49,7 +49,7 @@ export function mockedShards(plan) {
     if (fixture === 'standard') {
       if (!['fresh', 'global', 'session'].includes(isolation)) throw new Error(`MOCKED_ISOLATION_REQUIRED: ${entry.id}`);
       name = isolation === 'session' ? 'standard-journeys' : 'standard-config';
-    } else if (!['research', 'literature'].includes(fixture)) throw new Error(`UNKNOWN_MOCKED_FIXTURE: ${entry.id}`);
+    } else if (!['research', 'literature', 'governed'].includes(fixture)) throw new Error(`UNKNOWN_MOCKED_FIXTURE: ${entry.id}`);
     if (files.has(entry.source) && files.get(entry.source) !== name) throw new Error(`SPLIT_MOCKED_FILE: ${entry.source}`);
     files.set(entry.source, name);
     const group = groups.get(name) ?? { name, fixture, keys: [], checks: name === 'standard-config' && plan.execution.backend === 'jiuwenswarm' ? swarmChecks : [] };

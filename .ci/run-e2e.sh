@@ -79,7 +79,13 @@ stack_pid=""
 jiuwenswarm_started=0
 fixture_pid=""
 fixture="${CI_E2E_FIXTURE:-standard}"
-case "$fixture" in standard|research|literature) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
+case "$fixture" in standard|research|literature|governed) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
+# Research and literature replace a JiuwenSwarm instance's own tool contracts,
+# so they need that setup and its exclusive-instance guard. The governed
+# download fixture only swaps the API's MCP transport and artifact fetch, which
+# every backend supports, so it must stay off that path.
+swarm_offline_fixture=0
+case "$fixture" in research|literature) swarm_offline_fixture=1 ;; esac
 if [[ "$fixture" != standard && "$group" != mocked ]]; then echo 'Offline fixtures must never reach real E2E' >&2; exit 2; fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -246,7 +252,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # docs/en/reference/jiuwenswarm-migration-status.md).
   export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task
   export E2E_SWARM_TASK=1
-  if [[ "$fixture" != standard ]]; then
+  if [[ "$swarm_offline_fixture" == 1 ]]; then
     # Research mocks script platform tool contracts; standard/real use product defaults.
     export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
     export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
@@ -269,7 +275,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     exit 2
   }
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
-  if [[ "$fixture" != standard ]]; then
+  if [[ "$swarm_offline_fixture" == 1 ]]; then
     if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
       echo 'BLOCKED: research fixture refuses to modify a running Swarm instance' >&2; exit 2
     fi
@@ -316,6 +322,13 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # instead of connecting to the sibling that held the originally planned port.
   eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || exit 2
   export JIUWENSWARM_GATEWAY_URL JIUWENSWARM_MGMT_URL
+fi
+
+if [[ "$fixture" == governed ]]; then
+  # The governed download journeys only need the API's MCP transport and
+  # artifact fetch to stay on this machine, so they run on either backend.
+  export E2E_GOVERNED_DOWNLOAD_FIXTURE=1
+  export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/governed-download-api.mjs"
 fi
 
 stack_arguments=(--mode local)

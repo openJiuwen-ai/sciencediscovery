@@ -180,6 +180,10 @@
   .permission-card { grid-template-columns: minmax(0, 1fr); }
   .permission-card .plan-actions { grid-column: auto; }
   .permission-decision-actions > button { flex: 1 1 130px; }
+  /* Three decisions must not squeeze the file name and destination out of the
+     download row on a narrow conversation. */
+  .governed-download-item.awaiting-approval { grid-template-columns: minmax(0, 1fr); }
+  .governed-download-item.awaiting-approval .permission-decision-actions { justify-content: flex-start; }
   .deletion-impact { grid-template-columns: 1fr; }
   .dialog-actions { flex-wrap: wrap; }
   .dialog-actions > button { flex: 1 1 140px; }

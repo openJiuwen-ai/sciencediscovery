@@ -8,7 +8,7 @@
     },
     "fixture": {
       "multiple": false,
-      "values": ["standard", "research", "literature"],
+      "values": ["standard", "research", "literature", "governed"],
       "default": "standard"
     },
     "category": {
