@@ -17,6 +17,8 @@ import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { handlePluginRequest } from "../plugins/http.js";
+import { inspectMcpTool } from "../mcp/inspector.js";
+import type { McpInspectorRequest } from "@sciencediscovery/schema";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
@@ -890,6 +892,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (mcpSourceToolsMatch && request.method === "GET") {
         if (!mcpRegistry.has(mcpSourceToolsMatch[1]!)) return sendError(response, 404, "MCP source not found");
         sendJson(response, 200, Object.values(mcpRegistry.get(mcpSourceToolsMatch[1]!).manifest.tools));
+        return;
+      }
+      const mcpSourceInspectMatch = url.pathname.match(/^\/api\/mcp\/sources\/([^/]+)\/inspect$/);
+      if (mcpSourceInspectMatch && request.method === "POST") {
+        const sourceId = mcpSourceInspectMatch[1]!;
+        if (sourceId.startsWith("custom-") || !mcpRegistry.has(sourceId)) return sendError(response, 404, "MCP source not found");
+        const controller = new AbortController();
+        const abort = () => { if (!response.writableEnded) controller.abort(); };
+        response.on("close", abort);
+        try {
+          sendJson(response, 200, await inspectMcpTool(sourceId, await readJson<McpInspectorRequest>(request), {
+            servers: platform.customMcpServers, broker: mcpBroker, registry: mcpRegistry, store,
+          }, controller.signal));
+        } catch (error) {
+          sendError(response, 400, error instanceof Error ? error.message : "MCP inspection failed");
+        } finally { response.off("close", abort); }
         return;
       }
       const mcpInvocationsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/mcp\/invocations$/);

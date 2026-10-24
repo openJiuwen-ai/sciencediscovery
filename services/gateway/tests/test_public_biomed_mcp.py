@@ -251,6 +251,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_registers_the_complete_manifest_tool_set(self) -> None:
         actual = {tool.name for tool in await SERVER.list_tools()}
         self.assertEqual(actual, {
+            "alphafold_lookup_prediction", "alphafold_prepare_prediction_download",
             "arxiv_prepare_paper_download", "arxiv_search",
             "biorxiv_lookup_doi", "biorxiv_prepare_paper_download", "biorxiv_search_preprints",
             "chembl_search_activities", "chembl_search_molecules", "chembl_search_targets",
@@ -259,7 +260,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             "ensembl_lookup_gene", "ensembl_lookup_transcript", "ensembl_overlap_region",
             "ensembl_variant_consequence",
             "europe-pmc_prepare_paper_download", "europe-pmc_search",
-            "geo_list_files", "geo_lookup_accession", "geo_prepare_dataset_download", "geo_search_studies",
+            "geo_get_samples", "geo_list_files", "geo_lookup_accession", "geo_prepare_dataset_download", "geo_search_studies",
             "medrxiv_lookup_doi", "medrxiv_prepare_paper_download", "medrxiv_search_preprints",
             "pdb_lookup_structure", "pdb_prepare_structure_download", "pdb_search_structures",
             "pubmed_prepare_paper_download", "pubmed_search",

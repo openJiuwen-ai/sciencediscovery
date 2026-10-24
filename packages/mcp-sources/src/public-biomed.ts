@@ -33,6 +33,7 @@ interface ToolDefinition {
   kind?: McpToolKind;
   keywords: string[];
   priority?: number;
+  timeoutMs?: number;
   resultType?: "analysis-result" | "artifact-plan" | "evidence-records" | "structured-data";
 }
 
@@ -64,7 +65,10 @@ const objectSchema = (properties: Record<string, unknown>, required: string[]) =
 });
 const text = (maxLength = 500) => ({ maxLength, minLength: 1, type: "string" });
 const limit = { default: 5, maximum: 25, minimum: 1, type: "integer" };
+const offset = { default: 0, minimum: 0, type: "integer" };
 const accession = (pattern: string) => ({ maxLength: 80, minLength: 1, pattern, type: "string" });
+const uniprotAccession = accession("^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})(?:-[0-9]+)?$");
+const clinvarAccession = accession("^(?:(?:VCV|RCV)\\d{9}(?:\\.\\d+)?|\\d+)$");
 
 const preprintTools: Record<string, ToolDefinition> = {
   lookup_doi: {
@@ -241,9 +245,41 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
       },
       search_structures: {
         description: "Full-text search across released PDB structure metadata.",
-        inputSchema: objectSchema({ limit, query: text() }, ["query"]),
+        inputSchema: objectSchema({ limit, offset, query: text() }, ["query"]),
         keywords: ["protein structure", "crystal structure", "PDB", "ligand structure"],
         priority: 90,
+      },
+    },
+  },
+  {
+    attribution: "Predictions provided by AlphaFold DB (Google DeepMind and EMBL-EBI).",
+    caveats: ["Existing predicted structures, not experimental evidence or new prediction jobs. Preserve model versions and interpret pLDDT and PAE separately. A candidate is not downloaded until its ArtifactJob completes."],
+    description: "Existing predicted protein structures and confidence files from AlphaFold DB, addressed by UniProt accession.",
+    displayName: "AlphaFold DB",
+    hosts: [...externalUrlList("connector_hosts.alphafold")],
+    id: "alphafold",
+    kinds: ["structure", "protein"],
+    license: "CC BY 4.0",
+    publisher: "Google DeepMind / EMBL-EBI",
+    termsUrl: externalUrl("terms.alphafold"),
+    tools: {
+      lookup_prediction: {
+        description: "Retrieve existing AlphaFold models and confidence metadata by UniProt accession; does not run prediction.",
+        inputSchema: objectSchema({ accession: uniprotAccession }, ["accession"]),
+        keywords: ["AlphaFold", "predicted structure", "pLDDT", "PAE", "UniProt structure"],
+        priority: 95,
+      },
+      prepare_prediction_download: {
+        description: "Prepare an existing model (CIF/PDB), pLDDT or PAE JSON file for governed download; select model_id for a particular fragment.",
+        inputSchema: objectSchema({
+          accession: uniprotAccession,
+          format: { default: "cif", enum: ["cif", "pdb", "plddt", "pae"], type: "string" },
+          model_id: text(100),
+        }, ["accession"]),
+        keywords: ["download AlphaFold", "confidence file", "predicted model"],
+        kind: "artifact-plan",
+        priority: 92,
+        resultType: "artifact-plan",
       },
     },
   },
@@ -334,14 +370,14 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
     termsUrl: externalUrl("terms.ncbi"),
     tools: {
       get_assertions: {
-        description: "Retrieve the complete ClinVar XML assertion record for an accession.",
-        inputSchema: objectSchema({ accession: text(100) }, ["accession"]),
+        description: "Retrieve ClinVar evidence records with individual submitted assertions, versions, classifications, review status and conditions.",
+        inputSchema: objectSchema({ accession: clinvarAccession }, ["accession"]),
         keywords: ["ClinVar assertions", "SCV", "conflicting submissions"],
-        resultType: "structured-data",
+        resultType: "evidence-records",
       },
       lookup_accession: {
         description: "Look up a ClinVar VCV, RCV, or Variation ID accession.",
-        inputSchema: objectSchema({ accession: text(100) }, ["accession"]),
+        inputSchema: objectSchema({ accession: clinvarAccession }, ["accession"]),
         keywords: ["VCV", "RCV", "ClinVar accession"],
       },
       search_variants: {
@@ -365,25 +401,34 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
     termsUrl: externalUrl("terms.chembl"),
     tools: {
       search_activities: {
-        description: "Search measured ChEMBL activities with optional molecule and target filters.",
-        inputSchema: objectSchema({ limit, molecule_chembl_id: text(50), target_chembl_id: text(50) }, []),
+        description: "Retrieve a page of measured activities with molecule/target, assay, organism, confidence, and standard measurement filters. A value ceiling requires explicit type, units and relation. Preserve assay_metadata and follow pagination.nextOffset.",
+        inputSchema: objectSchema({
+          limit, offset,
+          molecule_chembl_id: accession("^CHEMBL\\d+$"), target_chembl_id: accession("^CHEMBL\\d+$"),
+          standard_type: text(50), standard_units: text(50),
+          standard_relation: { enum: ["=", "<", "<=", ">", ">=", "~"], type: "string" },
+          standard_value_max: { minimum: 0, type: "number" },
+          assay_type: { enum: ["B", "F", "A", "T", "P", "U"], type: "string" },
+          target_organism: text(100), confidence_score_min: { minimum: 0, maximum: 9, type: "integer" },
+        }, []),
         keywords: ["bioactivity", "IC50", "Ki", "assay"],
         priority: 92,
+        timeoutMs: 90_000,
       },
       search_molecules: {
         description: "Search ChEMBL molecules by name or identifier.",
-        inputSchema: objectSchema({ limit, query: text() }, ["query"]),
+        inputSchema: objectSchema({ limit, offset, query: text() }, ["query"]),
         keywords: ["small molecule", "compound", "drug", "ChEMBL molecule"],
       },
       search_targets: {
         description: "Search ChEMBL biological targets.",
-        inputSchema: objectSchema({ limit, query: text() }, ["query"]),
+        inputSchema: objectSchema({ limit, offset, query: text() }, ["query"]),
         keywords: ["drug target", "ChEMBL target", "target protein"],
       },
       similarity_search: {
         description: "Search ChEMBL molecules by SMILES similarity threshold.",
         inputSchema: objectSchema({
-          limit,
+          limit, offset,
           similarity: { default: 70, maximum: 100, minimum: 40, type: "integer" },
           smiles: text(2_000),
         }, ["smiles"]),
@@ -403,11 +448,19 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
     publisher: "NCBI GEO",
     termsUrl: externalUrl("terms.ncbi"),
     tools: {
+      get_samples: {
+        description: "Retrieve up to five GEO sample metadata records per page without expression tables. Follow pagination.nextOffset; inspect data type before count-based analysis.",
+        inputSchema: objectSchema({ accession: accession("^GSE\\d+$"), limit: { ...limit, maximum: 5 }, offset }, ["accession"]),
+        keywords: ["GEO samples", "GSM", "sample conditions", "treatment groups", "GEO platform"],
+        priority: 92,
+        timeoutMs: 180_000,
+      },
       list_files: {
-        description: "List standard GEO Series matrix and family-file candidates.",
-        inputSchema: objectSchema({ accession: accession("^GSE\\d+$") }, ["accession"]),
+        description: "Discover actual GEO matrix, SOFT and supplementary files from NCBI listings; follow pagination.nextOffset.",
+        inputSchema: objectSchema({ accession: accession("^GSE\\d+$"), limit, offset }, ["accession"]),
         keywords: ["GEO files", "series matrix", "supplementary files"],
         resultType: "structured-data",
+        timeoutMs: 120_000,
       },
       lookup_accession: {
         description: "Look up a GEO accession through Entrez GEO DataSets.",
@@ -415,15 +468,17 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
         keywords: ["GEO accession", "GSE", "GDS", "GPL", "GSM"],
       },
       prepare_dataset_download: {
-        description: "Prepare a standard GEO Series matrix or family SOFT download candidate.",
+        description: "Prepare one discovered GEO file for governed download. Use file_name from list_files for multi-platform matrices or supplementary data; inspect matrix type before analysis.",
         inputSchema: objectSchema({
           accession: accession("^GSE\\d+$"),
-          format: { default: "series-matrix", enum: ["series-matrix", "soft"], type: "string" },
+          format: { default: "series-matrix", enum: ["series-matrix", "soft", "supplementary"], type: "string" },
+          file_name: text(255),
         }, ["accession"]),
         keywords: ["download GEO", "expression matrix", "GEO SOFT"],
         kind: "artifact-plan",
         priority: 92,
         resultType: "artifact-plan",
+        timeoutMs: 120_000,
       },
       search_studies: {
         description: "Search GEO Series and DataSets using Entrez query syntax.",
@@ -472,10 +527,13 @@ function validateAgainstSchema(schema: Record<string, unknown>, input: unknown):
     }
     if (property.type === "string" && typeof value !== "string") issues.push({ message: "must be a string", path: key });
     if (property.type === "integer" && !Number.isInteger(value)) issues.push({ message: "must be an integer", path: key });
+    if (property.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) issues.push({ message: "must be a finite number", path: key });
     if (property.type === "array" && !Array.isArray(value)) issues.push({ message: "must be an array", path: key });
     if (typeof value === "string" && property.pattern && !new RegExp(String(property.pattern), "i").test(value)) {
       issues.push({ message: "has an invalid format", path: key });
     }
+    if (typeof value === "string" && typeof property.minLength === "number" && value.trim().length < property.minLength) issues.push({ message: "is too short", path: key });
+    if (typeof value === "string" && typeof property.maxLength === "number" && value.length > property.maxLength) issues.push({ message: "is too long", path: key });
     if (Array.isArray(property.enum) && !property.enum.includes(value)) issues.push({ message: "has an unsupported value", path: key });
     if (typeof value === "number" && typeof property.minimum === "number" && value < property.minimum) issues.push({ message: "is too small", path: key });
     if (typeof value === "number" && typeof property.maximum === "number" && value > property.maximum) issues.push({ message: "is too large", path: key });
@@ -536,10 +594,10 @@ function manifest(definition: SourceDefinition): McpSourceManifest {
         retryOn: ["transport-error", "rate-limited", "server-error"],
       },
       routing: { keywords: tool.keywords, mode: "prefer" as const, priority: tool.priority ?? 80 },
-      timeoutMs: tool.kind === "analysis" ? 60_000 : 30_000,
+      timeoutMs: tool.timeoutMs ?? (tool.kind === "analysis" ? 60_000 : 30_000),
     }])),
     transport: { mcpServerId: "biomed", type: "mcp" },
-    version: "1.0.0",
+    version: ["pdb", "clinvar", "chembl", "geo"].includes(definition.id) ? "2.0.0" : "1.0.0",
   };
 }
 
@@ -607,6 +665,11 @@ export function createPublicBiomedSources(sourceIds?: readonly string[]): McpSou
       },
       validateInput(toolId, input) {
         const tool = sourceManifest.tools[toolId];
+        if (sourceManifest.id === "chembl" && toolId === "search_activities" && input && typeof input === "object" && !Array.isArray(input)) {
+          const values = input as Record<string, unknown>;
+          if (!values.molecule_chembl_id && !values.target_chembl_id) return { valid: false, issues: [{ path: "target_chembl_id", message: "molecule_chembl_id or target_chembl_id is required" }] };
+          if (values.standard_value_max !== undefined && (!values.standard_type || !values.standard_units || !values.standard_relation)) return { valid: false, issues: [{ path: "standard_value_max", message: "requires standard_type, standard_units and standard_relation" }] };
+        }
         return tool
           ? validateAgainstSchema(tool.inputSchema, input)
           : { issues: [{ message: `Unknown tool: ${toolId}`, path: "toolId" }], valid: false };

@@ -138,7 +138,11 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
   const filtered = servers.filter((server) => `${server.name} ${server.description}`.toLowerCase().includes(query.toLowerCase()));
   const builtins = sources.filter((source) => !source.id.startsWith("custom-"));
   const draft = editor?.draft;
-  const inspectedServer = servers.find((server) => server.id === inspecting);
+  const inspectedSource = builtins.find((source) => source.id === inspecting);
+  const inspectedServer = servers.find((server) => server.id === inspecting) ?? (inspectedSource ? {
+    id: inspectedSource.id, name: inspectedSource.displayName, enabled: true,
+    tools: Object.values(inspectedSource.tools).map((tool) => ({ name: tool.mcpToolName ?? tool.id, description: tool.description, inputSchema: tool.inputSchema })),
+  } : undefined);
   const change = (patch: Partial<Draft>) => setEditor((current) => current ? { ...current, draft: { ...current.draft, ...patch } } : current);
 
   return <section className="mcp-settings" ref={root}>
@@ -206,7 +210,7 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
             </div>
           </article>)}
         </div>}
-      </> : <div className="mcp-builtin-list">{builtins.map((source) => <details key={source.id} className="mcp-builtin"><summary><DatabaseIcon size={16} /><strong>{source.displayName}</strong><span>{Object.keys(source.tools).length} {t("mcp.tools")}</span></summary><p>{source.description}</p><ul>{Object.values(source.tools).map((tool) => <li key={tool.id}><code>{tool.mcpToolName}</code><p>{tool.description}</p></li>)}</ul></details>)}</div>}
+      </> : <div className="mcp-builtin-list">{builtins.map((source) => <details key={source.id} className="mcp-builtin"><summary><DatabaseIcon size={16} /><strong>{source.displayName}</strong><span>{Object.keys(source.tools).length} {t("mcp.tools")}</span></summary><p>{source.description}</p><button className="text-button mcp-inline-command" type="button" onClick={() => setInspecting(source.id)}><Bug size={14} />MCP Inspector</button><ul>{Object.values(source.tools).map((tool) => <li key={tool.id}><code>{tool.mcpToolName}</code><p>{tool.description}</p></li>)}</ul></details>)}</div>}
     </>}
   </section>;
 }

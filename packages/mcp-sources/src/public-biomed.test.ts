@@ -24,7 +24,7 @@ test("public biomedical MCP manifests register every requested source and operat
   const sources = createPublicBiomedSources();
   assert.deepEqual(
     sources.map((source) => source.manifest.id),
-    ["arxiv", "pubmed", "europe-pmc", "biorxiv", "medrxiv", "pdb", "ensembl", "reactome", "clinvar", "chembl", "geo"],
+    ["arxiv", "pubmed", "europe-pmc", "biorxiv", "medrxiv", "pdb", "alphafold", "ensembl", "reactome", "clinvar", "chembl", "geo"],
   );
   assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "pdb")!.manifest.tools).sort(), [
     "lookup_structure",
@@ -45,6 +45,7 @@ test("public biomedical MCP manifests register every requested source and operat
     ]);
   }
   assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "geo")!.manifest.tools).sort(), [
+    "get_samples",
     "list_files",
     "lookup_accession",
     "prepare_dataset_download",
@@ -71,7 +72,7 @@ test("arXiv governance follows the provider terms: one connection, one request e
 
 test("built-in sources explicitly opt into the existing queue and pacing guards", () => {
   const manifests = createBuiltinMcpSourceRegistry().listManifests();
-  assert.equal(manifests.length, 13);
+  assert.equal(manifests.length, 14);
   for (const manifest of manifests) {
     assert.equal(manifest.governance.maxQueueDepth, 8, manifest.id);
     assert.equal(manifest.governance.queueTimeoutMs, 20_000, manifest.id);
@@ -133,4 +134,34 @@ test("Node normalization rejects forged MCP identities and artifact hosts", asyn
     }),
     /identity does not match/,
   );
+});
+
+test("domain database inputs enforce scientific measurement constraints before transport", () => {
+  const registry = createBuiltinMcpSourceRegistry();
+  const activities = registry.get("chembl");
+  assert.equal(activities.validateInput("search_activities", {}).valid, false);
+  assert.equal(activities.validateInput("search_activities", { target_chembl_id: "CHEMBL203", standard_value_max: 100 }).valid, false);
+  assert.equal(activities.validateInput("search_activities", { target_chembl_id: "CHEMBL203", standard_type: "IC50", standard_units: "nM", standard_relation: "=", standard_value_max: 100, offset: 2, confidence_score_min: 9 }).valid, true);
+  assert.equal(activities.validateInput("search_activities", { target_chembl_id: "CHEMBL203", standard_value_max: "100", standard_type: "IC50", standard_units: "nM", standard_relation: "=" }).valid, false);
+  assert.equal(registry.get("geo").validateInput("get_samples", { accession: "GSE1000", offset: -1 }).valid, false);
+  assert.equal(registry.get("alphafold").validateInput("lookup_prediction", { accession: "P69905" }).valid, true);
+  assert.equal(registry.get("alphafold").validateInput("lookup_prediction", { accession: "../../etc/passwd" }).valid, false);
+  assert.equal(registry.get("clinvar").validateInput("get_assertions", { accession: "VCV000014206.2" }).valid, true);
+  assert.equal(registry.get("clinvar").validateInput("get_assertions", { accession: "malformed" }).valid, false);
+});
+
+test("AlphaFold prediction evidence, versions and downloadable provenance survive normalization", async () => {
+  const source = createPublicBiomedSources(["alphafold"])[0]!;
+  const citation = { identifier: "AF-P69905-F1", identifierType: "alphafold identifier", label: "AlphaFold model", markdown: "[AlphaFold](https://alphafold.ebi.ac.uk/entry/P69905)", role: "database-record", source: "alphafold", sourceVersion: "6", url: "https://alphafold.ebi.ac.uk/entry/P69905" };
+  const payload = {
+    attribution: "provider", license: "CC BY 4.0", retrievedAt: "2026-10-20T00:00:00Z", sourceId: "alphafold", toolId: "prepare_prediction_download", untrusted: true, warnings: [],
+    records: [{ identifier: citation.identifier, identifierType: citation.identifierType, title: "Hemoglobin subunit alpha", source: "alphafold", url: citation.url, primaryCitation: citation, citations: [citation], structuredData: { structureType: "predicted", latestVersion: 6, globalMetricValue: 98.06 }, contentScope: "curated-record", fullTextRetrieved: false, crossReferences: [{ source: "uniprot", identifier: "P69905" }], warnings: [] }],
+    artifacts: [{ id: "alphafold:AF-P69905-F1:v6:cif", sourceId: "alphafold", sourceRecordId: "AF-P69905-F1", sourceUrl: "https://alphafold.ebi.ac.uk/files/AF-P69905-F1-model_v6.cif", logicalName: "AF-P69905-F1-model_v6.cif", kind: "structure", format: "cif", attribution: "AlphaFold DB", license: "CC BY 4.0" }],
+  };
+  const result = await source.normalizeResult({ retrievedAt: "later", source: source.manifest, tool: source.manifest.tools.prepare_prediction_download! }, { content: [{ type: "text", text: JSON.stringify(payload) }], isError: false });
+  assert.equal(result.records[0]!.primaryCitation.sourceVersion, "6");
+  assert.equal(result.retrievedAt, payload.retrievedAt);
+  assert.deepEqual(result.records[0]!.structuredData, payload.records[0]!.structuredData);
+  assert.equal(result.artifacts![0]!.sourceRecordId, result.records[0]!.identifier);
+  assert.equal(result.artifacts![0]!.sourceUrl, payload.artifacts[0]!.sourceUrl);
 });

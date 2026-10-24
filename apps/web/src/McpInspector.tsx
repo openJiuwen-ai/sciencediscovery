@@ -29,7 +29,7 @@ function initialInput(schema: Record<string, unknown>): string {
 }
 
 export function McpInspector({ server, sessionId, sessionTitle, client, onBack }: {
-  server: CustomMcpServerDetails;
+  server: Pick<CustomMcpServerDetails, "id" | "name" | "enabled"> & { tools: Array<Pick<CustomMcpServerDetails["tools"][number], "name" | "description" | "inputSchema">> };
   sessionId?: string;
   sessionTitle?: string;
   client: Pick<ApiClient, "inspectMcpTool">;

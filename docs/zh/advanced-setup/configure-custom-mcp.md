@@ -102,3 +102,5 @@ Agent 会按任务需要决定是否调用，勾选不代表每次对话必定�
 | 测试连接成功但调用失败 | 参数 Schema、Scope、工具权限和执行超时；连接成功不代表所有工具均可执行 |
 
 网络代理配置见[配置网络代理](configure-network-proxy.md)。
+
+内置领域数据库及 Inspector 调用示例见[领域数据库连接](domain-databases.md)。

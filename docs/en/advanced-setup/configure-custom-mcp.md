@@ -102,3 +102,5 @@ The Agent decides whether a task needs a tool, so selection does not force a cal
 | Connection succeeds but a tool fails | Input schema, scope, tool permissions and timeout; discovery does not prove every tool can execute |
 
 For network routing, see [Configure the network proxy](configure-network-proxy.md).
+
+Built-in domain data sources and their Inspector examples are documented in [Domain scientific databases](domain-databases.md).

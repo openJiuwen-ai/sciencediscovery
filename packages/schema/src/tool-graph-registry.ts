@@ -84,6 +84,12 @@ export const TOOL_GRAPH_REGISTRY: Record<string, ToolGraphSpec> = {
   "mcp__chembl__search_activities": { type: "search", product: "db_record" },
   "mcp__chembl__similarity_search": { type: "search", product: "db_record" },
   "mcp__geo__search_studies": { type: "search", product: "db_record" },
+  "mcp__geo__lookup_accession": { type: "search", product: "db_record" },
+  "mcp__geo__get_samples": { type: "search", product: "db_record" },
+  "mcp__pdb__lookup_structure": { type: "search", product: "db_record" },
+  "mcp__clinvar__lookup_accession": { type: "search", product: "db_record" },
+  "mcp__clinvar__get_assertions": { type: "search", product: "db_record" },
+  "mcp__alphafold__lookup_prediction": { type: "search", product: "db_record" },
 };
 // 暂缓（附录 B/E），启用时加行 + 需要的话加产出形状：
 // - db_lookup     数据库精确查询 → DbRecord / WebPage

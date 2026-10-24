@@ -126,7 +126,7 @@ test("MCP source API exposes only native MCP sources", async (context) => {
     status: McpSourceStatus;
   }>;
   assert.deepEqual(sources.map((source) => source.manifest.id).sort(), [
-    "arxiv", "biorxiv", "chembl", "clinvar", "ensembl", "europe-pmc",
+    "alphafold", "arxiv", "biorxiv", "chembl", "clinvar", "ensembl", "europe-pmc",
     "geo", "llm-wiki", "medrxiv", "pdb", "pubmed", "reactome", "uniprot",
   ]);
   assert.equal(sources.find((source) => source.manifest.id === "uniprot")?.status.status, "ready");

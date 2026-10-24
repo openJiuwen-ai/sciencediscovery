@@ -56,6 +56,7 @@
       "pmc_oa": "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
       "pmc_ftp_https_prefix": "https://ftp.ncbi.nlm.nih.gov/",
       "clinvar_variation_template": "https://www.ncbi.nlm.nih.gov/clinvar/variation/{variation_id}/",
+      "clinvar_accession_template": "https://www.ncbi.nlm.nih.gov/clinvar/{accession}/",
       "geo_accession_template": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={accession}",
       "geo_series_template": "https://ftp.ncbi.nlm.nih.gov/geo/series/{bucket}/{accession}"
     },
@@ -91,6 +92,8 @@
       "analysis_api": "https://reactome.org/AnalysisService/identifiers/projection"
     },
     "chembl": {
+      "activity_template": "https://www.ebi.ac.uk/chembl/api/data/activity/{identifier}.json",
+      "assay_api": "https://www.ebi.ac.uk/chembl/api/data/assay.json",
       "explore_template": "https://www.ebi.ac.uk/chembl/explore/{kind}/CHEMBL{identifier}",
       "resource_search_template": "https://www.ebi.ac.uk/chembl/api/data/{resource}/search.json",
       "activity_api": "https://www.ebi.ac.uk/chembl/api/data/activity.json",
@@ -99,6 +102,10 @@
     "uniprot": {
       "api_base": "https://rest.uniprot.org",
       "entry_template": "https://www.uniprot.org/uniprotkb/{accession}/entry"
+    },
+    "alphafold": {
+      "prediction_template": "https://alphafold.ebi.ac.uk/api/prediction/{accession}",
+      "entry_template": "https://alphafold.ebi.ac.uk/entry/{accession}"
     },
     "crossref": {
       "works_api": "https://api.crossref.org/works"
@@ -130,7 +137,8 @@
     "ensembl": "https://www.ensembl.org/info/about/legal/disclaimer.html",
     "reactome": "https://reactome.org/license",
     "chembl": "https://www.ebi.ac.uk/about/terms-of-use",
-    "uniprot": "https://www.uniprot.org/help/license"
+    "uniprot": "https://www.uniprot.org/help/license",
+    "alphafold": "https://alphafold.ebi.ac.uk/faq"
   },
   "connector_hosts": {
     "arxiv": [
@@ -185,6 +193,9 @@
     "uniprot": [
       "rest.uniprot.org",
       "www.uniprot.org"
+    ],
+    "alphafold": [
+      "alphafold.ebi.ac.uk"
     ]
   }
 }

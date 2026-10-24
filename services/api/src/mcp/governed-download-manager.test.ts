@@ -16,8 +16,8 @@ import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, symlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 
 import type { ArtifactJob, ArtifactPlan, McpInvocation, McpToolResult } from "@sciencediscovery/schema";
@@ -43,6 +43,93 @@ async function waitForCompleted(store: SessionStore, sessionId: string, jobId: s
     await new Promise((resolveWait) => setTimeout(resolveWait, 10));
   }
   throw new Error("Artifact job did not finish");
+}
+
+/**
+ * The shared fixture for the download-failure cases: one session with one succeeded
+ * invocation whose normalized result carries `artifacts`, and one injected fetch.
+ * `name` keeps each case's temporary directory distinct.
+ */
+async function setupDownloadFixture(
+  name: string,
+  artifacts: McpToolResult["artifacts"],
+  fetchFn: typeof fetch = async () => new Response(Buffer.from("%PDF-1.4\nserved\n"), {
+    headers: { "content-length": "14", "content-type": "application/pdf" },
+    status: 200,
+  }),
+  maxArtifactBytes = 1024,
+) {
+  const dataDir = resolve(process.cwd(), ".tmp", `artifact-${name}-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+    vision: false,
+  });
+  const project = await store.createProject("Artifacts");
+  const session = await store.createSession(project.id, "Download", model.id);
+  const registry = createBuiltinMcpSourceRegistry();
+  const gateway = unusedTransport();
+  const broker = new McpGovernanceBroker(
+    dataDir,
+    store,
+    registry,
+    new McpSourceCatalog(registry, gateway),
+    gateway,
+  );
+  const result: McpToolResult = {
+    artifacts,
+    attribution: "NCBI",
+    license: "public-domain",
+    records: [],
+    retrievedAt: new Date().toISOString(),
+    sourceId: "pubmed",
+    toolId: "search",
+    untrusted: true,
+    warnings: [],
+  };
+  const timestamp = new Date().toISOString();
+  const invocationId = `mcp-invocation-${name}`;
+  await store.appendMcpInvocation({
+    adapterVersion: "1",
+    attempts: [],
+    attribution: "NCBI",
+    cache: { hit: false, key: name, scope: "session" },
+    finishedAt: timestamp,
+    id: invocationId,
+    license: "public-domain",
+    normalizedResult: await broker.cas.put(JSON.stringify(result)),
+    projectId: project.id,
+    request: await broker.cas.put("{}"),
+    resultCount: 0,
+    sessionId: session.id,
+    sourceId: "pubmed",
+    startedAt: timestamp,
+    status: "succeeded",
+    toolCallId: `call-${name}`,
+    toolId: "search",
+    transport: "mcp",
+    turnId: `turn-${name}`,
+  });
+  const manager = new GovernedDownloadManager(store, registry, broker, fetchFn, maxArtifactBytes);
+  return { broker, dataDir, invocationId, manager, session, store };
+}
+
+/** Run one prepared download to its terminal state by approving the permission request. */
+async function approveAndAwait(store: SessionStore, sessionId: string, manager: GovernedDownloadManager,
+  creation: Awaited<ReturnType<GovernedDownloadManager["prepare"]>>) {
+  const request = creation.permissionRequest;
+  if (!request) throw new Error("Expected a permission request for the prepared download");
+  const terminalPromise = manager.waitForPlanTerminal(sessionId, creation.plan.id);
+  await store.decidePermissionRequest(request.id, "allow_once");
+  const [approved] = await manager.approveByPermissionRequest(request.id);
+  if (!approved) throw new Error("Expected the approved plan to yield a job");
+  const terminal = await terminalPromise;
+  return { job: await waitForCompleted(store, sessionId, approved.job.id), terminal };
 }
 
 for (const fixture of ["pdf", "html", "empty", "non-pdf"] as const) {
@@ -395,4 +482,235 @@ test("artifact paths reject traversal and an existing symlink parent", async (co
 
   await assert.rejects(assertSafeArtifactPath(root, resolve(root, "linked", "file.txt")), /symbolic link/);
   await assert.rejects(assertSafeArtifactPath(root, resolve(root, "..", "outside.txt")), /escapes/);
+});
+
+test("governed download fails instead of publishing an artifact whose checksum does not match", async (context) => {
+  const bytes = Buffer.from("%PDF-1.4\nserved artifact\n");
+  const fixture = await setupDownloadFixture("checksum", [{
+    attribution: "NCBI",
+    // The declared digest belongs to different content than the bytes served below.
+    checksum: { algorithm: "sha256", value: createHash("sha256").update("different content").digest("hex") },
+    expectedBytes: bytes.length,
+    format: "pdf",
+    id: "candidate-checksum",
+    kind: "paper",
+    license: "public-domain",
+    logicalName: "record.pdf",
+    mimeType: "application/pdf",
+    sourceId: "pubmed",
+    sourceRecordId: "12524540",
+    sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/record.pdf",
+  }], async () => new Response(bytes, {
+    headers: { "content-length": String(bytes.length), "content-type": "application/pdf" },
+    status: 200,
+  }));
+  context.after(() => rm(fixture.dataDir, { force: true, recursive: true }));
+
+  const creation = await fixture.manager.prepare(fixture.session.id, {
+    candidateId: "candidate-checksum",
+    destination: { path: "downloads/record.pdf", type: "workspace" },
+    mcpInvocationId: fixture.invocationId,
+  });
+  const { job, terminal } = await approveAndAwait(fixture.store, fixture.session.id, fixture.manager, creation);
+
+  assert.equal(terminal.status, "failed");
+  assert.equal(job.state, "failed");
+  assert.match(job.error?.message ?? "", /checksum/i);
+  // A rejected artifact must never be observable as a completed file.
+  await assert.rejects(
+    readFile(resolve(fixture.store.workspacePath(fixture.session.id), "downloads/record.pdf")),
+    { code: "ENOENT" },
+  );
+});
+
+test("governed download fails when the transfer ends shorter than the declared size", async (context) => {
+  const bytes = Buffer.from("%PDF-1.4\ntruncated artifact\n");
+  const fixture = await setupDownloadFixture("size", [{
+    attribution: "NCBI",
+    expectedBytes: bytes.length + 64,
+    format: "pdf",
+    id: "candidate-size",
+    kind: "paper",
+    license: "public-domain",
+    logicalName: "record.pdf",
+    mimeType: "application/pdf",
+    sourceId: "pubmed",
+    sourceRecordId: "12524540",
+    sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/record.pdf",
+  }], async () => new Response(bytes, {
+    headers: { "content-length": String(bytes.length), "content-type": "application/pdf" },
+    status: 200,
+  }));
+  context.after(() => rm(fixture.dataDir, { force: true, recursive: true }));
+
+  const creation = await fixture.manager.prepare(fixture.session.id, {
+    candidateId: "candidate-size",
+    destination: { path: "downloads/record.pdf", type: "workspace" },
+    mcpInvocationId: fixture.invocationId,
+  });
+  const { job, terminal } = await approveAndAwait(fixture.store, fixture.session.id, fixture.manager, creation);
+
+  assert.equal(terminal.status, "failed");
+  assert.equal(job.state, "failed");
+  assert.match(job.error?.message ?? "", /size mismatch/i);
+  await assert.rejects(
+    readFile(resolve(fixture.store.workspacePath(fixture.session.id), "downloads/record.pdf")),
+    { code: "ENOENT" },
+  );
+});
+
+test("a denied download is reported as terminal, leaves no artifact, and does not block a later download", async (context) => {
+  const bytes = Buffer.from("%PDF-1.4\nrecovered artifact\n");
+  const fixture = await setupDownloadFixture("deny-recover", [{
+    attribution: "NCBI",
+    checksum: { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") },
+    expectedBytes: bytes.length,
+    format: "pdf",
+    id: "candidate-deny-recover",
+    kind: "paper",
+    license: "public-domain",
+    logicalName: "record.pdf",
+    mimeType: "application/pdf",
+    sourceId: "pubmed",
+    sourceRecordId: "12524540",
+    sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/record.pdf",
+  }], async () => new Response(bytes, {
+    headers: { "content-length": String(bytes.length), "content-type": "application/pdf" },
+    status: 200,
+  }));
+  context.after(() => rm(fixture.dataDir, { force: true, recursive: true }));
+
+  const destination = { path: "downloads/record.pdf", type: "workspace" } as const;
+  const first = await fixture.manager.prepare(fixture.session.id, {
+    candidateId: "candidate-deny-recover",
+    destination,
+    mcpInvocationId: fixture.invocationId,
+  });
+  const deniedRequest = first.permissionRequest;
+  if (!deniedRequest) throw new Error("Expected a permission request for the prepared download");
+  const deniedTerminal = fixture.manager.waitForPlanTerminal(fixture.session.id, first.plan.id);
+  await fixture.store.decidePermissionRequest(deniedRequest.id, "deny");
+  const denied = await deniedTerminal;
+
+  // The refusal reaches the caller as a terminal state, and no job or file was produced.
+  assert.equal(denied.status, "denied");
+  assert.equal(denied.job, undefined);
+  await assert.rejects(
+    readFile(resolve(fixture.store.workspacePath(fixture.session.id), "downloads/record.pdf")),
+    { code: "ENOENT" },
+  );
+
+  // A refusal is terminal for that request: re-preparing the identical download
+  // returns the same plan, which carries no pending permission request and no job.
+  const repeated = await fixture.manager.prepare(fixture.session.id, {
+    candidateId: "candidate-deny-recover",
+    destination,
+    mcpInvocationId: fixture.invocationId,
+  });
+  assert.equal(repeated.plan.id, first.plan.id);
+  assert.equal(repeated.permissionRequest, undefined);
+  assert.equal(repeated.job, undefined);
+
+  // The session is not poisoned: a download the operator does approve still completes.
+  const second = await fixture.manager.prepare(fixture.session.id, {
+    candidateId: "candidate-deny-recover",
+    destination: { path: "downloads/record-retry.pdf", type: "workspace" },
+    mcpInvocationId: fixture.invocationId,
+  });
+  const { job, terminal } = await approveAndAwait(fixture.store, fixture.session.id, fixture.manager, second);
+
+  assert.equal(terminal.status, "completed");
+  assert.equal(job.state, "completed");
+  assert.deepEqual(
+    await readFile(resolve(fixture.store.workspacePath(fixture.session.id), "downloads/record-retry.pdf")),
+    bytes,
+  );
+});
+
+test("an interrupted download resumes with a Range request and publishes the complete artifact", async (context) => {
+  const full = Buffer.from("%PDF-1.4\nresumed artifact payload\n");
+  const prefix = full.subarray(0, 12);
+  const remainder = full.subarray(12);
+  const ranges: Array<string | undefined> = [];
+  const fixture = await setupDownloadFixture("resume-range", [{
+    attribution: "NCBI",
+    checksum: { algorithm: "sha256", value: createHash("sha256").update(full).digest("hex") },
+    expectedBytes: full.length,
+    format: "pdf",
+    id: "candidate-resume",
+    kind: "paper",
+    license: "public-domain",
+    logicalName: "resumed.pdf",
+    mimeType: "application/pdf",
+    sourceId: "pubmed",
+    sourceRecordId: "12524540",
+    sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/resumed.pdf",
+  }], async (_input, init) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    ranges.push(headers?.range);
+    return headers?.range
+      ? new Response(remainder, { headers: { "content-length": String(remainder.length) }, status: 206 })
+      : new Response(full, { headers: { "content-length": String(full.length) }, status: 200 });
+  });
+  context.after(() => rm(fixture.dataDir, { force: true, recursive: true }));
+
+  const workspace = fixture.store.workspacePath(fixture.session.id);
+  const timestamp = new Date().toISOString();
+  const plan: ArtifactPlan = {
+    candidates: [{
+      attribution: "NCBI",
+      checksum: { algorithm: "sha256", value: createHash("sha256").update(full).digest("hex") },
+      expectedBytes: full.length,
+      format: "pdf",
+      id: "candidate-resume",
+      kind: "paper",
+      license: "public-domain",
+      logicalName: "resumed.pdf",
+      mimeType: "application/pdf",
+      sourceId: "pubmed",
+      sourceRecordId: "12524540",
+      sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/resumed.pdf",
+    }],
+    createdAt: timestamp,
+    destination: { path: "downloads/resumed.pdf", type: "workspace" },
+    id: "plan-resume",
+    mcpInvocationId: fixture.invocationId,
+    permissionAuthorizationId: "authorization-resume",
+    permissionRequestId: "request-resume",
+    selectedCandidateId: "candidate-resume",
+    sessionId: fixture.session.id,
+    sourceId: "pubmed",
+    sourceRecordId: "12524540",
+    state: "approved",
+    toolId: "search",
+  };
+  const job: ArtifactJob = {
+    attempts: 0,
+    createdAt: timestamp,
+    id: "job-resume",
+    maxAttempts: 3,
+    permissionAuthorizationId: "authorization-resume",
+    planId: plan.id,
+    progress: { bytesDownloaded: 0, filesCompleted: 0, filesTotal: 1 },
+    projectId: plan.sessionId,
+    sessionId: fixture.session.id,
+    sourceId: "pubmed",
+    sourceRecordId: "12524540",
+    state: "queued",
+    updatedAt: timestamp,
+  };
+  await fixture.store.appendArtifactPlan(plan);
+  await fixture.store.appendArtifactJob(job);
+  // A previous attempt left these bytes staged; the manager must continue from them.
+  const staging = resolve(workspace, ".sciencediscovery", "staging", `${job.id}.part`);
+  await mkdir(dirname(staging), { recursive: true });
+  await writeFile(staging, prefix);
+
+  await fixture.manager.resumeInterrupted();
+  const completed = await waitForCompleted(fixture.store, fixture.session.id, job.id);
+
+  assert.equal(completed.state, "completed");
+  assert.deepEqual(ranges, [`bytes=${prefix.length}-`]);
+  assert.deepEqual(await readFile(resolve(workspace, "downloads/resumed.pdf")), full);
+  await assert.rejects(readFile(staging), { code: "ENOENT" });
 });

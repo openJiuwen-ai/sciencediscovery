@@ -68,6 +68,25 @@ interface PersistedCatalog {
   webConnectorMigrated?: boolean;
 }
 
+test("domain database selections persist across global/project/session settings and restart", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `domain-connectors-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const ids = ["geo", "chembl", "clinvar", "pdb", "alphafold"];
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  await store.replaceGlobalSettings({ enabledConnectorIds: ids });
+  const project = await store.createProject("Domain databases");
+  await store.replaceProjectSettings(project.id, { enabledConnectorIds: ids });
+  const session = await store.createSession(project.id, "Predictions and experimental data", { enabledConnectorIds: ids }, {}, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds, ids);
+  const restored = new SessionStore(tempRoot);
+  await restored.load();
+  assert.deepEqual(restored.getSessionSettings(session.id).effective.enabledConnectorIds, ids);
+  assert.deepEqual(restored.getGlobalSettings().overrides.enabledConnectorIds, ids);
+});
+
+
 test("remote environment audit revisions never replace the local catalog or disappear on refresh", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `remote-env-catalog-${Date.now()}-${process.pid}`);
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
