@@ -22,7 +22,7 @@ import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources, pythonPlugins } from './profiles.mjs';
 import { preflight } from './environment.mjs';
-import { executionConfig, realShards, mockedShards } from './execution.mjs';
+import { executionConfig, realShards, mockedShards, biomniEntries } from './execution.mjs';
 import { checks } from './checks.mjs';
 import { planGroups, schedule, utWorkers, SWARM, SWARM_TAG } from './scheduler.mjs';
 import { startSwarm, withoutSwarm } from './swarm.mjs';
@@ -257,6 +257,7 @@ export async function main(args=process.argv.slice(2)) {
     plan=subplan({...plan,evaluatorRevision},plan.entries);
   }
   let selectedShard;
+  if (process.env.CI_BIOMNI_ONLY === '1') plan=subplan(plan,biomniEntries(plan,slice));
   if (slice === 'e2e') mockedShards(plan); // Reject unclassified cases even in a serial local run.
   if(shard){
     if(!['e2e','e2e-real'].includes(slice))throw new Error('--shard requires --slice e2e or e2e-real');

@@ -303,6 +303,14 @@ Missing prerequisites fail before model calls; they do not filter selection.
 
 ### L5 full-public benchmark and baseline candidate
 
+For an isolated CI verification of only the public 50, manually dispatch
+**Real E2E** (`real-e2e.yml`) on the desired branch with `profile=release`
+and `biomni-only=true`.
+Its default is four concurrent cases, with one isolated job per case; queued
+cases start as jobs finish. It reuses the real E2E preparation, scoring and
+aggregation without selecting the other L4 cases or packaging jobs. The full
+release workflow keeps its default of two concurrent real workers.
+
 The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50
 public BiomniBench-DA tasks, with one task per isolated worker, at most two
 concurrent workers and a six-hour worker ceiling including preparation. The

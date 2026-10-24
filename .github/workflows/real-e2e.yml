@@ -15,6 +15,34 @@ on:
         description: "Independent execution backend"
         required: true
         type: string
+      biomni-only:
+        description: "Run only the 50 public BiomniBench-DA cases (release profile)"
+        type: boolean
+        default: false
+      max-parallel:
+        description: "Maximum number of concurrent isolated real workers"
+        type: number
+        default: 2
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "L5 policy"
+        type: choice
+        options: [release]
+        default: release
+      backend:
+        type: choice
+        options: [jiuwenswarm]
+        default: jiuwenswarm
+      biomni-only:
+        description: "Run only the 50 public BiomniBench-DA cases"
+        type: boolean
+        default: true
+      max-parallel:
+        description: "Concurrent cases (one isolated job per case)"
+        type: choice
+        options: ['4', '2', '1']
+        default: '4'
 
 permissions:
   contents: read
@@ -35,6 +63,7 @@ jobs:
     env:
       CI_PROFILE: ${{ inputs.profile }}
       CI_E2E_BACKEND: ${{ inputs.backend }}
+      CI_BIOMNI_ONLY: ${{ inputs.biomni-only && '1' || '0' }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
     steps:
@@ -90,7 +119,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.real-plan.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: ${{ fromJSON(format('{0}', inputs.max-parallel)) }}
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
@@ -99,6 +128,7 @@ jobs:
       CI_ALLOW_REAL: "1"
       CI_PROFILE: ${{ inputs.profile }}
       CI_E2E_BACKEND: ${{ inputs.backend }}
+      CI_BIOMNI_ONLY: ${{ inputs.biomni-only && '1' || '0' }}
       CI_REAL_SHARD: ${{ matrix.shard }}
       E2E_COMMIT_SHA: ${{ github.sha }}
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results

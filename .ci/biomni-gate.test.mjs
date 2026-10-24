@@ -10,7 +10,7 @@ import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 import { profiles } from '../test/support/tagged/profiles.mjs';
-import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
+import { biomniCase, realShards, biomniEntries } from '../test/support/tagged/execution.mjs';
 import { dataset, manifestHash, evaluateSuite, projectMetrics, validateMetrics } from './biomni-gate.mjs';
 import { generationTokens, judgeTokens, toolMetrics, settled, selectedProcesses, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64', 'arch:arm64'] });
@@ -35,6 +35,18 @@ test('all 50 public cases are L5-only, partitioned exactly once', () => {
   for (const profile of ['pr','merge','daily']) assert.throws(() => createPlan(catalog, { revision: 'test', targets: [{os:'linux',arch:'amd64'}], selector: profiles[profile].selector }), /EMPTY_SELECTION/);
   assert.equal(realShards(plan).length, 50);
   assert.equal(new Set(realShards(plan).flatMap(s => s.keys)).size, 50);
+});
+
+test('Biomni-only selection excludes other real cases and preserves worker identities', () => {
+  const mixed = subplan(plan, [...plan.entries, { ...plan.entries[0], key: 'other', source: 'test/other.spec.ts', tags: ['tier:l4'] }]);
+  const selected = subplan(mixed, biomniEntries(mixed, 'e2e-real'));
+  assert.equal(selected.entries.length, 50);
+  assert.deepEqual(realShards(selected), realShards(plan));
+  for (const shard of realShards(selected)) {
+    assert.equal(selected.entries.filter(e => shard.keys.includes(e.key)).length, 1);
+  }
+  assert.throws(() => biomniEntries({ ...mixed, profile: 'daily' }, 'e2e-real'), /REQUIRES_L5_REAL/);
+  assert.throws(() => biomniEntries(mixed, 'e2e'), /REQUIRES_L5_REAL/);
 });
 
 test('Biomni workers receive the 40 GiB workspace and three-hour run budgets', () => {

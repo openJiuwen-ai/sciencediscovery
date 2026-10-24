@@ -35,6 +35,16 @@ export function realShards(plan) {
   ];
 }
 
+// Narrow before deriving shard names, identically in the planner and workers.
+export function biomniEntries(plan, slice) {
+  if (slice !== 'e2e-real' || !['release', 'l5'].includes(plan.profile)) {
+    throw new Error('BIOMNI_ONLY_REQUIRES_L5_REAL');
+  }
+  const entries = plan.entries.filter(e => biomniCase(e));
+  if (!entries.length) throw new Error('BIOMNI_ONLY_EMPTY_SELECTION');
+  return entries;
+}
+
 export const swarmChecks = ['history', 'history-names', 'run-shell', 'host-tools', 'approvals', 'skills', 'skill-switch', 'trajectory', 'language'];
 
 // Tags describe isolation requirements, not a second list of CI test names.

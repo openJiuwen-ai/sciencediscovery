@@ -91,7 +91,8 @@ test('both entry points reuse the same suite, profile, backend and inherited sec
     assert.match(jobs[name], /backend: \$\{\{ needs.policy.outputs.backend \}\}/);
   }
   assert.match(realWorkflow, /on:\n  workflow_call:/);
-  assert.doesNotMatch(realWorkflow, /^  (push|schedule|workflow_dispatch|pull_request):/m);
+  assert.doesNotMatch(realWorkflow, /^  (push|schedule|pull_request):/m);
+  assert.match(realWorkflow, /^  workflow_dispatch:/m);
 });
 
 test('real workers require their own plan and respect cancellation', () => {
