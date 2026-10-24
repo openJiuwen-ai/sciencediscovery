@@ -51,6 +51,7 @@ import {
   DEFAULT_ENVIRONMENT_SOURCE_SETTINGS,
   DEFAULT_IDEA_TREE_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+  DEFAULT_REVIEWER_SPECIALIST_SETTINGS,
   DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
@@ -87,6 +88,12 @@ export interface Catalog {
   reviewerSpecialistFeedbackPolicy: import("@sciencediscovery/schema").ReviewerFeedbackPolicy;
   /** Legacy persisted value retained only while older catalogs are migrated; runtime uses Session settings. */
   reviewerSpecialistLevel: ReviewerSpecialistLevel;
+  /**
+   * One-time migration flag for the #323/#413 default-on decision. When absent,
+   * a persisted `reviewerSpecialistEnabled: false` from the pre-#353 product
+   * default is lifted to true once; later user opt-outs set this flag and stay off.
+   */
+  reviewerSpecialistDefaultOnMigrated?: boolean;
   remoteHosts: RemoteHostTarget[];
   remoteJobs: RemoteJob[];
   remoteWorkspaceSyncs: RemoteWorkspaceSyncRecord[];
@@ -133,9 +140,10 @@ export function emptyCatalog(
     projects: [],
     quotaSettings: structuredClone(initialQuotaSettings),
     sandboxNetworkSettings: structuredClone(DEFAULT_SANDBOX_NETWORK_SETTINGS),
-    reviewerSpecialistEnabled: true,
-    reviewerSpecialistFeedbackPolicy: "record",
+    reviewerSpecialistEnabled: DEFAULT_REVIEWER_SPECIALIST_SETTINGS.enabled,
+    reviewerSpecialistFeedbackPolicy: DEFAULT_REVIEWER_SPECIALIST_SETTINGS.feedbackPolicy,
     reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+    reviewerSpecialistDefaultOnMigrated: true,
     remoteHosts: [],
     remoteJobs: [],
     remoteWorkspaceSyncs: [],

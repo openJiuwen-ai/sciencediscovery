@@ -139,11 +139,23 @@ export interface ReviewerSpecialistSettings {
   feedbackPolicy: ReviewerFeedbackPolicy;
 }
 
+/** Product default for the global Reviewer Specialist master switch (see #323 / #413). */
+export const DEFAULT_REVIEWER_SPECIALIST_SETTINGS: ReviewerSpecialistSettings = {
+  enabled: true,
+  feedbackPolicy: DEFAULT_REVIEWER_FEEDBACK_POLICY,
+};
+
 /** Reviewer behaviour that belongs to one Session, not the global Specialist switch. */
 export interface SessionReviewerSpecialistSettings {
   automaticReviewEnabled: boolean;
   level: ReviewerSpecialistLevel;
 }
+
+/** Product default for new Sessions: automatic review on at the Quick level. */
+export const DEFAULT_SESSION_REVIEWER_SPECIALIST_SETTINGS: SessionReviewerSpecialistSettings = {
+  automaticReviewEnabled: true,
+  level: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+};
 
 export type TimeoutKind =
   | "gateway_idle"

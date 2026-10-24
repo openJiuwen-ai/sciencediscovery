@@ -54,6 +54,7 @@ interface PersistedCatalog {
   reviewerSpecialistEnabled?: boolean;
   reviewerSpecialistFeedbackPolicy?: string;
   reviewerSpecialistLevel?: string;
+  reviewerSpecialistDefaultOnMigrated?: boolean;
   sessions: Array<{
     approvalMode: "always_allow" | "ask_for_dangerous";
     id: string;
@@ -590,12 +591,47 @@ test("catalogs without a Reviewer switch enable automatic review on migration", 
   await store.load();
   const catalog = await readPersistedCatalog(tempRoot);
   delete catalog.reviewerSpecialistEnabled;
+  delete catalog.reviewerSpecialistDefaultOnMigrated;
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
   database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
   database.close();
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
   assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
+  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistDefaultOnMigrated, true);
+});
+
+test("pre-#353 Reviewer default-off catalogs migrate to enabled once", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-legacy-off-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const catalog = await readPersistedCatalog(tempRoot);
+  catalog.reviewerSpecialistEnabled = false;
+  delete catalog.reviewerSpecialistDefaultOnMigrated;
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
+  const persisted = await readPersistedCatalog(tempRoot);
+  assert.equal(persisted.reviewerSpecialistEnabled, true);
+  assert.equal(persisted.reviewerSpecialistDefaultOnMigrated, true);
+});
+
+test("intentional Reviewer opt-out survives reload after default-on migration", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-opt-out-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  assert.equal(store.getReviewerSpecialistSettings().enabled, true);
+  await store.updateReviewerSpecialistSettings({ enabled: false });
+  assert.equal(store.getReviewerSpecialistSettings().enabled, false);
+  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistDefaultOnMigrated, true);
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, false);
 });
 
 test("SessionStore appends run events losslessly and survives reload", async (context) => {

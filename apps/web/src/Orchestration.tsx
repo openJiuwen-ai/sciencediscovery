@@ -152,7 +152,7 @@ export function SpecialistManager({
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [reviewerEnabled, setReviewerEnabled] = useState(false);
+  const [reviewerEnabled, setReviewerEnabled] = useState<boolean | undefined>(undefined);
   const [reviewerBusy, setReviewerBusy] = useState(true);
   const [builtinBusy, setBuiltinBusy] = useState(false);
   const [builtinExpanded, setBuiltinExpanded] = useState(false);
@@ -206,6 +206,7 @@ export function SpecialistManager({
   }, [client]);
 
   async function toggleReviewer(): Promise<void> {
+    if (reviewerEnabled === undefined) return;
     setReviewerBusy(true);
     try {
       const settings = await client.updateReviewerSpecialistSettings({
@@ -275,8 +276,8 @@ export function SpecialistManager({
   return <div className="specialist-manager">
     <div className="settings-detail-header"><span className="eyebrow">{t("specialist.eyebrow")}</span><h3>{t("specialist.title")}</h3><p>{t("specialist.description")}</p></div>
     <BuiltInReviewerSpecialist
-      busy={reviewerBusy}
-      enabled={reviewerEnabled}
+      busy={reviewerBusy || reviewerEnabled === undefined}
+      enabled={reviewerEnabled === true}
       onToggle={() => void toggleReviewer()}
     />
     {builtinSpecialists.length > 0 ? (() => {
