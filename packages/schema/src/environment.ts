@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { ShellRecoveryOptions } from "./recovery.js";
 import { externalUrl, externalUrlList } from "@sciencediscovery/external-urls";
 
 import type { ScientificArtifactKind } from "./artifact-provenance.js";
@@ -234,7 +235,7 @@ export interface DirectExecutionCapability {
   account: string;
 }
 
-export interface ShellExecutionRequest {
+export interface ShellExecutionRequest extends ShellRecoveryOptions {
   explicitHandoff?: boolean;
   directAuthorization?: DirectExecutionAuthorization;
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */

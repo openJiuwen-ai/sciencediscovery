@@ -24,6 +24,12 @@ Every tool result crosses one bound before model input. Ordinary non-self-bounde
 
 Shell execution requests `code` permission. Generated files retain diff and derivation audit but become Artifacts only after `declare_artifact`; remote files must first be explicitly copied to local storage. Uploads and governed MCP downloads retain their existing Artifact registration flow.
 
+Optional `run_shell.recovery_metadata_path` collects adapter-authored failure evidence.
+`execution_status` returns persisted capability, completed/failed work and fixed
+checkpoint references. An explicit `recovery_context` creates a new, linked
+attempt only after current prerequisites and ordinary permissions pass; reading
+metadata never launches one. See [failed execution recovery](../developer-docs/execution-recovery.md).
+
 ## Product Web tools (native default; JiuwenSwarm can use its own)
 
 | Tool | Parameters | Behavior and boundary |

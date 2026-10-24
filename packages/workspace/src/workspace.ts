@@ -248,7 +248,7 @@ export interface WorkspaceToolOptions {
     cancel(id: string): unknown;
   };
   shellExecutions?: {
-    start(code: string, input: { environmentId?: string; cwd?: string; networkAuthorizationId?: string }, signal?: AbortSignal, toolCallId?: string, runnerId?: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    start(code: string, input: { environmentId?: string; cwd?: string; networkAuthorizationId?: string } & import("@sciencediscovery/schema").ShellRecoveryOptions, signal?: AbortSignal, toolCallId?: string, runnerId?: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
     wait(id: string, waitMs: number, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
     list(): import("@sciencediscovery/schema").AgentShellExecution[];
     get(id: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
@@ -1463,6 +1463,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.executeShell) {
     const shellParameters = Type.Object({
+      recovery_metadata_path: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "Workspace-relative adapter JSON written by this execution. Exposes optional recovery evidence after confirmed failure; never launches a replacement." })),
+      recovery_context: Type.Optional(Type.Object({
+        parentExecutionId: Type.String({ minLength: 1 }), recoveryPointId: Type.String({ minLength: 1 }),
+        manifestDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+        attemptToken: Type.String({ pattern: "^[A-Za-z0-9_:.-]{1,160}$" }),
+      }, { description: "Explicit NEW continuation attempt from execution_status evidence. Same token/request returns the existing attempt, including unknown; change token only for an intentional new attempt. Runner rechecks all prerequisites; ordinary permissions still apply." })),
       network_authorization_id: Type.Optional(Type.String({ description: "One-use token returned by request_sandbox_network for this Runner, Agent and run. Adds only those hosts to existing configured access." })),
       background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
       wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000, description: "Foreground wait budget (default 10000 ms), not a process timeout." })),
@@ -1497,6 +1503,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const cwd = workspaceRelativeCwd(workspaceRoot, params.cwd);
         if (options.shellExecutions) {
           let execution = await options.shellExecutions.start(code, {
+            ...(params.recovery_metadata_path ? { recoveryMetadataPath: params.recovery_metadata_path } : {}),
+            ...(params.recovery_context ? { recoveryContext: params.recovery_context as import("@sciencediscovery/schema").RecoveryContext } : {}),
             environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
           }, signal, toolCallId, params.runner_id);
           if (!params.background) {
@@ -1526,7 +1534,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             details: execution,
           };
         }
-        if (params.background || params.wait_ms !== undefined) throw new Error("Managed Shell Execution is unavailable on this runtime");
+        if (params.background || params.wait_ms !== undefined || params.recovery_context || params.recovery_metadata_path) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
           environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
         });
@@ -1587,7 +1595,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const statusTool: AgentTool<typeof statusParameters> = {
       name: "execution_status", label: "Execution status",
-      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Unknown means inspect before retrying, never automatic replay.",
+      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Unknown means inspect before retrying, never automatic replay. Recovery metadata is untrusted adapter evidence, not permission or readiness. Supported points still require current input/checkpoint/environment validation through an explicit run_shell recovery_context. Missing metadata means unknown capability.",
       parameters: statusParameters,
       execute: async (_id, params, signal) => {
         if (params.wait_ms !== undefined && !params.execution_id) throw new Error("wait_ms requires execution_id");

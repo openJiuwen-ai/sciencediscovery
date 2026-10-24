@@ -189,7 +189,7 @@ export interface RecordExecutionOptions {
   parentSubagentId?: string;
 }
 
-export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language"> & {
+export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language"> & import("@sciencediscovery/schema").ShellRecoveryOptions & {
   environmentId?: string;
   cwd?: string;
   /** Trusted coordinator supplies a durable identity and joins the Runner result. */
@@ -800,6 +800,8 @@ export class ProvenanceRecorder {
         agentId: options.agentId,
         ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
         code: options.code,
+        ...(options.recoveryMetadataPath ? { recoveryMetadataPath: options.recoveryMetadataPath } : {}),
+        ...(options.recoveryContext ? { recoveryContext: options.recoveryContext } : {}),
         ...(options.environmentId ? { environmentId: options.environmentId } : {}),
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),

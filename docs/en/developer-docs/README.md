@@ -44,6 +44,7 @@ These pages are for developers and code agents modifying ScienceDiscovery core c
 - [Project/Session Runner inheritance](runner-inheritance.md) — Runner selection, remote execution, inheritance semantics.
 - [Ascend NPU Host Broker](ascend-npu-runner.md) — allowlisted host workloads.
 - [Network proxy](network-proxy.md) — outbound proxy resolution and security boundary.
+- [Failed execution recovery](execution-recovery.md) — optional evidence, immutable checkpoints and explicitly authorized new attempts.
 - [Content-addressable storage](cas.md) — CAS, version objects, workspace change detection.
 - [PDF worker](paper-worker.md) — PDF extraction protocol and limits.
 - [Web frontend](web-frontend.md) — Web host, event mapping, frontend development entry points.
