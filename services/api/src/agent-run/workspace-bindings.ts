@@ -24,7 +24,7 @@ import { RunnerUnavailableError } from "@sciencediscovery/workspace";
 import { createHash, randomUUID } from "node:crypto";
 import { createOperationalLogger } from "@sciencediscovery/operational-logging";
 
-import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import { prepareShellExecutionContext, type ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
@@ -279,7 +279,18 @@ export function createWorkspaceExecutionBindings(
       };
   };
   const executionOwner = { sessionId: options.sessionId, agentId: options.agentId };
-  const pending = (record: Pick<AgentShellExecution, "state">) => record.state === "queued" || record.state === "running";
+  const reconcileExecution = (id: string) => options.store.shellExecutions.reconcile(id, executionOwner, {
+    runner: (record) => {
+      try {
+        options.store.assertSessionWritable(options.sessionId);
+        options.store.assertSessionAllowsRunner(options.sessionId, record.runnerId);
+      } catch { throw Object.assign(new Error("Execution observation is no longer authorized"), { statusCode: 403 }); }
+      return resolveExecutionTarget(record.runnerId).runnerClient;
+    },
+    finalize: (context, result, runner, status) => options.provenanceRecorder.commitExistingShellExecutionResult(context, result, runner, status),
+    finalizeFailure: (context, failure) => options.provenanceRecorder.commitExistingShellExecutionFailure(context, failure),
+  });
+  const pending = (record: Pick<AgentShellExecution, "state">) => record.state === "queued" || record.state === "running" || record.state === "unknown";
   /**
    * A terminal record returned through an Agent tool is delivered: the owner's
    * model has read how the execution ended, so the completion notice retained
@@ -587,15 +598,19 @@ export function createWorkspaceExecutionBindings(
     shellExecutions: {
       start: async (code, environment, signal, toolCallId, runnerId) => {
         const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
+        const workspaceId = options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id;
         return delivered(await options.store.shellExecutions.start(executionOwner, {
           runnerId: prepared.runnerId!, turnId: options.executionId,
-          workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
+          workspaceId,
         }, () => resolveExecutionTarget(runnerId).runnerClient,
-        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId)));
+        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId),
+        (id) => prepareShellExecutionContext({ ...prepared, executionId: id }),
+        (context, failure) => options.provenanceRecorder.commitExistingShellExecutionFailure(context, failure)));
       },
       wait: async (id, waitMs, signal) => {
         const record = await options.store.shellExecutions.get(id, executionOwner);
         if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
+        await reconcileExecution(id);
         return delivered(await options.store.shellExecutions.wait(id, executionOwner, waitMs, signal));
       },
       list: () => options.store.shellExecutions.list(executionOwner).filter((record) => {
@@ -604,7 +619,7 @@ export function createWorkspaceExecutionBindings(
       get: async (id) => {
         const record = await options.store.shellExecutions.get(id, executionOwner);
         if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
-        return delivered(record);
+        return delivered(await reconcileExecution(id));
       },
       logs: async (id, cursor) => {
         const page = await options.store.shellExecutions.logs(id, executionOwner, (runnerId) => resolveExecutionTarget(runnerId).runnerClient, cursor);
@@ -612,7 +627,7 @@ export function createWorkspaceExecutionBindings(
         // execution reports it here: the model that read these logs now knows
         // how the command ended, and nothing is left for a wake to tell it.
         const record = delivered(options.store.shellExecutions.find(id, executionOwner));
-        return pending(record) ? page : { ...page, state: record.state, ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}) };
+        return pending(record) && record.state !== "unknown" ? page : { ...page, state: record.state, ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}) };
       },
       cancel: async (id) => delivered(await options.store.shellExecutions.cancel(id, executionOwner, (runnerId) => resolveExecutionTarget(runnerId).runnerClient)),
     },

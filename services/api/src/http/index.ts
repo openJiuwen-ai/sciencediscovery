@@ -1536,6 +1536,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (status.hostKeyChallenge) {
           throw hostKeyError(new SshHostKeyUntrustedError(status.hostKeyChallenge, host.alias), host.id);
         }
+        if (status.state === "ready") void store.shellExecutions.reconcilePending(host.id).catch(() => undefined);
         sendJson(response, status.state === "ready" ? 200 : 503, status);
         return;
       }

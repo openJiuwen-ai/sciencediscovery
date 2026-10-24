@@ -4,7 +4,42 @@
 import type { ShellExecutionResult } from "./environment.js";
 
 export interface ExecutionOwner { sessionId: string; agentId: string }
+
+/** Stable acceptance identity, persisted with the Runner's execution ledger. */
+export interface ExecutionReceipt {
+  runnerInstanceId: string;
+  runnerBootId: string;
+  revision: number;
+  requestDigest: string;
+  acceptedAt: string;
+}
+
+/** Evidence is populated only by the process owner, never inferred from a lost connection. */
+export interface ExecutionEvidence {
+  runnerInstanceId: string;
+  runnerBootId: string;
+  revision: number;
+  processTerminated: boolean;
+  terminationReason?: string;
+  resultDigest?: string;
+  workspaceVersionDigest?: string;
+}
+
+export interface ExecutionObservation {
+  status: "fresh" | "stale" | "reconciling" | "blocked";
+  lastObservedAt?: string;
+  lastRunnerState?: ManagedExecution["state"];
+  failureCount: number;
+  nextRetryAt?: string;
+  lastError?: { code: string; message: string; retryable: boolean; httpStatus?: number };
+}
+
 export interface ManagedExecution extends ExecutionOwner {
+  receipt?: ExecutionReceipt;
+  evidence?: ExecutionEvidence;
+  /** Canonical admission key, persisted to quarantine unconfirmed work after restart. */
+  workspaceKey?: string;
+  npuDevices?: number[];
   id: string;
   state: "queued" | "running" | "completed" | "failed" | "cancelled" | "unknown";
   queuedAt: string;
@@ -44,6 +79,11 @@ export type AgentShellExecutionResult = Omit<ShellExecutionResult, "workspaceSna
 };
 
 export interface AgentShellExecution extends ExecutionOwner {
+  receipt?: ExecutionReceipt;
+  evidence?: ExecutionEvidence;
+  observation?: ExecutionObservation;
+  dispatchPhase?: "prepared" | "dispatching" | "accepted" | "rejected";
+  finalization?: "pending" | "committed" | "failed";
   id: string;
   runnerId: string;
   workspaceId: string;
