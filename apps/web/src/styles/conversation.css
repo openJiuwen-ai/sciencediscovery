@@ -84,6 +84,30 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .copy-button:hover { border-color: var(--accent-border); color: var(--accent-strong); }
 .copy-button.copied { border-color: var(--success-border); color: var(--success); opacity: 1; }
 .message-copy { position: absolute; top: -2px; right: 0; }
+.message-actions { grid-column: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; margin-top: -5px; }
+.message-actions .copy-button, .message-more-button { width: 28px; height: 28px; opacity: 1; border: 0; background: transparent; color: var(--text-faint); border-radius: 6px; }
+.message-actions .copy-button:hover, .message-more-button:hover { background: var(--surface-hover); color: var(--text); }
+.message-actions .copy-button.copied { color: var(--success); }
+.message-actions .copy-button.failed { color: var(--danger); }
+.message-actions .copy-button:focus-visible, .message-more-button:focus-visible, .conversation-branch-divider button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.message-fork-action { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
+.message-branch-status, .message-branch-error { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.message-branch-status { color: var(--muted); }
+.message-branch-error { color: var(--danger); }
+.message-branch-menu { position: fixed; z-index: var(--z-popover, 1000); width: max-content; max-width: calc(100vw - 16px); }
+.message-branch-menu > button { display: flex; align-items: center; gap: 8px; }
+.message-branch-menu > small { display: block; max-width: 240px; padding: 4px 10px 8px; color: var(--muted); font-size: 11px; white-space: normal; }
+.replayed-reply-actions { margin: 12px 0 22px var(--timeline-gutter); max-width: calc(820px - var(--timeline-gutter)); }
+.conversation-branch-boundary { max-width: calc(820px - var(--timeline-gutter)); margin: 12px 0 26px var(--timeline-gutter); min-width: 0; }
+.replayed-reply-actions .conversation-branch-boundary { margin: 12px 0 0; }
+.conversation-branch-divider { display: flex; align-items: center; gap: 12px; }
+.conversation-branch-divider > span { flex: 1; min-width: 8px; height: 1px; background: var(--border); }
+.conversation-branch-divider button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; border: 0; border-radius: 6px; padding: 5px 7px; background: transparent; color: var(--accent-strong); cursor: pointer; font-size: 12px; }
+.conversation-branch-divider button:hover { background: var(--accent-soft); }
+.conversation-branch-scope { margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.conversation-branch-scope summary { cursor: pointer; }
+.conversation-branch-scope ul { padding-left: 18px; }
+@media (pointer: coarse) { .message-actions .copy-button, .message-more-button { width: 36px; height: 36px; } }
 .avatar { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; font-weight: 700; }
 .message.assistant .avatar { border-color: var(--accent-border-soft); background: var(--accent-soft); color: var(--accent-strong); font: 600 18px ui-monospace, monospace; }
 .message-role { display: block; margin: 1px 0 8px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }

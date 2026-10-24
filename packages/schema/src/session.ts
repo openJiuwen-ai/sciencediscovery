@@ -53,7 +53,51 @@ export function createLocalSessionTitle(
   return fallbackSessionTitle(createdAt);
 }
 
+/** Persisted separately from archive state; archive/restore never unlocks evidence. */
+export interface ResearchSnapshot {
+  operationId: string;
+  packageChecksum: string;
+  role: "imported_snapshot" | "research_copy";
+  state: "importing" | "ready" | "failed";
+  sessionIds: string[];
+  createdAt: string;
+  sourceSnapshotSessionId?: string;
+  /** Server-owned immutable package relative to the data directory. */
+  storagePath?: string;
+  snapshotChecksum?: string;
+  continuationAvailable?: boolean;
+  /** Original package scope; copying does not recover omitted history. */
+  exportLevel?: "necessary" | "complete";
+  historyLimited?: boolean;
+  omissions?: string[];
+}
+
+export interface ResearchContinuationOperation {
+  id: string;
+  sourceSessionId: string;
+  sourceMessageId?: string;
+  state: "copying" | "ready" | "failed";
+  createdAt: string;
+  sessionIds?: string[];
+  entrySessionId?: string;
+  error?: string;
+}
+
+export function isEvidenceSessionReadOnly(session: Pick<Session, "researchSnapshot"> | undefined): boolean {
+  const snapshot = session?.researchSnapshot;
+  return Boolean(snapshot && (snapshot.role === "imported_snapshot" || snapshot.state !== "ready"));
+}
+
 export interface Session {
+  researchSnapshot?: ResearchSnapshot;
+  /** Server-owned branch boundary; points to the immediate source, never a live link. */
+  conversationBranch?: {
+    sourceSessionId: string;
+    sourceMessageId: string;
+    inheritedMessageId: string;
+    createdAt: string;
+    omissions: string[];
+  };
   approvalMode: ApprovalMode;
   archivedAt?: string;
   createdAt: string;

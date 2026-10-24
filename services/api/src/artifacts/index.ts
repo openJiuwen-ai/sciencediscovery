@@ -69,9 +69,9 @@ async function workspaceFileMetadata(workspaceRoot: string, path: string): Promi
   return fileMetadata;
 }
 
-export async function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
+export async function listWorkspaceFiles(store: SessionStore, sessionId: string, complete = false): Promise<WorkspaceFile[]> {
   const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
-  const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId));
+  const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId), complete ? Number.POSITIVE_INFINITY : undefined);
   const provenance = await store.reconcileWorkspaceFiles(
     sessionId,
     scan.files,

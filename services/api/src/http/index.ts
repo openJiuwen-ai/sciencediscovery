@@ -13,12 +13,15 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { createResearchSnapshots } from "../research-snapshots.js";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { handlePluginRequest } from "../plugins/http.js";
+import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { sessionTrajectory } from "../trajectory.js";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
@@ -67,7 +70,6 @@ import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
   CancelRunResult,
-  ChatMessage,
   ConfirmSkillReviewDraftRequest,
   ComposerReference,
   MemoryGraphEdgeType,
@@ -116,9 +118,10 @@ import type {
   RuntimeStatus,
   SendMessageRequest,
   SessionRun,
-  SessionRunEvent,
   SessionRunStatus,
   SessionListState,
+  Session,
+  ScientificArtifact,
   ToolTrace,
   RotatePermissionEpochRequest,
   RunnerHealth,
@@ -136,6 +139,7 @@ import type {
   UploadFileRequest,
   WorkspaceCapabilities,
   WorkspaceUploadResult,
+  WorkspaceFileProvenance,
   RegisterRemoteHostRequest,
   RemoteConnectLog,
   RemoteHostTarget,
@@ -159,7 +163,7 @@ import {
   isIdeaTreeExecutorSkill,
 } from "@sciencediscovery/idea-tree";
 
-import { SessionStoreHttpError } from "../store.js";
+import { SessionStoreHttpError, SessionEvidenceLockedError } from "../store.js";
 import { validateLiveProvider } from "../store/providers.js";
 import { normalizeApiToken } from "../store/secrets.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
@@ -372,6 +376,94 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  const researchPackageProvider = researchPackagePlugin.create().contribution.provider;
+
+  const sessionHasResearchHistory = async (sessionId: string): Promise<boolean> => {
+    // A session is importable only while it is truly unused. Keep this check
+    // broader than the visible transcript: background runs, artifact planning,
+    // provenance, reviews, evidence, remote work and other persisted records
+    // also make importing into the session unsafe because import may restore
+    // data from a different research history.
+    const [
+      messages,
+      runs,
+      workspaceFiles,
+      artifacts,
+      artifactOutputs,
+      artifactDerivations,
+      artifactPlans,
+      artifactJobs,
+      artifactExtractionJobs,
+      promptManifests,
+      artifactReviews,
+      reviews,
+      reviewerAuditTasks,
+      reviewFeedback,
+      mcpInvocations,
+      paperAcquisitions,
+      paperVisionRuns,
+      claims,
+      evidenceLinks,
+      evidenceItems,
+      subagents,
+      remoteJobs,
+      remoteWorkspaceSyncs,
+      executionRuns,
+    ] = await Promise.all([
+      store.readMessages(sessionId),
+      store.listSessionRuns(sessionId),
+      listWorkspaceFiles(store, sessionId),
+      Promise.resolve(store.listArtifacts(sessionId)),
+      store.listSessionArtifactOutputs(sessionId),
+      store.listArtifactDerivations(sessionId),
+      store.listArtifactPlans(sessionId),
+      store.listArtifactJobs(sessionId),
+      store.listArtifactExtractionJobs(sessionId),
+      store.listPromptManifests(sessionId),
+      store.listArtifactReviews(sessionId),
+      store.listReviews(sessionId),
+      store.listReviewerAuditTasks(sessionId),
+      store.listReviewFeedback(sessionId),
+      store.listMcpInvocations(sessionId),
+      store.listPaperAcquisitions(sessionId),
+      store.listPaperVisionRuns(sessionId),
+      store.listClaims(sessionId),
+      store.listEvidenceLinks(sessionId),
+      store.listEvidenceItems(sessionId),
+      Promise.resolve(store.listSubagents(sessionId)),
+      Promise.resolve(store.listRemoteJobs(sessionId)),
+      store.listRemoteWorkspaceSyncs(sessionId),
+      store.listExecutionRuns(sessionId),
+    ]);
+    return [
+      messages,
+      runs,
+      workspaceFiles,
+      artifacts,
+      artifactOutputs,
+      artifactDerivations,
+      artifactPlans,
+      artifactJobs,
+      artifactExtractionJobs,
+      promptManifests,
+      artifactReviews,
+      reviews,
+      reviewerAuditTasks,
+      reviewFeedback,
+      mcpInvocations,
+      paperAcquisitions,
+      paperVisionRuns,
+      claims,
+      evidenceLinks,
+      evidenceItems,
+      subagents,
+      remoteJobs,
+      remoteWorkspaceSyncs,
+      executionRuns,
+    ].some((items) => items.length > 0);
+  };
+
+  const { buildResearchPackageInput, persistImportedResearchPackage, startContinuation, startConversationBranch, getContinuation, recoverContinuations } = createResearchSnapshots(platform, sessionHasResearchHistory);
   const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
     run: async (task, signal) => {
       const session = store.getSession(task.sessionId);
@@ -622,6 +714,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         ...mount,versionId:refs.find((ref) => ref.libraryId===mount.libraryId && (!mount.versionId || mount.versionId==="head" || ref.versionId===mount.versionId))!.versionId,
       }))},assets:{skills,libraries:refs}};
     }))
+    .then(() => recoverContinuations())
     .then(() => reviewerAuditCoordinator.resume())
     .then(() => undefined);
 
@@ -839,6 +932,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendError(response, 401, "Unauthorized");
         return;
       }
+      // Guard before any handler can dispatch execution, upload, or change settings.
+      const scopedSession = url.pathname.match(/^\/api\/sessions\/([^/]+)(.*)$/);
+      if (scopedSession && !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET")) {
+        const suffix = scopedSession[2] ?? "";
+        const management = suffix === "" && request.method === "DELETE"
+          || /^\/(archive|restore|research-continuations|conversation-branches)(?:\/|$)/.test(suffix);
+        const target = decodeURIComponent(scopedSession[1]!);
+        if (!management && isEvidenceSessionReadOnly(store.getSession(target))) throw new SessionEvidenceLockedError();
+      }
+      const branchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/conversation-branches$/);
+      if (branchMatch && request.method === "POST") {
+        const body = await readJson<{ messageId: string; requestId: string }>(request);
+        return sendJson(response, 202, await startConversationBranch(decodeURIComponent(branchMatch[1]!), body.messageId, body.requestId));
+      }
+      const continuationMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/research-continuations(?:\/([^/]+))?$/);
+      if (continuationMatch) {
+        const sourceId = decodeURIComponent(continuationMatch[1]!);
+        if (!store.getSession(sourceId)) return sendError(response, 404, "Session not found");
+        if (request.method === "POST" && !continuationMatch[2]) {
+          const body = await readJson<{ requestId: string }>(request);
+          return sendJson(response, 202, await startContinuation(sourceId, body.requestId));
+        }
+        if (request.method === "GET" && continuationMatch[2]) return sendJson(response, 200, await getContinuation(sourceId, continuationMatch[2]));
+        return sendError(response, 405, "Unsupported continuation operation");
+      }
       if (url.pathname === "/api/evolve/status" && request.method === "GET") {
         return sendJson(response, 200, await evolveAvailability.refresh());
       }
@@ -856,6 +974,86 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (await handlePluginRequest(request, response, url, store.plugins, () => readJson(request))) return;
+      const conversationExportMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/conversation-export$/);
+      if (conversationExportMatch && request.method === "GET") {
+        const sessionId = decodeURIComponent(conversationExportMatch[1]!);
+        const session = store.getSession(sessionId);
+        if (!session) return sendError(response, 404, "Session not found");
+        const allMessages = await store.readMessages(sessionId);
+        const selectedIds = new Set(url.searchParams.getAll("messageId"));
+        if (url.searchParams.get("scope") === "custom" && selectedIds.size === 0) return sendError(response, 400, "Select at least one Prompt for a custom conversation export");
+        const format = url.searchParams.get("format");
+        if (format !== "markdown" && format !== "pdf") return sendError(response, 400, "Unsupported conversation export format");
+        const visible = allMessages.filter((message) => !message.kind || message.kind === "message");
+        if (url.searchParams.get("scope") === "custom" && !visible.some((message) => selectedIds.has(message.id) && message.role === "user")) return sendError(response, 400, "No selected Prompt exists in this conversation");
+        let messages = visible;
+        if (selectedIds.size) {
+          const selectedIndexes = visible.flatMap((message, index) => selectedIds.has(message.id) ? [index] : []);
+          const included = new Set<number>();
+          for (const start of selectedIndexes) {
+            let end = start + 1;
+            while (end < visible.length && visible[end]!.role !== "user") end++;
+            for (let index = start; index < end; index++) included.add(index);
+          }
+          messages = visible.filter((_message, index) => included.has(index));
+        }
+        const markdown = `# ${session.title}\n\n${messages.map((message) => `## ${message.role === "assistant" ? "Assistant" : "User"}\n\n_${message.createdAt}_\n\n${message.content}`).join("\n\n---\n\n")}\n`;
+        if (format === "pdf") {
+          const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+          const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escape(session.title)}</title><style>@page{size:A4;margin:18mm}body{font:11pt/1.6 system-ui,sans-serif;color:#20252b}pre{white-space:pre-wrap;overflow-wrap:anywhere}h1,h2{break-after:avoid}article{break-inside:auto;border-bottom:1px solid #ddd;padding:12px 0}</style></head><body><h1>${escape(session.title)}</h1>${messages.map((message) => `<article><h2>${message.role === "assistant" ? "Assistant" : "User"}</h2><small>${escape(message.createdAt)}</small><pre>${escape(message.content)}</pre></article>`).join("")}<script>window.addEventListener('load',()=>window.print())</script></body></html>`;
+          response.writeHead(200, { "cache-control": "no-store", "content-type": "text/html; charset=utf-8", "x-content-type-options": "nosniff" });
+          response.end(html);
+        } else {
+          response.writeHead(200, { "cache-control": "no-store", "content-disposition": `attachment; filename="${encodeURIComponent(session.title)}.md"`, "content-type": "text/markdown; charset=utf-8", "x-content-type-options": "nosniff" });
+          response.end(markdown);
+        }
+        return;
+      }
+      const researchPackageMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package(?:\/(inspect|import|preview))?$/);
+      if (researchPackageMatch) {
+        const projectId = decodeURIComponent(researchPackageMatch[1]!);
+        if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
+        const sessionId = url.searchParams.get("sessionId") ?? undefined;
+        if (request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview")) {
+          const requestedLevel = url.searchParams.get("level");
+          const level = requestedLevel === "complete" ? "complete" : "necessary";
+          const selectedFiles = url.searchParams.get("customFiles") === "1" ? new Set(url.searchParams.getAll("filePath")) : undefined;
+          if (selectedFiles && !sessionId) return sendError(response, 400, "File selection requires a session");
+          const input = await buildResearchPackageInput(projectId, sessionId, level, selectedFiles);
+          const result = researchPackageProvider.export(input);
+          if (researchPackageMatch[2] === "preview") {
+            const records = input.records as { sessions: Array<{ session: { id: string }; workspace: Array<{ path: string }> }> };
+            const selectedPaths = new Set(records.sessions.find((record) => record.session.id === sessionId)?.workspace.map((file) => file.path));
+            return sendJson(response, 200, {
+              estimatedBytes: result.bytes.byteLength,
+              files: sessionId ? (await listWorkspaceFiles(store, sessionId, true)).map((file) => ({ ...file, selected: selectedPaths.has(file.path) })) : [],
+              exportProfile: input.exportProfile,
+              omissions: input.omissions ?? [],
+            });
+          }
+          const packageFileName = ((sessionId ? store.getSession(sessionId)?.title : undefined) || input.source.title || projectId).trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || "科研会话";
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${packageFileName}.sdresearch`)}`,
+            "content-length": result.bytes.byteLength,
+            "content-type": "application/octet-stream",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(Buffer.from(result.bytes));
+          return;
+        }
+        if (request.method === "POST" && researchPackageMatch[2] === "inspect") {
+          const bytes = await readBytes(request, 256 * 1024 * 1024, "Research package");
+          sendJson(response, 200, researchPackageProvider.inspect(bytes));
+          return;
+        }
+        if (request.method === "POST" && researchPackageMatch[2] === "import") {
+          const bytes = await readBytes(request, 256 * 1024 * 1024, "Research package");
+          sendJson(response, 201, await persistImportedResearchPackage(projectId, sessionId, bytes));
+          return;
+        }
+        return sendError(response, 405, "Unsupported research package operation");
+      }
       if (await handleCustomMcpRequest(request, response, url, platform.customMcpServers, () => readJson(request), { broker: mcpBroker, registry: mcpRegistry, store })) return;
       if (request.method === "GET" && url.pathname === "/api/mcp/sources") {
         sendJson(response, 200, mcpRegistry.listManifests().map((manifest) => ({
@@ -1856,6 +2054,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         if (operation.startsWith("workspaces/") && request.method === "DELETE") {
           const sessionId = decodeURIComponent(operation.slice("workspaces/".length));
+          store.assertSessionWritable(sessionId);
           const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
           if (!binding) return sendError(response, 404, "Workspace binding not found");
           if (await sessionHasActiveRun(store, sessionId)) return sendError(response, 409, "Cannot delete a remote workspace during an active run");
@@ -2596,6 +2795,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const body = await readJson<DecidePermissionRequest>(request);
         const existingRequest = store.getPermissionRequest(permissionDecisionMatch[1]!);
         if (!existingRequest) return sendError(response, 404, "Permission request not found");
+        if (existingRequest.sessionId && isEvidenceSessionReadOnly(store.getSession(existingRequest.sessionId))) throw new SessionEvidenceLockedError();
         if (!body.decision) {
           return sendError(response, 400, "Permission decision is required");
         }
@@ -3550,6 +3750,28 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!store.getSession(fileMatch[1]!)) return sendError(response, 404, "Session not found");
         const requestedPath = url.searchParams.get("path") ?? "";
         const target = resolveWorkspaceFile(store.workspacePath(fileMatch[1]!), requestedPath);
+        if (url.searchParams.get("preview") === "true") {
+          const handle = await open(target, "r");
+          try {
+            const info = await handle.stat();
+            if (!info.isFile()) return sendError(response, 400, "Path is not a file");
+            // Bound preview IO/memory independently of the full-file download.
+            const limit = 256 * 1024;
+            const buffer = Buffer.alloc(Math.min(info.size, limit));
+            let offset = 0;
+            while (offset < buffer.length) {
+              const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+              if (!bytesRead) break;
+              offset += bytesRead;
+            }
+            response.setHeader("x-workspace-file-size", String(info.size));
+            response.setHeader("x-workspace-preview-truncated", String(info.size > offset));
+            send(response, 200, contentTypeForPath(target), buffer.subarray(0, offset));
+          } finally {
+            await handle.close();
+          }
+          return;
+        }
         send(response, 200, contentTypeForPath(target), await readFile(target));
         return;
       }
@@ -3590,6 +3812,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const packageImportEligibilityMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/research-package-import-eligibility$/);
+      if (packageImportEligibilityMatch && request.method === "GET") {
+        const sessionId = packageImportEligibilityMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, { canImport: !isEvidenceSessionReadOnly(store.getSession(sessionId)) && !(await sessionHasResearchHistory(sessionId)) });
+        return;
+      }
+
       if (url.pathname.startsWith("/api/")) {
         sendError(response, 404, "Not found");
         return;
@@ -3603,7 +3833,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
-      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
+      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message, error instanceof SessionEvidenceLockedError ? error.code : undefined);
       else if (error instanceof IdeaTreePersistenceError || error instanceof IdeaTreeRuntimeError) {
         sendError(
           response,
