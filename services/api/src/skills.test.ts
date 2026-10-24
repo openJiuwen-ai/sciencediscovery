@@ -553,7 +553,11 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
   try {
     const catalog = new SkillCatalog(dataDir, repositoryRoot);
     await catalog.load();
-    assert.equal(catalog.get("life-science-evidence-brief")?.readOnly, true);
+    const evidenceBrief = catalog.get("life-science-evidence-brief");
+    assert.equal(evidenceBrief?.readOnly, true);
+    assert.equal(evidenceBrief?.version, "1.2.0");
+    assert.match(evidenceBrief?.instructions ?? "", /Funding\/COI: not found in retrieved metadata/);
+    assert.match(evidenceBrief?.instructions ?? "", /Never infer funding sources or competing interests/);
     const methodSkill = catalog.get("structure-pocket-inspection");
     assert.equal(methodSkill?.readOnly, true);
     assert.deepEqual(methodSkill?.resources.map((resource) => resource.path), ["scripts/inspect_pdb.py"]);
