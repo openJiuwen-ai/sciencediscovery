@@ -125,7 +125,7 @@ Compose reads the root `.env` (template: `.env.docker.example`) and interpolates
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
 | `SCIENCE_AGENT_SSH_CONFIG_PATH` | — | SSH configuration for remote runners (a container path); files under host `./data/ssh` are already visible at `/app/data/ssh` |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | Enables usage-dashboard display currency conversion; disabled keeps each model's original estimate currency |
-| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | USD/CNY source for the usage dashboard; default is no-key Frankfurter; custom URLs are labeled by their host |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | USD/CNY source for the usage dashboard; default is no-key Frankfurter; custom URLs are labeled by their host; `https://allratestoday.com/api/open/latest/USD` (AllRatesToday, ECB reference rates, also no key) is recognized too |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | Usage-dashboard exchange-rate cache TTL; defaults to 6 hours |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | Usage-dashboard exchange-rate request timeout |
 
