@@ -10,7 +10,8 @@ done
 [[ "${CI_ALLOW_REAL:-}" == 1 ]] || { echo 'BLOCKED: CI_ALLOW_REAL=1 required' >&2; exit 2; }
 runtime="${CI_RUNTIME_DIR:?CI_RUNTIME_DIR required}"
 mkdir -p "$runtime"
-uv venv "$runtime/benchmark-venv"
+# Keep the pinned scientific wheels independent of the hosted runner's Python.
+uv venv --python 3.12 "$runtime/benchmark-venv"
 python="$runtime/benchmark-venv/bin/python"
 uv pip install --python "$python" pandas==2.3.3 numpy==2.2.6 scipy==1.15.3 \
   requests==2.32.3 python-dotenv==1.0.1 tqdm==4.67.1 huggingface-hub==0.34.4
