@@ -549,6 +549,8 @@ EOF
     mkdir -p "$HOME"
     export HOME
   fi
+  # Retain existing container registries/workspaces on the persisted volume.
+  export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$HOME}"
 
   if [[ ! -x "$gateway_python" ]]; then
     echo "The Python MCP server environment is missing at $gateway_python. Rebuild the image." >&2
@@ -670,6 +672,11 @@ start_stack() {
     fi
     # Where the JiuwenSwarm instance listens; scripts/jiuwenswarm.sh knows its ports.
     if [[ -z "${JIUWENSWARM_GATEWAY_URL:-}" || -z "${JIUWENSWARM_MGMT_URL:-}" ]]; then
+      # Another root may already listen on our old ports. Start checks this
+      # instance's PID and may allocate new ports; read endpoints afterwards.
+      if [[ "$use_jiuwenswarm" -eq 1 ]]; then
+        "$script_dir/jiuwenswarm.sh" start >&2 || exit 1
+      fi
       eval "$("$script_dir/jiuwenswarm.sh" env)" || {
         echo "Could not read the JiuwenSwarm instance; run scripts/jiuwenswarm.sh setup and start." >&2
         exit 1

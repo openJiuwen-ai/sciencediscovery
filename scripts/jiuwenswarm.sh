@@ -26,7 +26,7 @@
 #
 # JiuwenSwarm is installed into its own directory and virtualenv; it is never
 # installed into the ScienceDiscovery environments. Its instance workspace is
-# created under ${JIUWENSWARM_HOME:-$HOME}/.jiuwenswarm-instances/<name>.
+# created under $JIUWENSWARM_HOME/.jiuwenswarm-instances/<name>.
 # JIUWENSWARM_HOME also relocates the instance registry without changing HOME.
 set -euo pipefail
 
@@ -45,16 +45,13 @@ jw_instance="${JIUWENSWARM_INSTANCE:-sciencediscovery}"
 # volume instead of inside the image.
 jw_src="${JIUWENSWARM_SRC:-$jw_root/src}"
 jw_bin="$jw_src/.venv/bin"
-jw_data_dir="$jw_root/data"
-jw_log="$jw_root/jiuwenswarm.log"
-if [[ -n "${JIUWENSWARM_HOME:-}" ]]; then
-  # JiuwenSwarm's early bootstrap and later path getters must see the same
-  # absolute root, including when a child changes its working directory.
-  [[ "$JIUWENSWARM_HOME" == /* ]] || JIUWENSWARM_HOME="$repository_root/$JIUWENSWARM_HOME"
-  export JIUWENSWARM_HOME
-  jw_data_dir="$JIUWENSWARM_HOME/.jiuwenswarm"
-  jw_log="$JIUWENSWARM_HOME/jiuwenswarm-$jw_instance.log"
-fi
+# Keep the embedded registry separate even when a standalone instance has the
+# same name. Explicit overrides also provide the opt-in legacy compatibility path.
+export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$HOME/.sciencediscovery/jiuwenswarm}"
+# Early bootstrap and later path getters must agree after a child changes cwd.
+[[ "$JIUWENSWARM_HOME" == /* ]] || export JIUWENSWARM_HOME="$repository_root/$JIUWENSWARM_HOME"
+jw_data_dir="$JIUWENSWARM_HOME/.jiuwenswarm"
+jw_log="$JIUWENSWARM_HOME/jiuwenswarm-$jw_instance.log"
 apply_compatibility_patches() {
   python3 "$script_dir/swarm-patches.py" apply "$jw_src" "$jw_tag"
 }
@@ -80,7 +77,7 @@ Environment:
   JIUWENSWARM_INSTANCE   instance name (default sciencediscovery)
   JIUWENSWARM_HOME       isolated runtime root for registry, named workspaces and logs
                          (relative paths resolve from the repository root;
-                         unset preserves the existing user-home workspace)
+                         default $HOME/.sciencediscovery/jiuwenswarm)
   SCIENCE_AGENT_PYPI_INDEX  PyPI mirror for uv, as start-stack.sh uses it
   UV_HTTP_TIMEOUT        seconds uv waits on a download (default 300; the default 30 fails on slow links)
 EOT
@@ -96,7 +93,7 @@ jw() {
   JIUWENSWARM_DATA_DIR="$jw_data_dir" "$jw_bin/$1" "${@:2}"
 }
 
-instance_workspace() { echo "${JIUWENSWARM_HOME:-$HOME}/.jiuwenswarm-instances/$jw_instance"; }
+instance_workspace() { echo "$JIUWENSWARM_HOME/.jiuwenswarm-instances/$jw_instance"; }
 
 port_of() { # agent_server | web | gateway
   jw jiuwenswarm-start --status "$jw_instance" 2>/dev/null \
@@ -202,7 +199,7 @@ cmd_start() {
   verify_compatibility_patches
   # Detach completely (stdin, stdout, stderr): a background job that keeps the caller's stdout open
   # makes `scripts/jiuwenswarm.sh start | tee ...`, or any script capturing its output, wait forever.
-  cd "$jw_root"
+  cd "$JIUWENSWARM_HOME"
   # Web search is configured from ScienceDiscovery's web settings, which the API applies with config.set.
   # Put our guarded sitecustomize hook in every JiuwenSwarm Python process. It applies JiuwenSwarm's
   # own MCP call-timeout patch before startup prewarming can create a client with the 30-second fallback.

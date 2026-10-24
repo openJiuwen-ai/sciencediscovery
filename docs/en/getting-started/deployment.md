@@ -163,6 +163,53 @@ After a successful build, later starts can use:
 
 Open <http://127.0.0.1:4310> after startup and follow the Connection prompt using the token in `.sciencediscovery-data/secrets/auth-token` (or your configured data directory / `SCIENCE_AGENT_AUTH_TOKEN`). This also works for background services without the original terminal output.
 
+### JiuwenSwarm runtime data and existing installations
+
+Local source startup uses `$HOME/.sciencediscovery/jiuwenswarm` as
+`JIUWENSWARM_HOME`, without changing `HOME`. The registry is
+`.jiuwenswarm/instances.yaml` beneath that root; configuration, skills, sessions
+and process records are in `.jiuwenswarm-instances/sciencediscovery/`. Wrapper
+logs are `jiuwenswarm-sciencediscovery.log` under the same root. Standalone
+JiuwenSwarm keeps its own home registry and workspaces, so both applications
+can use the name `sciencediscovery` independently.
+
+`JIUWENSWARM_HOME=/absolute/runtime` selects another root; relative values
+resolve from the repository root. Use the same selection for `setup`, `start`,
+`status`, `env`, `stop` and stack startup. Test runs supply their own root.
+`JIUWENSWARM_ROOT` / `JIUWENSWARM_SRC` select the pinned installation, independently
+of runtime data. JiuwenSwarm detects occupied ports and persists a free port
+group at initialization/startup; `scripts/jiuwenswarm.sh env` reports current
+endpoints. Avoid pinning old gateway/management URLs when sharing a host.
+
+Existing local installations are **not moved, rewritten or deleted**. The new
+default creates a fresh isolated instance; old sessions remain in
+`$HOME/.jiuwenswarm-instances/sciencediscovery`. To continue using an old instance,
+first verify that it belongs to ScienceDiscovery, rather than a standalone user.
+Then explicitly select the legacy root for every command, for example:
+
+```bash
+export JIUWENSWARM_HOME="$HOME"
+scripts/jiuwenswarm.sh status
+./scripts/start-stack.sh --mode local
+```
+
+This is an opt-in compatibility mode: setup/start will apply ScienceDiscovery
+configuration to that selected old instance and stop will stop it. It provides
+no separation from a standalone instance using that same root/name. To switch
+to isolation, stop the legacy instance with that selection, unset
+`JIUWENSWARM_HOME`, unset any pinned `JIUWENSWARM_GATEWAY_URL` /
+`JIUWENSWARM_MGMT_URL`, then run setup and start again. Keep the old directories
+as a backup; no automatic migration guesses ownership from the instance name.
+
+Docker retains the existing persisted layout: with the default Compose data
+mount `/data`, runtime root is `/data/.home`, registry is
+`/data/.home/.jiuwenswarm/instances.yaml` and the named workspace is
+`/data/.home/.jiuwenswarm-instances/sciencediscovery`. Wrapper logs are now
+`/data/.home/jiuwenswarm-sciencediscovery.log`. An explicit container
+`JIUWENSWARM_HOME` must also be on a persisted mount. The image's installation
+remains under `/opt/sciencediscovery/jiuwenswarm/src`. The packaged launcher
+continues using its separate `<dataDir>/jiuwenswarm-home` runtime root.
+
 ### macOS notes
 
 If local source mode reports that Seatbelt is unavailable, check:
