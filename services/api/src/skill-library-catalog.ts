@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— rename 覆盖的 EPERM 退避重试走 platform/os。
+import { renameReplace } from "./platform/os/index.js";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type {
@@ -206,7 +208,7 @@ export class SkillLibraryCatalog {
   private async saveIndex(): Promise<void> {
     const temporary = resolve(this.root, `.catalog-${randomUUID()}.json`);
     await writeFile(temporary, `${JSON.stringify(this.index, null, 2)}\n`, { flag: "wx" });
-    await rename(temporary, this.indexPath);
+    await renameReplace(temporary, this.indexPath);
   }
 
   async load(): Promise<void> {

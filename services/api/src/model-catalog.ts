@@ -27,7 +27,9 @@
  * leaves the previous snapshot in place and reports why.
  */
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— rename 覆盖的 EPERM 退避重试走 platform/os。
+import { renameReplace } from "./platform/os/index.js";
 import { dirname, join } from "node:path";
 
 import { fetchModelsDevCatalog, ModelCatalogFetchError } from "@sciencediscovery/model";
@@ -183,7 +185,7 @@ export class ModelCatalogStore {
       // leave a half-written snapshot the next start would reject.
       const staging = `${this.#cachePath}.partial`;
       await writeFile(staging, JSON.stringify(file), "utf8");
-      await rename(staging, this.#cachePath);
+      await renameReplace(staging, this.#cachePath);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new ModelCatalogFetchError(`The downloaded model catalog could not be saved: ${message}`);

@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import shlex
+import tempfile
 import sys
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -86,7 +87,9 @@ class AgentRunRequest(BaseModel):
     agentId: str | None = None
     prompt: str
     mode: str = "agent.work.normal"
-    cwd: str = "/tmp"
+    # [windows-desktop] reason: 炸点③-12 —— 硬编码 "/tmp" 在 Windows 不存在；
+    # tempfile.gettempdir() 在 POSIX 上仍是 /tmp，行为不变（可上游化）。
+    cwd: str = Field(default_factory=tempfile.gettempdir)
     tools: list[ToolSpec] = Field(default_factory=list)
     bridge: Bridge | None = None
     model: ModelSpec | None = None

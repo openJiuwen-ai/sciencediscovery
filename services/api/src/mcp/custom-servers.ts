@@ -13,12 +13,15 @@
 // limitations under the License.
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CustomMcpServerConfig, CustomMcpServerDetails, McpCatalog, McpCatalogTool } from "@sciencediscovery/schema";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
+// [windows-desktop] reason: F3.3 —— 0600 语义走 platform/os 适配层（win32=icacls）；
+// 炸点③-13 —— rename 覆盖的 EPERM 退避重试同层。
+import { renameReplace, restrictToOwner } from "../platform/os/index.js";
 import { customMcpAdapter } from "./custom-adapter.js";
 import { loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
 import { McpOAuthManager, validateOAuthUrl } from "./oauth.js";
@@ -218,7 +221,8 @@ export class CustomMcpServers {
     if (!this.key) throw new Error("MCP storage is not initialized");
     const temporary = `${this.path}.tmp`;
     await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(next)), { mode: 0o600 });
-    await rename(temporary, this.path);
+    await restrictToOwner(temporary);
+    await renameReplace(temporary, this.path);
     this.configs = next;
     this.sync();
   }
