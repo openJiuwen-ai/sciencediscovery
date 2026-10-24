@@ -1,0 +1,9 @@
+# Shared by real-research preparation and its offline Python regression check.
+# These numerical versions provide CPython 3.14 wheels on Linux AMD64/ARM64.
+pandas==2.3.3
+numpy==2.3.5
+scipy==1.16.3
+requests==2.32.3
+python-dotenv==1.0.1
+tqdm==4.67.1
+huggingface-hub==0.34.4

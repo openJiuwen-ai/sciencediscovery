@@ -301,6 +301,13 @@ prepare one task selected by the frozen plan, at dataset revision
 The DRB evaluator remains pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`.
 Missing prerequisites fail before model calls; they do not filter selection.
 
+Research preparation and `run-research-python.sh unit` share the exact pins in
+`research-requirements.txt` and require binary wheels, including on Python 3.14.
+Both default to Python 3.14 independently of the product service environments;
+`SCIENCE_RESEARCH_PYTHON` overrides only the benchmark interpreter. The existing
+offline research UT check therefore exercises the same dependencies as real
+workers without model calls or gated dataset downloads.
+
 ### L5 full-public benchmark and baseline candidate
 
 The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50

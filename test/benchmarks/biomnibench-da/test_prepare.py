@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 import hashlib
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -14,6 +15,35 @@ def blob(data):
 
 
 class PrepareTests(unittest.TestCase):
+    def test_download_uses_pinned_hub_inputs_and_verifies_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {"task.toml": b'[environment]\n',
+                     "tests/rubric.txt": b'Criterion 1: Analysis\nLevels: A=100 B=50 C=0\n'}
+            task = {"id": "da-1-1", "files": [
+                {"path": name, "bytes": len(data), "oid": blob(data)} for name, data in files.items()]}
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"repository": "fixture/benchmark", "revision": "pinned-revision", "tasks": [task]}))
+
+            def download(**kwargs):
+                self.assertEqual(kwargs["repo_id"], "fixture/benchmark")
+                self.assertEqual(kwargs["repo_type"], "dataset")
+                self.assertEqual(kwargs["revision"], "pinned-revision")
+                path = Path(kwargs["local_dir"]) / kwargs["filename"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(files[kwargs["filename"].removeprefix("da-1-1/")])
+                return str(path)
+
+            # Import and call the installed Hub API, replacing only network I/O.
+            with patch.object(prepare, "MANIFEST", manifest), patch.dict(os.environ, {"HF_TOKEN": "fixture"}), \
+                 patch("sys.argv", ["prepare", "download", "--root", str(root / "inputs"), "--case", task["id"]]), \
+                 patch("huggingface_hub.hf_hub_download", side_effect=download) as hub:
+                prepare.main()
+            self.assertEqual(hub.call_count, len(files))
+            (root / "inputs/da-1-1/task.toml").write_bytes(b'corrupt')
+            with self.assertRaises(ValueError):
+                prepare.task_inputs(root / "inputs", task)
+
     def test_regular_and_lfs_stream_checksums_reject_corruption(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input"
