@@ -13,13 +13,16 @@
 // limitations under the License.
 
 import { createHash, randomBytes } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { auth, extractWWWAuthenticateParams, type OAuthClientProvider, type OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CustomMcpServerConfig, McpAuthorizationStart, McpAuthorizationStatus } from "@sciencediscovery/schema";
 import { decryptSecretValue, encryptSecretValue } from "../store/secrets.js";
+// [windows-desktop] reason: F3.3 —— 0600 语义走 platform/os 适配层（win32=icacls）；
+// 炸点③-13 —— rename 覆盖的 EPERM 退避重试同层。
+import { renameReplace, restrictToOwner } from "../platform/os/index.js";
 
 export const MCP_OAUTH_CALLBACK = "/api/mcp/oauth/callback";
 const AUTH_REQUIRED = "MCP OAuth login required. Open MCP server settings to authorize this server.";
@@ -83,7 +86,8 @@ export class McpOAuthManager {
     const operation = this.queue.then(async () => {
       if (!this.key) throw new Error("MCP OAuth storage is not initialized");
       await writeFile(`${this.path}.tmp`, encryptSecretValue(this.key, "mcp-oauth", JSON.stringify(this.saved)), { mode: 0o600 });
-      await rename(`${this.path}.tmp`, this.path);
+      await restrictToOwner(`${this.path}.tmp`);
+      await renameReplace(`${this.path}.tmp`, this.path);
     });
     this.queue = operation.catch(() => undefined);
     return operation;

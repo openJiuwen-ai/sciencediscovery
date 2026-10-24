@@ -37,7 +37,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— rename 覆盖的 EPERM 退避重试走 platform/os。
+import { renameReplace } from "../platform/os/index.js";
 import { resolve } from "node:path";
 
 import type {
@@ -310,7 +312,7 @@ export class EvolutionStore {
     const temporary = resolve(directory, `.run-${process.pid}-${randomUUID()}.tmp`);
     await writeFile(temporary, `${JSON.stringify(run, null, 2)}\n`, "utf8");
     try {
-      await rename(temporary, this.runFilePath(run.id));
+      await renameReplace(temporary, this.runFilePath(run.id));
     } catch (error) {
       await rm(temporary, { force: true });
       throw error;

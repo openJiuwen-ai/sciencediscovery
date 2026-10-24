@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { access, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+// [windows-desktop] reason: 炸点③-13 —— rename 覆盖的 EPERM 退避重试走 platform/os。
+import { renameReplace } from "./platform/os/index.js";
 import type { IncomingMessage } from "node:http";
 import { basename, dirname, extname, relative, resolve, sep } from "node:path";
 
@@ -288,7 +290,7 @@ export async function writeWorkspaceUpload(options: {
     await writeFile(staging, options.bytes);
     const staged = await lstat(staging);
     if (!staged.isFile()) throw new Error("Upload staging path is not a regular file");
-    await rename(staging, target);
+    await renameReplace(staging, target);
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);
     throw error;

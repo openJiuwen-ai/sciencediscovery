@@ -39,7 +39,9 @@ def test_missing_initial_status_and_parallel_results_do_not_corrupt_display_turn
 
 
 def frames(name: str) -> list[dict]:
-    lines = [line.strip() for line in (FIXTURES / name).read_text().splitlines() if line.strip()]
+    # [windows-desktop] reason: 炸点③-8 同族 —— fixture 含非 ASCII 字节，
+    # 中文 Windows 默认 GBK 会解码炸；显式 utf-8（可上游化）。
+    lines = [line.strip() for line in (FIXTURES / name).read_text(encoding="utf-8").splitlines() if line.strip()]
     return [json.loads(line.removeprefix("ACK ")) for line in lines]
 
 

@@ -23,6 +23,8 @@ import { fileURLToPath } from "node:url";
 import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
+// [windows-desktop] reason: F3.3 —— 0600 语义走 platform/ 适配层（win32=icacls）。
+import { restrictToOwner } from "./platform/index.js";
 import { RunnerReadiness } from "./readiness.js";
 
 import type {
@@ -740,6 +742,8 @@ export function createRunnerServer(
           const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
           try {
             await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+            // [windows-desktop] reason: F3.3 —— 0600 在 NTFS 无 POSIX 语义，走 platform/ 适配层。
+            await restrictToOwner(temporary);
             if (conflict === "overwrite") await rename(temporary, file);
             else {
               try { await link(temporary, file); }

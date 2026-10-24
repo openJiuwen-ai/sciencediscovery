@@ -58,6 +58,9 @@ import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import { buildSeatbeltProfile, canonicalPath, seatbeltPwdShim, seatbeltWorkspaceMapping } from "./seatbelt.js";
+// [windows-desktop] reason: F3.2 —— Windows 无 SIGKILL 语义与进程组，
+// 杀子进程统一走 platform/ 适配层（posix=child.kill 透传，win32=taskkill /T /F）。
+import { terminateTree } from "./platform/index.js";
 import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { RUNNER_VERSION } from "./version.js";
@@ -961,7 +964,9 @@ const sandboxProcessGroups = new WeakSet<ChildProcessWithoutNullStreams>();
 
 /** Kill the namespace init as well as the monitor, including during bwrap setup. */
 export function killSandboxProcess(child: ChildProcessWithoutNullStreams): boolean {
-  if (!sandboxProcessGroups.has(child) || !child.pid) return child.kill("SIGKILL");
+  // [windows-desktop] reason: F3.2 —— 非沙箱分支原样透传到 platform 层；
+  // posix 行为不变（SIGKILL 单子进程），win32 用 taskkill /T 覆盖整棵进程树。
+  if (!sandboxProcessGroups.has(child) || !child.pid) return terminateTree(child);
   try {
     process.kill(-child.pid, "SIGKILL");
     return true;

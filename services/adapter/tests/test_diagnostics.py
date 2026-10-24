@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import logging
+import os
+import re
 import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
@@ -38,8 +40,16 @@ def test_private_rotating_file(monkeypatch, tmp_path):
         diagnostics.emit("run.started", run_id="r")
         handler = diagnostics._handler
         assert handler.maxBytes == 10 * 1024 * 1024 and handler.backupCount == 3
-        assert path.stat().st_mode & 0o777 == 0o600
-        assert json.loads(path.read_text())["event"] == "run.started"
+        # [windows-desktop] reason: F3.3 —— NTFS 无 POSIX 权限位，Windows 上
+        # 断言等价的 owner-only ACL（icacls 读回不含内置组），POSIX 保持 st_mode 断言。
+        if os.name == "nt":
+            import subprocess
+            report = subprocess.run(["icacls", str(path)], capture_output=True, text=True, timeout=10)
+            assert report.returncode == 0
+            assert not re.search(r"BUILTIN\\Users|Everyone|Authenticated Users", report.stdout, re.I), report.stdout
+        else:
+            assert path.stat().st_mode & 0o777 == 0o600
+        assert json.loads(path.read_text(encoding="utf-8"))["event"] == "run.started"
     finally:
         if diagnostics._handler:
             diagnostics.logger.removeHandler(diagnostics._handler)

@@ -14,7 +14,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
-import { extname, resolve } from "node:path";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { send, sendError } from "./response.js";
 
@@ -39,7 +39,11 @@ export function contentTypeForPath(pathname: string): string {
 export async function serveStatic(response: ServerResponse, staticDir: string, pathname: string): Promise<void> {
   const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const candidate = resolve(staticDir, requested);
-  if (candidate !== staticDir && !candidate.startsWith(`${staticDir}/`)) {
+  // [windows-desktop] reason: 炸点③-11 —— `startsWith(`${staticDir}/`)` 在 Windows 上
+  // 因分隔符不一致（candidate 用 `\`）永远为假，SPA 任何路径都 400。
+  // relative() 判断越界是平台中立写法，Linux/macOS 行为不变（可上游化）。
+  const insideRoot = relative(staticDir, candidate);
+  if (insideRoot === ".." || insideRoot.startsWith(`..${sep}`) || isAbsolute(insideRoot)) {
     sendError(response, 400, "Invalid path");
     return;
   }
