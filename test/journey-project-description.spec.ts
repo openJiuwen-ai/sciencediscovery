@@ -77,6 +77,7 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
         expect(other).not.toHaveProperty("description");
       });
       await journey.step("Read the saved description", "Project A settings display the description without manually querying an API.", async () => {
+        await page.getByRole("button", { name: "Projects", exact: true }).click();
         await page.getByRole("button", { name: `More actions for ${original.name}`, exact: true }).click();
         await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
         await expect(description.locator(".project-description-text")).toHaveText(originalText);
