@@ -1183,6 +1183,7 @@ test("MCP tools retain metadata and remain exclusive unless explicitly classifie
         type: "object",
       },
       name: "mcp__uniprot__lookup",
+      parallelSafe: false,
       routing: { keywords: ["protein", "accession"], mode: "prefer", priority: 90 },
       sourceId: "uniprot",
       toolId: "lookup",
@@ -1198,6 +1199,26 @@ test("MCP tools retain metadata and remain exclusive unless explicitly classifie
   const result = await tool.execute("call-1", { accession: "P04637" });
   assert.deepEqual(received, { accession: "P04637" });
   assert.match(result.content[0]?.text ?? "", /\"sourceId\":\"uniprot\"/);
+});
+
+test("MCP tools marked parallel-safe opt into concurrent dispatch", () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Search public records",
+      displayName: "Public search",
+      execute: async () => ({}),
+      inputSchema: { type: "object" },
+      name: "mcp__pubmed__search",
+      parallelSafe: true,
+      routing: { keywords: ["search"], mode: "prefer", priority: 90 },
+      sourceId: "pubmed",
+      toolId: "search",
+    }],
+  });
+
+  assert.equal(tools.find((tool) => tool.name === "mcp__pubmed__search")?.isConcurrencySafe?.({}), true);
 });
 
 test("all scientific environment tools forward runner_id and setup retries are explicit", async () => {

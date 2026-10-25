@@ -305,6 +305,8 @@ export interface WorkspaceToolOptions {
     execute: (toolCallId: string, input: JsonValue, signal?: AbortSignal, onProgress?: (chunk: string) => void) => Promise<unknown>;
     inputSchema: Record<string, unknown>;
     name: string;
+    /** Trusted MCP manifest classified this operation as a read-only lookup or search. */
+    parallelSafe?: boolean;
     routing: {
       keywords: string[];
       mode: "off" | "prefer";
@@ -2064,6 +2066,7 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
       mcp: { sourceId: mcpTool.sourceId, toolId: mcpTool.toolId },
       name: mcpTool.name,
       parameters: mcpTool.inputSchema as TSchema,
+      ...(mcpTool.parallelSafe ? { isConcurrencySafe: () => true } : {}),
       routing: mcpTool.routing,
     });
   }

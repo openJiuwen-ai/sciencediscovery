@@ -53,11 +53,13 @@ test("enabled literature sources expose diagnostics before the catalog is refres
 test("ready literature sources expose every declared MCP tool", async () => {
   const { options, catalog } = fixture();
   await catalog.refresh();
-  const names = createMcpWorkspaceTools(options).mcpTools!.map((tool) => tool.name);
+  const tools = createMcpWorkspaceTools(options).mcpTools!;
+  const names = tools.map((tool) => tool.name);
   assert.deepEqual(names, options.registry.list().flatMap(({ manifest }) =>
     Object.keys(manifest.tools).map((id) => `mcp__${manifest.id}__${id}`)));
   assert.ok(names.includes("mcp__arxiv__search"));
   assert.ok(names.includes("mcp__pubmed__search"));
+  assert.equal(tools.find((tool) => tool.name === "mcp__pubmed__search")?.parallelSafe, true);
 });
 
 for (const failure of ["missing server", "disabled server", "server error", "missing tool", "incompatible tool"] as const) {
