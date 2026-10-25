@@ -42,8 +42,8 @@ for (const language of languages) {
        *   1. Open an empty workbench in English or Chinese at desktop, low-height, or narrow width; the first two steps are accessible actions.
        *   2. Activate Configure a model with Enter; the model registry and connection wizard open directly.
        *   3. Close settings, reopen from the same step by pointer, and close again.
-       *   4. Activate Create a Project with Space, then cancel without creating a Project.
-       *   5. Reopen by pointer, create a Project, and verify the first Session and composer open and persist after reload.
+       *   4. Activate Create a Project with Space and enter a draft name.
+       *   5. Cancel without creating a Project, reopen by pointer, create, and verify the first Session and composer persist after reload.
        * Environment: Isolated local stack at E2E_BASE_URL with an empty Project/model catalog; viewport matrix at DPR 1.
        * Type: mocked
        * LLM: none — navigation and Project creation require no model call.
@@ -54,7 +54,7 @@ for (const language of languages) {
        * Credentials: E2E_API_TOKEN for the isolated local API only.
        * CostSideEffects: no external cost; the created Project is deleted in finally; reset requires E2E_ALLOW_STACK_RESET.
        */
-      test(`First Project from actionable steps at ${viewport.width}x${viewport.height}`, { tag: "@mocked" }, async ({ journey, page }, testInfo) => {
+      test(`Empty-state ${language.locale} ${viewport.width}x${viewport.height} opens model settings and first Project`, { tag: "@mocked" }, async ({ journey, page }, testInfo) => {
         journey.scenario({
           goal: "首次使用者直接从空状态进入模型设置、取消后重开，再创建项目并进入可继续工作的首个会话。",
           preconditions: [
@@ -113,20 +113,21 @@ for (const language of languages) {
             await expect(settings.locator(".model-connect-wizard")).toBeVisible();
           });
 
-          await journey.step("用键盘打开创建对话框并取消", "Space 打开现有创建项目对话框；填写名称后取消，空状态仍在。", async () => {
+          await journey.step("用键盘打开创建对话框", "Space 打开现有创建项目对话框，项目名称和创建、取消操作均可用。", async () => {
             await closeSettings();
             await create.focus();
             await expect(create).toBeFocused();
             await create.press("Space");
             await expect(dialog.getByLabel(language.projectName, { exact: true })).toBeVisible();
             await dialog.getByLabel(language.projectName, { exact: true }).fill("Cancelled project");
+          });
+
+          await journey.step("取消后点击卡片创建项目并继续首个会话", "取消草稿后仍是空状态；点击卡片创建成功，对话框关闭、首个会话与输入区自动打开，刷新后仍在该会话。", async () => {
             await dialog.getByRole("button", { name: language.cancel, exact: true }).click();
             await expect(dialog).toBeHidden();
             await expect(create).toBeVisible();
-          });
-
-          await journey.step("点击卡片创建项目并继续首个会话", "项目创建成功，对话框关闭、空状态消失，首个会话与输入区自动打开；刷新后仍在该会话。", async () => {
             await create.click({ position: { x: 20, y: 20 } });
+            await expect(dialog.getByLabel(language.projectName, { exact: true })).toHaveValue("");
             const name = `Onboarding ${language.locale} ${viewport.width} ${Date.now()}`;
             await dialog.getByLabel(language.projectName, { exact: true }).fill(name);
             const response = page.waitForResponse((item) => item.request().method() === "POST"
