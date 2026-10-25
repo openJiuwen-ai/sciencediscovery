@@ -21,7 +21,32 @@ import { resolve } from "node:path";
 import { renamedEnvironmentValue, type CompatibilityLog } from "./environment.js";
 import type { ServeSettings } from "./serve.js";
 
-export type Command = "serve" | "version" | "help" | "extract" | "run";
+export type Command = "serve" | "version" | "help" | "extract" | "run" | "evolve" | "idea";
+
+export type EngineKind = "evolve" | "idea";
+export type EngineAction = "list" | "get" | "watch" | "stop" | "pause" | "continue";
+
+/** What each engine's Web card can do, and so what its command offers. */
+export const ENGINE_ACTIONS: Record<EngineKind, readonly EngineAction[]> = {
+  evolve: ["list", "get", "watch", "stop"],
+  idea: ["list", "get", "watch", "pause", "continue", "stop"],
+};
+
+/** `evolve` / `idea`: the engine, the action, and the run it applies to. */
+export interface EngineSettings {
+  engine: EngineKind;
+  action: EngineAction;
+  /** Evolve run id or Idea Tree research id; every action but `list` takes one. */
+  id?: string;
+  /** `--session <id>`: required by `idea`; narrows `evolve list`. */
+  sessionId?: string;
+  /** `--candidate <hash>` (`evolve get`): print that candidate's source. */
+  candidate?: string;
+  /** `--after <sequence>` (`evolve watch`): start after this event. */
+  after?: number;
+  token?: string;
+  output?: string;
+}
 
 /** Input source for `run`: exactly one of positional / content / stdin is set. */
 export interface RunSettings {
@@ -55,6 +80,8 @@ export interface ParsedInvocation {
   settings: ServeSettings;
   /** Set for `run`; carries the CLI options that select the session and run. */
   runSettings?: RunSettings;
+  /** Set for `evolve` and `idea`. */
+  engineSettings?: EngineSettings;
 }
 
 export const USAGE = `Usage: ScienceDiscovery <command> [options]
@@ -62,6 +89,10 @@ export const USAGE = `Usage: ScienceDiscovery <command> [options]
 Commands:
   serve                    Start the Web UI, control API and sandbox runner
   run [input] [options]    Run an agent task via a running serve (CLI client)
+  evolve <action> [run-id] List, inspect, watch or stop evolve searches
+  idea <action> [research-id] --session <id>
+                           List, inspect, watch, pause, continue or stop
+                           Idea Tree researches
   extract --to <dir>       Unpack the embedded runtime payload without starting it
   version                  Print the release version and bundled runtime versions
   help                     Show this message
@@ -99,6 +130,28 @@ run options:
   --token <token>          Override the token read from the data directory
   --output <jsonl|text>    Output format, default jsonl (no TTY) / text (TTY)
   --timeout <ms>           Wall-clock timeout for the run
+
+evolve and idea actions (clients of a running serve, like run):
+  evolve list [--session <id>]    Searches, newest first, in every session
+  evolve get <run-id>             Status, candidates, tokens and best node
+    --candidate <hash>            Print that candidate's source instead
+  evolve watch <run-id>           Stream events until the search ends
+    --after <sequence>            Start after this event, to resume a watch
+  evolve stop <run-id>            Stop the search, as the dashboard's Stop does
+  idea list --session <id>        The session's Idea Tree researches
+  idea get <research-id>          Status, round and scored candidates
+  idea watch <research-id>        Stream progress until the research stops
+  idea pause <research-id>        Pause after the step in progress
+  idea continue <research-id>     Resume a paused or interrupted research
+  idea stop <research-id>         End the research, as the card's End research
+                                  does; an ended research cannot be continued
+  --session <id>                  Required by every idea action
+  --token <token>, --output <jsonl|text>, --data-dir, --host and --port work as
+  for run. watch reconnects after a dropped connection and continues where it
+  stopped; Ctrl-C stops watching, not the engine. watch exits 0 when the engine
+  finished (succeeded, completed), 130 when it was stopped, ended or paused,
+  and 1 otherwise (failed, budget_exhausted, interrupted, or the connection
+  could not be recovered).
 
 Bubblewrap is the only required host dependency. The memory graph is on for a
 new data directory and kept as local files; Neo4j is optional and not bundled.
@@ -180,10 +233,26 @@ export function parseInvocation(
   cwd: string,
   onCompatibility?: CompatibilityLog,
 ): ParsedInvocation {
-  const [rawCommand, ...rest] = argv;
+  const [rawCommand, ...afterCommand] = argv;
   const command = rawCommand ?? "help";
-  if (!["serve", "version", "help", "extract", "run", "--help", "-h", "--version"].includes(command)) {
+  if (!["serve", "version", "help", "extract", "run", "evolve", "idea", "--help", "-h", "--version"].includes(command)) {
     throw new Error(`Unknown command: ${command}\n\n${USAGE}`);
+  }
+  // `evolve <action>` / `idea <action>`: the action word comes first.
+  let engineSettings: EngineSettings | undefined;
+  let rest = afterCommand;
+  if (command === "evolve" || command === "idea") {
+    const [action, ...options] = afterCommand;
+    const actions = ENGINE_ACTIONS[command];
+    if (action !== undefined && !action.startsWith("-")) {
+      if (!actions.includes(action as EngineAction)) {
+        throw new Error(`Unknown ${command} action: ${action} (expected ${actions.join(", ")})\n\n${USAGE}`);
+      }
+      engineSettings = { engine: command, action: action as EngineAction };
+      rest = options;
+    } else if (!afterCommand.includes("-h") && !afterCommand.includes("--help")) {
+      throw new Error(`${command} requires an action: ${actions.join(", ")}\n\n${USAGE}`);
+    }
   }
   const dataDirFromEnvironment = Boolean(
     env.SCIENCE_DISCOVERY_DATA_DIR?.trim() || env.SCIENCE_AGENT_DATA_DIR?.trim(),
@@ -199,9 +268,20 @@ export function parseInvocation(
   if (invocation.command === "run") {
     invocation.runSettings = { stdin: false, autoApprove: false };
   }
+  if (engineSettings) invocation.engineSettings = engineSettings;
   const runOpts = (flag: string): RunSettings => {
     if (!invocation.runSettings) throw new Error(`${flag} requires the run command`);
     return invocation.runSettings;
+  };
+  const engineOpts = (flag: string): EngineSettings => {
+    if (!invocation.engineSettings) throw new Error(`${flag} requires the evolve or idea command`);
+    return invocation.engineSettings;
+  };
+  // Options every client of a running serve takes: run, evolve and idea.
+  const clientOpts = (flag: string): RunSettings | EngineSettings => {
+    const target = invocation.runSettings ?? invocation.engineSettings;
+    if (!target) throw new Error(`${flag} requires the run, evolve or idea command`);
+    return target;
   };
 
   for (let index = 0; index < rest.length; index += 1) {
@@ -209,6 +289,11 @@ export function parseInvocation(
     // run 的位置参数:不以 "-" 开头的项当问题正文或完整 JSON 输入(仅首个)
     if (invocation.command === "run" && argument !== undefined && !argument.startsWith("-") && invocation.runSettings && invocation.runSettings.positional === undefined) {
       invocation.runSettings.positional = argument;
+      continue;
+    }
+    // evolve / idea: the one positional is the run or research id.
+    if (invocation.engineSettings && argument !== undefined && !argument.startsWith("-") && invocation.engineSettings.id === undefined) {
+      invocation.engineSettings.id = argument;
       continue;
     }
     const next = (): string => requireValue(argument as string, rest[++index]);
@@ -244,7 +329,7 @@ export function parseInvocation(
       case "--auto-approve": runOpts(argument).autoApprove = true; break;
       case "--stdin": runOpts(argument).stdin = true; break;
       case "--content": runOpts(argument).input = next(); break;
-      case "--session": runOpts(argument).sessionId = next(); break;
+      case "--session": clientOpts(argument).sessionId = next(); break;
       case "--project": runOpts(argument).projectId = next(); break;
       case "--model": runOpts(argument).modelId = next(); break;
       case "--skills": runOpts(argument).skills = next(); break;
@@ -265,13 +350,24 @@ export function parseInvocation(
         runOpts(argument).review = value;
         break;
       }
-      case "--token": runOpts(argument).token = next(); break;
+      case "--token": clientOpts(argument).token = next(); break;
       case "--output": {
         const value = next();
         if (value !== "jsonl" && value !== "text" && value !== "json") {
           throw new Error(`${argument} must be jsonl, json or text`);
         }
-        runOpts(argument).output = value;
+        clientOpts(argument).output = value;
+        break;
+      }
+      // evolve / idea 选项
+      case "--candidate": engineOpts(argument).candidate = next(); break;
+      case "--after": {
+        const raw = next();
+        const value = Number(raw);
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value)) {
+          throw new Error(`${argument} must be a non-negative integer event sequence`);
+        }
+        engineOpts(argument).after = value;
         break;
       }
       case "--timeout": {
@@ -298,7 +394,35 @@ export function parseInvocation(
       throw new Error(`run input must be exactly one of: positional, --content, --stdin (got ${sources})`);
     }
   }
+  if (invocation.command !== "help" && invocation.engineSettings) {
+    validateEngineSettings(invocation.engineSettings);
+  }
   return invocation;
+}
+
+/** Combinations the routes cannot serve, refused before any request is sent. */
+function validateEngineSettings(engine: EngineSettings): void {
+  const { action, engine: name } = engine;
+  const subject = name === "evolve" ? "run id" : "research id";
+  if (action === "list" && engine.id !== undefined) {
+    throw new Error(`${name} list takes no ${subject} (got ${engine.id})`);
+  }
+  if (action !== "list" && engine.id === undefined) {
+    throw new Error(`${name} ${action} requires a ${subject}`);
+  }
+  if (name === "idea" && !engine.sessionId) {
+    // The research routes are per session; there is no global research list.
+    throw new Error(`idea ${action} requires --session <id>`);
+  }
+  if (name === "evolve" && engine.sessionId && action !== "list") {
+    throw new Error(`--session applies to evolve list only; evolve ${action} finds the run by its id`);
+  }
+  if (engine.candidate !== undefined && !(name === "evolve" && action === "get")) {
+    throw new Error("--candidate applies to evolve get only");
+  }
+  if (engine.after !== undefined && !(name === "evolve" && action === "watch")) {
+    throw new Error("--after applies to evolve watch only");
+  }
 }
 
 /**

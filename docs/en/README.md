@@ -38,7 +38,7 @@ After the quick start, the learning path continues with five short lessons, each
 ## Reference
 
 - [Agent backends](reference/agent-backends.md) — current JiuwenSwarm defaults, native opt-out, tools, planning, Skills, and subagents.
-- [CLI](reference/cli.md) — command and behavior reference for `serve`, `run`, `extract`, and `version`.
+- [CLI](reference/cli.md) — command and behavior reference for `serve`, `run`, `evolve`, `idea`, `extract`, and `version`.
 - [Built-in research capabilities](reference/builtin-research-capabilities.md)
 - [Configuration](reference/configuration.md)
 - [REST API](reference/rest-api.md)

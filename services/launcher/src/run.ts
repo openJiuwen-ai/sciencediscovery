@@ -124,6 +124,21 @@ function emitJsonlError(payload: { message: string; code?: string; runId?: strin
   process.stdout.write(JSON.stringify({ type: "error", ...payload }) + "\n");
 }
 
+/**
+ * Where a CLI client of `serve` connects and with which token: `--token`, else
+ * `SCIENCE_AGENT_AUTH_TOKEN`, else the token `serve` stored in the data directory.
+ */
+export function resolveControlPlane(
+  settings: ServeSettings,
+  explicitToken: string | undefined,
+  baseEnv: NodeJS.ProcessEnv,
+): { baseUrl: string; token: string } {
+  const token = explicitToken
+    || resolveBootstrapToken(settings.dataDir, AUTH_TOKEN_FILE, baseEnv.SCIENCE_AGENT_AUTH_TOKEN).token;
+  const host = settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host;
+  return { baseUrl: `http://${host}:${settings.port}`, token };
+}
+
 export async function runCommand(context: RunContext, log: (message: string) => void): Promise<RunResult> {
   const { settings, runSettings, baseEnv } = context;
 
@@ -134,10 +149,7 @@ export async function runCommand(context: RunContext, log: (message: string) => 
   }
 
   // 2. token + baseUrl
-  const token = runSettings.token
-    || resolveBootstrapToken(settings.dataDir, AUTH_TOKEN_FILE, baseEnv.SCIENCE_AGENT_AUTH_TOKEN).token;
-  const host = settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host;
-  const baseUrl = `http://${host}:${settings.port}`;
+  const { baseUrl, token } = resolveControlPlane(settings, runSettings.token, baseEnv);
 
   // 3. 输出模式 + 交互性
   const isTty = Boolean(process.stdout.isTTY);

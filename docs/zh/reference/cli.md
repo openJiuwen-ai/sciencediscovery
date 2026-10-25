@@ -7,6 +7,8 @@
 ```text
 ScienceDiscovery serve [选项]        启动 Web UI、API、沙箱 runner 与默认的 JiuwenSwarm/adapter
 ScienceDiscovery run [输入] [选项]    作为命令行客户端连接一个已运行的 serve，执行 Agent 任务
+ScienceDiscovery evolve <动作> ...    列出、查看、跟踪或停止 evolve 搜索
+ScienceDiscovery idea <动作> ...      列出、查看、跟踪、暂停、继续或停止 Idea Tree 研究
 ScienceDiscovery extract --to <目录>  只解包内嵌运行时，不启动
 ScienceDiscovery version             打印版本及内置 Node / CPython / micromamba 版本
 ScienceDiscovery help                显示帮助
@@ -17,6 +19,8 @@ ScienceDiscovery help                显示帮助
 ```bash
 node services/launcher/dist/main.js run ...
 ```
+
+`evolve` 与 `idea` 使用同一个入口。
 
 ## `serve`
 
@@ -104,6 +108,68 @@ node services/launcher/dist/main.js run ...
 ### Docker
 
 容器内不需要运行 `run`。若希望从宿主 CLI 连接 Docker 中的服务，可让客户端指向相同发布端口，并使用 Docker bind mount 对应的数据目录或显式 token。
+
+## `evolve` 与 `idea`
+
+evolve 搜索（`/evolve-design`）和 Idea Tree 研究（`/idea-tree`）在发起它们的那一轮对话结束后，还会在服务端继续运行数分钟到数小时。这两个命令用于在终端里列出、查看、跟踪和控制它们。它们调用的是 Web 卡片使用的同一组 HTTP 路由，因此从 CLI 停止与在 evolve 面板上点 **停止**、在 Idea Tree 卡片上点 **结束研究** 效果相同。与 `run` 一样，它们连接一个已运行的 `serve`，从同一个 `--data-dir` 读取令牌，并接受 `--token`、`--host`、`--port` 与 `--output <jsonl|text>`。
+
+```text
+ScienceDiscovery evolve list [--session <id>]
+ScienceDiscovery evolve get <run-id> [--candidate <hash>]
+ScienceDiscovery evolve watch <run-id> [--after <sequence>]
+ScienceDiscovery evolve stop <run-id>
+
+ScienceDiscovery idea list --session <id>
+ScienceDiscovery idea get <research-id> --session <id>
+ScienceDiscovery idea watch <research-id> --session <id>
+ScienceDiscovery idea pause|continue|stop <research-id> --session <id>
+```
+
+| 动作 | `evolve` | `idea` |
+| --- | --- | --- |
+| `list` | 所有搜索，最新的在前；`--session` 只看一个会话，与路由的 `sessionId` 过滤一致 | `--session` 指定会话中的研究 |
+| `get` | 状态、候选数、token、费用与最佳节点；带 `--candidate <hash>` 时改为输出该候选的源码 | 状态、阶段、轮次、token，以及每个候选和它的得分 |
+| `watch` | 持续输出搜索事件，直到搜索结束 | 持续输出研究进度，直到研究不再运行 |
+| `stop` | 停止搜索 | 结束研究；已结束的研究不能再继续 |
+| `pause` / `continue` | 不提供：evolve 搜索不能暂停 | 在当前步骤完成后暂停 / 继续已暂停或被中断的研究 |
+
+每个命令只提供对应卡片已有的操作：evolve 没有暂停；Idea Tree 研究按会话寻址，因为它的路由就是按会话的。run id 可用 `evolve list` 查到，research id 可用 `idea list` 查到。
+
+### 输出
+
+约定与 `run` 相同：
+
+- 在终端中输出 text：表格和可读的行写 stdout；连接提示和 `watch` 的最终状态写 stderr。
+- 在管道或重定向中输出 JSONL：每行一个对象，内容与路由返回的完全一致——run 记录、事件记录（`{"sequence", "createdAt", "event"}`）、研究视图（`{"research", "graph"}`）。`watch` 会额外输出 `{"type":"reconnect"}` 行，并以一行 `{"type":"result"}` 结尾；失败是一行 `{"type":"error"}`。除此之外不输出任何内容，因此可以直接接 `jq`。
+
+```bash
+# 仍在运行的搜索
+./ScienceDiscovery evolve list | jq -r 'select(.status == "running") | .id'
+
+# 保存搜索事件，并按结束方式分支
+./ScienceDiscovery evolve watch "$RUN" > events.jsonl && echo "search succeeded"
+
+# 保存最佳候选的源码
+best=$(./ScienceDiscovery evolve get "$RUN" | jq .bestNodeIndex)
+hash=$(jq -r "select(.event.type == \"expanded\" and .event.nodeIndex == $best) | .event.codeHash" events.jsonl)
+./ScienceDiscovery evolve get "$RUN" --candidate "$hash" --output text > best.py
+```
+
+### `watch`
+
+`watch` 先回放已经发生的内容，再实时跟踪，引擎不再运行时返回；对已经结束的运行会立即返回。连接中断时（例如网络波动或 `serve` 重启），它会以逐渐加长的间隔重连约三分钟，并从中断处继续：evolve 从最后打印的事件序号之后继续，不丢也不重复；Idea Tree 的每次更新都携带完整的当前状态，所以重连后显示当前状态，并跳过已经显示过的更新。如果要在新进程里接着跟踪 evolve，把保存下来的最后一个 `sequence` 传给 `--after`。
+
+Ctrl-C 只停止跟踪，不停止引擎。要停止引擎请用 `stop`。
+
+退出码沿用 `run` 的约定（0 完成、1 失败、130 取消）：
+
+| 退出码 | `evolve` 结束状态 | `idea` 结束状态 |
+| --- | --- | --- |
+| 0 | `succeeded` | `completed` |
+| 130 | `stopped` | `ended` 或 `paused` |
+| 1 | `failed` 或 `budget_exhausted` | `interrupted` |
+
+找不到运行、令牌被拒绝或连接无法恢复时，`watch` 也以 1 退出；按 Ctrl-C 时以 130 退出。
 
 ## `extract`
 
