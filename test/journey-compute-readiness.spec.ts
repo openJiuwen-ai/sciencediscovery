@@ -36,7 +36,7 @@ test.describe("Local compute readiness", { tag: ["@isolation:session", "@categor
         await expect(page.getByText("API · Connected", { exact: true })).toBeVisible();
         await expect(page.getByText(`Local compute · ${compute}`, { exact: true })).toBeVisible();
         if (compute === "Unavailable") {
-          const notice = page.getByRole("alert", { name: "Local compute notice" });
+          const notice = page.getByRole("status", { name: "Local compute notice" });
           await expect(notice).toContainText("Analyses cannot run on the local Runner");
           if (probe.capability?.detail || probe.reason) await expect(notice).toContainText(probe.capability?.detail || probe.reason!);
         }
@@ -81,7 +81,7 @@ test.describe("Local compute readiness", { tag: ["@isolation:session", "@categor
         dependencyAvailable: true, sandboxUsable: state === "ready", ready: state === "ready", reason: state === "ready" ? "ready" : "sandbox-unusable", detail };
       await route.fulfill({ json: { runnerId: "local", connected: state !== "runner", ...(state === "runner" ? { reason: "Runner connection refused" } : state === "legacy" ? {} : { capability }) } });
     });
-    const notice = page.getByRole("alert", { name: "Local compute notice" });
+    const notice = page.getByRole("status", { name: "Local compute notice" });
     const recheck = page.getByRole("button", { name: "Recheck compute", exact: true });
     try {
       await journey.step("查看沙箱不可用原因", "API 已连接与本地计算不可用同时显示，完整原因直接出现在工作台。", async () => {
@@ -90,6 +90,9 @@ test.describe("Local compute readiness", { tag: ["@isolation:session", "@categor
         await expect(page.getByText("Local compute · Unavailable", { exact: true })).toBeVisible();
         await expect(notice).toContainText(detail);
         await expect(notice).toContainText("scientific environments and model availability are checked separately");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await expect(page.locator(".compute.bad")).toBeVisible();
+        await expect(page.locator(".connection.bad")).toHaveCount(0);
       });
       for (const viewport of [{ width: 1440, height: 900 }, { width: 960, height: 600 }, { width: 390, height: 844 }]) {
         await journey.step(`在 ${viewport.width}×${viewport.height} 阅读提示`, "原因可换行阅读，重新检查可操作，状态文字不裁切且页面无水平溢出。", async () => {

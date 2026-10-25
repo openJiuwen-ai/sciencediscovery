@@ -48,15 +48,18 @@ export function useComputeReadiness(client: Client) {
 
 type Readiness = ReturnType<typeof useComputeReadiness>;
 
-export function ComputeStatus({ readiness }: { readiness: Readiness }) {
+export function ComputeStatus({ readiness, error }: { readiness: Readiness; error?: string }) {
   const { t } = useLocale();
   return <div className="compute-status" role="status" aria-label={t("compute.statusLabel")}>
-    <span className={`connection ${readiness.connection === "connected" ? "" : readiness.connection === "checking" ? "pending" : "bad"}`}>
+    <span className={`api-connection ${readiness.connection === "connected" ? "" : readiness.connection === "checking" ? "pending" : "bad"}`}>
       <i aria-hidden="true" />{t(`compute.api.${readiness.connection}`)}
     </span>
-    <span className={`connection ${readiness.compute === "ready" ? "" : readiness.compute === "unknown" ? "pending" : "bad"}`} title={t("compute.scope")}>
+    <span className={`compute ${readiness.compute === "ready" ? "" : readiness.compute === "unknown" ? "pending" : "bad"}`} title={t("compute.scope")}>
       <i aria-hidden="true" />{t(`compute.local.${readiness.compute}`)}
     </span>
+    {error ? <span className="connection bad" title={t("app.connectionErrorTooltip", { error })}>
+      <i aria-hidden="true" />{t("app.connectionErrorChip")}
+    </span> : null}
   </div>;
 }
 
@@ -65,7 +68,7 @@ export function ComputeNotice({ readiness }: { readiness: Readiness }) {
   if (readiness.compute === "ready" || readiness.connection === "checking") return null;
   const capability = readiness.value?.capability;
   const reason = readiness.error || readiness.value?.reason || capability?.detail || (capability ? t(`compute.reason.${capability.reason}`) : t("compute.reason.unknown"));
-  return <section className="compute-notice" role="alert" aria-label={t("compute.noticeLabel")}>
+  return <section className="compute-notice" role="status" aria-label={t("compute.noticeLabel")}>
     <div>
       <strong>{t(readiness.compute === "unavailable" ? "compute.unavailableTitle" : "compute.unknownTitle")}</strong>
       <p className="compute-notice-reason">{reason}</p>

@@ -4578,7 +4578,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     sessionTokens={sessionUsage?.totals.totalTokens}
                   />
                 ) : null}
-                <ComputeStatus readiness={computeReadiness} />
+                <ComputeStatus readiness={computeReadiness} error={error} />
               </div>
             </div>
             {sessionPending ? (

@@ -115,11 +115,31 @@ test("the notice exposes the actual reason safely and labels both signals in Eng
       const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale, children: [
         createElement(ComputeStatus, { key: "status", readiness: view.state() }), createElement(ComputeNotice, { key: "notice", readiness: view.state() }),
       ] }));
-      assert.match(html, /role="alert"/);
+      assert.match(html, /class="compute-notice" role="status"/);
+      assert.doesNotMatch(html, /role="alert"/);
       assert.match(html, /bwrap: &lt;host&gt; denied/);
       assert.match(html, locale === "en" ? /API · Connected/ : /API · 已连接/);
       assert.match(html, locale === "en" ? /Local compute · Unavailable/ : /本地计算 · 不可用/);
       assert.match(html, locale === "en" ? /scientific environments and model availability/ : /科学环境和模型可用性/);
     }
+  } finally { await view.close(); }
+});
+
+test("sandbox and API failures do not claim the runtime error chip; gateway errors retain their detail", async () => {
+  let fail = false;
+  const view = await harness({ getRunnerExecutionCapability: async () => { if (fail) throw new Error("API unavailable"); return unavailable; } });
+  try {
+    let html = renderToStaticMarkup(createElement(ComputeStatus, { readiness: view.state() }));
+    assert.match(html, /class="compute bad"/);
+    assert.doesNotMatch(html, /class="connection bad"/);
+    fail = true;
+    await act(async () => view.state().recheck());
+    html = renderToStaticMarkup(createElement(ComputeStatus, { readiness: view.state() }));
+    assert.match(html, /class="api-connection bad"/);
+    assert.doesNotMatch(html, /class="connection bad"/);
+    const error = "503: No available channel for model inline-cards-regression";
+    html = renderToStaticMarkup(createElement(ComputeStatus, { readiness: view.state(), error }));
+    assert.match(html, /class="connection bad" title="Needs attention: 503: No available channel for model inline-cards-regression"/);
+    assert.match(html, /Needs attention<\/span>/);
   } finally { await view.close(); }
 });
