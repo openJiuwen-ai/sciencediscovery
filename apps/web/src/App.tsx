@@ -2601,6 +2601,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   const [modelWizardRequested, setModelWizardRequested] = useState(false);
 
+  function openProjectCreation(): void {
+    if (!projectsLoaded || !globalSettings) return;
+    setProjectsExpanded(true);
+    setSidebarDrawerOpen(false);
+    setProjectCreationOpen(true);
+  }
+
   function openSystemSettings(group?: SystemSettingsGroup, options?: { wizard?: boolean }): void {
     setSidebarDrawerOpen(false);
     reportSystemSettingsError();
@@ -4267,12 +4274,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               count={projectsLoaded ? projects.length : undefined}
               expanded={projectsExpanded}
               label={t("sidebar.projects")}
-              onAdd={() => {
-                if (!projectsLoaded || !globalSettings) return;
-                setProjectsExpanded(true);
-                setSidebarDrawerOpen(false);
-                setProjectCreationOpen(true);
-              }}
+              onAdd={openProjectCreation}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
               panelId="projects-panel-content"
             />
@@ -4531,9 +4533,34 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <h2>{t("empty.title")}</h2>
                 <p>{t("empty.description")}</p>
                 <ol className="empty-steps">
-                  <li><span className="empty-step-icon"><SettingsIcon size={16} /></span><div><strong>{t("empty.configureModel")}</strong><small>{t("empty.configureModelHelp")}</small></div></li>
-                  <li><span className="empty-step-icon"><ProjectIcon size={16} /></span><div><strong>{t("empty.createProject")}</strong><small>{t("empty.createProjectHelp")}</small></div></li>
-                  <li><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
+                  <li>
+                    <button
+                      aria-describedby="empty-configure-model-help"
+                      aria-labelledby="empty-configure-model"
+                      className="empty-step-action"
+                      onClick={() => openSystemSettings("models", { wizard: true })}
+                      type="button"
+                    >
+                      <span className="empty-step-icon"><SettingsIcon size={16} /></span>
+                      <span><strong id="empty-configure-model">{t("empty.configureModel")}</strong><small id="empty-configure-model-help">{t("empty.configureModelHelp")}</small></span>
+                      <ChevronRightIcon size={16} />
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      aria-describedby="empty-create-project-help"
+                      aria-labelledby="empty-create-project"
+                      className="empty-step-action"
+                      disabled={!projectsLoaded || !globalSettings}
+                      onClick={openProjectCreation}
+                      type="button"
+                    >
+                      <span className="empty-step-icon"><ProjectIcon size={16} /></span>
+                      <span><strong id="empty-create-project">{t("empty.createProject")}</strong><small id="empty-create-project-help">{t("empty.createProjectHelp")}</small></span>
+                      <ChevronRightIcon size={16} />
+                    </button>
+                  </li>
+                  <li className="empty-step-info"><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
                 </ol>
               </div>
             ) : trajectorySession && session.id === trajectorySession.id ? (

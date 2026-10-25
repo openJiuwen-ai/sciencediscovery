@@ -73,7 +73,12 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .empty-state p, .session-intro p { color: var(--muted); font-size: 16px; line-height: 1.75; }
 .session-intro { padding: 4vh 0 32px; }
 .empty-steps { display: grid; gap: 10px; margin: 30px 0 0; padding: 0; list-style: none; }
-.empty-steps li { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 12px 14px; }
+.empty-step-info, .empty-step-action { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 12px 14px; }
+.empty-step-action { width: 100%; grid-template-columns: 38px minmax(0, 1fr) auto; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.empty-step-action:hover:not(:disabled) { border-color: var(--accent-border); background: var(--surface-soft); }
+.empty-step-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.empty-step-action:disabled { opacity: .55; cursor: wait; }
+.empty-step-action > svg { color: var(--accent-strong); }
 .empty-step-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-s); background: var(--accent-soft); color: var(--accent-strong); }
 .empty-steps strong, .empty-steps small { display: block; }
 .empty-steps strong { color: var(--text-heading); font-size: 14px; }
