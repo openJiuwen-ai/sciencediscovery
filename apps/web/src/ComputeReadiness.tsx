@@ -65,7 +65,9 @@ export function ComputeStatus({ readiness, error }: { readiness: Readiness; erro
 
 export function ComputeNotice({ readiness }: { readiness: Readiness }) {
   const { t } = useLocale();
-  if (readiness.compute === "ready" || readiness.connection === "checking") return null;
+  // Connection settings own token recovery. A rejected credential cannot
+  // confirm sandbox readiness and must not add a second authentication notice.
+  if (readiness.compute === "ready" || readiness.connection === "checking" || readiness.connection === "unauthorized") return null;
   const capability = readiness.value?.capability;
   const reason = readiness.error || readiness.value?.reason || capability?.detail || (capability ? t(`compute.reason.${capability.reason}`) : t("compute.reason.unknown"));
   return <section className="compute-notice" role="status" aria-label={t("compute.noticeLabel")}>

@@ -66,6 +66,7 @@ test("a failed API read clears a previous ready status and distinguishes rejecte
     await act(async () => view.state().recheck());
     assert.equal(view.state().connection, "unauthorized");
     assert.equal(view.state().compute, "unknown");
+    assert.equal(renderToStaticMarkup(createElement(ComputeNotice, { readiness: view.state() })), "", "Connection settings alone report rejected credentials");
   } finally { await view.close(); }
 });
 
