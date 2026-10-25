@@ -75,7 +75,7 @@ test("failed description save retains the draft and permits retry", async (conte
   await act(async () => button(renderer, "Edit description").props.onClick());
   await act(async () => renderer.root.findByType("textarea").props.onChange({ target: { value: "Keep this draft" } }));
   await submit(renderer);
-  assert.equal(renderer.root.findByProps({ role: "alert" }).children.join(""), "Save unavailable");
+  assert.equal(renderer.root.findByProps({ role: "alert" }).findByType("small").children.join(""), "Save unavailable");
   assert.equal(renderer.root.findByType("textarea").props.value, "Keep this draft");
   assert.equal(button(renderer, "Save description").props.disabled, false);
   await submit(renderer);

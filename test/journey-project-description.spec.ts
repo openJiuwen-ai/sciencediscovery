@@ -71,9 +71,10 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
           const payload = await (await response).json() as CreateProjectResponse;
           fixtures.push({ project: payload.project, session: payload.firstSession });
           await expect(dialog).toHaveCount(0);
-          for (const dismiss of await page.locator(".toast").getByRole("button", { name: "Dismiss", exact: true }).all()) {
-            await dismiss.click();
-          }
+          const toast = page.locator(".toast.success").filter({ hasText: payload.project.name });
+          await expect(toast).toBeVisible();
+          await toast.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+          await expect(toast).toHaveCount(0);
         }
         original = (await projects()).find((item) => item.id === fixtures[0]!.project.id)!;
         other = (await projects()).find((item) => item.id === fixtures[1]!.project.id)!;
@@ -87,7 +88,7 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
         await expect(description.locator(".project-description-text")).toHaveText(originalText);
         await expect(description.getByRole("button", { name: "Edit description", exact: true })).toBeVisible();
       });
-      await journey.step("Cancel a long draft at 390 × 844", "The textarea and actions fit the narrow dialog; cancel restores the saved description.", async () => {
+      await journey.step("Edit a long draft at 390 × 844", "The textarea and Save and Cancel actions fit the narrow dialog.", async () => {
         await page.setViewportSize({ width: 390, height: 844 });
         await description.getByRole("button", { name: "Edit description", exact: true }).click();
         const input = description.getByRole("textbox", { name: "Research description", exact: true });
@@ -97,6 +98,8 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
         expect(box!.x).toBeGreaterThanOrEqual(0);
         expect(box!.x + box!.width).toBeLessThanOrEqual(390);
         await expect(description.getByRole("button", { name: "Save description", exact: true })).toBeVisible();
+      });
+      await journey.step("Cancel the draft", "Cancel restores the saved description without saving the draft.", async () => {
         await description.getByRole("button", { name: "Cancel", exact: true }).click();
         await expect(description.locator(".project-description-text")).toHaveText(originalText);
       });

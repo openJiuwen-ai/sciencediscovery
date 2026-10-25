@@ -17,6 +17,7 @@ import { useState, type FormEvent } from "react";
 import type { Project } from "@sciencediscovery/schema";
 
 import { useLocale } from "./i18n/index.js";
+import { InlineErrorAlert } from "./InlineErrorAlert.js";
 
 export function ProjectDescriptionEditor({ project, onSave }: {
   project: Project;
@@ -50,7 +51,7 @@ export function ProjectDescriptionEditor({ project, onSave }: {
         <textarea autoFocus disabled={saving} maxLength={2000} onChange={(event) => setDraft(event.target.value)}
           placeholder={t("project.descriptionPlaceholder")} rows={4} value={draft} />
       </label>
-      {error ? <p className="error" role="alert">{error}</p> : null}
+      {error ? <InlineErrorAlert detail={error} /> : null}
       <div className="dialog-actions">
         <button className="secondary-button" disabled={saving} onClick={() => setEditing(false)} type="button">{t("common.cancel")}</button>
         <button className="primary-button" disabled={saving} type="submit">{saving ? t("common.saving") : t("project.saveDescription")}</button>
