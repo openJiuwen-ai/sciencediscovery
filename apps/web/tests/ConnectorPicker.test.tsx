@@ -215,3 +215,35 @@ test("busy catalog disables reload, while an undiscovered source explains its un
     assert.equal(reloaded, 1);
   } finally {await act(async () => view.unmount());}
 });
+
+const customServer = { displayName: "Lab inventory", id: "custom-0123456789ab", publisher: "Lab inventory" } as ConnectorManifest;
+const webAccess = { displayName: "Web", id: "web", publisher: "ScienceDiscovery" } as ConnectorManifest;
+
+test("data sources, Web access and custom MCP servers are separate groups, each checked on its own", async (context) => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors: [...connectors, customServer, webAccess], defaultOpen: true, enabledIds: ["web"], onToggle: () => undefined,
+  }));
+  assert.deepEqual([...markup.matchAll(/connector-picker-group-label">([^<]+)</g)].map((match) => match[1]),
+    ["Data sources", "Web access", "Custom MCP"]);
+  // A custom server is listed under the name the user gave it, not its generated id.
+  assert.match(markup, /<strong>Lab inventory<\/strong>/);
+  assert.doesNotMatch(markup, /custom-0123456789ab/);
+  assert.equal((markup.match(/checked=""/g) ?? []).length, 1);
+
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", {configurable: true, value: {addEventListener() {}, removeEventListener() {}}});
+  context.after(() => {
+    if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  });
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const toggled: string[] = [];
+  let view!: ReactTestRenderer;
+  await act(async () => {view = create(createElement(ConnectorPicker, {
+    connectors: [...connectors, customServer, webAccess], defaultOpen: true, enabledIds: ["web"], onToggle: (id) => {toggled.push(id);},
+  }));});
+  try {
+    for (const box of view.root.findAllByProps({ type: "checkbox" })) await act(async () => box.props.onChange());
+    assert.deepEqual(toggled, ["pubmed", "uniprot", "web", "custom-0123456789ab"]);
+  } finally {await act(async () => view.unmount());}
+});

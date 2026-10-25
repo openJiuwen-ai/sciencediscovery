@@ -777,6 +777,9 @@
 .settings-choices label { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: 8px; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .settings-choices label > span { margin: 0; }
 .settings-choices input { flex: 0 0 24px; width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+.settings-choice-group { margin-top: 12px; }
+.settings-choice-group-label { display: block; color: var(--text-faint); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.settings-choice-group .settings-choices { margin-top: 6px; }
 .settings-library-list { display: grid; gap: 8px; margin-top: 9px; }
 .settings-library-row { display: grid; gap: 10px; align-items: center; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px; }
 .settings-library-row.selected { border-color: var(--border-strong); background: var(--surface-subtle); }

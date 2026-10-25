@@ -35,6 +35,18 @@ export function connectorName(id: ConnectorId): string {
   })[id] ?? id;
 }
 
+export type ConnectorGroupLabel = "connectors.groupBuiltin" | "connectors.groupWeb" | "connectors.groupCustom";
+
+/** Data sources, Web access and custom MCP servers: one list, shown in the same groups wherever it is checked. */
+export function groupConnectors(connectors: readonly ConnectorManifest[]): Array<{ label: ConnectorGroupLabel; items: ConnectorManifest[] }> {
+  const groups: Array<{ label: ConnectorGroupLabel; items: ConnectorManifest[] }> = [
+    { label: "connectors.groupBuiltin", items: connectors.filter((connector) => !connector.id.startsWith("custom-") && connector.id !== "web") },
+    { label: "connectors.groupWeb", items: connectors.filter((connector) => connector.id === "web") },
+    { label: "connectors.groupCustom", items: connectors.filter((connector) => connector.id.startsWith("custom-")) },
+  ];
+  return groups.filter((group) => group.items.length);
+}
+
 export function ConnectorPicker({
   t, icons,
   connectors,
@@ -84,14 +96,7 @@ export function ConnectorPicker({
 
   const enabledCount = connectors.filter((connector) => effectiveIds.has(connector.id)).length;
   const summary = `${t("connectors.title")}: ${t("connectors.summary", { enabled: enabledCount, total: connectors.length })}`;
-  const builtinConnectors = connectors.filter((connector) => !connector.id.startsWith("custom-") && connector.id !== "web");
-  const customConnectors = connectors.filter((connector) => connector.id.startsWith("custom-"));
-  const webConnectors = connectors.filter((connector) => connector.id === "web");
-  const groups: Array<{ label: string; items: ConnectorManifest[] }> = [
-    { label: "connectors.groupBuiltin", items: builtinConnectors },
-    ...(webConnectors.length ? [{ label: "connectors.groupWeb", items: webConnectors }] : []),
-    ...(customConnectors.length ? [{ label: "connectors.groupCustom", items: customConnectors }] : []),
-  ];
+  const groups = groupConnectors(connectors);
   return <div className="connector-picker" ref={rootRef}>
     <button
       aria-expanded={open}
@@ -107,8 +112,8 @@ export function ConnectorPicker({
     </button>
     {open ? <div aria-label={t("connectors.title")} className="connector-picker-popover" role="dialog">
       <div className="connector-picker-heading"><strong>{t("connectors.title")}</strong><span>{t("connectors.enabled", { enabled: enabledCount, total: connectors.length })}</span></div>
-      {groups.map((group) => group.items.length ? <div key={group.label} className="connector-picker-group">
-        <small className="connector-picker-group-label">{t(group.label as "connectors.groupBuiltin")}</small>
+      {groups.map((group) => <div key={group.label} className="connector-picker-group">
+        <small className="connector-picker-group-label">{t(group.label)}</small>
         <ul>
           {group.items.map((connector) => {
             const name = connector.displayName ?? connectorName(connector.id);
@@ -143,7 +148,7 @@ export function ConnectorPicker({
             </li>;
           })}
         </ul>
-      </div> : null)}
+      </div>)}
       {refreshError ? <p role="alert">{t("connectors.refreshFailed", { error: refreshError })}</p> : null}
       {onReload ? <button type="button" disabled={refreshing} onClick={onReload}>{t(refreshing ? "connectors.refreshing" : "connectors.reload")}</button> : null}
       <p className="connector-picker-note">{t("connectors.note")}</p>

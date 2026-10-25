@@ -1667,7 +1667,9 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     assert.equal(sent.jiuwenSwarmTools, "all");
     assert.equal(sent.systemPrompt.includes("Use only the registered workspace tools"), false);
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
+    // These options give the run no web tools, so JiuwenSwarm's web tools are hidden as well.
     assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
+      "free_search", "paid_search", "fetch_webpage",
       "todo_create", "todo_modify", "todo_list", "todo_get",
       "subagent_spawn", "subagent_wait", "task_tool", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
@@ -1720,7 +1722,28 @@ test("with JiuwenSwarm's tools, web search and fetching are JiuwenSwarm's, in th
     const names = (body: any) => body.tools.map((tool: { name: string }) => tool.name);
     assert.equal(names(sent[0]).includes("web_search") || names(sent[0]).includes("web_fetch"), false);
     assert.equal(/\bweb_search\b|\bweb_fetch\b/.test(sent[0].systemPrompt), false, "the prompt names JiuwenSwarm's tools");
+    assert.equal(["free_search", "paid_search", "fetch_webpage"].some((name) => sent[0].hiddenJiuwenSwarmTools.includes(name)), false,
+      "JiuwenSwarm's web tools stay offered in place of ours");
     assert.ok(names(sent[1]).includes("web_search") && names(sent[1]).includes("web_fetch"), "ours with SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours");
+  } finally {
+    await adapter.close();
+  }
+});
+
+test("a Session with Web access unchecked gets neither ScienceDiscovery's nor JiuwenSwarm's web tools", async () => {
+  const sent: any[] = [];
+  const adapter = await fakeAdapter(async ({ body }, response) => { sent.push(body); response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
+  try {
+    // Run assembly leaves webSearch/webFetch out when the Session's connectors do not include "web".
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options()).execute("a");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ webSearch: (async () => []) as never })).execute("b");
+    const names = (body: any) => body.tools.map((tool: { name: string }) => tool.name);
+    assert.equal(names(sent[0]).includes("web_search") || names(sent[0]).includes("web_fetch"), false);
+    assert.equal(sent[0].jiuwenSwarmTools, "all");
+    assert.ok(["free_search", "paid_search", "fetch_webpage"].every((name) => sent[0].hiddenJiuwenSwarmTools.includes(name)));
+    // Each of JiuwenSwarm's web tools follows the one of ours it replaces.
+    assert.equal(sent[1].hiddenJiuwenSwarmTools.includes("free_search") || sent[1].hiddenJiuwenSwarmTools.includes("paid_search"), false);
+    assert.ok(sent[1].hiddenJiuwenSwarmTools.includes("fetch_webpage"));
   } finally {
     await adapter.close();
   }

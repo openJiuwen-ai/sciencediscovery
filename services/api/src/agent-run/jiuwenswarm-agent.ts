@@ -123,6 +123,14 @@ export const SUBAGENT_DELEGATION_SECTION = [
 export const JIUWENSWARM_WEB_TOOLS: Record<string, string> = { web_search: "free_search (or paid_search)", web_fetch: "fetch_webpage" };
 
 /**
+ * The same JiuwenSwarm tools by name, under the ScienceDiscovery tool each one stands in for. They stand in only for
+ * a tool the run has: a Session with Web access unchecked gets neither ours nor these.
+ */
+export const JIUWENSWARM_NATIVE_WEB_TOOLS: Record<string, readonly string[]> = {
+  web_search: ["free_search", "paid_search"], web_fetch: ["fetch_webpage"],
+};
+
+/**
  * JiuwenSwarm's own tools that act on the host: the model never gets them. Commands and file writes go through
  * ScienceDiscovery's `run_shell`, reads through its file tools, so they run in its sandbox and Runner, with its
  * provenance. The adapter turns away a call the model makes to one anyway.
@@ -326,8 +334,11 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // plugin is switched off has no update_plan, and then no planning tool of either kind.
     const jiuwenSwarmPlans = (this.config.planning ?? "todo") === "todo" && Boolean(this.options.planStore) && tools.has("update_plan");
     if (jiuwenSwarmPlans) tools.delete("update_plan");
-    // Web search and page fetching are JiuwenSwarm's own when its tools are in use.
+    // Web search and page fetching are JiuwenSwarm's own when its tools are in use, but only in place of ours: a run
+    // without web_search or web_fetch (Web access unchecked for the Session) must not get JiuwenSwarm's either.
     const allJiuwenSwarmTools = (this.config.tools ?? "jiuwenswarm") === "jiuwenswarm";
+    const hiddenWebTools = allJiuwenSwarmTools
+      ? Object.entries(JIUWENSWARM_NATIVE_WEB_TOOLS).flatMap(([ours, theirs]) => tools.has(ours) ? [] : theirs) : [];
     if (allJiuwenSwarmTools) for (const name of Object.keys(JIUWENSWARM_WEB_TOOLS)) tools.delete(name);
     // With JiuwenSwarm's own sub-agent tools the model does not also get ours: those sub-agents run inside
     // JiuwenSwarm, with none of ScienceDiscovery's tools, sandbox, handoff or provenance.
@@ -370,7 +381,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       ? setInterval(() => this.logGatewayProgress("heartbeat", modelGateway), 30_000) : undefined;
     progressTimer?.unref();
     try {
-      const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents);
+      const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents, hiddenWebTools);
       this.controller.signal.throwIfAborted();
       // An unrecovered partial answer must never be reported as completed.
       if (modelGateway.lastTurn()?.truncated) {
@@ -533,7 +544,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   private async stream(
     text: string, tools: Map<string, AgentTool>, bridgeUrl: string, bridgeToken: string,
     announcements: ToolAnnouncements, transcript: Transcript, modelGateway: { token: string; url: string },
-    jiuwenSwarmPlans = false, jiuwenSwarmSubagents = false,
+    jiuwenSwarmPlans = false, jiuwenSwarmSubagents = false, hiddenWebTools: readonly string[] = [],
   ): Promise<string> {
     const { config: model } = this.options;
     const toolNames = new Set(tools.keys());
@@ -586,6 +597,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
         hiddenJiuwenSwarmTools: [
           ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
+          ...hiddenWebTools,
           ...(!jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []),
           ...(!jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS : []),
         ],

@@ -6027,6 +6027,61 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   assert.equal(parentResultRequest, undefined);
 });
 
+test("Web access follows the inherited or overridden connector selection into the model's tools", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `web-access-selection-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const offered: string[][] = [];
+  const modelServer = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { tools?: Array<{ function?: { name?: string } }> };
+    // Session auto-naming sends no tools; only the Agent's own turns matter here.
+    if (body.tools?.length) offered.push(body.tools.map((tool) => tool.function?.name ?? ""));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const delta of [{ content: "Done" }, {}]) {
+      response.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: "content" in delta ? null : "stop", index: 0 }],
+        created: 1, id: "chatcmpl-web-access", model: "web-access-model", object: "chat.completion.chunk" })}\n\n`);
+    }
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { modelServer.close(() => resolveClose()); modelServer.closeAllConnections(); }));
+  const model = await createTestModel(origin, {
+    baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`, model: "web-access-model", name: "Web access model",
+  });
+  const json = { ...authorization, "content-type": "application/json" };
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Web access project" }), headers: json, method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Web access session" }), headers: json, method: "POST",
+  });
+  const webTools = async () => {
+    const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+      body: JSON.stringify({ content: "Search the web for the latest perovskite results." }), headers: json, method: "POST",
+    });
+    assert.equal(run.status, 200);
+    await run.text();
+    return offered.at(-1)?.filter((name) => name === "web_search" || name === "web_fetch");
+  };
+
+  // A new data directory enables Web access globally; Project and Session inherit it.
+  assert.deepEqual(await webTools(), ["web_search", "web_fetch"]);
+  const projectSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${project.body.id}/settings`, {
+    body: JSON.stringify({ enabledConnectorIds: ["pubmed"] }), headers: json, method: "PUT",
+  });
+  assert.deepEqual(projectSettings.body.effective.enabledConnectorIds, ["pubmed"]);
+  // The Project override replaces the inherited list, so the Session that inherits it has no web tools.
+  assert.deepEqual(await webTools(), []);
+  const sessionSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${session.body.id}/settings`, {
+    body: JSON.stringify({ enabledConnectorIds: ["pubmed", "web"], modelId: model.id }), headers: json, method: "PUT",
+  });
+  assert.equal(sessionSettings.body.sources.enabledConnectorIds, "session");
+  assert.deepEqual(await webTools(), ["web_search", "web_fetch"]);
+});
+
 test("hierarchical settings and Project/Session lifecycle APIs preserve and delete the expected data", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-lifecycle-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
