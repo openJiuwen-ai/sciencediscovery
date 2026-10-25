@@ -28,6 +28,8 @@ How to call `gh`, and the rule that issue and pull request text is English:
 [github](../github/SKILL.md). Pipeline internals — which platform runs which
 layer, the workflow files, run logs, failure attribution: [ci](../ci/SKILL.md).
 Journey design and reporting: [e2e-testing](../e2e-testing/SKILL.md).
+Several layers of one change, and what to do after a lower layer merges:
+[stacked PRs](../stacked-prs/SKILL.md).
 
 For a change tied to an existing issue, follow the
 [GitHub skill](../github/SKILL.md#work-on-an-existing-issue): try to assign it
