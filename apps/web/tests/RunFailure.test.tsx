@@ -17,18 +17,19 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import { zhCN } from "../src/i18n/messages.js";
+import type { RunFailureCode } from "@sciencediscovery/schema";
+import { en, zhCN } from "../src/i18n/messages.js";
 import { setActiveLocale } from "../src/i18n/locale.js";
 import { formatRunFailure } from "../src/run-failure.js";
 
-test("a failure class reads as a plain cause with a recovery action, then the detail", () => {
+test("a failure class reads as a plain cause with a recovery action", () => {
   setActiveLocale("en");
   assert.match(
-    formatRunFailure("rate-limited", "429 Too Many Requests"),
-    /^The model service is limiting requests\. Wait a moment and try again\. · 429 Too Many Requests$/,
+    formatRunFailure("rate-limited"),
+    /^The model service is limiting requests\. Wait a moment and try again\.$/,
   );
   assert.match(
-    formatRunFailure("transport-error", "fetch failed"),
+    formatRunFailure("transport-error"),
     /^The model service could not be reached\./,
   );
 });
@@ -36,8 +37,8 @@ test("a failure class reads as a plain cause with a recovery action, then the de
 test("the Chinese locale renders the plain cause in Chinese", () => {
   setActiveLocale("zh-CN");
   assert.match(
-    formatRunFailure("unauthorized", "401 invalid api key"),
-    /^模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。 · 401 invalid api key$/,
+    formatRunFailure("unauthorized"),
+    /^模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。$/,
   );
 });
 
@@ -48,8 +49,13 @@ test("every stable failure class has a zh-CN message", () => {
   }
 });
 
-test("a failure without a class degrades to the original error text", () => {
+test("missing and future failure classes have localized recovery guidance", () => {
+  for (const [locale, messages] of [["en", en], ["zh-CN", zhCN]] as const) {
+    setActiveLocale(locale);
+    assert.equal(formatRunFailure(undefined), messages["runFailure.unknown"]);
+    assert.equal(formatRunFailure("future-failure" as RunFailureCode), messages["runFailure.unknown"]);
+    assert.equal(formatRunFailure("toString" as RunFailureCode), messages["runFailure.unknown"]);
+    assert.equal(formatRunFailure("timeout"), messages["runFailure.timeout"]);
+  }
   setActiveLocale("en");
-  assert.equal(formatRunFailure(undefined, "Gateway is unavailable"), "Gateway is unavailable");
-  assert.equal(formatRunFailure("timeout", "  "), "The request timed out. Retry, or split the task / raise the timeout budget.");
 });

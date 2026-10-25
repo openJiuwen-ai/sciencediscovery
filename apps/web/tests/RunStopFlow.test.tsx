@@ -21,6 +21,7 @@ import type { RunStreamEvent } from "@sciencediscovery/schema";
 
 import { requestRunStop, routeRunStreamEvent, shouldRefreshUsageForEvent } from "../src/App.js";
 import { reduceRunTimeline, type RunTimelineEntry } from "../src/RunTimeline.js";
+import { setActiveLocale } from "../src/i18n/index.js";
 
 /** Collect the grace-period callback instead of waiting five real seconds. */
 function captureSchedule() {
@@ -190,7 +191,8 @@ test("a background run that fails names its Session instead of failing silently"
 
   const background = routeRunStreamEvent(failure, { isDisplayed: false, sessionTitle: "Session A" });
   assert.deepEqual(background.toast, {
-    detail: "Gateway is unavailable",
+    detail: "The task stopped before it could finish. Retry the task; if it fails again, open the technical details to help diagnose the problem.",
+    technicalDetail: "Gateway is unavailable",
     title: "Run failed · Session A",
     tone: "error",
   });
@@ -199,6 +201,23 @@ test("a background run that fails names its Session instead of failing silently"
   const displayed = routeRunStreamEvent(failure, { isDisplayed: true, sessionTitle: "Session A" });
   assert.equal(displayed.toast, undefined);
   assert.equal(displayed.updatesSessionView, true);
+});
+
+test("background failure guidance follows the active locale and keeps diagnostics separate", () => {
+  try {
+    setActiveLocale("zh-CN");
+    const failure: RunStreamEvent = { error: "401 invalid api key", errorCode: "unauthorized", type: "run.failed" };
+    const background = routeRunStreamEvent(failure, { isDisplayed: false, sessionTitle: "蛋白质分析" });
+    assert.equal(background.toast?.title, "运行失败 · 蛋白质分析");
+    assert.match(background.toast?.detail ?? "", /^模型服务拒绝了当前凭据.*重试。$/);
+    assert.doesNotMatch(background.toast?.detail ?? "", /401|invalid api key/);
+    assert.equal(background.toast?.technicalDetail, failure.error);
+    assert.equal(routeRunStreamEvent(failure, { isDisplayed: false }).toast?.title, "运行失败");
+    setActiveLocale("en");
+    assert.equal(routeRunStreamEvent(failure, { isDisplayed: false }).toast?.title, "Run failed");
+  } finally {
+    setActiveLocale("en");
+  }
 });
 
 test("ordinary stream events carry no toast and follow the display gate", () => {

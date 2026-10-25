@@ -704,7 +704,7 @@ export function reduceRunTimeline(
 
   if (event.type === "run.failed" || event.type === "run.cancelled") {
     const summary = event.type === "run.failed"
-      ? formatRunFailure(event.errorCode, event.error)
+      ? formatRunFailure(event.errorCode)
       : event.reason;
     return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
       if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
@@ -720,7 +720,9 @@ export function reduceRunTimeline(
       || event.status === "failed"
       || event.status === "cancelled"
       || event.status === "interrupted")) {
-    const summary = event.reason ?? event.run.error ?? translateActive("timeline.runStatusFallback", { status: event.status });
+    const summary = event.status === "failed"
+      ? formatRunFailure(undefined)
+      : event.reason ?? event.run.error ?? translateActive("timeline.runStatusFallback", { status: event.status });
     return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
       if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {

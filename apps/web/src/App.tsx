@@ -3255,7 +3255,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
       sessionTitle,
     });
-    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
+    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail, routing.toast.technicalDetail);
     if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
       void refreshUsageData().catch((reason: Error) => setError(reason));
     }
@@ -3353,7 +3353,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         });
       }
     }
-    if (streamEvent.type === "run.failed") setError(formatRunFailure(streamEvent.errorCode, streamEvent.error));
+    if (streamEvent.type === "run.failed") {
+      const message = formatRunFailure(streamEvent.errorCode);
+      setErrorState(message);
+      pushToast("error", t("error.runFailed"), message, streamEvent.error);
+    }
   }
 
   async function loadToolOutput(

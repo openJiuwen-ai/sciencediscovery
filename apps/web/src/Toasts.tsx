@@ -21,6 +21,7 @@ export type ToastTone = "error" | "info" | "success";
 
 export interface Toast {
   detail?: string;
+  technicalDetail?: string;
   id: number;
   title: string;
   tone: ToastTone;
@@ -35,7 +36,8 @@ export function toastAutoDismissDelay(tone: ToastTone): number | undefined {
 
 /** Two notifications are the same event when they read identically. */
 function isSameNotification(left: Toast, right: Toast): boolean {
-  return left.tone === right.tone && left.title === right.title && left.detail === right.detail;
+  return left.tone === right.tone && left.title === right.title && left.detail === right.detail
+    && left.technicalDetail === right.technicalDetail;
 }
 
 export function addToastToQueue(current: Toast[], toast: Toast): Toast[] {
@@ -77,10 +79,10 @@ export function useToasts() {
     setToasts((current) => removeToastFromQueue(current, id));
   }, []);
 
-  const push = useCallback((tone: ToastTone, title: string, detail?: string) => {
+  const push = useCallback((tone: ToastTone, title: string, detail?: string, technicalDetail?: string) => {
     const id = nextToastId.current;
     nextToastId.current += 1;
-    setToasts((current) => addToastToQueue(current, { detail, id, title, tone }));
+    setToasts((current) => addToastToQueue(current, { detail, id, title, tone, technicalDetail }));
     const timeout = toastAutoDismissDelay(tone);
     if (timeout !== undefined) timers.current.set(id, window.setTimeout(() => dismiss(id), timeout));
   }, [dismiss]);
@@ -119,6 +121,10 @@ export function ToastViewport({
           <div className="toast-body">
             <strong>{toast.title}</strong>
             {toast.detail ? <small title={toast.detail}>{toast.detail}</small> : null}
+            {toast.technicalDetail ? <details className="toast-technical-details">
+              <summary>{t("runFailure.technicalDetails")}</summary>
+              <pre>{toast.technicalDetail}</pre>
+            </details> : null}
           </div>
           <button aria-label={t("common.dismiss")} className="icon-button" onClick={() => onDismiss(toast.id)} title={t("common.dismiss")} type="button"><CloseIcon size={13} /></button>
         </div>

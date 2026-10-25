@@ -44,6 +44,10 @@
 .toast-body { min-width: 0; display: grid; gap: 2px; padding-top: 3px; }
 .toast-body strong { color: var(--text-strong); font-size: 13px; }
 .toast-body small { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.toast-body:has(.toast-technical-details) small { display: block; overflow: visible; }
+.toast-technical-details { color: var(--muted); font-size: 12px; }
+.toast-technical-details summary { cursor: pointer; }
+.toast-technical-details pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .toast > button { width: 24px; height: 24px; border: 0; border-radius: var(--radius-xs); color: var(--muted-light); }
 .toast > button:hover { background: var(--surface-hover); color: var(--text-secondary); }
 .inline-error-alert { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 0 0 14px; border: 1px solid var(--danger-border); border-radius: var(--radius-m); background: var(--danger-soft); padding: 11px 12px; color: var(--danger); }
