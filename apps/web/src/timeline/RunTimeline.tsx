@@ -970,6 +970,7 @@ export function RunTimeline({
               {pending && isRunning && onPermissionDecision ? (
                 <PermissionDecisionActions
                   action={entry.request.action}
+                  resource={entry.request.resource}
                   busy={decidingPermissionIds.includes(entry.request.id)
                     || decidingPermissionMatchers.includes(permissionMatchingKey(entry.request))}
                   onDecision={(decision) => void decidePermission(entry.request, decision)}

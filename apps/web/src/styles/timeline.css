@@ -363,6 +363,11 @@
 .permission-card label { display: grid; gap: 4px; align-content: start; color: var(--muted); font-size: 11px; }
 .permission-card .plan-actions { grid-column: 1 / -1; }
 .permission-decision-actions { flex-wrap: wrap; }
+.permission-decision-help { grid-column: 1 / -1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.permission-decision-help p { margin: 0 0 8px; }
+.permission-decision-help dl { display: grid; gap: 6px; margin: 0; }
+.permission-decision-help dt { font-weight: 600; }
+.permission-decision-help dd { margin: 2px 0 0; color: var(--muted); }
 .permission-grant-manager { display: grid; gap: 9px; }
 .permission-grant { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid var(--border); border-radius: 9px; }
 .permission-grant div { display: grid; gap: 3px; }

@@ -226,7 +226,7 @@ test("the renamed sandbox network button still decides allow_matching", async ()
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 });
 
-test("shell execution cards keep Allow once / Allow same type / Deny with no scope hint", () => {
+test("collapsed shell approvals explain waiting, one request, Session-wide code grants and denial", () => {
   const request: PermissionRequest = {
     action: "code", createdAt: "2026-10-18T00:00:00.000Z", id: "request-shell",
     projectId: "project-1", resource: "workspace-code", sessionId: "session-1", state: "pending",
@@ -239,7 +239,47 @@ test("shell execution cards keep Allow once / Allow same type / Deny with no sco
   assert.match(html, />Allow once<\/button>/);
   assert.match(html, />Allow same type<\/button>/);
   assert.match(html, />Deny<\/button>/);
+  assert.match(html, /Waiting for your decision before this operation can proceed/);
+  assert.match(html, /Allow only this request, without saving permission for future requests/);
+  assert.match(html, /Allow pending and future workspace code execution in this Session without asking again, including other scripts and commands/);
+  assert.match(html, /Skip this operation and send the denial to the agent/);
+  assert.equal(html.match(/aria-describedby=/g)?.length, 3);
   assert.doesNotMatch(html, /title=/);
+});
+
+test("matching explanations follow exact-resource and resource-segment matchers", () => {
+  const cases: Array<[PermissionRequest["action"], string, RegExp]> = [
+    ["connector", "pubmed:search:BRCA1", /first 2 colon-separated resource parts equal pubmed:search\./],
+    ["artifact_download", "arxiv:download:paper.pdf", /first 2 colon-separated resource parts equal arxiv:download\./],
+    ["host", "ssh:compute-1", /exact resource ssh:compute-1 in this Session/],
+    ["direct_code", "direct:run-bound-scope", /exact resource direct:run-bound-scope in this Session/],
+    ["connector", "arxiv", /exact resource arxiv in this Session/],
+  ];
+  for (const [action, resource, help] of cases) {
+    const request: PermissionRequest = { ...networkRequest(), action, resource };
+    const html = renderToStaticMarkup(createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle, requests: [request],
+    }));
+    assert.match(html, help);
+    assert.match(html, /pending and future requests for the same action/);
+  }
+});
+
+test("approval explanations are localized and network consent keeps its run scope", () => {
+  const render = (action: PermissionRequest["action"], resource: string, locale: "en" | "zh-CN") =>
+    renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(PermissionCards, {
+      expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle,
+      requests: [{ ...networkRequest(), action, resource }],
+    })));
+  const code = render("code", "workspace-code", "zh-CN");
+  assert.match(code, /此操作正在等待你的决定，获准后才能继续/);
+  assert.match(code, /仅放行当前请求，不为后续请求保存授权/);
+  assert.match(code, /本会话中待审批及后续的工作区代码执行，包括其他脚本和命令/);
+  assert.match(code, /跳过此操作，并将拒绝结果反馈给 agent/);
+  const network = render("sandbox_network", "sandbox-network:digest", "en");
+  assert.match(network, /Allow the listed hosts on this Runner for this agent run without asking again/);
+  assert.doesNotMatch(network, /exact resource|first 2 colon-separated/);
+  assert.match(render("sandbox_network", "sandbox-network:digest", "zh-CN"), /允许本次 Agent 运行中此 Runner 访问列出的主机/);
 });
 
 test("the sandbox network grant button is localized", () => {
