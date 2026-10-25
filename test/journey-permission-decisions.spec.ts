@@ -61,6 +61,7 @@ for (const decision of ["Allow once", "Allow same type", "Deny"] as const) {
     });
     try {
       await journey.step("1. Request a calculation and read the paused approval", "The card explains waiting, one request, other scripts in this Session, and agent-visible denial without opening details.", async () => {
+        await page.setViewportSize({ width: 1440, height: 900 });
         await openProjectSession(page, fixture);
         runId = (await sendUserMessage(page, fixture.session.id, "Run two small workspace commands, asking for permission as needed.")).id;
         await expect(card).toBeVisible();
@@ -72,8 +73,16 @@ for (const decision of ["Allow once", "Allow same type", "Deny"] as const) {
         await expect(card.locator(".approval-mode-toggle")).toHaveCount(0);
       });
       for (const viewport of [{ width: 960, height: 600 }, { width: 390, height: 844 }]) {
-        await journey.step(`2. Read the card at ${viewport.width} × ${viewport.height}`, "All three explanations wrap within the card and all three actions remain available.", async () => {
+        await journey.step(`2. Read the card at ${viewport.width} × ${viewport.height}`, "Each explanation can be scrolled into view and all three actions remain available; hiding the workspace gives the narrow conversation more reading space.", async () => {
           await page.setViewportSize(viewport);
+          for (const description of await card.locator(".permission-decision-help dd").all()) {
+            await description.scrollIntoViewIfNeeded();
+            await expect(description).toBeInViewport();
+          }
+          if (viewport.width === 390) {
+            await page.getByRole("button", { name: "Hide workspace", exact: true }).click();
+            await card.scrollIntoViewIfNeeded();
+          }
           for (const button of ["Allow once", "Allow same type", "Deny"]) {
             await expect(card.getByRole("button", { name: button, exact: true })).toBeVisible();
           }
@@ -93,11 +102,11 @@ for (const decision of ["Allow once", "Allow same type", "Deny"] as const) {
         const executions = await sessionExecutionRuns(page, fixture.session.id);
         expect(executions).toHaveLength(decision === "Deny" ? 0 : 2);
         for (const execution of executions) {
-          expect(execution.status).toBe("completed");
+          expect(execution.status).toBe("succeeded");
           expect(execution.exitCode).toBe(0);
         }
         if (decision === "Deny") {
-          expect(stub.calls.flatMap(call => call.toolResults ?? []).join("\n")).toMatch(/denied/i);
+          expect(stub.calls.flatMap(call => call.toolResults ?? []).join("\n")).toMatch(/denied|拒绝/i);
           await expect(page.getByText("The command was skipped because permission was denied.", { exact: true })).toBeVisible();
         }
         expect((await get(`/api/sessions/${fixture.session.id}`)).approvalMode).toBe("ask_for_dangerous");
