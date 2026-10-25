@@ -14,6 +14,7 @@ const FILES = [
   { name: "analysis.py", mimeType: "text/x-python", buffer: Buffer.from(SCRIPT) },
   { name: "config.yaml", mimeType: "text/yaml", buffer: Buffer.from("model:\n  name: example\n  iterations: 42\n") },
   { name: "notes.unknown", mimeType: "application/octet-stream", buffer: Buffer.from("实验记录\nunknown UTF-8 text\nlast line") },
+  { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("普通文本\nFull text stays in-app.\n") },
   { name: "empty.txt", mimeType: "text/plain", buffer: Buffer.alloc(0) },
   { name: "large.log", mimeType: "text/plain", buffer: Buffer.from(LARGE) },
   { name: "report.md", mimeType: "text/markdown", buffer: Buffer.from("# Research results\n\n**Readable** prose.\n") },
@@ -107,6 +108,10 @@ test.describe("Read artifact and workspace source", { tag: ["@isolation:session"
         modal = await openArtifact(page, "notes.unknown");
         await expectNumbered(modal, "plaintext", 3);
         await expect(modal.locator(".numbered-source")).toContainText("实验记录");
+        await closeArtifact(modal);
+        modal = await openArtifact(page, "notes.txt");
+        await expectNumbered(modal, "plaintext", 3);
+        await expect(modal.locator(".numbered-source")).toContainText("Full text stays in-app.");
         await closeArtifact(modal);
         modal = await openArtifact(page, "empty.txt");
         await expect(modal.getByText("This file is empty.")).toBeVisible();

@@ -835,7 +835,11 @@ export function ArtifactModal({
         </div>
           : molecularByName ? <p className="artifact-empty">{t("artifact.loadingStructure")}</p>
           : artifact?.kind === "structure" || isStructureJson(source) ? <StructureViewer content={source} /> : null}
-        {artifact?.kind === "report" && contentUrl ? <iframe className="report-frame" src={contentUrl} title={artifact.logicalName} /> : null}
+        {artifact?.kind === "report" && contentUrl
+          ? sourceIsText
+            ? <SourcePreview name={artifact.logicalName} mediaType={version?.mediaType} source={source} />
+            : <iframe className="report-frame" src={contentUrl} title={artifact.logicalName} />
+          : null}
         {artifact?.kind === "dataset" && csvDetection && !(structureFormat && source) ? <CsvArtifactPreview
           onOpen={() => setCsvWindowOpen(true)}
           ready={csvWorkspaceReady}
