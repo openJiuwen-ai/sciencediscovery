@@ -93,17 +93,31 @@ async function expectViewerSize(page: Page, dialog: Locator, viewport: { height:
   return dialogGeometry(dialog);
 }
 
+/** Version controls must fit without a page scroll; visibility alone allows off-screen buttons. */
+async function expectHeaderControls(dialog: Locator) {
+  await expect(dialog.getByRole("combobox", { name: "Artifact version" })).toBeVisible();
+  await expect.poll(() => dialog.evaluate((panel) => {
+    const controls = panel.querySelectorAll<HTMLElement>(".artifact-modal-header, .version-picker, .version-picker select, .artifact-modal-controls button");
+    return [...controls].every((control) => {
+      const rect = control.getBoundingClientRect();
+      return rect.left >= 0 && rect.right <= window.innerWidth && rect.top >= 0 && rect.bottom <= window.innerHeight;
+    }) && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1;
+  })).toBe(true);
+  await dialog.getByRole("button", { name: "Close artifact viewer" }).click({ trial: true });
+}
+
 /**
  * E2E-META
- * Purpose: A researcher opening an artifact, or the detail viewer that shares its window, on a large screen gets a large content window (1600×960 at most, otherwise the viewport less 80px, full viewport at 900px and below) whose prose stays at a readable measure while tables and source use the window, and the settings dialog keeps its own size.
+ * Purpose: A researcher opening an artifact, or the detail viewer that shares its window, gets a large content window on desktop (1600×960 at most, otherwise the viewport less 80px, full viewport at 900px and below) whose prose stays readable while tables and source use the window; version controls and Close remain reachable at 390px, and settings keep their own size.
  * Steps:
  *   1. Prepare a local stub model and an isolated Project/Session; confirm the Artifact catalog is empty.
  *   2. Ask for a summary whose shell step writes and declares a Markdown report with a wide table and a long Python source.
  *   3. Open the report at 1920×1080: the viewer is 1600×960 and centred, paragraphs keep about 76ch, and the wide table uses the window width.
  *   4. Open the Python source: its preview uses the window width and height without scrolling the window itself.
  *   5. Resize to 2560×1440, 1280×800 and 900×800: the viewer stays capped at 1600×960, follows the viewport less 80px, and becomes the full viewport.
- *   6. Open the report's workspace-file provenance detail at 1920×1080: it uses the same 1600×960 window.
- *   7. Open System configuration at 1920×1080: the settings dialog keeps its own size rather than the viewer's.
+ *   6. Resize through 601/600/599px to 390×700: the version picker and Close fit without page overflow; Close dismisses the viewer.
+ *   7. Open the report's workspace-file provenance detail at 1920×1080: it uses the same 1600×960 window.
+ *   8. Open System configuration at 1920×1080: the settings dialog keeps its own size rather than the viewer's.
  * Environment: Isolated local stack at E2E_BASE_URL with the bubblewrap sandbox and a journey-owned Project/Session; no managed Python is needed.
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; one deterministic user turn.
@@ -144,7 +158,7 @@ test("J309 大屏打开产物时查看器放大且正文保持可读宽度", { t
 
   journey.scenario({
     goal: "研究员在大屏上打开产物，要让图表、表格和源码用上整块屏幕，而不是挤在约 1080px 的小卡片里；"
-      + "正文段落仍保持好读的行宽，设置对话框不跟着变大。",
+      + "正文段落仍保持好读的行宽，缩到 390px 后仍能选择版本并关闭查看器，设置对话框不跟着变大。",
     preconditions: [
       "隔离栈已启动，bubblewrap 沙箱可用",
       "已有一个由旅程创建的项目与会话，审批模式为「始终允许」，产物目录初始为空",
@@ -184,6 +198,7 @@ test("J309 大屏打开产物时查看器放大且正文保持可读宽度", { t
         const dialog = page.getByRole("dialog", { name: "Artifact: results/report.md" });
         await expect(dialog.locator(".markdown-table-scroll")).toBeVisible();
         const geometry = await expectViewerSize(page, dialog, { width: 1920, height: 1080 });
+        await expectHeaderControls(dialog);
         expect(geometry.paragraphWidth, "a paragraph keeps a readable measure instead of spanning the window").toBeLessThanOrEqual(760);
         expect(geometry.paragraphWidth).toBeGreaterThan(500);
         expect(geometry.tableWidth, "the wide table uses the window width").toBeGreaterThan(1500);
@@ -199,6 +214,7 @@ test("J309 大屏打开产物时查看器放大且正文保持可读宽度", { t
         const dialog = page.getByRole("dialog", { name: "Artifact: results/analysis.py" });
         await expect(dialog.locator("pre.artifact-source-preview")).toContainText("value_240");
         const geometry = await expectViewerSize(page, dialog, { width: 1920, height: 1080 });
+        await expectHeaderControls(dialog);
         expect(geometry.sourceWidth, "source preview uses the window width").toBeGreaterThanOrEqual(geometry.bodyClientWidth - 60);
         expect(geometry.sourceHeight, "source preview uses the window height").toBeGreaterThan(640);
         expect(geometry.bodyScrollHeight, "the window body does not scroll on top of the preview").toBeLessThanOrEqual(geometry.bodyClientHeight + 1);
@@ -235,12 +251,33 @@ test("J309 大屏打开产物时查看器放大且正文保持可读宽度", { t
     );
 
     await journey.step(
+      "缩到 390×700，检查版本选择器和关闭按钮",
+      "经过 600px 断点后，版本选择器和关闭按钮仍完整在屏幕内，页面没有横向滚动条，查看器保持整视口大小。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "Artifact: results/analysis.py" });
+        for (const width of [601, 600, 599, 390]) {
+          await page.setViewportSize({ width, height: 700 });
+          await expectHeaderControls(dialog);
+          const geometry = await dialogGeometry(dialog);
+          expect([geometry.width, geometry.height, geometry.left, geometry.top]).toEqual([width, 700, 0, 0]);
+        }
+      },
+    );
+
+    await journey.step(
+      "在 390×700 下关闭产物查看器",
+      "点击屏幕内的关闭按钮后，对话框消失，回到会话。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "Artifact: results/analysis.py" });
+        await dialog.getByRole("button", { name: "Close artifact viewer" }).click();
+        await expect(dialog).toHaveCount(0);
+      },
+    );
+
+    await journey.step(
       "回到 1920×1080，打开报告的工作区文件溯源详情",
       "节点详情查看器与产物查看器共用同一个 1600×960 窗口。",
       async () => {
-        const viewer = page.getByRole("dialog", { name: "Artifact: results/analysis.py" });
-        await viewer.getByRole("button", { name: "Close artifact viewer" }).click();
-        await expect(viewer).toHaveCount(0);
         await page.setViewportSize({ width: 1920, height: 1080 });
         const files = await tree.openPhysicalFiles();
         // With a fine pointer the provenance icon only appears while its row is hovered.

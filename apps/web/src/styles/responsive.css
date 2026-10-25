@@ -84,6 +84,13 @@
 
 @media (max-width: 600px) {
   :root { --timeline-gutter: 45px; }
+  /* Give controls their own row, and let the native select shrink before it
+     can push the Close button outside the full-width viewer. */
+  .artifact-modal-header { flex-direction: column; }
+  .artifact-modal-header > div:first-child { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .artifact-modal-header .artifact-modal-controls { width: 100%; min-width: 0; }
+  .artifact-modal-header .version-picker { min-width: 0; max-width: 100%; }
+  .artifact-modal-header .version-picker select { flex: 1; min-width: 0; }
   .workspace-provenance-grid { grid-template-columns: minmax(0, 1fr); }
   .workspace-provenance-revisions li, .workspace-provenance-list.lineage li { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 9px 0; }
   .session-bar-meta { width: 100%; }
