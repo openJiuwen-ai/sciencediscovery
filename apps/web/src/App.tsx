@@ -3355,8 +3355,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
     if (streamEvent.type === "run.failed") {
       const message = formatRunFailure(streamEvent.errorCode);
-      setErrorState(message);
-      pushToast("error", t("error.runFailed"), message, streamEvent.error);
+      // Keep the original diagnostic in the connection chip's tooltip while
+      // the notification leads with localized recovery guidance.
+      setErrorState(streamEvent.error || message);
+      pushToast("error", t("error.request"), message, streamEvent.error);
     }
   }
 

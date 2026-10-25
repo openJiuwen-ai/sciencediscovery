@@ -84,6 +84,7 @@ for (const locale of ["zh-CN", "en"] as const) {
       test.setTimeout(90_000);
       const zh = locale === "zh-CN";
       const title = zh ? "运行失败" : "Run failed";
+      const requestTitle = zh ? "请求错误" : "Request error";
       const detailsLabel = zh ? "技术详情" : "Technical details";
       const guidance = classified
         ? (zh ? "模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。" : "The model service rejected the credentials. Check the API key in the model registry and retry.")
@@ -116,7 +117,10 @@ for (const locale of ["zh-CN", "en"] as const) {
         await journey.step("提交任务并理解失败", "失败通知使用当前语言说明原因和恢复办法，底层错误默认折叠。", async () => {
           const run = await sendUserMessage(page, fixture!.session.id, "Check failure feedback");
           expect((await waitForRunTerminal(page, fixture!.session.id, run.id)).status).toBe("failed");
-          await expect(toast.locator("strong")).toHaveText(title);
+          await expect(toast.locator("strong")).toHaveText(requestTitle);
+          await expect(page.getByRole("status").filter({ hasText: requestTitle })).toBeVisible();
+          await expect(page.locator(".connection.bad")).toHaveAttribute("title", /COPY_TEST_PROVIDER_DETAIL/);
+          await expect(page.locator(".connection.bad")).not.toContainText("COPY_TEST_PROVIDER_DETAIL");
           await expect(toast.locator("small")).toHaveText(guidance);
           await expect(toast.locator("pre")).toBeHidden();
           await expect(toast.locator("small")).not.toContainText("COPY_TEST_PROVIDER_DETAIL");
