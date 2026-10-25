@@ -15,7 +15,8 @@
 import type { CreateProjectResponse, Project } from "@sciencediscovery/schema";
 import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
-import { apiJson, cleanupJourney, type JourneyFixture } from "./helpers/journeys.ts";
+import { authorizationHeader } from "./e2e-auth.js";
+import { cleanupJourney, type JourneyFixture } from "./helpers/journeys.ts";
 
 test.describe("project research description", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
   test.use({ locale: "en-US" });
@@ -51,7 +52,11 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
     const updatedText = "Updated RNA-seq note\n比较肿瘤与正常样本。";
     const settings = page.getByRole("dialog", { name: "Project settings", exact: true });
     const description = settings.getByRole("region", { name: "Research description", exact: true });
-    const projects = () => apiJson<Project[]>(page, "/api/projects");
+    const projects = async (): Promise<Project[]> => {
+      const response = await page.request.get("/api/projects", { headers: authorizationHeader() });
+      expect(response.ok()).toBeTruthy();
+      return response.json();
+    };
     try {
       await journey.step("Create Projects A and B", "A stores its research description; B has no description.", async () => {
         await page.goto("/");
