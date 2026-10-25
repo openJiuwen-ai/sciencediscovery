@@ -1713,6 +1713,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       enabledSkillIds: "unset",
       modelId: "session",
       reviewModelId: "session",
+      reviewThinkingEffort: "unset",
       semanticReviewEnabled: "session",
       skillSelectionMode: "unset",
       thinkingEffort: "unset",
@@ -1815,6 +1816,7 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
       enabledSkillIds: "project",
       modelId: "project",
       reviewModelId: "session",
+      reviewThinkingEffort: "unset",
       semanticReviewEnabled: "global",
       skillSelectionMode: "project",
       thinkingEffort: "unset",
@@ -3650,6 +3652,49 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
   const cleared = store.getSessionSettings(session.id);
   assert.equal(cleared.effective.thinkingMode, undefined);
   assert.equal(cleared.sources.thinkingMode, "unset");
+});
+
+test("a Session reports its model's thinking choices and resolves the Reviewer effort through scopes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-controls-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "tok", apiVariant: "deepseek", baseUrl: "https://api.example/v1", model: "deepseek-v4-pro", name: "示例模型",
+  });
+  const plain = await store.createModel({
+    apiToken: "tok", apiVariant: "openai", baseUrl: "https://api.example/v1", model: "plain-chat", name: "Plain",
+  });
+  const project = await store.createProject("reviewer-effort");
+  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+
+  // The CLI checks --effort against these before writing anything.
+  assert.deepEqual(store.getSessionThinkingControls(session.id), {
+    efforts: ["high", "max"], modelId: model.id, modelName: "示例模型", modes: ["auto", "enabled", "disabled"], supported: true,
+  });
+  await store.updateSession(session.id, { modelId: plain.id });
+  assert.deepEqual(store.getSessionThinkingControls(session.id), {
+    efforts: [], modelId: plain.id, modelName: "Plain", modes: [], supported: false,
+  });
+
+  // Unset by default: the review keeps the profile's thinking.
+  assert.equal(store.getSessionSettings(session.id).effective.reviewThinkingEffort, undefined);
+  assert.equal(store.getSessionSettings(session.id).sources.reviewThinkingEffort, "unset");
+  await store.replaceGlobalSettings({ ...store.getGlobalSettings().overrides, reviewThinkingEffort: "max" });
+  assert.equal(store.getSessionSettings(session.id).effective.reviewThinkingEffort, "max");
+  assert.equal(store.getSessionSettings(session.id).sources.reviewThinkingEffort, "global");
+  await store.updateSession(session.id, { reviewThinkingEffort: "high" });
+  const details = store.getSessionSettings(session.id);
+  assert.equal(details.effective.reviewThinkingEffort, "high");
+  assert.equal(details.sources.reviewThinkingEffort, "session");
+  // The conversation's own thinking is untouched by the Reviewer's.
+  assert.equal(details.effective.thinkingEffort, undefined);
+  await assert.rejects(
+    store.updateSession(session.id, { reviewThinkingEffort: "ultra" as never }),
+    /reviewThinkingEffort must be/,
+  );
 });
 
 test("switching Session models persists a legal model-level effort across reloads", async (context) => {

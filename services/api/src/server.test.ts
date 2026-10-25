@@ -71,6 +71,7 @@ import type {
   SessionDetail,
   SessionRun,
   SessionRunEvent,
+  SessionThinkingControls,
   SessionUsageSummary,
   RunnerHealth,
   ScientificEnvironmentSetup,
@@ -994,6 +995,32 @@ test("authenticated proxy REST returns complete settings URLs and manages MCP po
   });
   assert.equal(referencedDelete.status, 409);
   assert.match((await referencedDelete.json() as { error: string }).error, /referenced/);
+});
+
+test("a Session's thinking controls are those of the model its next run resolves to", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-controls-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin, { apiVariant: "kimi-k3", model: "custom-k3", name: "K3 gateway" });
+  const project = await jsonRequest<{ firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "thinking", settingsOverrides: { modelId: model.id } }),
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(project.response.status, 201);
+  const sessionId = project.body.firstSession.id;
+
+  const controls = await jsonRequest<SessionThinkingControls>(`${origin}/api/sessions/${sessionId}/thinking-controls`, {
+    headers: authorization,
+  });
+  assert.equal(controls.response.status, 200);
+  // The composer's choices for the same model: Kimi K3 cannot turn thinking off.
+  assert.deepEqual(controls.body, {
+    efforts: ["low", "high", "max"], modelId: model.id, modelName: "K3 gateway", modes: ["auto", "enabled"], supported: true,
+  });
+  assert.equal((await fetch(`${origin}/api/sessions/${sessionId}/thinking-controls`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/sessions/missing/thinking-controls`, { headers: authorization })).status, 404);
 });
 
 async function startToolModel(context: TestContext): Promise<{

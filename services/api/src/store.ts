@@ -113,6 +113,7 @@ import type {
   Session,
   SessionDetail,
   SessionRun,
+  SessionThinkingControls,
   SessionRunEvent,
   SessionRunStatus,
   IdeaTreeRunSettingsSnapshot,
@@ -180,6 +181,7 @@ import {
   getModelProviderPreset,
   lookupModelCatalog,
   MODEL_API_VARIANTS,
+  modelThinkingControls,
   resolveModelFacts,
 } from "@sciencediscovery/schema";
 import {
@@ -1694,7 +1696,7 @@ export class SessionStore {
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
-        else if (field === "thinkingEffort") effective.thinkingEffort = value as ModelThinkingEffort;
+        else if (field === "thinkingEffort" || field === "reviewThinkingEffort") effective[field] = value as ModelThinkingEffort;
         else effective[field] = value as string;
         sources[field] = source;
       }
@@ -2223,6 +2225,13 @@ export class SessionStore {
         { inheritedPlugins: mergePluginSettings(this.catalog.globalSettings.plugins, project.settingsOverrides.plugins) } : {}),
       ...this.resolveRuntimeSettings(sessionId),
     };
+  }
+
+  /** What the Session's next Run can be asked to think at: the controls of its effective model. */
+  getSessionThinkingControls(sessionId: string): SessionThinkingControls {
+    const model = this.getModel(this.resolveRuntimeSettings(sessionId).effective.modelId);
+    const { efforts, modes, supported } = modelThinkingControls(model, this.listProviders());
+    return { efforts, modes, supported, ...(model ? { modelId: model.id, modelName: model.name } : {}) };
   }
 
   resolveRuntimeSettings(sessionId: string): ResolvedRuntimeSettings {

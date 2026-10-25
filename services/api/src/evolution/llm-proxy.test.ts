@@ -355,6 +355,48 @@ test("a caller that says nothing about thinking has nothing added", async () => 
   assert.equal("thinking" in (seen[0] ?? {}), false);
 });
 
+test("an Idea Tree stage's effort is narrowed to the model's stops, and ignored where it has none", async () => {
+  const tokens = new RunTokenRegistry();
+  const models: Record<string, unknown> = {
+    // Kimi K3 accepts low, high and max.
+    kimi: { ...MODEL, apiProtocol: "openai-chat-completions", apiVariant: "kimi-k3", id: "kimi" },
+    plain: { ...MODEL, apiProtocol: "openai-chat-completions", apiVariant: "openai", id: "plain" },
+  };
+  const store = {
+    ...(fakeStore().store as object),
+    getModel: (id: string) => models[id],
+    listProviders: () => [],
+  } as never;
+  const seen: Array<Record<string, unknown>> = [];
+  const { origin } = await mount({
+    fetchImpl: (async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), { status: 200 });
+    }) as never,
+    store,
+    tokens,
+  });
+  const ask = (modelId: string, extra: Record<string, unknown>) => fetch(`${origin}/internal/evolve-llm/run-${modelId}/v1/chat/completions`, {
+    body: JSON.stringify({ messages: [{ content: "assess this design", role: "user" }], ...extra }),
+    headers: { authorization: `Bearer ${tokens.issue(`run-${modelId}`, "s1", modelId)}`, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  assert.equal((await ask("kimi", { reasoning_effort: "max" })).status, 200);
+  assert.equal(seen.at(-1)?.reasoning_effort, "max");
+  assert.equal((await ask("kimi", { reasoning_effort: "medium" })).status, 200);
+  assert.equal(seen.at(-1)?.reasoning_effort, "high");
+  // A stage with no effort of its own keeps the profile's thinking: nothing added.
+  assert.equal((await ask("kimi", {})).status, 200);
+  assert.equal("reasoning_effort" in (seen.at(-1) ?? {}), false);
+  // A model without an effort field is never sent one.
+  assert.equal((await ask("plain", { reasoning_effort: "high" })).status, 200);
+  assert.equal("reasoning_effort" in (seen.at(-1) ?? {}), false);
+  const calls = seen.length;
+  assert.equal((await ask("kimi", { reasoning_effort: "ultra" })).status, 400);
+  assert.equal(seen.length, calls, "an unknown level is refused before the provider is called");
+});
+
 test("a run's two models get two tokens, and neither buys the other", async () => {
   // A judged scorecard needs a second model: one rewrites the candidate, one
   // grades it. The proxy pins the model to the token exactly so a caller cannot

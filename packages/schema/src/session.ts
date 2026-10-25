@@ -524,12 +524,27 @@ export interface UpdateSessionRequest {
   remoteRunnerHostIds?: string[] | null;
   runnerIds?: string[] | null;
   reviewModelId?: string;
+  reviewThinkingEffort?: ModelThinkingEffort;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
   specialistId?: string | null;
   thinkingEffort?: ModelThinkingEffort;
   thinkingMode?: ModelThinkingMode;
   title?: string;
+}
+
+/**
+ * The thinking choices the Session's effective model accepts — the same ones
+ * the composer offers — so a client can refuse a value the model would not
+ * honor instead of letting it be narrowed silently.
+ */
+export interface SessionThinkingControls {
+  efforts: ModelThinkingEffort[];
+  /** Absent when the Session resolves to no model. */
+  modelId?: string;
+  modelName?: string;
+  modes: ModelThinkingMode[];
+  supported: boolean;
 }
 
 export interface SendMessageRequest {
