@@ -40,6 +40,7 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
    * CostSideEffects: no external cost; both Projects and their Sessions are deleted in finally.
    */
   test("Read, revise and clear research descriptions in Project settings", { tag: "@mocked" }, async ({ page, journey }) => {
+    page.setDefaultTimeout(10_000);
     journey.scenario({
       goal: "Keep a Project's research description visible and editable after creation, independently of other settings and Projects.",
       preconditions: ["Isolated API/Web and Runner; no model or Agent turn is needed."],
@@ -70,6 +71,9 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
           const payload = await (await response).json() as CreateProjectResponse;
           fixtures.push({ project: payload.project, session: payload.firstSession });
           await expect(dialog).toHaveCount(0);
+          for (const dismiss of await page.locator(".toast").getByRole("button", { name: "Dismiss", exact: true }).all()) {
+            await dismiss.click();
+          }
         }
         original = (await projects()).find((item) => item.id === fixtures[0]!.project.id)!;
         other = (await projects()).find((item) => item.id === fixtures[1]!.project.id)!;
@@ -86,7 +90,7 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
       await journey.step("Cancel a long draft at 390 × 844", "The textarea and actions fit the narrow dialog; cancel restores the saved description.", async () => {
         await page.setViewportSize({ width: 390, height: 844 });
         await description.getByRole("button", { name: "Edit description", exact: true }).click();
-        const input = description.getByLabel("Research description", { exact: true });
+        const input = description.getByRole("textbox", { name: "Research description", exact: true });
         await input.fill("https://research.example/" + "研究RNAseq".repeat(247));
         await expect(input).toHaveAttribute("maxlength", "2000");
         const box = await description.boundingBox();
@@ -99,14 +103,14 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
       await journey.step("Recover from a failed save", "The error stays next to the editor and the user's draft remains available for retry.", async () => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await description.getByRole("button", { name: "Edit description", exact: true }).click();
-        await description.getByLabel("Research description", { exact: true }).fill(`  ${updatedText}  `);
+        await description.getByRole("textbox", { name: "Research description", exact: true }).fill(`  ${updatedText}  `);
         await page.route(`**/api/projects/${original.id}`, async (route) => {
           if (route.request().method() === "PATCH") await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Description save unavailable" }) });
           else await route.continue();
         });
         await description.getByRole("button", { name: "Save description", exact: true }).click();
         await expect(description.getByRole("alert")).toContainText("Description save unavailable");
-        await expect(description.getByLabel("Research description", { exact: true })).toHaveValue(`  ${updatedText}  `);
+        await expect(description.getByRole("textbox", { name: "Research description", exact: true })).toHaveValue(`  ${updatedText}  `);
         await page.unroute(`**/api/projects/${original.id}`);
       });
       await journey.step("Save and reopen", "The retried save trims the text; a full reload shows the persisted multiline description.", async () => {
@@ -122,7 +126,7 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
       await journey.step("Clear with an empty value at 1280 × 600", "Saving empty text removes the payload field and hides the description preview after reload.", async () => {
         await page.setViewportSize({ width: 1280, height: 600 });
         await description.getByRole("button", { name: "Edit description", exact: true }).click();
-        await description.getByLabel("Research description", { exact: true }).fill("");
+        await description.getByRole("textbox", { name: "Research description", exact: true }).fill("");
         await description.getByRole("button", { name: "Save description", exact: true }).click();
         await expect(description.getByRole("button", { name: "Add description", exact: true })).toBeVisible();
         await page.reload();
@@ -131,11 +135,11 @@ test.describe("project research description", { tag: ["@isolation:session", "@ca
       });
       await journey.step("Clear with whitespace and check isolation", "Whitespace also removes the field; Project A's other fields and all of Project B remain unchanged.", async () => {
         await description.getByRole("button", { name: "Add description", exact: true }).click();
-        await description.getByLabel("Research description", { exact: true }).fill("A temporary note");
+        await description.getByRole("textbox", { name: "Research description", exact: true }).fill("A temporary note");
         await description.getByRole("button", { name: "Save description", exact: true }).click();
         await expect(description.locator(".project-description-text")).toHaveText("A temporary note");
         await description.getByRole("button", { name: "Edit description", exact: true }).click();
-        await description.getByLabel("Research description", { exact: true }).fill("  \n\t  ");
+        await description.getByRole("textbox", { name: "Research description", exact: true }).fill("  \n\t  ");
         await description.getByRole("button", { name: "Save description", exact: true }).click();
         await expect(description.getByRole("button", { name: "Add description", exact: true })).toBeVisible();
         await page.reload();
