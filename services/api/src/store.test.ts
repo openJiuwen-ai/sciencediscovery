@@ -1713,6 +1713,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       enabledSkillIds: "unset",
       modelId: "session",
       reviewModelId: "session",
+      reviewThinkingEffort: "unset",
       semanticReviewEnabled: "session",
       skillSelectionMode: "unset",
       thinkingEffort: "unset",
@@ -1815,6 +1816,7 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
       enabledSkillIds: "project",
       modelId: "project",
       reviewModelId: "session",
+      reviewThinkingEffort: "unset",
       semanticReviewEnabled: "global",
       skillSelectionMode: "project",
       thinkingEffort: "unset",
@@ -2306,6 +2308,57 @@ test("SessionStore clears an auto-default only while the attempted model still o
   assert.deepEqual(reopened.getGlobalSettings().overrides, {
     enabledConnectorIds: [], thinkingEffort: "high",
   });
+});
+
+test("SessionStore persists project description edits and clears without changing other fields or projects", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-description-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Project A", { enabledConnectorIds: [] }, [], undefined, "  Original research  ");
+  const other = structuredClone(await store.createProject("Project B"));
+  const original = structuredClone(project);
+  assert.equal(project.description, "Original research");
+
+  const updated = await store.updateProject(project.id, { description: "  Updated RNA-seq note\n肿瘤与正常样本  " });
+  assert.deepEqual(updated, { ...original, description: "Updated RNA-seq note\n肿瘤与正常样本" });
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getProject(project.id), updated);
+  assert.deepEqual(reopened.getProject(other.id), other);
+  assert.equal((await reopened.updateProject(project.id, { name: "Project A renamed" })).description, updated.description);
+
+  for (const blank of ["", "  \n\t "]) {
+    await reopened.updateProject(project.id, { description: "Temporary description" });
+    const cleared = await reopened.updateProject(project.id, { description: blank });
+    assert.equal(Object.hasOwn(cleared, "description"), false);
+    const reloaded = new SessionStore(tempRoot);
+    await reloaded.load();
+    assert.equal(Object.hasOwn(reloaded.getProject(project.id)!, "description"), false);
+    assert.deepEqual(reloaded.getProject(other.id), other);
+    const { description: _description, ...expected } = original;
+    assert.deepEqual(cleared, { ...expected, name: "Project A renamed" });
+  }
+});
+
+test("SessionStore validates project description before mutation and shares creation limits", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-description-limit-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const maxDescription = "研".repeat(2000);
+  const project = await store.createProject("Limit project", {}, [], undefined, `  ${maxDescription}  `);
+  assert.equal(project.description, maxDescription);
+  assert.equal((await store.updateProject(project.id, { description: `  ${maxDescription}  ` })).description, maxDescription);
+  const before = structuredClone(project);
+  for (const description of ["x".repeat(2001), null, 42, {}, []]) {
+    await assert.rejects(store.updateProject(project.id, {
+      description: description as string, name: "Must not rename", runnerIds: [],
+    }), /Project description must/);
+    assert.deepEqual(store.getProject(project.id), before);
+    await assert.rejects(store.createProject("Rejected project", {}, [], undefined, description as string), /Project description must/);
+  }
+  assert.equal(Object.hasOwn(await store.createProject("Blank project", {}, [], undefined, "  \n "), "description"), false);
 });
 
 test("SessionStore persists validated Project and Session renames", async (context) => {
@@ -3650,6 +3703,49 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
   const cleared = store.getSessionSettings(session.id);
   assert.equal(cleared.effective.thinkingMode, undefined);
   assert.equal(cleared.sources.thinkingMode, "unset");
+});
+
+test("a Session reports its model's thinking choices and resolves the Reviewer effort through scopes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-controls-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "tok", apiVariant: "deepseek", baseUrl: "https://api.example/v1", model: "deepseek-v4-pro", name: "示例模型",
+  });
+  const plain = await store.createModel({
+    apiToken: "tok", apiVariant: "openai", baseUrl: "https://api.example/v1", model: "plain-chat", name: "Plain",
+  });
+  const project = await store.createProject("reviewer-effort");
+  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+
+  // The CLI checks --effort against these before writing anything.
+  assert.deepEqual(store.getSessionThinkingControls(session.id), {
+    efforts: ["high", "max"], modelId: model.id, modelName: "示例模型", modes: ["auto", "enabled", "disabled"], supported: true,
+  });
+  await store.updateSession(session.id, { modelId: plain.id });
+  assert.deepEqual(store.getSessionThinkingControls(session.id), {
+    efforts: [], modelId: plain.id, modelName: "Plain", modes: [], supported: false,
+  });
+
+  // Unset by default: the review keeps the profile's thinking.
+  assert.equal(store.getSessionSettings(session.id).effective.reviewThinkingEffort, undefined);
+  assert.equal(store.getSessionSettings(session.id).sources.reviewThinkingEffort, "unset");
+  await store.replaceGlobalSettings({ ...store.getGlobalSettings().overrides, reviewThinkingEffort: "max" });
+  assert.equal(store.getSessionSettings(session.id).effective.reviewThinkingEffort, "max");
+  assert.equal(store.getSessionSettings(session.id).sources.reviewThinkingEffort, "global");
+  await store.updateSession(session.id, { reviewThinkingEffort: "high" });
+  const details = store.getSessionSettings(session.id);
+  assert.equal(details.effective.reviewThinkingEffort, "high");
+  assert.equal(details.sources.reviewThinkingEffort, "session");
+  // The conversation's own thinking is untouched by the Reviewer's.
+  assert.equal(details.effective.thinkingEffort, undefined);
+  await assert.rejects(
+    store.updateSession(session.id, { reviewThinkingEffort: "ultra" as never }),
+    /reviewThinkingEffort must be/,
+  );
 });
 
 test("switching Session models persists a legal model-level effort across reloads", async (context) => {

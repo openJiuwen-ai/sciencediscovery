@@ -25,6 +25,7 @@ export type RuntimeSettingsField =
   | "enabledSkillIds"
   | "modelId"
   | "reviewModelId"
+  | "reviewThinkingEffort"
   | "semanticReviewEnabled"
   | "skillSelectionMode"
   | "thinkingEffort"
@@ -60,6 +61,11 @@ export interface RuntimeSettingsOverrides {
   enabledSkillIds?: string[];
   modelId?: string;
   reviewModelId?: string;
+  /** Thinking effort of the Reviewer Specialist's semantic (Deep) review,
+   *  independent of the conversation's. Unset keeps the review on the model
+   *  profile's own thinking setting; set, it turns thinking on at the nearest
+   *  stop the model accepts, and a model without an effort control ignores it. */
+  reviewThinkingEffort?: ModelThinkingEffort;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
   /** Per-scope thinking overrides. They sit on top of the selected model
@@ -79,6 +85,7 @@ export interface EffectiveRuntimeSettings {
   enabledSkillIds: string[];
   modelId?: string;
   reviewModelId?: string;
+  reviewThinkingEffort?: ModelThinkingEffort;
   semanticReviewEnabled: boolean;
   skillSelectionMode: SkillSelectionMode;
   thinkingEffort?: ModelThinkingEffort;
@@ -283,6 +290,19 @@ export interface IdeaTreeAssessorConfig {
   weight?: number;
 }
 
+/** Idea Tree stages that can think at their own effort; `assess` covers every assessor of the template. */
+export const IDEA_TREE_THINKING_ROLES = ["ideate", "design", "assess", "aggregate", "propagate"] as const;
+
+export type IdeaTreeThinkingRole = typeof IDEA_TREE_THINKING_ROLES[number];
+
+/**
+ * Thinking effort per Idea Tree stage. A stage left out keeps the model
+ * profile's own thinking setting; a set stage turns thinking on at the nearest
+ * stop the research model accepts, and a model without an effort control
+ * ignores it. Frozen into each research when it is created.
+ */
+export type IdeaTreeRoleThinkingEfforts = Partial<Record<IdeaTreeThinkingRole, ModelThinkingEffort>>;
+
 /**
  * Idea Tree 系统设置。存在于 System Settings 中，不在 Session 级别。
  * 用户输入 /idea-tree 命令触发 idea-tree 功能，参数从此设置注入。
@@ -316,6 +336,9 @@ export interface IdeaTreeSettings {
 
   /** PROPAGATE 阶段 insight 合成指令覆盖。只影响合成指令文本，不触碰 runtime 的 childDigest 校验与逐级传播队列 */
   propagateInsightSystemPrompt?: string;
+
+  /** Per-stage thinking effort; absent when no stage has its own. */
+  roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts;
 }
 
 export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
@@ -352,6 +375,7 @@ export interface IdeaTreeSettingsDetails {
   assessorSustainability: IdeaTreeAssessorConfig;
   aggregatorSystemPrompt?: string;
   propagateInsightSystemPrompt?: string;
+  roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts;
 }
 
 /** Idea Tree 设置写入 payload。每个字段可选，独立更新。空值（空字符串/undefined）即使用默认。 */
@@ -372,6 +396,8 @@ export interface UpdateIdeaTreeSettingsRequest {
   assessorSustainability?: IdeaTreeAssessorConfig;
   aggregatorSystemPrompt?: string | null;
   propagateInsightSystemPrompt?: string | null;
+  /** Replaces the whole per-stage map; `null` or `{}` returns every stage to inherit. */
+  roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts | null;
 }
 
 export interface RuntimeSessionRun {

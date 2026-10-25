@@ -93,6 +93,29 @@ For exact options in the current build, use:
 ./ScienceDiscovery run --help
 ```
 
+### Thinking and reasoning effort
+
+`--thinking` and `--effort` set thinking for the model the run uses. Like `--model`, the choice is saved on the run's session.
+
+| Option | Effect |
+| --- | --- |
+| `--thinking off` | Turn thinking off |
+| `--thinking auto` | Leave thinking to the model's default |
+| `--thinking on` | Turn thinking on at the session's current effort |
+| `--effort <level>` | Think at `low`, `medium`, `high`, `xhigh`, or `max`; implies `--thinking on` |
+
+The accepted values are exactly the choices the composer offers for that model. They are checked after `--model` is applied and before anything is saved or the run starts. A value the model does not accept fails the command with exit code 1 and a message that lists what the model does accept; in JSONL mode the message is an `error` line with `"code": "THINKING_NOT_ACCEPTED"`. This covers an effort level the model has no stop for, `off` on a model that cannot turn thinking off, and either option on a model without a thinking control. `--effort` together with `--thinking off` or `--thinking auto` is rejected as a contradiction. Without either option, the session's thinking is left as it is.
+
+To compare efforts, run the same task once per level:
+
+```bash
+for level in high max; do
+  ./ScienceDiscovery run --auto-approve --output text --effort "$level" "Summarize the dataset" > "answer-$level.md"
+done
+```
+
+Each run records its effective thinking in `settingsSnapshot.thinkingMode` and `settingsSnapshot.thinkingEffort` of `GET /api/sessions/:sessionId/runs/:runId`; the effort applies only when the mode is `enabled`. The Reviewer and Idea Tree stages can have their own effort; those are settings, not `run` options. See [Thinking effort per role](runtime-behavior.md#thinking-effort-per-role).
+
 ### Local source mode
 
 Use:

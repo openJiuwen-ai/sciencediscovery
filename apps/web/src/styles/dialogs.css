@@ -159,6 +159,12 @@
 .editor-heading strong, .editor-heading small { display: block; }
 .editor-heading strong { color: var(--text-strong); font-size: 17px; }
 .editor-heading small { margin-top: 5px; color: var(--muted); font-size: 13px; }
+.project-description { margin: 0 0 20px; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
+.project-description-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.project-description-heading strong, .project-description label > span { color: var(--text-strong); font-size: 14px; font-weight: 700; }
+.project-description label { display: grid; gap: 8px; }
+.project-description-text { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.project-description .dialog-actions { flex-wrap: wrap; }
 .model-editor-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .model-editor-actions .primary-button { justify-self: end; width: auto; }
 

@@ -113,6 +113,7 @@ import type {
   Session,
   SessionDetail,
   SessionRun,
+  SessionThinkingControls,
   SessionRunEvent,
   SessionRunStatus,
   IdeaTreeRunSettingsSnapshot,
@@ -180,6 +181,7 @@ import {
   getModelProviderPreset,
   lookupModelCatalog,
   MODEL_API_VARIANTS,
+  modelThinkingControls,
   resolveModelFacts,
 } from "@sciencediscovery/schema";
 import {
@@ -304,6 +306,14 @@ function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): Runti
     enabledSkillLibraries: [],
     skillSelectionMode: "selected",
   };
+}
+
+function normalizeProjectDescription(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value !== "string") throw new SessionStoreHttpError("Project description must be a string", 400);
+  const description = value.trim();
+  if (description.length > 2_000) throw new SessionStoreHttpError("Project description must be at most 2000 characters", 400);
+  return description;
 }
 
 function requiredLabel(value: unknown, field: string): string {
@@ -1694,7 +1704,7 @@ export class SessionStore {
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
-        else if (field === "thinkingEffort") effective.thinkingEffort = value as ModelThinkingEffort;
+        else if (field === "thinkingEffort" || field === "reviewThinkingEffort") effective[field] = value as ModelThinkingEffort;
         else effective[field] = value as string;
         sources[field] = source;
       }
@@ -2225,6 +2235,13 @@ export class SessionStore {
     };
   }
 
+  /** What the Session's next Run can be asked to think at: the controls of its effective model. */
+  getSessionThinkingControls(sessionId: string): SessionThinkingControls {
+    const model = this.getModel(this.resolveRuntimeSettings(sessionId).effective.modelId);
+    const { efforts, modes, supported } = modelThinkingControls(model, this.listProviders());
+    return { efforts, modes, supported, ...(model ? { modelId: model.id, modelName: model.name } : {}) };
+  }
+
   resolveRuntimeSettings(sessionId: string): ResolvedRuntimeSettings {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
@@ -2668,8 +2685,7 @@ export class SessionStore {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
     const allowedRunners = runnerIds === undefined ? undefined : this.validateRunnerIds(runnerIds);
     const allowedHosts = this.validateProjectRemoteRunnerHosts(allowedRunners?.filter((id) => id !== "local") ?? remoteRunnerHostIds);
-    const trimmedDescription = description?.trim() ?? "";
-    if (trimmedDescription.length > 2_000) throw new Error("Project description must be at most 2000 characters");
+    const trimmedDescription = normalizeProjectDescription(description);
     const project: Project = {
       createdAt: new Date().toISOString(),
       ...(trimmedDescription ? { description: trimmedDescription } : {}),
@@ -2688,6 +2704,7 @@ export class SessionStore {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
     const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
+    const description = normalizeProjectDescription(changes.description);
     if (changes.runnerIds !== undefined) {
       const ids = this.validateRunnerIds(changes.runnerIds);
       project.runnerIds = ids;
@@ -2698,6 +2715,10 @@ export class SessionStore {
       project.remoteRunnerHostIds = ids;
     }
     if (name !== undefined) project.name = name;
+    if (changes.description !== undefined) {
+      if (description) project.description = description;
+      else delete project.description;
+    }
     await this.saveCatalog();
     return project;
   }

@@ -44,6 +44,7 @@ import {
 import {
   lookupModelCatalog,
   MODEL_PROVIDER_PRESETS,
+  roleThinking,
   type CreateModelProviderRequest,
   type CreateProviderModelRequest,
   type ModelFactOverrides,
@@ -427,8 +428,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             dataDir: store.dataDir,
             model: selectedModel.model,
             proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
-            thinkingEffort: selectedModel.thinkingEffort,
-            thinkingMode: selectedModel.thinkingMode,
+            // The review's own effort when one is set; otherwise the profile's
+            // thinking, as before the setting existed.
+            ...(roleThinking(selectedModel, store.listProviders(), runtimeSettings.reviewThinkingEffort)
+              ?? { thinkingEffort: selectedModel.thinkingEffort, thinkingMode: selectedModel.thinkingMode }),
           },
           enabledConnectorIds: reviewerConnectorIds,
           executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
@@ -2349,6 +2352,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sessionSettingsMatch[1]!,
           await readJson<RuntimeSettingsOverrides>(request),
         ));
+        return;
+      }
+      const sessionThinkingControlsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/thinking-controls$/);
+      if (sessionThinkingControlsMatch && request.method === "GET") {
+        if (!store.getSession(sessionThinkingControlsMatch[1]!)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, store.getSessionThinkingControls(sessionThinkingControlsMatch[1]!));
         return;
       }
 

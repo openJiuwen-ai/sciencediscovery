@@ -33,6 +33,8 @@ import { DownloadIcon } from "./icons.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { useLocale } from "./i18n/index.js";
 import { MarkdownRenderer } from "./Markdown.js";
+import { SourcePreview } from "./SourcePreview.js";
+import { readPreviewText } from "./source-preview.js";
 import { detectStructureFormat, isStructureJson, type StructureFormat } from "./molecular.js";
 
 // Mol* is heavy; only fetch its bundle when the floating viewer is opened.
@@ -213,7 +215,7 @@ export function CsvArtifactPreview({
       <strong>{t("csv.openWorkspace")}</strong>
       <small>{t("csv.openWorkspaceHint")}</small>
     </button>
-    <details><summary>{t("csv.viewRaw")}</summary><pre className="artifact-source-preview">{source.slice(0, 100_000) || t("csv.loadingArtifact")}</pre></details>
+    <details><summary>{t("csv.viewRaw")}</summary>{ready ? <SourcePreview source={source} /> : <p>{t("csv.loadingArtifact")}</p>}</details>
   </div>;
 }
 
@@ -254,6 +256,7 @@ export function DatasetTable({ columns, rows, totalRows, truncated }: { columns:
 export function JsonSourcePreview({ parsed, source, truncated }: { parsed: boolean; source: string; truncated: boolean }) {
   const { t } = useLocale();
   return <ArtifactViewerSlot kind="json" parsed={parsed} source={source} truncated={truncated}
+    renderSource={(text) => <SourcePreview language="json" source={text} />}
     labels={{ invalidJson: t("artifact.invalidJsonNote"), truncated: t("artifact.previewTruncated") }} />;
 }
 
@@ -297,11 +300,11 @@ export function DatasetPreview({
   </div>;
 }
 
-function NotebookCells({ cells }: { cells: NotebookCell[] }) {
+function NotebookCells({ cells, language }: { cells: NotebookCell[]; language?: string }) {
   return <div className="notebook-cells">{cells.map((cell, i) => {
     if (cell.cell_type === "markdown") return <div className="notebook-cell markdown" key={i}><MarkdownRenderer content={cell.source} /></div>;
-    if (cell.cell_type === "code") return <div className="notebook-cell code" key={i}><div className="notebook-cell-header">code</div><pre>{cell.source}</pre>{cell.execution_count != null ? <small>execution count: {cell.execution_count}</small> : null}</div>;
-    return <div className="notebook-cell raw" key={i}><pre>{cell.source}</pre></div>;
+    if (cell.cell_type === "code") return <div className="notebook-cell code" key={i}><div className="notebook-cell-header">code</div><SourcePreview source={cell.source} language={language ?? "plaintext"} />{cell.execution_count != null ? <small>execution count: {cell.execution_count}</small> : null}</div>;
+    return <div className="notebook-cell raw" key={i}><SourcePreview source={cell.source} /></div>;
   })}</div>;
 }
 
@@ -479,6 +482,7 @@ export function ArtifactModal({
   const [loadedSessions, setLoadedSessions] = useState<Session[]>();
   const [contentUrl, setContentUrl] = useState<string>();
   const [source, setSource] = useState("");
+  const [sourceIsText, setSourceIsText] = useState(false);
   const [loadedVersionId, setLoadedVersionId] = useState<string>();
   const [provenance, setProvenance] = useState<ArtifactVersionProvenance>();
   const [mode, setMode] = useState<"preview" | "provenance">("preview");
@@ -553,6 +557,13 @@ export function ArtifactModal({
   // a JSON artifact reports `dataset-table` only when it is a record array.
   const datasetTable = preview ? previewOf(preview, "dataset-table") : undefined;
   const jsonSource = preview ? previewOf(preview, "json-source") : undefined;
+  const notebookLanguage = useMemo(() => {
+    if (artifact?.kind !== "notebook" || !source) return undefined;
+    try {
+      const metadata = JSON.parse(source).metadata;
+      return metadata?.language_info?.name ?? metadata?.kernelspec?.language;
+    } catch { return undefined; }
+  }, [artifact?.kind, source]);
 
   useEffect(() => {
     setArtifacts([]);
@@ -657,17 +668,15 @@ export function ArtifactModal({
     setProvenance(undefined);
     void Promise.all([client.readArtifactVersion(sessionId, versionId), client.getArtifactProvenance(sessionId, versionId)]).then(async ([blob, nextProvenance]) => {
       if (!active) return;
-      // "other" reads as text too: it is the kind every source file lands on
-      // (the kind enum has no "code"), and gating it out meant a .py artifact
-      // opened to a blank preview. Binary "other" content is caught at render
-      // by the NUL sniff rather than here — the bytes are already downloaded.
-      const textualKind = artifact && ["dataset", "html", "json", "latex", "markdown", "notebook", "other", "structure"].includes(artifact.kind);
-      const molecularByName = detectStructureFormat({ name: artifact?.logicalName });
-      const nextSource = textualKind || molecularByName ? await blob.text() : "";
+      const text = await readPreviewText(blob, artifact?.logicalName ?? "", version?.mediaType);
+      // Specialized parsers need the complete document; generic source previews
+      // only need the bounded UTF-8 sample. Binary content is never decoded here.
+      const nextSource = text === undefined ? "" : artifact?.kind === "other" ? text : await blob.text();
       if (!active) return;
       url = URL.createObjectURL(blob);
       setContentUrl(url);
       setSource(nextSource);
+      setSourceIsText(text !== undefined);
       setLoadedVersionId(versionId);
       setProvenance(nextProvenance);
       setPoint(undefined);
@@ -696,7 +705,7 @@ export function ArtifactModal({
       }
     }).catch((error: Error) => { if (active) reportError(error); });
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
-  }, [artifact?.kind, artifact?.logicalName, client, graphSessionId, sessionId, versionId]);
+  }, [artifact?.kind, artifact?.logicalName, client, graphSessionId, sessionId, versionId, version?.mediaType]);
 
   useEffect(() => {
     if (!versionId || !artifact) { setPreview(undefined); return; }
@@ -804,8 +813,8 @@ export function ArtifactModal({
     : <div className="artifact-version-preview">
         {artifact?.kind === "figure" && contentUrl ? <><div className="annotatable-figure"> <img alt={artifact.logicalName} onClick={choosePoint} src={contentUrl} />{point ? <i style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} /> : null}</div><div className="annotation-editor"><input onChange={(event) => setNote(event.target.value)} placeholder={t("artifact.annotationPlaceholder")} value={note} /><button className="secondary-button compact-button" disabled={!point || !note.trim()} onClick={() => void saveAnnotation()} type="button">{t("artifact.attachToMessage")}</button></div></> : null}
         {artifact?.kind === "html" && contentUrl ? <><div className="dashboard-controls"><button aria-label={t("artifact.zoomOut")} className="icon-button" onClick={() => setZoom((value) => Math.max(.5, value - .1))} title={t("artifact.zoomOut")} type="button">−</button><span>{Math.round(zoom * 100)}%</span><button aria-label={t("artifact.zoomIn")} className="icon-button" onClick={() => setZoom((value) => Math.min(2, value + .1))} title={t("artifact.zoomIn")} type="button">＋</button></div><div className="dashboard-frame"><iframe sandbox="allow-scripts" src={contentUrl} style={{ height: `${420 / zoom}px`, transform: `scale(${zoom})`, transformOrigin: "top left", width: `${100 / zoom}%` }} title={artifact.logicalName} /></div></> : null}
-        {artifact?.kind === "markdown" ? <div className="manuscript-preview"><MarkdownRenderer content={source} onChipClick={onChipClick} references={version?.references} /><details><summary>{t("artifact.sourceFold")}</summary><pre>{source}</pre></details></div> : null}
-        {artifact?.kind === "latex" ? <div className="manuscript-preview"><MarkdownRenderer content={latexPreview(source)} onChipClick={onChipClick} references={version?.references} /><details><summary>{t("artifact.latexSourceFold")}</summary><pre>{source}</pre></details></div> : null}
+        {artifact?.kind === "markdown" ? <div className="manuscript-preview"><MarkdownRenderer content={source} onChipClick={onChipClick} references={version?.references} /><details><summary>{t("artifact.sourceFold")}</summary><SourcePreview name={artifact.logicalName} source={source} /></details></div> : null}
+        {artifact?.kind === "latex" ? <div className="manuscript-preview"><MarkdownRenderer content={latexPreview(source)} onChipClick={onChipClick} references={version?.references} /><details><summary>{t("artifact.latexSourceFold")}</summary><SourcePreview language="latex" source={source} /></details></div> : null}
         {structureFormat && source ? <div className="molecular-with-compare">
           {comparableStructures.length ? <div className="cmp-picker"><label>{t("artifact.compareWith")}
             <select onChange={(event) => setCompareId(event.target.value || undefined)} value={compareId ?? ""}>
@@ -826,7 +835,11 @@ export function ArtifactModal({
         </div>
           : molecularByName ? <p className="artifact-empty">{t("artifact.loadingStructure")}</p>
           : artifact?.kind === "structure" || isStructureJson(source) ? <StructureViewer content={source} /> : null}
-        {artifact?.kind === "report" && contentUrl ? <iframe className="report-frame" src={contentUrl} title={artifact.logicalName} /> : null}
+        {artifact?.kind === "report" && contentUrl
+          ? sourceIsText
+            ? <SourcePreview name={artifact.logicalName} mediaType={version?.mediaType} source={source} />
+            : <iframe className="report-frame" src={contentUrl} title={artifact.logicalName} />
+          : null}
         {artifact?.kind === "dataset" && csvDetection && !(structureFormat && source) ? <CsvArtifactPreview
           onOpen={() => setCsvWindowOpen(true)}
           ready={csvWorkspaceReady}
@@ -836,7 +849,7 @@ export function ArtifactModal({
             ? datasetPreview
           : artifact?.kind === "dataset" && jsonSource
             ? <JsonSourcePreview parsed={jsonSource.parsed} source={jsonSource.source} truncated={jsonSource.truncated} />
-          : artifact?.kind === "dataset" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || t("artifact.binaryNote")}</pre> : null}
+          : artifact?.kind === "dataset" && !(structureFormat && source) ? sourceIsText ? <SourcePreview name={artifact.logicalName} source={source} /> : <p className="artifact-empty">{t("artifact.binaryNote")}</p> : null}
         {/* JSON: a record array still gets the table (with a raw-JSON switch);
             every other document is shown as formatted JSON or raw text, never
             an empty grid. */}
@@ -845,19 +858,15 @@ export function ArtifactModal({
             ? datasetPreview
             : jsonSource
               ? <JsonSourcePreview parsed={jsonSource.parsed} source={jsonSource.source} truncated={jsonSource.truncated} />
-              : <pre className="artifact-source-preview">{source || t("artifact.loadingJson")}</pre>
+              : <SourcePreview language="json" source={source} />
           : null}
         {artifact?.kind === "notebook" && preview?.kind === "notebook" && preview.mode === "notebook-cells"
-          ? <NotebookCells cells={preview.cells} />
-          : artifact?.kind === "notebook" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || t("artifact.binaryNote")}</pre> : null}
-        {/* "other" is where every source file lands — the kind enum has no
-            "code" — and it had no case at all, so a .py artifact opened to a
-            blank body. A NUL byte in the head is the binary tell; those get
-            the download hint instead of mojibake. */}
-        {artifact?.kind === "other" && !(structureFormat && source)
-          ? (source && !source.slice(0, 4096).includes("\u0000")
-            ? <pre className="artifact-source-preview">{source.slice(0, 100_000)}</pre>
-            : <pre className="artifact-source-preview">{t("artifact.binaryNote")}</pre>)
+          ? <><NotebookCells cells={preview.cells} language={notebookLanguage} /><details><summary>{t("artifact.sourceFold")}</summary><SourcePreview language="json" source={source} /></details></>
+          : artifact?.kind === "notebook" && !(structureFormat && source) ? <SourcePreview language="json" source={source} /> : null}
+        {artifact?.kind === "other" && !(structureFormat && source) && versionId && loadedVersionId === versionId
+          ? (sourceIsText
+            ? <SourcePreview name={artifact.logicalName} mediaType={version?.mediaType} source={source} />
+            : <p className="artifact-empty">{t("artifact.binaryNote")}</p>)
           : null}
       </div>;
   const csvWorkspace: ReactNode = csvWindowOpen && artifact && version && csvWorkspaceReady ? <Suspense fallback={<div className="csv-artifact-loading" role="status"><span>{t("artifact.loadingCsvWorkspace")}</span></div>}>

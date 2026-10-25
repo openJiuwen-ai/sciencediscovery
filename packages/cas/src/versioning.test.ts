@@ -118,42 +118,98 @@ test("refs validate closure, rollback injected faults and retain every committed
     await refs.commit(store, "agent/head", first, second);
     assert.deepEqual(refs.history("agent/head"), [first, second]);
     assert.equal(refs.roots().length, 2);
+    // A new instance has admitted nothing, so its first commit checks the whole closure.
     await rm(store.objectPath(leaf));
-    await assert.rejects(refs.commit(store, "agent/broken", null, second));
+    await assert.rejects(store.validateClosure(second), { code: "ENOENT" });
+    await assert.rejects(refs.commit(new VersionStore(store.dataDir), "agent/broken", null, second));
     assert.equal(refs.head("agent/broken"), null);
     assert.deepEqual(await store.put("data", "file"), leaf);
     await writeFile(store.objectPath(leaf), "evil");
-    await assert.rejects(refs.commit(store, "agent/corrupt", null, second), /integrity/);
+    await assert.rejects(refs.commit(new VersionStore(store.dataDir), "agent/corrupt", null, second), /integrity/);
     assert.equal(refs.head("agent/corrupt"), null);
   } finally { refs.close(); }
 }));
 
-test("commit reuses verified unchanged objects while full audits still reread them", async () => fixture(async (store) => {
+test("commits rehash only objects this instance has not admitted, while full audits reread everything", async (t) => fixture(async (store) => {
   const leaf = await store.put("data", "file");
   const root = await store.putRecord("Root", { leaf });
   const refs = await RefStore.open(store);
   try {
     await refs.commit(store, "agent/first", null, root);
-    store.readRecord = async () => { throw new Error("unexpected record reread"); };
-    store.verifyRef = async () => { throw new Error("unexpected blob rehash"); };
+    const records = t.mock.method(store, "readRecord"), blobs = t.mock.method(store, "verifyRef");
     await refs.commit(store, "agent/second", null, root);
     assert.deepEqual(refs.head("agent/second"), root);
-    await assert.rejects(store.validateClosure(root), /unexpected record reread/);
+    assert.deepEqual([records.mock.callCount(), blobs.mock.callCount()], [0, 0]);
+    const next = await store.putRecord("Root", { parent: root, leaf: await store.put("data", "next") });
+    assert.equal(await store.validateClosureForCommit(next), 2);
+    assert.equal(await store.validateClosure(next), 4);
   } finally { refs.close(); }
 }));
 
-test("commit rejects an object changed during its first verification", async () => fixture(async (store) => {
+test("bytes admitted as a blob are still parsed when referenced as a record", async () => fixture(async (store) => {
+  const missing = { pool: "data", digest: `sha256:${sha256("never written")}`, size: 13, mediaType: "application/octet-stream" } as const;
+  const bytes = canonicalize({ schemaVersion: 1, kind: "Root", value: { missing }, dependencies: [missing] });
+  const blob = await store.put("agent-state", bytes);
+  assert.equal(await store.validateClosureForCommit(await store.putRecord("Holder", { blob })), 2);
+  await assert.rejects(store.validateClosureForCommit({ ...blob, mediaType: RECORD_MEDIA_TYPE }), { code: "ENOENT" });
+}));
+
+test("observing a corrupt admitted object makes the next commit verify its closure again", async () => fixture(async (store) => {
   const leaf = await store.put("data", "file");
   const root = await store.putRecord("Root", { leaf });
   const refs = await RefStore.open(store);
+  try {
+    await refs.commit(store, "agent/first", null, root);
+    await writeFile(store.objectPath(leaf), "evil");
+    // Tampering after admission is found by reads, full audits and new instances.
+    await assert.rejects(refs.commit(new VersionStore(store.dataDir), "agent/fresh", null, root), /integrity/);
+    await assert.rejects(store.readData(leaf), /integrity/);
+    await assert.rejects(refs.commit(store, "agent/after-read", null, root), /integrity/);
+    assert.equal(refs.head("agent/after-read"), null);
+  } finally { refs.close(); }
+}));
+
+test("a revocation during validation keeps that closure unadmitted", async () => fixture(async (store) => {
+  const leaf = await store.put("data", "file");
+  const base = await store.putRecord("Root", { leaf });
+  await store.validateClosureForCommit(base);
+  // Dependencies are visited from the end of their sorted list: skip base first, then hash extra.
+  let extra = await store.put("data", "extra-0");
+  for (let i = 1; extra.digest > base.digest; i++) extra = await store.put("data", `extra-${i}`);
+  const next = await store.putRecord("Root", { base, extra });
   const verify = store.verifyRef.bind(store);
   store.verifyRef = async (ref) => {
-    await verify(ref);
-    if (ref.pool === leaf.pool && ref.digest === leaf.digest) await writeFile(store.objectPath(leaf), "evil");
+    if (ref.digest === extra.digest) {
+      await writeFile(store.objectPath(leaf), "evil");
+      await assert.rejects(store.readData(leaf), /integrity/);
+    }
+    return verify(ref);
   };
+  assert.equal(await store.validateClosureForCommit(next), 2, "base was skipped before the failure was observed");
+  await assert.rejects(store.validateClosureForCommit(next), /integrity/);
+}));
+
+test("per-turn commit validation does not grow with the trajectory", async (t) => fixture(async (store) => {
+  const refs = await RefStore.open(store);
+  const records = t.mock.method(store, "readRecord"), blobs = t.mock.method(store, "verifyRef");
+  const observations: AgentStateRef[] = [], perTurn: number[] = [];
+  let head: AgentStateRef | null = null;
   try {
-    await assert.rejects(refs.commit(store, "agent/race", null, root), /changed during validation/);
-    assert.equal(refs.head("agent/race"), null);
+    for (let turn = 0; turn < 40; turn++) {
+      observations.push(await store.putRecord("ToolObservation", { turn, content: await store.put("agent-state", `output ${turn}`) }));
+      const state = await store.putRecord("AgentStateSnapshot", { turn, observations });
+      const context = await store.putRecord("ContextAssemblyRecord", { turn, state });
+      const before = records.mock.callCount() + blobs.mock.callCount();
+      await refs.commit(store, `attempts/run/${turn}`, null, context);
+      const step: AgentStateRef = await store.putRecord("TrajectoryStep", { turn, parent: head, context, state });
+      await refs.commit(store, "agents/a/head", head, step);
+      perTurn.push(records.mock.callCount() + blobs.mock.callCount() - before);
+      head = step;
+    }
+    // Content, observation, state and context, then the step; history is never reread.
+    assert.deepEqual([...new Set(perTurn)], [5]);
+    assert.equal(await store.validateClosureForCommit(head!), 0);
+    assert.equal(await store.validateClosure(head!), 5 * 40);
   } finally { refs.close(); }
 }));
 

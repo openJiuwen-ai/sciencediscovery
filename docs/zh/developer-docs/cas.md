@@ -40,7 +40,7 @@ Runner/API 的 UI 变化投影仍比较 size:mtimeMs；版本化 WorkspaceTree �
 
 ## 生命周期与恢复
 
-VersionStore.putRecord 使用 RFC 8785 JCS、schemaVersion 和强引用依赖计算内容身份，validateClosure 始终重新哈希全部可达字节。ref 提交使用 validateClosureForCommit，仍遍历完整依赖图；当对象的设备号、inode、大小、修改时间和状态变更时间未变化时，复用已验证的字节及依赖边。新对象或变化对象重新校验，校验期间发生变化则拒绝提交。缓存只在完整闭包通过后发布，且仅存在于当前 `VersionStore` 实例中；新实例首次提交会重新校验闭包。未知 schemaVersion 拒绝读取，不做隐式原地升级。
+VersionStore.putRecord 使用 RFC 8785 JCS、schemaVersion 和强引用依赖计算内容身份，validateClosure 是全量审计，始终重新哈希全部可达字节。ref 提交使用 validateClosureForCommit：只重新哈希当前 `VersionStore` 实例尚未准入的对象，遇到已准入对象即停止向下遍历，因此单次提交的开销取决于上次提交后新发布的对象，而不是轨迹长度。一次成功的提交校验或全量审计验证了对象字节（record 还包括其完整依赖闭包）后，该对象被准入；准入只在完整闭包通过后发布。以普通 blob 身份准入的字节，被后续引用声明为 record 时仍会解析。信任边界：准入依赖 CAS 只追加、对象发布后从不改写或删除（见下文），并假设本进程校验过的对象不会被存储之外的操作修改；不把文件元数据当作证据。这类带外修改不会被同一实例后续的提交发现，而由每次 `read`、`readRecord` 和导出读取（都会重新哈希）、validateClosure，以及新实例的首次提交（准入集合为空）发现。每个 Agent run 打开自己的存储，因此首次提交会把继承的历史完整校验一次。实例一旦观察到已准入对象读取失败，就清空全部准入，正在进行的校验也不会准入其结果。未知 schemaVersion 拒绝读取，不做隐式原地升级。
 
 生产 createAgentRun 创建行为 AgentManifest、血缘 AgentRevision 和初始状态；每个模型 turn 通过可等待 Runtime lifecycle 顺序提交 before state、实际 context/model input、整批工具结果、after state、actions/eventSegments、TrajectoryStep。State 将完整运行 transcript 与压缩后的模型 history 分开，另保存原始观察、工具可见性/loop 状态，以及计划、Artifact、权限、环境和子 Agent 权威记录。DurableContextStore 仅作为上下文投影。ModelContextSnapshot 的精确边界为 ProviderModelClient.invoke 输入，不保存 HTTP 认证。
 

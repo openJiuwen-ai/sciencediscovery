@@ -17,9 +17,11 @@ export function reconcile(plan, root) {
       const summary = JSON.parse(readFileSync(join(directory, 'e2e-real/tagged/summary.json')));
       if (workerPlan.revision !== plan.revision || workerPlan.profile !== plan.profile || workerPlan.evaluatorRevision !== plan.evaluatorRevision || canonical(workerPlan.execution) !== canonical(plan.execution)
         || canonical(workerPlan.entries) !== canonical(plan.entries.filter(e=>shard.keys.includes(e.key)))) throw new Error('SHARD_IDENTITY_MISMATCH');
-      const verified = verifyResults(workerPlan, summary.results);
-      if (summary.status !== 'PASS' || summary.planDigest !== workerPlan.digest || verified.exitCode) throw new Error('SHARD_FAILED');
+      if (summary.planDigest !== workerPlan.digest) throw new Error('SHARD_RESULT_PLAN_MISMATCH');
+      // A valid failed shard still executed its cases. Retain those results so
+      // suite accounting distinguishes FAIL from NOT_RUN while the gate fails.
       results.push(...summary.results);
+      if (summary.status !== 'PASS' || verifyResults(workerPlan, summary.results).exitCode) throw new Error('SHARD_FAILED');
     } catch (error) { errors.push(`${shard.name}: ${error.code === 'ENOENT' ? 'SHARD_EVIDENCE_MISSING' : error.message}`); }
   }
   return verifyResults(plan, results, errors);

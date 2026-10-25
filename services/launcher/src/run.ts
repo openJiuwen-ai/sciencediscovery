@@ -28,12 +28,13 @@
 import { createInterface } from "node:readline/promises";
 
 import { AUTH_TOKEN_FILE, resolveBootstrapToken } from "./bootstrap-tokens.js";
-import type { RunSettings } from "./cli-options.js";
+import type { RunSettings, ThinkingSwitch } from "./cli-options.js";
 import {
   ApiRequestError,
   ControlPlaneClient,
   type RunStreamEvent,
   type SessionRun,
+  type SessionThinkingControls,
 } from "./control-plane-client.js";
 import type { ServeSettings } from "./serve.js";
 
@@ -118,6 +119,38 @@ function buildSettingsOverrides(runSettings: RunSettings, input: ResolvedInput):
   const connectors = splitList(runSettings.connectors) ?? input.enabledConnectorIds;
   if (connectors) overrides.enabledConnectorIds = connectors;
   return overrides;
+}
+
+const THINKING_MODE: Record<ThinkingSwitch, string> = { auto: "auto", off: "disabled", on: "enabled" };
+const THINKING_SWITCH: Record<string, ThinkingSwitch> = { auto: "auto", disabled: "off", enabled: "on" };
+
+/**
+ * Why the session's model cannot honor `--thinking`/`--effort`, or undefined
+ * when it can. The accepted choices are the composer's for the same model, so
+ * a value is refused here instead of being narrowed silently by the server.
+ */
+export function thinkingRefusal(
+  controls: SessionThinkingControls,
+  { effort, thinking }: Pick<RunSettings, "effort" | "thinking">,
+): string | undefined {
+  if (!controls.modelId) return "--thinking and --effort need a model; choose one with --model";
+  const model = `Model "${controls.modelName ?? controls.modelId}"`;
+  if (!controls.supported) return `${model} has no thinking control, so --thinking and --effort cannot be applied`;
+  const requested = effort ? "on" : thinking!;
+  if (!controls.modes.includes(THINKING_MODE[requested])) {
+    const accepted = controls.modes.map((mode) => THINKING_SWITCH[mode] ?? mode).join(", ");
+    return `${model} does not accept --thinking ${requested}${effort ? ` (implied by --effort)` : ""}; it accepts ${accepted}`;
+  }
+  if (effort && !controls.efforts.length) return `${model} has no effort levels; use --thinking on instead of --effort`;
+  if (effort && !controls.efforts.includes(effort)) {
+    return `${model} does not accept --effort ${effort}; it accepts ${controls.efforts.join(", ")}`;
+  }
+  return undefined;
+}
+
+/** The session change `--thinking`/`--effort` make; an effort turns thinking on, as in the composer. */
+export function thinkingChanges({ effort, thinking }: Pick<RunSettings, "effort" | "thinking">): Record<string, string> {
+  return effort ? { thinkingEffort: effort, thinkingMode: "enabled" } : { thinkingMode: THINKING_MODE[thinking!] };
 }
 
 function emitJsonlError(payload: { message: string; code?: string; runId?: string; sessionId?: string }): void {
@@ -220,6 +253,18 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     }
   }
   if (!sessionId) throw new Error("internal: failed to resolve session");
+
+  // Thinking is checked against the model the run will use (after --model was
+  // applied) and only then saved on the session, like the other overrides.
+  if (runSettings.effort || runSettings.thinking) {
+    const refusal = thinkingRefusal(await client.getSessionThinkingControls(sessionId), runSettings);
+    if (refusal) {
+      if (outputMode === "text") process.stderr.write(`${refusal}\n`);
+      else emitJsonlError({ message: refusal, code: "THINKING_NOT_ACCEPTED", sessionId });
+      return { exitCode: 1 };
+    }
+    await client.updateSession(sessionId, thinkingChanges(runSettings));
+  }
 
   if (outputMode === "text") {
     log(`[run] project=${projectId ?? "—"} session=${sessionId}`);

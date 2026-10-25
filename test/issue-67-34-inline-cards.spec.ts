@@ -218,7 +218,7 @@ test("workspace plan and run-anchored subagent survive follow-up and reload", { 
 
   // Switch away and back: positions stay put.
   await page.getByRole("button", { name: "Add session" }).click();
-  await expect(page.locator(".session-bar h1.session-bar-session")).toHaveText("Untitled session", { timeout: 20_000 });
+  await expect(page.locator(".session-bar h1.session-bar-session")).toHaveText("Untitled session 2", { timeout: 20_000 });
   await selectInlineCardsSession();
   await showWorkspacePlans(page);
   await expect(plan).toBeVisible({ timeout: 60_000 });

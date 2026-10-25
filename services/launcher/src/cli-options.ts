@@ -64,10 +64,20 @@ export interface RunSettings {
   approval?: string;
   autoApprove: boolean;
   review?: string;
+  /** `--effort <level>`: thinking on at this effort. */
+  effort?: ThinkingEffort;
+  /** `--thinking <off|auto|on>`. */
+  thinking?: ThinkingSwitch;
   token?: string;
   output?: string;
   timeout?: number;
 }
+
+/** Effort stops the product knows; the selected model accepts a subset. */
+export const THINKING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingEffort = typeof THINKING_EFFORTS[number];
+export const THINKING_SWITCHES = ["off", "auto", "on"] as const;
+export type ThinkingSwitch = typeof THINKING_SWITCHES[number];
 
 export interface ParsedInvocation {
   command: Command;
@@ -127,6 +137,10 @@ run options:
   --approval <mode>        ask_for_dangerous (default) | always_allow
   --auto-approve           Equivalent to --approval always_allow
   --review <auto|manual>   Override review mode
+  --thinking <off|auto|on> Override thinking for the session's model
+  --effort <level>         Think at this effort: low, medium, high, xhigh or
+                           max (implies --thinking on). A level the model does
+                           not accept is an error, not a silent fallback
   --token <token>          Override the token read from the data directory
   --output <jsonl|text>    Output format, default jsonl (no TTY) / text (TTY)
   --timeout <ms>           Wall-clock timeout for the run
@@ -350,6 +364,22 @@ export function parseInvocation(
         runOpts(argument).review = value;
         break;
       }
+      case "--effort": {
+        const value = next();
+        if (!(THINKING_EFFORTS as readonly string[]).includes(value)) {
+          throw new Error(`${argument} must be one of ${THINKING_EFFORTS.join(", ")}`);
+        }
+        runOpts(argument).effort = value as ThinkingEffort;
+        break;
+      }
+      case "--thinking": {
+        const value = next();
+        if (!(THINKING_SWITCHES as readonly string[]).includes(value)) {
+          throw new Error(`${argument} must be off, auto or on`);
+        }
+        runOpts(argument).thinking = value as ThinkingSwitch;
+        break;
+      }
       case "--token": clientOpts(argument).token = next(); break;
       case "--output": {
         const value = next();
@@ -392,6 +422,11 @@ export function parseInvocation(
     const sources = [positional !== undefined, input !== undefined, stdin].filter(Boolean).length;
     if (sources > 1) {
       throw new Error(`run input must be exactly one of: positional, --content, --stdin (got ${sources})`);
+    }
+    // An effort only exists with thinking on, the same as in the composer.
+    const { effort, thinking } = invocation.runSettings;
+    if (effort && thinking && thinking !== "on") {
+      throw new Error(`--effort ${effort} needs thinking on; drop --thinking ${thinking} or use --thinking on`);
     }
   }
   if (invocation.command !== "help" && invocation.engineSettings) {

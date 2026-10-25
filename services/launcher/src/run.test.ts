@@ -21,8 +21,8 @@ import { join } from "node:path";
 
 
 import { parseInvocation, USAGE } from "./cli-options.js";
-import { runCommand } from "./run.js";
-import { ControlPlaneClient } from "./control-plane-client.js";
+import { runCommand, thinkingChanges, thinkingRefusal } from "./run.js";
+import { ControlPlaneClient, type SessionThinkingControls } from "./control-plane-client.js";
 import type { ServeSettings } from "./serve.js";
 
 const cwd = "/opt/sciencediscovery";
@@ -117,6 +117,116 @@ describe("run option parsing", () => {
     assert.match(USAGE, /run \[input\] \[options\]/);
     assert.match(USAGE, /--content <text>/);
     assert.match(USAGE, /--auto-approve/);
+    assert.match(USAGE, /--thinking <off\|auto\|on>/);
+    assert.match(USAGE, /--effort <level>/);
+  });
+
+  test("--effort and --thinking take only the levels and switches the product knows", () => {
+    const inv = parseInvocation(["run", "--effort", "xhigh", "--thinking", "on", "q"], {}, cwd);
+    assert.equal(inv.runSettings?.effort, "xhigh");
+    assert.equal(inv.runSettings?.thinking, "on");
+    assert.equal(parseInvocation(["run", "--thinking", "off", "q"], {}, cwd).runSettings?.thinking, "off");
+    assert.throws(() => parseInvocation(["run", "--effort", "extreme", "q"], {}, cwd), /--effort must be one of low, medium, high, xhigh, max/);
+    assert.throws(() => parseInvocation(["run", "--thinking", "enabled", "q"], {}, cwd), /--thinking must be off, auto or on/);
+    assert.throws(() => parseInvocation(["run", "--effort"], {}, cwd), /requires a value/);
+    assert.throws(() => parseInvocation(["serve", "--effort", "high"], {}, cwd), /requires the run command/);
+  });
+
+  test("an effort with thinking off or auto is a contradiction, not a guess", () => {
+    assert.throws(() => parseInvocation(["run", "--effort", "high", "--thinking", "off", "q"], {}, cwd), /needs thinking on/);
+    assert.throws(() => parseInvocation(["run", "--thinking", "auto", "--effort", "high", "q"], {}, cwd), /needs thinking on/);
+  });
+});
+
+describe("thinking against the session's model", () => {
+  const deepseek: SessionThinkingControls = {
+    efforts: ["high", "max"], modelId: "m1", modelName: "DeepSeek", modes: ["auto", "enabled", "disabled"], supported: true,
+  };
+
+  test("accepts exactly the composer's choices for the model", () => {
+    assert.equal(thinkingRefusal(deepseek, { effort: "max" }), undefined);
+    assert.equal(thinkingRefusal(deepseek, { thinking: "off" }), undefined);
+    assert.equal(thinkingRefusal(deepseek, { thinking: "auto" }), undefined);
+    assert.equal(thinkingRefusal(deepseek, { effort: "high", thinking: "on" }), undefined);
+  });
+
+  test("names the levels the model does accept when it refuses one", () => {
+    assert.equal(thinkingRefusal(deepseek, { effort: "low" }), 'Model "DeepSeek" does not accept --effort low; it accepts high, max');
+  });
+
+  test("refuses a switch the model lacks, and an effort on a model without levels", () => {
+    const kimi = { ...deepseek, efforts: ["low", "high", "max"], modelName: "Kimi K3", modes: ["auto", "enabled"] };
+    assert.equal(thinkingRefusal(kimi, { thinking: "off" }), 'Model "Kimi K3" does not accept --thinking off; it accepts auto, on');
+    const qwen = { ...deepseek, efforts: [], modelName: "Qwen" };
+    assert.equal(thinkingRefusal(qwen, { thinking: "on" }), undefined);
+    assert.equal(thinkingRefusal(qwen, { effort: "high" }), 'Model "Qwen" has no effort levels; use --thinking on instead of --effort');
+  });
+
+  test("refuses a model with no thinking control, and a session with no model", () => {
+    const plain = { efforts: [], modelId: "m2", modelName: "GPT", modes: [], supported: false };
+    assert.equal(thinkingRefusal(plain, { thinking: "auto" }), 'Model "GPT" has no thinking control, so --thinking and --effort cannot be applied');
+    assert.match(thinkingRefusal({ efforts: [], modes: [], supported: false }, { effort: "high" }) ?? "", /need a model/);
+  });
+
+  test("an effort turns thinking on; a switch alone leaves the effort as it was", () => {
+    assert.deepEqual(thinkingChanges({ effort: "max" }), { thinkingEffort: "max", thinkingMode: "enabled" });
+    assert.deepEqual(thinkingChanges({ thinking: "off" }), { thinkingMode: "disabled" });
+    assert.deepEqual(thinkingChanges({ thinking: "on" }), { thinkingMode: "enabled" });
+  });
+});
+
+describe("run with --effort / --thinking", () => {
+  const controls: SessionThinkingControls = {
+    efforts: ["high", "max"], modelId: "m1", modelName: "DeepSeek", modes: ["auto", "enabled", "disabled"], supported: true,
+  };
+
+  function mockServe(t: import("node:test").TestContext) {
+    const stdout: string[] = [];
+    const updates: unknown[] = [];
+    const runs: unknown[] = [];
+    let controlReads = 0;
+    t.mock.method(process.stdout, "write", (chunk: unknown) => { stdout.push(String(chunk)); return true; });
+    t.mock.method(process.stderr, "write", () => true);
+    t.mock.method(ControlPlaneClient.prototype, "health", async () => true);
+    t.mock.method(ControlPlaneClient.prototype, "getSessionThinkingControls", async () => { controlReads += 1; return controls; });
+    t.mock.method(ControlPlaneClient.prototype, "updateSession", async (_session: string, body: unknown) => { updates.push(body); return {}; });
+    t.mock.method(ControlPlaneClient.prototype, "createRun", async (_session: string, body: unknown) => { runs.push(body); return { id: "run", status: "running" }; });
+    t.mock.method(ControlPlaneClient.prototype, "getSessionUsage", async () => ({}));
+    t.mock.method(ControlPlaneClient.prototype, "subscribeRunEvents", async (
+      _session: string, _run: string, _after: number, onEvent: (event: unknown) => void,
+    ) => { onEvent({ type: "run.completed", message: { content: "answer" } }); });
+    return { controlReads: () => controlReads, runs, stdout, updates };
+  }
+
+  const run = (extra: Partial<import("./cli-options.js").RunSettings>) => runCommand({
+    settings: baseSettings(), baseEnv: {},
+    runSettings: { stdin: false, autoApprove: true, input: "sweep", output: "jsonl", token: "test-token", sessionId: "session", ...extra },
+  }, () => {});
+
+  test("an accepted effort is saved on the session before the run starts", async (t) => {
+    const serve = mockServe(t);
+    assert.equal((await run({ effort: "max" })).exitCode, 0);
+    assert.deepEqual(serve.updates, [{ approvalMode: "always_allow" }, { thinkingEffort: "max", thinkingMode: "enabled" }]);
+    assert.equal(serve.runs.length, 1);
+  });
+
+  test("a refused effort fails the command with an explicit error and starts no run", async (t) => {
+    const serve = mockServe(t);
+    assert.equal((await run({ effort: "low" })).exitCode, 1);
+    const error = serve.stdout.join("").trim().split("\n").map((line) => JSON.parse(line)).find((event) => event.type === "error");
+    assert.deepEqual(error, {
+      type: "error", code: "THINKING_NOT_ACCEPTED", sessionId: "session",
+      message: 'Model "DeepSeek" does not accept --effort low; it accepts high, max',
+    });
+    assert.deepEqual(serve.updates, [{ approvalMode: "always_allow" }]);
+    assert.equal(serve.runs.length, 0);
+  });
+
+  test("without either flag the session's thinking is neither read nor written", async (t) => {
+    const serve = mockServe(t);
+    assert.equal((await run({})).exitCode, 0);
+    assert.equal(serve.controlReads(), 0);
+    assert.deepEqual(serve.updates, [{ approvalMode: "always_allow" }]);
   });
 });
 

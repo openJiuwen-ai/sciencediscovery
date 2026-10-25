@@ -17,6 +17,9 @@ import type {
   SessionRun,
 } from "@sciencediscovery/schema";
 
+import { translateActive } from "../i18n/index.js";
+import { formatRunFailure } from "../run-failure.js";
+
 const STOP_STREAM_GRACE_MS = 5_000;
 
 export interface RunStreamRouting {
@@ -24,7 +27,7 @@ export interface RunStreamRouting {
    * Feedback about the run as a whole, shown even when the run's Session is not
    * the one on screen.
    */
-  toast?: { detail?: string; title: string; tone: "error" | "info" };
+  toast?: { detail?: string; technicalDetail?: string; title: string; tone: "error" | "info" };
   /**
    * Whether this event may write into the panels shared by whichever Session is
    * rendered — messages, reviews, permission cards, plans, subagents, remote
@@ -54,8 +57,11 @@ export function routeRunStreamEvent(
   if (event.type === "run.failed" && !context.isDisplayed) {
     return {
       toast: {
-        detail: event.error,
-        title: context.sessionTitle ? `Run failed · ${context.sessionTitle}` : "Run failed",
+        detail: formatRunFailure(event.errorCode),
+        technicalDetail: event.error,
+        title: context.sessionTitle
+          ? translateActive("runFailure.sessionTitle", { session: context.sessionTitle })
+          : translateActive("error.runFailed"),
         tone: "error",
       },
       updatesSessionView,

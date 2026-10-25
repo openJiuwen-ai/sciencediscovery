@@ -4,13 +4,15 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TestContext } from "node:test";
 
 import { RefStore, VersionStore } from "@sciencediscovery/cas";
-import type { RunnerClient } from "@sciencediscovery/executor";
+import { RunnerClient as HttpRunnerClient, type RunnerClient } from "@sciencediscovery/executor";
 import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
@@ -329,4 +331,244 @@ test("local execution results retain strong snapshot dependencies and reject mis
   await f.versions.validateClosure(observation);
   await rm(f.versions.objectPath(version));
   await assert.rejects(f.versions.validateClosure(observation), { code: "ENOENT" });
+});
+
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+type LogEvent = { level: "info" | "warn"; event: string; fields: { [key: string]: unknown } };
+function captureLog() {
+  const events: LogEvent[] = [];
+  const write = (level: LogEvent["level"]) => (event: string, fields: LogEvent["fields"] = {}) => { events.push({ level, event, fields }); };
+  return { events, log: { info: write("info"), warn: write("warn") }, named: (event: string) => events.filter((entry) => entry.event === event) };
+}
+
+/** A real HTTP Runner whose status endpoint can drop connections: transport faults come from fetch itself, not a fake throw. */
+async function droppingRunner(context: TestContext, f: Fixture) {
+  const runner = { id: "", posts: 0, statusRequests: 0, drop: 0, down: false, state: "running" as ManagedExecution["state"] };
+  const server = createServer((request, response) => {
+    const send = (status: number, body: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    };
+    const url = new URL(request.url ?? "/", "http://runner");
+    if (request.method === "POST" && url.pathname === "/shell-executions") {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        runner.posts++;
+        runner.id = (JSON.parse(body) as ShellExecutionRequest).executionId;
+        send(202, { ...owner, id: runner.id, state: "running", queuedAt: new Date().toISOString() });
+      });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === `/shell-executions/${runner.id}`) {
+      runner.statusRequests++;
+      if (runner.down || runner.drop > 0) {
+        runner.drop = Math.max(0, runner.drop - 1);
+        request.socket.destroy(); // the job keeps running; only this status read is lost
+        return;
+      }
+      const ended = runner.state !== "queued" && runner.state !== "running";
+      send(200, { ...owner, id: runner.id, state: runner.state, queuedAt: new Date().toISOString(),
+        ...(ended ? { startedAt: new Date().toISOString(), result: f.result, version: f.ref } : {}) });
+      return;
+    }
+    send(404, { error: "Execution not found for this Agent" });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+  return { runner, client: new HttpRunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "token") as RunnerClient };
+}
+
+test("a dropped status connection is retried by the same Execution ID and logged with its cause and Runner connection", async (context) => {
+  const f = await fixture(context);
+  const logs = captureLog();
+  const service = new ShellExecutions(f.db, f.versions, f.notices, 1, undefined, logs.log);
+  service.describeRunnerConnections(() => "ready");
+  const { runner, client } = await droppingRunner(context, f);
+  runner.drop = 1;
+  runner.state = "completed";
+  const job = await service.start(owner, identity, () => client, (executionId, dispatch) => dispatch(request(executionId)));
+  const result = await service.wait(job.id, owner, 5_000);
+  assert.equal(result.state, "completed");
+  assert.equal(result.provenance, "committed");
+  assert.equal(runner.posts, 1, "the accepted command is never submitted again");
+  assert.equal(runner.statusRequests, 2);
+  const [failure] = logs.named("shell_execution_observation_failed");
+  assert.equal(logs.named("shell_execution_observation_failed").length, 1);
+  assert.equal(failure!.level, "warn");
+  assert.equal(failure!.fields.executionId, job.id);
+  assert.equal(failure!.fields.runnerId, identity.runnerId);
+  assert.equal(failure!.fields.consecutiveFailures, 1);
+  assert.equal(failure!.fields.retryable, true);
+  assert.equal(failure!.fields.errorMessage, "fetch failed");
+  assert.match(String(failure!.fields.errorCode), /^(?:UND_ERR_|ECONN)/, "the socket-level code behind `fetch failed` is kept");
+  assert.equal(failure!.fields.runnerConnection, "ready");
+  assert.deepEqual(logs.named("shell_execution_observation_recovered").map((entry) => entry.fields.consecutiveFailures), [1]);
+  assert.deepEqual(logs.named("shell_execution_unconfirmed"), []);
+});
+
+test("an outage past the threshold stays unconfirmed, then execution_status adopts the Runner's committed outcome without replay", async (context) => {
+  const f = await fixture(context);
+  const logs = captureLog();
+  const service = new ShellExecutions(f.db, f.versions, f.notices, 1, undefined, logs.log);
+  let connection = "connecting";
+  service.describeRunnerConnections(() => connection);
+  const { runner, client } = await droppingRunner(context, f);
+  runner.down = true;
+  const job = await service.start(owner, identity, () => client, (executionId, dispatch) => dispatch(request(executionId)));
+  const lost = await service.wait(job.id, owner, 5_000);
+  assert.equal(lost.state, "unknown", "a lost observation is neither success nor job failure");
+  assert.equal(lost.provenance, "unconfirmed");
+  assert.match(lost.error!, /after 5 consecutive attempts: fetch failed \((?:UND_ERR_|ECONN)/);
+  const failures = logs.named("shell_execution_observation_failed");
+  assert.deepEqual(failures.map((entry) => entry.fields.consecutiveFailures), [1, 2, 3, 4, 5]);
+  assert.deepEqual(failures.map((entry) => "retryInMs" in entry.fields), [true, true, true, true, false]);
+  assert.ok(failures.every((entry) => entry.fields.executionId === job.id && entry.fields.runnerConnection === "connecting"));
+  const [unconfirmed] = logs.named("shell_execution_unconfirmed");
+  assert.equal(unconfirmed!.fields.stage, "observation");
+  assert.equal(unconfirmed!.fields.accepted, true);
+
+  assert.equal((await service.wait(job.id, owner, 0)).state, "unknown", "without a Runner resolver nothing is queried");
+  connection = "ready"; runner.down = false; runner.state = "completed";
+  const reconciled = await service.wait(job.id, owner, 0, undefined, () => client);
+  assert.equal(reconciled.state, "completed");
+  assert.equal(reconciled.provenance, "committed");
+  assert.equal(reconciled.error, undefined);
+  assert.equal(reconciled.result?.stdout, "done");
+  assert.equal(reconciled.runnerVersionId, f.ref.digest);
+  assert.equal(runner.posts, 1, "reconciliation reads the same Execution ID; it never submits the command");
+  assert.deepEqual(logs.named("shell_execution_reconciled").map((entry) => entry.fields),
+    [{ executionId: job.id, runnerId: identity.runnerId, sessionId: owner.sessionId, agentId: owner.agentId,
+      runnerState: "completed", state: "completed", provenance: "committed" }]);
+  const statusReads = runner.statusRequests;
+  assert.equal((await service.wait(job.id, owner, 0, undefined, () => client)).state, "completed");
+  assert.equal(runner.statusRequests, statusReads, "a confirmed outcome is not queried again");
+});
+
+test("an execution orphaned by an API restart is followed again while its Runner still runs it, and its real end notifies again", async (context) => {
+  const f = await fixture(context);
+  const logs = captureLog();
+  const finish = deferred<void>();
+  let observations = 0; let ended = false;
+  const runner = {
+    getShellExecution: async (id: string) => {
+      observations++;
+      if (observations > 1) { await finish.promise; ended = true; }
+      return { ...owner, id, state: ended ? "completed" : "running", queuedAt: "now", startedAt: "now",
+        ...(ended ? { result: f.result, version: f.ref } : {}) };
+    },
+  } as unknown as RunnerClient;
+  const orphan = { ...owner, ...identity, id: "orphan", state: "running", queuedAt: "now", accepted: true, provenance: "pending" };
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run("orphan", owner.sessionId, owner.agentId, JSON.stringify(orphan));
+  const restarted = new ShellExecutions(f.db, f.versions, f.notices, 1, undefined, logs.log);
+  assert.equal(logs.named("shell_execution_orphaned")[0]!.fields.executionId, "orphan");
+  assert.equal((await restarted.get("orphan", owner)).state, "unknown");
+  assert.equal(f.notices.unread(owner).length, 1, "the restart reports the lost outcome");
+  f.notices.markRead(owner, "execution", "orphan");
+
+  const resumed = await restarted.wait("orphan", owner, 0, undefined, () => runner);
+  assert.equal(resumed.state, "running", "the Runner's live record replaces the restart's unknown");
+  assert.equal(resumed.provenance, "pending");
+  assert.equal(resumed.finishedAt, undefined);
+  assert.equal(resumed.error, undefined);
+  assert.doesNotThrow(() => f.notices.createTimer(owner, { dueAt: Date.now() + 60_000, message: "check", executionId: "orphan" }),
+    "a running execution accepts reminders again");
+  finish.resolve();
+  const completed = await restarted.wait("orphan", owner, 2_000, undefined, () => runner);
+  assert.equal(completed.state, "completed");
+  assert.equal(completed.provenance, "committed");
+  assert.equal(completed.result?.stdout, "done");
+  const [notice] = f.notices.unread(owner);
+  assert.match(notice!.message, /orphan on Runner remote: completed; provenance committed/);
+  assert.equal(f.notices.timers(owner)[0]!.state, "cancelled", "the real completion supersedes the reminder");
+});
+
+test("a resumed observation that loses the Runner again returns to unknown with a fresh notice", async (context) => {
+  const f = await fixture(context);
+  let observations = 0;
+  const runner = {
+    getShellExecution: async (id: string) => {
+      observations++;
+      if (observations > 1) throw new TypeError("fetch failed", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
+      return { ...owner, id, state: "running", queuedAt: "now" };
+    },
+  } as unknown as RunnerClient;
+  const orphan = { ...owner, ...identity, id: "orphan", state: "running", queuedAt: "now", accepted: true, provenance: "pending" };
+  f.db.prepare("INSERT INTO shell_executions VALUES (?, ?, ?, ?)").run("orphan", owner.sessionId, owner.agentId, JSON.stringify(orphan));
+  const restarted = new ShellExecutions(f.db, f.versions, f.notices, 1);
+  f.notices.markRead(owner, "execution", "orphan");
+  assert.equal((await restarted.wait("orphan", owner, 0, undefined, () => runner)).state, "running");
+  const lost = await restarted.wait("orphan", owner, 2_000);
+  assert.equal(lost.state, "unknown");
+  assert.equal(lost.provenance, "unconfirmed");
+  assert.match(lost.error!, /after 5 consecutive attempts: fetch failed \(ECONNRESET\)/);
+  assert.equal(observations, 6);
+  assert.match(f.notices.unread(owner)[0]!.message, /orphan on Runner remote: unknown; provenance unconfirmed/);
+});
+
+test("a lost submission response is reconciled once the Runner shows it accepted the Execution ID", async (context) => {
+  const f = await fixture(context);
+  const logs = captureLog();
+  const service = new ShellExecutions(f.db, f.versions, f.notices, 1, undefined, logs.log);
+  let submitted = 0;
+  const runner = {
+    startShellExecution: async () => { submitted++; throw new Error("lost response"); },
+    getShellExecution: async (id: string) => ({ ...owner, id, state: "completed", queuedAt: "now", startedAt: "now", result: f.result, version: f.ref }),
+  } as unknown as RunnerClient;
+  const job = await service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)));
+  assert.equal(job.state, "unknown"); assert.equal(job.accepted, false);
+  assert.equal(logs.named("shell_execution_unconfirmed")[0]!.fields.stage, "submission");
+  const reconciled = await service.wait(job.id, owner, 0, undefined, () => runner);
+  assert.equal(reconciled.state, "completed");
+  assert.equal(reconciled.provenance, "committed");
+  assert.equal(reconciled.accepted, true);
+  assert.equal(submitted, 1);
+});
+
+test("reconciliation adopts only Runner-committed outcomes and otherwise keeps the uncertainty explicit", async (context) => {
+  const cases: Array<[string, (id: string) => Promise<Partial<ManagedExecution>>, { state: string; provenance: string; error?: RegExp }]> = [
+    ["Runner still unreachable", async () => { throw new Error("Remote runner is not connected"); },
+      { state: "unknown", provenance: "unconfirmed", error: /^Runner status remained unavailable/ }],
+    ["Runner never received the ID", async () => { throw Object.assign(new Error("Execution not found for this Agent"), { statusCode: 400 }); },
+      { state: "unknown", provenance: "unconfirmed", error: /^Runner status remained unavailable/ }],
+    ["Runner restarted mid-run", async (id) => ({ id, state: "unknown", error: "Runner restarted before completion was recorded; the command was not replayed" }),
+      { state: "unknown", provenance: "unconfirmed", error: /^Runner could not confirm the outcome: Runner restarted before completion/ }],
+    ["completed without a committed version", async (id) => ({ id, state: "completed", startedAt: "now" }),
+      { state: "unknown", provenance: "unconfirmed", error: /without a committed result/ }],
+    ["recorded failure before a result", async (id) => ({ id, state: "failed", startedAt: "now", error: "sandbox setup failed",
+      version: { pool: "agent-state", digest: "sha256:abc", size: 1, mediaType: "application/json" } }),
+      { state: "failed", provenance: "committed", error: /^sandbox setup failed$/ }],
+    ["foreign identity", async () => ({ id: "other", state: "completed" }),
+      { state: "unknown", provenance: "unconfirmed", error: /^Runner status remained unavailable/ }],
+  ];
+  for (const [label, answer, expected] of cases) {
+    const f = await fixture(context);
+    const logs = captureLog();
+    const service = new ShellExecutions(f.db, f.versions, f.notices, 1, undefined, logs.log);
+    service.describeRunnerConnections(() => "disconnected");
+    let observations = 0; let submitted = 0;
+    const lost = {
+      startShellExecution: async (r: ShellExecutionRequest) => { submitted++; return { ...owner, id: r.executionId, state: "running", queuedAt: "now" }; },
+      getShellExecution: async () => { throw new TypeError("fetch failed"); },
+    } as unknown as RunnerClient;
+    const job = await service.start(owner, identity, () => lost, (id, dispatch) => dispatch(request(id)));
+    assert.equal((await service.wait(job.id, owner, 2_000)).state, "unknown", label);
+    const answering = {
+      getShellExecution: async (id: string) => { observations++; return { ...owner, queuedAt: "now", ...await answer(id) }; },
+    } as unknown as RunnerClient;
+    const [first, second] = await Promise.all([
+      service.wait(job.id, owner, 0, undefined, () => answering), service.wait(job.id, owner, 0, undefined, () => answering),
+    ]);
+    assert.equal(observations, 1, `${label}: concurrent inspections share one Runner query`);
+    for (const result of [first!, second!]) {
+      assert.equal(result.state, expected.state, label);
+      assert.equal(result.provenance, expected.provenance, label);
+      assert.match(result.error ?? "", expected.error!, label);
+    }
+    assert.equal(submitted, 1, `${label}: never replayed`);
+    if (expected.state === "unknown" && !logs.named("shell_execution_reconciled").length) {
+      const [failure] = logs.named("shell_execution_reconcile_failed");
+      assert.equal(failure!.fields.executionId, job.id, label);
+      assert.equal(failure!.fields.runnerConnection, "disconnected", label);
+    }
+  }
 });

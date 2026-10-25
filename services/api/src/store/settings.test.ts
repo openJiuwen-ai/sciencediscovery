@@ -121,3 +121,20 @@ test("Idea Tree accepts the server Lead Agent output ceiling", () => {
   assert.equal(normalizeIdeaTreeSettings({maxTokensPerCall: 32768}, DEFAULT_IDEA_TREE_SETTINGS).maxTokensPerCall, 32768);
   assert.throws(() => normalizeIdeaTreeSettings({maxTokensPerCall: 32769}, DEFAULT_IDEA_TREE_SETTINGS));
 });
+
+test("Idea Tree stages inherit unless given their own effort, and the map survives storage", () => {
+  // Nothing set: the stored settings carry no map at all, so unset users see no change.
+  assert.equal("roleThinkingEfforts" in normalizeIdeaTreeSettings({}, DEFAULT_IDEA_TREE_SETTINGS), false);
+  const updated = normalizeIdeaTreeSettings({ roleThinkingEfforts: { aggregate: "max", assess: "high", design: null as never } }, DEFAULT_IDEA_TREE_SETTINGS);
+  assert.deepEqual(updated.roleThinkingEfforts, { assess: "high", aggregate: "max" });
+  const restored = resolveIdeaTreeSettings(JSON.parse(JSON.stringify(updated)));
+  assert.deepEqual(restored.roleThinkingEfforts, { assess: "high", aggregate: "max" });
+  // Omitted keeps the map; null or an empty map returns every stage to inherit.
+  assert.deepEqual(normalizeIdeaTreeSettings({ maxDepth: 3 }, restored).roleThinkingEfforts, { assess: "high", aggregate: "max" });
+  assert.equal(normalizeIdeaTreeSettings({ roleThinkingEfforts: null }, restored).roleThinkingEfforts, undefined);
+  assert.equal(normalizeIdeaTreeSettings({ roleThinkingEfforts: {} }, restored).roleThinkingEfforts, undefined);
+  assert.throws(() => normalizeIdeaTreeSettings({ roleThinkingEfforts: { review: "high" } as never }, restored), /unknown stage: review/);
+  assert.throws(() => normalizeIdeaTreeSettings({ roleThinkingEfforts: { design: "ultra" } as never }, restored), /roleThinkingEfforts.design must be/);
+  // A stale stored value never wedges loading: the bad entries are dropped.
+  assert.deepEqual(resolveIdeaTreeSettings({ roleThinkingEfforts: { design: "ultra", ideate: "low", old: "max" } }).roleThinkingEfforts, { ideate: "low" });
+});

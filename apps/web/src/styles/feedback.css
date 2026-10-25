@@ -18,7 +18,7 @@
 @keyframes skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .nav-skeleton { display: grid; gap: 8px; padding: 4px 2px; }
 .nav-skeleton .skeleton { height: 34px; }
-.message-skeleton { display: grid; gap: 24px; max-width: 820px; }
+.message-skeleton { display: grid; gap: 24px; max-width: var(--conversation-column-width); margin-inline: auto; }
 .message-skeleton .skeleton { height: 78px; }
 .file-skeleton { display: grid; gap: 6px; }
 .file-skeleton .skeleton { height: 48px; }
@@ -44,6 +44,10 @@
 .toast-body { min-width: 0; display: grid; gap: 2px; padding-top: 3px; }
 .toast-body strong { color: var(--text-strong); font-size: 13px; }
 .toast-body small { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.toast-body:has(.toast-technical-details) small { display: block; overflow: visible; }
+.toast-technical-details { color: var(--muted); font-size: 12px; }
+.toast-technical-details summary { cursor: pointer; }
+.toast-technical-details pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .toast > button { width: 24px; height: 24px; border: 0; border-radius: var(--radius-xs); color: var(--muted-light); }
 .toast > button:hover { background: var(--surface-hover); color: var(--text-secondary); }
 .inline-error-alert { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 0 0 14px; border: 1px solid var(--danger-border); border-radius: var(--radius-m); background: var(--danger-soft); padding: 11px 12px; color: var(--danger); }

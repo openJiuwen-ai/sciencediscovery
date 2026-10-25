@@ -73,6 +73,17 @@ test('real shard union is exact and missing worker evidence fails suite accounti
   }
   // Release passes on complete existing evidence without a historical baseline.
   assert.equal(reconcile(p,root).exitCode,0);
+  const failedSummary=join(root,`real-e2e-results-${shards[0].name}`,'e2e-real/tagged/summary.json');
+  const failedWorker=JSON.parse(readFileSync(join(root,`real-e2e-results-${shards[0].name}`,'e2e-real/tagged/plan.json')));
+  const failedResults=failedWorker.entries.map((entry,index)=>({...passed(entry),outcome:index===0?'FAIL':'PASS'}));
+  writeFileSync(failedSummary,JSON.stringify(verifyResults(failedWorker,failedResults)));
+  const failedVerdict=reconcile(p,root);
+  assert.equal(failedVerdict.status,'FAIL');
+  assert.equal(failedVerdict.executed,p.entries.length);
+  assert.equal(failedVerdict.passed,p.entries.length-1);
+  assert.equal(failedVerdict.failed,1);
+  assert.ok(!failedVerdict.problems.some(problem=>problem.startsWith('NOT_RUN:')));
+  writeFileSync(failedSummary,JSON.stringify(verifyResults(failedWorker,failedWorker.entries.map(passed))));
   const file=join(root,`real-e2e-results-${shards[0].name}`,'e2e-real/tagged/plan.json');
   const before=JSON.parse(readFileSync(file));
   const drift=subplan(before,before.entries.map(e=>({...e,sourceHash:'b'.repeat(64)})));

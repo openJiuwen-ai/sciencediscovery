@@ -28,18 +28,11 @@ const FAILURE_MESSAGE_KEYS: Record<RunFailureCode, MessageKey> = {
   unauthorized: "runFailure.unauthorized",
 };
 
-/**
- * Render a failed run for the user: a plain-language cause and recovery
- * action first, then the original error text after a separator.
- *
- * The provider's own text is never dropped or summarized — diagnosing a
- * failure needs what actually came back from the endpoint — but it is no
- * longer the first thing the user reads. A failure without a class (older
- * records, or the class never being assigned) degrades to the raw text.
- */
-export function formatRunFailure(code: RunFailureCode | undefined, error: string): string {
-  const detail = error.trim();
-  if (!code) return detail;
-  const plain = translateActive(FAILURE_MESSAGE_KEYS[code]);
-  return detail ? `${plain} · ${detail}` : plain;
+/** Keep provider diagnostics separate from the cause and recovery guidance.
+ * Older records and unrecognized codes still need an actionable message. */
+export function formatRunFailure(code: RunFailureCode | undefined): string {
+  const key = code && Object.hasOwn(FAILURE_MESSAGE_KEYS, code)
+    ? FAILURE_MESSAGE_KEYS[code]
+    : "runFailure.unknown";
+  return translateActive(key);
 }

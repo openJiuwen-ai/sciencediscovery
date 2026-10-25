@@ -23,6 +23,15 @@
 
 新 Session 默认继承。创建 Session 时仍要求解析后的任务模型存在且已保存提供方 token。运行开始时会快照设置；修改父级只影响之后的运行，不会改写进行中或历史运行已记录的配置。
 
+### 按角色的思考力度
+
+会话的思考设置（在输入框中选择，或用 `run --thinking` / `--effort` 设置）作用于主 Agent。有两个角色可以改用自己的力度。两者默认都是继承，也就是保持这些设置出现之前的行为：使用模型配置自身的思考设置。
+
+- **Reviewer**：运行时设置 `reviewThinkingEffort`，与任务模型一样按 Global、Project、Session 依次解析（`PUT /api/settings`、`PUT /api/projects/:projectId/settings`、`PATCH /api/sessions/:sessionId`）。它作用于 Deep（语义）评审，该评审使用 Session 的任务模型。
+- **Idea Tree**：Idea Tree 设置（`PUT /api/settings/idea-tree`）中的 `roleThinkingEfforts`，按阶段设置：`ideate`、`design`、`assess`（所有评估者）、`aggregate` 与 `propagate`。例如 `{"roleThinkingEfforts":{"assess":"high","aggregate":"max"}}`。整张表一次替换；`null` 或 `{}` 让所有阶段恢复继承。研究在创建时冻结这张表。
+
+角色力度会以该档位开启思考，并像已保存的会话力度一样收窄到模型接受的最接近档位；没有力度控制字段的模型会忽略它。Web 界面暂时没有这些设置的控件。
+
 ## 技能管理
 
 打开 **系统配置 → Skills** 可查看内置的 `life-science-evidence-brief`、`structure-pocket-inspection` 或管理本地技能。可移植包遵循 Agent Skills 布局：

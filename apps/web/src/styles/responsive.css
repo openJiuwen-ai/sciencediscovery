@@ -17,7 +17,7 @@
 @media (max-width: 1180px) {
   .app-shell { grid-template-columns: 240px minmax(0, 1fr); }
   .content-grid { grid-template-columns: minmax(0, 1fr) 340px; }
-  .messages { padding-inline: 32px; }
+  .conversation { --conversation-padding-inline: 32px; }
   .workspace-panel { padding-inline: 12px; }
   .skill-workspace-layout { grid-template-columns: 200px 180px minmax(360px, 1fr) 220px; }
 }
@@ -56,8 +56,8 @@
   .workspace-resizer, .composer-hint { display: none; }
   .session-bar { padding: 6px 14px 6px 58px; }
   .session-bar .connection { display: none; }
-  .messages { padding: 26px 22px; }
-  .composer { margin-inline: 18px; }
+  .conversation { --conversation-padding-inline: 22px; }
+  .messages { padding-block: 26px; }
   .result-preview { width: 100%; margin-left: 0; }
   .document-backdrop, .artifact-modal-backdrop { padding: 0; }
   .document-panel, .artifact-modal-panel { width: 100%; min-height: 100vh; max-height: 100vh; border: 0; border-radius: 0; }

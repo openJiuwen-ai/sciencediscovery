@@ -160,6 +160,7 @@ import {
   UploadIcon,
 } from "./icons.js";
 import { CopyButton } from "./CopyButton.js";
+import { ProjectDescriptionEditor } from "./ProjectDescriptionEditor.js";
 import { findMarkdownFigureArtifact, KIND_TO_LABEL, MarkdownRenderer } from "./Markdown.js";
 import {
   DeletionDialog,
@@ -203,6 +204,8 @@ import { AgentActivityPanel, type ActivityFocus } from "./AgentActivityPanel.js"
 import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
+import { SourcePreview } from "./SourcePreview.js";
+import { readPreviewText } from "./source-preview.js";
 import { WorkspaceFileProvenanceModal } from "./WorkspaceFileProvenanceModal.js";
 import {
   artifactArchiveBlob,
@@ -1214,7 +1217,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const sidebarDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const [projectCreationOpen, setProjectCreationOpen] = useState(false);
   const [sessionCreationPending, setSessionCreationPending] = useState(false);
-  const [markdownDocument, setMarkdownDocument] = useState<{ content: string; path: string }>();
+  const [workspaceDocument, setWorkspaceDocument] = useState<{ content: string; path: string; file: Blob; markdown: boolean }>();
   const [workspaceTable, setWorkspaceTable] = useState<{
     content: string;
     fileName: string;
@@ -2185,7 +2188,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     // buffer is rendered, so a run left streaming in the background still has
     // its steps on screen when the user returns to it.
     setIsFollowingOutput(true);
-    setMarkdownDocument(undefined);
+    setWorkspaceDocument(undefined);
     setWorkspaceTable(undefined);
     void refreshSession(visibleSessionId).catch((reason: Error) => {
       if (shouldApplySessionScopedUpdate(visibleSessionId, activeSessionIdRef.current)) setError(reason);
@@ -2222,13 +2225,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }, [activeSessionId, client, files]);
 
   useEffect(() => {
-    if (!markdownDocument) return;
+    if (!workspaceDocument) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMarkdownDocument(undefined);
+      if (event.key === "Escape") setWorkspaceDocument(undefined);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [markdownDocument]);
+  }, [workspaceDocument]);
 
   useEffect(() => {
     if (!isFollowingOutput) return;
@@ -2600,6 +2603,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   const [modelWizardRequested, setModelWizardRequested] = useState(false);
+
+  function openProjectCreation(): void {
+    if (!projectsLoaded || !globalSettings) return;
+    setProjectsExpanded(true);
+    setSidebarDrawerOpen(false);
+    setProjectCreationOpen(true);
+  }
 
   function openSystemSettings(group?: SystemSettingsGroup, options?: { wizard?: boolean }): void {
     setSidebarDrawerOpen(false);
@@ -3173,13 +3183,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
     const file = await client.readFile(targetSessionId, path);
-    if (/\.(md|markdown)$/i.test(path)) {
-      setMarkdownDocument({ content: await file.text(), path });
-      return;
-    }
-    // Tables the interactive CSV viewer already handles open there from the
-    // bytes just read, with no Artifact declaration; every other file keeps
-    // the browser hand-off below.
+    // Preserve the specialized table reader before trying generic UTF-8 text.
     if (opensInCsvViewer(path, file.type)) {
       const entry = targetSessionId === activeSessionId
         ? files.find((item) => item.path === path)
@@ -3197,6 +3201,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           size: file.size,
         },
       });
+      return;
+    }
+    const text = await readPreviewText(file, path);
+    // HTML and molecular files retain their existing browser/specialized path.
+    if (text !== undefined && !/\.(?:html?|pdb|cif|mmcif|sdf|mol|mol2|xyz)$/i.test(path)) {
+      const markdown = /\.(md|markdown)$/i.test(path);
+      setWorkspaceDocument({ content: markdown ? await file.text() : text, path, file, markdown });
       return;
     }
     const url = URL.createObjectURL(file);
@@ -3255,7 +3266,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
       sessionTitle,
     });
-    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
+    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail, routing.toast.technicalDetail);
     if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
       void refreshUsageData().catch((reason: Error) => setError(reason));
     }
@@ -3353,7 +3364,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         });
       }
     }
-    if (streamEvent.type === "run.failed") setError(formatRunFailure(streamEvent.errorCode, streamEvent.error));
+    if (streamEvent.type === "run.failed") {
+      const message = formatRunFailure(streamEvent.errorCode);
+      // Keep the original diagnostic in the connection chip's tooltip while
+      // the notification leads with localized recovery guidance.
+      setErrorState(streamEvent.error || message);
+      pushToast("error", t("error.request"), message, streamEvent.error);
+    }
   }
 
   async function loadToolOutput(
@@ -4267,12 +4284,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               count={projectsLoaded ? projects.length : undefined}
               expanded={projectsExpanded}
               label={t("sidebar.projects")}
-              onAdd={() => {
-                if (!projectsLoaded || !globalSettings) return;
-                setProjectsExpanded(true);
-                setSidebarDrawerOpen(false);
-                setProjectCreationOpen(true);
-              }}
+              onAdd={openProjectCreation}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
               panelId="projects-panel-content"
             />
@@ -4531,9 +4543,34 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <h2>{t("empty.title")}</h2>
                 <p>{t("empty.description")}</p>
                 <ol className="empty-steps">
-                  <li><span className="empty-step-icon"><SettingsIcon size={16} /></span><div><strong>{t("empty.configureModel")}</strong><small>{t("empty.configureModelHelp")}</small></div></li>
-                  <li><span className="empty-step-icon"><ProjectIcon size={16} /></span><div><strong>{t("empty.createProject")}</strong><small>{t("empty.createProjectHelp")}</small></div></li>
-                  <li><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
+                  <li>
+                    <button
+                      aria-describedby="empty-configure-model-help"
+                      aria-labelledby="empty-configure-model"
+                      className="empty-step-action"
+                      onClick={() => openSystemSettings("models", { wizard: true })}
+                      type="button"
+                    >
+                      <span className="empty-step-icon"><SettingsIcon size={16} /></span>
+                      <span><strong id="empty-configure-model">{t("empty.configureModel")}</strong><small id="empty-configure-model-help">{t("empty.configureModelHelp")}</small></span>
+                      <ChevronRightIcon size={16} />
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      aria-describedby="empty-create-project-help"
+                      aria-labelledby="empty-create-project"
+                      className="empty-step-action"
+                      disabled={!projectsLoaded || !globalSettings}
+                      onClick={openProjectCreation}
+                      type="button"
+                    >
+                      <span className="empty-step-icon"><ProjectIcon size={16} /></span>
+                      <span><strong id="empty-create-project">{t("empty.createProject")}</strong><small id="empty-create-project-help">{t("empty.createProjectHelp")}</small></span>
+                      <ChevronRightIcon size={16} />
+                    </button>
+                  </li>
+                  <li className="empty-step-info"><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
                 </ol>
               </div>
             ) : trajectorySession && session.id === trajectorySession.id ? (
@@ -4979,14 +5016,18 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
 
-      {markdownDocument ? (
-        <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMarkdownDocument(undefined); }}>
-          <section aria-label={t("app.renderedMarkdownAria", { path: markdownDocument.path })} aria-modal="true" className="document-panel" role="dialog">
+      {workspaceDocument ? (
+        <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorkspaceDocument(undefined); }}>
+          <section aria-label={t(workspaceDocument.markdown ? "app.renderedMarkdownAria" : "artifact.textFileAria", { path: workspaceDocument.path })} aria-modal="true" className="document-panel" role="dialog">
             <header className="document-header">
-              <div><span className="eyebrow">{t("app.renderedMarkdown")}</span><h2>{markdownDocument.path.split("/").at(-1)}</h2><small title={markdownDocument.path}>{markdownDocument.path}</small></div>
-              <button aria-label={t("app.closeMarkdownReader")} className="icon-button" onClick={() => setMarkdownDocument(undefined)} title={t("app.closeMarkdownReader")}><CloseIcon size={20} /></button>
+              <div><span className="eyebrow">{t(workspaceDocument.markdown ? "app.renderedMarkdown" : "artifact.sourceTitle")}</span><h2>{workspaceDocument.path.split("/").at(-1)}</h2><small title={workspaceDocument.path}>{workspaceDocument.path}</small></div>
+              <button aria-label={t("artifact.downloadText")} className="icon-button" onClick={() => downloadBlob(workspaceDocument.file, workspaceDocument.path.split("/").at(-1) || "download")} title={t("artifact.downloadText")}><DownloadIcon size={18} /></button>
+              <button aria-label={t(workspaceDocument.markdown ? "app.closeMarkdownReader" : "artifact.closeTextReader")} className="icon-button" onClick={() => setWorkspaceDocument(undefined)} title={t(workspaceDocument.markdown ? "app.closeMarkdownReader" : "artifact.closeTextReader")}><CloseIcon size={20} /></button>
             </header>
-            <MarkdownRenderer className="document-markdown" content={markdownDocument.content} />
+            {workspaceDocument.markdown ? <div className="document-markdown">
+              <MarkdownRenderer content={workspaceDocument.content} />
+              <details><summary>{t("artifact.sourceFold")}</summary><SourcePreview name={workspaceDocument.path} source={workspaceDocument.content} /></details>
+            </div> : <div className="document-source"><SourcePreview name={workspaceDocument.path} mediaType={workspaceDocument.file.type} source={workspaceDocument.content} /></div>}
           </section>
         </div>
       ) : null}
@@ -5286,6 +5327,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeScopedSettings(); }}>
           <section aria-label={t("app.scopedSettingsAria", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })} aria-modal="true" className="config-panel" role="dialog">
             <div className="config-header"><div><span className="eyebrow">{t("app.scopedOverrides", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })}</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label={t("app.closeScopedSettings")} title={t("app.closeScopedSettings")}><CloseIcon size={20} /></button></div>
+            {scopedSettingsProject ? <ProjectDescriptionEditor
+              key={scopedSettingsProject.id}
+              project={scopedSettingsProject}
+              onSave={async (description) => {
+                const updated = await client.updateProject(scopedSettingsProject.id, { description });
+                setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
+              }}
+            /> : null}
             {scopedSettingsErrors.map((detail) => <InlineErrorAlert
               detail={detail}
               key={detail}

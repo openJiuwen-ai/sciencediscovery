@@ -20,17 +20,22 @@ import {
   DEFAULT_WEB_SETTINGS,
   type EnabledSkillLibrary,
   FREE_SEARCH_ORDER,
+  IDEA_TREE_THINKING_ROLES,
   isSkillSelectionMode,
   migrateLegacyWebSettings,
+  MODEL_THINKING_EFFORTS,
   PAID_SEARCH_ORDER,
   SKILL_SELECTION_FIELDS,
   type ConnectorId,
   type FreeSearchEngine,
   type IdeaTreeAssessorConfig,
+  type IdeaTreeRoleThinkingEfforts,
   type IdeaTreeSettings,
+  type IdeaTreeThinkingRole,
   type PaidSearchProvider,
   type McpProxyPolicies,
   type MemoryGraphSettings,
+  type ModelThinkingEffort,
   type ProxyDefaultPolicy,
   type ProxyPolicy,
   type ProxyServerKind,
@@ -72,11 +77,15 @@ export const RUNTIME_SETTINGS_FIELDS = [
   "enabledSkillIds",
   "modelId",
   "reviewModelId",
+  "reviewThinkingEffort",
   "semanticReviewEnabled",
   "skillSelectionMode",
   "thinkingEffort",
   "thinkingMode",
 ] as const satisfies readonly RuntimeSettingsField[];
+
+const isThinkingEffort = (value: unknown): value is ModelThinkingEffort =>
+  MODEL_THINKING_EFFORTS.includes(value as ModelThinkingEffort);
 
 /** Global defaults no longer configure skills; strip the fields instead of merging them. */
 export function withoutSkillSelection(overrides: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
@@ -231,11 +240,13 @@ export function normalizeRuntimeSettings(
       normalized.thinkingMode = value.thinkingMode as RuntimeSettingsOverrides["thinkingMode"];
     }
   }
-  if (hasOwn(value, "thinkingEffort")) {
-    if (!(["low", "medium", "high", "xhigh", "max"] as const).includes(value.thinkingEffort as never)) {
-      if (strict) throw new Error("thinkingEffort must be low, medium, high, xhigh, or max");
+  for (const field of ["thinkingEffort", "reviewThinkingEffort"] as const) {
+    if (!hasOwn(value, field)) continue;
+    const effort = value[field];
+    if (!isThinkingEffort(effort)) {
+      if (strict) throw new Error(`${field} must be low, medium, high, xhigh, or max`);
     } else {
-      normalized.thinkingEffort = value.thinkingEffort as RuntimeSettingsOverrides["thinkingEffort"];
+      normalized[field] = effort;
     }
   }
   return normalized;
@@ -528,6 +539,26 @@ function normalizeAssessor(
   };
 }
 
+/** Per-stage efforts in canonical stage order. A `null` stage inherits. On
+ *  write an unknown stage or level is rejected; on load it is dropped. */
+function normalizeRoleThinkingEfforts(input: unknown, strict: boolean): IdeaTreeRoleThinkingEfforts | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (!isRecord(input)) {
+    if (strict) throw new Error("roleThinkingEfforts must be an object");
+    return undefined;
+  }
+  const unknownRole = Object.keys(input).find((role) => !IDEA_TREE_THINKING_ROLES.includes(role as IdeaTreeThinkingRole));
+  if (strict && unknownRole) throw new Error(`roleThinkingEfforts has an unknown stage: ${unknownRole}`);
+  const efforts: IdeaTreeRoleThinkingEfforts = {};
+  for (const role of IDEA_TREE_THINKING_ROLES) {
+    const effort = input[role];
+    if (effort === undefined || effort === null) continue;
+    if (isThinkingEffort(effort)) efforts[role] = effort;
+    else if (strict) throw new Error(`roleThinkingEfforts.${role} must be low, medium, high, xhigh, or max`);
+  }
+  return Object.keys(efforts).length ? efforts : undefined;
+}
+
 /**
  * Normalize an Idea Tree settings update against the current stored value.
  *
@@ -575,6 +606,9 @@ export function normalizeIdeaTreeSettings(
   const propagateInsightSystemPrompt = hasOwn(input, "propagateInsightSystemPrompt")
     ? optionalString(input.propagateInsightSystemPrompt)
     : current.propagateInsightSystemPrompt;
+  const roleThinkingEfforts = hasOwn(input, "roleThinkingEfforts")
+    ? normalizeRoleThinkingEfforts(input.roleThinkingEfforts, true)
+    : current.roleThinkingEfforts;
   // Weight validation: enforce the 1.0 sum only when all three weights are
   // explicitly provided in this update. Partial updates keep the current
   // values for the un-touched assessors, so the sum is only meaningful when
@@ -606,6 +640,7 @@ export function normalizeIdeaTreeSettings(
     assessorSustainability,
     ...(aggregatorSystemPrompt ? { aggregatorSystemPrompt } : {}),
     ...(propagateInsightSystemPrompt ? { propagateInsightSystemPrompt } : {}),
+    ...(roleThinkingEfforts ? { roleThinkingEfforts: structuredClone(roleThinkingEfforts) } : {}),
   };
 }
 
@@ -652,5 +687,7 @@ export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
       ? { propagateInsightSystemPrompt: value.propagateInsightSystemPrompt.trim() }
       : {}),
   };
+  const roleThinkingEfforts = normalizeRoleThinkingEfforts(value.roleThinkingEfforts, false);
+  if (roleThinkingEfforts) current.roleThinkingEfforts = roleThinkingEfforts;
   return current;
 }
