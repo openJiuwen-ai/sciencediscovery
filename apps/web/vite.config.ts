@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
+let build = "source";
+try { build = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* Release archives may omit .git. */ }
+
 export default defineConfig({
+  define: { __SCIENCE_DISCOVERY_BUILD__: JSON.stringify(`${process.env.SCIENCE_DISCOVERY_VERSION ?? version} (${build})`) },
   plugins: [react()],
   // Pre-bundle the Mol* plugin entry points we use so their CommonJS deps
   // (e.g. mutative) get proper ESM interop. We deliberately avoid the

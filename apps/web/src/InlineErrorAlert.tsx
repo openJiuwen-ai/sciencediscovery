@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ErrorDiagnosticActions } from "./ErrorDiagnosticActions.js";
 import { AlertCircleIcon, CloseIcon } from "./icons.js";
 import { useLocale } from "./i18n/index.js";
 
@@ -40,6 +41,7 @@ export function InlineErrorAlert({
     <div>
       <strong>{title ?? t("error.settingsTitle")}</strong>
       <small>{detail}</small>
+      <ErrorDiagnosticActions title={title ?? t("error.settingsTitle")} detail={detail} />
     </div>
     {onDismiss ? <button
       aria-label={t("error.dismiss")}

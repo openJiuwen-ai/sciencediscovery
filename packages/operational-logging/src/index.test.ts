@@ -101,3 +101,18 @@ test("redacts sensitive keys and credential-like text", (context) => {
     assert.doesNotMatch(contents, new RegExp(secret));
   }
 });
+
+
+test("home-directory identities never enter operational log files", (context) => {
+  const logger = createOperationalLogger({ category: "api", dataDir: withTempDataDir(context), service: "api" });
+  logger.error("request_failed", {
+    errorMessage: "/home/alice/project/error.ts",
+    path: "/Users/bob/project/file.ts",
+    nested: { path: String.raw`C:\Users\charlie\AppData\log.txt` },
+    safePath: "/var/log/service.log",
+  });
+  const contents = readFileSync(logger.path, "utf8");
+  assert.doesNotMatch(contents, /alice|bob|charlie/);
+  assert.match(contents, /\[REDACTED\]/);
+  assert.match(contents, /\/var\/log\/service\.log/);
+});

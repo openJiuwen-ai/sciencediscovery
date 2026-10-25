@@ -42,16 +42,12 @@ export interface OperationalLoggerOptions {
   service: string;
 }
 
+import { redactLogText, redactLogValue } from "./redaction.js";
+export { redactLogText, redactLogValue, shortErrorMessage } from "./redaction.js";
+
 const LEVELS: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_BACKUP_COUNT = 5;
-const SENSITIVE_KEY = /(?:authorization|api[-_]?key|token|password|secret)/i;
-const BULK_PAYLOAD_KEY = /^(?:args|arguments|body|content|input|messages?|output|prompt|request|response|stderr|stdout)$/i;
-const SENSITIVE_ASSIGNMENT = /\b(authorization|api[-_]?key|token|password|secret)\b["']?\s*[:=]\s*["']?(?:bearer\s+)?[^\s,;"'}]+/gi;
-const BEARER_VALUE = /\bbearer\s+[a-z0-9._~+\/-]+=*/gi;
-const URL_CREDENTIALS = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi;
-const SENSITIVE_QUERY_VALUE = /([?&](?:api[-_]?key|access[-_]?token|token|password|secret)=)[^&#\s]+/gi;
-
 function parseLevel(raw: string | undefined): LogLevel {
   const normalized = raw?.trim().toLowerCase();
   if (normalized === "warning") return "warn";
@@ -62,45 +58,6 @@ function parsePositiveInteger(raw: string | undefined, fallback: number): number
   if (!raw?.trim()) return fallback;
   const value = Number(raw);
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
-}
-
-export function redactLogText(value: string): string {
-  return value
-    .replace(URL_CREDENTIALS, "$1[REDACTED]@")
-    .replace(SENSITIVE_QUERY_VALUE, "$1[REDACTED]")
-    .replace(SENSITIVE_ASSIGNMENT, "$1=[REDACTED]")
-    .replace(BEARER_VALUE, "Bearer [REDACTED]");
-}
-
-export function shortErrorMessage(error: unknown, maxLength = 500): string {
-  const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
-  return redactLogText(message).replace(/[\r\n\t]+/g, " ").slice(0, maxLength);
-}
-
-export function redactLogValue(value: unknown, key?: string, seen = new WeakSet<object>()): unknown {
-  if (key && SENSITIVE_KEY.test(key)) return "[REDACTED]";
-  if (key && BULK_PAYLOAD_KEY.test(key)) return "[OMITTED]";
-  if (typeof value === "string") return redactLogText(value);
-  if (value instanceof Error) {
-    return { errorMessage: redactLogText(value.message), errorName: value.name };
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) return "[Circular]";
-    seen.add(value);
-    const redacted = value.map((entry) => redactLogValue(entry, undefined, seen));
-    seen.delete(value);
-    return redacted;
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) return "[Circular]";
-    seen.add(value);
-    const redacted = Object.fromEntries(
-      Object.entries(value).map(([entryKey, entryValue]) => [entryKey, redactLogValue(entryValue, entryKey, seen)]),
-    );
-    seen.delete(value);
-    return redacted;
-  }
-  return value;
 }
 
 function formatValue(value: unknown): string {

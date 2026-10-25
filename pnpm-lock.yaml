@@ -79,6 +79,9 @@ importers:
       '@sciencediscovery/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
+      '@sciencediscovery/operational-logging':
+        specifier: workspace:*
+        version: link:../../packages/operational-logging
       '@sciencediscovery/plan':
         specifier: workspace:*
         version: link:../../packages/plan

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 
+import { rememberErrorDiagnostic } from "../error-diagnostics.js";
 import type { ApiError } from "@sciencediscovery/schema";
 
 import { translateActive } from "../i18n/index.js";
@@ -64,8 +65,12 @@ export class AuthApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const body = (await response.json().catch(() => ({ error: response.statusText }))) as ApiError;
+      const message = body.error || translateActive("error.requestFailed", { status: response.status });
+      const requestId = response.headers?.get("x-request-id") ?? undefined;
+      const sessionId = /^\/api\/sessions\/([^/?]+)/.exec(path)?.[1];
+      rememberErrorDiagnostic(message, { ...(requestId ? { requestId } : {}), ...(sessionId ? { sessionId } : {}) });
       throw new ApiRequestError(
-        body.error || translateActive("error.requestFailed", { status: response.status }),
+        message,
         response.status,
         body.code,
         body.details,
@@ -89,8 +94,12 @@ export class AuthApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const body = (await response.json().catch(() => ({ error: response.statusText }))) as ApiError;
+      const message = body.error || translateActive("error.requestFailed", { status: response.status });
+      const requestId = response.headers?.get("x-request-id") ?? undefined;
+      const sessionId = /^\/api\/sessions\/([^/?]+)/.exec(path)?.[1];
+      rememberErrorDiagnostic(message, { ...(requestId ? { requestId } : {}), ...(sessionId ? { sessionId } : {}) });
       throw new ApiRequestError(
-        body.error || translateActive("error.requestFailed", { status: response.status }),
+        message,
         response.status,
         body.code,
         body.details,

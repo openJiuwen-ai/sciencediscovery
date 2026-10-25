@@ -32,6 +32,17 @@ export interface RunnerWorkspaceBinding {
 }
 
 export class ApiClient extends WebApiClient {
+  async getErrorDiagnostics(ids: import("@sciencediscovery/operational-logging/diagnostics").DiagnosticIds): Promise<import("@sciencediscovery/operational-logging/diagnostics").DiagnosticSnapshot> {
+    const params = new URLSearchParams(Object.entries(ids).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    // This best-effort read must not re-route the error being reported through
+    // the normal 401 prompt callback, which can unmount an inline error alert.
+    const response = await fetch(`/api/error-diagnostics?${params}`, {
+      headers: { authorization: `Bearer ${this.token}` },
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!response.ok) throw new Error("Diagnostic snapshot unavailable");
+    return await response.json();
+  }
   readonly trajectory: TrajectoryPort = {
     index: (id, signal) => this.request(`/api/sessions/${encodeURIComponent(id)}/trajectory`, { signal }),
     detail: (id, entry, signal) => this.request(`/api/sessions/${encodeURIComponent(id)}/trajectory/detail?id=${encodeURIComponent(entry)}`, { signal }),

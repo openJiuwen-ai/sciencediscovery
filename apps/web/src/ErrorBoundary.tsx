@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ErrorDiagnosticActions } from "./ErrorDiagnosticActions.js";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface ErrorBoundaryProps {
@@ -57,6 +58,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return <div className="error-boundary-fallback" role="alert">
       <strong>{this.props.label}</strong>
       <p>{this.state.message}</p>
+      <ErrorDiagnosticActions title={this.props.label} detail={this.state.message} />
     </div>;
   }
 }

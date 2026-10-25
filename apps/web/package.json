@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sciencediscovery/operational-logging": "workspace:*",
     "@sciencediscovery/trajectory": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
     "cytoscape": "^3.34.0",

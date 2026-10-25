@@ -610,7 +610,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const blockedSaveAlert = dialog.getByRole("alert").filter({ hasText: "保存凭据" });
         await expect(blockedSaveAlert).toBeVisible();
         await expect(card.getByRole("button", { name: "保存凭据" })).toBeVisible();
-        await blockedSaveAlert.getByRole("button").click();
+        await blockedSaveAlert.getByRole("button", { name: "关闭错误", exact: true }).click();
         await card.getByLabel("用户名").fill("operator");
         await card.getByLabel("密码", { exact: true }).fill("new-secret");
         await card.getByRole("button", { name: "浏览", exact: true }).click();
@@ -659,7 +659,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         // Dismiss the acknowledged error from the preceding SSH scenario.
         const priorError = dialog.getByRole("alert").filter({ hasText: "SSH authentication failed" }).filter({ has: page.getByRole("button") });
-        if (await priorError.count()) await priorError.getByRole("button").click();
+        if (await priorError.count()) await priorError.getByRole("button", { name: "关闭错误", exact: true }).click();
         await dialog.getByRole("button", { name: "添加 Runner", exact: true }).click();
         await dialog.getByLabel("连接方式", { exact: true }).selectOption("direct");
         await dialog.getByLabel("名称", { exact: true }).fill("lab-workstation");

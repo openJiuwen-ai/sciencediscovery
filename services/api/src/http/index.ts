@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./error-diagnostics.js";
 import { randomUUID } from "node:crypto";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
@@ -789,6 +790,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   };
 
   const server = createServer(async (request, response) => {
+    const requestId = randomUUID();
+    response.setHeader("x-request-id", requestId);
+    response.once("finish", () => {
+      if (response.statusCode >= 400) apiLog.warn("http_request_failed", {
+        requestId, statusCode: response.statusCode,
+      });
+    });
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
     try {
       await ready;
@@ -842,6 +850,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendError(response, 401, "Unauthorized");
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/error-diagnostics") {
+        const ids = diagnosticIds(url.searchParams);
+        if (!ids) { sendError(response, 400, "Invalid diagnostic correlation id"); return; }
+        sendJson(response, 200, await errorDiagnosticSnapshot(
+          diagnosticLogPaths(config.dataDir, apiLog.path, runLog.path), ids,
+        ));
+        return;
+      }
+
       if (url.pathname === "/api/evolve/status" && request.method === "GET") {
         return sendJson(response, 200, await evolveAvailability.refresh());
       }
