@@ -596,7 +596,8 @@ export function createWorkspaceExecutionBindings(
       wait: async (id, waitMs, signal) => {
         const record = await options.store.shellExecutions.get(id, executionOwner);
         if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
-        return delivered(await options.store.shellExecutions.wait(id, executionOwner, waitMs, signal));
+        return delivered(await options.store.shellExecutions.wait(id, executionOwner, waitMs, signal,
+          (runnerId) => resolveExecutionTarget(runnerId).runnerClient));
       },
       list: () => options.store.shellExecutions.list(executionOwner).filter((record) => {
         try { if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId); return true; } catch { return false; }

@@ -1589,7 +1589,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const statusTool: AgentTool<typeof statusParameters> = {
       name: "execution_status", label: "Execution status",
-      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Unknown means inspect before retrying, never automatic replay.",
+      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Inspecting an unknown execution by execution_id asks its Runner for that same execution's outcome; never replay it.",
       parameters: statusParameters,
       execute: async (_id, params, signal) => {
         if (params.wait_ms !== undefined && !params.execution_id) throw new Error("wait_ms requires execution_id");

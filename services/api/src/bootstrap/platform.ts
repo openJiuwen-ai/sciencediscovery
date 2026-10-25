@@ -521,6 +521,8 @@ export async function initializePlatformServices(
   store.setAvailableSkillIds(skillCatalog.ids());
   await initializeComponent("custom_mcp_servers", () => services.customMcpServers.load());
   await initializeComponent("session_store", () => store.load());
+  store.shellExecutions.describeRunnerConnections((runnerId) =>
+    runnerId === "local" ? "local" : remoteCompute.runnerStatus(runnerId).state);
   await mcpCatalog.refresh().catch((error) => {
     apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });
     console.warn("MCP catalog was unavailable during API startup:", error);
