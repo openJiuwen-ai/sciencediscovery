@@ -93,7 +93,8 @@ test.describe("Read artifact and workspace source", { tag: ["@isolation:session"
           const line = modal.locator(".source-line").nth(1);
           const gutter = await line.locator(".source-line-number").boundingBox();
           const content = await line.locator(".source-line-text").boundingBox();
-          expect(gutter!.y).toBe(content!.y);
+          // Chromium can round adjacent grid boxes at fractional CSS pixels.
+          expect(Math.abs(gutter!.y - content!.y)).toBeLessThan(1);
         }
         await page.setViewportSize({ width: 1440, height: 900 });
       });
