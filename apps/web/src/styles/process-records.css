@@ -111,7 +111,7 @@ details[open] > summary > .record-chevron { transform: rotate(90deg); }
 .timeline-disclosure.tool:has(> summary > .tool-authorization) > summary { grid-template-columns: 16px 28px minmax(0, 1fr) auto auto; }
 /* The prose grid and every process row share the same avatar gutter. */
 .run-timeline > .process-record, .messages > .process-record {
-  width: calc(100% - var(--timeline-gutter)); max-width: calc(820px - var(--timeline-gutter));
+  width: calc(100% - var(--timeline-gutter)); max-width: calc(var(--conversation-column-width) - var(--timeline-gutter));
   margin: 4px 0 11px var(--timeline-gutter);
 }
 .run-timeline > .process-record:not([open]):not(:has(> button[aria-expanded="true"])),
