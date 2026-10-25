@@ -153,6 +153,7 @@ import type {
 } from "@sciencediscovery/schema";
 import {
   LOCAL_RUNNER_ID,
+  DEFAULT_ENABLED_CONNECTOR_IDS,
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
@@ -1676,8 +1677,10 @@ export class SessionStore {
   private resolveSettingsLayers(
     layers: Array<{ overrides: RuntimeSettingsOverrides; source: Exclude<RuntimeSettingsSource, "unset"> }>,
   ): ResolvedRuntimeSettings {
+    // Built-in defaults, each replaced whole by the first layer that sets the field. Clearing every
+    // override (for example PUT /api/settings {}) therefore leaves Web access on, not every connector off.
     const effective: ResolvedRuntimeSettings["effective"] = {
-      enabledConnectorIds: [],
+      enabledConnectorIds: [...DEFAULT_ENABLED_CONNECTOR_IDS],
       enabledSkillLibraries: [],
       enabledSkillIds: [],
       semanticReviewEnabled: true,

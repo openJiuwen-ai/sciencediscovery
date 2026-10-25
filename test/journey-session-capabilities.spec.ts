@@ -26,7 +26,8 @@ const WEB_TOOLS = ["web_search", "web_fetch", "free_search", "paid_search", "fet
  * E2E-META
  * Purpose: Data sources, custom MCP servers and Web access are separate Session checkboxes, and each one decides what the Agent can call.
  * Steps:
- *   1. Open the composer picker: three groups, the custom server under its name; toggling a data source leaves the others alone.
+ *   1. With Global settings cleared to their defaults, open the composer picker: Web access is checked, the custom server is listed
+ *      by its name and unchecked, and toggling a data source leaves the others alone.
  *   2. With Web access inherited and the custom MCP checked, the Agent is offered both and one MCP tool call succeeds.
  *   3. Uncheck Web access and the custom MCP: neither is offered; a search attempt fails without a permission card.
  *   4. Check both again but turn the server off in System settings: Web access returns, the server's tools stay absent.
@@ -39,7 +40,7 @@ const WEB_TOOLS = ["web_search", "web_fetch", "free_search", "paid_search", "fet
  * MCP: Real SDK stdio echo fixture on the API host.
  * OtherExternal: none; browser non-local requests are blocked.
  * Credentials: E2E_API_TOKEN; local stub token has no external access.
- * CostSideEffects: Temporary model, project and MCP server; removed in finally.
+ * CostSideEffects: Temporary model, project and MCP server; removed in finally. Global settings are cleared for the journey and restored in finally.
  */
 test("Session checkboxes turn custom MCP and Web access on and off for the Agent", { tag: "@mocked" }, async ({ page, journey }) => {
   const name = `Capability MCP ${Date.now()}`;
@@ -72,7 +73,7 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
     projectName: name, sessionTitle: "Session capabilities", approvalMode: "ask_for_dangerous",
     model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `${name} model` },
   });
-  journey.scenario({ goal: "Each Session capability checkbox decides whether the Agent can use it", preconditions: ["Isolated local stack", "Local MCP echo fixture", "Local scripted model", "No external calls"] });
+  journey.scenario({ goal: "Each Session capability checkbox decides whether the Agent can use it", preconditions: ["Isolated local stack", "Global settings cleared to defaults", "Local MCP echo fixture", "Local scripted model", "No external calls"] });
   const picker = page.locator(".connector-picker-popover");
   const box = (label: RegExp) => picker.getByRole("checkbox", { name: label });
   const webBox = box(/^Web/);
@@ -91,13 +92,17 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
     expect(response.ok()).toBe(true);
     return await response.json() as Array<{ sourceId: string; status: string; turnId: string }>;
   };
+  // Clearing Global settings (PUT /api/settings {}) is what other journeys and API clients do; start from it on
+  // purpose, so the Web access a new Session inherits below is the built-in default rather than a seeded list.
+  const globalOverrides = await globalSettings(page);
+  await globalSettings(page, {});
   try {
     await openProjectSession(page, fixture);
     await journey.step("Open the capability checkboxes", "Data sources, Web access and Custom MCP are separate groups; the server is listed by its name", async () => {
       await page.locator(".connector-picker-trigger").click();
       await expect(picker.locator(".connector-picker-group-label")).toHaveText(["Data sources", "Web access", "Custom MCP"]);
       await expect(picker.locator(".connector-picker-group").filter({ hasText: "Custom MCP" })).toContainText(name);
-      // A new Session inherits Web access; a custom server stays off until it is checked here.
+      // A new Session inherits Web access even with nothing set at any layer; a custom server stays off until it is checked here.
       await expect(webBox).toBeChecked();
       await expect(serverBox).not.toBeChecked();
       const before = await enabledIds();
@@ -168,6 +173,7 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
       await dialog.getByRole("group", { name: "Custom MCP" }).scrollIntoViewIfNeeded();
     });
   } finally {
+    await globalSettings(page, globalOverrides);
     await cleanupJourney(page, fixture);
     await stub.stop();
     await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${server.id}`, { headers: authorizationHeader() });
@@ -175,6 +181,15 @@ test("Session checkboxes turn custom MCP and Web access on and off for the Agent
 });
 
 });
+
+/** Read the Global overrides, or replace them when `overrides` is given. */
+async function globalSettings(page: Page, overrides?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const response = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+    headers: authorizationHeader(), method: overrides ? "PUT" : "GET", ...(overrides ? { data: overrides } : {}),
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  return (await response.json() as { overrides: Record<string, unknown> }).overrides;
+}
 
 async function toggle(checkbox: Locator, checked: boolean): Promise<void> {
   await checkbox.click();

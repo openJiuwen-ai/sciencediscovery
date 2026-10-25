@@ -43,6 +43,12 @@ export type SkillSelectionMode = typeof SKILL_SELECTION_MODES[number];
 
 export const DEFAULT_SKILL_SELECTION_MODE: SkillSelectionMode = "all";
 
+/**
+ * The connector selection a Session gets when no layer (Global, Project, Session) sets one: Web access on, every
+ * data source and custom MCP server off. A list set at any layer, even an empty one, replaces it whole.
+ */
+export const DEFAULT_ENABLED_CONNECTOR_IDS: readonly ConnectorId[] = ["web"];
+
 /** Runtime settings fields that only Project and Session layers may set. */
 export const SKILL_SELECTION_FIELDS: readonly RuntimeSettingsField[] = ["enabledSkillIds", "enabledSkillLibraries", "skillSelectionMode"];
 

@@ -238,6 +238,30 @@ test("SessionStore seeds web connector on first load of a pre-migration catalog 
   assert.equal(afterReopen.webConnectorMigrated, true);
 });
 
+test("a new Session inherits Web access unless a layer sets a list without it", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `web-access-default-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const project = await store.createProject("Web access default");
+  const newSession = async () => (await store.createSession(project.id, "Inherits", {}, {}, { allowUnconfiguredModel: true })).id;
+
+  // Clearing every Global override falls back to the built-in default, as the approval default does.
+  await store.replaceGlobalSettings({});
+  const cleared = store.getSessionSettings(await newSession());
+  assert.deepEqual(cleared.effective.enabledConnectorIds, ["web"]);
+  assert.equal(cleared.sources.enabledConnectorIds, "unset");
+
+  // A list set at any layer, even an empty one, still replaces it.
+  await store.replaceGlobalSettings({ enabledConnectorIds: [] });
+  assert.deepEqual(store.getSessionSettings(await newSession()).effective.enabledConnectorIds, []);
+  await store.replaceProjectSettings(project.id, { enabledConnectorIds: ["web", "pubmed"] });
+  const overSession = await newSession();
+  assert.deepEqual(store.getSessionSettings(overSession).effective.enabledConnectorIds, ["web", "pubmed"]);
+  await store.replaceSessionSettings(overSession, { enabledConnectorIds: ["pubmed"] });
+  assert.deepEqual(store.getSessionSettings(overSession).effective.enabledConnectorIds, ["pubmed"]);
+});
+
 test("late execution provenance retains history without rolling back the latest business revision", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `publication-order-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));

@@ -46,6 +46,7 @@ import type {
   WorkspaceFileRevision,
 } from "@sciencediscovery/schema";
 import {
+  DEFAULT_ENABLED_CONNECTOR_IDS,
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_ENVIRONMENT_SOURCE_SETTINGS,
@@ -116,7 +117,7 @@ export function emptyCatalog(
     environmentSourceSettings: structuredClone(DEFAULT_ENVIRONMENT_SOURCE_SETTINGS),
     // Skill selection starts at the Project layer, so Global carries no skill fields.
     globalSettings: {
-      enabledConnectorIds: ["web"],
+      enabledConnectorIds: [...DEFAULT_ENABLED_CONNECTOR_IDS],
       semanticReviewEnabled: true,
     },
     ideaTreeSettings: structuredClone(DEFAULT_IDEA_TREE_SETTINGS),
