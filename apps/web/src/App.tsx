@@ -160,6 +160,7 @@ import {
   UploadIcon,
 } from "./icons.js";
 import { CopyButton } from "./CopyButton.js";
+import { ProjectDescriptionEditor } from "./ProjectDescriptionEditor.js";
 import { findMarkdownFigureArtifact, KIND_TO_LABEL, MarkdownRenderer } from "./Markdown.js";
 import {
   DeletionDialog,
@@ -5286,6 +5287,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeScopedSettings(); }}>
           <section aria-label={t("app.scopedSettingsAria", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })} aria-modal="true" className="config-panel" role="dialog">
             <div className="config-header"><div><span className="eyebrow">{t("app.scopedOverrides", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })}</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label={t("app.closeScopedSettings")} title={t("app.closeScopedSettings")}><CloseIcon size={20} /></button></div>
+            {scopedSettingsProject ? <ProjectDescriptionEditor
+              key={scopedSettingsProject.id}
+              project={scopedSettingsProject}
+              onSave={async (description) => {
+                const updated = await client.updateProject(scopedSettingsProject.id, { description });
+                setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
+              }}
+            /> : null}
             {scopedSettingsErrors.map((detail) => <InlineErrorAlert
               detail={detail}
               key={detail}

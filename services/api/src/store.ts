@@ -306,6 +306,14 @@ function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): Runti
   };
 }
 
+function normalizeProjectDescription(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value !== "string") throw new SessionStoreHttpError("Project description must be a string", 400);
+  const description = value.trim();
+  if (description.length > 2_000) throw new SessionStoreHttpError("Project description must be at most 2000 characters", 400);
+  return description;
+}
+
 function requiredLabel(value: unknown, field: string): string {
   if (typeof value !== "string") throw new Error(`${field} is required`);
   const cleaned = cleanLabel(value, "");
@@ -2668,8 +2676,7 @@ export class SessionStore {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
     const allowedRunners = runnerIds === undefined ? undefined : this.validateRunnerIds(runnerIds);
     const allowedHosts = this.validateProjectRemoteRunnerHosts(allowedRunners?.filter((id) => id !== "local") ?? remoteRunnerHostIds);
-    const trimmedDescription = description?.trim() ?? "";
-    if (trimmedDescription.length > 2_000) throw new Error("Project description must be at most 2000 characters");
+    const trimmedDescription = normalizeProjectDescription(description);
     const project: Project = {
       createdAt: new Date().toISOString(),
       ...(trimmedDescription ? { description: trimmedDescription } : {}),
@@ -2688,6 +2695,7 @@ export class SessionStore {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
     const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
+    const description = normalizeProjectDescription(changes.description);
     if (changes.runnerIds !== undefined) {
       const ids = this.validateRunnerIds(changes.runnerIds);
       project.runnerIds = ids;
@@ -2698,6 +2706,10 @@ export class SessionStore {
       project.remoteRunnerHostIds = ids;
     }
     if (name !== undefined) project.name = name;
+    if (changes.description !== undefined) {
+      if (description) project.description = description;
+      else delete project.description;
+    }
     await this.saveCatalog();
     return project;
   }

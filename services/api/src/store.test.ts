@@ -2308,6 +2308,57 @@ test("SessionStore clears an auto-default only while the attempted model still o
   });
 });
 
+test("SessionStore persists project description edits and clears without changing other fields or projects", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-description-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Project A", { enabledConnectorIds: [] }, [], undefined, "  Original research  ");
+  const other = structuredClone(await store.createProject("Project B"));
+  const original = structuredClone(project);
+  assert.equal(project.description, "Original research");
+
+  const updated = await store.updateProject(project.id, { description: "  Updated RNA-seq note\n肿瘤与正常样本  " });
+  assert.deepEqual(updated, { ...original, description: "Updated RNA-seq note\n肿瘤与正常样本" });
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getProject(project.id), updated);
+  assert.deepEqual(reopened.getProject(other.id), other);
+  assert.equal((await reopened.updateProject(project.id, { name: "Project A renamed" })).description, updated.description);
+
+  for (const blank of ["", "  \n\t "]) {
+    await reopened.updateProject(project.id, { description: "Temporary description" });
+    const cleared = await reopened.updateProject(project.id, { description: blank });
+    assert.equal(Object.hasOwn(cleared, "description"), false);
+    const reloaded = new SessionStore(tempRoot);
+    await reloaded.load();
+    assert.equal(Object.hasOwn(reloaded.getProject(project.id)!, "description"), false);
+    assert.deepEqual(reloaded.getProject(other.id), other);
+    const { description: _description, ...expected } = original;
+    assert.deepEqual(cleared, { ...expected, name: "Project A renamed" });
+  }
+});
+
+test("SessionStore validates project description before mutation and shares creation limits", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-description-limit-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const maxDescription = "研".repeat(2000);
+  const project = await store.createProject("Limit project", {}, [], undefined, `  ${maxDescription}  `);
+  assert.equal(project.description, maxDescription);
+  assert.equal((await store.updateProject(project.id, { description: `  ${maxDescription}  ` })).description, maxDescription);
+  const before = structuredClone(project);
+  for (const description of ["x".repeat(2001), null, 42, {}, []]) {
+    await assert.rejects(store.updateProject(project.id, {
+      description: description as string, name: "Must not rename", runnerIds: [],
+    }), /Project description must/);
+    assert.deepEqual(store.getProject(project.id), before);
+    await assert.rejects(store.createProject("Rejected project", {}, [], undefined, description as string), /Project description must/);
+  }
+  assert.equal(Object.hasOwn(await store.createProject("Blank project", {}, [], undefined, "  \n "), "description"), false);
+});
+
 test("SessionStore persists validated Project and Session renames", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-rename-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

@@ -17,7 +17,7 @@ import type { Session } from "./session.js";
 
 export interface Project {
   createdAt: string;
-  /** Optional free-form research description collected at creation. */
+  /** Optional free-form research description. */
   description?: string;
   id: string;
   name: string;
@@ -46,6 +46,8 @@ export interface CreateProjectResponse extends Project {
 }
 
 export interface UpdateProjectRequest {
+  /** Omit to preserve; blank or whitespace clears the stored description. */
+  description?: string;
   name?: string;
   remoteRunnerHostIds?: string[];
   runnerIds?: string[];
