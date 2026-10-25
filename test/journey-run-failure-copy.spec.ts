@@ -78,7 +78,7 @@ for (const locale of ["zh-CN", "en"] as const) {
      * Credentials: E2E_API_TOKEN for the isolated API; synthetic model credential with no external access.
      * CostSideEffects: Journey-owned model, Project and Sessions removed in finally; no external requests or cost.
      */
-    test(`Run failure guidance and recovery ${locale} ${classified ? "classified" : "unclassified"}`, {
+    test(`Run failure ${locale} ${classified ? "classified" : "unclassified"} guidance and recovery`, {
       tag: ["@mocked", "@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:none"],
     }, async ({ page, journey }) => {
       test.setTimeout(90_000);
@@ -90,6 +90,7 @@ for (const locale of ["zh-CN", "en"] as const) {
         : (zh ? "任务未能完成，运行已停止。请重试任务；若再次失败，可展开技术详情以排查原因。" : "The task stopped before it could finish. Retry the task; if it fails again, open the technical details to help diagnose the problem.");
       const model = await recoverableModel();
       let fixture: JourneyFixture | undefined;
+      let otherSessionId: string;
       journey.scenario({ goal: "运行失败时先读懂原因和恢复办法，需要时展开技术详情；切换会话后仍能理解后台失败并继续工作。", preconditions: [`界面语言 ${locale}`, classified ? "服务返回稳定失败分类" : "模拟旧生产者未提供失败分类", "独立 API/Web，仅调用本地模型桩"] });
       await page.addInitScript(value => localStorage.setItem("sciencediscovery-locale", value), locale);
       if (!classified) {
@@ -107,6 +108,10 @@ for (const locale of ["zh-CN", "en"] as const) {
       const toast = page.locator(".toast.error");
       try {
         fixture = await createProjectAndSession(page, { projectName: `Failure copy ${locale} ${Date.now()}`, sessionTitle: "Failure copy session", model: { baseUrl: model.baseUrl, apiToken: "copy-test-local-only", model: "copy-test", name: `Failure copy ${Date.now()}`, apiVariant: "openai" } });
+        // Populate both Sessions before opening the navigation snapshot.
+        const response = await page.request.post(`${apiBaseUrl()}/api/projects/${fixture.project.id}/sessions`, { headers: authorizationHeader(), data: { title: "Other copy session", modelId: fixture.model!.id } });
+        expect(response.ok()).toBe(true);
+        otherSessionId = (await response.json()).id;
         await openProjectSession(page, fixture);
         await journey.step("提交任务并理解失败", "失败通知使用当前语言说明原因和恢复办法，底层错误默认折叠。", async () => {
           const run = await sendUserMessage(page, fixture!.session.id, "Check failure feedback");
@@ -134,8 +139,6 @@ for (const locale of ["zh-CN", "en"] as const) {
           await expect(page.getByText("COPY_TEST_RECOVERY_OK", { exact: true }).first()).toBeVisible();
         });
         await journey.step("切换会话后查看后台失败", "通知以当前语言标明失败会话，保留当前会话与草稿。", async () => {
-          const response = await page.request.post(`${apiBaseUrl()}/api/projects/${fixture!.project.id}/sessions`, { headers: authorizationHeader(), data: { title: "Other copy session", modelId: fixture!.model!.id } });
-          expect(response.ok()).toBe(true);
           model.setMode("wait");
           await sendUserMessage(page, fixture!.session.id, "Fail while in another session");
           await expect.poll(model.isWaiting).toBe(true);
@@ -157,10 +160,8 @@ for (const locale of ["zh-CN", "en"] as const) {
         await journey.step("继续当前会话", "关闭通知后当前会话可提交新任务并完成。", async () => {
           await toast.locator("button").click();
           model.setMode("accept");
-          const sessionResponse = await page.request.get(`${apiBaseUrl()}/api/projects/${fixture!.project.id}/sessions`, { headers: authorizationHeader() });
-          const other = (await sessionResponse.json()).find((session: { title: string }) => session.title === "Other copy session");
-          const run = await sendUserMessage(page, other.id, "Continue current session");
-          expect((await waitForRunTerminal(page, other.id, run.id)).status).toBe("completed");
+          const run = await sendUserMessage(page, otherSessionId, "Continue current session");
+          expect((await waitForRunTerminal(page, otherSessionId, run.id)).status).toBe("completed");
           await expect(page.getByText("COPY_TEST_RECOVERY_OK", { exact: true }).first()).toBeVisible();
         });
       } finally {
