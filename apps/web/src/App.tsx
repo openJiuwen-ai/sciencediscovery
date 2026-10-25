@@ -16,6 +16,7 @@ import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useMcpReadiness } from "./composer/useMcpReadiness.js";
 import { ExecutionBlockCards } from "./ExecutionReadiness.js";
+import { ComputeNotice, ComputeStatus, useComputeReadiness } from "./ComputeReadiness.js";
 
 import {
   readRenamedStorageItem,
@@ -1323,6 +1324,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const computeReadiness = useComputeReadiness(client);
   const mcpReadiness = useMcpReadiness(client);
   const mcpSources = mcpReadiness.sources;
 
@@ -4488,6 +4490,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       </aside>
 
       <main className="main-area">
+        <ComputeNotice readiness={computeReadiness} />
         {workspaceView === "usage" ? (
           <UsagePage
             analytics={usageAnalytics}
@@ -4525,7 +4528,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
         <div className={workspaceCollapsed ? "content-grid workspace-collapsed" : "content-grid"} style={workspaceCollapsed ? undefined : { gridTemplateColumns: `minmax(0, 1fr) ${workspaceWidth}px` }}>
           <section className="conversation">
-            {activeProject || session ? <div className="session-bar">
+            <div className="session-bar">
               <div className="session-bar-title">
                 {mainProjectRenameTarget ? <InlineRenameInput
                   ariaLabel={t("app.renameProjectAria", { name: mainProjectRenameTarget.label })}
@@ -4575,9 +4578,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     sessionTokens={sessionUsage?.totals.totalTokens}
                   />
                 ) : null}
-                <span className={error ? "connection bad" : "connection"} title={error ? t("app.connectionErrorTooltip", { error }) : t("app.connectionOkTooltip")}><i />{error ? t("app.connectionErrorChip") : null}</span>
+                <ComputeStatus readiness={computeReadiness} />
               </div>
-            </div> : null}
+            </div>
             {sessionPending ? (
               <div className="messages"><SkeletonRows className="message-skeleton" count={3} /></div>
             ) : !session ? (
