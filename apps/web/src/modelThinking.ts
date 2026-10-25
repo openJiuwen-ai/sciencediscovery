@@ -13,26 +13,20 @@
 // limitations under the License.
 
 import type {
-  ModelFactOverrides,
   ModelProfile,
   ModelProvider,
+  ModelThinkingControls,
   ModelThinkingEffort,
   ModelThinkingMode,
 } from "@sciencediscovery/schema";
-import {
-  DEFAULT_MODEL_API_VARIANT,
-  constrainCatalogThinking,
-  lookupModelCatalog,
-  THINKING_CONTROL_VARIANTS,
-  THINKING_EFFORT_VARIANTS,
-} from "@sciencediscovery/schema";
+import { constrainCatalogThinking, modelThinkingControls } from "@sciencediscovery/schema";
 
-export interface ModelThinkingControls {
-  efforts: ModelThinkingEffort[];
-  legacyBudget: boolean;
-  modes: ModelThinkingMode[];
-  supported: boolean;
-}
+// Shared with the API so the composer and the CLI agree on what a model accepts.
+export {
+  modelThinkingControls,
+  modelVariantThinkingControls,
+  type ModelThinkingControls,
+} from "@sciencediscovery/schema";
 
 export interface ModelThinkingNormalization {
   thinkingEffort?: ModelThinkingEffort;
@@ -75,61 +69,6 @@ export function thinkingChoiceValue(
     if (options.some((option) => option.value === value)) return value;
   }
   return options[0]?.value ?? "auto";
-}
-
-const DEFAULT_MODES: ModelThinkingMode[] = ["auto", "enabled", "disabled"];
-
-export function modelVariantThinkingControls(
-  modelId: string,
-  variant: ModelProfile["apiVariant"],
-  /** Facts the user stated for this model. A declared effort list replaces the
-   *  catalog's, because a gateway often accepts fewer stops than the vendor
-   *  documents and only its operator knows that. */
-  facts?: ModelFactOverrides,
-): ModelThinkingControls {
-  const catalog = lookupModelCatalog(modelId);
-  const effectiveVariant = catalog?.apiVariant ?? variant;
-  const declaredEfforts = facts?.thinkingEfforts?.length ? facts.thinkingEfforts : undefined;
-  if (!effectiveVariant || !THINKING_CONTROL_VARIANTS.includes(effectiveVariant)) {
-    return { efforts: [], legacyBudget: false, modes: [], supported: false };
-  }
-  const supported = facts?.thinkingSupported ?? catalog?.thinking?.supported;
-  if (supported === false) {
-    return { efforts: [], legacyBudget: false, modes: [], supported: false };
-  }
-  const modes = catalog?.thinking?.modes
-    ?? (["gemini", "kimi-k3"].includes(effectiveVariant) ? ["auto", "enabled"] : DEFAULT_MODES);
-  let efforts: readonly ModelThinkingEffort[] = declaredEfforts ?? catalog?.thinking?.efforts ?? [];
-  if (!declaredEfforts && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(effectiveVariant)) {
-    if (effectiveVariant === "gemini") efforts = ["low", "medium", "high"];
-    else if (effectiveVariant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
-    else if (effectiveVariant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
-    else if (effectiveVariant === "kimi-k3") efforts = ["low", "high", "max"];
-    else efforts = ["high", "max"];
-  }
-  return {
-    efforts: [...efforts],
-    legacyBudget: effectiveVariant === "anthropic-legacy",
-    modes: [...modes],
-    supported: true,
-  };
-}
-
-/** Resolve only capabilities that can be translated onto the selected wire
- * protocol. Catalog facts narrow a known model; custom endpoints fall back to
- * the explicitly selected dialect instead of claiming facts about the model. */
-export function modelThinkingControls(
-  model: ModelProfile | undefined,
-  providers: readonly ModelProvider[],
-): ModelThinkingControls {
-  if (!model) return { efforts: [], legacyBudget: false, modes: [], supported: false };
-  const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
-    ? "anthropic-messages"
-    : "openai-chat-completions");
-  const variant = model.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
-  const provider = providers.find((candidate) => candidate.id === model.providerId);
-  const catalog = lookupModelCatalog(model.model, provider?.presetId);
-  return modelVariantThinkingControls(model.model, catalog?.apiVariant ?? variant, model.facts);
 }
 
 /** Return only fields whose persisted Session value is illegal for the

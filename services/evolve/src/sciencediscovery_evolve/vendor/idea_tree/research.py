@@ -168,9 +168,18 @@ class IdeaTreeEngine:
     def assessors(self):
         return self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))['assessors']
 
-    def transport(self, system, payload, ceiling):
+    def role_effort(self, role):
+        """The stage's own thinking effort, if one was configured; assessors share `assess`."""
+        stage = 'assess' if role in {item['id'] for item in self.assessors()} else role
+        return self.state['settings'].get('roleThinkingEfforts', {}).get(stage)
+
+    def transport(self, system, payload, ceiling, effort=None):
         # No temperature: some gateways accept only their own value (Kimi: "only 1 is allowed"). See completion.py.
-        body = json.dumps(dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)).encode()
+        fields = dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)
+        if effort:
+            # The control plane narrows it to a stop the model accepts.
+            fields['reasoning_effort'] = effort
+        body = json.dumps(fields).encode()
         request = urllib.request.Request(self.endpoint['url'], data=body, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.endpoint['token']})
         for attempt in range(2):
             try:
@@ -226,7 +235,7 @@ class IdeaTreeEngine:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
-                    raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling)
+                    raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling, self.role_effort(role))
                 received = True
             finally:
                 async with self.usage_lock:

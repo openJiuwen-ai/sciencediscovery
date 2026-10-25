@@ -68,6 +68,15 @@ export interface CreateProjectResponse {
   [key: string]: unknown;
 }
 
+/** The thinking choices the session's effective model accepts. */
+export interface SessionThinkingControls {
+  efforts: string[];
+  modelId?: string;
+  modelName?: string;
+  modes: string[];
+  supported: boolean;
+}
+
 export interface ControlPlaneClientOptions {
   baseUrl: string;
   token: string;
@@ -135,6 +144,11 @@ export class ControlPlaneClient {
       body: JSON.stringify(body),
       method: "PUT",
     });
+  }
+
+  /** GET /api/sessions/:id/thinking-controls — what the next run's model accepts. */
+  getSessionThinkingControls(sessionId: string): Promise<SessionThinkingControls> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/thinking-controls`);
   }
 
   /** PATCH /api/sessions/:id — approvalMode/reviewMode (must be sent alone). */

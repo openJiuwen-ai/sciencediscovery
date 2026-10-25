@@ -98,12 +98,6 @@ export function pruneRunnerBinariesScript(binaryPath: string): string {
   return [
     "set -eu",
     `cd ${shellQuote(binaryPath.slice(0, separator))} || exit 0`,
-    // Every executable a live process is running. readlink fails on processes
-    // this user may not inspect, and under `set -e` that would abort the script
-    // before it reads a single name, so each failure is swallowed individually
-    // rather than by the assignment — a partial list must not become an empty
-    // one, which would read as "nothing is busy" and delete a live binary.
-    `busy=$(for process in /proc/[0-9]*; do readlink "$process/exe" 2>/dev/null || true; done)`,
     // A dotfile is never a candidate: an interrupted `.upload-*` may still be
     // an in-flight transfer from another connection, and no process holds it.
     "for candidate in *; do",
@@ -112,6 +106,11 @@ export function pruneRunnerBinariesScript(binaryPath: string): string {
     `  case "$candidate" in *[!0-9a-f]*) continue ;; esac`,
     `  [ "\${#candidate}" -eq 64 ] || continue`,
     `  [ "$candidate" = ${shellQuote(binaryPath.slice(separator + 1))} ] && continue`,
+    // Re-read live executables for each deletion: another connection may have
+    // started a binary since an earlier candidate was checked. Swallow each
+    // readlink failure individually under set -e, retaining the readable entries
+    // when another process exits or this user may not inspect it.
+    `  busy=$(for process in /proc/[0-9]*; do readlink "$process/exe" 2>/dev/null || true; done)`,
     // A running binary Linux has already unlinked reads as "<path> (deleted)",
     // which still contains the name, so the substring match covers it.
     `  printf '%s\\n' "$busy" | grep -Fq "/$candidate" && continue`,

@@ -74,7 +74,7 @@ export function PermissionCards({
         {expanded ? <div className="permission-card-body">
           <code>{request.resource}</code>
         </div> : null}
-        <PermissionDecisionActions busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
+        <PermissionDecisionActions action={request.action} resource={request.resource} busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
       </article>;
     })}
   </section>;
@@ -90,6 +90,6 @@ export function PermissionGrantManager({
   const { t } = useLocale();
   return <div className="permission-grant-manager">
     <div className="settings-detail-header"><span className="eyebrow">{t("permissions.governance")}</span><h3>{t("permissions.grants")}</h3><p>{t("permissions.grantsHelp")}</p></div>
-    {grants.length ? grants.map((grant) => <article className="permission-grant" key={grant.id}><div><strong>{t(ACTION_LABELS[grant.action])}</strong><small>{grant.resource} · this Session</small></div><button className="danger-button" onClick={() => onRevoke(grant)} type="button">{t("permissions.revoke")}</button></article>) : <p className="muted">{t("permissions.noGrants")}</p>}
+    {grants.length ? grants.map((grant) => <article className="permission-grant" key={grant.id}><div><strong>{t(ACTION_LABELS[grant.action])}</strong><small>{grant.resource} · {grant.action === "sandbox_network" ? t("permissions.grantScopeSandboxNetworkRun") : "this Session"}</small></div><button className="danger-button" onClick={() => onRevoke(grant)} type="button">{t("permissions.revoke")}</button></article>) : <p className="muted">{t("permissions.noGrants")}</p>}
   </div>;
 }

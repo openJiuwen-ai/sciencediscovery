@@ -195,6 +195,7 @@ IFS= read -r auth_token < "$auth_token_path"
 
 export SCIENCE_AGENT_AUTH_TOKEN="$auth_token"
 export SCIENCE_DISCOVERY_DATA_DIR="$runtime_root/data"
+if [[ "$group" == real ]]; then export E2E_BIOMNI_FIXTURE_ROOT="$SCIENCE_DISCOVERY_DATA_DIR"; fi
 # The product's API/Runner/memory-graph default ports belong
 # to the instance a person leaves running. A test stack that reuses them competes
 # with that instance for the port and puts its own address in front of whoever the

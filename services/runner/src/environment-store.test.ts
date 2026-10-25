@@ -22,6 +22,7 @@ import { basename, dirname, resolve } from "node:path";
 
 import {
   EnvironmentStore,
+  executeEnvironmentCommand,
   describeFetchFailure,
   installManagedMicromamba,
   managedMicromambaBaseUrl,
@@ -755,4 +756,24 @@ test("managed provisioner selects pinned Linux and macOS releases", async (conte
     /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u,
   );
   assert.deepEqual(requestedUrls, [arm64.url]);
+});
+
+
+test("runtime pip defaults to the configured mirror and explicit sources still win", async (context) => {
+  const old = process.env.SCIENCE_AGENT_PYPI_INDEX;
+  process.env.SCIENCE_AGENT_PYPI_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple";
+  context.after(() => { if (old === undefined) delete process.env.SCIENCE_AGENT_PYPI_INDEX; else process.env.SCIENCE_AGENT_PYPI_INDEX = old; });
+  const { store, executions } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  const task = await store.createTask("mirror-test", "python");
+  const mirrored = await store.install(task.id, ["openpyxl"], undefined, "pip");
+  assert.deepEqual(mirrored.channels, [process.env.SCIENCE_AGENT_PYPI_INDEX]);
+  const explicit = await store.install(task.id, ["statsmodels"], undefined, "pip", undefined, "https://mirrors.aliyun.com/pypi/simple/");
+  assert.deepEqual(explicit.channels, ["https://mirrors.aliyun.com/pypi/simple"]);
+  assert.ok(executions.filter(e => e.arguments.includes("pip")).every(e => e.environment?.PIP_DEFAULT_TIMEOUT === "20"));
+});
+
+test("an unresponsive external environment command is terminated within its bounded wait", async () => {
+  await assert.rejects(executeEnvironmentCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], process.env, 50),
+    (error: any) => error.killed === true && error.signal === "SIGTERM");
 });

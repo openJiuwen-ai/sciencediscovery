@@ -81,7 +81,7 @@ test("JSON preview shows the formatted document instead of a table", () => {
     source: formatted,
     truncated: false,
   }));
-  assert.match(html, /&quot;name&quot;: &quot;af3&quot;/);
+  assert.match(html.replace(/<[^>]*>/g, ""), /&quot;name&quot;: &quot;af3&quot;/);
   assert.doesNotMatch(html, /<table/);
   assert.doesNotMatch(html, /row/);
 });
@@ -93,16 +93,19 @@ test("JSON preview labels unparseable documents and still shows the raw text", (
     truncated: true,
   }));
   assert.match(html, /not valid JSON/);
-  assert.match(html, /&quot;truncated&quot;: tru/);
+  assert.match(html.replace(/<[^>]*>/g, ""), /&quot;truncated&quot;: tru/);
   assert.match(html, /Preview truncated/);
   assert.ok(html.indexOf("Preview truncated") < html.indexOf("artifact-source-preview"));
 });
 
-test("JSON fallback does not silently cap the locally loaded source", () => {
-  const source = readFileSync(new URL("../src/ScientificArtifacts.tsx", import.meta.url), "utf8");
-  const jsonFallback = source.slice(source.indexOf('artifact?.kind === "json"'), source.indexOf('artifact?.kind === "notebook"'));
-  assert.match(jsonFallback, /<pre className="artifact-source-preview">\{source \|\| t\("artifact\.loadingJson"\)\}<\/pre>/);
-  assert.doesNotMatch(jsonFallback, /source\.slice\(0, 100_000\)/);
+test("JSON source previews cap oversized local source with an explicit download hint", () => {
+  const html = renderToStaticMarkup(createElement(JsonSourcePreview, {
+    parsed: false,
+    source: "x".repeat(100_000) + "HIDDEN_SUFFIX",
+    truncated: false,
+  }));
+  assert.match(html, /Preview truncated at 100,000 characters/);
+  assert.doesNotMatch(html, /HIDDEN_SUFFIX/);
 });
 
 test("JSON preview keeps long unbreakable values complete in the DOM", () => {
@@ -216,7 +219,7 @@ test("the raw JSON view shows the formatted source document and can switch back"
     view: "raw" as const,
   }));
   assert.match(html, /json-source-preview/);
-  assert.match(html, /&quot;tag&quot;: &quot;a&quot;/);
+  assert.match(html.replace(/<[^>]*>/g, ""), /&quot;tag&quot;: &quot;a&quot;/);
   assert.doesNotMatch(html, /<table/);
   // The Table switch stays available, so the transition is reversible.
   assert.match(html, /aria-pressed="false"[^>]*>Table</);

@@ -348,7 +348,7 @@ test("persistent R kernel path retains state and reports a generated workspace a
 test("a persistent Kernel can be torn down by its runtime-status identity", async (context) => {
   const { dataDir, store, workspaceRoot } = await fixture(context);
   const manager = new KernelManager({
-    bwrapPath: "/usr/bin/bwrap",
+    bwrapPath: BWRAP_PATH,
     dataDir,
     execTimeoutMs: 0,
     idleTimeoutMs: 0,

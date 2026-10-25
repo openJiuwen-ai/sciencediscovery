@@ -1361,3 +1361,20 @@ for (const [locale, label] of [["en", "Sandbox network access"], ["zh-CN", "沙�
     assert.ok(!html.includes("sandbox_network"));
   });
 }
+
+for (const [locale, allowLabel] of [["en", "Allow these hosts for this run"], ["zh-CN", "本次运行允许这些主机"]] as const) {
+  test(`the live timeline network card offers its grant by host scope (${locale})`, () => {
+    const entries = apply([{ type: "permission.required", request: {
+      id: "network-actions", action: "sandbox_network", resource: "sandbox-network:" + "a".repeat(64),
+      sessionId: "session-1", state: "pending", createdAt: "2026-10-18T10:00:00.000Z",
+      summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443.",
+    } }]);
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, {
+      entries, isRunning: true, onToggle() {}, onPermissionDecision: async () => {},
+    })));
+    assert.ok(html.includes(`>${allowLabel}</button>`), "the network card names the hosts its grant covers");
+    assert.ok(!html.includes("Allow same type") && !html.includes("允许同类操作"),
+      "the shared same-type label would read as blanket network access");
+    assert.ok(html.includes(">Allow once</button>") || html.includes(">仅允许一次</button>"));
+  });
+}

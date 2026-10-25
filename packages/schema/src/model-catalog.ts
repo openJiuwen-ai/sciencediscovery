@@ -34,9 +34,19 @@ import type {
   ModelCatalogEntry,
   ModelCatalogPricing,
   ModelCatalogThinking,
+  ModelFactOverrides,
+  ModelProvider,
   ModelProviderPresetId,
 } from "./model-provider.js";
-import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
+import {
+  DEFAULT_MODEL_API_VARIANT,
+  THINKING_CONTROL_VARIANTS,
+  THINKING_EFFORT_VARIANTS,
+  type ModelApiVariant,
+  type ModelProfile,
+  type ModelThinkingEffort,
+  type ModelThinkingMode,
+} from "./model-usage.js";
 
 export interface ModelCatalogRecord {
   /** Additional normalized ids that resolve to this record. */
@@ -166,4 +176,88 @@ export function constrainCatalogThinking(
         : efforts.includes("high") ? "high" : efforts[0]!;
   }
   return { effort: legalEffort, mode: legalMode };
+}
+
+/** The thinking choices a model accepts on its wire protocol. */
+export interface ModelThinkingControls {
+  efforts: ModelThinkingEffort[];
+  legacyBudget: boolean;
+  modes: ModelThinkingMode[];
+  supported: boolean;
+}
+
+const DEFAULT_THINKING_MODES: ModelThinkingMode[] = ["auto", "enabled", "disabled"];
+
+export function modelVariantThinkingControls(
+  modelId: string,
+  variant: ModelApiVariant | undefined,
+  /** Facts the user stated for this model. A declared effort list replaces the
+   *  catalog's, because a gateway often accepts fewer stops than the vendor
+   *  documents and only its operator knows that. */
+  facts?: ModelFactOverrides,
+): ModelThinkingControls {
+  const catalog = lookupModelCatalog(modelId);
+  const effectiveVariant = catalog?.apiVariant ?? variant;
+  const declaredEfforts = facts?.thinkingEfforts?.length ? facts.thinkingEfforts : undefined;
+  if (!effectiveVariant || !THINKING_CONTROL_VARIANTS.includes(effectiveVariant)) {
+    return { efforts: [], legacyBudget: false, modes: [], supported: false };
+  }
+  const supported = facts?.thinkingSupported ?? catalog?.thinking?.supported;
+  if (supported === false) {
+    return { efforts: [], legacyBudget: false, modes: [], supported: false };
+  }
+  const modes = catalog?.thinking?.modes
+    ?? (["gemini", "kimi-k3"].includes(effectiveVariant) ? ["auto", "enabled"] : DEFAULT_THINKING_MODES);
+  let efforts: readonly ModelThinkingEffort[] = declaredEfforts ?? catalog?.thinking?.efforts ?? [];
+  if (!declaredEfforts && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(effectiveVariant)) {
+    if (effectiveVariant === "gemini") efforts = ["low", "medium", "high"];
+    else if (effectiveVariant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
+    else if (effectiveVariant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
+    else if (effectiveVariant === "kimi-k3") efforts = ["low", "high", "max"];
+    else efforts = ["high", "max"];
+  }
+  return {
+    efforts: [...efforts],
+    legacyBudget: effectiveVariant === "anthropic-legacy",
+    modes: [...modes],
+    supported: true,
+  };
+}
+
+/** Resolve only capabilities that can be translated onto the selected wire
+ * protocol. Catalog facts narrow a known model; custom endpoints fall back to
+ * the explicitly selected dialect instead of claiming facts about the model.
+ * The composer offers exactly these choices, and the CLI accepts exactly them. */
+export function modelThinkingControls(
+  model: ModelProfile | undefined,
+  providers: readonly ModelProvider[],
+): ModelThinkingControls {
+  if (!model) return { efforts: [], legacyBudget: false, modes: [], supported: false };
+  const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
+    ? "anthropic-messages"
+    : "openai-chat-completions");
+  const variant = model.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
+  const provider = providers.find((candidate) => candidate.id === model.providerId);
+  const catalog = lookupModelCatalog(model.model, provider?.presetId);
+  return modelVariantThinkingControls(model.model, catalog?.apiVariant ?? variant, model.facts);
+}
+
+/**
+ * The thinking a role with its own effort (the Reviewer, an Idea Tree stage)
+ * runs at on this model: thinking on, at the requested stop or the nearest one
+ * the model accepts. Undefined — keep the caller's existing thinking — when no
+ * effort was set or the model has no effort control to honor it with.
+ */
+export function roleThinking(
+  model: ModelProfile | undefined,
+  providers: readonly ModelProvider[],
+  effort: ModelThinkingEffort | undefined,
+): { thinkingEffort: ModelThinkingEffort; thinkingMode: "enabled" } | undefined {
+  if (!model || !effort) return undefined;
+  const controls = modelThinkingControls(model, providers);
+  if (!controls.supported || !controls.efforts.length || !controls.modes.includes("enabled")) return undefined;
+  const thinkingEffort = controls.efforts.includes(effort)
+    ? effort
+    : constrainCatalogThinking(model.model, "enabled", effort, { thinkingEfforts: controls.efforts }).effort;
+  return { thinkingEffort, thinkingMode: "enabled" };
 }

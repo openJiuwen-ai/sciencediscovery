@@ -62,14 +62,14 @@ function watchNewTabs(page: Page): { count: () => number; stop: () => void } {
 
 /**
  * E2E-META
- * Purpose: Workspace CSV files open in the interactive table viewer in place, whether uploaded or written by the agent without a declaration, while other workspace files keep opening in a new browser tab.
+ * Purpose: Workspace CSV files open in the interactive table viewer in place, whether uploaded or written by the agent without a declaration, while text notes open in the numbered in-app reader.
  * Steps:
  *   1. Prepare a local stub model and an isolated Project/Session; upload a CSV and a comma-rich text note through the workspace drop zone.
  *   2. Open the uploaded CSV from the workspace file tree; the viewer appears in the page, no tab opens, and only the existing workspace file endpoint is read.
  *   3. Check charts, column-type choices, missing-value filtering and row search inside the viewer, then close it.
  *   4. Ask the agent to write an intermediate CSV without declaring it; it appears in the file tree but not the Artifact catalog.
  *   5. Open the undeclared CSV from the file tree; the same viewer opens it.
- *   6. Open the text note; it still opens in a new browser tab and no viewer appears.
+ *   6. Open the text note; it opens in the in-app text reader with line numbers and no table viewer appears.
  * Environment: Isolated local stack at E2E_BASE_URL with a journey-owned Project/Session; English browser locale.
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; one deterministic run_shell turn.
@@ -200,13 +200,13 @@ test("工作区里的 CSV 直接在交互表格中打开", { tag: "@mocked" }, a
 
     await journey.step(
       "点击文本笔记",
-      "文本文件照旧在新的浏览器标签页里打开，页面上没有出现表格查看器。",
+      "文本文件在应用内显示行号，没有打开新的浏览器标签页，页面上没有出现表格查看器。",
       async () => {
-        const newTab = page.context().waitForEvent("page");
         await workspaceFile(page, "run-notes.txt").click();
-        const tab = await newTab;
-        expect(tab.url()).toMatch(/^blob:/);
-        await tab.close();
+        const reader = page.getByRole("dialog", { name: "Text file: run-notes.txt" });
+        await expect(reader.locator(".numbered-source")).toContainText("Plate 2, lane 4");
+        await expect(reader.locator(".source-line-number").first()).toHaveText("1");
+        expect(tabs.count()).toBe(0);
         await expect(page.getByRole("dialog", { name: /^CSV Visualization Workspace/ })).toHaveCount(0);
       },
     );

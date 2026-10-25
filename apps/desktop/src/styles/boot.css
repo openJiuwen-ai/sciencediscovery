@@ -1,0 +1,100 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * The three screens that are not the app: connecting, offline, and the gate
+ * that asks for the access token.
+ *
+ * These have no counterpart in the prototype, which was a static mock of the
+ * populated UI — so unlike the other partials this one is authored here rather
+ * than split out of it. It stays deliberately plain: a card centred on the page
+ * background, no chrome, because the only thing these screens may do is explain
+ * and offer one action.
+ */
+
+.boot-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 32px;
+  background: var(--bg);
+}
+
+.boot-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 30px 32px 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  text-align: left;
+}
+/* Offline is the one state worth a colour: a user who sees a plain white card
+   reads it as "still loading", which is the opposite of the message. */
+.boot-card.is-offline { border-color: var(--danger-border); }
+.boot-card.is-offline .boot-mark { background: var(--danger-soft); color: var(--danger); }
+
+.boot-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 16px;
+  border-radius: var(--radius-m);
+  background: var(--primary-softer);
+  color: var(--primary);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.boot-title {
+  margin: 0 0 8px;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+
+.boot-body {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+/* The hint is the fallback detail: read after the body, never instead of it. */
+.boot-hint {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-s);
+  background: var(--surface-soft);
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.boot-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.boot-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}

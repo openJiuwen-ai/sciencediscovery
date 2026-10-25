@@ -37,7 +37,7 @@ import { completeChatRequest, InvalidModelResponseError, type ChatCompletionRequ
 
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 
-import type { ModelInvocationUsage } from "@sciencediscovery/schema";
+import { MODEL_THINKING_EFFORTS, roleThinking, type ModelInvocationUsage, type ModelThinkingEffort } from "@sciencediscovery/schema";
 
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
@@ -139,10 +139,19 @@ export async function handleEvolveCompletion(
     return sendError(response, 503, "The model this run was created with has no API token");
   }
 
-  const body = await readJson<ChatCompletionRequest>(request);
+  const { reasoning_effort: requestedEffort, ...body } = await readJson<ChatCompletionRequest & { reasoning_effort?: unknown }>(request);
   if (!Array.isArray(body.messages) || !body.messages.length) {
     return sendError(response, 400, "messages is required");
   }
+  if (requestedEffort !== undefined && !MODEL_THINKING_EFFORTS.includes(requestedEffort as ModelThinkingEffort)) {
+    return sendError(response, 400, "reasoning_effort must be low, medium, high, xhigh, or max");
+  }
+  // An Idea Tree stage with its own effort asks for it per call. It is narrowed
+  // to a stop this model accepts, and a model with no effort control keeps its
+  // profile's thinking, the same as a call that asks for nothing.
+  const stageThinking = requestedEffort === undefined
+    ? undefined
+    : roleThinking(model, deps.store.listProviders(), requestedEffort as ModelThinkingEffort);
 
   const startedAt = new Date().toISOString();
 
@@ -154,13 +163,13 @@ export async function handleEvolveCompletion(
   const began = Date.now();
   apiLog.info("evolve_llm_call_started", {
     ceiling: body.max_tokens, inFlight: inFlight.size, runId,
-    thinking: body.thinking?.type ?? "default",
+    thinking: stageThinking?.thinkingEffort ?? body.thinking?.type ?? "default",
   });
   inFlight.add(began);
   try {
     const controller = new AbortController();
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
-    upstream = await completeChatRequest({ ...model, apiToken, proxy: resolveProxyForUrl(deps.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, body,
+    upstream = await completeChatRequest({ ...model, ...stageThinking, apiToken, proxy: resolveProxyForUrl(deps.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, body,
       AbortSignal.any([controller.signal, AbortSignal.timeout(CALL_CEILING_MS)]), deps.fetchImpl);
   } catch (error) {
     inFlight.delete(began);

@@ -63,6 +63,7 @@ curl -fsS http://127.0.0.1:4310/health
 | `PATCH /api/projects/:projectId` | `{"name":"新名称"}` | `200`，更新后的 `Project` |
 | `GET /api/projects/:projectId/sessions?state=active|archived|all` | 无 | `200`，`Session[]`；`state` 默认 `active` |
 | `POST /api/projects/:projectId/sessions` | `CreateSessionRequest` | `201`，创建后的 `Session` |
+| `GET /api/sessions/:sessionId/thinking-controls` | 无 | `200`，`SessionThinkingControls`：Session 生效模型接受的 `modes` 与 `efforts`，与输入框提供的选项一致 |
 | `GET /api/sessions/:sessionId/files` | 无 | `200`，工作区文件数组 |
 | `POST /api/sessions/:sessionId/workspace/upload?conflict=reject|overwrite|rename` | multipart `file` 字段 | `201`，`WorkspaceUploadResult` |
 

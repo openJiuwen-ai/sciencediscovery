@@ -43,6 +43,21 @@
  * hashes); they overflowed the preview and inflated the modal grid track.
  * Wrap them anywhere instead of forcing the reader into horizontal scrolling. */
 .artifact-source-preview { overflow-wrap: anywhere; }
+.source-preview { min-width: 0; }
+.source-preview pre.numbered-source { padding: 10px 0; color: var(--text); font: 13px/1.6 ui-monospace, monospace; tab-size: 4; }
+.numbered-source > code { display: block; font: inherit; }
+.source-line { display: grid; grid-template-columns: 5ch minmax(0, 1fr); }
+.source-line-number { padding-right: 1ch; border-right: 1px solid var(--border); color: var(--text-muted); text-align: right; user-select: none; }
+.source-line-text { min-width: 0; min-height: 1.6em; padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.numbered-source .hljs-comment, .numbered-source .hljs-quote { color: var(--text-muted); }
+.numbered-source .hljs-keyword, .numbered-source .hljs-selector-tag, .numbered-source .hljs-literal { color: var(--accent-strong); }
+.numbered-source .hljs-string, .numbered-source .hljs-regexp, .numbered-source .hljs-bullet { color: var(--success); }
+.numbered-source .hljs-number, .numbered-source .hljs-symbol, .numbered-source .hljs-meta { color: var(--warning-strong); }
+.numbered-source .hljs-title, .numbered-source .hljs-section, .numbered-source .hljs-name { color: var(--accent-ink); font-weight: 600; }
+.numbered-source .hljs-attr, .numbered-source .hljs-attribute, .numbered-source .hljs-type { color: var(--danger); }
+.document-source { min-height: 0; overflow: auto; padding: 20px; }
+.document-source pre.numbered-source { max-height: none; margin: 0; }
+.document-panel .document-header > div { flex: 1; min-width: 0; }
 .dataset-preview { display: grid; gap: 6px; }
 .dataset-view-tabs { display: flex; gap: 4px; }
 .dataset-view-tabs button { border: 0; border-radius: 6px; background: var(--surface-hover); color: var(--muted); padding: 5px 9px; cursor: pointer; font-size: 10px; white-space: nowrap; }

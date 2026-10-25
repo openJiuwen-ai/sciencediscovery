@@ -28,7 +28,6 @@ import type {
   ProviderModelPreview,
   ProxyPolicy,
   ProxySettingsDetails,
-  RuntimeSettingsOverrides,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_MODEL_API_VARIANT,
@@ -360,31 +359,11 @@ export function ModelConnectWizard({
 
     let createdProviderId: string | undefined;
     const createdModelIds: string[] = [];
-    // Taken before any provider or model is created. The first model claims
-    // the global default on the server, so a later delete is rejected until
-    // this snapshot is written back. A failed read has no snapshot: stop
-    // before creating anything instead of leaving a row that cannot be deleted.
-    let savedOverrides: RuntimeSettingsOverrides | undefined;
-    const restoreSavedOverrides = async (): Promise<void> => {
-      if (savedOverrides === undefined || typeof client.replaceGlobalSettings !== "function") return;
-      try {
-        await client.replaceGlobalSettings(savedOverrides);
-      } catch { /* ignore */ }
-    };
-
-    try {
-      if (typeof client.getGlobalSettings !== "function") {
-        throw new Error(t("wizard.error.settingsRead"));
+    const clearAttemptDefault = async (): Promise<void> => {
+      for (const id of createdModelIds) {
+        try { await client.clearGlobalModelIfCurrent(id); } catch { /* ignore */ }
       }
-      const currentDetails = await client.getGlobalSettings();
-      savedOverrides = { ...(currentDetails.overrides ?? {}) };
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      setValidationError(message);
-      onError?.(reason instanceof Error ? reason : message);
-      setTesting(false);
-      return;
-    }
+    };
 
     try {
       // Whether the system already has models BEFORE this connect decides the
@@ -411,8 +390,9 @@ export function ModelConnectWizard({
       const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
       if (!testOutcome.ok && !budgetLimited) {
         // Failed: roll back everything this attempt created.
-        // Restore settings first so deleteModel is not blocked by runtime settings.
-        await restoreSavedOverrides();
+        // Remove only this attempt's auto-default; unrelated concurrent
+        // settings edits and newer default selections must remain intact.
+        await clearAttemptDefault();
         for (const id of createdModelIds) {
           try { await client.deleteModel(id); } catch { /* ignore */ }
         }
@@ -470,7 +450,7 @@ export function ModelConnectWizard({
       onNotice?.(t(budgetLimited ? "wizard.savedInconclusive" : "wizard.successTitle"), successDesc + (budgetLimited ? " " + t("wizard.outputLimitNotice") : ""));
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
-      await restoreSavedOverrides();
+      await clearAttemptDefault();
       for (const id of createdModelIds) {
         try { await client.deleteModel(id); } catch { /* ignore */ }
       }

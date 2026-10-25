@@ -157,6 +157,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
           },
           inputSchema: tool.inputSchema,
           name: `mcp__${adapter.manifest.id.replace(/[^A-Za-z0-9_-]/g, "_")}__${tool.id.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+          parallelSafe: tool.idempotent && (tool.kind === "lookup" || tool.kind === "search"),
           routing: tool.routing,
           sourceId: adapter.manifest.id,
           toolId: tool.id,

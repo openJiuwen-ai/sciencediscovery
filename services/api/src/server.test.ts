@@ -71,6 +71,7 @@ import type {
   SessionDetail,
   SessionRun,
   SessionRunEvent,
+  SessionThinkingControls,
   SessionUsageSummary,
   RunnerHealth,
   ScientificEnvironmentSetup,
@@ -996,6 +997,32 @@ test("authenticated proxy REST returns complete settings URLs and manages MCP po
   assert.match((await referencedDelete.json() as { error: string }).error, /referenced/);
 });
 
+test("a Session's thinking controls are those of the model its next run resolves to", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-controls-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin, { apiVariant: "kimi-k3", model: "custom-k3", name: "K3 gateway" });
+  const project = await jsonRequest<{ firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "thinking", settingsOverrides: { modelId: model.id } }),
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(project.response.status, 201);
+  const sessionId = project.body.firstSession.id;
+
+  const controls = await jsonRequest<SessionThinkingControls>(`${origin}/api/sessions/${sessionId}/thinking-controls`, {
+    headers: authorization,
+  });
+  assert.equal(controls.response.status, 200);
+  // The composer's choices for the same model: Kimi K3 cannot turn thinking off.
+  assert.deepEqual(controls.body, {
+    efforts: ["low", "high", "max"], modelId: model.id, modelName: "K3 gateway", modes: ["auto", "enabled"], supported: true,
+  });
+  assert.equal((await fetch(`${origin}/api/sessions/${sessionId}/thinking-controls`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/sessions/missing/thinking-controls`, { headers: authorization })).status, 404);
+});
+
 async function startToolModel(context: TestContext): Promise<{
   authorizations: string[];
   baseUrl: string;
@@ -1114,21 +1141,11 @@ async function startSkillCreatorModel(context: TestContext): Promise<{
     toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
     const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
     const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
-    // With the JiuwenSwarm backend skill-creator is imported there as
-    // "sciencediscovery-skill-creator" (to avoid its built-in name clash) and normally loaded
-    // with skill_tool; our read_skill remains available as a fallback.
+    // Exercise ScienceDiscovery's public read_skill contract on both executors.
+    // SDK-local import aliases depend on which built-in skills its distribution
+    // contains; they are not the identity of this platform-owned skill.
     const delta = toolResultCount === 0
-      ? onJiuwenSwarm
-        ? {
-            role: "assistant",
-            tool_calls: [{
-              function: { arguments: JSON.stringify({ skill_name: "sciencediscovery-skill-creator" }), name: "skill_tool" },
-              id: "call-read-skill-creator",
-              index: 0,
-              type: "function",
-            }],
-          }
-        : {
+      ? {
           role: "assistant",
           tool_calls: [{
             function: { arguments: JSON.stringify({ skillId: "skill-creator" }), name: "read_skill" },
@@ -1464,7 +1481,7 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
 }
 
 const AUTO_NAMING_RESPONSE_TITLE = "Refined TP53 expression study";
-const AUTO_NAMING_STORED_TITLE = createLocalSessionTitle(AUTO_NAMING_RESPONSE_TITLE);
+const AUTO_NAMING_STORED_TITLE = AUTO_NAMING_RESPONSE_TITLE;
 
 async function startAutoNamingModel(
   context: TestContext,
@@ -3688,7 +3705,7 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
   assert.equal(run.status, 200);
   const stream = await run.text();
   assert.match(stream, /pending agent-created-demo draft/);
-  assert.ok(modelServer.toolNames.some((names) => names.includes(onJiuwenSwarm ? "skill_tool" : "read_skill")), JSON.stringify(modelServer.toolNames));
+  assert.ok(modelServer.toolNames.some((names) => names.includes("read_skill")), JSON.stringify(modelServer.toolNames));
   assert.ok(modelServer.toolNames.some((names) => names.includes("create_skill")), JSON.stringify(modelServer.toolNames));
 
   assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);

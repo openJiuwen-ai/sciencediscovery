@@ -14,7 +14,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
-import { extname, resolve } from "node:path";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { send, sendError } from "./response.js";
 
@@ -39,7 +39,8 @@ export function contentTypeForPath(pathname: string): string {
 export async function serveStatic(response: ServerResponse, staticDir: string, pathname: string): Promise<void> {
   const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const candidate = resolve(staticDir, requested);
-  if (candidate !== staticDir && !candidate.startsWith(`${staticDir}/`)) {
+  const relativePath = relative(staticDir, candidate);
+  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
     sendError(response, 400, "Invalid path");
     return;
   }

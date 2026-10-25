@@ -10,6 +10,7 @@ These pages are for developers and code agents modifying ScienceDiscovery core c
 - [Runtime architecture](architecture.md) — native/JiuwenSwarm executors, adapter, API, Runner, and sidecars.
 - [Repository layout](repository-layout.md) — service/package ownership, dependency rules, and entry points.
 - [Control plane](control-plane.md) — authoritative API state, Run lifecycle, and executor seam.
+- [Automatic Session titles](session-titles.md) — language budgets, complete summaries, safe fallback, and sidebar overflow.
 
 ## Agent Runtime
 
@@ -46,6 +47,7 @@ These pages are for developers and code agents modifying ScienceDiscovery core c
 - [Content-addressable storage](cas.md) — CAS, version objects, workspace change detection.
 - [PDF worker](paper-worker.md) — PDF extraction protocol and limits.
 - [Web frontend](web-frontend.md) — Web host, event mapping, frontend development entry points.
+- [Desktop frontend](desktop-frontend.md) — the v0.1 workbench in `apps/desktop`: startup gate, stream handling, model configuration, and how it replaces `apps/web`.
 - [Frontend quality guidance](frontend-quality.md) — Development skill, responsive layout, and optional diagnostics.
 
 ## Documentation maintenance rules

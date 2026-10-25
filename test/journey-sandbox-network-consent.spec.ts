@@ -55,6 +55,8 @@ for (const decision of ["Deny", "Allow once"] as const) {
         runId = (await sendUserMessage(page, fixture.session.id, "Ask me for permission to retrieve PubMed records before executing anything.")).id;
         const card = page.locator("article.permission-card").filter({ hasText: "eutils.ncbi.nlm.nih.gov:443" }).first();
         await expect(card).toBeVisible(); await expect(card).toContainText("Retrieve requested PubMed records");
+        await expect(card.getByRole("button", { name: "Allow these hosts for this run", exact: true })).toBeVisible();
+        expect(await card.getByRole("button", { name: "Allow same type", exact: true }).count()).toBe(0);
         expect((await get(`/api/sessions/${fixture.session.id}/agent-activity`)).executions).toHaveLength(0);
       });
       await journey.step(`Choose ${decision}`, "The decision returns without executing or silently substituting another source.", async () => {

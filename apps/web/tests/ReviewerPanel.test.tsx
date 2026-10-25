@@ -62,6 +62,17 @@ test("ReviewerPanel shows the built-in Quick review identity", () => {
   assert.doesNotMatch(html, /Citation verified/);
 });
 
+test("ReviewerPanel labels citation-only Quick reviews as partial", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ checks: ["citation"], reviewLevel: "quick" })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Citation-format checks passed/);
+  assert.match(html, /claim support was not checked/);
+  assert.doesNotMatch(html, /Quick review passed/);
+});
+
 test("ReviewerPanel shows missing citation identifiers", () => {
   const finding = {
     code: "CITATION_IDENTIFIER_MISSING",

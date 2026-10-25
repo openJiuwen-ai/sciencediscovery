@@ -107,6 +107,7 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
     getGlobalSettings: async () => ({ effective: {}, overrides: {} } as any),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
+    clearGlobalModelIfCurrent: async () => ({ cleared: true }),
     testModel: async () => successResult,
     updateProvider: async (id: string, body: any) => ({
       id,
@@ -343,6 +344,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   let deletedModelId: string | undefined;
   let deletedProviderId: string | undefined;
   let defaultModelSetCalled = false;
+  const rollbackCalls: string[] = [];
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => ({
@@ -366,12 +368,20 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
       updatedAt: "2026-09-17T00:00:00.000Z",
     } as ModelProvider),
     deleteModel: async (modelId: string) => {
+      rollbackCalls.push(`delete:${modelId}`);
       deletedModelId = modelId;
       return { deleted: modelId };
     },
     deleteProvider: async (providerId: string) => {
       deletedProviderId = providerId;
       return { deleted: providerId };
+    },
+    clearGlobalModelIfCurrent: async (modelId: string) => {
+      rollbackCalls.push(`clear:${modelId}`);
+      return { cleared: true };
+    },
+    replaceGlobalSettings: async () => {
+      throw new Error("failed connections must not restore a stale settings snapshot");
     },
     testModel: async () => authFailResult,
   });
@@ -409,6 +419,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   // Temporary objects rolled back
   assert.equal(deletedModelId, "temp-profile-to-delete");
   assert.equal(deletedProviderId, "temp-provider-to-delete");
+  assert.deepEqual(rollbackCalls, ["clear:temp-profile-to-delete", "delete:temp-profile-to-delete"]);
 
   // Default model was NOT changed
   assert.equal(defaultModelSetCalled, false);
@@ -1555,14 +1566,39 @@ test("an API key entered before presets arrive keeps automatic custom mode and t
   assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-kept");
 });
 
-test("a failed settings read stops before creating a provider or model", async () => {
+test("a failed settings read after the probe rolls back the created provider and model", async () => {
   let replaceCalls = 0;
   let createCalls = 0;
+  const rollbackCalls: string[] = [];
   const errors: unknown[] = [];
   const client = createMockClient({
-    createProvider: async () => {
+    createProvider: async (body: any) => {
       createCalls += 1;
-      throw new Error("should not create a provider");
+      return {
+        apiProtocol: body.apiProtocol,
+        apiVariant: body.apiVariant,
+        baseUrl: body.baseUrl,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        id: "settings-read-provider",
+        modelDiscovery: body.modelDiscovery,
+        name: body.name,
+        presetId: body.presetId,
+        proxyPolicy: "inherit",
+        tokenOptional: false,
+        updatedAt: "2026-09-17T00:00:00.000Z",
+      } as ModelProvider;
+    },
+    clearGlobalModelIfCurrent: async (modelId: string) => {
+      rollbackCalls.push(`clear:${modelId}`);
+      return { cleared: true };
+    },
+    deleteModel: async (modelId: string) => {
+      rollbackCalls.push(`delete:${modelId}`);
+      return { deleted: modelId };
+    },
+    deleteProvider: async (providerId: string) => {
+      rollbackCalls.push(`provider:${providerId}`);
+      return { deleted: providerId };
     },
     getGlobalSettings: async () => { throw new Error("settings 500"); },
     replaceGlobalSettings: async () => {
@@ -1593,8 +1629,15 @@ test("a failed settings read stops before creating a provider or model", async (
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
 
-  assert.equal(createCalls, 0);
+  assert.equal(createCalls, 1);
   assert.equal(replaceCalls, 0);
+  assert.deepEqual(rollbackCalls, [
+    "clear:profile-settings-read-provider-listed-model-first",
+    "clear:profile-settings-read-provider-listed-model-second",
+    "delete:profile-settings-read-provider-listed-model-first",
+    "delete:profile-settings-read-provider-listed-model-second",
+    "provider:settings-read-provider",
+  ]);
   assert.equal(errors.length, 1);
   assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
   const alert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });

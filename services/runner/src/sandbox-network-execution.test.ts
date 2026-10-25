@@ -22,6 +22,8 @@ import { NO_SANDBOX_NETWORK_ACCESS, type PermissionEpoch } from "@sciencediscove
 import { executeShell, executePython } from "./executor.js";
 import { EgressGatewayRegistry } from "./egress-gateway.js";
 
+const BWRAP_PATH = process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap";
+
 for (const language of ["python", "shell"] as const) test(`${language} execution attributes denied hosts even when script catches the error and releases its gateway`, async t => {
   const root = await mkdtemp(join(tmpdir(), "net-exec-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -34,7 +36,7 @@ for (const language of ["python", "shell"] as const) test(`${language} execution
     mounts: [{ source: "workspace", mode: "read-write" }], secretRefs: [], networkPolicy: access.mode, networkAccess: access };
   const python = 'import urllib.request\ntry:\n urllib.request.urlopen("https://pypi.org", timeout=1)\nexcept Exception:\n print("caught; partial result only")\n';
   const request = { executionId: `denial-${language}`, agentId: "main", code: language === "python" ? python : `python3 - <<'PY'\n${python}PY`, permissionEpoch, workspaceRoot };
-  const config = { dataDir: root, bwrapPath: "/usr/bin/bwrap", pythonPath: "/usr/bin/python3", execTimeoutMs: 5000, maxWorkspaceBytes: 0, maxOutputBytes: 10000 };
+  const config = { dataDir: root, bwrapPath: BWRAP_PATH, pythonPath: "/usr/bin/python3", execTimeoutMs: 5000, maxWorkspaceBytes: 0, maxOutputBytes: 10000 };
   const result = language === "python" ? await executePython(config, request, undefined, undefined, undefined, registry)
     : await executeShell(config, request, undefined, undefined, registry);
   assert.equal(result.exitCode, 0); assert.match(result.stdout, /partial result only/);
@@ -49,7 +51,7 @@ for (const language of ["python", "shell"] as const) test(`${language} default n
   const workspaceRoot = join(root, "projects", "session"); await mkdir(workspaceRoot, { recursive: true });
   const permissionEpoch = { id: "epoch", sessionId: "s", createdAt: "now", environmentRevisionId: "system", reason: "offline", secretRefs: [],
     mounts: [{ source: "workspace", mode: "read-write" }], networkPolicy: "none", networkAccess: NO_SANDBOX_NETWORK_ACCESS } as PermissionEpoch;
-  const config = { dataDir: root, bwrapPath: "/usr/bin/bwrap", pythonPath: "/usr/bin/python3", execTimeoutMs: 5000, maxWorkspaceBytes: 0, maxOutputBytes: 10000 };
+  const config = { dataDir: root, bwrapPath: BWRAP_PATH, pythonPath: "/usr/bin/python3", execTimeoutMs: 5000, maxWorkspaceBytes: 0, maxOutputBytes: 10000 };
   const request = { executionId: language, agentId: "main", code: language === "python" ? 'print("offline")' : "printf offline", permissionEpoch, workspaceRoot };
   const result = language === "python" ? await executePython(config, request) : await executeShell(config, request);
   assert.equal(result.exitCode, 0); assert.match(result.stdout, /offline/);

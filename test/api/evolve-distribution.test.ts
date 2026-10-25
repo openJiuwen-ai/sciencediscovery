@@ -55,7 +55,8 @@ test("a user initializes the pinned release into an empty installation and compl
   try {
     const pins = JSON.parse(await readFile(join(repository, "scripts/binary-release/runtimes.json"), "utf8"));
     const architecture = process.arch === "arm64" ? "aarch64" : "x86_64";
-    await run(process.execPath, [join(repository, "scripts/binary-release/fetch-runtime.mjs"), "--runtime", "python", "--arch", architecture, "--output", join(workspace, "python"), "--cache", join(workspace, "downloads")], { timeout: 5 * 60_000 });
+    const runtimeCache = process.env.BINARY_CACHE_DIR?.trim() || join(workspace, "downloads");
+    await run(process.execPath, [join(repository, "scripts/binary-release/fetch-runtime.mjs"), "--runtime", "python", "--arch", architecture, "--output", join(workspace, "python"), "--cache", runtimeCache], { timeout: 5 * 60_000 });
     record("Resolve and download the pinned distribution Python", { version: pins.python.version, sha256: pins.python.architectures[architecture].sha256 });
     const uv = pins.uv.architectures[architecture];
     const manifest: PayloadManifest = {
@@ -69,7 +70,22 @@ test("a user initializes the pinned release into an empty installation and compl
     const log = (message: string) => record("Installer progress", { message });
     const realIo = defaultBootstrapIo(log);
     const io: BootstrapIo = { ...realIo,
-      fetch: async (url, options) => { if (String(url) === EVOLVE_RELEASE.url) sourceDownloads++; return await realIo.fetch(url, options); },
+      fetch: async (url, options) => {
+        if (String(url) === EVOLVE_RELEASE.url) {
+          sourceDownloads++;
+          const cache = process.env.BINARY_CACHE_DIR?.trim();
+          if (cache) {
+            try {
+              const archive = await readFile(join(cache, `evolve-${EVOLVE_RELEASE.commit}.tar.gz`));
+              // The real installer still verifies the release's pinned size and hash.
+              return new Response(new Uint8Array(archive));
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
+          }
+        }
+        return await realIo.fetch(url, options);
+      },
       run: async (command, args, options) => {
         if (args[0] === "pip" && injectDependencyFailure) {
           injectDependencyFailure = false;
@@ -95,7 +111,7 @@ test("a user initializes the pinned release into an empty installation and compl
       },
     };
     const context = { dataDir: join(workspace, "data"), payloadRoot: workspace, manifest, io,
-      env: { PATH: process.env.PATH, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: "https://pypi.org/simple" }, log };
+      env: { PATH: process.env.PATH, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || "https://pypi.org/simple" }, log };
     control = await startEvolveControl(context);
     assert.equal(control.runtime.status().state, "not_initialized");
     assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");

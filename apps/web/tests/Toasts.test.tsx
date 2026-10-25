@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { LocaleProvider } from "../src/i18n/index.js";
 
 import {
   addToastToQueue,
@@ -50,6 +51,28 @@ test("renders nothing when the toast queue is empty", () => {
   const html = renderToStaticMarkup(createElement(ToastViewport, { onDismiss: () => undefined, toasts: [] }));
 
   assert.equal(html, "");
+});
+
+test("run diagnostics are escaped inside a closed, localized disclosure", () => {
+  for (const [initialLocale, label] of [["en", "Technical details"], ["zh-CN", "技术详情"]] as const) {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale,
+      children: createElement(ToastViewport, { onDismiss: () => undefined, toasts: [{
+        detail: "Retry the task", technicalDetail: "<provider> low-level error", id: 1, title: "Run failed", tone: "error",
+      }] }),
+    }));
+    assert.ok(html.includes(`<summary>${label}</summary>`));
+    assert.match(html, /<details class="toast-technical-details"><summary>/);
+    assert.match(html, /<pre>&lt;provider&gt; low-level error<\/pre>/);
+    assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
+  }
+});
+
+test("distinct diagnostics with the same recovery guidance remain accessible", () => {
+  const failure: Toast = { detail: "Retry the task", technicalDetail: "first failure", id: 1, title: "Run failed", tone: "error" };
+  let queue = addToastToQueue([], failure);
+  queue = addToastToQueue(queue, { ...failure, id: 2 });
+  queue = addToastToQueue(queue, { ...failure, technicalDetail: "second failure", id: 3 });
+  assert.deepEqual(queue.map((toast) => toast.id), [1, 3]);
 });
 
 test("error notifications never receive an automatic dismiss delay", () => {

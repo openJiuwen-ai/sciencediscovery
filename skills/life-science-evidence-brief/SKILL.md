@@ -23,6 +23,7 @@ Create an auditable evidence brief from brokered public database records. Keep e
 - Question and scope
 - Curated protein record
 - Literature evidence
+- Study disclosures: for every included primary study, add a `Funding/COI:` entry. Include a concise funding or competing-interest disclosure only when it appears in retrieved metadata or the abstract; otherwise write `Funding/COI: not found in retrieved metadata`. This only describes the retrieved record and does not establish that no funding or conflict exists.
 - Claim-to-source table
 - Limitations
 - References, with each item ending in its canonical clickable `record.citation`
@@ -35,4 +36,5 @@ Create an auditable evidence brief from brokered public database records. Keep e
 - If a connector is disabled or fails, state which evidence class is missing; do not fabricate a substitute citation.
 - If a connector returns zero records, say so explicitly and narrow or revise the query instead of inventing sources.
 - Label whether each synthesis section is based on metadata, abstracts, or curated records; never claim full-text review unless a separate paper-import/extraction step actually supplied it.
+- Never infer funding sources or competing interests that are absent from retrieved metadata or abstracts.
 - Keep direct abstract quotations short and prefer paraphrase.

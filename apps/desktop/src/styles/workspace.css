@@ -1,0 +1,1037 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 1124:1678 */
+/* ===== workspace ===== */
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 18px;
+  border-left: 1px solid var(--border);
+  background: var(--surface-sunk);
+  overflow-y: auto;
+}
+.workspace-panel.collapsed { display: none; }
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-header h2 {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text-strong);
+}
+.workspace-header small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.workspace-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.workspace-section > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+}
+.status-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+.status-dot.green { background: var(--success-bright); animation: pulse 1.6s ease-out infinite; }
+.status-dot.green { box-shadow: 0 0 0 0 rgba(34, 160, 107, .55); }
+.status-dot.amber { background: var(--insight); box-shadow: 0 0 0 3px var(--insight-soft); }
+.status-dot.red { background: var(--danger-bright); box-shadow: 0 0 0 3px var(--danger-soft); }
+.status-dot.gray { background: var(--border-strong); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(34, 160, 107, .55); }
+  70% { box-shadow: 0 0 0 8px rgba(34, 160, 107, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 160, 107, 0); }
+}
+
+.workspace-section .title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .005em;
+}
+.workspace-section .badge {
+  margin-left: auto;
+  min-width: 22px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.error-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-left: 4px solid var(--danger-bright);
+  background: var(--danger-soft);
+}
+.error-card .error-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--danger-bright);
+  font-size: 18px;
+}
+.error-card .error-title { color: var(--danger-deep); font-size: 13px; font-weight: 700; }
+.error-card .error-desc { color: var(--danger); font-size: 12px; line-height: 1.5; margin-top: 2px; }
+.error-card button {
+  padding: 7px 14px;
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--danger-deep);
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--danger-border);
+}
+.error-card button:hover { background: #fff; border-color: var(--danger-bright); }
+
+.collapsed-section > header { cursor: pointer; }
+.collapsed-section > header .chev {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  transition: transform .12s ease;
+}
+.collapsed-section[open] > header .chev { transform: rotate(90deg); }
+.collapsed-section .collapsed-body {
+  padding: 0 14px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.collapsed-section .collapsed-body .item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+}
+.collapsed-section .collapsed-body .item:last-child { border-bottom: 0; }
+.collapsed-section .collapsed-body .item .item-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--surface-soft);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* tabbed workspace panel */
+.workspace-panel {
+  /* Same variable as the shell's third grid track, set once on `.app-shell`. */
+  width: var(--panel-width, 360px);
+  /* The splitter hangs off the panel's left edge, so the edge has to be a
+     containing block. */
+  position: relative;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: -8px 0 24px rgba(15, 23, 42, .04);
+  overflow: hidden;
+}
+/* The grab area sits inside the panel rather than straddling the edge, because
+   the panel clips its own overflow — a handle hanging outside it would be a
+   handle that is not there. Six pixels is the whole hot zone; the line it draws
+   on hover is two. */
+.workspace-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  background: transparent;
+}
+.workspace-splitter::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: transparent;
+}
+.workspace-splitter:hover::after,
+.workspace-splitter:focus-visible::after,
+body.is-resizing .workspace-splitter::after {
+  background: var(--primary);
+}
+.workspace-splitter:focus-visible { outline: none; }
+.workspace-tabbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.workspace-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  min-width: 0;
+}
+.workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: 8px 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  background: var(--surface-subtle);
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.workspace-tab:hover { color: var(--text-strong); background: var(--surface-hover); }
+.workspace-tab.active {
+  color: var(--primary-strong);
+  border-bottom-color: var(--primary);
+  background: var(--surface);
+}
+/* The label is its own button so the close button is not nested inside it —
+   nested buttons are invalid and React cannot render them reliably. */
+.workspace-tab-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 168px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-tab-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.workspace-tab .tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-tab .tab-icon { font-size: 13px; color: var(--text-faint); }
+.workspace-tab.active .tab-icon { color: var(--primary); }
+.workspace-tab .tab-close {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.workspace-tab .tab-close:hover { background: var(--surface-hover); color: var(--text-strong); }
+.tab-add {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+}
+.tab-add:hover { background: var(--surface-hover); color: var(--text-strong); }
+
+.workspace-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+.tab-content {
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+  padding: 80px 16px;
+  line-height: 1.7;
+}
+.tab-content strong { color: var(--text-secondary); display: block; font-size: 13px; margin-bottom: 4px; }
+
+.workspace-footer {
+  border-top: 1px solid var(--border);
+  padding: 8px 16px 16px;
+  background: var(--surface);
+}
+.workspace-link {
+  display: block;
+  padding: 6px 0;
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+.workspace-link:hover { color: var(--primary); }
+.panel-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  list-style: none;
+}
+.panel-section > summary::-webkit-details-marker { display: none; }
+.panel-section .artifacts-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+.panel-section .artifacts-count {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.panel-section .artifacts-chev {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  transition: transform .12s ease;
+}
+.panel-section[open] > summary .artifacts-chev { transform: rotate(180deg); }
+.artifacts-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border-soft);
+}
+/* One line per artifact: the dot, then the name, which ellipsises rather than
+   wrapping. The name is the only text there is. */
+.artifact-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 0;
+  border-bottom: 1px solid var(--border-soft);
+  transition: background .12s ease;
+}
+.artifact-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 8px 4px;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-item:hover { background: var(--surface-hover); }
+.artifact-item:last-child { border-bottom: 0; }
+
+/* ===== workspace file tree ===== */
+/* The tree sits below the artifacts section, so it opens with a divider. */
+.workspace-tree-section {
+  margin-top: 14px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.tree-pathbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  font-size: 11.5px;
+}
+.tree-rootname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-weight: 650;
+}
+.tree-filecount {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+button.tree-filecount {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+button.tree-filecount:hover { color: var(--primary-strong); }
+.tree-row {
+  display: grid;
+  grid-template-columns: 12px 15px minmax(0, 1fr) 46px 54px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tree-row:hover { background: var(--surface-hover); }
+/* Leaves open a preview in a tab, so they read as clickable text. */
+.tree-row.is-file { width: 100%; text-align: left; cursor: pointer; }
+.tree-row.is-file:hover .tree-name { color: var(--primary-strong); }
+.tree-chev {
+  color: var(--text-faint);
+  font-size: 9px;
+  transition: transform .12s ease;
+}
+.tree-icon { font-size: 11px; line-height: 1; text-align: center; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-size, .tree-age {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tree-dir > summary { list-style: none; cursor: pointer; }
+.tree-dir > summary::-webkit-details-marker { display: none; }
+.tree-dir[open] > summary .tree-chev { transform: rotate(90deg); }
+.tree-dir[open] > summary .tree-name { color: var(--text-strong); font-weight: 600; }
+.tree-children {
+  margin-left: 6px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border-soft);
+}
+/* Depth costs width, and at 280 px a four-level path has spent it. So the two
+   right-hand columns are given up a level at a time, in the order that matters
+   least: the size goes first — a folder row never had one, and a file three
+   levels down is being read for its name — then the age, which the parent's
+   count and the artifact list both say again. What is left is the indent and
+   the name, which is the whole point of drawing a tree. */
+.tree-children .tree-children .tree-row { grid-template-columns: 12px 15px minmax(0, 1fr) 54px; }
+.tree-children .tree-children .tree-size { display: none; }
+.tree-children .tree-children .tree-children .tree-row { grid-template-columns: 12px 15px minmax(0, 1fr); }
+.tree-children .tree-children .tree-children .tree-age { display: none; }
+.tree-empty {
+  padding: 14px 10px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.artifact-view {
+  padding: 4px 0 24px;
+}
+.artifact-view-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 14px;
+}
+.artifact-view-header h3 {
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: -.005em;
+}
+/* A structure's name is the way into the full-screen view, so it is a button
+   there and plain text everywhere else. It keeps the h3's own look: the name of
+   the document is not a place to advertise that something is clickable. */
+.artifact-view-title {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+.artifact-view-title:hover { color: var(--primary-strong); }
+.artifact-view-header small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+/* A path is one long token with no space in it, so the line-breaking rules that
+   cover prose will not split it, and at the panel's 280px floor the header —
+   not the content — is what would push the column sideways. */
+.artifact-view-header h3,
+.artifact-view-header small {
+  overflow-wrap: anywhere;
+}
+.artifact-view-body h4 {
+  margin: 14px 0 6px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+.artifact-view-body h4:first-of-type { margin-top: 0; }
+.artifact-view-body .meta-line {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.artifact-view-body ul {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+}
+.artifact-view-body li {
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.artifact-view-body li:last-child { border-bottom: 0; }
+.artifact-view-body li strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+.artifact-view-body li code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--surface-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--text-secondary);
+}
+.artifact-view-body li em {
+  display: inline-block;
+  font-style: normal;
+  color: var(--text-faint);
+  font-size: 11px;
+  margin-right: 4px;
+}
+.artifact-view-body .bibtex {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+.artifact-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.artifact-name {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+/* 3094:3449 */
+/* ============================================================================
+   Workspace panel: mixed selection, task cards, provenance, artifact windows
+   ============================================================================ */
+.panel-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 12px;
+}
+.panel-bulk-bar strong { font-variant-numeric: tabular-nums; }
+.panel-bulk-bar .bulk-spacer { flex: 1; }
+/* Over the ZIP ceiling: the bar says so and the action stays disabled. */
+.panel-bulk-bar.is-over {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.bulk-button {
+  padding: 4px 11px;
+  border: 1px solid var(--primary-border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+.bulk-button:hover { background: var(--primary-tint); }
+.bulk-button.is-primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+.bulk-button.is-primary:hover { background: var(--primary-strong); }
+.bulk-button[disabled] { opacity: .5; cursor: not-allowed; }
+.artifact-pick {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin-right: 2px;
+  accent-color: var(--primary);
+}
+.artifact-item.is-picked { background: var(--primary-soft); }
+/* Row-level actions stay out of the way until the row is hovered. */
+.artifact-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.artifact-item:hover .artifact-row-actions { opacity: 1; }
+.artifact-mini-button {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.artifact-mini-button:hover { background: var(--surface-sunk); color: var(--primary-strong); }
+
+/* Provenance: source + version, as a metadata table with a small run timeline under it. */
+.provenance-meta {
+  display: grid;
+  gap: 0;
+  margin: 4px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+}
+.provenance-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+}
+.provenance-row:last-child { border-bottom: 0; }
+.provenance-row:nth-child(odd) { background: var(--surface-subtle); }
+.provenance-key { color: var(--text-faint); }
+.provenance-value { color: var(--text); word-break: break-word; }
+.provenance-value code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.provenance-timeline { display: grid; gap: 0; margin: 0; padding: 0 0 0 16px; list-style: none; }
+.provenance-timeline li {
+  position: relative;
+  padding: 0 0 14px 16px;
+  border-left: 1px solid var(--border-strong);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.provenance-timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+.provenance-timeline li::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.provenance-timeline strong { display: block; color: var(--text-strong); font-weight: 650; }
+.provenance-timeline small { color: var(--text-faint); }
+
+/* Preview placeholders for the six basic kinds — no real renderer in this revision. */
+.preview-image-placeholder,
+.preview-web-placeholder,
+.preview-pdf-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 190px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+/* Static stand-in for the Plotly canvas: axes labelled, so the mapping above reads as
+   connected to the plot below. */
+.plot-volcano {
+  position: relative;
+  height: 240px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background:
+    linear-gradient(0deg, var(--surface-sunk) 1px, transparent 1px) 0 0 / 100% 25%,
+    linear-gradient(90deg, var(--surface-sunk) 1px, transparent 1px) 0 0 / 12.5% 100%,
+    var(--surface);
+}
+.plot-volcano::before,
+.plot-volcano::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+}
+/* Two soft clusters either side of centre, plus a highlighted set near the origin. */
+.plot-volcano::before {
+  left: 16%;
+  top: 34%;
+  width: 44%;
+  height: 48%;
+  background: radial-gradient(circle at 30% 70%, rgba(214, 69, 69, .38), transparent 62%),
+              radial-gradient(circle at 68% 40%, rgba(37, 99, 235, .34), transparent 60%);
+}
+.plot-volcano::after {
+  left: 44%;
+  top: 62%;
+  width: 22%;
+  height: 26%;
+  background: radial-gradient(circle at 50% 50%, rgba(20, 115, 79, .42), transparent 66%);
+}
+.plot-axis-x, .plot-axis-y {
+  position: absolute;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+.plot-axis-x { right: 8px; bottom: 6px; }
+.plot-axis-y { left: 8px; top: 6px; }
+
+/* ---- §5.4 artifact windows: fixed layouts, deliberately static in this preview ---- */
+.artifact-window { display: grid; gap: 12px; }
+.artifact-window-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+.artifact-window-note strong { color: var(--text-strong); }
+
+.csv-builder { display: grid; grid-template-columns: 178px minmax(0, 1fr); gap: 12px; }
+.csv-builder-rail {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+}
+.csv-builder-rail-label {
+  padding: 2px 4px 6px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.csv-type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+}
+.csv-type-row:hover { background: var(--surface-hover); }
+.csv-type-row.is-active { background: var(--primary-soft); color: var(--primary-strong); font-weight: 650; }
+.csv-builder-main { display: grid; gap: 12px; align-content: start; }
+.csv-mapping {
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.csv-mapping-label {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.csv-map-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.csv-map-role { color: var(--text-secondary); }
+.csv-map-field {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.plot-frame {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+
+/* .ipynb read-only: no edit caret anywhere, and a banner that says so. */
+.ipynb-readonly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--insight-soft);
+  border-radius: var(--radius-m);
+  background: var(--insight-soft);
+  color: var(--insight-strong);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.ipynb-cell {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  overflow: hidden;
+}
+.ipynb-cell-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-subtle);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.ipynb-cell-head .ipynb-prompt { color: var(--primary); font-weight: 700; }
+.ipynb-source {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  cursor: default;
+  user-select: text;
+}
+.ipynb-output {
+  padding: 9px 12px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
+
+
+
+/* Source preview for a file or artifact this version cannot render. Scoped to
+   the panel because it is the only place raw text is shown verbatim. */
+.tab-content-source {
+  margin: 0;
+  padding: 12px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.molstar-shell {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: linear-gradient(160deg, #f8fafc 0%, #e8eef7 60%, #dbe6f5 100%);
+  overflow: hidden;
+}
+/* Soft-render fallback: the container has a real aspect box so switching the renderer does
+   not reflow the panel around it. */
+.molstar-canvas { position: absolute; inset: 0; }
+/* The plugin paints its own container grey behind the canvas. The box already
+   has a background, and before the first frame that is what should show. */
+.molstar-canvas .msp-plugin { background: transparent; }
+/* Mol* draws two sets of controls over the canvas: the animation picker in the
+   top left, and the viewport button strip on the right. A 360px column has no
+   room for either, and neither is about this box — its own way in is a click on
+   the model. Hidden rather than unbuilt, so that turning one back on is a
+   matter of deleting a line here.
+
+   Scoped to the box: the full-screen view has the room, and there they are
+   Mol*'s own controls over its own canvas, which is what it looks like when the
+   plugin is mounted as the old front end mounts it.
+
+   The third class is load-bearing: Mol* writes its own rule as
+   `.msp-plugin .msp-viewport-controls`, and its stylesheet arrives with the
+   lazily imported chunk, so at equal specificity it would win the tie by
+   coming second. The `:not()` does not replace the third class, it adds to it:
+   `:not()` takes the specificity of its argument, so this selector is still
+   above Mol*'s. */
+.molstar-shell:not(.is-fullscreen) .molstar-canvas .msp-plugin .msp-viewport-controls,
+.molstar-shell:not(.is-fullscreen) .molstar-canvas .msp-plugin .msp-viewport-top-left-controls { display: none; }
+/* The model itself is the button: a click opens the full-screen view. */
+.molstar-shell:not(.is-fullscreen) { cursor: zoom-in; }
+/* Full screen is the same box escaping the column, the way the panel's own
+   full screen escapes the grid. The canvas is not remounted — it only changes
+   size, so the angle the model was turned to is the one it keeps. */
+.molstar-shell.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+}
+.molstar-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, .88);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 650;
+  box-shadow: var(--shadow-1);
+}
+/* Full screen only: a real header, because Mol*'s panels now own the corners
+   the floating name and badge would sit on. The canvas starts below it. */
+.molstar-head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.molstar-head-name {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.molstar-head-meta {
+  flex: 1;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.molstar-shell.is-fullscreen .molstar-canvas { inset: 40px 0 0 0; }
+.molstar-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: rgba(255, 255, 255, .92);
+  color: var(--text-secondary);
+  font-size: 13px;
+  box-shadow: var(--shadow-1);
+}
+.molstar-close:hover { background: var(--surface-hover); color: var(--text); }
+/* Reading the file and, if it fails, saying so — over the canvas rather than
+   beside it, and under the badge. */
+.molstar-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 18px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  pointer-events: none;
+  text-align: center;
+}

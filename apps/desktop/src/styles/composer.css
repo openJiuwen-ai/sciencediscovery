@@ -1,0 +1,300 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 530:932 */
+/* composer */
+.composer {
+  /* Containing block for the capability / model dropdowns, which anchor to the
+     composer's top edge (bottom: calc(100% + 8px)). Without this they resolve
+     against the viewport and open off-screen above. */
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  width: calc(100% - clamp(48px, 12vw, 120px));
+  max-width: 880px;
+  margin: 12px clamp(24px, 6vw, 60px) 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  overflow: visible;
+}
+
+.composer-input {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px 8px;
+}
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  max-height: 200px;
+  display: block;
+  padding: 2px 0 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+}
+.composer textarea::placeholder { color: var(--muted-light); }
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 8px 8px;
+  background: var(--surface);
+  border-top: 1px solid var(--border-soft);
+}
+/* 上传文件. Same footprint as the model pill — one row, so a different size
+   would read as a different kind of control — but it is the one button here
+   that puts something into the turn rather than deciding who answers it. */
+.composer-attach {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  transition: background .12s ease, color .12s ease;
+}
+.composer-attach:hover { background: var(--primary-soft); color: var(--primary-strong); }
+.composer-attach:disabled { opacity: .5; cursor: default; }
+.composer-attach:disabled:hover { background: none; color: var(--text-secondary); }
+/* The real input is unreachable by design: the button is what the user sees and
+   what a keyboard can reach, and `display: none` keeps the native control — whose
+   styling cannot be made to match — out of the row entirely. */
+.composer-file-input { display: none; }
+/* model selector pill (replaces previous icons) */
+.composer-model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.composer-model-pill:hover { background: var(--primary-soft); }
+.composer-model-pill[aria-expanded="true"] {
+  background: var(--primary-softer);
+  box-shadow: 0 0 0 1px var(--primary-border-soft);
+}
+.composer-model-pill .model-mark {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #1c2531 0%, #344054 100%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+.composer-model-pill .model-name { font-weight: 600; }
+.composer-model-pill .model-chev { color: var(--text-faint); }
+.composer-model-pill[aria-expanded="true"] .model-chev { transform: rotate(180deg); color: var(--primary-strong); }
+
+.send-button-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  transition: background .12s ease, color .12s ease, border-color .12s ease, transform .12s ease;
+}
+.send-button-icon svg { transform: rotate(45deg); }
+.send-button-icon:hover:not(:disabled) {
+  background: var(--primary-softer);
+  color: var(--primary-strong);
+  border-color: var(--primary-border-soft);
+}
+.send-button-icon:active:not(:disabled) { transform: scale(.96); }
+.send-button-icon:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+/* `display` is not optional. In the composer this span is a flex child, so it
+   is blockified and the 14px box holds. Dropped into an inline flow — the
+   transcript body, `.workspace-empty` — a bare span ignores width and height,
+   and the ring collapses into the two side borders: a 4×20 vertical sliver,
+   which is exactly what a streaming response used to show. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  border: 2px solid rgba(0,0,0,.1);
+  border-top-color: var(--text-faint);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  transform: none !important;
+}
+@keyframes spin { to { transform: rotate(360deg) !important; } }
+
+/* composer dropdown */
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.composer-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 14px;
+  z-index: 50;
+  width: 320px;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  padding: 8px;
+  animation: popIn .12s ease;
+}
+.composer-dropdown .dropdown-section { padding: 4px 0; }
+.composer-dropdown .dropdown-section + .dropdown-section {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+.composer-dropdown .dropdown-label {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.composer-dropdown .dropdown-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--text);
+  font-size: 13px;
+}
+.composer-dropdown .dropdown-row:hover { background: var(--primary-soft); }
+.composer-dropdown .dropdown-row .row-label { font-weight: 600; }
+.composer-dropdown .dropdown-row .row-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+.composer-dropdown .dropdown-row .row-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.composer-dropdown .dropdown-row .row-check {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+.composer-dropdown .dropdown-row .row-arrow {
+  color: var(--text-faint);
+  font-size: 16px;
+}
+.composer-dropdown .dropdown-row .model-mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #1c2531 0%, #344054 100%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+.composer-dropdown .dropdown-row-sub {
+  grid-template-columns: auto 1fr auto;
+  color: var(--muted);
+  font-weight: 550;
+}
+.composer-dropdown .dropdown-divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 4px 6px;
+}
+.composer-dropdown .dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.composer-dropdown .dropdown-toggle:hover { background: var(--surface-soft); }
+.composer-dropdown .dropdown-toggle input { accent-color: var(--primary); }
+
+/* messages (after send) */
+
+/* 2658:2687 */
+/* The send button becomes the stop button in place — never a bare spinner. The teardown
+   is a real cancel: closing the window does not stop the run. */
+.send-button-icon.is-stop {
+  background: var(--danger-bright);
+  color: #fff;
+}
+.send-button-icon.is-stop:hover { background: var(--danger); }
+.stop-glyph {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+/* Held for a beat after the turn ends so a send click cannot land on the stop button's
+   old position by reflex. */
+.send-button-icon.is-cooling { opacity: .55; cursor: default; }
+

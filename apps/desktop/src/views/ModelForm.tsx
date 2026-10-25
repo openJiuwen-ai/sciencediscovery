@@ -1,0 +1,495 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { useState } from "react";
+
+import type { ApiClient } from "../api/client.js";
+import {
+  addProviderModel,
+  createProvider,
+  previewProviderModels,
+  setGlobalModel,
+  testModel,
+  updateProvider,
+} from "../api/models.js";
+import type {
+  CreateModelProviderRequest,
+  ModelConnectivityTestResult,
+  ModelProfile,
+  ModelProvider,
+  ModelProviderPreset,
+  ProviderModelEntry,
+} from "../api/types.js";
+import { TEXT } from "../text.js";
+import { providerName } from "./provider-name.js";
+
+export interface ModelFormResult {
+  profile: ModelProfile;
+  providerId: string;
+}
+
+interface Props {
+  client: ApiClient;
+  /** Called once the profile exists, passed its connectivity test and became
+   *  the default. */
+  onConfigured: (result: ModelFormResult) => void | Promise<void>;
+  /** Closes the form without writing the default selection. The wizard has no
+   *  cancel of its own — the model step has to be completed — so it omits
+   *  this. */
+  onCancel?: () => void;
+  onProvidersChanged: () => void;
+  presets: ModelProviderPreset[];
+  providers: ModelProvider[];
+  /** The save button's own wording: the wizard continues, settings saves. */
+  submitLabel: string;
+  /** The wizard's 测试并继续: the final button stays hidden until a test passes,
+   *  and any edit that could change connectivity hides it again. Settings keeps
+   *  both buttons visible, so the default is false. */
+  revealSubmitOnSuccess?: boolean;
+  /** Wording for the test button while it is the wizard's primary action. */
+  testLabel?: string;
+}
+
+type Verdict = { kind: "fail" | "ok" | "testing"; message: string };
+
+type Protocol = NonNullable<CreateModelProviderRequest["apiProtocol"]>;
+
+/** The three wire shapes a hand-configured gateway can speak. Everything else
+ *  about a custom provider is inferred from the protocol, the same way the
+ *  server does it for a preset (`DEFAULT_MODEL_DISCOVERY`). */
+const CUSTOM_PROTOCOLS: Protocol[] = [
+  "openai-chat-completions",
+  "openai-responses",
+  "anthropic-messages",
+];
+
+const CUSTOM_VARIANT: Record<string, NonNullable<CreateModelProviderRequest["apiVariant"]>> = {
+  "anthropic-messages": "anthropic-legacy",
+  "openai-chat-completions": "openai",
+  "openai-responses": "responses",
+};
+
+const CUSTOM_DISCOVERY: Record<string, NonNullable<CreateModelProviderRequest["modelDiscovery"]>> = {
+  "anthropic-messages": "anthropic-models",
+  "openai-chat-completions": "openai-models",
+  "openai-responses": "openai-models",
+};
+
+const CUSTOM = "__custom__";
+
+function failureMessage(test: ModelConnectivityTestResult): string {
+  if (test.message.trim() !== "") return test.message;
+  return TEXT.wizard.testCategories[test.category] ?? TEXT.errors.generic;
+}
+
+/**
+ * The one place a model gets configured.
+ *
+ * Both the first-run wizard and 设置 › 模型 use it, because the chain is
+ * identical and unforgiving: a provider must exist before a model can be added
+ * to it, a profile must exist before it can be tested, and the profile must
+ * exist before it can become the default — `PUT /api/settings` drops a
+ * `modelId` that names nothing, so this is the one order that works.
+ *
+ * Picking a preset is what supplies `apiProtocol`/`apiVariant`; only the custom
+ * branch asks for a protocol, because a wrong variant against a right URL reads
+ * as "the key is broken" and is the most expensive thing to debug here.
+ *
+ * The listing is fetched through `preview-models`, which saves nothing: a
+ * half-filled form must not leave a provider record behind. The model name can
+ * also be typed by hand, and lands on the same save path.
+ */
+export function ModelForm({
+  client,
+  onCancel,
+  onConfigured,
+  onProvidersChanged,
+  presets,
+  providers,
+  revealSubmitOnSuccess = false,
+  submitLabel,
+  testLabel,
+}: Props) {
+  const [presetId, setPresetId] = useState<string>(presets[0]?.id ?? CUSTOM);
+  const preset = presets.find((candidate) => candidate.id === presetId);
+  const custom = preset === undefined;
+
+  const [baseUrl, setBaseUrl] = useState(presets[0]?.baseUrl ?? "");
+  const [protocol, setProtocol] = useState<Protocol>("openai-chat-completions");
+  const [apiKey, setApiKey] = useState("");
+  const [revealed, setRevealed] = useState(false);
+  const [modelName, setModelName] = useState("");
+  const [listing, setListing] = useState<ProviderModelEntry[]>([]);
+  const [busy, setBusy] = useState<"" | "fetch" | "submit" | "test">("");
+  const [verdict, setVerdict] = useState<Verdict>();
+  const [testPassed, setTestPassed] = useState(false);
+
+  const tokenOptional = preset?.tokenOptional === true;
+  const keyMissing = !tokenOptional && apiKey.trim() === "";
+  const ready = modelName.trim() !== "" && baseUrl.trim() !== "" && !keyMissing;
+
+  /** Any edit that changes what would be sent invalidates the previous test. */
+  const invalidate = () => {
+    setVerdict(undefined);
+    setTestPassed(false);
+  };
+
+  const choosePreset = (id: string) => {
+    setPresetId(id);
+    const next = presets.find((candidate) => candidate.id === id);
+    setBaseUrl(next?.baseUrl ?? "");
+    setListing([]);
+    invalidate();
+  };
+
+  const chooseProtocol = (value: string) => {
+    const next = CUSTOM_PROTOCOLS.find((candidate) => candidate === value);
+    if (next !== undefined) setProtocol(next);
+    invalidate();
+  };
+
+  /** The body both the preview and the save send, so the listing is fetched
+   *  with exactly the credentials the provider will be created with. */
+  const requestBody = (): CreateModelProviderRequest => {
+    const shape = preset
+      ? {
+          apiProtocol: preset.apiProtocol,
+          apiVariant: preset.apiVariant,
+          modelDiscovery: preset.modelDiscovery,
+          name: preset.name,
+          presetId: preset.id,
+        }
+      : {
+          apiProtocol: protocol,
+          apiVariant: CUSTOM_VARIANT[protocol] ?? "openai",
+          modelDiscovery: CUSTOM_DISCOVERY[protocol] ?? "openai-models",
+          name: TEXT.wizard.custom.name,
+        };
+    return {
+      ...shape,
+      baseUrl: baseUrl.trim(),
+      ...(apiKey.trim() !== "" ? { apiToken: apiKey.trim() } : {}),
+      ...(tokenOptional ? { tokenOptional: true } : {}),
+    };
+  };
+
+  const fetchListing = async () => {
+    if (baseUrl.trim() === "") return;
+    setBusy("fetch");
+    invalidate();
+    try {
+      const preview = await previewProviderModels(client, requestBody());
+      setListing(preview.models);
+      if (preview.models.length === 0) {
+        setVerdict({ kind: "fail", message: TEXT.wizard.provider.empty });
+      } else if (preview.models.length === 1) {
+        // A gateway that answers with one model has already told us the answer.
+        setModelName(preview.models[0]?.id ?? "");
+      }
+    } catch (reason) {
+      // A gateway that cannot list is common (many proxies do not implement
+      // /models). That is not a dead end: the manual field below is the
+      // fallback, so this reports the failure without blocking the save.
+      setVerdict({
+        kind: "fail",
+        message: reason instanceof Error ? reason.message : TEXT.errors.generic,
+      });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  /** Both actions need a complete form; the missing field is what the user has
+   *  to hear about, so the refusal is the same one either way. */
+  const refuseIncomplete = (): boolean => {
+    if (ready) return false;
+    setVerdict({
+      kind: "fail",
+      message: keyMissing ? TEXT.wizard.missingKey : TEXT.wizard.missingModel,
+    });
+    setTestPassed(false);
+    return true;
+  };
+
+  /**
+   * Write the provider and its model, leaving the default selection alone.
+   *
+   * Reuse the provider that already answers this endpoint: the base URL is what
+   * identifies it, and a duplicate would split one configuration across two
+   * rows in 设置 with the key on only one of them. Adding the same model twice
+   * is idempotent on the server, so 测试 followed by 保存 does not leave two
+   * profiles behind.
+   */
+  const persist = async (): Promise<ModelFormResult> => {
+    const body = requestBody();
+    const existing = providers.find(
+      (provider) => provider.baseUrl === body.baseUrl && provider.presetId === body.presetId,
+    );
+    const provider = existing
+      ? await updateProvider(client, existing.id, body)
+      : await createProvider(client, body);
+    const profile = await addProviderModel(client, provider.id, { model: modelName.trim() });
+    onProvidersChanged();
+    return { profile, providerId: provider.id };
+  };
+
+  /**
+   * 测试: save the profile so it can be tested, then report the answer and stop
+   * there. A profile has to exist before `POST /api/models/:id/test` will take
+   * it, and the save is the same idempotent one 保存 would do, so testing first
+   * leaves the catalog in a state the next click can build on.
+   */
+  const runTest = async () => {
+    if (refuseIncomplete()) return;
+    setBusy("test");
+    setVerdict({ kind: "testing", message: TEXT.wizard.testing });
+    try {
+      const { profile } = await persist();
+      const test = await testModel(client, profile.id);
+      setVerdict(
+        test.ok
+          ? { kind: "ok", message: TEXT.wizard.testOk(test.latencyMs) }
+          : { kind: "fail", message: failureMessage(test) },
+      );
+      setTestPassed(test.ok);
+    } catch (reason) {
+      setVerdict({
+        kind: "fail",
+        message: reason instanceof Error ? reason.message : TEXT.errors.generic,
+      });
+      setTestPassed(false);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  /** 保存: create, verify, and point the global default at the new profile. */
+  const submit = async () => {
+    if (refuseIncomplete()) return;
+    setBusy("submit");
+    setVerdict({ kind: "testing", message: TEXT.wizard.testing });
+    try {
+      const { profile, providerId } = await persist();
+      const test = await testModel(client, profile.id);
+      if (!test.ok) {
+        // Saved but unusable. It stays in the list: the fix is correcting this
+        // form (which will now find and update that record), not starting over.
+        setVerdict({ kind: "fail", message: failureMessage(test) });
+        setTestPassed(false);
+        return;
+      }
+
+      const settings = await setGlobalModel(client, profile.id);
+      if (settings.overrides.modelId !== profile.id) {
+        // The write came back without the selection, which means the server did
+        // not accept the id. Saying "saved" here would be a lie.
+        setVerdict({ kind: "fail", message: TEXT.wizard.saveFailed(providerName(profile.name)) });
+        return;
+      }
+      setVerdict({ kind: "ok", message: TEXT.wizard.testOk(test.latencyMs) });
+      await onConfigured({ profile, providerId });
+    } catch (reason) {
+      setVerdict({
+        kind: "fail",
+        message: reason instanceof Error ? reason.message : TEXT.errors.generic,
+      });
+      setTestPassed(false);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const testButtonClass =
+    revealSubmitOnSuccess && !testPassed ? "primary-button" : "secondary-button";
+  const testButtonLabel =
+    busy === "test"
+      ? TEXT.wizard.testing
+      : revealSubmitOnSuccess
+        ? testPassed
+          ? TEXT.wizard.retest
+          : testLabel ?? TEXT.settings.model.test
+        : TEXT.settings.model.test;
+  const showSubmit = !revealSubmitOnSuccess || testPassed;
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">{TEXT.wizard.provider.preset}</span>
+        <select
+          className="field-select"
+          disabled={busy !== ""}
+          onChange={(event) => choosePreset(event.target.value)}
+          value={presetId}
+        >
+          {presets.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.name}
+            </option>
+          ))}
+          <option value={CUSTOM}>{TEXT.wizard.custom.option}</option>
+        </select>
+      </label>
+
+      {custom ? (
+        <label className="field">
+          <span className="field-label">{TEXT.wizard.custom.protocol}</span>
+          <select
+            className="field-select"
+            disabled={busy !== ""}
+            onChange={(event) => chooseProtocol(event.target.value)}
+            value={protocol}
+          >
+            {CUSTOM_PROTOCOLS.map((candidate) => (
+              <option key={candidate} value={candidate}>
+                {TEXT.wizard.custom.protocols[candidate] ?? candidate}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
+      <label className="field">
+        <span className="field-label">{TEXT.wizard.provider.baseUrl}</span>
+        <input
+          className="field-input"
+          disabled={busy !== ""}
+          onChange={(event) => {
+            setBaseUrl(event.target.value);
+            setListing([]);
+            invalidate();
+          }}
+          spellCheck={false}
+          value={baseUrl}
+        />
+      </label>
+
+      <label className="field">
+        <span className="field-label">
+          {TEXT.wizard.provider.apiKey}
+          {tokenOptional ? <span className="opt">{TEXT.wizard.optional}</span> : null}
+        </span>
+        <span className="field-secret">
+          <input
+            autoComplete="off"
+            className="field-input"
+            disabled={busy !== ""}
+            onChange={(event) => {
+              setApiKey(event.target.value);
+              invalidate();
+            }}
+            placeholder={
+              tokenOptional
+                ? TEXT.wizard.provider.tokenOptional
+                : TEXT.wizard.provider.apiKeyPlaceholder
+            }
+            spellCheck={false}
+            type={revealed ? "text" : "password"}
+            value={apiKey}
+          />
+          <button
+            className="field-secret-toggle"
+            onClick={() => setRevealed((current) => !current)}
+            type="button"
+          >
+            {revealed ? TEXT.wizard.provider.conceal : TEXT.wizard.provider.reveal}
+          </button>
+        </span>
+      </label>
+
+      <div className="field">
+        <span className="field-label">{TEXT.wizard.provider.model}</span>
+        {listing.length > 0 ? (
+          <select
+            className="field-select"
+            disabled={busy !== ""}
+            onChange={(event) => {
+              setModelName(event.target.value);
+              invalidate();
+            }}
+            value={listing.some((entry) => entry.id === modelName) ? modelName : ""}
+          >
+            <option value="">{TEXT.wizard.provider.selectPlaceholder}</option>
+            {listing.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.displayName ?? entry.id}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <div className="field-row is-action">
+          <input
+            className="field-input"
+            disabled={busy !== ""}
+            onChange={(event) => {
+              setModelName(event.target.value);
+              invalidate();
+            }}
+            placeholder={TEXT.wizard.provider.modelPlaceholder}
+            spellCheck={false}
+            value={modelName}
+          />
+          <button
+            className="secondary-button"
+            disabled={busy !== "" || baseUrl.trim() === ""}
+            onClick={() => void fetchListing()}
+            type="button"
+          >
+            {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
+          </button>
+        </div>
+      </div>
+
+      {verdict ? (
+        <div
+          className={`test-result${
+            verdict.kind === "ok" ? " is-ok" : verdict.kind === "fail" ? " is-fail" : ""
+          }`}
+        >
+          {verdict.message}
+        </div>
+      ) : null}
+
+      <div className="form-actions">
+        <button
+          className={testButtonClass}
+          disabled={busy !== ""}
+          onClick={() => void runTest()}
+          type="button"
+        >
+          {testButtonLabel}
+        </button>
+        {showSubmit ? (
+          <button
+            className="primary-button"
+            disabled={busy !== ""}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {busy === "submit" ? TEXT.wizard.testing : submitLabel}
+          </button>
+        ) : null}
+        {onCancel ? (
+          <button
+            className="secondary-button"
+            disabled={busy !== ""}
+            onClick={onCancel}
+            type="button"
+          >
+            {TEXT.menu.cancel}
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
+}

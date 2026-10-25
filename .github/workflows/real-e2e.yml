@@ -104,7 +104,10 @@ jobs:
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE: ${{ github.workspace }}/.ci-results/model-invalid-arguments.jsonl
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
-      CI_PREPARE_BIOMNI: ${{ matrix.prepareBiomni && '1' || '0' }}
+      CI_BIOMNI_CASE_ID: ${{ matrix.biomni_case }}
+      # Biomni inputs exceed the product's 10 GiB default workspace quota.
+      # Forty GiB covers the largest pinned input plus the required output reserve.
+      SCIENCE_AGENT_MAX_WORKSPACE_BYTES: ${{ matrix.biomni_case != '' && '42949672960' || '' }}
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
@@ -123,7 +126,7 @@ jobs:
       # RACE and FACT share this deadline. Forty minutes lets citation checking finish.
       E2E_DRB_EVAL_TIMEOUT_MS: "2400000"
       E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
-      E2E_BIOMNI_RUN_TIMEOUT_MS: "4800000"
+      E2E_BIOMNI_RUN_TIMEOUT_MS: ${{ vars.E2E_BIOMNI_RUN_TIMEOUT_MS || '10800000' }}
       LLM_BACKEND: openai
       OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
       OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}

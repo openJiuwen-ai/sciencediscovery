@@ -20,7 +20,7 @@ The workspace holds research files; the environment supplies software. Main and 
 
 ## From execution to inspection
 
-Each execution has status, logs, and file records. Long commands can continue in the background. “Still running” is not failure and does not require resubmitting the command. If status is unknown, check the original execution before starting another copy.
+Each execution has status, logs, and file records. Long commands can continue in the background. “Still running” is not failure and does not require resubmitting the command. If status is unknown, check the original execution before starting another copy. Checking it asks the Runner about that same execution, so a job that kept running or finished while the connection was down is picked up again without rerunning the command.
 
 Once files are registered as scientific artifacts, you can preview, download, and inspect their versions. Delivering code, result tables, and a report together makes review easier. Files on a remote Runner require explicit handoff; copying a file does not register an artifact automatically.
 

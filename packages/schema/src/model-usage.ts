@@ -38,6 +38,9 @@ export type ModelApiVariant =
 export type ModelThinkingMode = "auto" | "disabled" | "enabled";
 export type ModelThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Every effort stop the product knows, weakest first. A model accepts a subset. */
+export const MODEL_THINKING_EFFORTS: readonly ModelThinkingEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
 export const MODEL_API_VARIANTS: Record<ModelApiProtocol, readonly ModelApiVariant[]> = {
   "openai-chat-completions": ["openai", "deepseek", "kimi-k3", "qwen", "minimax", "gemini", "ollama"],
   "openai-responses": ["responses"],
