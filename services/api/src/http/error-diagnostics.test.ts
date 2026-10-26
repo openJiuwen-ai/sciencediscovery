@@ -20,7 +20,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { diagnosticIds, diagnosticLogLine, errorDiagnosticSnapshot } from "./error-diagnostics.js";
 import { createApiServer, closeApiServer, loadServerConfig } from "./index.js";
-import type { AddressInfo } from "node:net";
 
 const prefix = "2026-10-25T10:00:00.000Z ERROR [api] ";
 
@@ -29,8 +28,9 @@ test("correlation uses exact structured values and the most specific ID", () => 
   assert.equal(diagnosticLogLine(prefix + 'event=failed requestId=req-10', { requestId: "req-1" }), undefined);
   assert.equal(diagnosticLogLine(prefix + 'event=failed prompt="requestId=req-1"', { requestId: "req-1" }), undefined);
   const safe = diagnosticLogLine(prefix + 'event=failed requestId="req-1" prompt="research text" errorMessage="private error" stdout="private output" apiKey=secret statusCode=500', { requestId: "req-1" });
-  assert.match(safe!, /requestId=req-1/);
-  assert.doesNotMatch(safe!, /research|private|secret|stdout|errorMessage/);
+  assert.ok(safe);
+  assert.match(safe, /requestId=req-1/);
+  assert.doesNotMatch(safe, /research|private|secret|stdout|errorMessage/);
   assert.equal(diagnosticIds(new URLSearchParams("runId=../../api.log")), undefined);
 });
 
@@ -55,7 +55,9 @@ test("snapshot API requires authentication and correlates real HTTP failure IDs"
   const server = createApiServer(config);
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   context.after(async () => { await closeApiServer(server); await rm(dir, { recursive: true, force: true, maxRetries: 5 }); });
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const origin = `http://127.0.0.1:${address.port}`;
   const headers = { authorization: "Bearer test-local-credential" };
   assert.equal((await fetch(`${origin}/api/error-diagnostics`)).status, 401);
   assert.equal((await fetch(`${origin}/api/error-diagnostics?runId=..%2Fapi.log`, { headers })).status, 400);
