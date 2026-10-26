@@ -102,8 +102,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 
   if (invocation.command === "evolve" || invocation.command === "idea") {
+    // parseInvocation sets engineSettings whenever it accepts an action; check
+    // rather than assert, so a missing one is a usage error, not a TypeError.
+    const { engineSettings } = invocation;
+    if (!engineSettings) throw new Error(`${invocation.command} requires an action\n\n${USAGE}`);
     const { exitCode } = await engineCommand(
-      { settings: invocation.settings, engineSettings: invocation.engineSettings!, baseEnv: process.env },
+      { settings: invocation.settings, engineSettings, baseEnv: process.env },
       write,
     );
     return exitCode;
