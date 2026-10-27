@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { reviewUnverifiedDelivery } from "@sciencediscovery/schema";
 import type { ArtifactReviewRun } from "@sciencediscovery/schema";
 import React, { useEffect, useRef, useState } from "react";
 
@@ -51,9 +52,10 @@ function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; 
   if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
   if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
-  // A citation/format pass is never a delivery pass. When the task declared no
-  // structured deliverables this is said in the label itself, not only in details.
-  if (review.decision === "ACCEPT_AND_PROCEED" && review.completeness?.status === "unconfirmed") {
+  // A citation/format pass is never a delivery pass. `reviewUnverifiedDelivery` is
+  // the same function the main-Agent feedback uses, so the card and the record
+  // cannot reach different conclusions about the same review.
+  if (review.decision === "ACCEPT_AND_PROCEED" && reviewUnverifiedDelivery(review)) {
     return { label: t("reviewer.result.scopeLimited"), tone: "warning" };
   }
   if (review.decision === "ACCEPT_AND_PROCEED") {
@@ -187,6 +189,9 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
                     paths: review.completeness.required.map((entry) => entry.path).join(", "),
                   })}
             </p>
+            {review.completeness.scope === "session"
+              ? <p className="scope-note">{t("reviewer.completeness.sessionScope")}</p>
+              : null}
           </section>
         ) : null}
         <footer>
@@ -282,16 +287,19 @@ function batchSummary(
   if (status === "failed") return t("reviewer.statusFailed");
   if (!reviews.length) return t("reviewer.builtInSpecialist");
   // A review that could not verify delivery is not a pass, so it gets its own
-  // count instead of inflating "passed".
+  // count instead of inflating "passed". The verdict comes from the same function
+  // the Reviewer feedback uses: an unverified delivery must read the same in both.
   const unverifiedDelivery = (review: ArtifactReviewRun) => review.status !== "failed"
     && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
-    && review.completeness?.status === "unconfirmed";
+    && reviewUnverifiedDelivery(review);
   // A stale review is history: a newer Artifact version exists, so its verdict no
   // longer describes what the Session holds and must not count as a current pass.
-  const outdated = (review: ArtifactReviewRun) => review.status !== "failed" && review.stale === true;
+  // A superseded verdict is history whatever it decided — including a failure the
+  // newer version already replaced.
+  const outdated = (review: ArtifactReviewRun) => review.stale === true;
   const passed = reviews.filter((review) => review.status !== "failed"
     && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
-    && !unverifiedDelivery(review) && !outdated(review)).length;
+    && !reviewUnverifiedDelivery(review) && !outdated(review)).length;
   const deliveryUnverified = reviews.filter((review) => unverifiedDelivery(review) && !outdated(review)).length;
   const outdatedCount = reviews.filter(outdated).length;
   // A superseded verdict is history: it belongs to the outdated count only, not to

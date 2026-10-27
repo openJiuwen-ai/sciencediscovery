@@ -242,8 +242,10 @@ export interface ArtifactReviewRun {
    */
   completeness?: ArtifactReviewCompleteness;
   /**
-   * Requirement set the completeness verdict was computed against. A reused
-   * review is only re-derived when the current set has the same fingerprint.
+   * Requirement set the completeness verdict was computed against. It lets a
+   * reused review tell "the same set, re-derived from live Artifacts" from "the
+   * Brief changed since", so a changed set is re-decided instead of freezing the
+   * verdict it once produced.
    */
   deliverableFingerprint?: string;
   decision: "ACCEPT_AND_PROCEED" | "REVISE_AND_RETRY" | "SKIPPED";
@@ -325,6 +327,29 @@ export interface ArtifactReviewCompleteness {
    */
   scope?: "run" | "session";
   status: "complete" | "incomplete" | "unconfirmed";
+}
+
+/**
+ * A review that recorded no delivery verdict never checked delivery, so it must
+ * not be presented as a delivery pass. A structure-only review is the one
+ * exception: it only parses the file and claims nothing about delivery.
+ *
+ * The Reviewer feedback and the Reviewer panel both answer "was delivery
+ * verified" through this one function: two independent readings of the same
+ * record are how a card can say "passed" while the main-Agent record says the
+ * scope was limited.
+ */
+export function reviewUnverifiedDelivery(
+  review: Pick<ArtifactReviewRun, "checks" | "completeness">,
+): boolean {
+  if (review.completeness) return review.completeness.status !== "complete";
+  return !isStructureOnlyReview(review);
+}
+
+/** A review that only parsed the file: no citation, computation or delivery claim. */
+export function isStructureOnlyReview(review: Pick<ArtifactReviewRun, "checks">): boolean {
+  const checks = review.checks ?? [];
+  return checks.length > 0 && checks.every((check) => check === "structure");
 }
 
 export interface ReviewCheckpoint {

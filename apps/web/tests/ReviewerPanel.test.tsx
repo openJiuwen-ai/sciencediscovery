@@ -44,9 +44,16 @@ function review(overrides: Partial<ArtifactReviewRun> = {}): ArtifactReviewRun {
   };
 }
 
+
+const deliveredComplete = {
+  required: [{ path: "report.md", state: "present" as const }],
+  source: "brief" as const,
+  status: "complete" as const,
+};
+
 test("ReviewerPanel shows the built-in Quick review identity", () => {
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
-    reviews: [review({ checks: ["citation", "computation"], reviewLevel: "quick" })],
+    reviews: [review({ checks: ["citation", "computation", "completeness"], completeness: deliveredComplete, reviewLevel: "quick" })],
     toolCallId: "review-call",
   }));
 
@@ -64,7 +71,7 @@ test("ReviewerPanel shows the built-in Quick review identity", () => {
 
 test("ReviewerPanel labels citation-only Quick reviews as partial", () => {
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
-    reviews: [review({ checks: ["citation"], reviewLevel: "quick" })],
+    reviews: [review({ checks: ["citation", "completeness"], completeness: deliveredComplete, reviewLevel: "quick" })],
     toolCallId: "review-call",
   }));
 
@@ -317,11 +324,12 @@ test("ReviewerPanel collapses a completed multi-Artifact group by default", () =
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointStatus: "completed",
     reviews: [
-      review(),
+      review({ completeness: deliveredComplete }),
       review({
         artifactId: "artifact-2",
         artifactLogicalName: "chart.png",
         artifactVersionId: "version-2",
+        completeness: deliveredComplete,
         id: "review-2",
       }),
     ],
@@ -374,7 +382,7 @@ test("ReviewerPanel keeps a checkpoint failure beside partial Artifact results",
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointError: "Second Artifact could not be read",
     checkpointStatus: "failed",
-    reviews: [review()],
+    reviews: [review({ completeness: deliveredComplete })],
     toolCallId: "review-call",
   }));
 
@@ -475,4 +483,25 @@ test("ReviewerPanel keeps an outdated warning out of the warning count", () => {
   assert.match(html, /1 outdated/);
   assert.doesNotMatch(html, /warnings? found/i);
   assert.match(html, /<i>Outdated<\/i>/);
+});
+
+test("ReviewerPanel treats a review without a delivery verdict as unverified", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ checks: ["citation"], reviewLevel: "quick" })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Checks passed; delivery not verified/);
+  assert.doesNotMatch(html, /Quick review passed/);
+});
+
+test("ReviewerPanel labels a superseded failure as outdated, not as a current revision", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ reviewLevel: "quick", stale: true, status: "failed" })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /<i>Outdated<\/i>/);
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /revision required/i);
 });

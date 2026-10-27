@@ -14,6 +14,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 
+import { reviewUnverifiedDelivery } from "@sciencediscovery/schema";
 import type {
   ArtifactReviewCompleteness,
   ArtifactReviewRun,
@@ -117,13 +118,20 @@ export function reviewerCheckpointPromptContent(
       "The review did not produce a reliable Artifact decision. Do not treat this failure as an Artifact defect.",
     ].join("\n");
   }
+  if (!reviews.length) {
+    // A checkpoint that reviewed nothing verified nothing. The automatic path has a
+    // "skipped" fallback of its own; the manual path has none, so the record itself
+    // must not read as a pass.
+    return [
+      "Reviewer Specialist feedback (internal review record)",
+      "Status: NO_ARTIFACTS",
+      "No Artifact was reviewed, so nothing about the task's delivery or its claims was verified. Treat this record as no review, not as a pass.",
+    ].join("\n");
+  }
   const findings = reviews.flatMap((review) => review.findings);
-  // A review with no delivery verdict is unverified, not "nothing to check" — except
-  // a structure-only review, which never claims anything about delivery.
-  const unverifiedDelivery = (review: ArtifactReviewRun) => (review.completeness
-    ? review.completeness.status !== "complete"
-    : !(review.checks ?? []).includes("structure"));
-  const scopeLimited = reviews.some((review) => unverifiedDelivery(review));
+  // The Reviewer panel answers "was delivery verified" through the same function,
+  // so a card and this record cannot disagree about the same review.
+  const scopeLimited = reviews.some((review) => reviewUnverifiedDelivery(review));
   const overall = inProgress ? "PARTIAL" : findings.length ? "REVISION_REQUIRED" : scopeLimited ? "SCOPE_LIMITED" : "PASSED";
   const lines = reviews.flatMap((review) => [
     `- Artifact: ${review.artifactLogicalName} (version id: ${review.artifactVersionId}, decision: ${review.decision}, level: ${review.reviewLevel ?? "quick"}${review.smartStatus ? `, deep status: ${review.smartStatus}` : ""})`,
@@ -309,14 +317,14 @@ function deliverableMatchScore(
   // A subagent's private workspace prefix is the one segment this removes, so a
   // leftover from an earlier attempt (`archive/…`, `old/…`) cannot stand in for
   // this run's deliverable, and a bare `predictions.npy` cannot be satisfied by
-  // `output/cl5/predictions.npy`. A requirement that names a directory may still
-  // be written one level shallower than the recorded path (`cl3/predictions.npy`
-  // vs `output/cl3/predictions.npy`), which is a naming difference, not a
-  // different file.
-  const exact = candidates.some((candidate) => candidate === required);
-  const directoryBoundary = required.includes("/")
-    && candidates.some((candidate) => candidate.endsWith(`/${required}`));
-  return exact || directoryBoundary ? 1_000 : 0;
+  // `output/cl5/predictions.npy`.
+  // Exactly equal after removing one subagent workspace prefix. Any looser rule
+  // (a suffix match, even limited to one extra segment) lets an earlier attempt —
+  // `archive/2026-10-01/output/cl3/predictions.npy`, `old/output/cl3/…` — stand in
+  // for this run's file, which is the false pass #435 is about. A declaration that
+  // omits a leading directory therefore reads as missing: declare the path the
+  // task actually writes.
+  return candidates.some((candidate) => candidate === required) ? 1_000 : 0;
 }
 
 /**
@@ -387,9 +395,17 @@ function completenessFindings(completeness: ArtifactReviewCompleteness): Artifac
 function deliverableRequirementsFingerprint(
   requirements: RunReviewerCheckpointOptions["requiredDeliverables"],
 ): string {
-  const paths = [...new Set(requirements?.paths ?? [])].sort();
+  // Normalized, deduplicated and order-free: `./cl3/x.npy` and `cl3/x.npy` are the
+  // same declaration, and listing the same files in another order is not a change.
+  // `scope` and `source` belong to the identity as well: a run's Brief and a
+  // Session fallback that happen to name the same paths are not the same authority.
+  const paths = [...new Set((requirements?.paths ?? []).map(normalizeDeliverablePath).filter(Boolean))].sort();
   return createHash("sha256")
-    .update(JSON.stringify({ paths, source: requirements?.source ?? "none" }))
+    .update(JSON.stringify({
+      paths,
+      scope: requirements?.scope ?? (requirements?.source === "session-fallback" ? "session" : "run"),
+      source: requirements?.source ?? "none",
+    }))
     .digest("hex");
 }
 
@@ -398,8 +414,9 @@ function attachCompleteness(
   completeness: ArtifactReviewCompleteness,
   requirements?: RunReviewerCheckpointOptions["requiredDeliverables"],
 ): ArtifactReviewRun {
-  const fingerprint = requirements ? deliverableRequirementsFingerprint(requirements) : undefined;
-  const withFingerprint = fingerprint ? { deliverableFingerprint: fingerprint } : {};
+  // Recorded even when no requirement exists: "none" is a requirement set too, and
+  // a review may only be reused against the same one.
+  const withFingerprint = { deliverableFingerprint: deliverableRequirementsFingerprint(requirements) };
   if (completeness.status === "unconfirmed") return { ...review, completeness, ...withFingerprint };
   const checks = [...new Set([...(review.checks ?? []), "completeness" as const])];
   if (completeness.status === "complete") return { ...review, checks, completeness, ...withFingerprint };
@@ -409,7 +426,10 @@ function attachCompleteness(
     completeness,
     ...withFingerprint,
     decision: "REVISE_AND_RETRY",
-    findings: [...review.findings, ...completenessFindings(completeness)],
+    // Same path reported twice (a verdict attached again after a reuse) is noise for
+    // the reader and inflates nothing: keep one finding per missing path.
+    findings: [...review.findings, ...completenessFindings(completeness).filter((finding) => !review.findings
+      .some((existing) => existing.code === finding.code && existing.message === finding.message))],
   };
 }
 
@@ -421,36 +441,59 @@ function deliverableFinding(code: string): boolean {
  * Completeness depends on Artifacts outside the reviewed version, so a reused
  * review (keyed on the report's version id and content hash) may carry a verdict
  * that the Session no longer supports: deleting the deliverable used to keep
- * `PASSED`. Re-derive it from live state on every reuse and recompute the
- * decision from the findings that survive.
+ * `PASSED`. Re-derive it from live state on every reuse and recompute the decision
+ * from the findings that survive.
+ *
+ * The requirement set can change while the report stays byte-identical: the run's
+ * Brief is edited, or a later audit resolves no requirement for that run at all.
+ * The stored verdict is then not presented as the current one, because it names
+ * files this run no longer has to produce and can keep claiming a pass the current
+ * requirements do not support.
  */
 function refreshReusedReview(
   review: ArtifactReviewRun,
-  version: ScientificArtifactVersion,
   completeness: ArtifactReviewCompleteness,
   isCompletenessTarget: boolean,
   requirements?: RunReviewerCheckpointOptions["requiredDeliverables"],
 ): ArtifactReviewRun {
-  // Recomputing is only safe against the same requirement set: a different set
-  // (a Session fallback, or another run's Brief) would drop a real
-  // DELIVERABLE_MISSING and persist an ACCEPT. When the sets differ, or the
-  // reviewed verdict never recorded one, keep what the previous run decided.
-  const fingerprint = requirements ? deliverableRequirementsFingerprint(requirements) : undefined;
-  if (completeness.source !== "brief" || !fingerprint || review.deliverableFingerprint !== fingerprint) return review;
+  // The report's own findings (citation, computation, structure) stay: the reuse
+  // key pins its content, so they still describe it. Delivery findings are a
+  // function of other files and are always re-derived.
   const findings = review.findings.filter((finding) => !deliverableFinding(finding.code));
-  const checks = review.checks ?? [];
-  const { completeness: _previousCompleteness, ...rest } = review;
-  const refreshed: ArtifactReviewRun = {
+  const checks = (review.checks ?? []).filter((check) => check !== "completeness");
+  const { completeness: _previousCompleteness, deliverableFingerprint: _previousFingerprint, ...rest } = review;
+  const redelivered: ArtifactReviewRun = {
     ...rest,
     decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
     findings,
-    ...(checks.includes("completeness")
-      ? { checks: checks.filter((check) => check !== "completeness") }
-      : {}),
+    ...(checks.length ? { checks } : {}),
   };
-  return isCompletenessTarget
-    ? attachCompleteness(refreshed, completeness, requirements)
-    : refreshed;
+  // A run's own Brief is authoritative for that report, so a changed set is simply
+  // the current requirement: re-decide against it instead of freezing the verdict.
+  if (completeness.source === "brief") {
+    return isCompletenessTarget
+      ? attachCompleteness(redelivered, completeness, requirements)
+      : redelivered;
+  }
+  // A Session fallback describes other runs. Against the very same set it is still
+  // a faithful re-derivation; against a different one it must not decide, or it
+  // would wash a real REVISE into an ACCEPT using files this run never had to make.
+  if (review.deliverableFingerprint === deliverableRequirementsFingerprint(requirements)) {
+    return isCompletenessTarget
+      ? attachCompleteness(redelivered, completeness, requirements)
+      : redelivered;
+  }
+  // Withdraw the delivery verdict: the review says the scope was unconfirmed rather
+  // than reporting the missing file of a set that no longer applies.
+  return {
+    ...redelivered,
+    completeness: {
+      required: [],
+      source: completeness.source,
+      status: "unconfirmed",
+      ...(completeness.scope ? { scope: completeness.scope } : {}),
+    },
+  };
 }
 
 function reusableQuickReview(
@@ -461,7 +504,11 @@ function reusableQuickReview(
   const mediaType = normalizedMediaType(version.mediaType);
   const requiresNarrativeReview = NARRATIVE_MEDIA_TYPES.has(mediaType);
   const requiresStructureReview = STRUCTURED_JSON_MEDIA_TYPES.has(mediaType);
-  return reviews.find((review) =>
+  // Newest first: an older review of the same version must not resurrect a verdict
+  // (or an older requirement set) that a later run already replaced. The delivery
+  // verdict is re-derived from live state afterwards, so an edited Brief does not
+  // need a fresh model call for an unchanged report.
+  return [...reviews].reverse().find((review) =>
     review.artifactVersionId === version.id
     && review.artifactContentHash === version.content.hash
     && review.reviewerSpecialistVersion === QUICK_REVIEWER_VERSION
@@ -519,7 +566,8 @@ function reusableExactSemanticReview(
   version: ScientificArtifactVersion,
   graphReviewEnabled: boolean,
 ): ArtifactReviewRun | undefined {
-  return reviews.find((review) =>
+  // Newest first, for the same reason as the Quick reuse.
+  return [...reviews].reverse().find((review) =>
     review.artifactVersionId === version.id
     && review.artifactContentHash === version.content.hash
     && review.reviewerSpecialistVersion === SEMANTIC_REVIEWER_VERSION
@@ -1111,8 +1159,14 @@ async function runReviewerCheckpointUnlocked(
   // versions produced by different runs, so each verdict is computed against the
   // requirements of the run that produced that version; reports without one would
   // otherwise read as "nothing to check" and let the batch come out as a pass.
-  const requirementsFor = (version: ScientificArtifactVersion) =>
-    options.requiredDeliverablesFor?.(version) ?? options.requiredDeliverables;
+  // A resolver that answers `undefined` is a verdict, not a gap to fill: it means
+  // none of this report's own run declared a deliverable (or its subagents stopped).
+  // Falling back to a batch-wide set here would judge the report against another
+  // run's files — reporting their absence as a revision, or certifying delivery as
+  // complete when the other run happened to produce them.
+  const requirementsFor = (version: ScientificArtifactVersion) => (options.requiredDeliverablesFor
+    ? options.requiredDeliverablesFor(version)
+    : options.requiredDeliverables);
   const completenessCache = new Map<string, ArtifactReviewCompleteness>();
   const completenessFor = (version: ScientificArtifactVersion): ArtifactReviewCompleteness => {
     const requirements = requirementsFor(version);
@@ -1176,7 +1230,6 @@ async function runReviewerCheckpointUnlocked(
           logicalName: artifact.logicalName,
           version,
         }),
-        version,
         completenessFor(version),
         completenessTargetVersionIds.has(version.id),
         requirementsFor(version),
@@ -1191,7 +1244,6 @@ async function runReviewerCheckpointUnlocked(
       if (reusableQuick) {
         const linkedReview = refreshReusedReview(
           linkReusedReview(reusableQuick, checkpoint),
-          version,
           completenessFor(version),
           completenessTargetVersionIds.has(version.id),
           requirementsFor(version),

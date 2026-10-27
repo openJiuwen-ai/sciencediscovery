@@ -203,18 +203,19 @@ test("auditReviewContext turns an automatic task id back into the reviewed run",
     sessionId: "session-1",
     toolCallId: "automatic-review:task-1",
   });
-  assert.deepEqual(automatic, {
-    parentRunId: "run-1",
-    parentRunIds: ["run-1"],
-    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], scope: "run", source: "brief" },
-  });
+  assert.equal(automatic.parentRunId, "run-1");
+  assert.deepEqual(automatic.parentRunIds, ["run-1"]);
+  assert.deepEqual(automatic.requiredDeliverables, { paths: ["output/cl3/predictions.npy"], scope: "run", source: "brief" });
+  assert.equal(typeof automatic.requiredDeliverablesFor, "function");
   // Manual re-review differs only by its synthetic id, which is not a run id either.
   const manual = auditReviewContext(store, {
     artifactVersionIds: ["report-v2"],
     sessionId: "session-1",
     toolCallId: "manual-review:message-1",
   });
-  assert.deepEqual(manual, automatic);
+  assert.equal(manual.parentRunId, automatic.parentRunId);
+  assert.deepEqual(manual.requiredDeliverables, automatic.requiredDeliverables);
+  assert.equal(typeof manual.requiredDeliverablesFor, "function");
 });
 
 test("an audit task whose versions carry no run falls back to the Session scope", () => {
@@ -225,14 +226,17 @@ test("an audit task whose versions carry no run falls back to the Session scope"
     listSubagents: () => [subagentForRun],
   } as unknown as SessionStore;
 
-  assert.deepEqual(auditReviewContext(store, {
+  const fallbackContext = auditReviewContext(store, {
     artifactVersionIds: ["report-v3"],
     sessionId: "session-1",
     toolCallId: "manual-review:message-1",
-  }), {
-    parentRunId: "manual-review:message-1",
-    parentRunIds: [],
-    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], scope: "session", source: "session-fallback" },
+  });
+  assert.equal(fallbackContext.parentRunId, "manual-review:message-1");
+  assert.deepEqual(fallbackContext.parentRunIds, []);
+  assert.deepEqual(fallbackContext.requiredDeliverables, {
+    paths: ["output/cl3/predictions.npy"],
+    scope: "session",
+    source: "session-fallback",
   });
 });
 

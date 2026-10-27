@@ -31,7 +31,6 @@ import type { SessionStore } from "../store.js";
 const DELIVERABLE_EXTENSION = /\.[A-Za-z0-9]{1,10}$/u;
 const WINDOWS_SEPARATOR = /\\/gu;
 const DEAD_SUBAGENT_STATUSES = new Set(["cancelled", "failed", "timed_out"]);
-const ALIVE_SUBAGENT_STATUSES = new Set(["completed", "running"]);
 const MAX_DECLARED_PATH_LENGTH = 200;
 
 export function declaredDeliverablePath(requirement: string): string | undefined {
@@ -121,21 +120,67 @@ export function sessionRequiredDeliverables(
  * runner a synthetic tool-call id, so this is the one place that turns it back
  * into a run context — a caller must not do that conversion itself.
  */
-export function auditReviewContext(
-  store: Pick<SessionStore, "getArtifactVersion" | "listSubagents">,
-  task: { artifactVersionIds: readonly string[]; sessionId: string; toolCallId: string },
-): {
+export interface AuditReviewContext {
   /** The newest reviewed run, for APIs that take one; the synthetic id otherwise. */
   parentRunId: string;
   parentRunIds: string[];
+  /**
+   * The union of every reviewed run's declarations, for callers that take one set.
+   * A checkpoint must not use it as a fallback for a single report: see
+   * `requiredDeliverablesFor`.
+   */
   requiredDeliverables?: ReviewDeliverableRequirements;
-} {
+  /**
+   * Requirements of the run behind one reviewed version. `undefined` means neither
+   * that run nor (through the Session fallback) the Session declared anything, and
+   * the report must be reported as unconfirmed — never as another run's set.
+   */
+  requiredDeliverablesFor: (version: { turnId?: string }) => ReviewDeliverableRequirements | undefined;
+}
+
+export interface ReviewCheckpointInput {
+  /** Empty means "no explicit list": the checkpoint scans the parent run's reports. */
+  artifactVersionIds: string[];
+  parentRunId: string;
+  requiredDeliverablesFor: (version: { turnId?: string }) => ReviewDeliverableRequirements | undefined;
+}
+
+export function auditReviewContext(
+  store: Pick<SessionStore, "getArtifactVersion" | "listSubagents">,
+  task: { artifactVersionIds: readonly string[]; sessionId: string; toolCallId: string },
+): AuditReviewContext {
   const parentRunIds = reviewedRunIds(store, task.sessionId, task.artifactVersionIds);
   const requiredDeliverables = sessionRequiredDeliverables(store, task.sessionId, parentRunIds);
   return {
     parentRunId: parentRunIds[0] ?? task.toolCallId,
     parentRunIds,
+    requiredDeliverablesFor: (version) => requirementsForVersion(store, task.sessionId, version),
     ...(requiredDeliverables ? { requiredDeliverables } : {}),
+  };
+}
+
+/**
+ * The Reviewer checkpoint fields both entry points hand to `runReviewerCheckpoint`,
+ * assembled in one testable place.
+ *
+ * This is the seam where the delivery gate broke twice (a synthetic tool-call id
+ * used as a run id, then a per-report resolver silently replaced by a batch-wide
+ * set), so it is a function instead of two lines duplicated in two callers: a test
+ * can call it, and a mutation that drops the per-version resolver shows up as a
+ * failing assertion rather than as a caller-only regression.
+ *
+ * The batch-wide set is deliberately not included: with a per-version resolver
+ * present it is dead weight, and without it, it is the bug.
+ */
+export function reviewCheckpointInput(
+  store: Pick<SessionStore, "getArtifactVersion" | "listSubagents">,
+  task: { artifactVersionIds?: readonly string[]; sessionId: string; toolCallId: string },
+): ReviewCheckpointInput {
+  const context = auditReviewContext(store, { ...task, artifactVersionIds: task.artifactVersionIds ?? [] });
+  return {
+    artifactVersionIds: [...(task.artifactVersionIds ?? [])],
+    parentRunId: context.parentRunId,
+    requiredDeliverablesFor: context.requiredDeliverablesFor,
   };
 }
 

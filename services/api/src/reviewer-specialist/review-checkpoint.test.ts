@@ -1328,9 +1328,9 @@ test("an Artifact label cannot stand in for the declared file path", async () =>
   assert.equal(review.decision, "REVISE_AND_RETRY");
 });
 
-test("reuse without an authoritative requirement keeps a real revision verdict", async () => {
-  const { artifacts, cas, saved, store } = deliverableFixture();
-  const run = (required?: { paths: string[]; source: "brief" }) => runReviewerCheckpoint({
+test("a caller without requirements re-decides instead of replaying the old verdict", async () => {
+  const { cas, saved, store } = deliverableFixture();
+  const run = (required?: { paths: string[]; source: "brief" | "session-fallback" }) => runReviewerCheckpoint({
     cas,
     parentRunId: "run-1",
     reason: "Quick review",
@@ -1341,13 +1341,14 @@ test("reuse without an authoritative requirement keeps a real revision verdict",
 
   await run({ paths: ["output/cl3/predictions.npy"], source: "brief" });
   assert.equal(saved[0]?.decision, "REVISE_AND_RETRY");
-  assert.ok(artifacts.length >= 1);
 
-  // A caller that knows no requirements must not wash the finding away.
+  // The caller now knows no requirement: the delivery verdict is withdrawn rather
+  // than replaying "cl3 missing" for a set that no longer applies, and the record
+  // says the scope is unconfirmed instead of reporting a pass.
   const result = await run();
-  const reused = saved.at(-1)!;
-  assert.equal(reused.decision, "REVISE_AND_RETRY");
-  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  const review = saved.at(-1)!;
+  assert.equal(review.completeness?.status, "unconfirmed");
+  assert.deepEqual(review.findings.filter((finding) => finding.code === "DELIVERABLE_MISSING"), []);
   assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
 });
 
@@ -1569,16 +1570,22 @@ test("one checkpoint that covers two runs judges both runs' declarations", async
     { cas, store },
   );
   assert.deepEqual(context.parentRunIds, ["run-B", "run-1"], "the report's own run stays in the set");
+  // The batch-wide set is still the union of the reviewed runs' Briefs; delivery
+  // itself is decided per report (see below).
   assert.deepEqual(context.requiredDeliverables?.paths, ["output/a/predictions.npy", "output/b/results.json"]);
-  // Several reviewed runs are still a run scope: the union of their own Briefs.
   assert.equal(context.requiredDeliverables?.scope, "run");
   // Reading only the newest run would drop run-A's requirement entirely.
   assert.deepEqual(sessionRequiredDeliverables(store, "session-1", ["run-B"])?.paths, ["output/b/results.json"]);
 
+  // Each report answers only for its own run: the run-1 report is not judged
+  // against run-B's file, and the run-B report is not judged against run-1's.
   const target = saved.find((review) => review.artifactVersionId === reportVersion.id)!;
   assert.equal(target.completeness?.scope, "run");
   assert.deepEqual(target.completeness?.required.map((entry) => [entry.path, entry.state]), [
     ["output/a/predictions.npy", "missing"],
+  ]);
+  const second = saved.find((review) => review.artifactVersionId === "artifact-report-v2")!;
+  assert.deepEqual(second.completeness?.required.map((entry) => [entry.path, entry.state]), [
     ["output/b/results.json", "present"],
   ]);
   assert.equal(target.decision, "REVISE_AND_RETRY");
@@ -1608,35 +1615,28 @@ test("a subagent's report is judged against the run that started the subagent", 
   assert.equal(review.decision, "REVISE_AND_RETRY");
 });
 
-test("a Session fallback cannot re-derive a reused REVISE into a pass", async () => {
-  const { cas, saved, store } = deliverableFixture({
-    logicalName: "legacy.npy",
-    size: 10,
-    sourcePath: "output/cl9/legacy.npy",
-  });
-  const run = (required: { paths: string[]; scope: "run" | "session"; source: "brief" | "session-fallback" }) =>
+test("a Session fallback is judged on its own, never by inheriting a verdict", async () => {
+  const { cas, saved, store } = deliverableFixture();
+  const run = (required: { paths: string[]; source: "brief" | "session-fallback"; scope?: "run" | "session" }) =>
     runReviewerCheckpoint({
       cas,
       parentRunId: "run-1",
       reason: "Quick review",
-      requiredDeliverables: required,
       sessionId: "session-1",
       store,
+      requiredDeliverables: required,
     });
 
-  await run({ paths: ["output/cl3/predictions.npy"], scope: "run", source: "brief" });
+  await run({ paths: ["output/cl3/predictions.npy"], source: "brief", scope: "run" });
   assert.equal(saved[0]?.decision, "REVISE_AND_RETRY");
 
-  // A later audit resolves only a Session fallback: the earlier run's file is
-  // present, so re-deriving would turn the real REVISE into an ACCEPT. A fallback
-  // describes other runs, so the reused verdict must stand.
-  const reusedResult = await run({ paths: ["output/cl9/legacy.npy"], scope: "session", source: "session-fallback" });
-  const reused = saved.at(-1)!;
-  assert.ok(reused.reusedFromReviewId, "the review itself was reused");
-  assert.equal(reused.decision, "REVISE_AND_RETRY");
-  assert.equal(reused.completeness?.status, "incomplete");
-  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
-  assert.doesNotMatch(reviewerCheckpointPromptContent(reusedResult.reviews), /^Status: PASSED$/mu);
+  const result = await run({ paths: ["REPORTS/other.md"], source: "session-fallback", scope: "session" });
+  const review = saved.at(-1)!;
+  assert.equal(review.completeness?.source, "session-fallback");
+  // A fallback set that differs from the one the verdict was computed against must
+  // not decide: the review withdraws to unconfirmed rather than pass or revive cl3.
+  assert.equal(review.completeness?.status, "unconfirmed");
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
 });
 
 test("a review with no declaration anywhere reads as a limited scope, never PASSED", async () => {
@@ -1728,7 +1728,10 @@ test("every report in a merged batch carries its own delivery verdict", async ()
   assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
 });
 
-test("a requirement one level shallower than the recorded path still matches", async () => {
+test("a declaration that omits a leading directory reads as missing", async () => {
+  // Tolerance here would be indistinguishable from an archived earlier attempt
+  // (`old/output/cl3/…`), so the rule stays exact and the requirement must name the
+  // path the task actually writes.
   const { evaluateDeliverableCompleteness } = await import("@sciencediscovery/provenance");
   const artifact: ScientificArtifact = {
     createdAt: "2026-10-27T00:00:00.000Z",
@@ -1758,12 +1761,18 @@ test("a requirement one level shallower than the recorded path still matches", a
     version: 1,
   };
   const store = { listArtifacts: () => [artifact], listArtifactVersions: () => [version] };
-  const verdict = evaluateDeliverableCompleteness(store, "session-1", { paths: ["cl3/predictions.npy"], source: "brief" });
-  assert.equal(verdict.required[0]?.state, "present", "writing the declaration one directory shallower is a naming difference");
+  assert.equal(
+    evaluateDeliverableCompleteness(store, "session-1", { paths: ["output/cl3/predictions.npy"], source: "brief" }).required[0]?.state,
+    "present",
+  );
+  assert.equal(
+    evaluateDeliverableCompleteness(store, "session-1", { paths: ["cl3/predictions.npy"], source: "brief" }).required[0]?.state,
+    "missing",
+  );
 });
 
-test("a reuse against a different requirement set keeps the previous verdict", async () => {
-  const { artifacts, cas, saved, store, versions } = deliverableFixture();
+test("a changed requirement set is re-decided and the new requirement is enforced", async () => {
+  const { cas, saved, store } = deliverableFixture();
   const run = (required: { paths: string[]; source: "brief" }) => runReviewerCheckpoint({
     cas,
     parentRunId: "run-1",
@@ -1773,15 +1782,144 @@ test("a reuse against a different requirement set keeps the previous verdict", a
     store,
   });
 
-  await run({ paths: ["output/cl9/predictions.npy"], source: "brief" });
+  await run({ paths: ["output/cl3/predictions.npy"], source: "brief" });
   assert.equal(saved[0]?.decision, "REVISE_AND_RETRY");
 
-  // A different (here: satisfied) requirement set must not wash the earlier
-  // finding away; the verdict was not computed against these files.
-  assert.ok(artifacts.length >= 1 && versions.length >= 1);
-  const result = await run({ paths: ["REPRODUCTION_REPORT.md"], source: "brief" });
-  const reused = saved.at(-1)!;
-  assert.equal(reused.decision, "REVISE_AND_RETRY");
-  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  // The Brief gained a file that is not there: the new set decides, and the stale
+  // "cl3 missing" of the previous set is not carried over.
+  const result = await run({ paths: ["output/cl9/extra.npy"], source: "brief" });
+  const review = saved.at(-1)!;
+  assert.equal(review.decision, "REVISE_AND_RETRY");
+  assert.deepEqual(review.completeness?.required.map((entry) => [entry.path, entry.state]), [["output/cl9/extra.npy", "missing"]]);
   assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
+});
+
+test("a report from a cancelled run is not judged with another run's declaration", async () => {
+  // run-A completed and produced cl3; run-B was cancelled, so its own declarations
+  // are unusable ("this run may not borrow another run's list"). Filling the gap
+  // with the batch-wide set would certify run-B's report as complete with run-A's
+  // file — a false complete, which is exactly what #435 forbids.
+  const content = Buffer.from("The study reports a result [1].\n[1] Study. arXiv:1706.03762");
+  const artifact = (id: string, name: string): ScientificArtifact => ({
+    createdAt: "2026-10-27T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id,
+    kind: "markdown",
+    logicalName: name,
+    name,
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  });
+  const version = (artifactId: string, turnId: string, createdAt: string): ScientificArtifactVersion => ({
+    artifactId,
+    content: { hash: `${artifactId}-hash`, size: content.length },
+    createdAt,
+    executionRunIds: [],
+    id: `${artifactId}-v1`,
+    inputArtifactVersionIds: [],
+    mediaType: "text/markdown",
+    projectId: "project-1",
+    sessionId: "session-1",
+    turnId,
+    version: 1,
+  });
+  const artifacts = [artifact("report-a", "report-a.md"), artifact("report-b", "report-b.md")];
+  const versions = [
+    version("report-a", "run-a", "2026-10-27T00:00:00.000Z"),
+    version("report-b", "run-b", "2026-10-27T00:01:00.000Z"),
+  ];
+  const cl3: ScientificArtifact = {
+    ...artifact("cl3", "predictions.npy"),
+    kind: "dataset",
+  };
+  artifacts.push(cl3);
+  versions.push({
+    artifactId: "cl3",
+    content: { hash: "cl3-hash", size: 32 },
+    createdAt: "2026-10-27T00:00:05.000Z",
+    executionRunIds: [],
+    id: "cl3-v1",
+    inputArtifactVersionIds: [],
+    mediaType: "application/octet-stream",
+    projectId: "project-1",
+    sessionId: "session-1",
+    sourcePath: "output/cl3/predictions.npy",
+    turnId: "run-a",
+    version: 1,
+  });
+  const saved: ArtifactReviewRun[] = [];
+  const store = {
+    appendArtifactReview: async (review: ArtifactReviewRun) => { saved.push(review); },
+    getArtifact: (_sessionId: string, artifactId: string) => artifacts.find((entry) => entry.id === artifactId),
+    getArtifactVersion: (_sessionId: string, versionId: string) => versions.find((entry) => entry.id === versionId),
+    listArtifactReviews: async () => saved,
+    listArtifacts: () => artifacts,
+    listArtifactVersions: (_sessionId: string, artifactId: string) => versions.filter((entry) => entry.artifactId === artifactId),
+  } as unknown as SessionStore;
+  const cas = { read: async () => content, verify: async () => true } as unknown as CasStore;
+  const runAPaths = { paths: ["output/cl3/predictions.npy", "report-a.md"], scope: "run" as const, source: "brief" as const };
+
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds: ["report-a-v1", "report-b-v1"],
+    cas,
+    parentRunId: "run-b",
+    reason: "Merged automatic audit",
+    // run-b's resolver answers undefined: its Briefs cannot be used, and that must
+    // not fall back to the batch-wide set.
+    requiredDeliverables: runAPaths,
+    requiredDeliverablesFor: (entry) => (entry.turnId === "run-a" ? runAPaths : undefined),
+    sessionId: "session-1",
+    store,
+  });
+
+  const runB = saved.find((review) => review.artifactLogicalName === "report-b.md")!;
+  assert.equal(runB.completeness?.status, "unconfirmed", "a cancelled run's report must not be certified with another run's file");
+  assert.notEqual(runB.completeness?.status, "complete");
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
+});
+
+test("an archived or old prefix cannot stand in for the declared path", async () => {
+  const { evaluateDeliverableCompleteness } = await import("@sciencediscovery/provenance");
+  const artifact: ScientificArtifact = {
+    createdAt: "2026-10-27T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id: "a",
+    kind: "dataset",
+    logicalName: "predictions.npy",
+    name: "predictions.npy",
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  };
+  for (const sourcePath of ["archive/2026-10-01/output/cl3/predictions.npy", "old/output/cl3/predictions.npy"]) {
+    const version: ScientificArtifactVersion = {
+      artifactId: "a",
+      content: { hash: "h", size: 12 },
+      createdAt: artifact.createdAt,
+      executionRunIds: [],
+      id: "a-v1",
+      inputArtifactVersionIds: [],
+      mediaType: "application/octet-stream",
+      projectId: "project-1",
+      sessionId: "session-1",
+      sourcePath,
+      version: 1,
+    };
+    const store = { listArtifacts: () => [artifact], listArtifactVersions: () => [version] };
+    const verdict = evaluateDeliverableCompleteness(store, "session-1", { paths: ["output/cl3/predictions.npy"], source: "brief" });
+    assert.equal(verdict.required[0]?.state, "missing", `${sourcePath} is an earlier attempt, not this deliverable`);
+  }
+});
+
+test("a checkpoint with no reviews never reads as a pass", () => {
+  const content = reviewerCheckpointPromptContent([]);
+  assert.match(content, /Status: NO_ARTIFACTS/);
+  assert.doesNotMatch(content, /Status: PASSED/);
 });

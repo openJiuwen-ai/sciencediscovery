@@ -213,7 +213,7 @@ import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-ex
 import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
-import { auditReviewContext, requirementsForVersion } from "../reviewer-specialist/required-deliverables.js";
+import { reviewCheckpointInput } from "../reviewer-specialist/required-deliverables.js";
 import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
@@ -496,22 +496,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // `task.toolCallId` is a synthetic `automatic-review:<taskId>` /
         // `manual-review:<messageId>` label, never a run id. Both audit paths take
         // the reviewed run from the Artifact versions; without it the delivery gate
-        // could never match a subagent's Brief and would silently pass.
-        const auditContext = auditReviewContext(store, runnableTask);
+        // could never match a subagent's Brief and would silently pass. Each report
+        // is judged against the run that produced it, because a merged batch may
+        // hold versions from several runs.
         const result = await runReviewerCheckpoint({
-          artifactVersionIds: runnableTask.artifactVersionIds,
+          ...reviewCheckpointInput(store, runnableTask),
           cas: provenanceRecorder.cas,
-          parentRunId: auditContext.parentRunId,
           reason: task.origin === "manual" ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
           reviewLevel: task.reviewLevel,
           sessionId: task.sessionId,
           signal,
           store,
           toolCallId: task.toolCallId,
-          // Each report is judged against the run that produced it; a merged batch
-          // may hold versions from several runs.
-          requiredDeliverablesFor: (version) => requirementsForVersion(store, task.sessionId, version),
-          ...(auditContext.requiredDeliverables ? { requiredDeliverables: auditContext.requiredDeliverables } : {}),
           ...(memoryGraphEnabled() ? {
             traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, task.sessionId, memoryGraphEnabled),
             traceArtifactProvenance: async (reference, traceSignal) => {

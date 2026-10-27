@@ -204,7 +204,7 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
-import { requirementsForVersion, sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
+import { reviewCheckpointInput } from "../reviewer-specialist/required-deliverables.js";
 
 import {
   aggregateToolText,
@@ -1480,8 +1480,14 @@ async function executeAgentRun(
           : undefined;
         try {
           const result = await runReviewerCheckpoint({
-            artifactVersionIds: input.artifactVersionIds,
+            ...reviewCheckpointInput(store, {
+              artifactVersionIds: input.artifactVersionIds,
+              sessionId,
+              toolCallId: checkpointToolCallId,
+            }),
             cas: provenanceRecorder.cas,
+            // This checkpoint belongs to the main Agent's own run, so its id is used
+            // as-is; the per-version resolver still judges a merged batch per run.
             parentRunId: runId,
             reason: input.reason,
             reviewLevel: sessionReviewerSpecialistSettings.level,
@@ -1489,13 +1495,6 @@ async function executeAgentRun(
             signal,
             store,
             toolCallId: checkpointToolCallId,
-            // One checkpoint can cover versions from several runs; judge each report
-            // against the run that produced it.
-            requiredDeliverablesFor: (version) => requirementsForVersion(store, sessionId, version),
-            ...(() => {
-              const required = sessionRequiredDeliverables(store, sessionId, [runId]);
-              return required ? { requiredDeliverables: required } : {};
-            })(),
             ...(memoryGraphClient && memoryGraphSink.enabled ? {
               traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, sessionId, () => memoryGraphSink.enabled),
               traceArtifactProvenance: async (reference, traceSignal) => {
