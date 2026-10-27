@@ -430,3 +430,30 @@ test("ReviewerPanel keeps an outdated review out of the revision count", () => {
   assert.doesNotMatch(html, /revision required/i);
   assert.match(html, /<i>Outdated<\/i>/);
 });
+
+test("ReviewerPanel keeps an outdated warning out of the warning count", () => {
+  const finding = {
+    code: "COMPUTATION_EVIDENCE_INSUFFICIENT",
+    evidenceRefs: [],
+    id: "finding-warning-1",
+    message: "Numeric claim has no readable Evidence content.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "computation"],
+      decision: "REVISE_AND_RETRY",
+      findings: [finding],
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  // A superseded verdict is history: it must not be counted as a current warning
+  // while the same card is labelled Outdated.
+  assert.doesNotMatch(html, /\b1 warning\b/i);
+  assert.match(html, /<i>Outdated<\/i>/);
+});

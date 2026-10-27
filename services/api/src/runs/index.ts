@@ -1490,7 +1490,7 @@ async function executeAgentRun(
             store,
             toolCallId: checkpointToolCallId,
             ...(() => {
-              const required = sessionRequiredDeliverables(store, sessionId, runId);
+              const required = sessionRequiredDeliverables(store, sessionId, [runId]);
               return required ? { requiredDeliverables: required } : {};
             })(),
             ...(memoryGraphClient && memoryGraphSink.enabled ? {

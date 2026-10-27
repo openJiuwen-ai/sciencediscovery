@@ -83,15 +83,25 @@ export function cancelReviewerCheckpoints(sessionId: string): boolean {
   return true;
 }
 
+/**
+ * Which declarations were enforced, spelled out so a Session-level fallback is
+ * never mistaken for a requirement the reviewed run itself declared.
+ */
+function deliverableScopeNote(completeness: ArtifactReviewCompleteness): string {
+  return completeness.scope === "session"
+    ? " Declarations come from the Session, not from the run(s) that produced this report."
+    : "";
+}
+
 function deliverableSummaryLine(completeness: ArtifactReviewCompleteness): string {
   const missing = completeness.required.filter((entry) => entry.state !== "present");
   if (completeness.status === "unconfirmed") {
     return "  - Delivery completeness: UNCONFIRMED. The task declared no structured deliverables, so only the checks listed above were verified; do not describe the task or the full delivery as passed.";
   }
   if (completeness.status === "incomplete") {
-    return `  - Delivery completeness: INCOMPLETE. Missing or empty required files: ${missing.map((entry) => `${entry.path} (${entry.state})`).join(", ")}. A passing citation/format check is not overall delivery.`;
+    return `  - Delivery completeness: INCOMPLETE. Missing or empty required files: ${missing.map((entry) => `${entry.path} (${entry.state})`).join(", ")}. A passing citation/format check is not overall delivery.${deliverableScopeNote(completeness)}`;
   }
-  return `  - Delivery completeness: COMPLETE. Required files present and non-empty: ${completeness.required.map((entry) => entry.path).join(", ")}. Presence only; content and scientific correctness were not verified.`;
+  return `  - Delivery completeness: COMPLETE. Required files present and non-empty: ${completeness.required.map((entry) => entry.path).join(", ")}. Presence only; content and scientific correctness were not verified.${deliverableScopeNote(completeness)}`;
 }
 
 export function reviewerCheckpointPromptContent(
@@ -211,7 +221,7 @@ export interface RunReviewerCheckpointOptions {
    * is absent the review records `completeness: unconfirmed` and must never be
    * presented as an overall delivery pass.
    */
-  requiredDeliverables?: { paths: string[]; source: "brief" };
+  requiredDeliverables?: { paths: string[]; scope?: "run" | "session"; source: "brief" | "session-fallback" };
   traceEvidenceReference?: TraceEvidenceReference;
   semanticReview?: SemanticReviewOptions;
   onProgress?: (progress: {
@@ -324,8 +334,10 @@ export function evaluateDeliverableCompleteness(
       state: best.version.content.size > 0 ? "present" as const : "empty" as const,
     };
   });
+  const scope = requirements?.scope ?? (requirements?.source === "session-fallback" ? "session" : undefined);
   return {
     required,
+    ...(scope ? { scope } : {}),
     source: requirements?.source ?? "brief",
     status: required.every((entry) => entry.state === "present") ? "complete" : "incomplete",
   };

@@ -21,10 +21,12 @@ import type {
   ArtifactReviewRun,
   ScientificArtifact,
   ScientificArtifactVersion,
+  Subagent,
 } from "@sciencediscovery/schema";
 
 import type { CasStore } from "@sciencediscovery/cas";
 import type { SessionStore } from "../store.js";
+import { auditReviewContext, sessionRequiredDeliverables } from "./required-deliverables.js";
 import {
   cancelReviewerCheckpoints,
   citationReviewClaim,
@@ -1400,4 +1402,253 @@ test("a subagent workspace prefix is stripped before matching, a stray archive p
     ["output/cl3/predictions.npy", "present"],
     ["REPRODUCTION_REPORT.md", "present"],
   ], "the subagent prefix is removed and a root-level deliverable still matches");
+});
+
+function declaringSubagent(paths: string[], parentTurnId = "run-1"): Subagent {
+  return {
+    createdAt: "2026-10-20T00:00:00.000Z",
+    id: `subagent-${parentTurnId}`,
+    input: { brief: {
+      collaborationRules: [],
+      constraints: [],
+      goal: "Reproduce the paper",
+      outputRequirements: paths,
+    }, description: "Reproduce", prompt: "Reproduce the paper" },
+    maxTurns: 10,
+    parentTurnId,
+    sessionId: "session-1",
+    status: "completed",
+    steps: [],
+  } as unknown as Subagent;
+}
+
+async function auditReview(
+  sessionId: string,
+  artifactVersionIds: string[],
+  toolCallId: string,
+  options: { store: SessionStore; cas: CasStore; subagents?: Subagent[]; versionTurns?: Record<string, string> },
+) {
+  const store = options.store;
+  const context = auditReviewContext(store, { artifactVersionIds, sessionId, toolCallId });
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds,
+    cas: options.cas,
+    reason: toolCallId.startsWith("manual-review:") ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
+    sessionId,
+    store,
+    toolCallId,
+    ...context,
+  });
+  return { context, result };
+}
+
+test("an automatic audit reads the reviewed run from the Artifact version and enforces its Brief", async () => {
+  const { cas, reportVersion, saved, store } = deliverableFixture();
+  Object.assign(store, {
+    listSubagents: () => [declaringSubagent(["output/cl3/predictions.npy"])],
+  });
+
+  const { context, result } = await auditReview("session-1", [reportVersion.id], "automatic-review:task-1", { cas, store });
+  assert.equal(context.parentRunId, "run-1", "the synthetic task id never becomes a run id");
+  assert.deepEqual(context.requiredDeliverables, {
+    paths: ["output/cl3/predictions.npy"],
+    scope: "run",
+    source: "brief",
+  });
+
+  const review = saved.at(-1)!;
+  assert.equal(review.completeness?.source, "brief");
+  assert.equal(review.completeness?.scope, "run");
+  assert.equal(review.completeness?.status, "incomplete", "the declared file only exists in an earlier run's workspace");
+  assert.equal(review.decision, "REVISE_AND_RETRY");
+  assert.ok(review.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /^Status: REVISION_REQUIRED$/mu);
+});
+
+test("the manual re-review enforces the same Brief as the automatic audit", async () => {
+  const { cas, reportVersion, saved, store } = deliverableFixture();
+  Object.assign(store, {
+    listSubagents: () => [declaringSubagent(["output/cl3/predictions.npy"])],
+  });
+
+  // The manual path only differs by its synthetic id, which is not a run id either.
+  const { context } = await auditReview("session-1", [reportVersion.id], "manual-review:message-1", { cas, store });
+  assert.deepEqual(context.requiredDeliverables, {
+    paths: ["output/cl3/predictions.npy"],
+    scope: "run",
+    source: "brief",
+  });
+  const review = saved.at(-1)!;
+  assert.equal(review.completeness?.status, "incomplete");
+  assert.equal(review.decision, "REVISE_AND_RETRY");
+  assert.doesNotMatch(reviewerCheckpointPromptContent([review]), /declares no structured required file/iu);
+});
+
+test("a run that cannot be resolved never turns a missing delivery into a pass", async () => {
+  const { cas, reportVersion, saved, store } = deliverableFixture();
+  // Same Session, but the reviewed version records no run at all.
+  const realVersion = store.getArtifactVersion.bind(store);
+  Object.assign(store, {
+    getArtifactVersion: (sessionId: string, versionId: string) => {
+      const version = realVersion(sessionId, versionId);
+      if (!version) return undefined;
+      const { turnId: _turnId, ...withoutRun } = version;
+      return withoutRun;
+    },
+    listSubagents: () => [declaringSubagent(["output/cl3/predictions.npy"])],
+  });
+  const unresolved = await auditReview("session-1", [reportVersion.id], "automatic-review:task-1", { cas, store });
+  // The Session fallback still finds the declaration, and says so.
+  assert.deepEqual(unresolved.context.requiredDeliverables, {
+    paths: ["output/cl3/predictions.npy"],
+    scope: "session",
+    source: "session-fallback",
+  });
+  assert.equal(saved.at(-1)?.decision, "REVISE_AND_RETRY");
+  assert.equal(saved.at(-1)?.completeness?.scope, "session");
+  // The fallback is spelled out in the main-Agent feedback, not hidden.
+  assert.match(
+    reviewerCheckpointPromptContent(unresolved.result.reviews),
+    /Declarations come from the Session/u,
+  );
+});
+
+test("one checkpoint that covers two runs judges both runs' declarations", async () => {
+  const { artifacts, cas, reportVersion, saved, store, versions } = deliverableFixture();
+  // The coordinator merges a newly registered version into the pending checkpoint,
+  // so this audit covers a run-A report and a run-B report at once.
+  versions.push({
+    ...reportVersion,
+    createdAt: "2026-10-20T00:05:00.000Z",
+    id: "artifact-report-v2",
+    turnId: "run-B",
+    version: 2,
+  });
+  // run-B's declared deliverable exists; run-A's does not.
+  const runBDeliverable: ScientificArtifact = {
+    createdAt: "2026-10-20T00:05:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id: "artifact-run-b-results",
+    kind: "dataset",
+    logicalName: "results.json",
+    name: "results.json",
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-20T00:05:00.000Z",
+  };
+  artifacts.push(runBDeliverable);
+  versions.push({
+    artifactId: runBDeliverable.id,
+    content: { hash: "run-b-results-hash", size: 12 },
+    createdAt: "2026-10-20T00:05:00.000Z",
+    executionRunIds: [],
+    id: "artifact-run-b-results-v1",
+    inputArtifactVersionIds: [],
+    mediaType: "application/json",
+    projectId: "project-1",
+    sessionId: "session-1",
+    sourcePath: "output/b/results.json",
+    turnId: "run-B",
+    version: 1,
+  });
+  Object.assign(store, {
+    listSubagents: () => [
+      declaringSubagent(["output/a/predictions.npy"], "run-1"),
+      declaringSubagent(["output/b/results.json"], "run-B"),
+    ],
+  });
+
+  const { context } = await auditReview(
+    "session-1",
+    [reportVersion.id, "artifact-report-v2"],
+    "automatic-review:task-2",
+    { cas, store },
+  );
+  assert.deepEqual(context.parentRunIds, ["run-B", "run-1"], "the report's own run stays in the set");
+  assert.deepEqual(context.requiredDeliverables?.paths, ["output/a/predictions.npy", "output/b/results.json"]);
+  // Several reviewed runs are still a run scope: the union of their own Briefs.
+  assert.equal(context.requiredDeliverables?.scope, "run");
+  // Reading only the newest run would drop run-A's requirement entirely.
+  assert.deepEqual(sessionRequiredDeliverables(store, "session-1", ["run-B"])?.paths, ["output/b/results.json"]);
+
+  const target = saved.find((review) => review.artifactVersionId === reportVersion.id)!;
+  assert.equal(target.completeness?.scope, "run");
+  assert.deepEqual(target.completeness?.required.map((entry) => [entry.path, entry.state]), [
+    ["output/a/predictions.npy", "missing"],
+    ["output/b/results.json", "present"],
+  ]);
+  assert.equal(target.decision, "REVISE_AND_RETRY");
+  assert.ok(target.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"
+    && finding.message.includes("output/a/predictions.npy")));
+});
+
+test("a subagent's report is judged against the run that started the subagent", async () => {
+  const { cas, reportVersion, saved, store } = deliverableFixture();
+  // A subagent writes its report into its private workspace: the version's turn is
+  // the subagent id, not the root run, so the Brief has to be found through the
+  // subagent record instead of falling back to the whole Session.
+  reportVersion.turnId = "subagent-abc";
+  const worker = declaringSubagent(["output/cl3/predictions.npy"], "run-1");
+  worker.id = "subagent-abc";
+  Object.assign(store, { listSubagents: () => [worker] });
+
+  const { context } = await auditReview("session-1", [reportVersion.id], "automatic-review:task-4", { cas, store });
+  assert.equal(context.parentRunId, "run-1", "the subagent's turn is mapped back to its run");
+  assert.deepEqual(context.requiredDeliverables, {
+    paths: ["output/cl3/predictions.npy"],
+    scope: "run",
+    source: "brief",
+  });
+  const review = saved.at(-1)!;
+  assert.equal(review.completeness?.status, "incomplete");
+  assert.equal(review.decision, "REVISE_AND_RETRY");
+});
+
+test("a Session fallback cannot re-derive a reused REVISE into a pass", async () => {
+  const { cas, saved, store } = deliverableFixture({
+    logicalName: "legacy.npy",
+    size: 10,
+    sourcePath: "output/cl9/legacy.npy",
+  });
+  const run = (required: { paths: string[]; scope: "run" | "session"; source: "brief" | "session-fallback" }) =>
+    runReviewerCheckpoint({
+      cas,
+      parentRunId: "run-1",
+      reason: "Quick review",
+      requiredDeliverables: required,
+      sessionId: "session-1",
+      store,
+    });
+
+  await run({ paths: ["output/cl3/predictions.npy"], scope: "run", source: "brief" });
+  assert.equal(saved[0]?.decision, "REVISE_AND_RETRY");
+
+  // A later audit resolves only a Session fallback: the earlier run's file is
+  // present, so re-deriving would turn the real REVISE into an ACCEPT. A fallback
+  // describes other runs, so the reused verdict must stand.
+  const reusedResult = await run({ paths: ["output/cl9/legacy.npy"], scope: "session", source: "session-fallback" });
+  const reused = saved.at(-1)!;
+  assert.ok(reused.reusedFromReviewId, "the review itself was reused");
+  assert.equal(reused.decision, "REVISE_AND_RETRY");
+  assert.equal(reused.completeness?.status, "incomplete");
+  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  assert.doesNotMatch(reviewerCheckpointPromptContent(reusedResult.reviews), /^Status: PASSED$/mu);
+});
+
+test("a review with no declaration anywhere reads as a limited scope, never PASSED", async () => {
+  const { cas, reportVersion, saved, store } = deliverableFixture();
+  Object.assign(store, { listSubagents: () => [] });
+
+  const { context } = await auditReview("session-1", [reportVersion.id], "manual-review:message-2", { cas, store });
+  assert.equal(context.requiredDeliverables, undefined);
+  const review = saved.at(-1)!;
+  assert.equal(review.completeness?.status, "unconfirmed");
+  assert.equal(review.decision, "ACCEPT_AND_PROCEED", "the checks themselves passed");
+  const prompt = reviewerCheckpointPromptContent([review]);
+  assert.match(prompt, /Delivery completeness: UNCONFIRMED/u);
+  assert.match(prompt, /^Status: SCOPE_LIMITED$/mu);
+  assert.doesNotMatch(prompt, /^Status: PASSED$/mu);
 });

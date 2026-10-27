@@ -280,11 +280,6 @@ export interface ArtifactReviewRun {
     status: "completed" | "failed" | "inconclusive" | "reused";
   }>;
   sessionId: string;
-  /**
-   * Computed on read (never persisted): the review passed its own checks but could
-   * not verify delivery, so it must not be read as an overall pass.
-   */
-  deliveryUnverified?: boolean;
   /** Computed on read (never persisted): a newer Artifact version exists than the reviewed one. */
   stale?: boolean;
   /** Computed on read (never persisted): id of that newer version, when one exists. */
@@ -311,10 +306,19 @@ export interface ArtifactReviewDeliverable {
 export interface ArtifactReviewCompleteness {
   required: ArtifactReviewDeliverable[];
   /**
-   * `none` means the task had no structured deliverable declaration; the
-   * review must then say the scope was limited instead of implying a pass.
+   * `brief` is the reviewed run's own declaration; `session-fallback` means that
+   * run declared nothing and the Session's live declarations were used instead;
+   * `none` means nothing was declared at all. Only `brief` is authoritative
+   * enough to re-derive a reused verdict — a fallback describes other runs.
    */
-  source: "brief" | "none";
+  source: "brief" | "session-fallback" | "none";
+  /**
+   * Which declarations were enforced: `run` when the Briefs of the reviewed
+   * run(s) were found, `session` when none of them declared anything and the
+   * Session's live declarations were used instead. Recorded so a Session-wide
+   * fallback stays observable instead of looking like a scoped check.
+   */
+  scope?: "run" | "session";
   status: "complete" | "incomplete" | "unconfirmed";
 }
 

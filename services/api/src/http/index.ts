@@ -213,7 +213,7 @@ import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-ex
 import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
-import { reviewedRunId, sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
+import { auditReviewContext } from "../reviewer-specialist/required-deliverables.js";
 import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
@@ -493,23 +493,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         };
       }
       try {
+        // `task.toolCallId` is a synthetic `automatic-review:<taskId>` /
+        // `manual-review:<messageId>` label, never a run id. Both audit paths take
+        // the reviewed run from the Artifact versions; without it the delivery gate
+        // could never match a subagent's Brief and would silently pass.
+        const auditContext = auditReviewContext(store, runnableTask);
         const result = await runReviewerCheckpoint({
           artifactVersionIds: runnableTask.artifactVersionIds,
           cas: provenanceRecorder.cas,
-          parentRunId: task.toolCallId,
+          parentRunId: auditContext.parentRunId,
           reason: task.origin === "manual" ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
           reviewLevel: task.reviewLevel,
           sessionId: task.sessionId,
           signal,
           store,
           toolCallId: task.toolCallId,
-          ...(() => {
-            // `task.toolCallId` is a synthetic `automatic-review:<taskId>` label,
-            // never a run id; the run is the one that produced the reviewed versions.
-            const parentRunId = reviewedRunId(store, task.sessionId, task.artifactVersionIds);
-            const required = sessionRequiredDeliverables(store, task.sessionId, parentRunId);
-            return required ? { requiredDeliverables: required } : {};
-          })(),
+          ...(auditContext.requiredDeliverables ? { requiredDeliverables: auditContext.requiredDeliverables } : {}),
           ...(memoryGraphEnabled() ? {
             traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, task.sessionId, memoryGraphEnabled),
             traceArtifactProvenance: async (reference, traceSignal) => {
