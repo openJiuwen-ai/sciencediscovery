@@ -72,7 +72,7 @@ export interface ReviewCheckpointStore {
   listArtifactVersions(sessionId: string, artifactId: string): ScientificArtifactVersion[];
 }
 
-export const QUICK_REVIEWER_VERSION = "2.4.0-deliverable-completeness";
+export const QUICK_REVIEWER_VERSION = "2.5.0-deliverable-completeness";
 const sessionReviewQueues = new Map<string, Promise<void>>();
 const activeReviewControllers = new Map<string, Set<AbortController>>();
 
@@ -251,6 +251,12 @@ function selectVersions(options: RunReviewerCheckpointOptions): ScientificArtifa
 const DELIVERABLE_MISSING_CODE = "DELIVERABLE_MISSING";
 const DELIVERABLE_EMPTY_CODE = "DELIVERABLE_EMPTY";
 
+const SUBAGENT_WORKSPACE_PREFIX = /^subagents\/[^/]+\//u;
+
+function stripSubagentWorkspacePrefix(path: string): string {
+  return path.replace(SUBAGENT_WORKSPACE_PREFIX, "");
+}
+
 function normalizeDeliverablePath(value: string): string {
   return value.trim().replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/^\/+/u, "").replace(/\/+$/u, "");
 }
@@ -276,13 +282,12 @@ function deliverableMatchScore(
     ? [recorded]
     : [artifact.name, artifact.logicalName])
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map(normalizeDeliverablePath);
-  let best = 0;
-  for (const candidate of candidates) {
-    if (candidate === required) best = Math.max(best, 1_000);
-    else if (candidate.endsWith(`/${required}`)) best = Math.max(best, 500);
-  }
-  return best;
+    .map((value) => stripSubagentWorkspacePrefix(normalizeDeliverablePath(value)));
+  // Exact match only. A subagent's private workspace prefix is the one segment
+  // this removes, so a leftover from an earlier attempt (`archive/…`, `old/…`)
+  // cannot stand in for this run's deliverable, and a bare `predictions.npy`
+  // cannot be satisfied by `output/cl5/predictions.npy`.
+  return candidates.some((candidate) => candidate === required) ? 1_000 : 0;
 }
 
 /**
@@ -380,14 +385,16 @@ function refreshReusedReview(
   completeness: ArtifactReviewCompleteness,
   completenessTargetVersionId: string | undefined,
 ): ArtifactReviewRun {
+  // Without an authoritative requirement this run knows less than the reviewed
+  // one did; dropping its findings would upgrade a real REVISE to a persisted
+  // ACCEPT, so such a reuse keeps what it had.
+  if (completeness.source !== "brief") return review;
   const findings = review.findings.filter((finding) => !deliverableFinding(finding.code));
   const checks = review.checks ?? [];
   const { completeness: _previousCompleteness, ...rest } = review;
   const refreshed: ArtifactReviewRun = {
     ...rest,
-    decision: findings.length
-      ? "REVISE_AND_RETRY"
-      : checks.length ? "ACCEPT_AND_PROCEED" : "SKIPPED",
+    decision: findings.length ? "REVISE_AND_RETRY" : "ACCEPT_AND_PROCEED",
     findings,
     ...(checks.includes("completeness")
       ? { checks: checks.filter((check) => check !== "completeness") }

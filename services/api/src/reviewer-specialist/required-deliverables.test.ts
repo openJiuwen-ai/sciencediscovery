@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import type { Subagent } from "@sciencediscovery/schema";
 
 import type { SessionStore } from "../store.js";
-import { declaredDeliverablePath, declaredDeliverablePaths, sessionRequiredDeliverables } from "./required-deliverables.js";
+import { declaredDeliverablePath, declaredDeliverablePaths, reviewedRunId, sessionRequiredDeliverables } from "./required-deliverables.js";
 
 function subagent(outputRequirements: string[]): Subagent {
   return {
@@ -45,6 +45,8 @@ test("deliverable declarations accept only explicit relative file paths", () => 
     "./outputs/predictions.csv",
     "outputs/model.fasta",
     "output\\cl3\\predictions.npy",
+    // A root-level deliverable of the lead Agent has no directory; it is matched exactly.
+    "REPRODUCTION_REPORT.md",
   ];
   for (const declaration of accepted) {
     assert.ok(declaredDeliverablePath(declaration), `${declaration} is a deliverable path`);
@@ -58,8 +60,6 @@ test("deliverable declarations accept only explicit relative file paths", () => 
     "https://example.com/predictions.npy",
     "output/*.npy",
     "predictions",
-    // A bare file name is satisfied by every instance's copy, so it is not a requirement.
-    "REPRODUCTION_REPORT.md",
     // Climbing out of the declared directory is a notation, not the file.
     "output/../predictions.npy",
   ];
@@ -86,13 +86,15 @@ test("a Session without a structured deliverable declares none", () => {
   });
 });
 
-test("declarations are scoped to the reviewed run and drop failed subagents", () => {
+test("declarations are scoped to the reviewed run and drop stopped subagents", () => {
   const earlier = subagent(["output/cl3/predictions.npy"]);
   earlier.parentTurnId = "run-earlier";
   const failed = subagent(["output/cl9/predictions.npy"]);
   failed.status = "failed";
+  const timedOut = subagent(["output/cl7/predictions.npy"]);
+  timedOut.status = "timed_out";
   const current = subagent(["output/cl5/predictions.npy"]);
-  const store = { listSubagents: () => [earlier, failed, current] } as unknown as SessionStore;
+  const store = { listSubagents: () => [earlier, failed, timedOut, current] } as unknown as SessionStore;
 
   assert.deepEqual(sessionRequiredDeliverables(store, "session-1", "run-1"), {
     paths: ["output/cl5/predictions.npy"],
@@ -100,6 +102,59 @@ test("declarations are scoped to the reviewed run and drop failed subagents", ()
   });
   assert.deepEqual(sessionRequiredDeliverables(store, "session-1"), {
     paths: ["output/cl3/predictions.npy", "output/cl5/predictions.npy"],
+    source: "brief",
+  });
+});
+
+test("a later run without Briefs falls back to the Session's live declarations", () => {
+  const earlier = subagent(["output/cl3/predictions.npy"]);
+  earlier.parentTurnId = "run-1";
+  const store = { listSubagents: () => [earlier] } as unknown as SessionStore;
+  // run-2 only rewrites the report; it must still be checked against the file the
+  // earlier run declared instead of silently becoming unverified.
+  assert.deepEqual(sessionRequiredDeliverables(store, "session-1", "run-2"), {
+    paths: ["output/cl3/predictions.npy"],
+    source: "brief",
+  });
+});
+
+test("the reviewed run is read from the Artifact versions, not the audit task id", () => {
+  const store = {
+    getArtifactVersion: (_sessionId: string, versionId: string) => versionId === "v1" ? { turnId: "run-1" } : undefined,
+  } as unknown as SessionStore;
+  assert.equal(reviewedRunId(store, "session-1", ["v1"]), "run-1");
+  assert.equal(reviewedRunId(store, "session-1", ["missing"]), undefined);
+  // The coordinator's synthetic id never matches a subagent's parentTurnId, which is
+  // why the automatic path must derive the run from the versions it reviews.
+  assert.equal(reviewedRunId(store, "session-1", []), undefined);
+});
+
+test("both audit paths reach the declarations of the run they review", () => {
+  // The automatic audit is enqueued on an Artifact version; the manual one on a
+  // message. Both hand the runner a synthetic tool-call id, so the run has to be
+  // read from the reviewed version — this is the regression that turned the gate
+  // off on the real paths while the function itself was correct.
+  const subagentForRun = subagent(["output/cl3/predictions.npy"]);
+  subagentForRun.parentTurnId = "run-1";
+  const versions: Record<string, { turnId?: string }> = {
+    "report-v2": { turnId: "run-1" },
+    "report-v3": {},
+  };
+  const store = {
+    getArtifactVersion: (_sessionId: string, versionId: string) => versions[versionId],
+    listSubagents: () => [subagentForRun],
+  } as unknown as SessionStore;
+
+  const parentRunId = reviewedRunId(store, "session-1", ["report-v2"]);
+  assert.equal(parentRunId, "run-1");
+  assert.deepEqual(sessionRequiredDeliverables(store, "session-1", parentRunId), {
+    paths: ["output/cl3/predictions.npy"],
+    source: "brief",
+  });
+  // A version without a turn id must fall back to the Session's declarations,
+  // never to "no requirements".
+  assert.deepEqual(sessionRequiredDeliverables(store, "session-1", reviewedRunId(store, "session-1", ["report-v3"])), {
+    paths: ["output/cl3/predictions.npy"],
     source: "brief",
   });
 });

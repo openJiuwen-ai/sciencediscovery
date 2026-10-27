@@ -38,8 +38,16 @@ export function annotateReviewStaleness(
     if (latest) latestVersionByArtifactId.set(review.artifactId, latest.id);
   }
   return reviews.map((review) => {
+    // One derived verdict for every reader: the Web panel, the checkpoint feedback
+    // and the main Agent's authority snapshot must not each interpret `completeness`.
+    const deliveryUnverified = review.decision === "ACCEPT_AND_PROCEED"
+      && !review.findings.length && review.completeness?.status === "unconfirmed";
     const latestVersionId = latestVersionByArtifactId.get(review.artifactId);
-    if (!latestVersionId || latestVersionId === review.artifactVersionId) return review;
-    return { ...review, stale: true, staleSinceVersionId: latestVersionId };
+    const stale = Boolean(latestVersionId && latestVersionId !== review.artifactVersionId);
+    return {
+      ...review,
+      ...(deliveryUnverified ? { deliveryUnverified: true } : {}),
+      ...(stale && latestVersionId ? { stale: true, staleSinceVersionId: latestVersionId } : {}),
+    };
   });
 }

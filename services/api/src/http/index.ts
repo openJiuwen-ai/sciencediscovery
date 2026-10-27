@@ -213,7 +213,7 @@ import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-ex
 import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
-import { sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
+import { reviewedRunId, sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
 import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
@@ -504,7 +504,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           store,
           toolCallId: task.toolCallId,
           ...(() => {
-            const required = sessionRequiredDeliverables(store, task.sessionId, task.toolCallId);
+            // `task.toolCallId` is a synthetic `automatic-review:<taskId>` label,
+            // never a run id; the run is the one that produced the reviewed versions.
+            const parentRunId = reviewedRunId(store, task.sessionId, task.artifactVersionIds);
+            const required = sessionRequiredDeliverables(store, task.sessionId, parentRunId);
             return required ? { requiredDeliverables: required } : {};
           })(),
           ...(memoryGraphEnabled() ? {

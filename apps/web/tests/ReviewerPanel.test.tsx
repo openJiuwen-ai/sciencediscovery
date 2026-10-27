@@ -400,3 +400,33 @@ for (const reason of [
     assert.doesNotMatch(html, /Review failed|Review passed|process-record failed/);
   });
 }
+
+test("ReviewerPanel keeps an outdated review out of the revision count", () => {
+  const finding = {
+    code: "DELIVERABLE_MISSING",
+    evidenceRefs: [],
+    id: "finding-1",
+    message: "Required task deliverable is missing: output/cl3/predictions.npy.",
+    severity: "critical" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "completeness"],
+      completeness: {
+        required: [{ path: "output/cl3/predictions.npy", state: "missing" }],
+        source: "brief",
+        status: "incomplete",
+      },
+      decision: "REVISE_AND_RETRY",
+      findings: [finding],
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /revision required/i);
+  assert.match(html, /<i>Outdated<\/i>/);
+});

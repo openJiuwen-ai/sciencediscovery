@@ -280,6 +280,11 @@ export interface ArtifactReviewRun {
     status: "completed" | "failed" | "inconclusive" | "reused";
   }>;
   sessionId: string;
+  /**
+   * Computed on read (never persisted): the review passed its own checks but could
+   * not verify delivery, so it must not be read as an overall pass.
+   */
+  deliveryUnverified?: boolean;
   /** Computed on read (never persisted): a newer Artifact version exists than the reviewed one. */
   stale?: boolean;
   /** Computed on read (never persisted): id of that newer version, when one exists. */

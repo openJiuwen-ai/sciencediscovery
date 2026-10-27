@@ -47,9 +47,7 @@ type Translate = ReturnType<typeof useLocale>["t"];
 function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; tone: string } {
   if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
   // A superseded verdict is history, whatever it decided when it was written.
-  if (review.stale === true && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length) {
-    return { label: t("reviewer.result.outdated"), tone: "skipped" };
-  }
+  if (review.stale === true) return { label: t("reviewer.result.outdated"), tone: "skipped" };
   if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
   // A citation/format pass is never a delivery pass. When the task declared no
@@ -295,8 +293,12 @@ function batchSummary(
     && !unverifiedDelivery(review) && !outdated(review)).length;
   const deliveryUnverified = reviews.filter((review) => unverifiedDelivery(review) && !outdated(review)).length;
   const outdatedCount = reviews.filter(outdated).length;
-  const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
-  const revision = reviews.filter((review) => review.status === "failed" || review.findings.some((finding) => finding.severity === "critical")).length;
+  // A superseded verdict is history: it belongs to the outdated count only, not to
+  // the current warnings or revisions the user is asked to act on.
+  const warning = reviews.filter((review) => review.status !== "failed" && !outdated(review)
+    && review.findings.some((finding) => finding.severity === "warning")).length;
+  const revision = reviews.filter((review) => !outdated(review)
+    && (review.status === "failed" || review.findings.some((finding) => finding.severity === "critical"))).length;
   const parts = [
     t(reviews.length === 1 ? "reviewer.artifactCountOne" : "reviewer.artifactCount", { count: reviews.length }),
     passed ? t("reviewer.passedCount", { count: passed }) : undefined,

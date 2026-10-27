@@ -1324,3 +1324,80 @@ test("an Artifact label cannot stand in for the declared file path", async () =>
   assert.equal(review.completeness?.required[0]?.state, "missing");
   assert.equal(review.decision, "REVISE_AND_RETRY");
 });
+
+test("reuse without an authoritative requirement keeps a real revision verdict", async () => {
+  const { artifacts, cas, saved, store } = deliverableFixture();
+  const run = (required?: { paths: string[]; source: "brief" }) => runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    sessionId: "session-1",
+    store,
+    ...(required ? { requiredDeliverables: required } : {}),
+  });
+
+  await run({ paths: ["output/cl3/predictions.npy"], source: "brief" });
+  assert.equal(saved[0]?.decision, "REVISE_AND_RETRY");
+  assert.ok(artifacts.length >= 1);
+
+  // A caller that knows no requirements must not wash the finding away.
+  const result = await run();
+  const reused = saved.at(-1)!;
+  assert.equal(reused.decision, "REVISE_AND_RETRY");
+  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
+});
+
+test("a subagent workspace prefix is stripped before matching, a stray archive prefix is not", async () => {
+  const { evaluateDeliverableCompleteness } = await import("@sciencediscovery/provenance");
+  const artifact = (id: string, name: string): ScientificArtifact => ({
+    createdAt: "2026-10-27T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id,
+    kind: "dataset",
+    logicalName: name,
+    name,
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  });
+  const version = (artifactId: string, sourcePath: string): ScientificArtifactVersion => ({
+    artifactId,
+    content: { hash: `${artifactId}-hash`, size: 10 },
+    createdAt: "2026-10-27T00:00:00.000Z",
+    executionRunIds: [],
+    id: `${artifactId}-v1`,
+    inputArtifactVersionIds: [],
+    mediaType: "application/octet-stream",
+    projectId: "project-1",
+    sessionId: "session-1",
+    sourcePath,
+    version: 1,
+  });
+  const artifacts = [
+    artifact("a-sub", "predictions.npy"),
+    artifact("a-archive", "predictions.npy"),
+    artifact("a-root", "REPRODUCTION_REPORT.md"),
+  ];
+  const versions = [
+    version("a-sub", "subagents/sub-1/output/cl3/predictions.npy"),
+    version("a-archive", "archive/2026-10-01/output/cl3/predictions.npy"),
+    version("a-root", "REPRODUCTION_REPORT.md"),
+  ];
+  const store = {
+    listArtifacts: () => artifacts,
+    listArtifactVersions: (_sessionId: string, artifactId: string) => versions.filter((entry) => entry.artifactId === artifactId),
+  };
+
+  const scoped = evaluateDeliverableCompleteness(store, "session-1", {
+    paths: ["output/cl3/predictions.npy", "REPRODUCTION_REPORT.md"],
+    source: "brief",
+  });
+  assert.deepEqual(scoped.required.map((entry) => [entry.path, entry.state]), [
+    ["output/cl3/predictions.npy", "present"],
+    ["REPRODUCTION_REPORT.md", "present"],
+  ], "the subagent prefix is removed and a root-level deliverable still matches");
+});

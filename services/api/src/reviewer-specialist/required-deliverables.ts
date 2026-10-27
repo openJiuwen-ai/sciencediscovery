@@ -29,8 +29,9 @@ import type { SessionStore } from "../store.js";
  * requirement prose rather than a file.
  */
 const DELIVERABLE_EXTENSION = /\.[A-Za-z0-9]{1,10}$/u;
-const BARE_NAME = /^[^/]+$/u;
 const WINDOWS_SEPARATOR = /\\/gu;
+const DEAD_SUBAGENT_STATUSES = new Set(["cancelled", "failed", "timed_out"]);
+const ALIVE_SUBAGENT_STATUSES = new Set(["completed", "running"]);
 const MAX_DECLARED_PATH_LENGTH = 200;
 
 export function declaredDeliverablePath(requirement: string): string | undefined {
@@ -46,10 +47,9 @@ export function declaredDeliverablePath(requirement: string): string | undefined
   // not the file the Reviewer will look for, and it never matches a real path.
   if (!path || path.split("/").some((segment) => segment === "..")) return undefined;
   if (!DELIVERABLE_EXTENSION.test(path)) return undefined;
-  // A bare file name is ambiguous: `predictions.npy` is satisfied by every
-  // instance's copy, so one instance's output would stand in for another's. The
-  // requirement must name the directory the file lives in.
-  if (BARE_NAME.test(path)) return undefined;
+  // A bare name is allowed and matched exactly (see deliverableMatchScore): the
+  // lead Agent's root-level deliverables keep their gate, while `predictions.npy`
+  // can no longer stand in for `output/cl3/predictions.npy`.
   return path;
 }
 
@@ -79,13 +79,33 @@ export function sessionRequiredDeliverables(
   // A Session accumulates subagents from every task it ever ran. Enforcing an
   // earlier task's requirement against this report would invent failures, so the
   // set is scoped to the reviewed run when the caller knows it.
-  // A failed subagent keeps its Brief after it stops, and its requirement would
-  // then be demanded of every later report in the Session: the mirror image of
-  // trusting a declaration too little.
-  const usable = subagents.filter((subagent) => subagent.status !== "failed");
+  // A subagent that stopped keeps its Brief, and its requirement would then be
+  // demanded of every later report in the Session: the mirror image of trusting a
+  // declaration too little. `running` stays, because a review can run beside it.
+  const usable = subagents.filter((subagent) => ALIVE_SUBAGENT_STATUSES.has(subagent.status));
   const scoped = parentRunId
     ? usable.filter((subagent) => subagent.parentTurnId === parentRunId)
     : usable;
-  const paths = declaredDeliverablePaths(scoped);
-  return paths.length ? { paths, source: "brief" } : undefined;
+  // A later run that only rewrites the report has no subagent of its own; falling
+  // back to the Session's live declarations keeps that report checked instead of
+  // silently unverified.
+  const declared = declaredDeliverablePaths(scoped.length ? scoped : usable);
+  return declared.length ? { paths: declared, source: "brief" } : undefined;
+}
+
+/**
+ * The run whose Briefs produced the reviewed Artifacts. The Reviewer audit task
+ * only carries a synthetic tool-call id (`automatic-review:<uuid>`), which is
+ * never a run id, so the run is read from the Artifact versions it reviews.
+ */
+export function reviewedRunId(
+  store: Pick<SessionStore, "getArtifactVersion">,
+  sessionId: string,
+  artifactVersionIds: readonly string[] | undefined,
+): string | undefined {
+  for (const versionId of artifactVersionIds ?? []) {
+    const turnId = store.getArtifactVersion(sessionId, versionId)?.turnId;
+    if (turnId) return turnId;
+  }
+  return undefined;
 }
