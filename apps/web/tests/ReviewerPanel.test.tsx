@@ -85,6 +85,9 @@ test("ReviewerPanel never presents a citation pass as a delivery pass", () => {
   }));
 
   assert.match(html, /Checks passed; delivery not verified/);
+  // The panel summary must not count an unverified delivery as a pass.
+  assert.match(html, /1 artifact · 1 delivery not verified/);
+  assert.doesNotMatch(html, /1 passed/);
   assert.match(html, /Outdated/);
   assert.match(html, /Delivery completeness was not verified/);
   assert.doesNotMatch(html, /Citation-format checks passed/);

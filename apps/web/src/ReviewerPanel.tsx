@@ -278,12 +278,20 @@ function batchSummary(
   }
   if (status === "failed") return t("reviewer.statusFailed");
   if (!reviews.length) return t("reviewer.builtInSpecialist");
-  const passed = reviews.filter((review) => review.status !== "failed" && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length).length;
+  // A review that could not verify delivery is not a pass, so it gets its own
+  // count instead of inflating "passed".
+  const unverifiedDelivery = (review: ArtifactReviewRun) => review.status !== "failed"
+    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
+    && review.completeness?.status === "unconfirmed";
+  const passed = reviews.filter((review) => review.status !== "failed"
+    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length && !unverifiedDelivery(review)).length;
+  const deliveryUnverified = reviews.filter(unverifiedDelivery).length;
   const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
   const revision = reviews.filter((review) => review.status === "failed" || review.findings.some((finding) => finding.severity === "critical")).length;
   const parts = [
     t(reviews.length === 1 ? "reviewer.artifactCountOne" : "reviewer.artifactCount", { count: reviews.length }),
     passed ? t("reviewer.passedCount", { count: passed }) : undefined,
+    deliveryUnverified ? t("reviewer.deliveryUnverifiedCount", { count: deliveryUnverified }) : undefined,
     warning ? t(warning === 1 ? "reviewer.warningCountOne" : "reviewer.warningCount", { count: warning }) : undefined,
     revision ? t("reviewer.revisionCount", { count: revision }) : undefined,
   ].filter(Boolean);
