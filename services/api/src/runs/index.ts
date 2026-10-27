@@ -204,6 +204,7 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
+import { sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
 
 import {
   aggregateToolText,
@@ -1488,6 +1489,10 @@ async function executeAgentRun(
             signal,
             store,
             toolCallId: checkpointToolCallId,
+            ...(() => {
+              const required = sessionRequiredDeliverables(store, sessionId);
+              return required ? { requiredDeliverables: required } : {};
+            })(),
             ...(memoryGraphClient && memoryGraphSink.enabled ? {
               traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, sessionId, () => memoryGraphSink.enabled),
               traceArtifactProvenance: async (reference, traceSignal) => {

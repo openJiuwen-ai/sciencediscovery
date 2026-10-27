@@ -313,7 +313,10 @@ test("Reviewer checkpoint feedback exposes findings to the next model context", 
   const content = reviewerCheckpointPromptContent(result.reviews);
 
   assert.match(content, /Reviewer Specialist feedback \(internal review record\)/);
-  assert.match(content, /Status: PASSED/);
+  // A Session that declared no structured deliverable cannot be reported as an
+  // overall pass: the scope is limited to the listed checks.
+  assert.match(content, /Status: SCOPE_LIMITED/);
+  assert.match(content, /Delivery completeness: UNCONFIRMED/);
   assert.match(content, /Artifact: analysis\.md/);
   assert.match(content, /No findings\./);
   assert.match(content, /read-only diagnostic context/);
@@ -1015,4 +1018,194 @@ test("Session cancellation aborts an active Deep Reviewer", async () => {
   assert.equal(cancelReviewerCheckpoints("session-1"), true);
   await assert.rejects(review, (error: unknown) => error instanceof DOMException && error.name === "AbortError");
   assert.equal(cancelReviewerCheckpoints("session-1"), false);
+});
+
+/** Report review plus an optional declared deliverable that the Session may or may not hold. */
+function deliverableFixture(deliverable?: { logicalName?: string; sourcePath?: string; size: number }) {
+  const reportText = "The study reports a result [1].\n[1] Study. arXiv:1706.03762";
+  const reportContent = Buffer.from(reportText);
+  const report: ScientificArtifact = {
+    createdAt: "2026-10-20T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id: "artifact-report",
+    kind: "markdown",
+    logicalName: "REPRODUCTION_REPORT.md",
+    name: "REPRODUCTION_REPORT.md",
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-20T00:00:00.000Z",
+  };
+  const reportVersion: ScientificArtifactVersion = {
+    artifactId: report.id,
+    content: { hash: "report-hash", size: reportContent.length },
+    createdAt: report.createdAt,
+    executionRunIds: [],
+    id: "artifact-report-v1",
+    inputArtifactVersionIds: [],
+    mediaType: "text/markdown",
+    projectId: report.projectId,
+    sessionId: report.sessionId,
+    turnId: "run-1",
+    version: 1,
+  };
+  const artifacts: ScientificArtifact[] = [report];
+  const versions: ScientificArtifactVersion[] = [reportVersion];
+  if (deliverable) {
+    const logicalName = deliverable.logicalName ?? "power_predictions.npy";
+    const data: ScientificArtifact = {
+      createdAt: report.createdAt,
+      createdInSessionId: "session-1",
+      createdInSessionTitle: "Session 1",
+      currentVersion: 1,
+      id: "artifact-deliverable",
+      kind: "dataset",
+      logicalName,
+      name: logicalName,
+      origin: "llm_declared",
+      projectId: "project-1",
+      sessionId: "session-1",
+      updatedAt: report.createdAt,
+    };
+    artifacts.push(data);
+    versions.push({
+      artifactId: data.id,
+      content: { hash: "deliverable-hash", size: deliverable.size },
+      createdAt: "2026-10-20T00:01:00.000Z",
+      executionRunIds: [],
+      id: "artifact-deliverable-v1",
+      inputArtifactVersionIds: [],
+      mediaType: "application/octet-stream",
+      projectId: data.projectId,
+      sessionId: data.sessionId,
+      ...(deliverable.sourcePath ? { sourcePath: deliverable.sourcePath } : {}),
+      turnId: "run-1",
+      version: 1,
+    });
+  }
+  const saved: ArtifactReviewRun[] = [];
+  const store = {
+    appendArtifactReview: async (review: ArtifactReviewRun) => { saved.push(review); },
+    getArtifact: (_sessionId: string, artifactId: string) => artifacts.find((artifact) => artifact.id === artifactId),
+    getArtifactVersion: (_sessionId: string, versionId: string) => versions.find((version) => version.id === versionId),
+    listArtifactReviews: async () => saved,
+    listArtifacts: () => artifacts,
+    listArtifactVersions: (_sessionId: string, artifactId: string) => versions.filter((version) => version.artifactId === artifactId),
+  } as unknown as SessionStore;
+  const cas = {
+    read: async () => reportContent,
+    verify: async () => true,
+  } as unknown as CasStore;
+  return { reportVersion, saved, store, cas };
+}
+
+test("Quick review rejects a report when a declared deliverable file is missing", async () => {
+  const { cas, saved, store } = deliverableFixture();
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], source: "brief" },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = saved[0]!;
+  assert.equal(review.decision, "REVISE_AND_RETRY", "a missing deliverable cannot be accepted");
+  assert.equal(review.completeness?.status, "incomplete");
+  assert.deepEqual(review.completeness?.required.map((entry) => [entry.path, entry.state]), [["output/cl3/predictions.npy", "missing"]]);
+  assert.ok(review.checks?.includes("completeness"));
+  assert.ok(review.findings.some((finding) => finding.code === "DELIVERABLE_MISSING" && finding.severity === "critical"));
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /REVISION_REQUIRED/u);
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^PASSED$/mu);
+});
+
+test("Quick review treats an empty declared deliverable as incomplete", async () => {
+  const { cas, saved, store } = deliverableFixture({
+    logicalName: "predictions.npy",
+    size: 0,
+    sourcePath: "output/cl3/predictions.npy",
+  });
+  await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], source: "brief" },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = saved[0]!;
+  assert.equal(review.decision, "REVISE_AND_RETRY");
+  assert.equal(review.completeness?.required[0]?.state, "empty");
+  assert.ok(review.findings.some((finding) => finding.code === "DELIVERABLE_EMPTY"));
+});
+
+test("Quick review records a present deliverable and says presence is not correctness", async () => {
+  const { cas, saved, store } = deliverableFixture({
+    logicalName: "predictions.npy",
+    size: 2_048,
+    sourcePath: "output/cl3/predictions.npy",
+  });
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], source: "brief" },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = saved[0]!;
+  assert.equal(review.decision, "ACCEPT_AND_PROCEED");
+  assert.equal(review.completeness?.status, "complete");
+  assert.deepEqual(review.completeness?.required.map((entry) => entry.state), ["present"]);
+  assert.ok(review.checks?.includes("completeness"));
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Delivery completeness: COMPLETE/u);
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Presence only/u);
+});
+
+test("a bare file name cannot stand in for an instance-scoped deliverable path", async () => {
+  // The report claims output/cl3/predictions.npy, but the Session only holds an
+  // Artifact called predictions.npy with no recorded path. One instance's output
+  // must never satisfy another's requirement, so the delivery stays incomplete.
+  const { cas, saved, store } = deliverableFixture({ logicalName: "predictions.npy", size: 2_048 });
+  await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], source: "brief" },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = saved[0]!;
+  assert.equal(review.decision, "REVISE_AND_RETRY");
+  assert.deepEqual(
+    review.completeness?.required.map((entry) => [entry.path, entry.state]),
+    [["output/cl3/predictions.npy", "missing"]],
+  );
+});
+
+test("Quick review reports unconfirmed delivery scope instead of an overall pass", async () => {
+  const { cas, saved, store } = deliverableFixture();
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = saved[0]!;
+  assert.equal(review.completeness?.status, "unconfirmed");
+  assert.equal(review.completeness?.source, "none");
+  assert.equal(review.checks?.includes("completeness"), false, "an unconfirmed check must not claim it ran");
+  assert.equal(review.decision, "ACCEPT_AND_PROCEED", "citation outcome is unchanged");
+  const prompt = reviewerCheckpointPromptContent(result.reviews);
+  assert.match(prompt, /SCOPE_LIMITED/u);
+  assert.match(prompt, /UNCONFIRMED/u);
+  assert.doesNotMatch(prompt, /^PASSED$/mu);
 });

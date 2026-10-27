@@ -213,6 +213,7 @@ import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-ex
 import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
+import { sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -501,6 +502,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           signal,
           store,
           toolCallId: task.toolCallId,
+          ...(() => {
+            const required = sessionRequiredDeliverables(store, task.sessionId);
+            return required ? { requiredDeliverables: required } : {};
+          })(),
           ...(memoryGraphEnabled() ? {
             traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, task.sessionId, memoryGraphEnabled),
             traceArtifactProvenance: async (reference, traceSignal) => {

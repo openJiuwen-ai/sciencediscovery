@@ -233,8 +233,14 @@ export interface ArtifactReviewRun {
   artifactVersionId: string;
   checkpointId: string;
   /** Checks completed by this run. Older persisted MVP reviews omit it. */
-  checks?: Array<"structure" | "citation" | "computation">;
+  checks?: Array<"structure" | "citation" | "computation" | "completeness">;
   createdAt: string;
+  /**
+   * Deterministic delivery-completeness verdict for the task this report
+   * belongs to. `unconfirmed` means no authoritative deliverable requirement
+   * was available, so the review must never be presented as an overall pass.
+   */
+  completeness?: ArtifactReviewCompleteness;
   decision: "ACCEPT_AND_PROCEED" | "REVISE_AND_RETRY" | "SKIPPED";
   finishedAt: string;
   findings: ArtifactReviewFinding[];
@@ -276,6 +282,31 @@ export interface ArtifactReviewRun {
   sessionId: string;
   status: "completed" | "failed";
   toolCallId?: string;
+}
+
+/** One task-required deliverable and whether the Session actually holds it. */
+export interface ArtifactReviewDeliverable {
+  /** Logical name of the matched Artifact, when one was found. */
+  artifactLogicalName?: string;
+  /** Version that satisfied the requirement, when one did. */
+  artifactVersionId?: string;
+  /** Requirement as declared by the task, e.g. `output/cl3/predictions.npy`. */
+  path: string;
+  state: "present" | "missing" | "empty";
+}
+
+/**
+ * Delivery completeness of the task behind a report. It answers only
+ * "is the required file there and non-empty", never "is the science right".
+ */
+export interface ArtifactReviewCompleteness {
+  required: ArtifactReviewDeliverable[];
+  /**
+   * `none` means the task had no structured deliverable declaration; the
+   * review must then say the scope was limited instead of implying a pass.
+   */
+  source: "brief" | "none";
+  status: "complete" | "incomplete" | "unconfirmed";
 }
 
 export interface ReviewCheckpoint {
