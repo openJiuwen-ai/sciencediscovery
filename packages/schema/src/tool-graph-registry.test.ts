@@ -56,6 +56,12 @@ const DB_RECORD_TOOLS = [
   "mcp__chembl__search_activities",
   "mcp__chembl__similarity_search",
   "mcp__geo__search_studies",
+  "mcp__geo__lookup_accession",
+  "mcp__geo__get_samples",
+  "mcp__pdb__lookup_structure",
+  "mcp__clinvar__lookup_accession",
+  "mcp__clinvar__get_assertions",
+  "mcp__alphafold__lookup_prediction",
 ];
 const CODE_TOOLS = ["run_shell", "run_npu_job"];
 
@@ -99,14 +105,14 @@ test("execution tools emit Code", () => {
 });
 
 test("unregistered tools return undefined", () => {
-  assert.equal(toolGraphSpec("mcp__pdb__lookup_structure"), undefined);
+  assert.equal(toolGraphSpec("mcp__pdb__prepare_structure_download"), undefined);
   assert.equal(toolGraphSpec("totally_made_up"), undefined);
-  assert.equal(toolGraphType("mcp__pdb__lookup_structure"), undefined);
+  assert.equal(toolGraphType("mcp__pdb__prepare_structure_download"), undefined);
   assert.equal(toolGraphType("totally_made_up"), undefined);
 });
 
 test("registry size matches expectation", () => {
-  assert.equal(Object.keys(TOOL_GRAPH_REGISTRY).length, 21);
+  assert.equal(Object.keys(TOOL_GRAPH_REGISTRY).length, 27);
 });
 
 test("every registry key is a string", () => {

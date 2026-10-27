@@ -42,7 +42,7 @@ export class WebApiClient extends EvolveApiClient {
     return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/clear`, { method: "POST" });
   }
   inspectMcpTool(id: string, body: McpInspectorRequest, signal?: AbortSignal): Promise<McpInspectorResult> {
-    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/inspect`, { method: "POST", body: JSON.stringify(body), signal });
+    return this.request(`/api/mcp/${id.startsWith("custom-") ? "servers" : "sources"}/${encodeURIComponent(id)}/inspect`, { method: "POST", body: JSON.stringify(body), signal });
   }
   listMcpServers(): Promise<CustomMcpServerDetails[]> {
     return this.request("/api/mcp/servers");

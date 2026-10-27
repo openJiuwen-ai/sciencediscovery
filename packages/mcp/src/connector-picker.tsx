@@ -19,6 +19,7 @@ type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.provider
 
 export function connectorName(id: ConnectorId): string {
   return ({
+    alphafold: "AlphaFold DB",
     arxiv: "arXiv",
     biorxiv: "bioRxiv",
     chembl: "ChEMBL",

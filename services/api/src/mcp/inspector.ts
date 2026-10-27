@@ -25,8 +25,8 @@ export async function inspectMcpTool(
 ): Promise<McpInspectorResult> {
   if (!body || typeof body.sessionId !== "string" || typeof body.toolName !== "string") throw new Error("sessionId and toolName are required");
   const server = dependencies.servers.list().find((item) => item.id === id);
-  if (!server) throw new Error("MCP server not found");
-  if (!server.enabled) throw new Error("Enable the MCP server before invoking a tool");
+  if (!server && (id.startsWith("custom-") || !dependencies.registry.has(id))) throw new Error("MCP server not found");
+  if (server && !server.enabled) throw new Error("Enable the MCP server before invoking a tool");
   const session = dependencies.store.getSession(body.sessionId);
   if (!session) throw new Error("Session not found");
   const tool = Object.values(dependencies.registry.get(id).manifest.tools).find((item) => item.mcpToolName === body.toolName);

@@ -59,6 +59,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
     "biorxiv",
     "medrxiv",
     "pdb",
+    "alphafold",
     "ensembl",
     "reactome",
     "clinvar",

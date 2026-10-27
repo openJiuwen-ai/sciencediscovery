@@ -25,7 +25,7 @@
         "mode": "off",
         "priority": 0
       },
-      "tool_call_timeout": 60,
+      "tool_call_timeout": 180,
       "type": "stdio"
     },
     "uniprot": {
