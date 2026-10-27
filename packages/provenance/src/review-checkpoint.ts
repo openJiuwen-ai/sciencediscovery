@@ -72,7 +72,7 @@ export interface ReviewCheckpointStore {
   listArtifactVersions(sessionId: string, artifactId: string): ScientificArtifactVersion[];
 }
 
-export const QUICK_REVIEWER_VERSION = "2.3.0-deliverable-completeness";
+export const QUICK_REVIEWER_VERSION = "2.4.0-deliverable-completeness";
 const sessionReviewQueues = new Map<string, Promise<void>>();
 const activeReviewControllers = new Map<string, Set<AbortController>>();
 
@@ -268,7 +268,13 @@ function deliverableMatchScore(
 ): number {
   const required = normalizeDeliverablePath(requirement);
   if (!required) return 0;
-  const candidates = [version.sourcePath, artifact.name, artifact.logicalName]
+  // `name`/`logicalName` are model-chosen labels (`declare_artifact` lets the
+  // caller override the name); only a recorded source path proves the file is
+  // there. Uploads have no source path, and their basename is their identity.
+  const recorded = version.sourcePath?.trim();
+  const candidates = (recorded
+    ? [recorded]
+    : [artifact.name, artifact.logicalName])
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map(normalizeDeliverablePath);
   let best = 0;
@@ -355,6 +361,41 @@ function attachCompleteness(
     decision: "REVISE_AND_RETRY",
     findings: [...review.findings, ...completenessFindings(completeness)],
   };
+}
+
+function deliverableFinding(code: string): boolean {
+  return code === DELIVERABLE_MISSING_CODE || code === DELIVERABLE_EMPTY_CODE;
+}
+
+/**
+ * Completeness depends on Artifacts outside the reviewed version, so a reused
+ * review (keyed on the report's version id and content hash) may carry a verdict
+ * that the Session no longer supports: deleting the deliverable used to keep
+ * `PASSED`. Re-derive it from live state on every reuse and recompute the
+ * decision from the findings that survive.
+ */
+function refreshReusedReview(
+  review: ArtifactReviewRun,
+  version: ScientificArtifactVersion,
+  completeness: ArtifactReviewCompleteness,
+  completenessTargetVersionId: string | undefined,
+): ArtifactReviewRun {
+  const findings = review.findings.filter((finding) => !deliverableFinding(finding.code));
+  const checks = review.checks ?? [];
+  const { completeness: _previousCompleteness, ...rest } = review;
+  const refreshed: ArtifactReviewRun = {
+    ...rest,
+    decision: findings.length
+      ? "REVISE_AND_RETRY"
+      : checks.length ? "ACCEPT_AND_PROCEED" : "SKIPPED",
+    findings,
+    ...(checks.includes("completeness")
+      ? { checks: checks.filter((check) => check !== "completeness") }
+      : {}),
+  };
+  return version.id === completenessTargetVersionId
+    ? attachCompleteness(refreshed, completeness)
+    : refreshed;
 }
 
 function reusableQuickReview(
@@ -1060,10 +1101,15 @@ async function runReviewerCheckpointUnlocked(
       ? reusableExactSemanticReview(existing, version, graphReviewEnabled)
       : undefined;
     if (reusableExactSmart) {
-      const linkedReview = linkReusedReview(reusableExactSmart, checkpoint, {
-        logicalName: artifact.logicalName,
+      const linkedReview = refreshReusedReview(
+        linkReusedReview(reusableExactSmart, checkpoint, {
+          logicalName: artifact.logicalName,
+          version,
+        }),
         version,
-      });
+        completeness,
+        completenessTargetVersionId,
+      );
       await options.store.appendArtifactReview(linkedReview);
       reviews.push(linkedReview);
       checkpoint.skippedArtifactVersionIds.push(version.id);
@@ -1072,7 +1118,12 @@ async function runReviewerCheckpointUnlocked(
     }
     if (!wantsDeep || !options.semanticReview || !deepMediaCandidate) {
       if (reusableQuick) {
-        const linkedReview = linkReusedReview(reusableQuick, checkpoint);
+        const linkedReview = refreshReusedReview(
+          linkReusedReview(reusableQuick, checkpoint),
+          version,
+          completeness,
+          completenessTargetVersionId,
+        );
         await options.store.appendArtifactReview(linkedReview);
         reviews.push(linkedReview);
         checkpoint.skippedArtifactVersionIds.push(version.id);

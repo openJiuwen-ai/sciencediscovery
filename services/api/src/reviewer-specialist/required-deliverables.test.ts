@@ -43,7 +43,7 @@ test("deliverable declarations accept only explicit relative file paths", () => 
   const accepted = [
     "output/cl3/predictions.npy",
     "./outputs/predictions.csv",
-    "REPRODUCTION_REPORT.md",
+    "outputs/model.fasta",
     "output\\cl3\\predictions.npy",
   ];
   for (const declaration of accepted) {
@@ -58,6 +58,10 @@ test("deliverable declarations accept only explicit relative file paths", () => 
     "https://example.com/predictions.npy",
     "output/*.npy",
     "predictions",
+    // A bare file name is satisfied by every instance's copy, so it is not a requirement.
+    "REPRODUCTION_REPORT.md",
+    // Climbing out of the declared directory is a notation, not the file.
+    "output/../predictions.npy",
   ];
   for (const declaration of rejected) {
     assert.equal(declaredDeliverablePath(declaration), undefined, `${declaration} is not a deliverable path`);
@@ -78,6 +82,24 @@ test("a Session without a structured deliverable declares none", () => {
   const withDeliverable = { listSubagents: () => [subagent(["output/cl3/predictions.npy"])] } as unknown as SessionStore;
   assert.deepEqual(sessionRequiredDeliverables(withDeliverable, "session-1"), {
     paths: ["output/cl3/predictions.npy"],
+    source: "brief",
+  });
+});
+
+test("declarations are scoped to the reviewed run and drop failed subagents", () => {
+  const earlier = subagent(["output/cl3/predictions.npy"]);
+  earlier.parentTurnId = "run-earlier";
+  const failed = subagent(["output/cl9/predictions.npy"]);
+  failed.status = "failed";
+  const current = subagent(["output/cl5/predictions.npy"]);
+  const store = { listSubagents: () => [earlier, failed, current] } as unknown as SessionStore;
+
+  assert.deepEqual(sessionRequiredDeliverables(store, "session-1", "run-1"), {
+    paths: ["output/cl5/predictions.npy"],
+    source: "brief",
+  });
+  assert.deepEqual(sessionRequiredDeliverables(store, "session-1"), {
+    paths: ["output/cl3/predictions.npy", "output/cl5/predictions.npy"],
     source: "brief",
   });
 });

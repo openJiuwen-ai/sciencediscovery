@@ -22,10 +22,14 @@ import type { SessionStore } from "../store.js";
  * absolute host paths and URLs are not deliverable identities and are ignored:
  * the Reviewer then reports completeness as unconfirmed instead of guessing.
  */
-const DELIVERABLE_EXTENSIONS = new Set([
-  "cif", "csv", "docx", "h5", "hdf5", "html", "json", "jsonl", "md", "npy", "npz",
-  "parquet", "pdf", "png", "pdb", "qmd", "svg", "tex", "tsv", "txt", "xlsx", "zip",
-]);
+/**
+ * Scientific deliverables span formats no product list can enumerate (`.fasta`,
+ * `.vcf`, `.nc`, `.cif`, `.ipynb` …), so the extension is not whitelisted: a
+ * short alphanumeric suffix is enough, and a missing extension is what makes a
+ * requirement prose rather than a file.
+ */
+const DELIVERABLE_EXTENSION = /\.[A-Za-z0-9]{1,10}$/u;
+const BARE_NAME = /^[^/]+$/u;
 const WINDOWS_SEPARATOR = /\\/gu;
 const MAX_DECLARED_PATH_LENGTH = 200;
 
@@ -38,10 +42,14 @@ export function declaredDeliverablePath(requirement: string): string | undefined
   // An absolute host path identifies a machine location, not a task deliverable.
   if (trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(trimmed)) return undefined;
   const path = trimmed.replace(WINDOWS_SEPARATOR, "/").replace(/^\.\//u, "").replace(/^\/+/u, "").replace(/\/+$/u, "");
-  if (!path || path.startsWith("../")) return undefined;
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
-  if (!name.includes(".") || !DELIVERABLE_EXTENSIONS.has(extension)) return undefined;
+  // A relative path may not climb: `outputs/../predictions.npy` is a notation,
+  // not the file the Reviewer will look for, and it never matches a real path.
+  if (!path || path.split("/").some((segment) => segment === "..")) return undefined;
+  if (!DELIVERABLE_EXTENSION.test(path)) return undefined;
+  // A bare file name is ambiguous: `predictions.npy` is satisfied by every
+  // instance's copy, so one instance's output would stand in for another's. The
+  // requirement must name the directory the file lives in.
+  if (BARE_NAME.test(path)) return undefined;
   return path;
 }
 
@@ -65,7 +73,19 @@ export function declaredDeliverablePaths(subagents: readonly Subagent[]): string
 export function sessionRequiredDeliverables(
   store: SessionStore,
   sessionId: string,
+  parentRunId?: string,
 ): { paths: string[]; source: "brief" } | undefined {
-  const paths = declaredDeliverablePaths(store.listSubagents(sessionId));
+  const subagents = store.listSubagents(sessionId);
+  // A Session accumulates subagents from every task it ever ran. Enforcing an
+  // earlier task's requirement against this report would invent failures, so the
+  // set is scoped to the reviewed run when the caller knows it.
+  // A failed subagent keeps its Brief after it stops, and its requirement would
+  // then be demanded of every later report in the Session: the mirror image of
+  // trusting a declaration too little.
+  const usable = subagents.filter((subagent) => subagent.status !== "failed");
+  const scoped = parentRunId
+    ? usable.filter((subagent) => subagent.parentTurnId === parentRunId)
+    : usable;
+  const paths = declaredDeliverablePaths(scoped);
   return paths.length ? { paths, source: "brief" } : undefined;
 }

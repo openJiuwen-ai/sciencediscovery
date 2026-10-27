@@ -1098,7 +1098,7 @@ function deliverableFixture(deliverable?: { logicalName?: string; sourcePath?: s
     read: async () => reportContent,
     verify: async () => true,
   } as unknown as CasStore;
-  return { reportVersion, saved, store, cas };
+  return { artifacts, reportVersion, saved, store, cas, versions };
 }
 
 test("Quick review rejects a report when a declared deliverable file is missing", async () => {
@@ -1208,4 +1208,119 @@ test("Quick review reports unconfirmed delivery scope instead of an overall pass
   assert.match(prompt, /SCOPE_LIMITED/u);
   assert.match(prompt, /UNCONFIRMED/u);
   assert.doesNotMatch(prompt, /^PASSED$/mu);
+});
+
+test("a reused Quick review re-derives delivery completeness from live Artifacts", async () => {
+  const { artifacts, cas, saved, store } = deliverableFixture({
+    logicalName: "predictions.npy",
+    size: 2_048,
+    sourcePath: "output/cl3/predictions.npy",
+  });
+  const requiredDeliverables = { paths: ["output/cl3/predictions.npy"], source: "brief" as const };
+
+  await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables,
+    sessionId: "session-1",
+    store,
+  });
+  assert.equal(saved[0]?.completeness?.status, "complete");
+
+  // The deliverable goes away while the report itself is untouched: the report
+  // version id and hash still match, so the next run reuses this review.
+  const deliverable = artifacts.find((artifact) => artifact.id === "artifact-deliverable");
+  assert.ok(deliverable);
+  deliverable.deletedAt = "2026-10-27T01:00:00.000Z";
+
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables,
+    sessionId: "session-1",
+    store,
+  });
+
+  const reused = saved.at(-1)!;
+  assert.equal(reused.reusedFromReviewId !== undefined, true, "the review itself was reused");
+  assert.equal(reused.decision, "REVISE_AND_RETRY", "a delivery pass cannot outlive its deliverable");
+  assert.equal(reused.completeness?.status, "incomplete");
+  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
+});
+
+test("a reused Quick review returns to a pass once the deliverable is back", async () => {
+  const { artifacts, cas, saved, store, versions } = deliverableFixture();
+  const requiredDeliverables = { paths: ["output/cl3/predictions.npy"], source: "brief" as const };
+  const run = () => runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables,
+    sessionId: "session-1",
+    store,
+  });
+
+  await run();
+  assert.equal(saved[0]?.completeness?.status, "incomplete");
+
+  const delivered: ScientificArtifact = {
+    createdAt: "2026-10-27T00:05:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id: "artifact-late-deliverable",
+    kind: "dataset",
+    logicalName: "predictions.npy",
+    name: "predictions.npy",
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-27T00:05:00.000Z",
+  };
+  artifacts.push(delivered);
+  versions.push({
+    artifactId: delivered.id,
+    content: { hash: "late-hash", size: 4_096 },
+    createdAt: delivered.createdAt,
+    executionRunIds: [],
+    id: "artifact-late-deliverable-v1",
+    inputArtifactVersionIds: [],
+    mediaType: "application/octet-stream",
+    projectId: delivered.projectId,
+    sessionId: delivered.sessionId,
+    sourcePath: "output/cl3/predictions.npy",
+    turnId: "run-1",
+    version: 1,
+  });
+
+  const result = await run();
+  const reused = saved.at(-1)!;
+  assert.equal(reused.decision, "ACCEPT_AND_PROCEED");
+  assert.equal(reused.completeness?.status, "complete");
+  assert.match(reviewerCheckpointPromptContent(result.reviews), /Delivery completeness: COMPLETE/u);
+});
+
+test("an Artifact label cannot stand in for the declared file path", async () => {
+  // The model may name a scratch file exactly like the requirement; only the
+  // recorded source path proves the file exists where the task asked for it.
+  const { cas, saved, store } = deliverableFixture({
+    logicalName: "output/cl3/predictions.npy",
+    size: 2_048,
+    sourcePath: "scratch/whatever.npy",
+  });
+  await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables: { paths: ["output/cl3/predictions.npy"], source: "brief" },
+    sessionId: "session-1",
+    store,
+  });
+
+  const review = saved[0]!;
+  assert.equal(review.completeness?.required[0]?.state, "missing");
+  assert.equal(review.decision, "REVISE_AND_RETRY");
 });

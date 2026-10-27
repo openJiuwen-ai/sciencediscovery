@@ -28,7 +28,7 @@ import type {
 import type { EvidenceReferenceTraceResult, TraceEvidenceReference } from "./computation-review.js";
 
 // Bump whenever the Deep evidence protocol changes so old semantic verdicts are not reused.
-export const SEMANTIC_REVIEWER_VERSION = "2.3.0-source-availability-gate";
+export const SEMANTIC_REVIEWER_VERSION = "2.4.0-deliverable-completeness";
 export const REVIEW_POLICY_VERSION = "2.3.0";
 // Bounds apply to one model task, never to the number of reviewable items in
 // a locked Artifact. Every detected reference and Evidence-linked claim gets

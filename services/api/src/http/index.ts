@@ -504,7 +504,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           store,
           toolCallId: task.toolCallId,
           ...(() => {
-            const required = sessionRequiredDeliverables(store, task.sessionId);
+            const required = sessionRequiredDeliverables(store, task.sessionId, task.toolCallId);
             return required ? { requiredDeliverables: required } : {};
           })(),
           ...(memoryGraphEnabled() ? {
