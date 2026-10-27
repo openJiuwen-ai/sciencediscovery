@@ -320,6 +320,20 @@ for (const reason of [
   "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.",
   "Automatic review skipped: automatic review was turned off for this session.",
 ]) {
+  test(`ReviewerPanel keeps a completed automatic skip visible: ${reason}`, () => {
+    const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+      checkpointContent: reason,
+      checkpointStatus: "completed",
+      reviews: [],
+      toolCallId: "automatic-review:disabled-task",
+    }));
+
+    assert.match(html, /class="reviewer-specialist-panel process-record"/);
+    assert.ok(html.includes(`<strong>Reviewer Specialist · ${reason}</strong>`));
+    assert.ok(html.includes(`<p>${reason}</p>`), "expanded content retains the skip reason");
+    assert.doesNotMatch(html, /Review failed|Review passed|process-record failed/);
+  });
+
   test(`ReviewerPanel displays a neutral automatic skip: ${reason}`, () => {
     const html = renderToStaticMarkup(createElement(ReviewerPanel, {
       checkpointError: reason,

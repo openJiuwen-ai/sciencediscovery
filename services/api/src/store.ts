@@ -17,6 +17,7 @@ import type { ConfigurationSnapshot } from "./configuration/types.js";
 import type { SkillLibrary } from "@sciencediscovery/schema";
 import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
+import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -1959,6 +1960,81 @@ export class SessionStore {
     return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
   }
 
+  /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
+  applySystemConfigurationSync(capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    if (capabilityId === "timeouts.configure") this.catalog.timeoutSettings = normalizeTimeoutSettings({ ...this.getTimeoutSettings(), ...values });
+    else if (capabilityId === "quotas.configure") this.catalog.quotaSettings = normalizeQuotaSettings({ ...this.getQuotaSettings(), ...values });
+    else if (capabilityId === "idea_tree.configure") this.catalog.ideaTreeSettings = normalizeIdeaTreeSettings(values as Parameters<typeof normalizeIdeaTreeSettings>[0], this.getIdeaTreeSettings());
+    else throw new Error("Unsupported system configuration");
+  }
+
+  /** The same formal runtime settings and reviewer state as the settings pages, in the shared audit transaction. */
+  applyP1ConfigurationSync(sessionId: string, capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues, scope: ConfigurationScope): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    const project = this.getProject(session.projectId)!;
+    if (scope.kind === "global" || scope.kind === "project" && (capabilityId !== "skill.select" || scope.id !== project.id)
+      || scope.kind === "session" && scope.id !== sessionId) throw new Error("Unsupported P1 scope");
+    const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const patch: RuntimeSettingsOverrides = {};
+    if (capabilityId === "skill.select") {
+      if (this.everySkillEverywhere) throw new Error("SKILL_SELECTION_UNAVAILABLE");
+      if (values.skillSelectionMode !== undefined) patch.skillSelectionMode = values.skillSelectionMode as SkillSelectionMode;
+      if (values.enabledSkillIds !== undefined) patch.enabledSkillIds = [...values.enabledSkillIds as string[]];
+      if (values.enabledSkillLibraryIds !== undefined) {
+        const libraries = this.configurationSkillLibrarySource();
+        const effectiveLibraries = (scope.kind === "project" ? this.getProjectSettings(project.id) : this.getSessionSettings(sessionId)).effective.enabledSkillLibraries;
+        patch.enabledSkillLibraries = (values.enabledSkillLibraryIds as string[]).map(id => {
+          const library = libraries.find(item => item.id === id);
+          if (!library?.headVersionId) throw new Error("SKILL_LIBRARY_UNAVAILABLE");
+          // Pin exactly the approved head. Preserve other selected library properties.
+          const previous = effectiveLibraries.find(item => item.libraryId === id);
+          return previous ?? { libraryId: id, versionId: library.headVersionId };
+        });
+      }
+    } else if (capabilityId === "thinking.configure") {
+      const effective = this.getSessionSettings(sessionId).effective;
+      const model = this.getModel(effective.modelId);
+      if (!model) throw new Error("MODEL_NOT_SELECTED");
+      const constrained = constrainCatalogThinking(model.model, values.thinkingMode as ModelThinkingMode | undefined,
+        values.thinkingEffort as ModelThinkingEffort | undefined, model.facts);
+      if (values.thinkingMode !== undefined) {
+        if (constrained.mode !== values.thinkingMode) throw new Error("THINKING_MODE_UNSUPPORTED");
+        patch.thinkingMode = constrained.mode;
+      }
+      if (values.thinkingEffort !== undefined) {
+        if (constrained.effort !== values.thinkingEffort) throw new Error("THINKING_EFFORT_UNSUPPORTED");
+        patch.thinkingEffort = constrained.effort;
+      }
+    } else if (capabilityId === "review.configure") {
+      if (values.reviewModelId !== undefined) patch.reviewModelId = String(values.reviewModelId);
+      if (values.semanticReviewEnabled !== undefined) patch.semanticReviewEnabled = values.semanticReviewEnabled as boolean;
+      const reviewer = this.getSessionReviewerSpecialistSettings(sessionId);
+      this.applySessionReviewerSpecialistSettingsSync(sessionId, {
+        automaticReviewEnabled: values.automaticReviewEnabled ?? reviewer.automaticReviewEnabled,
+        level: values.level ?? reviewer.level,
+      });
+    } else throw new Error("Unsupported P1 capability");
+    const next = this.normalizeSettings({ ...current, ...patch });
+    if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
+    else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
+    session.updatedAt = new Date().toISOString();
+  }
+
+  private applySessionReviewerSpecialistSettingsSync(sessionId: string, value: unknown): void {
+    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
+      throw new Error("Reviewer Specialist automatic review must be a boolean");
+    }
+    if (!isReviewerSpecialistLevel(value.level)) {
+      throw new Error("Reviewer Specialist level must be quick or deep");
+    }
+    const session = this.assertSessionWritable(sessionId);
+    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
+    session.reviewerSpecialistLevel = value.level;
+    session.updatedAt = new Date().toISOString();
+  }
+
   getTimeoutSettings(): SystemTimeoutSettings {
     return structuredClone(this.catalog.timeoutSettings);
   }
@@ -2019,16 +2095,7 @@ export class SessionStore {
     sessionId: string,
     value: unknown,
   ): Promise<SessionReviewerSpecialistSettings> {
-    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
-      throw new Error("Reviewer Specialist automatic review must be a boolean");
-    }
-    if (!isReviewerSpecialistLevel(value.level)) {
-      throw new Error("Reviewer Specialist level must be quick or deep");
-    }
-    const session = this.assertSessionWritable(sessionId);
-    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
-    session.reviewerSpecialistLevel = value.level;
-    session.updatedAt = new Date().toISOString();
+    this.applySessionReviewerSpecialistSettingsSync(sessionId, value);
     await this.saveCatalog();
     return this.getSessionReviewerSpecialistSettings(sessionId);
   }
@@ -5201,6 +5268,7 @@ export class SessionStore {
         settingsSnapshot: {
           ...structuredClone(input.settingsSnapshot),
           ideaTreeEnabled: input.settingsSnapshot.ideaTreeEnabled === true,
+          sessionReviewer: structuredClone(input.settingsSnapshot.sessionReviewer ?? this.getSessionReviewerSpecialistSettings(input.sessionId)),
         },
         ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),

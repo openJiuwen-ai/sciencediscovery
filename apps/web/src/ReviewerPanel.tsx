@@ -263,6 +263,7 @@ function batchSummary(
 }
 
 export function ReviewerPanel({
+  checkpointContent,
   checkpointError,
   checkpointProgress,
   checkpointStatus,
@@ -270,6 +271,7 @@ export function ReviewerPanel({
   reviews,
   toolCallId,
 }: {
+  checkpointContent?: string;
   checkpointError?: string;
   checkpointProgress?: ReviewerProgress;
   checkpointStatus?: "completed" | "failed" | "running";
@@ -279,13 +281,13 @@ export function ReviewerPanel({
 }) {
   const { t } = useLocale();
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
-  // Capability/session opt-outs use a terminal failed checkpoint for storage,
-  // but are intentional skips rather than failed verification.
+  // Current opt-outs complete neutrally; keep older failed checkpoints readable.
+  const skipReason = checkpointStatus === "completed" ? checkpointContent : checkpointError;
   const automaticSkip = !scopedReviews.length
     && toolCallId.startsWith("automatic-review:")
-    && checkpointStatus === "failed"
-    && checkpointError?.startsWith("Automatic review skipped:");
-  const summary = automaticSkip ? checkpointError : batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
+    && (checkpointStatus === "failed" || checkpointStatus === "completed")
+    && skipReason?.startsWith("Automatic review skipped:");
+  const summary = automaticSkip ? skipReason : batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
   const userExpanded = useRef<boolean | undefined>(undefined);
   useEffect(() => { userExpanded.current = undefined; setExpanded(checkpointStatus === "running"); }, [toolCallId]);
@@ -297,7 +299,7 @@ export function ReviewerPanel({
   // Older versions could create checkpoints for code/data Artifacts. The API
   // now omits those records; suppress their empty completed shell as well so a
   // researcher only sees report-quality review activity.
-  if (!scopedReviews.length && checkpointStatus === "completed") return null;
+  if (!scopedReviews.length && checkpointStatus === "completed" && !automaticSkip) return null;
   return (
     <details
       aria-label={t("reviewer.panelAria")}
@@ -320,7 +322,7 @@ export function ReviewerPanel({
         {checkpointStatus === "running" && scopedReviews.length > 0 && checkpointProgress
           ? <ReviewProgress progress={checkpointProgress} />
           : null}
-        {automaticSkip ? <p>{checkpointError}</p> : checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
+        {automaticSkip ? <p>{skipReason}</p> : checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
           ? <CheckpointOnlyReview error={checkpointError} progress={checkpointProgress} reviewLevel={reviewLevel} status={checkpointStatus} />
           : null}
         {scopedReviews.map((review) => <CompletedReview key={review.id} review={review} />)}

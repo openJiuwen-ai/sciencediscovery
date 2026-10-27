@@ -4629,6 +4629,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <Fragment key={block.message.id}>
                       {block.message.kind === "reviewer_checkpoint" && block.message.reviewerCheckpoint ? (
                         <ReviewerPanel
+                          checkpointContent={block.message.content}
                           checkpointError={block.message.reviewerCheckpoint.error}
                           checkpointProgress={block.message.reviewerCheckpoint.progress}
                           checkpointStatus={block.message.reviewerCheckpoint.status}
