@@ -79,7 +79,6 @@ test("ReviewerPanel never presents a citation pass as a delivery pass", () => {
       checks: ["citation"],
       completeness: { required: [], source: "none", status: "unconfirmed" },
       reviewLevel: "quick",
-      stale: true,
     })],
     toolCallId: "review-call",
   }));
@@ -88,9 +87,28 @@ test("ReviewerPanel never presents a citation pass as a delivery pass", () => {
   // The panel summary must not count an unverified delivery as a pass.
   assert.match(html, /1 artifact · 1 delivery not verified/);
   assert.doesNotMatch(html, /1 passed/);
-  assert.match(html, /Outdated/);
   assert.match(html, /Delivery completeness was not verified/);
   assert.doesNotMatch(html, /Citation-format checks passed/);
+});
+
+test("ReviewerPanel does not count an outdated review as a pass", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "completeness"],
+      completeness: {
+        required: [{ path: "output/cl3/predictions.npy", state: "present" }],
+        source: "brief",
+        status: "complete",
+      },
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /1 passed/);
+  assert.match(html, /<i>Outdated<\/i>/);
 });
 
 test("ReviewerPanel lists a missing required deliverable by path", () => {

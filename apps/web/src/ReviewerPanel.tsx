@@ -46,6 +46,10 @@ type Translate = ReturnType<typeof useLocale>["t"];
 
 function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; tone: string } {
   if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
+  // A superseded verdict is history, whatever it decided when it was written.
+  if (review.stale === true && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length) {
+    return { label: t("reviewer.result.outdated"), tone: "skipped" };
+  }
   if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
   // A citation/format pass is never a delivery pass. When the task declared no
@@ -283,15 +287,21 @@ function batchSummary(
   const unverifiedDelivery = (review: ArtifactReviewRun) => review.status !== "failed"
     && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
     && review.completeness?.status === "unconfirmed";
+  // A stale review is history: a newer Artifact version exists, so its verdict no
+  // longer describes what the Session holds and must not count as a current pass.
+  const outdated = (review: ArtifactReviewRun) => review.status !== "failed" && review.stale === true;
   const passed = reviews.filter((review) => review.status !== "failed"
-    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length && !unverifiedDelivery(review)).length;
-  const deliveryUnverified = reviews.filter(unverifiedDelivery).length;
+    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
+    && !unverifiedDelivery(review) && !outdated(review)).length;
+  const deliveryUnverified = reviews.filter((review) => unverifiedDelivery(review) && !outdated(review)).length;
+  const outdatedCount = reviews.filter(outdated).length;
   const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
   const revision = reviews.filter((review) => review.status === "failed" || review.findings.some((finding) => finding.severity === "critical")).length;
   const parts = [
     t(reviews.length === 1 ? "reviewer.artifactCountOne" : "reviewer.artifactCount", { count: reviews.length }),
     passed ? t("reviewer.passedCount", { count: passed }) : undefined,
     deliveryUnverified ? t("reviewer.deliveryUnverifiedCount", { count: deliveryUnverified }) : undefined,
+    outdatedCount ? t("reviewer.outdatedCount", { count: outdatedCount }) : undefined,
     warning ? t(warning === 1 ? "reviewer.warningCountOne" : "reviewer.warningCount", { count: warning }) : undefined,
     revision ? t("reviewer.revisionCount", { count: revision }) : undefined,
   ].filter(Boolean);
