@@ -24,6 +24,7 @@ import { createBuiltinMcpSourceRegistry, createMcpSourceRegistry } from "@scienc
 import { SessionStore } from "../store.js";
 import {
   ResourceRateLimiter,
+  SourceHealth,
   ResourceRateLimitQueueFullError,
   ResourceRateLimitQueueTimeoutError,
   type ResourceRateLimitOptions,
@@ -640,7 +641,7 @@ test("search tools (no body) keep their snippet-only web_page products", async (
     "a snippet-only search must not carry contentHash");
 });
 
-test("governance broker preserves omitted limits, maps queue guards, and feeds 429s back", async (context) => {
+test("governance broker bounds admission, maps queue guards, and feeds 429s back", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `mcp-rate-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
   context.after(() => rm(dataDir, { force: true, recursive: true }));
@@ -710,7 +711,9 @@ test("governance broker preserves omitted limits, maps queue guards, and feeds 4
       reported.push([key, retryAfterMs]);
     },
   } as unknown as ResourceRateLimiter;
-  const broker = new McpGovernanceBroker(dataDir, store, registry, catalog, gateway, { limiter });
+  let healthNow = Date.now();
+  const broker = new McpGovernanceBroker(dataDir, store, registry, catalog, gateway, { limiter, health: new SourceHealth(() => healthNow) });
+  context.after(() => broker.close());
   const invoke = (toolCallId: string, accession: string) => broker.invoke({
     input: { accession },
     projectId: project.id,
@@ -722,19 +725,21 @@ test("governance broker preserves omitted limits, maps queue guards, and feeds 4
   });
 
   // Upstream 429: structured RATE_LIMITED error, queue wait recorded, cooldown reported.
-  await assert.rejects(invoke("call-429", "P04637"), /429/);
+  await assert.rejects(invoke("call-429", "P04637"), /temporarily unavailable/);
   let invocation = (await store.listMcpInvocations(session.id)).at(-1);
   assert.equal(invocation?.error?.code, "RATE_LIMITED");
-  assert.equal(invocation?.error?.retryable, true);
+  assert.equal(invocation?.error?.retryable, false);
   assert.equal(invocation?.error?.retryAfterMs, 2_000);
   assert.equal(invocation?.queueWaitMs, 7);
   assert.deepEqual(reported, [["rest.uniprot.org", 2_000]]);
   assert.deepEqual(acquireOptions, {
+    queueScope: "rest.uniprot.org:uniprot:lookup",
     maxConcurrent: undefined,
-    maxQueueDepth: undefined,
+    maxQueueDepth: 8,
     minIntervalMs: undefined,
-    queueTimeoutMs: undefined,
+    queueTimeoutMs: Math.min(20_000, lookup.timeoutMs),
   });
+  healthNow += 2_001;
 
   nextAcquire = async () => { throw new ResourceRateLimitQueueFullError("rest.uniprot.org", 8); };
   await assert.rejects(invoke("call-full", "P04638"), /too many parallel requests/);

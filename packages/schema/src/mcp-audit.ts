@@ -26,6 +26,8 @@ export type McpAttemptStatus =
   | "transport-error";
 
 export interface McpAttempt {
+  /** Provider-owned, sanitized HTTP failure metadata; never request URLs/headers. */
+  upstream?: { endpoint: string; statusCode: number; failureScope: "endpoint" | "request" | "unknown" };
   attempt: number;
   durationMs: number;
   errorCode?: string;
@@ -47,6 +49,7 @@ export type McpErrorCode =
   | "RATE_LIMIT_QUEUE_FULL"
   | "RATE_LIMIT_QUEUE_TIMEOUT"
   | "RESPONSE_TOO_LARGE"
+  | "SOURCE_COOLDOWN"
   | "SOURCE_DISABLED"
   | "TIMEOUT"
   | "UNAUTHORIZED"
@@ -58,6 +61,9 @@ export interface McpError {
   retryAfterMs?: number;
   retryable: boolean;
   upstreamCode?: string;
+  sourceHealth?: { decision: "cooldown" | "probe-in-flight"; endpoint?: string; statusCode: number; retryAt: string };
+  fallbackSourceIds?: string[];
+  guidance?: string;
 }
 
 export interface McpInvocation {

@@ -637,6 +637,9 @@ importers:
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
       typebox:
         specifier: 1.1.38
         version: 1.1.38

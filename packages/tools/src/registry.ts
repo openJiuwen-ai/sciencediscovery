@@ -28,6 +28,7 @@ import {
 import { ToolLoopGuard } from "./loop-guard.js";
 import { isRemoteContentTool, neutralizeUntrustedTags } from "./sanitize.js";
 import { retiredToolGuidance } from "./retired-tools.js";
+import type { McpError } from "@sciencediscovery/schema";
 import type { AgentTool } from "./types.js";
 
 export interface ToolSpec {
@@ -442,13 +443,16 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const invocation = error && typeof error === "object" && "invocation" in error
-        ? (error as { invocation?: { attempts?: unknown[]; error?: { code?: string; retryAfterMs?: number; retryable?: boolean } } }).invocation
+        ? (error as { invocation?: { attempts?: unknown[]; error?: McpError } }).invocation
         : undefined;
       const details = { ok: false, error: {
         attempts: invocation?.attempts?.length ?? 1,
         code: invocation?.error?.code ?? "TOOL_EXECUTION_FAILED",
         message: message.slice(0, 1_000),
         ...(invocation?.error?.retryAfterMs !== undefined ? { retryAfterMs: invocation.error.retryAfterMs } : {}),
+        ...(invocation?.error?.sourceHealth ? { sourceHealth: invocation.error.sourceHealth } : {}),
+        ...(invocation?.error?.fallbackSourceIds ? { fallbackSourceIds: invocation.error.fallbackSourceIds } : {}),
+        ...(invocation?.error?.guidance ? { guidance: invocation.error.guidance } : {}),
         retryable: invocation?.error?.retryable ?? false,
       } };
       return { content: JSON.stringify(details), details, isError: true, selfBounded: true };

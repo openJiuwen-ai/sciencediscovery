@@ -36,6 +36,7 @@ from urllib.parse import quote
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from .http_errors import raise_for_status as _raise_for_status
 from .external_urls import external_url, format_external_url
 
 SERVER = FastMCP("biomed")
@@ -44,23 +45,6 @@ TIMEOUT = 30
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _raise_for_status(response: httpx.Response) -> None:
-    """Raise a readable error that keeps the status and the Retry-After hint.
-
-    ``response.raise_for_status()`` drops response headers, so the gateway
-    retry loop could never honour upstream ``Retry-After`` values. Keep the
-    message header-token friendly for its error classifier and avoid echoing
-    the full request URL (it can embed the user query).
-    """
-    if response.status_code < 400:
-        return
-    message = f"HTTP {response.status_code} {response.reason_phrase} from {response.request.url.host}"
-    retry_after = response.headers.get("retry-after")
-    if retry_after:
-        message += f" (retry-after: {retry_after})"
-    raise RuntimeError(message)
 
 
 def _log_arxiv_http(
@@ -768,7 +752,7 @@ async def reactome_enrichment(identifiers: list[str], species: str = "Homo sapie
             params={"pageSize": 100, "page": 1, "species": species},
             headers={"accept": "application/json", "content-type": "text/plain"},
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         data = response.json()
     pathways = data.get("pathways", [])
     records = []

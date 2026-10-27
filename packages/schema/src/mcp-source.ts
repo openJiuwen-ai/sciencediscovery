@@ -118,13 +118,13 @@ export interface McpSourceManifest {
     license: string;
     /** Maximum in-flight requests; omitted means unlimited. */
     maxConcurrentRequests?: number;
-    /** Waiting requests allowed per rate-limit group; omitted means unlimited. */
+    /** Waiting requests allowed per rate-limit group; broker defaults to 8 when omitted. */
     maxQueueDepth?: number;
     maxResponseBytes: number;
     /** Minimum spacing between requests; omitted with no rateLimitPerSecond means no pacing. */
     minIntervalMs?: number;
     networkHosts: string[];
-    /** Longest a request may wait for a slot; omitted disables the queue timeout. */
+    /** Longest slot wait; broker defaults to 20s and caps it at the tool timeout. */
     queueTimeoutMs?: number;
     rateLimitGroup: string;
     /** Requests per second used to derive pacing; omitted with no minIntervalMs means no pacing. */

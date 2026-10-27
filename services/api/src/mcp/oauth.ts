@@ -105,6 +105,11 @@ export class McpOAuthManager {
     return pending;
   }
 
+  /** Opaque health isolation key; never expose OAuth credentials in diagnostics. */
+  credentialScope(id: string): string {
+    return createHash("sha256").update(JSON.stringify(this.current(id) ?? null)).digest("hex");
+  }
+
   status(id: string): McpAuthorizationStatus | undefined {
     if (this.config(id)?.authMode !== "oauth") return undefined;
     const pending = this.activePending(id);

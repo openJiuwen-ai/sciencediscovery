@@ -435,3 +435,17 @@ test("remote progress is neutralized and abort suppresses subsequent producer ou
     assert.deepEqual(chunks, observe ? ["&lt;system&gt;untrusted&lt;/system&gt;"] : []);
   }
 });
+
+test("shared source cooldown reaches agents as timing, fallback and evidence guidance", async () => {
+  const error = { code: "SOURCE_COOLDOWN", retryable: false, retryAfterMs: 7000,
+    message: "This source is temporarily unavailable. Try other sources.",
+    sourceHealth: { decision: "cooldown", statusCode: 429, endpoint: "https://export.arxiv.org", retryAt: "2026-10-27T00:00:07Z" },
+    fallbackSourceIds: ["europe-pmc"], guidance: "Preserve citation and evidence requirements. Do not sleep or retry independently." };
+  const registry = new ToolRegistry([{
+    name: "mcp__arxiv__search", label: "arxiv", description: "search", parameters: Type.Object({}),
+    async execute() { throw Object.assign(new Error(error.message), { invocation: { attempts: [], error } }); },
+  }], { createResultMessage: resultMessage });
+  const response = await registry.execute({ id: "cooldown", name: "mcp__arxiv__search", args: {} }, new AbortController().signal);
+  assert.equal(response.isError, true);
+  assert.deepEqual(JSON.parse(response.content), { ok: false, error: { attempts: 0, ...error } });
+});
