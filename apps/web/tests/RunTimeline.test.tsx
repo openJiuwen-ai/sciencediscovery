@@ -589,7 +589,10 @@ test("Reviewer Specialist renders at its review_checkpoint timeline position", (
   const after = html.indexOf("After reviewer.");
   assert.ok(before >= 0 && specialist > before && after > specialist);
   assert.match(html, /report\.md/);
-  assert.match(html, />1 artifact · 1 passed</);
+  // This review carries no delivery verdict, so it is not counted as a pass: the
+  // summary says the delivery was not verified instead of claiming one passed.
+  assert.match(html, />1 artifact · 1 delivery not verified</);
+  assert.doesNotMatch(html, /1 passed/);
 });
 
 test("tool cards replay their input and full result", () => {
