@@ -214,6 +214,7 @@ import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evide
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
 import { sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
+import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -3038,12 +3039,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (artifactReviewsMatch && request.method === "GET") {
         const sessionId = artifactReviewsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const reviews = await store.listArtifactReviews(sessionId);
-        sendJson(response, 200, reviews.filter((review) => {
+        const reviews = (await store.listArtifactReviews(sessionId)).filter((review) => {
           const version = store.getArtifactVersion(sessionId, review.artifactVersionId);
           const artifact = version ? store.getArtifact(sessionId, version.artifactId) : undefined;
           return Boolean(version && artifact && isReviewerReportCandidate(artifact, version));
-        }));
+        });
+        // A review answers for one Artifact version: once a newer version exists it
+        // reads as history, never as the current verdict.
+        sendJson(response, 200, annotateReviewStaleness(store, sessionId, reviews));
         return;
       }
       const reviewerAuditTasksMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-audit-tasks$/);
