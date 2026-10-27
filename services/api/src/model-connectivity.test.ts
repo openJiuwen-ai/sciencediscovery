@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { protocolProvider } from "../../../test/helpers/protocol-provider.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -63,6 +63,21 @@ async function withProvider<T>(
 
 const directProxy = () => ({ mode: "direct" } as const);
 
+test("CFG-R02: every compatibility dispatch has a final destination guard, including the tool-result round trip", async () => {
+  const provider = await protocolProvider("all"); let checks = 0;
+  try {
+    const tested = await testModelConnectivity({ apiToken: "synthetic", profile: profile(provider.baseUrl), resolveProxy: directProxy, compatibility: true,
+      beforeDispatch: destination => { checks++; assert.ok(destination.apiProtocol); } });
+    assert.ok(tested.ok); assert.equal(checks, 12); assert.equal(provider.requests.length, 12);
+  } finally { await provider.close(); }
+  const denied = await protocolProvider("all"); let denials = 0;
+  try {
+    const tested = await testModelConnectivity({ apiToken: "must-not-send", profile: profile(denied.baseUrl), resolveProxy: directProxy, compatibility: true,
+      beforeDispatch: () => { denials++; throw new Error("Destination changed"); } });
+    assert.equal(tested.ok, false); assert.equal(denied.requests.length, 0); assert.equal(denials, 9);
+  } finally { await denied.close(); }
+});
+
 test("connectivity probe uses the saved endpoint, model, and API token", async () => {
   await withProvider(async (request, response) => {
     assert.equal(request.url, "/v1/chat/completions");
@@ -97,6 +112,22 @@ test("missing model token fails locally without resolving a proxy or calling a p
   assert.equal(tested.category, "missing_token");
   assert.equal(tested.ok, false);
   assert.equal(proxyResolved, false);
+});
+
+test("token-optional provider can be probed without an authorization header", async () => {
+  await withProvider(async (request, response) => {
+    assert.equal(request.headers.authorization, undefined);
+    await readRequest(request);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  }, async (origin) => {
+    const tested = await testModelConnectivity({
+      allowMissingToken: true,
+      profile: profile(`${origin}/v1`),
+      resolveProxy: directProxy,
+    });
+    assert.equal(tested.category, "ok");
+  });
 });
 
 test("provider HTTP failures have stable connectivity categories", async () => {
@@ -329,3 +360,129 @@ for (const acknowledgement of ['OK.', ' ok! ', 'unexpected answer']) test(`tool 
     assert.equal(provider.requests.length, 12); assert.ok(tested.protocols!.every(p => p.tools.ok === (acknowledgement !== 'unexpected answer')));
   } finally { await provider.close(); }
 });
+
+test("declared protocols on arbitrary gateways and complete endpoint URLs match the real client", async () => {
+  let calls = 0;
+  await withProvider(async (request, response) => {
+    calls++; const body = JSON.parse(await readRequest(request)) as Record<string, unknown>;
+    assert.equal(body.model, "provider-model"); assert.equal(body.stream, false);
+    if (request.url === "/gateway/v1/messages") {
+      assert.equal(request.headers["x-api-key"], "protocol-secret"); assert.equal(request.headers.authorization, undefined);
+      assert.equal(body.max_tokens, 8); assert.ok(Array.isArray(body.messages));
+      response.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "OK" }] }));
+    } else if (request.url === "/gateway/v1/responses") {
+      assert.equal(request.headers.authorization, "Bearer protocol-secret"); assert.equal(body.max_output_tokens, 16);
+      assert.equal(body.store, false); assert.ok(Array.isArray(body.input)); assert.equal(body.messages, undefined);
+      response.end(JSON.stringify({ object: "response", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] }));
+    } else {
+      assert.equal(request.url, "/api/plan/v1/chat/completions");
+      assert.equal(request.headers.authorization, "Bearer protocol-secret"); assert.equal(request.headers["x-api-key"], undefined);
+      assert.deepEqual(body.thinking, { type: "disabled" });
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+    }
+  }, async origin => {
+    for (const endpoint of [
+      { apiProtocol: "anthropic-messages" as const, apiVariant: "anthropic-legacy" as const, baseUrl: `${origin}/gateway/v1/messages` },
+      { apiProtocol: "openai-responses" as const, apiVariant: "responses" as const, baseUrl: `${origin}/gateway/v1/responses/` },
+      // Explicit chat overrides the old /api/plan heuristic.
+      { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const, baseUrl: `${origin}/api/plan/v1/chat/completions` },
+    ]) {
+      assert.equal((await testModelConnectivity({ apiToken: "protocol-secret", profile: { ...profile(endpoint.baseUrl), ...endpoint }, resolveProxy: directProxy })).category, "ok");
+    }
+  });
+  assert.equal(calls, 3);
+});
+
+test("legacy profiles retain the plan endpoint fallback without duplicating /v1", async () => {
+  await withProvider(async (request, response) => {
+    assert.equal(request.url, "/api/plan/v1/messages"); assert.equal(request.headers["x-api-key"], "secret");
+    await readRequest(request); response.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "OK" }] }));
+  }, async origin => {
+    assert.equal((await testModelConnectivity({ apiToken: "secret", profile: profile(`${origin}/api/plan/v1`), resolveProxy: directProxy })).category, "ok");
+  });
+});
+
+test("redirect responses never forward credentials or replay the paid probe", async () => {
+  let sent = 0; let redirected = 0;
+  await withProvider(async (request, response) => {
+    redirected++; await readRequest(request); response.end(JSON.stringify({ choices: [{ message: { content: "should not be reached" } }] }));
+  }, async destination => {
+    await withProvider(async (request, response) => {
+      sent++; await readRequest(request); response.writeHead(307, { location: `${destination}/stolen` }); response.end();
+    }, async origin => {
+      const tested = await testModelConnectivity({ apiToken: "secret", profile: profile(origin), resolveProxy: directProxy });
+      assert.equal(tested.category, "provider_error"); assert.equal(tested.providerStatus, 307);
+    });
+  });
+  assert.equal(sent, 1); assert.equal(redirected, 0);
+});
+
+test("64 KiB byte budget aborts an oversized response without draining the provider stream", async () => {
+  let calls = 0; let closed = false;
+  let signalClosed!: () => void;
+  const responseClosed = new Promise<void>(resolve => { signalClosed = resolve; });
+  await withProvider(async (request, response) => {
+    calls++; await readRequest(request); response.writeHead(200, { "content-type": "application/json" });
+    response.on("close", () => { closed = true; signalClosed(); });
+    // Multibyte UTF-8 must be counted as bytes, and the stream never terminates.
+    response.write(JSON.stringify({ choices: [{ message: { content: "测".repeat(24_000) } }] }));
+  }, async origin => {
+    const tested = await testModelConnectivity({ apiToken: "secret", profile: profile(origin), resolveProxy: directProxy, timeoutMs: 5000 });
+    assert.equal(tested.category, "invalid_response"); assert.match(tested.message, /limit/);
+    // Observe real asynchronous socket cancellation well before the 5s probe
+    // deadline, so the timeout cannot accidentally satisfy this assertion.
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("The oversized response socket did not close after cancellation")), 1000);
+      responseClosed.then(() => { clearTimeout(timeout); resolve(); }, reject);
+    });
+  });
+  assert.equal(calls, 1); assert.equal(closed, true);
+});
+
+test("401 and 429 remain one non-retried operation and exclude raw provider data", async () => {
+  let calls = 0;
+  await withProvider(async (request, response) => {
+    calls++; await readRequest(request); response.writeHead(calls === 1 ? 401 : 429, { "retry-after": "0" });
+    response.end(JSON.stringify({ error: { message: "echoed-credential" } }));
+  }, async origin => {
+    for (const category of ["authorization", "rate_limited"]) {
+      const tested = await testModelConnectivity({ apiToken: "echoed-credential", profile: profile(origin), resolveProxy: directProxy });
+      assert.equal(tested.category, category); assert.equal(JSON.stringify(tested).includes("echoed-credential"), false);
+    }
+  });
+  assert.equal(calls, 2);
+});
+
+test("invalid protocol and variant pairs fail before contacting a provider", async () => {
+  let calls = 0;
+  await withProvider((_, response) => { calls++; response.end(); }, async origin => {
+    const tested = await testModelConnectivity({ apiToken: "secret", profile: { ...profile(origin), apiProtocol: "openai-responses", apiVariant: "deepseek" }, resolveProxy: directProxy });
+    assert.equal(tested.category, "invalid_response");
+  });
+  assert.equal(calls, 0);
+
+});
+
+for (const phase of ["all", "tool_result"] as const) {
+  test(`review 307 compatibility never forwards synthetic credentials: ${phase}`, async () => {
+    const received: Array<{ headers: IncomingMessage["headers"]; body: string }> = [];
+    await withProvider(async (request, response) => {
+      received.push({ headers: request.headers, body: await readRequest(request) }); response.end("unexpected");
+    }, async destination => {
+      const provider = await protocolProvider("all", { redirect: ({ body }) => phase === "all" || /tool_call_id|function_call_output|tool_result/.test(JSON.stringify(body.messages ?? body.input)) ? `${destination}/must-not-receive` : undefined });
+      try {
+        const tested = await testModelConnectivity({ apiToken: "review-307-synthetic-token", profile: profile(provider.baseUrl), resolveProxy: directProxy, compatibility: true, timeoutMs: 1000 });
+        assert.equal(tested.protocols?.length, 3);
+        for (const result of tested.protocols ?? []) {
+          assert.equal(result.basic.ok, phase === "tool_result");
+          assert.equal(result.streaming.ok, phase === "tool_result");
+          assert.equal(result.tools.ok, false); assert.equal(result.tools.providerStatus, 307);
+          if (phase === "all") { assert.equal(result.basic.providerStatus, 307); assert.equal(result.streaming.providerStatus, 307); }
+        }
+        assert.equal(provider.requests.length, phase === "all" ? 9 : 12);
+        assert.deepEqual(received, [], "307 destination must receive zero requests, headers and bodies");
+        assert.doesNotMatch(JSON.stringify(tested), /review-307-synthetic-token/);
+      } finally { await provider.close(); }
+    });
+  });
+}

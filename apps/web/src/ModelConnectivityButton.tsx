@@ -14,7 +14,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { ModelConnectivityTestCategory, ModelConnectivityTestResult } from "@sciencediscovery/schema";
+import type { ManualModelDestination, ModelConnectivityTestCategory, ModelConnectivityTestResult } from "@sciencediscovery/schema";
+import { isPlaintextModelUrl } from "./model-url.js";
 
 import { AlertCircleIcon, CheckIcon, SpinnerIcon } from "./icons.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
@@ -32,7 +33,8 @@ export interface ModelConnectivityButtonProps {
   modelId: string;
   modelName: string;
   profileVersion: string;
-  testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>;
+  baseUrl?: string;
+  testModel: (modelId: string, compatibility?: boolean, expectedDestination?: ManualModelDestination) => Promise<ModelConnectivityTestResult>;
 }
 
 export function failureCopy(category: ModelConnectivityTestCategory, t: Translate): { label: string; title: string } {
@@ -63,6 +65,7 @@ export function ModelConnectivityButton({
   modelId,
   modelName,
   profileVersion,
+  baseUrl = "",
   testModel,
 }: ModelConnectivityButtonProps) {
   const { t } = useLocale();
@@ -70,19 +73,20 @@ export function ModelConnectivityButton({
   const requestRevision = useRef(0);
   const [consent, setConsent] = useState(false);
   const [scope, setScope] = useState("selected");
+  const hasHttpDestination = isPlaintextModelUrl(baseUrl);
 
   useEffect(() => {
     requestRevision.current += 1;
     setState({ status: "idle" });
     setConsent(false);
-  }, [modelId, profileVersion]);
+  }, [modelId, profileVersion, baseUrl]);
 
   async function runTest(): Promise<void> {
-    if (!consent) return;
+    if (!consent || disabled || state.status === "testing") return;
     const revision = ++requestRevision.current;
     setState({ status: "testing" });
     try {
-      const result = await testModel(modelId, scope === "matrix");
+      const result = await testModel(modelId, scope === "matrix", hasHttpDestination ? { baseUrl, profileUpdatedAt: profileVersion } : undefined);
       if (requestRevision.current === revision) setState({ result, status: "result" });
     } catch (reason) {
       if (requestRevision.current !== revision) return;

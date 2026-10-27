@@ -105,6 +105,30 @@ test("model test button spins, shows a result, and can be clicked again", async 
   await act(async () => renderer!.unmount());
 });
 
+test("CFG-R14 existing HTTP model only needs paid consent and sends the selected destination version", async () => {
+  const calls: unknown[][] = [];
+  const testModel = async (...args: any[]) => { calls.push(args); return success; };
+  const render = (version: string) => createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ModelConnectivityButton, {
+    modelId: "http-model", modelName: "Manual gateway", profileVersion: version, baseUrl: "http://gateway.invalid/v1", testModel,
+  }));
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(render("v1")); });
+  const inputs = () => renderer!.root.findAllByType("input");
+  assert.equal(inputs().length, 1, "No additional HTTP acknowledgement");
+  assert.equal(inputs()[0]!.props.checked, false);
+  assert.equal(renderer!.root.findByType("button").props.disabled, true);
+  await act(async () => { renderer!.root.findByType("button").props.onClick(); });
+  assert.equal(calls.length, 0);
+  await act(async () => { inputs()[0]!.props.onChange({ target: { checked: true } }); });
+  assert.equal(renderer!.root.findByType("button").props.disabled, false);
+  await act(async () => { renderer!.root.findByType("button").props.onClick(); });
+  assert.deepEqual(calls, [["http-model", false, { baseUrl: "http://gateway.invalid/v1", profileUpdatedAt: "v1" }]]);
+  await act(async () => { renderer!.update(render("v2")); });
+  assert.equal(inputs()[0]!.props.checked, false);
+  assert.equal(renderer!.root.findByType("button").props.disabled, true);
+  await act(async () => renderer!.unmount());
+});
+
 test("saving a changed profile clears its previous test result", async () => {
   const testModel = async () => success;
   let renderer: ReactTestRenderer;

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { ConfigurationCapabilityId, ConfigurationValues, SkillLibrary } from "@sciencediscovery/schema";
 import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationSnapshot } from "./configuration/types.js";
-import type { SkillLibrary } from "@sciencediscovery/schema";
-import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
@@ -2595,6 +2595,84 @@ export class SessionStore {
   listProjects(): Project[] {
     return this.catalog.projects.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
+
+  /** Runtime proof deliberately excludes unrelated settings, catalogs and model defaults. */
+  configurationRuntimeVersions(connectorIds: readonly string[], plugins?: RuntimeSettingsOverrides["plugins"], sessionId?: string): Record<string, string> {
+    const ids = [...new Set(connectorIds)].sort();
+    const hash = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
+    return { connectors: hash(ids.map(id => [id, this.connectorIds.has(id)])),
+      connectorCatalog: this.configurationConnectorRevisionSource?.(ids) ?? "not_attached",
+      policies: hash(ids.map(id => [id, this.mcpProxyPolicy(id), this.resolveProxy(this.mcpProxyPolicy(id))])),
+      plugins: hash([filterEnabledMcpSources(ids, plugins), sessionId ? filterEnabledMcpSources(ids, this.getSessionSettings(sessionId).effective.plugins) : null]) };
+  }
+
+  /** Finite domain operations, callable only from the configuration transaction. */
+  applyConfigurationDomainSync(sessionId: string, capabilityId: ConfigurationCapabilityId, values: ConfigurationValues, apiToken?: string): { modelId?: string } {
+    const database = this.getConfigurationDatabase();
+    if (!database.isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    if (capabilityId === "connector.enable") {
+      const connectorId = String(values.connectorId);
+      const current = this.getSessionSettings(sessionId).effective.enabledConnectorIds;
+      const restored = values.restoreInheritance === true ? this.getProjectSettings(session.projectId).effective.enabledConnectorIds
+        : typeof values.restoreConnectorIds === "string" ? JSON.parse(values.restoreConnectorIds) as string[] : [...new Set([...current, connectorId])];
+      if (!Array.isArray(restored) || restored.length > 200 || restored.some(id => typeof id !== "string" || !id || id.length > 100)) throw new Error("Invalid connector restoration");
+      for (const id of restored) {
+        if (!current.includes(id) && !this.connectorIds.has(id)) throw new Error("Connector is not installed");
+      }
+      if (values.restoreInheritance === true) delete session.settingsOverrides.enabledConnectorIds;
+      else if (typeof values.restoreConnectorIds === "string") {
+        session.settingsOverrides.enabledConnectorIds = JSON.parse(values.restoreConnectorIds) as string[];
+      } else session.settingsOverrides.enabledConnectorIds = [...new Set([...current, connectorId])];
+    } else if (capabilityId === "model.select") {
+      if (values.restoreInheritance === true) delete session.settingsOverrides.modelId;
+      else {
+        const modelId = String(values.modelId);
+        if (!this.getModel(modelId)) throw new Error("Model is no longer available");
+        session.settingsOverrides.modelId = modelId;
+      }
+    } else if (capabilityId === "model.connect") {
+      const normalized = validateLiveProvider({ name: String(values.name), baseUrl: String(values.baseUrl),
+        apiProtocol: values.apiProtocol as ModelProvider["apiProtocol"], apiVariant: values.apiVariant as ModelProvider["apiVariant"] });
+      const now = new Date().toISOString();
+      const existingProvider = this.catalog.providers.find(item => item.baseUrl.replace(/\/+$/, "") === normalized.baseUrl.replace(/\/+$/, "")
+        && item.apiProtocol === normalized.apiProtocol && item.apiVariant === normalized.apiVariant);
+      const provider: ModelProvider = existingProvider ?? { ...normalized, id: randomUUID(), hasApiToken: Boolean(apiToken),
+        tokenOptional: values.tokenOptional === true, proxyPolicy: "inherit", createdAt: now, updatedAt: now };
+      const validated = validateLiveModel({ name: provider.name, model: String(values.model), baseUrl: provider.baseUrl,
+        apiProtocol: provider.apiProtocol, apiVariant: provider.apiVariant });
+      const profile: ModelProfile = { ...validated, id: randomUUID(), providerId: provider.id,
+        hasApiToken: Boolean(apiToken), proxyPolicy: "inherit", createdAt: now, updatedAt: now };
+      const first = this.catalog.models.length === 0;
+      if (apiToken) {
+        if (existingProvider) this.setModelApiToken(profile.id, apiToken);
+        else this.setProviderApiToken(provider.id, apiToken);
+      }
+      if (!existingProvider) this.catalog.providers.push(provider);
+      this.catalog.models.push(profile);
+      if (first) {
+        this.catalog.globalSettings = this.normalizeSettings({ ...this.catalog.globalSettings, modelId: profile.id });
+        this.syncSessionCompatibilityForProject();
+      } else session.settingsOverrides.modelId = profile.id;
+      session.updatedAt = now;
+      this.syncSessionCompatibility(session);
+      return { modelId: profile.id };
+    } else if (capabilityId === "model.repair_credential") {
+      const profile = this.getModel(String(values.modelId));
+      if (!profile || !apiToken) throw new Error("Model and replacement credential are required");
+      // An isolated profile override avoids modifying a shared provider's other models.
+      this.setModelApiToken(profile.id, apiToken);
+      profile.hasApiToken = true;
+      profile.updatedAt = new Date().toISOString();
+      return { modelId: profile.id };
+    } else throw new Error("Unsupported configuration capability");
+    session.updatedAt = new Date().toISOString();
+    session.settingsOverrides = this.normalizeSettings(session.settingsOverrides);
+    this.syncSessionCompatibility(session);
+    return typeof values.modelId === "string" ? { modelId: values.modelId } : {};
+  }
+
+
 
   listModels(): ModelProfile[] {
     return this.catalog.models.toSorted((left, right) => left.name.localeCompare(right.name));

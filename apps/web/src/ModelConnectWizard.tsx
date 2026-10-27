@@ -39,6 +39,7 @@ import type { SettingsApiClient } from "./api/settings.js";
 import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
+import { isPlaintextModelUrl, normalizedModelBaseUrl } from "./model-url.js";
 import {
   EMPTY_MANUAL_MODEL,
   ManualModelFields,
@@ -59,6 +60,8 @@ export interface ModelConnectWizardProps {
   onSuccess?: (model: ModelProfile, provider: ModelProvider) => void;
   presets: readonly ModelProviderPreset[];
   proxySettings?: ProxySettingsDetails;
+  /** Inline configuration binds a Session without changing the global default. */
+  setFirstModelAsGlobalDefault?: boolean;
 }
 
 const CUSTOM_PROTOCOL: ModelApiProtocol = "openai-chat-completions";
@@ -79,6 +82,7 @@ export function ModelConnectWizard({
   onSuccess,
   presets,
   proxySettings,
+  setFirstModelAsGlobalDefault = true,
 }: ModelConnectWizardProps) {
   const { t } = useLocale();
 
@@ -129,7 +133,7 @@ export function ModelConnectWizard({
 
   const [testing, setTesting] = useState(false);
   const [probeConsent, setProbeConsent] = useState(false);
-  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, proxyPolicy, baseUrlOverride, selectedPresetId]);
+  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, apiVariant, proxyPolicy, baseUrlOverride, selectedPresetId, isCustom]);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
   const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string; inconclusive?: boolean }>();
@@ -142,6 +146,8 @@ export function ModelConnectWizard({
   const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
   const busy = testing || previewLoading;
+  const endpoint = providerInput();
+  const hasHttpDestination = isPlaintextModelUrl(endpoint.baseUrl);
 
   const previewSelectedCount = preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).length : 0;
   // How many models Save & connect will register right now; undefined means
@@ -218,7 +224,7 @@ export function ModelConnectWizard({
   // any advanced override on top, or the custom fields. Always a fresh
   // provider — the same vendor may be added several times with its own
   // name and key; existing rows are never touched.
-  function providerInput(): CreateModelProviderRequest {
+  function providerInput(): CreateModelProviderRequest & { baseUrl: string } {
     const apiToken = apiKey.trim() || undefined;
     if (selectedPreset) {
       return {
@@ -340,7 +346,7 @@ export function ModelConnectWizard({
   }
 
   async function handleTestAndEnable(): Promise<void> {
-    if (!probeConsent) return;
+    if (!probeConsent || busy) return;
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
@@ -382,10 +388,19 @@ export function ModelConnectWizard({
 
       // Register the first model and prove the wire before registering more.
       const requests = await resolveModelPlan(provider.id);
-      const firstProfile = await client.addProviderModel(provider.id, requests[0]!);
+      const firstProfile = await client.addProviderModel(provider.id, {
+        ...requests[0]!,
+        ...(setFirstModelAsGlobalDefault ? {} : { setGlobalDefault: false }),
+      });
       createdModelIds.push(firstProfile.id);
 
-      const testOutcome = await client.testModel(firstProfile.id);
+      // The saved profile must match the endpoint entered in this form.
+      if (hasHttpDestination && (normalizedModelBaseUrl(firstProfile.baseUrl) !== normalizedModelBaseUrl(endpoint.baseUrl)
+        || firstProfile.apiProtocol !== apiProtocol || firstProfile.apiVariant !== apiVariant)) {
+        throw new Error(t("settings.modelTest.httpChanged"));
+      }
+      const testOutcome = await client.testModel(firstProfile.id, false, hasHttpDestination
+        ? { baseUrl: endpoint.baseUrl, profileUpdatedAt: firstProfile.updatedAt } : undefined);
 
       const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
       if (!testOutcome.ok && !budgetLimited) {
@@ -407,12 +422,15 @@ export function ModelConnectWizard({
 
       // Wire proven: register the rest of the plan.
       for (const request of requests.slice(1)) {
-        const profile = await client.addProviderModel(provider.id, request);
+        const profile = await client.addProviderModel(provider.id, {
+          ...request,
+          ...(setFirstModelAsGlobalDefault ? {} : { setGlobalDefault: false }),
+        });
         createdModelIds.push(profile.id);
       }
 
       // Only the first model ever in the system becomes the global default.
-      if (!hadModels) {
+      if (!hadModels && setFirstModelAsGlobalDefault) {
         if (onDefaultModelSet) {
           await onDefaultModelSet(firstProfile.id);
         } else {
@@ -431,10 +449,10 @@ export function ModelConnectWizard({
       } catch { /* ignore */ }
 
       const count = createdModelIds.length;
-      const defaultChanged = !hadModels;
+      const defaultChanged = !hadModels && setFirstModelAsGlobalDefault;
       const successDesc = defaultChanged
         ? t(budgetLimited ? "wizard.savedDesc" : "wizard.successDesc", { count, model: firstProfile.name })
-        : t(budgetLimited ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count });
+        : t(budgetLimited ? "wizard.savedDescKeepDefault" : setFirstModelAsGlobalDefault ? "wizard.successDescKeepDefault" : "wizard.successDescSession", { count });
 
       setSuccessInfo({
         count,
@@ -494,7 +512,7 @@ export function ModelConnectWizard({
           <SparkleIcon size={18} />
           <h4>{t("wizard.title")}</h4>
         </div>
-        <p className="wizard-header-desc">{t("wizard.desc")}</p>
+        <p className="wizard-header-desc">{t(setFirstModelAsGlobalDefault ? "wizard.desc" : "wizard.descSession")}</p>
       </div>
 
       <div className="wizard-body">

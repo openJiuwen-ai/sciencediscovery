@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
 import { createElement } from "react";
@@ -122,6 +122,47 @@ async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
   assert.ok(label, "Cost disclosure must be reachable before a model request");
   await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
 }
+
+test("CFG-R14 manual HTTP lists without an extra checkbox, retains paid consent and preserves a retry", async () => {
+  let listings = 0;
+  let connects = 0;
+  const probes: unknown[][] = [];
+  const deleted: string[] = [];
+  const client = createMockClient({
+    previewProviderModels: async () => { listings++; return { models: [{ id: "fixture" }], source: "remote", fetchedAt: "now" }; },
+    createProvider: async (body: any) => { connects++; return { ...body, id: `provider-${connects}` } as ModelProvider; },
+    addProviderModel: async (providerId, body) => ({ id: `model-${connects}`, providerId, name: "Fixture", model: body.model, baseUrl: "http://gateway.invalid/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", updatedAt: `revision-${connects}` } as ModelProfile),
+    testModel: async (...args) => { probes.push(args); return connects === 1 ? authFailResult : successResult; },
+    deleteModel: async id => { deleted.push(id); return { deleted: id }; },
+    deleteProvider: async id => { deleted.push(id); return { deleted: id }; },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ModelConnectWizard, { client, presets: [] }))); });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://gateway.invalid/v1" } });
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "synthetic-key" } });
+  });
+  const submit = () => renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  const preview = () => renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
+  assert.equal(renderer!.root.findAllByProps({ className: "manual-http-consent" }).length, 0);
+  assert.equal(preview().props.disabled, false);
+  await act(async () => { preview().props.onClick(); });
+  assert.equal(listings, 1);
+  assert.equal(submit().props.disabled, true, "Only the existing paid probe consent gates Save & connect");
+  await act(async () => { submit().props.onClick(); });
+  assert.equal(connects, 0);
+  await acceptProbeCost(renderer!);
+  await act(async () => { submit().props.onClick(); });
+  assert.deepEqual(deleted, ["model-1", "provider-1"]);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "synthetic-key");
+  await act(async () => { submit().props.onClick(); });
+  assert.equal(probes.length, 2);
+  assert.deepEqual(probes[1], ["model-2", false, { baseUrl: "http://gateway.invalid/v1", profileUpdatedAt: "revision-2" }]);
+  await act(async () => { renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://another.invalid/v1" } }); });
+  assert.equal(preview().props.disabled, false);
+  assert.equal(submit().props.disabled, true);
+  await act(async () => renderer!.unmount());
+});
 
 test("renders preset provider selection, official registration link, and billing notice in zh-CN and en", async () => {
   let zhRenderer: ReactTestRenderer;
@@ -267,6 +308,69 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
   assert.match(extractText(successAlert), /模型已连接并保存/);
   assert.match(extractText(successAlert), /登记 2 个模型；listed-model-first 已设为全局默认任务模型/);
   assert.match(extractText(successAlert), /88 ms/);
+});
+
+test("inline connection keeps the global default unset on an empty system", async () => {
+  let globalWrites = 0;
+  let connectedModelId: string | undefined;
+  const registrationScopes: boolean[] = [];
+  const client = createMockClient({
+    addProviderModel: async (_providerId: string, body: any) => {
+      registrationScopes.push(body.setGlobalDefault);
+      return { id: `profile-${body.model}`, model: body.model, name: body.model } as ModelProfile;
+    },
+    replaceGlobalSettings: async () => {
+      globalWrites += 1;
+      return {} as any;
+    },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      onSuccess: (model) => { connectedModelId = model.id; },
+      presets: MODEL_PROVIDER_PRESETS,
+      setFirstModelAsGlobalDefault: false,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "demo-test-key" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.ok(connectedModelId);
+  assert.equal(globalWrites, 0);
+  assert.deepEqual(registrationScopes, [false, false]);
+});
+
+test("a failed inline connection does not rewrite global settings", async () => {
+  let globalWrites = 0;
+  const client = createMockClient({
+    replaceGlobalSettings: async () => {
+      globalWrites += 1;
+      return {} as any;
+    },
+    testModel: async () => authFailResult,
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+      setFirstModelAsGlobalDefault: false,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "bad-key" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.equal(globalWrites, 0);
+  assert.match(JSON.stringify(renderer!.toJSON()), /Authorization|API key|invalid/i);
 });
 
 test("successful flow with existing models: registers all listed models but leaves the global default alone", async () => {
@@ -540,6 +644,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
     addProviderModel: async (providerId: string, body: any) => {
       addedModelInput = { providerId, ...body };
       return {
+        baseUrl: "http://localhost:8000/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", updatedAt: "fixture-v1",
         contextWindow: 32000,
         id: "profile-custom-model",
         model: body.model,
@@ -640,6 +745,7 @@ test("custom provider without model id: registers every listed model", async () 
     addProviderModel: async (providerId: string, body: any) => {
       registeredModels.push(body.model);
       return {
+        baseUrl: "http://localhost:8000/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", updatedAt: "fixture-v1",
         contextWindow: 32000,
         id: `profile-${body.model}`,
         model: body.model,
