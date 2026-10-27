@@ -4,7 +4,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { RefStore, snapshotWorkspace, type AgentStateRef, type VersionStore } from "./versioning.js";
@@ -31,7 +31,7 @@ export async function withWorkspaceLease<T>(root: string, operation: () => Promi
   onBusy?: () => Promise<T>): Promise<T> {
   const { canonical, path } = await coordinationPath(root);
   if (owned.getStore()?.get(canonical)?.active) return operation();
-  const db = new DatabaseSync(`${path}.sqlite`);
+  const db = new DatabaseSync(toNamespacedPath(`${path}.sqlite`));
   let acquired = false;
   let marked = false;
   const token = { active: true };

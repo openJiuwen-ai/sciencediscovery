@@ -260,6 +260,8 @@ export interface CreateProviderModelRequest {
   /** Display name for the profile; defaults to the listing or catalog label. */
   label?: string;
   model: string;
+  /** False keeps a model added for one conversation out of the global default. */
+  setGlobalDefault?: boolean;
   vision?: boolean;
 }
 

@@ -14,6 +14,16 @@
 
 import type {
   CreatePermissionRequest,
+  ConnectorConfigurationRequest,
+  ConnectorConfigurationPreflightResult,
+  ConfigurationRequestView,
+  ConfigurationPreviewInput,
+  ConfigurationDecisionInput,
+  ConfigurationCredentialInput,
+  ConfigurationCredentialDraftView,
+  ConfigurationCapabilityId,
+  ConfigurationValues,
+  ConfigurationScope,
   CreateRemoteJobRequest,
   CreateSessionRequest,
   DeletionImpact,
@@ -40,6 +50,78 @@ import type {
 import { ProjectsApiClient } from "./projects.js";
 
 export class SessionsApiClient extends ProjectsApiClient {
+  preflightConnectorConfiguration(sessionId: string, content: string): Promise<ConnectorConfigurationPreflightResult> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration/preflight`, {
+      body: JSON.stringify({ content }), method: "POST",
+    });
+  }
+
+  listConnectorConfigurationRequests(sessionId: string): Promise<{ items: ConnectorConfigurationRequest[] }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`);
+  }
+
+  /** Includes legacy connector records while they are migrated to the registry. */
+  listConfigurationRequests(sessionId: string): Promise<{ items: Array<ConnectorConfigurationRequest | ConfigurationRequestView> }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`);
+  }
+
+  createConfigurationRequest(sessionId: string, input: { protocolVersion?: 3; capabilityId: ConfigurationCapabilityId; values: ConfigurationValues; scope?: ConfigurationScope }, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`, {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  getConfigurationRequest(sessionId: string, requestId: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId));
+  }
+
+  previewConfigurationRequest(sessionId: string, requestId: string, input: ConfigurationPreviewInput, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "preview"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  consentConfigurationEndpoint(sessionId: string, requestId: string, input: { revision: number; endpointTarget: string }, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "endpoint-consent"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  /** Credentials use a separate authenticated channel, never message/run input. */
+  submitConfigurationCredential(sessionId: string, requestId: string, input: ConfigurationCredentialInput, idempotencyKey: string): Promise<ConfigurationCredentialDraftView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "credentials"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  decideConfigurationRequest(sessionId: string, requestId: string, input: ConfigurationDecisionInput, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "decision"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  continueConfigurationRequest(sessionId: string, requestId: string, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "continue"), {
+      method: "POST", body: JSON.stringify({}), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  reverseConfigurationRequest(sessionId: string, requestId: string, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "reversal"), {
+      method: "POST", body: JSON.stringify({}), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
+  private configurationRequestPath(sessionId: string, requestId: string, operation?: string): string {
+    return `/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests/${encodeURIComponent(requestId)}${operation ? `/${operation}` : ""}`;
+  }
+
+  decideConnectorConfiguration(sessionId: string, requestId: string, decision: "apply" | "dismiss"): Promise<ConnectorConfigurationRequest> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests/${encodeURIComponent(requestId)}/decision`, {
+      body: JSON.stringify({ decision }), method: "POST",
+    });
+  }
+
   listSessions(projectId: string, state: SessionListState = "active"): Promise<Session[]> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/sessions?state=${state}`);
   }

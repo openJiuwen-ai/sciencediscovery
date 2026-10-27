@@ -4,7 +4,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import type { VersionStore } from "./versioning.js";
@@ -26,7 +26,7 @@ async function registry(versions: VersionStore) {
   await mkdir(versions.dataDir, { recursive: true, mode: 0o700 });
   const directory = join(await realpath(versions.dataDir), ".workspace-lifecycle");
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(join(directory, "registry.sqlite"));
+  const db = new DatabaseSync(toNamespacedPath(join(directory, "registry.sqlite")));
   db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS roots (path TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS fences (scope TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');`);
@@ -43,7 +43,7 @@ async function locked<T>(directory: string, key: string, action: () => Promise<T
   onBusy?: () => Promise<T>): Promise<T> {
   const identity = join(directory, createHash("sha256").update(key).digest("hex"));
   if (held.getStore()?.get(identity)?.active) return action();
-  const db = new DatabaseSync(`${identity}.sqlite`);
+  const db = new DatabaseSync(toNamespacedPath(`${identity}.sqlite`));
   const token = { active: true };
   let acquired = false;
   try {
