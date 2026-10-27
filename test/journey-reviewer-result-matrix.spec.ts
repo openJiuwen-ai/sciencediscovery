@@ -46,7 +46,12 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
   });
   const fixture = await createProjectAndSession(page, { projectName: `Reviewer matrix ${Date.now()}`, sessionTitle: "审核结果矩阵" });
   const cases: Case[] = [
-    { checkpoint: "completed", toolCallId: "quick-pass", review: review("quick-pass", { checks: ["citation"], reviewLevel: "quick" }) },
+    // A genuine Quick pass: the citation checks passed and the task's declared
+    // deliverable is present, so the card may say "Citation-format checks passed".
+    { checkpoint: "completed", toolCallId: "quick-pass", review: review("quick-pass", { checks: ["citation", "completeness"], completeness: { required: [{ path: "report.md", state: "present" }], source: "brief", status: "complete" }, reviewLevel: "quick" }) },
+    // The same checks without any delivery verdict: a citation pass must not be
+    // presented as an overall pass, so this one must read "delivery not verified".
+    { checkpoint: "completed", toolCallId: "quick-unverified", review: review("quick-unverified", { checks: ["citation"], reviewLevel: "quick" }) },
     { checkpoint: "completed", toolCallId: "quick-warning", review: review("quick-warning", { decision: "REVISE_AND_RETRY", findings: [{ code: "CITATION_IDENTIFIER_MISSING", evidenceRefs: [], id: "warning", message: "缺少可识别的引文标识符。", severity: "warning", status: "open" }], reviewLevel: "quick" }) },
     { checkpoint: "completed", toolCallId: "deep-contradiction", review: review("deep-contradiction", { findings: [{ code: "COMPUTATION_EVIDENCE_VALUE_MISMATCH", evidenceRefs: [], id: "mismatch", message: "锁定 Evidence 与报告数值不一致。", severity: "critical", status: "open" }], reviewLevel: "deep", sourceAssessments: [{ assessment: { assessment: "CONTRADICTED", claimId: "claim", locatorIds: ["locator"], policyVersion: "1", rationale: "锁定数值不一致。" }, claim: { artifactVersionId: "version-deep-contradiction", citationKeys: [], id: "claim", kind: "computation", requiredEvidenceLevel: "E4", text: "Response was 42%." }, locators: [], snapshots: [] }] }) },
     { checkpoint: "completed", toolCallId: "deep-inconclusive", review: review("deep-inconclusive", { reviewLevel: "deep", smartDetail: { code: "SMART_CITATION_INCONCLUSIVE", message: "Paper Reader timeout" }, smartStatus: "inconclusive" }) },
@@ -61,15 +66,19 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
   });
   await page.route(`**/api/sessions/${fixture.session.id}/artifact-reviews`, (route) => route.fulfill({ json: cases.flatMap((item) => item.review ? [{ ...item.review, sessionId: fixture.session.id }] : []) }));
   try {
-    await journey.step("进入带有审核记录的会话", "时间线显示五条只读 Reviewer Specialist 审核记录。", async () => {
+    await journey.step("进入带有审核记录的会话", "时间线显示六条只读 Reviewer Specialist 审核记录。", async () => {
       await openProjectSession(page, fixture);
-      await expect(page.locator(".reviewer-specialist-panel")).toHaveCount(5);
+      await expect(page.locator(".reviewer-specialist-panel")).toHaveCount(6);
     });
-    await journey.step("核对 Quick 的通过与告警", "仅检查引用格式的 Quick 项会说明结论支撑未检查，缺引用标识符显示告警。", async () => {
+    await journey.step("核对 Quick 的通过与告警", "仅检查引用格式的 Quick 项会说明结论支撑未检查；没有交付结论时必须显示未验证而不是通过；缺引用标识符显示告警。", async () => {
       const quickPass = page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-pass.md" });
       await expect(quickPass).toContainText("Citation-format checks passed");
       await expect(quickPass).toContainText("claim support was not checked");
       await expect(page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-warning.md" })).toContainText("Citation identifier missing");
+      // Nothing verified delivery here, so the card says so and never claims a pass.
+      const quickUnverified = page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-unverified.md" });
+      await expect(quickUnverified).toContainText("Checks passed; delivery not verified");
+      await expect(quickUnverified).not.toContainText("Quick review passed");
     });
     await journey.step("核对 Deep 的矛盾、降级与失败", "数值矛盾可见；来源降级不伪装成报告缺陷；失败项保留失败状态。", async () => {
       const all = page.locator(".reviewer-specialist-panel");
