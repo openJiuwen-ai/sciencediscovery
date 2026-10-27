@@ -95,6 +95,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
+  createWorkspaceTools,
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
 } from "@sciencediscovery/workspace";
 import {
@@ -3794,12 +3795,33 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
     headers: authorization,
   });
   assert.equal(listed.body.length, 1);
+  assert.equal(listed.body[0]?.status, "succeeded");
+  assert.equal(listed.body[0]?.sessionId, session.body.id);
   const textPath = `${uploaded.body.manifestPath.replace(/manifest\.json$/, "")}${uploaded.body.extraction.textPath}`;
+  const files = await jsonRequest<WorkspaceFile[]>(`${origin}/api/sessions/${session.body.id}/files`, {
+    headers: authorization,
+  });
+  assert.ok(files.body.some((file) => file.path === textPath), "Extracted text must be discoverable in the session workspace");
+  const tablePath = `${uploaded.body.manifestPath.replace(/manifest\.json$/, "")}${uploaded.body.extraction.tables[0]!.csvPath}`;
+  const tableResponse = await fetch(`${origin}/api/sessions/${session.body.id}/file?path=${encodeURIComponent(tablePath)}`, {
+    headers: authorization,
+  });
+  assert.equal(tableResponse.status, 200);
+  assert.match(await tableResponse.text(), /Treatment,2.4/);
   const textResponse = await fetch(`${origin}/api/sessions/${session.body.id}/file?path=${encodeURIComponent(textPath)}`, {
     headers: authorization,
   });
   assert.equal(textResponse.status, 200);
   assert.match(await textResponse.text(), /Scientific result with embedded text/);
+  const workspaceStore = new SessionStore(tempRoot);
+  await workspaceStore.load();
+  const readTool = createWorkspaceTools(workspaceStore.workspacePath(session.body.id), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("PDF text reading does not need Python execution"); },
+  }).find((tool) => tool.name === "read_file")!;
+  const agentRead = await readTool.execute("read-uploaded-paper", { path: textPath });
+  assert.ok(agentRead.content.some((item) => item.type === "text" && item.text.includes("Scientific result with embedded text")),
+    "The session agent's read_file tool must receive the parsed text, not PDF bytes");
   const sourceProvenance = await jsonRequest<WorkspaceFileProvenance>(
     `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=${encodeURIComponent(uploaded.body.pdfPath)}`,
     { headers: authorization },

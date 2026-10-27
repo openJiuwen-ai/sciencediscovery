@@ -3178,9 +3178,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       pushToast("error", t("app.uploadSkipped"), t("app.uploadSkippedDetail", { limit: formatByteLimit(maxFileBytes), name: file.name }));
     }
     if (!accepted.length) return;
-    const result = await client.uploadWorkspaceFiles(activeSessionId, accepted);
+    const result = await client.uploadDroppedFiles(activeSessionId, accepted);
+    if (!shouldApplySessionScopedUpdate(activeSessionId, activeSessionIdRef.current)) return;
     setFiles(result.files);
-    if (activeProjectId) setArtifacts(await client.listProjectArtifacts(activeProjectId));
+    if (activeProjectId) {
+      const projectArtifacts = await client.listProjectArtifacts(activeProjectId);
+      if (activeProjectId === activeProjectIdRef.current) setArtifacts(projectArtifacts);
+    }
     for (const item of result.uploaded) {
       if (item.status === "failed") {
         pushToast("error", t("app.uploadFailed"), `${item.originalName}: ${item.error ?? t("app.unknownError")}`);

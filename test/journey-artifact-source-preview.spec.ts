@@ -3,6 +3,7 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
+import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession, type JourneyFixture } from "./helpers/journeys.ts";
 
 const SCRIPT = '# Scientific analysis / 科学分析\ndef score(value):\n    """A multiline\n    description."""\n\n    return value * 2\n';
@@ -36,8 +37,16 @@ async function openArtifact(page: Page, name: string): Promise<Locator> {
   return modal;
 }
 async function closeArtifact(modal: Locator) { await modal.getByRole("button", { name: "Close artifact viewer" }).click(); }
-async function upload(page: Page) {
-  await page.locator("aside.workspace-panel label.drop-zone input[type=file]").setInputFiles(FILES);
+async function upload(page: Page, sessionId: string) {
+  await page.locator("aside.workspace-panel label.drop-zone input[type=file]").setInputFiles(FILES.filter((file) => file.mimeType !== "application/pdf"));
+  await expect((await artifactTree(page)).artifacts).toHaveCount(FILES.length - 1);
+  // This deliberately minimal PDF tests the generic Artifact preview, not paper ingestion.
+  const response = await page.request.post(`${apiBaseUrl()}/api/sessions/${sessionId}/workspace/upload`, {
+    headers: authorizationHeader(),
+    multipart: { files: FILES.find((file) => file.mimeType === "application/pdf")! },
+  });
+  expect(response.ok()).toBe(true);
+  await page.reload();
   await expect((await artifactTree(page)).artifacts).toHaveCount(FILES.length);
 }
 async function expectNumbered(modal: Locator, language: string, lines?: number) {
@@ -80,7 +89,7 @@ test.describe("Read artifact and workspace source", { tag: ["@isolation:session"
       await journey.step("上传代码、文本和专用格式文件", "文件都进入当前项目的产物目录。", async () => {
         fixture = await createProjectAndSession(page, { projectName: "Artifact source reading", sessionTitle: "Read research outputs" });
         await openProjectSession(page, fixture);
-        await upload(page);
+        await upload(page, fixture.session.id);
       });
       await journey.step("阅读 Python 脚本并调整窗口宽度", "Python 有语法颜色，空行和多行字符串保持行号；窄屏仍可完整阅读。", async () => {
         const modal = await openArtifact(page, "analysis.py");
@@ -200,7 +209,7 @@ test.describe("Read artifact and workspace source", { tag: ["@isolation:session"
       await journey.step("上传文件并展开工作区文件树", "工作区列出代码、笔记和日志文件。", async () => {
         fixture = await createProjectAndSession(page, { projectName: "Workspace source reading", sessionTitle: "Read my scripts" });
         await openProjectSession(page, fixture);
-        await upload(page);
+        await upload(page, fixture.session.id);
         await (await artifactTree(page)).openPhysicalFiles();
       });
       const open = (name: string) => page.locator("aside.workspace-panel details.physical-files").getByRole("button", { name: `Open ${name}`, exact: true }).click();

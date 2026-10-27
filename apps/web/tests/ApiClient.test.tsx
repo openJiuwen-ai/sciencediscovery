@@ -19,6 +19,78 @@ import assert from "node:assert/strict";
 
 import { ApiClient } from "../src/api.js";
 
+test("Drop files routes PDFs by MIME type or extension to paper intake and keeps CSV as a workspace attachment", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: string[] = [];
+  const pdfs = [new File(["%PDF"], "notes.PDF"), new File(["%PDF"], "protocol", { type: "application/pdf" })];
+  const csv = new File(["time,value\n0,1"], "measurements.csv", { type: "text/csv" });
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    calls.push(url);
+    assert.equal((init?.headers as Record<string, string>).authorization, "Bearer test-token");
+    if (url.includes("/workspace/upload?")) {
+      assert.deepEqual((init!.body as FormData).getAll("files").map((file) => (file as File).name), [csv.name]);
+      return Response.json({ errors: [], files: [], uploaded: [{ originalName: csv.name, path: csv.name, status: "created" }] });
+    }
+    if (url.includes("/papers/upload?")) {
+      const file = init!.body as File;
+      assert.ok(pdfs.includes(file));
+      assert.equal((init!.headers as Record<string, string>)["content-type"], "application/pdf");
+      return Response.json({ pdfPath: `papers/${file.name}/source.pdf` });
+    }
+    assert.equal(url, "/api/sessions/session%2Fa/files");
+    return Response.json([{ path: "papers/notes.PDF/analysis/text.txt" }, { path: csv.name }]);
+  };
+  try {
+    const result = await new ApiClient("test-token").uploadDroppedFiles("session/a", [pdfs[0]!, csv, pdfs[1]!]);
+    assert.equal(calls.filter((url) => url.includes("/papers/upload?")).length, 2);
+    assert.equal(calls.filter((url) => url.includes("/workspace/upload?")).length, 1);
+    assert.equal(result.uploaded.length, 3);
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.files.some((file) => file.path.endsWith("analysis/text.txt")));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("Drop files reports a PDF parse failure and continues with the remaining PDF and CSV", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("title=broken.pdf")) return Response.json({ error: "Invalid PDF" }, { status: 400 });
+    if (url.includes("/papers/upload?")) return Response.json({ pdfPath: "papers/valid/source.pdf" });
+    if (url.endsWith("/files")) return Response.json([{ path: "papers/valid/analysis/text.txt" }, { path: "data.csv" }]);
+    return Response.json({ errors: [], files: [], uploaded: [{ originalName: "data.csv", path: "data.csv", status: "created" }] });
+  };
+  try {
+    const result = await new ApiClient("test-token").uploadDroppedFiles("session-a", [
+      new File(["broken"], "broken.pdf"), new File(["%PDF"], "valid.pdf"), new File(["a,b"], "data.csv"),
+    ]);
+    assert.deepEqual(result.errors, [{ error: "Invalid PDF", name: "broken.pdf" }]);
+    assert.equal(result.uploaded.filter((item) => item.status === "created").length, 2);
+    assert.equal(result.uploaded.find((item) => item.originalName === "broken.pdf")?.status, "failed");
+    assert.equal(result.files.length, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("Drop files with only non-PDFs preserves the existing workspace upload response", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: string[] = [];
+  const response = { errors: [], files: [{ path: "data.csv" }], uploaded: [{ originalName: "data.csv", status: "renamed", path: "data-2.csv" }] };
+  globalThis.fetch = async (input) => {
+    calls.push(String(input));
+    return Response.json(response);
+  };
+  try {
+    assert.deepEqual(await new ApiClient("test-token").uploadDroppedFiles("session-a", [new File(["a,b"], "data.csv")]), response);
+    assert.deepEqual(calls, ["/api/sessions/session-a/workspace/upload?conflict=rename"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("subscribeRunEvents uses main SSE ids without inventing cursors for child events", async () => {
   const previousFetch = globalThis.fetch;
   const encoder = new TextEncoder();
