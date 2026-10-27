@@ -15,6 +15,10 @@ on:
         description: "Independent execution backend"
         required: true
         type: string
+      max-parallel:
+        description: "Maximum concurrent isolated real workers (allowed: 1, 2, 4)"
+        type: number
+        default: 2
 
 permissions:
   contents: read
@@ -32,12 +36,22 @@ jobs:
     environment: nightly-ci-ds
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      max-parallel: ${{ steps.concurrency.outputs.max-parallel }}
     env:
       CI_PROFILE: ${{ inputs.profile }}
       CI_E2E_BACKEND: ${{ inputs.backend }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
     steps:
+      - name: Validate real worker concurrency
+        id: concurrency
+        env:
+          CI_REAL_MAX_PARALLEL: ${{ inputs.max-parallel }}
+        run: |
+          case "$CI_REAL_MAX_PARALLEL" in
+            1|2|4) echo "max-parallel=$CI_REAL_MAX_PARALLEL" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::max-parallel must be 1, 2 or 4"; exit 1 ;;
+          esac
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -90,7 +104,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.real-plan.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: ${{ fromJSON(needs.real-plan.outputs.max-parallel || '2') }}
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}

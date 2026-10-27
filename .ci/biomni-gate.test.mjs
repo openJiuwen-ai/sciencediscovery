@@ -139,6 +139,25 @@ test('Linux memory sampler records a positive measurement for an isolated worker
   assert.equal(result.scope, 'isolated-local-worker-rss-sum');
 });
 
+test('suite reports all missing workers even when no artifact directory exists', t => {
+  const root = mkdtempSync(join(tmpdir(), 'biomni-no-artifacts-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const parentPath = join(root, 'plan.json');
+  writeFileSync(parentPath, JSON.stringify(subplan(plan, plan.entries)));
+  const resultRoot = join(root, 'missing-results');
+  const report = fileURLToPath(new URL('./real-report.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [report, parentPath, resultRoot], { cwd: root, encoding: 'utf8' });
+  assert.equal(run.status, 1, run.stderr);
+  assert.doesNotMatch(run.stderr, /ENOENT/);
+  const verdict = JSON.parse(readFileSync(join(resultRoot, 'verdict.json')));
+  assert.equal(verdict.status, 'FAIL');
+  assert.equal(verdict.planned, 50);
+  assert.equal(verdict.executed, 0);
+  assert.equal(verdict.problems.filter(p => p.includes('SHARD_EVIDENCE_MISSING')).length, 50);
+  assert.equal(verdict.biomni.measured, 0);
+  assert.ok(existsSync(join(resultRoot, 'biomni-gate.md')));
+});
+
 test('matrix, score packaging and suite accounting preserve all metrics and reject stale partial candidates', async t => {
   const root = mkdtempSync(join(tmpdir(), 'biomni-gate-'));
   t.after(() => rmSync(root, {recursive:true,force:true}));

@@ -137,10 +137,15 @@ and exactly-once supplemental checks. Missing, duplicated, skipped or failed
 results fail the gate. It produces combined `e2e-results`, preserving worker
 HTML/image links; no separate mocked accounting job is added.
 
-Real work **still waits for UT, ST and all mocked workers**. `real-plan`
-reconciles mocked results before freezing the real matrix. That matrix has
-one serialized basic worker and one worker per research case, with at most
-two concurrent workers. `real-report` (displayed as **Account for real cases**)
+L3 real work waits for UT, ST and all mocked workers; its `real-plan`
+reconciles mocked results before freezing the real matrix. L4/L5 start after
+policy selection independently of L1/L2. The real matrix has one serialized
+basic worker and one worker per research case, with at most two concurrent
+workers by default. Manual **CI** dispatch accepts `max-parallel` choices
+1, 2 or 4; select `profile=release` and `max-parallel=4` for a full L5 run
+with four workers. Merge queue, nightly and release-tag runs keep the default
+of two. Invalid reusable-workflow inputs fail planning before workers start.
+`real-report` (displayed as **Account for real cases**)
 reconciles their identities and results; it does not run another journey or
 call a model. `merge-gate` requires the jobs selected by `.ci/tier-policy.mjs`;
 for non-PR profiles these include real accounting and both distribution gates.

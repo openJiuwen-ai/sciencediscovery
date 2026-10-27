@@ -82,7 +82,9 @@ no fake research fixture is injected into real tests.
 
 The real matrix is generated from the frozen catalog: one serialized worker holds
 all L3 cases; each research case gets a separate job, with at most two workers
-running concurrently. The aggregate compares every shard to the parent plan's
+running concurrently by default. Manual runs can explicitly select 1, 2 or 4
+via `max-parallel`; other values fail planning before any worker starts.
+The aggregate compares every shard to the parent plan's
 SHA, configuration and exact identities, then requires
 `planned == executed == passed`. Missing, cancelled, skipped, duplicate or
 wrong-backend results fail. Existing quarantined cases are excluded by policy
@@ -310,9 +312,19 @@ workers without model calls or gated dataset downloads.
 
 ### L5 full-public benchmark and baseline candidate
 
+For a full L5 CI run, manually dispatch **CI** (`ci.yml`) on the desired
+branch with `profile=release`. This runs the cumulative CI gates and the
+complete real E2E suite, including the L3/L4 cases and all 50 public
+BiomniBench-DA tasks.
+The shared real E2E workflow defaults to two concurrent workers across the
+whole matrix. To use four workers, select `max-parallel=4` in the manual
+**CI** dispatch alongside `profile=release`. The input accepts only 1, 2 or 4;
+invalid reusable-workflow inputs fail planning before any worker starts.
+Merge queue, nightly and release-tag runs keep the default of two workers.
+
 The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50
-public BiomniBench-DA tasks, with one task per isolated worker, at most two
-concurrent workers and a six-hour worker ceiling including preparation. The
+public BiomniBench-DA tasks, with one task per isolated worker, sharing the
+selected concurrency limit and a six-hour worker ceiling including preparation. The
 other 50 upstream tasks remain private. The seeded literature-review journey
 remains quarantined pending its saved models, connector and skill setup.
 

@@ -30,6 +30,8 @@ export function reconcile(plan, root) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [planPath,root,policyPath] = process.argv.slice(2);
   const plan = JSON.parse(readFileSync(planPath));
+  // No worker artifacts exist when every job fails during preparation.
+  mkdirSync(root, { recursive: true });
   const verdict = reconcile(plan, root);
   let biomniReport = '';
   rmSync(join(root, 'biomni-baseline-candidate.json'), { force: true });
