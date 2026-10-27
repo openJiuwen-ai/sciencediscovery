@@ -18,6 +18,10 @@ Reviewer and session automatic review are on by default for new installs. Eligib
 
 Quick review focuses on citation structure and computational evidence chains. Deeper checking requires accessible sources, suitable tools, and time. A well-formed citation does not establish support, and a recorded execution does not establish sound statistics.
 
+A review also checks the deliverables the task itself declared. When the task's Brief names required files, the review reports each of them as present, empty, or missing, and an empty or missing file blocks a delivery pass with the exact path named. When the task declares no required file, the review says that delivery completeness was not verified instead of showing a pass: a citation check is never presented as overall delivery. A present file proves only that it exists; its content, the computation behind it, and the scientific conclusion remain unverified.
+
+A review answers for one Artifact version. Once that Artifact has a newer version, the earlier review is marked as outdated and kept as history rather than shown as the current verdict. With Automatic review on, the new version is queued for review and updates in the same place; when it is off, nothing is switched on and the existing review entry stays available.
+
 Reviewer feedback does not automatically edit artifacts or guarantee a subsequent revision by the main Agent. Use findings to request more evidence, narrower claims, or corrected calculations, then inspect the new version.
 
 ## Reduce hallucination through inspectable evidence

@@ -73,6 +73,52 @@ test("ReviewerPanel labels citation-only Quick reviews as partial", () => {
   assert.doesNotMatch(html, /Quick review passed/);
 });
 
+test("ReviewerPanel never presents a citation pass as a delivery pass", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation"],
+      completeness: { required: [], source: "none", status: "unconfirmed" },
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Checks passed; delivery not verified/);
+  assert.match(html, /Outdated/);
+  assert.match(html, /Delivery completeness was not verified/);
+  assert.doesNotMatch(html, /Citation-format checks passed/);
+});
+
+test("ReviewerPanel lists a missing required deliverable by path", () => {
+  const finding = {
+    code: "DELIVERABLE_MISSING",
+    evidenceRefs: [],
+    id: "finding-1",
+    message: "Required task deliverable is missing: output/cl3/predictions.npy.",
+    severity: "critical" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "completeness"],
+      completeness: {
+        required: [{ path: "output/cl3/predictions.npy", state: "missing" }],
+        source: "brief",
+        status: "incomplete",
+      },
+      decision: "REVISE_AND_RETRY",
+      findings: [finding],
+      reviewLevel: "quick",
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Revision required/);
+  assert.match(html, /Required file missing/);
+  assert.match(html, /Required files missing or empty: output\/cl3\/predictions\.npy \(missing\)/);
+});
+
 test("ReviewerPanel shows missing citation identifiers", () => {
   const finding = {
     code: "CITATION_IDENTIFIER_MISSING",

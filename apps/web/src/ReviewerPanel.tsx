@@ -48,6 +48,11 @@ function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; 
   if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
   if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
+  // A citation/format pass is never a delivery pass. When the task declared no
+  // structured deliverables this is said in the label itself, not only in details.
+  if (review.decision === "ACCEPT_AND_PROCEED" && review.completeness?.status === "unconfirmed") {
+    return { label: t("reviewer.result.scopeLimited"), tone: "warning" };
+  }
   if (review.decision === "ACCEPT_AND_PROCEED") {
     return {
       label: isCitationOnlyQuickReview(review)
@@ -81,6 +86,8 @@ const FINDING_KEYS: Record<string, MessageKey> = {
   COMPUTATION_EVIDENCE_INTERPRETATION_OVERREACH: "reviewer.finding.overreach",
   COMPUTATION_EVIDENCE_SCOPE_MISMATCH: "reviewer.finding.scopeMismatch",
   COMPUTATION_EVIDENCE_VALUE_MISMATCH: "reviewer.finding.valueMismatch",
+  DELIVERABLE_EMPTY: "reviewer.finding.deliverableEmpty",
+  DELIVERABLE_MISSING: "reviewer.finding.deliverableMissing",
 };
 
 function findingType(code: string, t: Translate): string {
@@ -112,7 +119,10 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
           <strong>{review.artifactLogicalName}</strong>
-          <small>{t("reviewer.versionLine", { level: levelLabel(review, t), version: review.artifactVersionId.slice(0, 8) })}</small>
+          <small>
+            {review.stale ? `${t("reviewer.stale")} · ` : ""}
+            {t("reviewer.versionLine", { level: levelLabel(review, t), version: review.artifactVersionId.slice(0, 8) })}
+          </small>
         </span>
         <i>{presentation.label}</i>
       </summary>
@@ -157,6 +167,24 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
                 : isCitationOnlyQuickReview(review)
                   ? t("reviewer.summary.citationOnlyPassed")
                 : t("reviewer.summary.citationPassed")}</p>
+        ) : null}
+        {review.completeness ? (
+          <section aria-label={t("reviewer.completeness.aria")} className="reviewer-completeness">
+            <p className={review.completeness.status}>
+              {review.completeness.status === "unconfirmed"
+                ? t("reviewer.completeness.unconfirmed")
+                : review.completeness.status === "incomplete"
+                  ? t("reviewer.completeness.incomplete", {
+                    paths: review.completeness.required
+                      .filter((entry) => entry.state !== "present")
+                      .map((entry) => `${entry.path} (${t(entry.state === "empty" ? "reviewer.deliverable.empty" : "reviewer.deliverable.missing")})`)
+                      .join(", "),
+                  })
+                  : t("reviewer.completeness.complete", {
+                    paths: review.completeness.required.map((entry) => entry.path).join(", "),
+                  })}
+            </p>
+          </section>
         ) : null}
         <footer>
           <span>{t("reviewer.footer", { detail: review.reusedFromReviewId ? t("reviewer.reused") : t("reviewer.levelReview", { level: levelLabel(review, t) }) })}</span>
