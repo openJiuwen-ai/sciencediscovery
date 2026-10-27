@@ -241,6 +241,11 @@ export interface ArtifactReviewRun {
    * was available, so the review must never be presented as an overall pass.
    */
   completeness?: ArtifactReviewCompleteness;
+  /**
+   * Requirement set the completeness verdict was computed against. A reused
+   * review is only re-derived when the current set has the same fingerprint.
+   */
+  deliverableFingerprint?: string;
   decision: "ACCEPT_AND_PROCEED" | "REVISE_AND_RETRY" | "SKIPPED";
   finishedAt: string;
   findings: ArtifactReviewFinding[];

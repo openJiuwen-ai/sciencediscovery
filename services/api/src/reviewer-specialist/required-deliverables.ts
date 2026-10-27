@@ -172,3 +172,20 @@ export function reviewedRunIds(
   const runIds = versions.map((version) => runOfSubagent.get(version.turnId!) ?? version.turnId!);
   return [...new Set(runIds)];
 }
+
+/**
+ * Requirements of the run that produced one reviewed version. A subagent writes
+ * its Artifacts with the subagent id as `turnId`, so that id is mapped back to the
+ * run that started it before the Briefs are looked up.
+ */
+export function requirementsForVersion(
+  store: Pick<SessionStore, "getArtifactVersion" | "listSubagents">,
+  sessionId: string,
+  version: { turnId?: string },
+): ReviewDeliverableRequirements | undefined {
+  const runOfSubagent = new Map(store.listSubagents(sessionId)
+    .map((subagent) => [subagent.id, subagent.parentTurnId]));
+  const turnId = version.turnId;
+  const runId = turnId ? runOfSubagent.get(turnId) ?? turnId : undefined;
+  return sessionRequiredDeliverables(store, sessionId, runId ? [runId] : []);
+}

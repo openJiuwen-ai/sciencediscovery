@@ -213,7 +213,7 @@ import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-ex
 import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
-import { auditReviewContext } from "../reviewer-specialist/required-deliverables.js";
+import { auditReviewContext, requirementsForVersion } from "../reviewer-specialist/required-deliverables.js";
 import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
@@ -508,6 +508,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           signal,
           store,
           toolCallId: task.toolCallId,
+          // Each report is judged against the run that produced it; a merged batch
+          // may hold versions from several runs.
+          requiredDeliverablesFor: (version) => requirementsForVersion(store, task.sessionId, version),
           ...(auditContext.requiredDeliverables ? { requiredDeliverables: auditContext.requiredDeliverables } : {}),
           ...(memoryGraphEnabled() ? {
             traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, task.sessionId, memoryGraphEnabled),

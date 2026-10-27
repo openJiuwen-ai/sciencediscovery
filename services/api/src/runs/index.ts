@@ -204,7 +204,7 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
-import { sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
+import { requirementsForVersion, sessionRequiredDeliverables } from "../reviewer-specialist/required-deliverables.js";
 
 import {
   aggregateToolText,
@@ -1489,6 +1489,9 @@ async function executeAgentRun(
             signal,
             store,
             toolCallId: checkpointToolCallId,
+            // One checkpoint can cover versions from several runs; judge each report
+            // against the run that produced it.
+            requiredDeliverablesFor: (version) => requirementsForVersion(store, sessionId, version),
             ...(() => {
               const required = sessionRequiredDeliverables(store, sessionId, [runId]);
               return required ? { requiredDeliverables: required } : {};

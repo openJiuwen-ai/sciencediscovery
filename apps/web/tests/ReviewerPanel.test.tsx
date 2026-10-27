@@ -457,3 +457,22 @@ test("ReviewerPanel keeps an outdated warning out of the warning count", () => {
   assert.doesNotMatch(html, /\b1 warning\b/i);
   assert.match(html, /<i>Outdated<\/i>/);
 });
+
+test("ReviewerPanel keeps an outdated warning out of the warning count", () => {
+  const finding = {
+    code: "CITATION_REFERENCE_MISSING",
+    evidenceRefs: [],
+    id: "finding-1",
+    message: "The reference list entry is missing.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ decision: "REVISE_AND_RETRY", findings: [finding], stale: true })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /warnings? found/i);
+  assert.match(html, /<i>Outdated<\/i>/);
+});

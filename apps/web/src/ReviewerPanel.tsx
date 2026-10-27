@@ -45,9 +45,10 @@ export function ReviewerSpecialistAvatar() {
 type Translate = ReturnType<typeof useLocale>["t"];
 
 function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; tone: string } {
-  if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
-  // A superseded verdict is history, whatever it decided when it was written.
+  // A superseded verdict is history, whatever it decided when it was written — a
+  // failed review that a newer version already replaced is not a current failure.
   if (review.stale === true) return { label: t("reviewer.result.outdated"), tone: "skipped" };
+  if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
   if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
   // A citation/format pass is never a delivery pass. When the task declared no

@@ -393,8 +393,9 @@ test("Reviewer checkpoint keeps an operationally incomplete Deep stage out of ma
   } satisfies ArtifactReviewRun;
   const content = reviewerCheckpointPromptContent([review]);
 
-  assert.match(content, /Status: PASSED/);
-  assert.doesNotMatch(content, /incomplete|semantically verified/i);
+  // A review without a delivery verdict cannot be reported as an overall pass.
+  assert.match(content, /Status: SCOPE_LIMITED/);
+  assert.doesNotMatch(content, /semantically verified/i);
 });
 
 test("Deep computation accepts a generated Artifact claim only with issued E4 locators", async () => {
@@ -1651,4 +1652,136 @@ test("a review with no declaration anywhere reads as a limited scope, never PASS
   assert.match(prompt, /Delivery completeness: UNCONFIRMED/u);
   assert.match(prompt, /^Status: SCOPE_LIMITED$/mu);
   assert.doesNotMatch(prompt, /^Status: PASSED$/mu);
+});
+
+test("every report in a merged batch carries its own delivery verdict", async () => {
+  // One checkpoint can cover two reports from two runs (the coordinator merges a
+  // newly registered version into the pending one). Only the first narrative
+  // version used to get a verdict, so the other read as "nothing to check" and the
+  // batch came out as PASSED while its own required file was missing.
+  const reportContent = Buffer.from("The study reports a result [1].\n[1] Study. arXiv:1706.03762");
+  const report = (id: string, turnId: string): ScientificArtifact => ({
+    createdAt: "2026-10-27T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id,
+    kind: "markdown",
+    logicalName: `${id}.md`,
+    name: `${id}.md`,
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  });
+  const version = (artifactId: string, turnId: string, createdAt: string): ScientificArtifactVersion => ({
+    artifactId,
+    content: { hash: `${artifactId}-hash`, size: reportContent.length },
+    createdAt,
+    executionRunIds: [],
+    id: `${artifactId}-v1`,
+    inputArtifactVersionIds: [],
+    mediaType: "text/markdown",
+    projectId: "project-1",
+    sessionId: "session-1",
+    turnId,
+    version: 1,
+  });
+  const artifacts = [report("report-a", "run-a"), report("report-b", "run-b")];
+  // run-b produced its report later, so it is the second version of the batch.
+  const versions = [
+    version("report-a", "run-a", "2026-10-27T00:00:00.000Z"),
+    version("report-b", "run-b", "2026-10-27T00:01:00.000Z"),
+  ];
+  const saved: ArtifactReviewRun[] = [];
+  const store = {
+    appendArtifactReview: async (review: ArtifactReviewRun) => { saved.push(review); },
+    getArtifact: (_sessionId: string, artifactId: string) => artifacts.find((artifact) => artifact.id === artifactId),
+    getArtifactVersion: (_sessionId: string, versionId: string) => versions.find((entry) => entry.id === versionId),
+    listArtifactReviews: async () => saved,
+    listArtifacts: () => artifacts,
+    listArtifactVersions: (_sessionId: string, artifactId: string) => versions.filter((entry) => entry.artifactId === artifactId),
+  } as unknown as SessionStore;
+  const cas = { read: async () => reportContent, verify: async () => true } as unknown as CasStore;
+
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds: ["report-a-v1", "report-b-v1"],
+    cas,
+    parentRunId: "run-b",
+    reason: "Merged automatic audit",
+    requiredDeliverablesFor: (entry) => entry.turnId === "run-a"
+      // run-a declared a file it never produced.
+      ? { paths: ["output/cl3/predictions.npy"], source: "brief", scope: "run" }
+      // run-b declared and produced its own file.
+      : { paths: ["report-b.md"], source: "brief", scope: "run" },
+    sessionId: "session-1",
+    store,
+  });
+
+  assert.equal(saved.length, 2);
+  const runA = saved.find((review) => review.artifactLogicalName === "report-a.md")!;
+  const runB = saved.find((review) => review.artifactLogicalName === "report-b.md")!;
+  assert.equal(runA.decision, "REVISE_AND_RETRY", "the report whose deliverable is missing cannot pass");
+  assert.equal(runA.completeness?.status, "incomplete");
+  assert.ok((runB.completeness !== undefined), "the other report must still carry a verdict");
+  assert.equal(runB.decision, "ACCEPT_AND_PROCEED");
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
+});
+
+test("a requirement one level shallower than the recorded path still matches", async () => {
+  const { evaluateDeliverableCompleteness } = await import("@sciencediscovery/provenance");
+  const artifact: ScientificArtifact = {
+    createdAt: "2026-10-27T00:00:00.000Z",
+    createdInSessionId: "session-1",
+    createdInSessionTitle: "Session 1",
+    currentVersion: 1,
+    id: "a",
+    kind: "dataset",
+    logicalName: "predictions.npy",
+    name: "predictions.npy",
+    origin: "llm_declared",
+    projectId: "project-1",
+    sessionId: "session-1",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  };
+  const version: ScientificArtifactVersion = {
+    artifactId: "a",
+    content: { hash: "h", size: 12 },
+    createdAt: artifact.createdAt,
+    executionRunIds: [],
+    id: "a-v1",
+    inputArtifactVersionIds: [],
+    mediaType: "application/octet-stream",
+    projectId: "project-1",
+    sessionId: "session-1",
+    sourcePath: "output/cl3/predictions.npy",
+    version: 1,
+  };
+  const store = { listArtifacts: () => [artifact], listArtifactVersions: () => [version] };
+  const verdict = evaluateDeliverableCompleteness(store, "session-1", { paths: ["cl3/predictions.npy"], source: "brief" });
+  assert.equal(verdict.required[0]?.state, "present", "writing the declaration one directory shallower is a naming difference");
+});
+
+test("a reuse against a different requirement set keeps the previous verdict", async () => {
+  const { artifacts, cas, saved, store, versions } = deliverableFixture();
+  const run = (required: { paths: string[]; source: "brief" }) => runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    requiredDeliverables: required,
+    sessionId: "session-1",
+    store,
+  });
+
+  await run({ paths: ["output/cl9/predictions.npy"], source: "brief" });
+  assert.equal(saved[0]?.decision, "REVISE_AND_RETRY");
+
+  // A different (here: satisfied) requirement set must not wash the earlier
+  // finding away; the verdict was not computed against these files.
+  assert.ok(artifacts.length >= 1 && versions.length >= 1);
+  const result = await run({ paths: ["REPRODUCTION_REPORT.md"], source: "brief" });
+  const reused = saved.at(-1)!;
+  assert.equal(reused.decision, "REVISE_AND_RETRY");
+  assert.ok(reused.findings.some((finding) => finding.code === "DELIVERABLE_MISSING"));
+  assert.doesNotMatch(reviewerCheckpointPromptContent(result.reviews), /^Status: PASSED$/mu);
 });
