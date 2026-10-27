@@ -439,7 +439,7 @@ test("ReviewerPanel keeps an outdated review out of the revision count", () => {
   assert.match(html, /<i>Outdated<\/i>/);
 });
 
-test("ReviewerPanel keeps an outdated warning out of the warning count", () => {
+test("ReviewerPanel keeps an outdated computation warning out of the warning count", () => {
   const finding = {
     code: "COMPUTATION_EVIDENCE_INSUFFICIENT",
     evidenceRefs: [],
