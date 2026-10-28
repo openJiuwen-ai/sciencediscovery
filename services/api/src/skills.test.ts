@@ -80,6 +80,32 @@ test("parses Agent Skills frontmatter and rejects invalid metadata", () => {
   );
 });
 
+test("loads legacy managed Skills without descriptions but rejects new packages without one", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    await catalog.createPackage({
+      description: "A stored Skill created before description validation.",
+      instructions: "# Legacy\n\nKeep this workflow available.",
+      name: "legacy-description-skill",
+    });
+    const packagePath = resolve(dataDir, "skills", "legacy-description-skill", "revisions", "1", "package", "SKILL.md");
+    const legacy = await readFile(packagePath, "utf8");
+    await writeFile(packagePath, legacy.replace(/^description:.*\n/mu, ""));
+
+    const reloaded = new SkillCatalog(dataDir, repositoryRoot);
+    await reloaded.load();
+    assert.equal(reloaded.get("legacy-description-skill")?.description, "");
+    assert.throws(
+      () => packageFromUpload("legacy-description.md", Buffer.from("---\nname: legacy-description-skill\n---\n\n# New\n")),
+      /description must be a non-empty string/,
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("discovers multiple Skills in common marketplace repository layouts", async () => {
   const checkout = await temporaryDataDir();
   try {
