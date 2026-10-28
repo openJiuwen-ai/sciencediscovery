@@ -567,6 +567,7 @@ export const ZH = {
         cpuCores: (count: number) => `${count} 核`,
         credentials: {
           cancel: "取消",
+          forget: "忘记已存的密码、私钥和口令",
           heading: "登录凭据",
           keyKeep: "留空则沿用已存的私钥",
           note: "凭据只写不读：存进去之后接口不会再返回它们，这里留空就是沿用已存的那一份。",

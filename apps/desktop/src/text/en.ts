@@ -540,6 +540,7 @@ export const EN: Text = {
         cpuCores: (count: number) => `${count} ${count === 1 ? "core" : "cores"}`,
         credentials: {
           cancel: "Cancel",
+          forget: "Forget the saved password, private key and passphrase",
           heading: "Login credentials",
           keyKeep: "Leave blank to keep the stored private key",
           note: "Credentials are write-only: the API never returns them, so leaving a field blank keeps the stored one.",

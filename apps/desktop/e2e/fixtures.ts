@@ -806,8 +806,8 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         state.runners[index] = {
           ...record,
           ...(input.username === undefined ? {} : { username: input.username }),
-          ...(input.password === undefined ? {} : { hasPassword: true }),
-          ...(input.privateKeyPath === undefined ? {} : { hasPrivateKey: true }),
+          ...(input.password === undefined ? {} : { hasPassword: input.password !== null }),
+          ...(input.privateKeyPath === undefined ? {} : { hasPrivateKey: input.privateKeyPath !== null }),
           updatedAt: UPDATED_AT,
         };
         // The route answers with a fresh probe, so the card shows the new login

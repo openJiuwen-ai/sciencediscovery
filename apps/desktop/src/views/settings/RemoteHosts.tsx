@@ -860,6 +860,7 @@ function CredentialsForm({
   const [keyPath, setKeyPath] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [saving, setSaving] = useState(false);
+  const [forgetCredentials, setForgetCredentials] = useState(false);
 
   const save = async () => {
     setSaving(true);
@@ -868,9 +869,13 @@ function CredentialsForm({
       // to verify, which is why the response is a fresh probe.
       const updated = await updateRemoteHostCredentials(client, host.id, {
         ...(username.trim() ? { username: username.trim() } : {}),
-        ...(password ? { password } : {}),
-        ...(keyPath.trim() ? { privateKeyPath: keyPath.trim() } : {}),
-        ...(passphrase ? { passphrase } : {}),
+        ...(forgetCredentials
+          ? { password: null, privateKeyPath: null, passphrase: null }
+          : {
+            ...(password ? { password } : {}),
+            ...(keyPath.trim() ? { privateKeyPath: keyPath.trim() } : {}),
+            ...(passphrase ? { passphrase } : {}),
+          }),
       });
       onDone(updated);
     } catch (reason) {
@@ -885,6 +890,15 @@ function CredentialsForm({
     <div className="connect-log">
       <div className="connect-log-body">
         <small className="row-note">{TEXT.settings.runtime.runner.credentials.note}</small>
+        <label className="runner-choice">
+          <input
+            checked={forgetCredentials}
+            disabled={saving}
+            onChange={(event) => setForgetCredentials(event.target.checked)}
+            type="checkbox"
+          />
+          <span>{TEXT.settings.runtime.runner.credentials.forget}</span>
+        </label>
         <label className="machine-field">
           <span>{TEXT.settings.runtime.runner.username}</span>
           <input
@@ -902,13 +916,14 @@ function CredentialsForm({
             className="field-input"
             onChange={(event) => setPassword(event.target.value)}
             placeholder={TEXT.settings.runtime.runner.credentials.secretKeep}
+            disabled={saving || forgetCredentials}
             type="password"
             value={password}
           />
         </label>
         <SshKeyFileField
           client={client}
-          disabled={saving}
+          disabled={saving || forgetCredentials}
           label={TEXT.settings.runtime.runner.keyFile}
           onChange={setKeyPath}
           placeholder={host.hasPrivateKey
@@ -925,6 +940,7 @@ function CredentialsForm({
             placeholder={host.hasPrivateKey
               ? TEXT.settings.runtime.runner.credentials.passphraseKeep
               : TEXT.settings.runtime.runner.credentials.passphrasePlaceholder}
+            disabled={saving || forgetCredentials}
             type="password"
             value={passphrase}
           />

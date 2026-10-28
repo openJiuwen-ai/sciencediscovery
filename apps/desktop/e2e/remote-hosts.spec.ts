@@ -321,6 +321,36 @@ test.describe("连接", () => {
 });
 
 test.describe("凭据", () => {
+  test("explicit forgetting clears stored credentials and a later password can be saved", async ({ page }) => {
+    const mock = await installMockApi(page, { runners: [runner({ hasPassword: true, hasPrivateKey: true })] });
+    const dialog = await openRemote(page);
+    const machine = card(dialog, "gpu-01");
+    await test.step("1. Keep saved credentials when fields are blank", async () => {
+      await machine.getByRole("button", { name: "登录凭据" }).click();
+      await machine.getByRole("button", { name: "保存并测试" }).click();
+      await expect(machine.locator(".connect-log")).toHaveCount(0);
+      expect(calls(mock, "PUT", "/api/remote-hosts/runner-1/credentials")[0]).toEqual({});
+      expect(mock.state.runners[0]).toMatchObject({ hasPassword: true, hasPrivateKey: true });
+    });
+    await test.step("2. Explicitly forget the saved password, key and passphrase", async () => {
+      await machine.getByRole("button", { name: "登录凭据" }).click();
+      await machine.getByRole("checkbox", { name: "忘记已存的密码、私钥和口令" }).check();
+      await expect(machine.getByLabel("登录密码")).toBeDisabled();
+      await machine.getByRole("button", { name: "保存并测试" }).click();
+      await expect(machine.locator(".connect-log")).toHaveCount(0);
+      expect(calls(mock, "PUT", "/api/remote-hosts/runner-1/credentials")[1]).toEqual({ password: null, privateKeyPath: null, passphrase: null });
+      expect(mock.state.runners[0]).toMatchObject({ hasPassword: false, hasPrivateKey: false });
+    });
+    await test.step("3. Save a replacement password", async () => {
+      await machine.getByRole("button", { name: "登录凭据" }).click();
+      await machine.getByLabel("登录密码").fill("replacement-test-password");
+      await machine.getByRole("button", { name: "保存并测试" }).click();
+      await expect(machine.locator(".connect-log")).toHaveCount(0);
+      expect(calls(mock, "PUT", "/api/remote-hosts/runner-1/credentials")[2]).toEqual({ password: "replacement-test-password" });
+      expect(mock.state.runners[0]).toMatchObject({ hasPassword: true, hasPrivateKey: false });
+    });
+  });
+
   test("empty fields keep what is stored; a filled one replaces it", async ({ page }) => {
     const mock = await installMockApi(page, {
       runners: [runner({ hasPassword: false, hasPrivateKey: true })],
