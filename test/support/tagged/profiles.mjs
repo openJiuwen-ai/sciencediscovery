@@ -19,8 +19,7 @@
  * them. The selector string every command runs is derived from these rows, so
  * this is the only place a policy is stated.
  *
- * Each test declares its first tier. Higher cumulative profiles include every
- * lower row; l5-only selects just L5 for independent manual validation.
+ * Each test declares its first tier. Higher profiles include every lower row.
  * Category, cost and execution backend are separate concerns.
  */
 const hermetic = { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' };
@@ -30,13 +29,11 @@ const real = { category: 'e2e', os: 'linux', arch: ['amd64', 'arm64'], npu: 'non
 const L3 = [...L2, { ...real, tier: 'l3', judge: 'none' }];
 const L4 = [...L3, { ...real, tier: 'l4' }];
 // L5 adds the full public BiomniBench-DA corpus and its metrics gate.
-const L5Only = [{ ...real, tier: 'l5' }];
-const L5 = [...L4, ...L5Only];
+const L5 = [...L4, { ...real, tier: 'l5' }];
 
 const policies = {
   l1: L1, l2: L2, l3: L3, l4: L4, l5: L5,
   pr: L2, merge: L3, daily: L4, release: L5,
-  'l5-only': L5Only,
 };
 
 /** One rule: a group with several values is OR, different groups are AND. */

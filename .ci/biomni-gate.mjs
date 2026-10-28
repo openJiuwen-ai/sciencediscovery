@@ -89,7 +89,7 @@ export function validateMetrics(doc, entry, plan) {
 
 export function evaluateSuite(plan, documents, policy, baseline) {
   const expected = plan.entries.filter(e => biomniCase(e));
-  if (!expected.length && !['release', 'l5', 'l5-only'].includes(plan.profile)) return undefined;
+  if (!expected.length && !['release', 'l5'].includes(plan.profile)) return undefined;
   const problems = [], results = [], caseStatuses = [], ids = expected.map(biomniCase);
   if (canonical([...ids].sort()) !== canonical(dataset.tasks.map(t => t.id).sort())) problems.push('BIOMNI_PUBLIC_50_PLAN_REQUIRED');
   if (!['candidate', 'compare', 'temporary'].includes(policy?.mode)) problems.push('INVALID_BASELINE_POLICY');

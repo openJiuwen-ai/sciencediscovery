@@ -5,7 +5,7 @@ import { validatePlan } from '../test/support/tagged/plan.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
 import { dataset } from './biomni-gate.mjs';
 const plan = validatePlan(JSON.parse(readFileSync(process.argv[2], 'utf8')));
-if (['release', 'l5', 'l5-only'].includes(plan.profile)) {
+if (['release', 'l5'].includes(plan.profile)) {
   const selected = plan.entries.map(biomniCase).filter(Boolean).sort();
   if (JSON.stringify(selected) !== JSON.stringify(dataset.tasks.map(t => t.id).sort())) throw new Error('BIOMNI_PUBLIC_50_PLAN_REQUIRED');
 }

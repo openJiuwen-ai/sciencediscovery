@@ -1,12 +1,12 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-# Run every eligible L5 case without the cumulative L1-L4 gates.
+# Run the real E2E slice of the existing cumulative L5 profile.
 # Keep manual validation separate from regular CI cancellation. A newer
 # manual validation at the same ref still replaces the previous manual run.
 name: Manual validation
 
-run-name: "Manual validation · ${{ github.ref_name }} · L5 only · parallel=${{ inputs.max-parallel }}"
+run-name: "Manual validation · ${{ github.ref_name }} · l5 · parallel=${{ inputs.max-parallel }}"
 
 on:
   workflow_dispatch:
@@ -31,10 +31,10 @@ permissions:
 
 jobs:
   validate:
-    name: Validate L5 only
+    name: Validate L5 real E2E
     uses: ./.github/workflows/real-e2e.yml
     secrets: inherit
     with:
-      profile: l5-only
+      profile: l5
       backend: ${{ inputs.backend }}
       max-parallel: ${{ fromJSON(inputs.max-parallel) }}
