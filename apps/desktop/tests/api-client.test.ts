@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 
 import { ApiClient, ApiRequestError, isAbortError, isAuthFailure } from "../src/api/client.js";
 import { testModel } from "../src/api/models.js";
-import { SseFrameDecoder, readToolOutput, streamMessage } from "../src/api/stream.js";
+import { MAX_FRAME_CHARACTERS, SseFrameDecoder, readToolOutput, streamMessage } from "../src/api/stream.js";
 import type { RunStreamEvent, SessionRunEvent } from "../src/api/types.js";
 
 /** Replace `globalThis.fetch` for one test, restore it afterwards, and hand
@@ -221,6 +221,187 @@ test("multi-line data fields are joined the way SSE specifies", () => {
   assert.deepEqual(decoder.push("data: one\ndata: two\n\n"), [{ data: "one\ntwo" }]);
 });
 
+test("a CRLF split across chunks is still one line break", () => {
+  const decoder = new SseFrameDecoder();
+  // Only the bytes that just arrived are normalized, so a `\r` at the end of
+  // one chunk has to wait for the `\n` that may open the next one.
+  assert.deepEqual(decoder.push("id: 2\r"), []);
+  assert.deepEqual(decoder.push("\ndata: {}\r"), []);
+  assert.deepEqual(decoder.push("\n\r\n"), [{ data: "{}", id: 2 }]);
+});
+
+test("a frame that never terminates stops at the cap and is reported as a skipped frame", () => {
+  // The repro from the issue: a writer that opens a frame and keeps sending
+  // bytes without ever terminating it. Below the ceiling the frame is still
+  // assembled as before; past it, nothing may be retained.
+  const decoder = new SseFrameDecoder();
+  const head = 'id: 4\ndata: {"type":"assistant.delta","delta":"';
+  decoder.push(head);
+  const filler = "x".repeat(64 * 1024);
+  let pushed = head.length;
+  while (pushed + filler.length <= MAX_FRAME_CHARACTERS) {
+    decoder.push(filler);
+    pushed += filler.length;
+  }
+  decoder.push(filler.slice(0, MAX_FRAME_CHARACTERS - pushed));
+  // Exactly at the ceiling is still a frame that may arrive.
+  assert.deepEqual(decoder.takeSkipped(), []);
+  decoder.push("x");
+  // One character past it the frame is given up on, with its cursor kept.
+  assert.deepEqual(decoder.takeSkipped(), [4]);
+  // And it is gone, not merely hidden: an unbounded decoder would hand this
+  // 8 MiB tail to `flush()` when the stream ended.
+  assert.deepEqual(decoder.flush(), []);
+});
+
+test("the decoder resynchronises at the next blank line after a dropped frame", () => {
+  const decoder = new SseFrameDecoder();
+  decoder.push('id: 5\ndata: {"type":"assistant.delta","delta":"');
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS + 1));
+  assert.deepEqual(decoder.takeSkipped(), [5]);
+  // The frame's own tail keeps arriving after the drop. Until its blank line
+  // lands, those bytes belong to the frame that was given up on: a `data:` line
+  // here is exactly the crafted tail that must never reach the JSON parser (as
+  // a frame it would be re-interpreted as a brand-new event).
+  assert.deepEqual(decoder.push('data: {"type":"injected"}'), []);
+  // One oversized frame is one skip, however many chunks its tail takes.
+  assert.deepEqual(decoder.takeSkipped(), []);
+  assert.deepEqual(decoder.push("more tail\n"), []);
+  assert.deepEqual(decoder.takeSkipped(), []);
+  // The blank line that finally arrives ends the frame that was given up on;
+  // it is not data and must not close anything else.
+  assert.deepEqual(decoder.push("\n\n"), []);
+  // A well-formed frame after it arrives untouched, which is what keeps a live
+  // run usable after one bad writer.
+  assert.deepEqual(decoder.push('id: 6\ndata: {"type":"run.status"}\n\n'), [
+    { data: '{"type":"run.status"}', id: 6 },
+  ]);
+});
+
+test("a dropped frame ends when its blank line arrives split across chunks", () => {
+  // A blank line is two bytes and a chunk boundary can land between them. The
+  // discard must carry the first newline, or the terminator never matches and
+  // the frame after the dropped one is swallowed.
+  const decoder = new SseFrameDecoder();
+  decoder.push('id: 7\ndata: {"type":"assistant.delta","delta":"');
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS + 1));
+  assert.deepEqual(decoder.takeSkipped(), [7]);
+  assert.deepEqual(decoder.push("\n"), []);
+  // The second newline completes the dropped frame's terminator, so parsing
+  // resumes and the next frame is delivered rather than discarded.
+  assert.deepEqual(decoder.push("\n"), []);
+  assert.deepEqual(decoder.takeSkipped(), []);
+  assert.deepEqual(decoder.push('id: 8\ndata: {"type":"run.status"}\n\n'), [
+    { data: '{"type":"run.status"}', id: 8 },
+  ]);
+});
+
+test("a dropped frame does not swallow a complete frame carried in the same chunk", () => {
+  // The chunk that closes the dropped frame can also carry the next frame. The
+  // carried newline is the blank line's first byte, so it closes the drop; the
+  // later `\n\n` in the same chunk belongs to the complete frame and must not
+  // be taken as the terminator, which would discard that whole frame.
+  const decoder = new SseFrameDecoder();
+  decoder.push('id: 7\ndata: {"type":"assistant.delta","delta":"');
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS + 1));
+  assert.deepEqual(decoder.takeSkipped(), [7]);
+  assert.deepEqual(decoder.push("\n"), []);
+  assert.deepEqual(decoder.push('\nid: 8\ndata: {"type":"run.status"}\n\n'), [
+    { data: '{"type":"run.status"}', id: 8 },
+  ]);
+  assert.deepEqual(decoder.takeSkipped(), []);
+});
+
+test("an empty chunk does not lose the carried newline while discarding", () => {
+  // An empty chunk carries no information. It must not clear the carried `\n`,
+  // or the next chunk's own blank line is taken as the dropped frame's
+  // terminator and the frame it belongs to is swallowed.
+  const decoder = new SseFrameDecoder();
+  decoder.push('id: 7\ndata: {"type":"assistant.delta","delta":"');
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS + 1));
+  assert.deepEqual(decoder.takeSkipped(), [7]);
+  // The dropped frame's tail ends with the blank line's first newline.
+  assert.deepEqual(decoder.push("more tail\n"), []);
+  assert.deepEqual(decoder.push(""), []);
+  assert.deepEqual(decoder.push('\nid: 8\ndata: {"type":"run.status"}\n\n'), [
+    { data: '{"type":"run.status"}', id: 8 },
+  ]);
+  // One dropped frame is one skip.
+  assert.deepEqual(decoder.takeSkipped(), []);
+});
+
+test("a lone carriage return between the two halves of a blank line keeps the resync", () => {
+  // A CRLF blank line can be split by a one-byte read: the lone `\r` arrives
+  // as its own chunk and normalizes to "". It must be held for the `\n` that
+  // follows, not treated as "this chunk does not end with a newline".
+  const decoder = new SseFrameDecoder();
+  decoder.push('id: 7\ndata: {"type":"assistant.delta","delta":"');
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS + 1));
+  assert.deepEqual(decoder.takeSkipped(), [7]);
+  assert.deepEqual(decoder.push("more tail\n"), []);
+  assert.deepEqual(decoder.push("\r"), []);
+  assert.deepEqual(decoder.push('\nid: 9\ndata: {"type":"run.status"}\n\n'), [
+    { data: '{"type":"run.status"}', id: 9 },
+  ]);
+  assert.deepEqual(decoder.takeSkipped(), []);
+});
+
+test("a frame exactly at the ceiling still parses when its terminator is split", () => {
+  // The blank line's first `\n` is framing, not payload: at exactly the ceiling
+  // it must not push the retained frame over the cap and get the frame dropped.
+  const decoder = new SseFrameDecoder();
+  const prefix = "id: 9\ndata: ";
+  const payload = "z".repeat(MAX_FRAME_CHARACTERS - prefix.length);
+  assert.deepEqual(decoder.push(`${prefix}${payload}`), []);
+  assert.deepEqual(decoder.takeSkipped(), []);
+  // Split terminator: the first newline arrives alone, the second closes it.
+  assert.deepEqual(decoder.push("\n"), []);
+  assert.deepEqual(decoder.push("\n"), [{ data: payload, id: 9 }]);
+  assert.deepEqual(decoder.takeSkipped(), []);
+});
+
+test("a dropped frame moves the cursor by the last id line it fully received", () => {
+  // `parseFrame` uses the last `id:` line of a frame, so the cursor a dropped
+  // frame reports must be read the same way: the first one would move the
+  // client backwards past frames it already saw.
+  const decoder = new SseFrameDecoder();
+  decoder.push("id: 3\nid: 4\n");
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS + 1));
+  assert.deepEqual(decoder.takeSkipped(), [4]);
+});
+
+test("a dropped frame moves the cursor only by an id line that fully arrived", () => {
+  // The `id:` line never got its newline before the frame was given up on, so
+  // the digits that did arrive could be the prefix of a longer number. Nothing
+  // was read, so a reconnect must not skip past anything.
+  const decoder = new SseFrameDecoder();
+  decoder.push("id: 1");
+  decoder.push("x".repeat(MAX_FRAME_CHARACTERS));
+  assert.deepEqual(decoder.takeSkipped(), [undefined]);
+});
+
+test("a frame below the ceiling still parses in full", () => {
+  const decoder = new SseFrameDecoder();
+  // A long report is the biggest event one frame carries: the model's default
+  // output budget is 16 384 tokens, so 1 MiB already sits far above real
+  // traffic and still nowhere near the ceiling.
+  const content = "y".repeat(1024 * 1024);
+  const data = JSON.stringify({ content, type: "assistant.snapshot" });
+  const frames = decoder.push(`id: 12\ndata: ${data}\n\n`);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0]?.data, data);
+  assert.deepEqual(decoder.takeSkipped(), []);
+});
+
+test("the frame ceiling is a module constant, not a configurable setting", () => {
+  // The ceiling is fixed in the module: no environment variable, no settings
+  // field and no constructor option can raise it at runtime.
+  assert.equal(MAX_FRAME_CHARACTERS, 8 * 1024 * 1024);
+  // A zero-parameter constructor leaves no options object that could carry a
+  // cap in, so the only way to change the bound is to edit the module.
+  assert.equal(SseFrameDecoder.length, 0);
+});
+
 test("a frame the server wrote badly does not end the stream", async () => {
   // The run is still going on the server. One frame with an unreadable payload
   // must not end the response: everything after it still arrives, and the
@@ -270,6 +451,46 @@ test("a frame the server wrote badly does not end the stream", async () => {
   assert.equal(seen[1].event, null);
   assert.equal(seen[1].sequence, 2);
   // One notice for the whole stream, not one per frame.
+  assert.deepEqual(skips, [1]);
+});
+
+test("a live stream keeps delivering frames after an unterminated one is dropped", async () => {
+  // The same shape against the pump: a writer opens a frame, sends bytes for a
+  // while without its blank line, then recovers. The stream has to carry on,
+  // count the lost frame once, and deliver what follows it.
+  const client = new ApiClient("t");
+  const seen: Seen[] = [];
+  const skips: number[] = [];
+  const filler = "x".repeat(64 * 1024);
+  const chunks = [
+    'id: 1\ndata: {"type":"run.started","runId":"run-1","model":{"name":"m"},"settings":{}}\n\n',
+    'id: 2\ndata: {"type":"assistant.delta","delta":"',
+  ];
+  for (let sent = 0; sent <= MAX_FRAME_CHARACTERS; sent += filler.length) chunks.push(filler);
+  chunks.push("\n\n");
+  chunks.push('id: 3\ndata: {"type":"assistant.delta","delta":"after"}\n\n');
+  chunks.push('id: 4\ndata: {"type":"run.status","status":"completed","run":{"id":"run-1","status":"completed"}}\n\n');
+  await withFetch(
+    () => Promise.resolve(sseResponse(chunks)),
+    async () => {
+      await streamMessage(
+        client,
+        "session-1",
+        { content: "hi" },
+        (event, sequence) => {
+          seen.push({ event, sequence });
+        },
+        undefined,
+        { onSkippedFrames: (count) => skips.push(count) },
+      );
+    },
+  );
+  assert.deepEqual(seen.map((entry) => entry.sequence), [1, 2, 3, 4]);
+  assert.equal(seen[0].event?.type, "run.started");
+  // The dropped frame moves the cursor and nothing else.
+  assert.equal(seen[1].event, null);
+  assert.equal(seen[2].event?.type, "assistant.delta");
+  assert.equal(seen[3].event?.type, "run.status");
   assert.deepEqual(skips, [1]);
 });
 
