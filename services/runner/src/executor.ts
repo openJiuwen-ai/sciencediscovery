@@ -772,6 +772,7 @@ export function buildSandboxLaunch(options: {
   const env: Record<string, string> = {
     HOME: "/tmp",
     PATH: options.npu ? `/usr/local/bin:${options.pathEnv}` : options.pathEnv,
+    PYTHONUNBUFFERED: "1",
   };
   // CANN's operator compiler is imported as ordinary Python, so its search path
   // has to join PYTHONPATH rather than replace whatever the environment set.
@@ -855,7 +856,7 @@ function launchEnvironment(options: {
   skillRoots?: SandboxSkillRoots;
   temp?: string;
 }): Record<string, string> {
-  const env: Record<string, string> = { HOME: options.home, PATH: options.pathEnv };
+  const env: Record<string, string> = { HOME: options.home, PATH: options.pathEnv, PYTHONUNBUFFERED: "1" };
   if (options.temp) {
     env.TMPDIR = options.temp;
     env.TMP = options.temp;
@@ -1335,7 +1336,7 @@ export async function executeDirectShell(
   const startedAt = new Date().toISOString();
   // Do not inject Runner service credentials into the process environment. Host
   // filesystem/network access is still unrestricted and is disclosed at consent.
-  const env = { PATH: "/usr/bin:/bin", HOME: userInfo().homedir, LANG: "C.UTF-8" };
+  const env = { PATH: "/usr/bin:/bin", HOME: userInfo().homedir, LANG: "C.UTF-8", PYTHONUNBUFFERED: "1" };
   const launch: SandboxLaunch = { args: [], chdir: cwd, commandPrefix: [], env };
   const result = await runSandboxed(config, launch, [], request.code,
     executionTimeoutMs(request.executionTimeoutMs, config.execTimeoutMs), workspaceRoot, signal,

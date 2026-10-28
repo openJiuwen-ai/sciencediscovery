@@ -45,6 +45,7 @@ export const PROFILE_RESERVED_KEYS = new Set([
   "PWD",
   "PYTHONNOUSERSITE",
   "PYTHONPATH",
+  "PYTHONUNBUFFERED",
   "R_ENVIRON_USER",
   "SHLVL",
   "http_proxy",

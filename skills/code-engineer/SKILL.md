@@ -73,6 +73,11 @@ This returns:
 
 Based on the analysis objectives and data schema, write Python/R code to perform the analysis.
 
+For long-running Python jobs, use `python -u` (or `PYTHONUNBUFFERED=1`) when
+redirecting output to a log. Print meaningful progress with `flush=True` so
+progress is visible before the process exits. A quiet log alone does not prove
+that a job has stalled; inspect the running process before restarting it.
+
 #### Execute Python Code
 
 ```bash
