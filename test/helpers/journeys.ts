@@ -488,9 +488,11 @@ export async function openProjectSession(
 export async function sendUserMessage(page: Page, sessionId: string, prompt: string): Promise<JourneyRun> {
   const runsPath = `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
   const before = new Set((await apiJson<JourneyRun[]>(page, runsPath)).map((run) => run.id));
+  await page.locator("form.composer").getByRole("textbox").fill(prompt);
+  const continueWithoutNetwork = page.getByRole("button", { name: /^(Continue without network|在无网络情况下继续)$/ });
+  if (await continueWithoutNetwork.isVisible()) await continueWithoutNetwork.click();
   const request = page.waitForRequest((candidate) =>
     candidate.method() === "POST" && /\/api\/sessions\/[^/]+\/messages$/.test(candidate.url()));
-  await page.locator("form.composer").getByRole("textbox").fill(prompt);
   await page.getByRole("button", { name: /^(Run analysis|Add to queue|运行分析|加入队列)$/ }).click();
   await request;
 
