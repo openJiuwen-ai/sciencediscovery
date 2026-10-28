@@ -84,7 +84,7 @@ export function detectCsvArtifact(candidate: CsvCandidate): CsvDetection | undef
 /**
  * Whether a Workspace file opens in the interactive CSV viewer. Only its name
  * and served media type decide; content is not sniffed, so a log or text file
- * that happens to contain commas keeps its ordinary browser hand-off.
+ * that happens to contain commas keeps its ordinary file preview.
  */
 export function opensInCsvViewer(path: string, mediaType?: string): boolean {
   return detectCsvArtifact({ mediaType, name: path }) !== undefined;

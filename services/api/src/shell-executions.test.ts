@@ -13,9 +13,11 @@ import type { TestContext } from "node:test";
 
 import { RefStore, VersionStore } from "@sciencediscovery/cas";
 import { RunnerClient as HttpRunnerClient, type RunnerClient } from "@sciencediscovery/executor";
-import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
+import type { AgentShellExecution, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
+import { ResearchPackageIds, remapRunEvent } from "./research-package-history.js";
+import { verifyResearchCopy } from "./research-snapshot-integrity.js";
 
 const owner = { sessionId: "session", agentId: "main" };
 const identity = { runnerId: "remote", workspaceId: "workspace", turnId: "original-turn" };
@@ -36,6 +38,25 @@ async function fixture(context: TestContext) {
   const result = { exitCode: 0, stdout: "done", stderr: "", workspaceSnapshot: ref } as ShellExecutionResult;
   return { db, versions, notices, service, ref, result };
 }
+
+test("historical shell restore round-trips output evidence and passes research copy verification", async (context) => {
+  const f = await fixture(context);
+  const source: AgentShellExecution = { id: "shell-source", sessionId: "session-source", agentId: "main",
+    runnerId: "remote", workspaceId: "workspace-source", turnId: "turn-source", state: "completed",
+    queuedAt: "2026-10-20T10:00:00.000Z", finishedAt: "2026-10-20T10:01:00.000Z", accepted: true, provenance: "committed",
+    result: { ...f.result, workspaceVersion: f.ref } };
+  const ids = new ResearchPackageIds();
+  const targetId = ids.id(source.sessionId);
+  const mapped = { ...remapRunEvent(source, ids), id: ids.id(source.id) };
+  await f.service.restoreHistorical(mapped);
+  const restored = await f.service.get(mapped.id, { sessionId: targetId, agentId: "main" });
+  assert.equal(restored.result?.stdout, "done");
+  assert.equal(restored.result?.workspaceSnapshot, undefined);
+  assert.equal(restored.result?.workspaceVersion, undefined);
+  const records = (id: string, execution: AgentShellExecution) => ({ sessions: [{ session: { id }, shellExecutions: [execution] }] });
+  assert.doesNotThrow(() => verifyResearchCopy(records(source.sessionId, source), records(targetId, restored), ids, new Map([[source.sessionId, targetId]]), "project"));
+  assert.deepEqual(f.notices.unread({ sessionId: targetId, agentId: "main" }), [], "restoring evidence does not execute or notify");
+});
 
 test("accepted background work outlives waiting and publishes a notice only after provenance", async (context) => {
   const f = await fixture(context);
