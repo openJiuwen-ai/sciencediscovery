@@ -196,7 +196,13 @@ test("researcher can allow a manual MCP download from its card", { tag: ["@mocke
       const settings = await get(settingsPath);
       const saved = await page.request.put(`${apiBaseUrl()}${settingsPath}`, { data: { ...settings.overrides, enabledConnectorIds: ["arxiv"], modelId: fixture.model!.id }, headers: authorizationHeader() });
       expect(saved.ok()).toBeTruthy();
-      const run = await sendUserMessage(page, fixture.session.id, "Prepare the arXiv PDF 2401.00001 for download.");
+      const prompt = "Prepare the arXiv PDF 2401.00001 for download.";
+      const composer = page.locator("form.composer");
+      await composer.getByRole("textbox").fill(prompt);
+      const preflight = composer.locator(".composer-network-preflight");
+      await expect(preflight).toContainText("Research network access is disabled");
+      await preflight.getByRole("button", { name: "Continue without network" }).click();
+      const run = await sendUserMessage(page, fixture.session.id, prompt);
       await expect.poll(() => stub.calls.length, { message: "the run should reach the scripted model", timeout: 60_000 }).toBeGreaterThan(0);
       expect(stub.calls[0]?.offeredTools ?? [], "the arXiv download tool must be offered to the run").toContain("mcp__arxiv__prepare_paper_download");
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 120_000);

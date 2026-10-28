@@ -324,8 +324,9 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
         // preflight must be acknowledged before the journey can demonstrate
         // the separate, in-run disabled-connector feedback it owns.
         await page.locator("form.composer").getByRole("textbox").fill(prompt);
-        await expect(page.getByRole("alert")).toContainText("研究网络访问已被禁用");
-        await page.getByRole("button", { name: "在无网络情况下继续" }).click();
+        const preflight = page.locator("form.composer .composer-network-preflight");
+        await expect(preflight).toContainText("研究网络访问已被禁用");
+        await preflight.getByRole("button", { name: "在无网络情况下继续" }).click();
         const run = await sendUserMessage(page, fixture.session.id, prompt);
         expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
         expect(offeredArxiv(0)).toEqual([]);
@@ -345,8 +346,9 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
         // Enabling arXiv changes the session's requested host set, so the
         // preflight correctly asks again before this separate run.
         await page.locator("form.composer").getByRole("textbox").fill(prompt);
-        await expect(page.getByRole("alert")).toContainText("研究网络访问已被禁用");
-        await page.getByRole("button", { name: "在无网络情况下继续" }).click();
+        const preflight = page.locator("form.composer .composer-network-preflight");
+        await expect(preflight).toContainText("研究网络访问已被禁用");
+        await preflight.getByRole("button", { name: "在无网络情况下继续" }).click();
         const run = await sendUserMessage(page, fixture.session.id, prompt);
         expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
         expect(offeredArxiv(1)).toContain("mcp__arxiv__search");

@@ -56,8 +56,9 @@ for (const decision of ["Deny", "Allow once"] as const) {
         // The composer warning is an earlier, offline preflight. Acknowledge
         // it so this journey can exercise the distinct run-level consent card.
         await page.locator("form.composer").getByRole("textbox").fill(prompt);
-        await expect(page.getByRole("alert")).toContainText("Research network access is disabled");
-        await page.getByRole("button", { name: "Continue without network" }).click();
+        const preflight = page.locator("form.composer .composer-network-preflight");
+        await expect(preflight).toContainText("Research network access is disabled");
+        await preflight.getByRole("button", { name: "Continue without network" }).click();
         runId = (await sendUserMessage(page, fixture.session.id, prompt)).id;
         const card = page.locator("article.permission-card").filter({ hasText: "eutils.ncbi.nlm.nih.gov:443" }).first();
         await expect(card).toBeVisible(); await expect(card).toContainText("Retrieve requested PubMed records");
