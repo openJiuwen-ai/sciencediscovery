@@ -40,6 +40,7 @@ import { ReviewerPanel } from "../ReviewerPanel.js";
 import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { translateActive, useLocale } from "../i18n/index.js";
+import { ErrorDiagnosticActions } from "../ErrorDiagnosticActions.js";
 import { formatRunFailure } from "../run-failure.js";
 import type { ApiClient } from "../api.js";
 
@@ -87,6 +88,8 @@ export type RunTimelineEntry =
       preview?: string;
       paperCount?: number;
       liveFailure?: string;
+      /** Error from the Run event, kept separate from tool result text. */
+      diagnosticError?: string;
       userExpanded?: boolean;
       type: "tool";
     }
@@ -709,7 +712,7 @@ export function reduceRunTimeline(
     return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
       if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running") {
-        return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
+        return { ...entry, diagnosticError: event.type === "run.failed" ? event.error : summary, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
       return cancelPendingPermission(entry);
     });
@@ -726,7 +729,7 @@ export function reduceRunTimeline(
     return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
       if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {
-        return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
+        return { ...entry, diagnosticError: event.run.error ?? event.reason ?? summary, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
       return cancelPendingPermission(entry);
     });
@@ -816,7 +819,9 @@ export function RunTimeline({
   onChipClick,
   reviewerLevel,
   workspaceSessionId,
+  diagnosticRunId,
 }: {
+  diagnosticRunId?: string;
   agentLabel?: string;
   artifactReviews?: ArtifactReviewRun[];
   ideaResearchClient?: ApiClient;
@@ -1074,6 +1079,7 @@ export function RunTimeline({
         const command = entry.trace.name === "run_shell" && typeof entry.trace.args?.command === "string"
           ? compactStatus(entry.trace.args.command) : undefined;
         return (
+          <React.Fragment key={entry.id}>
           <details
             className={`timeline-disclosure tool ${entry.trace.status}${entry.trace.status !== "running" ? " process-record" : ""}`}
             key={entry.id}
@@ -1098,6 +1104,8 @@ export function RunTimeline({
               <ToolIoSections outputText={outputText} trace={entry.trace} />
             </div>
           </details>
+          {entry.trace.status === "failed" || entry.liveFailure ? <ErrorDiagnosticActions title={t("record.toolFailed", { name: entry.trace.name })} detail={entry.diagnosticError ?? t("diagnostics.toolFailure")} ids={{ ...(workspaceSessionId ? { sessionId: workspaceSessionId } : {}), ...(diagnosticRunId ? { runId: diagnosticRunId } : {}) }} /> : null}
+          </React.Fragment>
         );
   }
   // The run's own label row carries when its answer was sent. The answer body

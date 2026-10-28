@@ -828,7 +828,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // than folded in from the event: the artifact list spans Sessions and
         // every version, and a read is what keeps it agreeing with the
         // catalog. The event only says that the moment has changed.
-        if (changesPanel(event.type)) {
+        // A `null` event is a frame that could not be read. Its cursor has
+        // already moved; there is no event behind it to act on.
+        if (event !== null && changesPanel(event.type)) {
           panelRefreshTarget.current = target;
           panelRefresh.current?.request();
         }
@@ -882,7 +884,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         setRunning(true);
       }
       try {
-        await subscribeRunEvents(client, target, runId, 0, applyEvent(target), controller.signal);
+        await subscribeRunEvents(client, target, runId, 0, applyEvent(target), controller.signal, {
+          // One low-key notice for the whole stream, and only when something
+          // was actually missing: the run went on, so this is not an error.
+          onSkippedFrames: (count) => toast(TEXT.conversation.malformedFrames(count), "info"),
+        });
       } catch (reason) {
         if (isAuthFailure(reason)) {
           onAuthRejected();
@@ -934,7 +940,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       const controller = new AbortController();
       abortRef.current = controller;
       try {
-        await streamMessage(client, session, { content: text }, applyEvent(session), controller.signal);
+        await streamMessage(client, session, { content: text }, applyEvent(session), controller.signal, {
+          // One low-key notice for the whole stream, and only when something
+          // was actually missing: the run went on, so this is not an error.
+          onSkippedFrames: (count) => toast(TEXT.conversation.malformedFrames(count), "info"),
+        });
       } catch (reason) {
         if (isAuthFailure(reason)) {
           onAuthRejected();
@@ -955,7 +965,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         }
       }
     },
-    [applyEvent, client, ensureSession, onAuthRejected, report, resetRun, settle, updateRun],
+    [applyEvent, client, ensureSession, onAuthRejected, report, resetRun, settle, toast, updateRun],
   );
 
   /**

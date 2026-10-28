@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ErrorDiagnosticActions, ErrorDiagnosticClient } from "./ErrorDiagnosticActions.js";
 import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useMcpReadiness } from "./composer/useMcpReadiness.js";
 import { ExecutionBlockCards } from "./ExecutionReadiness.js";
+import { ComputeNotice, ComputeStatus, useComputeReadiness } from "./ComputeReadiness.js";
 
 import {
   readRenamedStorageItem,
@@ -1323,6 +1325,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const computeReadiness = useComputeReadiness(client);
   const mcpReadiness = useMcpReadiness(client);
   const mcpSources = mcpReadiness.sources;
 
@@ -3294,7 +3297,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
       sessionTitle,
     });
-    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail, routing.toast.technicalDetail);
+    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail, routing.toast.technicalDetail, { runId, sessionId });
     if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
       void refreshUsageData().catch((reason: Error) => setError(reason));
     }
@@ -3397,7 +3400,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       // Keep the original diagnostic in the connection chip's tooltip while
       // the notification leads with localized recovery guidance.
       setErrorState(streamEvent.error || message);
-      pushToast("error", t("error.request"), message, streamEvent.error);
+      pushToast("error", t("error.request"), message, streamEvent.error, { runId, sessionId });
     }
   }
 
@@ -4263,9 +4266,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   function renderRunActivityGroup(group: RunActivityGroup, timelineSubagentIds: ReadonlySet<string> = new Set()) {
     if (!session) return null;
+    const failedRun = sessionRuns.find(run => run.id === group.runId && run.status === "failed");
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
+        {failedRun ? <ErrorDiagnosticActions title={t("error.runFailed")} detail={failedRun.error ?? ""} ids={{ runId: failedRun.id, sessionId: session.id }} /> : null}
         <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
@@ -4287,7 +4292,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   return (
-    <RuntimeConfigClient.Provider value={client}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
+    <ErrorDiagnosticClient.Provider value={client}><RuntimeConfigClient.Provider value={client}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
       <button
         aria-controls="app-sidebar"
@@ -4488,6 +4493,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       </aside>
 
       <main className="main-area">
+        <ComputeNotice readiness={computeReadiness} />
         {workspaceView === "usage" ? (
           <UsagePage
             analytics={usageAnalytics}
@@ -4525,7 +4531,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
         <div className={workspaceCollapsed ? "content-grid workspace-collapsed" : "content-grid"} style={workspaceCollapsed ? undefined : { gridTemplateColumns: `minmax(0, 1fr) ${workspaceWidth}px` }}>
           <section className="conversation">
-            {activeProject || session ? <div className="session-bar">
+            <div className="session-bar">
               <div className="session-bar-title">
                 {mainProjectRenameTarget ? <InlineRenameInput
                   ariaLabel={t("app.renameProjectAria", { name: mainProjectRenameTarget.label })}
@@ -4575,9 +4581,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     sessionTokens={sessionUsage?.totals.totalTokens}
                   />
                 ) : null}
-                <span className={error ? "connection bad" : "connection"} title={error ? t("app.connectionErrorTooltip", { error }) : t("app.connectionOkTooltip")}><i />{error ? t("app.connectionErrorChip") : null}</span>
+                <ComputeStatus readiness={computeReadiness} error={error} />
               </div>
-            </div> : null}
+            </div>
             {sessionPending ? (
               <div className="messages"><SkeletonRows className="message-skeleton" count={3} /></div>
             ) : !session ? (
@@ -4638,6 +4644,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <Fragment key={block.message.id}>
                       {block.message.kind === "reviewer_checkpoint" && block.message.reviewerCheckpoint ? (
                         <ReviewerPanel
+                          checkpointContent={block.message.content}
                           checkpointError={block.message.reviewerCheckpoint.error}
                           checkpointProgress={block.message.reviewerCheckpoint.progress}
                           checkpointStatus={block.message.reviewerCheckpoint.status}
@@ -4672,6 +4679,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
                       <RunTimeline
+                        diagnosticRunId={block.runId}
                         subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
@@ -4713,6 +4721,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   ))}
                   <ExecutionBlockCards key={session.id} client={client} sessionId={session.id} />
                   <RunTimeline
+                    diagnosticRunId={activeTimelineRunId}
                     subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
@@ -5432,7 +5441,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       /> : null}
 
     </div>
-    </PluginWebHost></RuntimeConfigClient.Provider>
+    </PluginWebHost></RuntimeConfigClient.Provider></ErrorDiagnosticClient.Provider>
   );
 }
 

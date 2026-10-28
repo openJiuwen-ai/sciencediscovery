@@ -176,6 +176,9 @@ export const ZH = {
     truncatedBody: "内容较长，这里是其中一部分。",
     droppedEvents: (count: number) => `有 ${count} 条更早的事件未能重放，以下是可恢复的部分。`,
     unknownEvents: (count: number) => `有 ${count} 个本版本不认识的事件被跳过。`,
+    /** 运行中发来的、读不出来的更新：运行本身继续了，但这一轮可能缺一段。
+     *  故意用日常说法，不向用户暴露协议或格式名词。 */
+    malformedFrames: (count: number) => `有 ${count} 条更新无法读取，已跳过。`,
     streamEnded: "连接已结束，运行状态未知。刷新可重新获取。",
     emptyTurn: "这一轮没有产出文本。",
     toolCall: "工具调用",

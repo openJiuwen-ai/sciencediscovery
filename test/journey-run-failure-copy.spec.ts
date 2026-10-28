@@ -65,9 +65,9 @@ for (const locale of ["zh-CN", "en"] as const) {
      * Purpose: Read localized actionable Run failures, inspect optional diagnostics, and continue after recovery, including a background Session failure.
      * Steps:
      *   1. Submit a task to a rejecting local model and read recovery guidance without raw diagnostics.
-     *   2. Inspect technical details at 390px, then retry successfully after the model recovers.
+     *   2. Inspect and copy technical details with the failed Run identifiers at 390px, then retry successfully after the model recovers.
      *   3. Switch Sessions while a request is pending and read the failed Session's localized notification.
-     *   4. Inspect the background failure at 960px and continue the current Session successfully.
+     *   4. Inspect and copy the background failure at 960px with its original Session identifiers, and continue the current Session successfully.
      * Environment: Isolated built API/Web at E2E_BASE_URL; no Runner or sidecars needed for text-only requests.
      * Type: mocked
      * LLM: journey-owned loopback endpoint returning deterministic 401 or successful SSE text.
@@ -80,20 +80,25 @@ for (const locale of ["zh-CN", "en"] as const) {
      */
     test(`Run failure ${locale} ${classified ? "classified" : "unclassified"} guidance and recovery`, {
       tag: ["@mocked", "@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:none"],
-    }, async ({ page, journey }) => {
+    }, async ({ page, context, journey }) => {
       test.setTimeout(90_000);
       const zh = locale === "zh-CN";
       const title = zh ? "运行失败" : "Run failed";
       const requestTitle = zh ? "请求错误" : "Request error";
       const detailsLabel = zh ? "技术详情" : "Technical details";
+      const copyLabel = zh ? "复制关键诊断" : "Copy key diagnostics";
+      const dismissLabel = zh ? "关闭通知" : "Dismiss notification";
       const guidance = classified
         ? (zh ? "模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。" : "The model service rejected the credentials. Check the API key in the model registry and retry.")
         : (zh ? "任务未能完成，运行已停止。请重试任务；若再次失败，可展开技术详情以排查原因。" : "The task stopped before it could finish. Retry the task; if it fails again, open the technical details to help diagnose the problem.");
       const model = await recoverableModel();
       let fixture: JourneyFixture | undefined;
       let otherSessionId: string;
+      let failedRunId: string;
+      let backgroundRunId: string;
       journey.scenario({ goal: "运行失败时先读懂原因和恢复办法，需要时展开技术详情；切换会话后仍能理解后台失败并继续工作。", preconditions: [`界面语言 ${locale}`, classified ? "服务返回稳定失败分类" : "模拟旧生产者未提供失败分类", "独立 API/Web，仅调用本地模型桩"] });
       await page.addInitScript(value => localStorage.setItem("sciencediscovery-locale", value), locale);
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
       if (!classified) {
         await page.route("**/api/sessions/*/messages", async route => {
           const response = await route.fetch();
@@ -116,6 +121,7 @@ for (const locale of ["zh-CN", "en"] as const) {
         await openProjectSession(page, fixture);
         await journey.step("提交任务并理解失败", "失败通知使用当前语言说明原因和恢复办法，底层错误默认折叠。", async () => {
           const run = await sendUserMessage(page, fixture!.session.id, "Check failure feedback");
+          failedRunId = run.id;
           expect((await waitForRunTerminal(page, fixture!.session.id, run.id)).status).toBe("failed");
           await expect(toast.locator("strong")).toHaveText(requestTitle);
           await expect(page.getByRole("status").filter({ hasText: requestTitle })).toBeVisible();
@@ -125,7 +131,7 @@ for (const locale of ["zh-CN", "en"] as const) {
           await expect(toast.locator("pre")).toBeHidden();
           await expect(toast.locator("small")).not.toContainText("COPY_TEST_PROVIDER_DETAIL");
         });
-        await journey.step("在窄屏查看技术详情", "390 像素宽度下，恢复说明完整显示，展开后可读取原始诊断。", async () => {
+        await journey.step("在窄屏查看技术详情", "390 像素宽度下，恢复说明完整显示，展开后可读取并复制原始诊断与失败运行的标识。", async () => {
           await page.setViewportSize({ width: 390, height: 844 });
           await toast.getByText(detailsLabel, { exact: true }).click();
           await expect(toast.locator("pre")).toContainText("COPY_TEST_PROVIDER_DETAIL <invalid credential>");
@@ -133,9 +139,13 @@ for (const locale of ["zh-CN", "en"] as const) {
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           const copy = toast.locator("small");
           expect(await copy.evaluate(node => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+          await toast.getByRole("button", { name: copyLabel, exact: true }).click();
+          await expect(toast.getByRole("status")).toContainText(zh ? "已复制诊断" : "Diagnostics copied");
+          const diagnostic = await page.evaluate(() => navigator.clipboard.readText());
+          for (const value of [guidance, "COPY_TEST_PROVIDER_DETAIL <invalid credential>", `runId: ${failedRunId}`, `sessionId: ${fixture!.session.id}`]) expect(diagnostic).toContain(value);
         });
         await journey.step("恢复服务后重试", "相同会话可再次提交并收到完成结果。", async () => {
-          await toast.locator("button").click();
+          await toast.getByRole("button", { name: dismissLabel, exact: true }).click();
           await page.setViewportSize({ width: 1440, height: 900 });
           model.setMode("accept");
           const run = await sendUserMessage(page, fixture!.session.id, "Retry after recovery");
@@ -144,7 +154,7 @@ for (const locale of ["zh-CN", "en"] as const) {
         });
         await journey.step("切换会话后查看后台失败", "通知以当前语言标明失败会话，保留当前会话与草稿。", async () => {
           model.setMode("wait");
-          await sendUserMessage(page, fixture!.session.id, "Fail while in another session");
+          backgroundRunId = (await sendUserMessage(page, fixture!.session.id, "Fail while in another session")).id;
           await expect.poll(model.isWaiting).toBe(true);
           await page.locator("#sessions-panel-content button.nav-item").filter({ hasText: "Other copy session" }).click();
           await expect(page.getByRole("heading", { name: "Other copy session", exact: true })).toBeVisible();
@@ -155,14 +165,19 @@ for (const locale of ["zh-CN", "en"] as const) {
           await expect(toast.locator("pre")).toBeHidden();
           await expect(page.locator("form.composer").getByRole("textbox")).toHaveValue("Keep this draft");
         });
-        await journey.step("查看后台错误详情", "960 像素宽度下可展开技术详情并关闭通知。", async () => {
+        await journey.step("查看后台错误详情", "960 像素宽度下可展开并复制技术详情，诊断对应失败会话而非当前会话。", async () => {
           await page.setViewportSize({ width: 960, height: 600 });
           await toast.getByText(detailsLabel, { exact: true }).click();
           await expect(toast.locator("pre")).toContainText("COPY_TEST_PROVIDER_DETAIL");
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await toast.getByRole("button", { name: copyLabel, exact: true }).click();
+          await expect(toast.getByRole("status")).toContainText(zh ? "已复制诊断" : "Diagnostics copied");
+          const diagnostic = await page.evaluate(() => navigator.clipboard.readText());
+          for (const value of [guidance, "COPY_TEST_PROVIDER_DETAIL <invalid credential>", `runId: ${backgroundRunId}`, `sessionId: ${fixture!.session.id}`]) expect(diagnostic).toContain(value);
+          expect(diagnostic).not.toContain(`sessionId: ${otherSessionId}`);
         });
         await journey.step("继续当前会话", "关闭通知后当前会话可提交新任务并完成。", async () => {
-          await toast.locator("button").click();
+          await toast.getByRole("button", { name: dismissLabel, exact: true }).click();
           model.setMode("accept");
           const run = await sendUserMessage(page, otherSessionId, "Continue current session");
           expect((await waitForRunTerminal(page, otherSessionId, run.id)).status).toBe("completed");

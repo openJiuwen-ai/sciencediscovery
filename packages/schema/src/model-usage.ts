@@ -120,6 +120,12 @@ export interface ModelCompatibilityOutcome {
   providerStatus?: number;
 }
 
+/** Snapshot of the manually selected target; never an Agent permission grant. */
+export interface ManualModelDestination {
+  baseUrl: string;
+  profileUpdatedAt: string;
+}
+
 export interface ModelConnectivityTestResult {
   inconclusiveReason?: ModelCompatibilityOutcome["inconclusiveReason"];
   category: ModelConnectivityTestCategory;

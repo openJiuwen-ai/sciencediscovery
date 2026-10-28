@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 
 import { ApiClient, ApiRequestError, isAbortError, isAuthFailure } from "../src/api/client.js";
 import { testModel } from "../src/api/models.js";
-import { SseFrameDecoder, readToolOutput } from "../src/api/stream.js";
+import { SseFrameDecoder, readToolOutput, streamMessage } from "../src/api/stream.js";
 import type { RunStreamEvent, SessionRunEvent } from "../src/api/types.js";
 
 /** Replace `globalThis.fetch` for one test, restore it afterwards, and hand
@@ -48,6 +48,27 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
     status,
   });
+}
+
+/** A response whose body is an event stream, delivered in the given chunks —
+ *  the shape the API writes it in. */
+function sseResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
+/** One frame of an event stream, as the pump delivered it. A `null` event is
+ *  a frame whose payload could not be read: the pump still hands over the
+ *  cursor it carried so a reconnect does not ask for it again. */
+interface Seen {
+  event: RunStreamEvent | null;
+  sequence?: number;
 }
 
 test("every request carries the bearer token, including streamed ones", async () => {
@@ -198,6 +219,125 @@ test("a frame with no id keeps its data and reports no cursor", () => {
 test("multi-line data fields are joined the way SSE specifies", () => {
   const decoder = new SseFrameDecoder();
   assert.deepEqual(decoder.push("data: one\ndata: two\n\n"), [{ data: "one\ntwo" }]);
+});
+
+test("a frame the server wrote badly does not end the stream", async () => {
+  // The run is still going on the server. One frame with an unreadable payload
+  // must not end the response: everything after it still arrives, and the
+  // stream ends the way it would have, on the terminal frame.
+  const client = new ApiClient("t");
+  const seen: Seen[] = [];
+  const skips: number[] = [];
+  let failure: unknown;
+  await withFetch(
+    () =>
+      Promise.resolve(
+        sseResponse([
+          'id: 1\ndata: {"type":"run.started","runId":"run-1","model":{"name":"m"},"settings":{}}\n\n',
+          // The server wrote a frame whose payload is not JSON at all.
+          'id: 2\ndata: {"type":"assistant.delta","delta":"cut\n\n',
+          'id: 3\ndata: {"type":"assistant.delta","delta":"after"}\n\n',
+          'id: 4\ndata: {"type":"run.status","status":"completed","run":{"id":"run-1","status":"completed"}}\n\n',
+        ]),
+      ),
+    async () => {
+      try {
+        await streamMessage(
+          client,
+          "session-1",
+          { content: "hi" },
+          (event, sequence) => {
+            seen.push({ event, sequence });
+          },
+          undefined,
+          { onSkippedFrames: (count) => skips.push(count) },
+        );
+      } catch (reason) {
+        failure = reason;
+      }
+    },
+  );
+  // A bad frame is not the stream's outcome.
+  assert.equal(failure, undefined);
+  // The frames after it still arrived, terminal one included.
+  assert.deepEqual(seen.map((entry) => entry.sequence), [1, 2, 3, 4]);
+  assert.equal(seen[0].event?.type, "run.started");
+  assert.equal(seen[2].event?.type, "assistant.delta");
+  assert.equal(seen[3].event?.type, "run.status");
+  // The unreadable frame is handed over as a cursor and nothing else. A
+  // reconnect asks for `?after=`, so a cursor left behind would fetch this
+  // same frame again, forever.
+  assert.equal(seen[1].event, null);
+  assert.equal(seen[1].sequence, 2);
+  // One notice for the whole stream, not one per frame.
+  assert.deepEqual(skips, [1]);
+});
+
+test("several unreadable frames are reported once, with the total", async () => {
+  const client = new ApiClient("t");
+  const seen: Seen[] = [];
+  const skips: number[] = [];
+  await withFetch(
+    () =>
+      Promise.resolve(
+        sseResponse([
+          'id: 1\ndata: {oops\n\n',
+          'id: 2\ndata: {oops\n\n',
+          'id: 3\ndata: {"type":"run.status","status":"completed","run":{"id":"run-1","status":"completed"}}\n\n',
+        ]),
+      ),
+    async () => {
+      await streamMessage(client, "session-1", { content: "hi" }, (event, sequence) => {
+        seen.push({ event, sequence });
+      }, undefined, { onSkippedFrames: (count) => skips.push(count) });
+    },
+  );
+  assert.deepEqual(seen.map((entry) => entry.sequence), [1, 2, 3]);
+  assert.deepEqual(skips, [2]);
+});
+
+test("a clean stream delivers every frame and says nothing about skips", async () => {
+  const client = new ApiClient("t");
+  const seen: Seen[] = [];
+  const skips: number[] = [];
+  await withFetch(
+    () =>
+      Promise.resolve(
+        sseResponse([
+          'id: 1\ndata: {"type":"assistant.delta","delta":"hello"}\n\n',
+          'id: 2\ndata: {"type":"run.status","status":"completed","run":{"id":"run-1","status":"completed"}}\n\n',
+        ]),
+      ),
+    async () => {
+      await streamMessage(client, "session-1", { content: "hi" }, (event, sequence) => {
+        seen.push({ event, sequence });
+      }, undefined, { onSkippedFrames: (count) => skips.push(count) });
+    },
+  );
+  assert.deepEqual(seen.map((entry) => entry.sequence), [1, 2]);
+  assert.equal(seen[0].event?.type, "assistant.delta");
+  assert.equal(seen[1].event?.type, "run.status");
+  assert.deepEqual(skips, []);
+});
+
+test("an exception from the event handler is not swallowed", async () => {
+  // A bug in the handler is this app's bug, not the server's bad frame: it has
+  // to reach the caller's error path rather than be counted as unreadable.
+  const client = new ApiClient("t");
+  const boom = new Error("handler failed");
+  const skips: number[] = [];
+  await withFetch(
+    () => Promise.resolve(sseResponse(['id: 1\ndata: {"type":"run.started","runId":"run-1","model":{"name":"m"},"settings":{}}\n\n'])),
+    async () => {
+      await assert.rejects(
+        streamMessage(client, "session-1", { content: "hi" }, () => {
+          throw boom;
+        }, undefined, { onSkippedFrames: (count) => skips.push(count) }),
+        (reason: unknown) => reason === boom,
+      );
+    },
+  );
+  assert.deepEqual(skips, []);
 });
 
 test("abort detection is by name, which is all fetch guarantees", () => {

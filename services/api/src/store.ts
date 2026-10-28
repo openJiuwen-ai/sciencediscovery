@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import type { ConfigurationSnapshot } from "./configuration/types.js";
+import type { SkillLibrary } from "@sciencediscovery/schema";
+import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
+import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -1785,6 +1790,138 @@ export class SessionStore {
     }
   }
 
+  private configurationSkillLibrarySource: () => SkillLibrary[] = () => [];
+
+  setConfigurationSkillLibrarySource(source: () => SkillLibrary[]): void { this.configurationSkillLibrarySource = source; }
+
+  /** Read-only catalog facts for scoped discovery, without collecting unrelated secrets or version hashes. */
+  configurationSkillResources(): { ids: string[]; libraries: SkillLibrary[]; selectionAvailable: boolean } {
+    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: !this.everySkillEverywhere };
+  }
+
+  private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
+
+  setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
+    this.configurationConnectorRevisionSource = source;
+  }
+
+  /** DEV-CFG-02: share the catalog connection with requests, receipts and outbox. */
+  getConfigurationDatabase(): DatabaseSync {
+    if (!this.database) throw new Error("Catalog database is not initialized");
+    return this.database;
+  }
+
+  /** No awaits or network calls inside the SQLite boundary. Domain and audit roll back together. */
+  async runConfigurationTransaction<T>(sessionId: string, action: () => T): Promise<T> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      const session = this.assertSessionWritable(sessionId);
+      const database = this.getConfigurationDatabase();
+      const previous = structuredClone(this.catalog);
+      const secretRows = () => this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all() as Array<{ model_id: string; encrypted_token: string }>;
+      const previousSecrets = secretRows();
+      const pluginRevisions = (secrets: typeof previousSecrets) => new Map(this.catalog.sessions.map(item => {
+        const settings = this.getSessionSettings(item.id).effective;
+        const modelIds = [settings.modelId, settings.reviewModelId].filter((id): id is string => Boolean(id));
+        return [item.id, canonicalConfiguration([settings, modelIds.map(id => {
+          const model = this.getModel(id);
+          return [model, this.getProvider(model?.providerId), secrets.filter(row => row.model_id === id || model?.providerId && row.model_id === providerSecretKey(model.providerId))];
+        })])];
+      }));
+      database.exec("BEGIN IMMEDIATE");
+      let result: T;
+      try {
+        result = action();
+        if (result && typeof (result as { then?: unknown }).then === "function") {
+          throw new Error("Configuration transactions must be synchronous");
+        }
+        database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
+          .run(JSON.stringify(this.catalog));
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        this.catalog = previous;
+        throw error;
+      }
+      const afterSecrets = secretRows();
+      if (canonicalConfiguration(previous) !== canonicalConfiguration(this.catalog) || canonicalConfiguration(previousSecrets) !== canonicalConfiguration(afterSecrets)) {
+        const committed = this.catalog;
+        let beforePlugins: Map<string, string>;
+        try { this.catalog = previous; beforePlugins = pluginRevisions(previousSecrets); }
+        finally { this.catalog = committed; }
+        for (const [affectedId, revision] of pluginRevisions(afterSecrets)) {
+          if (beforePlugins.get(affectedId) !== revision) {
+            const affected = this.getSession(affectedId);
+            if (affected) this.pluginControl?.changed(affected.projectId, affected.id);
+          }
+        }
+      }
+      return result;
+    });
+  }
+
+  configurationSnapshot(sessionId: string, capabilityId: ConfigurationCapabilityId, target: string): ConfigurationSnapshot {
+    const session = this.assertSessionWritable(sessionId);
+    const settings = this.getSessionSettings(sessionId);
+    const project = this.getProject(session.projectId)!;
+    const model = this.getModel(target);
+    const provider = this.getProvider(model?.providerId);
+    const version = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
+    // Ciphertext generations, never plaintext token hashes, invalidate old approvals.
+    const secretRows = this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all();
+    const resourceVersions = {
+      settings: version([this.catalog.globalSettings, project.settingsOverrides, session.settingsOverrides]),
+      models: version([this.catalog.models, this.catalog.providers]), credentials: version(secretRows),
+      connectors: version([...this.connectorIds].sort()), connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
+      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
+      autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
+      skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource(), this.everySkillEverywhere]),
+      reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
+    };
+    const timeoutSettings = this.getTimeoutSettings();
+    const quotaSettings = this.getQuotaSettings();
+    const ideaTreeSettings = this.getIdeaTreeSettings();
+    let systemVersions: Record<string, string> | undefined;
+    if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
+    else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
+    else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    return {
+      projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
+      // A connector grant does not alter a model, credential, Skill or Reviewer.
+      // Binding those unrelated records made a harmless standalone-model to
+      // Provider grouping migration invalidate an already committed run overlay.
+      resourceVersions: systemVersions ?? (capabilityId === "connector.enable" ? {
+        settings: resourceVersions.settings, connectors: resourceVersions.connectors,
+        connectorCatalog: resourceVersions.connectorCatalog, policies: resourceVersions.policies,
+        autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
+      } : resourceVersions),
+      data: {
+        capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
+        model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
+        tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
+        installedConnectorIds: [...this.connectorIds], inheritedConnectorIds: [...this.getProjectSettings(project.id).effective.enabledConnectorIds],
+        sources: structuredClone(settings.sources),
+        projectOverrides: structuredClone(project.settingsOverrides),
+        projectEffective: structuredClone(this.getProjectSettings(project.id).effective),
+        installedSkillIds: [...this.skillIds].sort(),
+        skillLibraries: structuredClone(this.configurationSkillLibrarySource()),
+        skillSelectionAvailable: !this.everySkillEverywhere,
+        effectiveModel: structuredClone(this.getModel(settings.effective.modelId)),
+        sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
+        reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
+        timeoutSettings, quotaSettings, ideaTreeSettings,
+      },
+    };
+  }
+
+  configurationSecretCipher(): { encrypt(id: string, secret: string): string; decrypt(id: string, ciphertext: string): string } {
+    return {
+      encrypt: (id, secret) => this.encryptModelApiToken(id, secret),
+      decrypt: (id, ciphertext) => this.decryptModelApiToken(id, ciphertext),
+    };
+  }
+
   getGlobalSettings(): RuntimeSettingsDetails {
     return {
       overrides: structuredClone(this.catalog.globalSettings),
@@ -1839,6 +1976,81 @@ export class SessionStore {
     }
     await this.saveCatalog();
     return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
+  }
+
+  /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
+  applySystemConfigurationSync(capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    if (capabilityId === "timeouts.configure") this.catalog.timeoutSettings = normalizeTimeoutSettings({ ...this.getTimeoutSettings(), ...values });
+    else if (capabilityId === "quotas.configure") this.catalog.quotaSettings = normalizeQuotaSettings({ ...this.getQuotaSettings(), ...values });
+    else if (capabilityId === "idea_tree.configure") this.catalog.ideaTreeSettings = normalizeIdeaTreeSettings(values as Parameters<typeof normalizeIdeaTreeSettings>[0], this.getIdeaTreeSettings());
+    else throw new Error("Unsupported system configuration");
+  }
+
+  /** The same formal runtime settings and reviewer state as the settings pages, in the shared audit transaction. */
+  applyP1ConfigurationSync(sessionId: string, capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues, scope: ConfigurationScope): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    const project = this.getProject(session.projectId)!;
+    if (scope.kind === "global" || scope.kind === "project" && (capabilityId !== "skill.select" || scope.id !== project.id)
+      || scope.kind === "session" && scope.id !== sessionId) throw new Error("Unsupported P1 scope");
+    const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const patch: RuntimeSettingsOverrides = {};
+    if (capabilityId === "skill.select") {
+      if (this.everySkillEverywhere) throw new Error("SKILL_SELECTION_UNAVAILABLE");
+      if (values.skillSelectionMode !== undefined) patch.skillSelectionMode = values.skillSelectionMode as SkillSelectionMode;
+      if (values.enabledSkillIds !== undefined) patch.enabledSkillIds = [...values.enabledSkillIds as string[]];
+      if (values.enabledSkillLibraryIds !== undefined) {
+        const libraries = this.configurationSkillLibrarySource();
+        const effectiveLibraries = (scope.kind === "project" ? this.getProjectSettings(project.id) : this.getSessionSettings(sessionId)).effective.enabledSkillLibraries;
+        patch.enabledSkillLibraries = (values.enabledSkillLibraryIds as string[]).map(id => {
+          const library = libraries.find(item => item.id === id);
+          if (!library?.headVersionId) throw new Error("SKILL_LIBRARY_UNAVAILABLE");
+          // Pin exactly the approved head. Preserve other selected library properties.
+          const previous = effectiveLibraries.find(item => item.libraryId === id);
+          return previous ?? { libraryId: id, versionId: library.headVersionId };
+        });
+      }
+    } else if (capabilityId === "thinking.configure") {
+      const effective = this.getSessionSettings(sessionId).effective;
+      const model = this.getModel(effective.modelId);
+      if (!model) throw new Error("MODEL_NOT_SELECTED");
+      const constrained = constrainCatalogThinking(model.model, values.thinkingMode as ModelThinkingMode | undefined,
+        values.thinkingEffort as ModelThinkingEffort | undefined, model.facts);
+      if (values.thinkingMode !== undefined) {
+        if (constrained.mode !== values.thinkingMode) throw new Error("THINKING_MODE_UNSUPPORTED");
+        patch.thinkingMode = constrained.mode;
+      }
+      if (values.thinkingEffort !== undefined) {
+        if (constrained.effort !== values.thinkingEffort) throw new Error("THINKING_EFFORT_UNSUPPORTED");
+        patch.thinkingEffort = constrained.effort;
+      }
+    } else if (capabilityId === "review.configure") {
+      if (values.reviewModelId !== undefined) patch.reviewModelId = String(values.reviewModelId);
+      if (values.semanticReviewEnabled !== undefined) patch.semanticReviewEnabled = values.semanticReviewEnabled as boolean;
+      const reviewer = this.getSessionReviewerSpecialistSettings(sessionId);
+      this.applySessionReviewerSpecialistSettingsSync(sessionId, {
+        automaticReviewEnabled: values.automaticReviewEnabled ?? reviewer.automaticReviewEnabled,
+        level: values.level ?? reviewer.level,
+      });
+    } else throw new Error("Unsupported P1 capability");
+    const next = this.normalizeSettings({ ...current, ...patch });
+    if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
+    else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
+    session.updatedAt = new Date().toISOString();
+  }
+
+  private applySessionReviewerSpecialistSettingsSync(sessionId: string, value: unknown): void {
+    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
+      throw new Error("Reviewer Specialist automatic review must be a boolean");
+    }
+    if (!isReviewerSpecialistLevel(value.level)) {
+      throw new Error("Reviewer Specialist level must be quick or deep");
+    }
+    const session = this.assertSessionWritable(sessionId);
+    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
+    session.reviewerSpecialistLevel = value.level;
+    session.updatedAt = new Date().toISOString();
   }
 
   getTimeoutSettings(): SystemTimeoutSettings {
@@ -1901,16 +2113,7 @@ export class SessionStore {
     sessionId: string,
     value: unknown,
   ): Promise<SessionReviewerSpecialistSettings> {
-    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
-      throw new Error("Reviewer Specialist automatic review must be a boolean");
-    }
-    if (!isReviewerSpecialistLevel(value.level)) {
-      throw new Error("Reviewer Specialist level must be quick or deep");
-    }
-    const session = this.assertSessionWritable(sessionId);
-    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
-    session.reviewerSpecialistLevel = value.level;
-    session.updatedAt = new Date().toISOString();
+    this.applySessionReviewerSpecialistSettingsSync(sessionId, value);
     await this.saveCatalog();
     return this.getSessionReviewerSpecialistSettings(sessionId);
   }
@@ -5163,6 +5366,7 @@ export class SessionStore {
         settingsSnapshot: {
           ...structuredClone(input.settingsSnapshot),
           ideaTreeEnabled: input.settingsSnapshot.ideaTreeEnabled === true,
+          sessionReviewer: structuredClone(input.settingsSnapshot.sessionReviewer ?? this.getSessionReviewerSpecialistSettings(input.sessionId)),
         },
         ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),

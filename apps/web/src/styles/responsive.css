@@ -37,6 +37,7 @@
   /* The drawer toggle floats over the top-left corner of the main area, so
      the bars and pages beneath it make room for it. */
   .session-bar { padding-left: 58px; }
+  .compute-notice { padding-left: 58px; }
   .archived-banner { padding-left: 58px; }
   .usage-page { padding-top: 60px; }
 }
@@ -55,7 +56,10 @@
   .workflow-controls > label { grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); }
   .workspace-resizer, .composer-hint { display: none; }
   .session-bar { padding: 6px 14px 6px 58px; }
-  .session-bar .connection { display: none; }
+  /* A compute notice reduces the available height. Keep the conversation
+     usable and let the workspace follow it in the same scroll region. */
+  .main-area:has(.compute-notice) .content-grid { overflow-y: auto; }
+  .main-area:has(.compute-notice) .conversation { flex: 0 0 auto; min-height: 100%; }
   .conversation { --conversation-padding-inline: 22px; }
   .messages { padding-block: 26px; }
   .result-preview { width: 100%; margin-left: 0; }

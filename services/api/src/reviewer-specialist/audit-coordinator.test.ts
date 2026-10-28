@@ -680,7 +680,7 @@ test("the Deep cooldown is applied once to the next automatic batch", async (con
 });
 
 
-test("automatic review exposes a disabled capability instead of silently omitting verification", async (context) => {
+test("automatic review records a visible skipped checkpoint when globally disabled", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-disabled-${Date.now()}-${process.pid}`);
   context.after(() => removeDataDir(dataDir));
   const store = new SessionStore(dataDir);
@@ -699,11 +699,15 @@ test("automatic review exposes a disabled capability instead of silently omittin
   });
   assert.ok(task);
   await waitFor(async () => (await store.getSessionDetail(session.id))?.messages
-    .some((message) => message.id === task.checkpointMessageId && message.reviewerCheckpoint?.status === "failed") ?? false);
+    .some((message) => message.id === task.checkpointMessageId && message.reviewerCheckpoint?.status === "completed") ?? false);
   const checkpoint = (await store.getSessionDetail(session.id))!.messages.find((message) => message.id === task.checkpointMessageId)!;
-  assert.match(checkpoint.reviewerCheckpoint!.error!, /Automatic review skipped: Reviewer Specialist is off/);
+  assert.equal(checkpoint.reviewerCheckpoint!.error, undefined);
+  assert.match(checkpoint.content, /Automatic review skipped: Reviewer Specialist is off/);
   assert.equal(executions, 0);
-  assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.status, "failed");
+  const settled = (await store.listReviewerAuditTasks(session.id))[0];
+  assert.ok(settled);
+  assert.equal(settled.status, "superseded");
+  assert.equal(settled.errorSummary, checkpoint.content);
   assert.deepEqual(await store.listReviewFeedback(session.id), []);
   await store.updateSessionReviewerSpecialistSettings(session.id, { automaticReviewEnabled: false, level: "quick" });
   assert.equal(await coordinator.enqueueArtifactVersion({

@@ -79,15 +79,21 @@ const STREAMED_ELSEWHERE: ReadonlySet<string> = new Set(["tool.output"]);
  * Pure and incremental on purpose: the same function rebuilds a finished run
  * from `?after=0`, folds a live `POST /messages` response and extends a
  * reconnect, so there is exactly one interpretation of the stream.
+ *
+ * A `null` event is a frame the stream could not read: there is nothing to
+ * fold, but the cursor it carried still moves — a reconnect asks for
+ * `?after=`, and without that the same unreadable frame would be fetched
+ * again, forever.
  */
 export function reduceRunStream(
   state: RunStreamState,
-  event: RunStreamEvent,
+  event: RunStreamEvent | null,
   sequence?: number,
 ): RunStreamState {
   const advanced = sequence === undefined
     ? state
     : { ...state, lastSequence: Math.max(state.lastSequence ?? 0, sequence) };
+  if (event === null) return advanced;
 
   switch (event.type) {
     case "run.queued":

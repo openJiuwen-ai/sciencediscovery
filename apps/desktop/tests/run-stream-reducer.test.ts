@@ -401,6 +401,18 @@ test("the replay cursor only ever moves forward", () => {
   assert.equal(backward.lastSequence, 5);
 });
 
+test("a frame that could not be read still moves the cursor", () => {
+  // The stream could not parse the frame, so there is no event to fold — but
+  // the frame carried an id, and a reconnect asks for `?after=`. Leaving the
+  // cursor where it was would fetch the same unreadable frame again, forever.
+  const state = reduceRunStream(emptyRunStream(), null, 4);
+  assert.equal(state.lastSequence, 4);
+  assert.deepEqual(state.turns, []);
+  assert.equal(state.unknownEvents, 0);
+  // A frame with no id has no cursor to move.
+  assert.equal(reduceRunStream(emptyRunStream(), null).lastSequence, undefined);
+});
+
 test("hasVisibleAnswer separates a real answer from thinking alone", () => {
   const thinkingOnly = fold([
     { content: "weighing options", turn: 1, type: "assistant.thinking.snapshot" } as RunStreamEvent,

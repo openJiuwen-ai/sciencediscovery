@@ -168,6 +168,11 @@ export const EN: Text = {
       `${count} earlier ${count === 1 ? "event" : "events"} could not be replayed; the recoverable part is below.`,
     unknownEvents: (count: number) =>
       `Skipped ${count} ${count === 1 ? "event" : "events"} this version does not recognise.`,
+    /** Updates the live run sent that could not be read. The run carried on
+     *  without them, so the turn may be missing a part. Deliberately plain
+     *  language: no protocol or format names reach the user. */
+    malformedFrames: (count: number) =>
+      `Skipped ${count} ${count === 1 ? "update" : "updates"} that could not be read.`,
     streamEnded: "The connection ended and the run's state is unknown. Reload to fetch it again.",
     emptyTurn: "This turn produced no text.",
     toolCall: "Tool call",

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { DiagnosticIds } from "@sciencediscovery/operational-logging/diagnostics";
+import { errorDiagnosticIds } from "./error-diagnostics.js";
+import { ErrorDiagnosticActions } from "./ErrorDiagnosticActions.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AlertCircleIcon, CheckIcon, CloseIcon, InfoIcon } from "./icons.js";
@@ -21,6 +24,7 @@ export type ToastTone = "error" | "info" | "success";
 
 export interface Toast {
   detail?: string;
+  diagnostics?: DiagnosticIds;
   technicalDetail?: string;
   id: number;
   title: string;
@@ -79,10 +83,11 @@ export function useToasts() {
     setToasts((current) => removeToastFromQueue(current, id));
   }, []);
 
-  const push = useCallback((tone: ToastTone, title: string, detail?: string, technicalDetail?: string) => {
+  const push = useCallback((tone: ToastTone, title: string, detail?: string, technicalDetail?: string, ids?: DiagnosticIds) => {
     const id = nextToastId.current;
     nextToastId.current += 1;
-    setToasts((current) => addToastToQueue(current, { detail, id, title, tone, technicalDetail }));
+    const diagnostics = { ...(ids ?? errorDiagnosticIds(technicalDetail || detail || "")) };
+    setToasts((current) => addToastToQueue(current, { detail, diagnostics, id, title, tone, technicalDetail }));
     const timeout = toastAutoDismissDelay(tone);
     if (timeout !== undefined) timers.current.set(id, window.setTimeout(() => dismiss(id), timeout));
   }, [dismiss]);
@@ -125,6 +130,7 @@ export function ToastViewport({
               <summary>{t("runFailure.technicalDetails")}</summary>
               <pre>{toast.technicalDetail}</pre>
             </details> : null}
+            {toast.tone === "error" ? <ErrorDiagnosticActions title={toast.title} detail={[toast.detail, toast.technicalDetail].filter(Boolean).join("\n\n")} ids={toast.diagnostics} /> : null}
           </div>
           <button aria-label={t("common.dismiss")} className="icon-button" onClick={() => onDismiss(toast.id)} title={t("common.dismiss")} type="button"><CloseIcon size={13} /></button>
         </div>

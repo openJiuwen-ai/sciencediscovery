@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readdir, readFile, readlink, rm, type FileHandle } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export type Pool = "data" | "agent-state";
@@ -50,7 +50,9 @@ export function assertRef(ref: ObjectRef, pool?: Pool): void {
 }
 
 async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY);
+  // Windows FlushFileBuffers requires a writable handle, including for a directory.
+  const access = process.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY;
+  const handle = await open(path, access | constants.O_DIRECTORY);
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
@@ -364,7 +366,7 @@ export class RefStore {
 
   static async open(store: VersionStore): Promise<RefStore> {
     await store.initialize();
-    const db = new DatabaseSync(resolve(store.dataDir, "versioning", "refs.sqlite"));
+    const db = new DatabaseSync(toNamespacedPath(resolve(store.dataDir, "versioning", "refs.sqlite")));
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS live_refs (name TEXT PRIMARY KEY, target TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, target TEXT NOT NULL);

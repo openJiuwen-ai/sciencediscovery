@@ -380,6 +380,8 @@ export interface ReviewCheckpointResult {
 
 /** A durable, independently cancellable Reviewer Specialist work item. */
 export interface ReviewerAuditTask {
+  /** Exact artifact producing root Run. Automatic reviews use its frozen preferences; no timestamp inference. */
+  sourceRunId?: string;
   artifactVersionIds: string[];
   /** The visible checkpoint card associated with this work item. Automatic
    * batches publish it only when the quiet window closes. */

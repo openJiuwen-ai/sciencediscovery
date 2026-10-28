@@ -91,6 +91,7 @@ export interface AgentRunResult {
   finalMessages: AgentHistoryMessage[];
   purpose: AgentRunPurpose;
   requestExecutionId: string;
+  suspended?: boolean;
 }
 
 export interface MainAgentProfileInput {
