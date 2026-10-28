@@ -9,7 +9,7 @@ import { readdir, readFile } from "node:fs/promises";
 async function findSkillRoots(root: URL): Promise<URL[]> {
   const roots: URL[] = [];
   for (const entry of await readdir(root, { withFileTypes: true })) {
-    if ([".git", "node_modules"].includes(entry.name)) continue;
+    if ([".git", ".sciencediscovery-data", ".tmp", "node_modules"].includes(entry.name)) continue;
     if (entry.isDirectory()) {
       roots.push(...await findSkillRoots(new URL(`${entry.name}/`, root)));
     } else if (entry.name === "SKILL.md") {
