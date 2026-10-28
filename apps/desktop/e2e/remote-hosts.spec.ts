@@ -321,7 +321,7 @@ test.describe("连接", () => {
 });
 
 test.describe("凭据", () => {
-  test("explicit forgetting clears stored credentials and a later password can be saved", async ({ page }) => {
+  test("explicit forgetting clears stored credentials and a later password can be saved", async ({ page }, testInfo) => {
     const mock = await installMockApi(page, { runners: [runner({ hasPassword: true, hasPrivateKey: true })] });
     const dialog = await openRemote(page);
     const machine = card(dialog, "gpu-01");
@@ -336,6 +336,13 @@ test.describe("凭据", () => {
       await machine.getByRole("button", { name: "登录凭据" }).click();
       await machine.getByRole("checkbox", { name: "忘记已存的密码、私钥和口令" }).check();
       await expect(machine.getByLabel("登录密码")).toBeDisabled();
+      for (const width of [390, 1280]) {
+        await page.setViewportSize({ width, height: 844 });
+        const forget = machine.getByRole("checkbox", { name: "忘记已存的密码、私钥和口令" });
+        await forget.scrollIntoViewIfNeeded();
+        await expect(forget).toBeInViewport();
+        await page.screenshot({ path: testInfo.outputPath(`forget-credentials-${width}.png`) });
+      }
       await machine.getByRole("button", { name: "保存并测试" }).click();
       await expect(machine.locator(".connect-log")).toHaveCount(0);
       expect(calls(mock, "PUT", "/api/remote-hosts/runner-1/credentials")[1]).toEqual({ password: null, privateKeyPath: null, passphrase: null });
