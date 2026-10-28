@@ -93,6 +93,7 @@ test("loads legacy managed Skills without descriptions but rejects new packages 
     const packagePath = resolve(dataDir, "skills", "legacy-description-skill", "revisions", "1", "package", "SKILL.md");
     const legacy = await readFile(packagePath, "utf8");
     await writeFile(packagePath, legacy.replace(/^description:.*\n/mu, ""));
+    await rm(resolve(dataDir, "skills", "legacy-description-skill", "revisions", "1", "revision.json"));
 
     const reloaded = new SkillCatalog(dataDir, repositoryRoot);
     await reloaded.load();
