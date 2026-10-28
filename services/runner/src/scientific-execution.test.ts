@@ -16,7 +16,8 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
 
@@ -36,6 +37,30 @@ import { KernelManager } from "./kernel-manager.js";
 
 const execFileAsync = promisify(execFile);
 const BWRAP_PATH = process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap";
+
+test("redirected Python logs are readable before the shell process exits", async (context) => {
+  const { dataDir, store, workspaceRoot } = await fixture(context);
+  const runtime = store.resolveRuntime("rev-python", "python");
+  const execution = executeShell({ bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 20_000, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 0 }, {
+    agentId: "main", executionId: "unbuffered-log", permissionEpoch: epoch(), workspaceRoot,
+    code: "python - <<'PY' > progress.log\nimport pathlib, time\nprint('progress before exit')\npathlib.Path('started').write_text('ready')\nwhile not pathlib.Path('release').exists():\n time.sleep(0.01)\nPY",
+  }, undefined, undefined, undefined, runtime);
+  let duringExecution = "";
+  try {
+    let started = false;
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      started = await readFile(resolve(workspaceRoot, "started"), "utf8").then(() => true, () => false);
+      if (started) break;
+      await delay(20);
+    }
+    assert.equal(started, true, "the Python process reached its wait point");
+    duringExecution = await readFile(resolve(workspaceRoot, "progress.log"), "utf8");
+  } finally {
+    await writeFile(resolve(workspaceRoot, "release"), "continue");
+    assert.equal((await execution).exitCode, 0);
+  }
+  assert.equal(duringExecution, "progress before exit\n");
+});
 
 test("managed Shell runs Python modules/files with a fresh process, relative cwd, and read-only prefix", async (context) => {
   const { dataDir, store, workspaceRoot, prefix } = await fixture(context);
