@@ -245,7 +245,11 @@ export function uploadWorkspaceFiles(
   conflict: WorkspaceConflictPolicy = "rename",
 ): Promise<WorkspaceUploadResult> {
   const body = new FormData();
-  for (const file of files) body.append("files", file, file.name);
+  for (const file of files) {
+    const name = file.name.split(/[/\\]/u).at(-1);
+    if (!name || name === "." || name === "..") throw new Error("Choose a file with a valid name.");
+    body.append("files", file, name);
+  }
   return client.request<WorkspaceUploadResult>(
     `/api/sessions/${encodeURIComponent(sessionId)}/workspace/upload?conflict=${conflict}`,
     { body, method: "POST" },

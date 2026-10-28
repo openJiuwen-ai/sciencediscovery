@@ -102,6 +102,23 @@ test("a file dragged over the window is announced, and dropping it uploads it", 
   expect(mock.state.files.map((file) => (file as { path: string }).path)).toEqual(["dropped.csv"]);
 });
 
+test("a dropped file with path segments uploads only its basename", async ({ page }) => {
+  const mock = await installMockApi(page, { sessions: [makeSession()] });
+  await test.step("1. Open the conversation workspace", async () => {
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "上传文件" })).toBeVisible();
+  });
+  await test.step("2. Drop a file whose name contains parent path segments", async () => {
+    const dragged = await transfer(page, "../outside.csv");
+    await page.dispatchEvent("body", "dragenter", { dataTransfer: dragged });
+    await page.dispatchEvent("body", "drop", { dataTransfer: dragged });
+  });
+  await test.step("3. Confirm the uploaded workspace path is a basename", async () => {
+    await expect(page.getByText("已上传 outside.csv", { exact: false })).toBeVisible();
+    expect(mock.state.files.map((file) => (file as { path: string }).path)).toEqual(["outside.csv"]);
+  });
+});
+
 test("an archived session refuses the drop and says why", async ({ page }) => {
   const mock = await installMockApi(page, {
     sessions: [makeSession({ archivedAt: "2026-10-02T00:00:00.000Z" })],
