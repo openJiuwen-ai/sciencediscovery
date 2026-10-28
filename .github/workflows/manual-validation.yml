@@ -1,9 +1,12 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-# Run the real E2E slice of the existing cumulative L5 profile.
-# Keep manual validation separate from regular CI cancellation. A newer
-# manual validation at the same ref still replaces the previous manual run.
+# Run L3+L4+L5 real E2E using the existing cumulative l5 profile.
+# The complete BiomniBench-DA public-50 corpus and its metrics gate are required.
+# This uses shared real-model/judge credentials and may take hours; duration
+# depends on case/model latency and the selected worker limit.
+# Regular CI cannot cancel this workflow. A newer manual validation at the
+# same ref cancels the previous manual run, including any unfinished work.
 name: Manual validation
 
 run-name: "Manual validation · ${{ github.ref_name }} · l5 · parallel=${{ inputs.max-parallel }}"
@@ -31,10 +34,10 @@ permissions:
 
 jobs:
   validate:
-    name: Validate L5 real E2E
+    name: Validate L3-L5 real E2E
     uses: ./.github/workflows/real-e2e.yml
     secrets: inherit
     with:
-      profile: l5
+      profile: l5 # Cumulative L3+L4+L5 real slice; full Biomni public-50 required.
       backend: ${{ inputs.backend }}
       max-parallel: ${{ fromJSON(inputs.max-parallel) }}
