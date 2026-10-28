@@ -12,32 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { expect } from "@playwright/test";
 import type { PaperAcquisition } from "../packages/schema/src/index.js";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession, type JourneyFixture } from "./helpers/journeys.ts";
 
-// A self-contained, valid PDF whose scientific content must survive real extraction.
-function experimentPdf(): Buffer {
-  const text = "BT /F1 12 Tf 40 240 Td (Protocol: 25 C; three replicates; time in seconds.) Tj 0 -20 Td (Rate constant: 0.125 per second.) Tj ET";
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    `<< /Length ${Buffer.byteLength(text)} >>\nstream\n${text}\nendstream`,
-  ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (const [index, object] of objects.entries()) {
-    offsets.push(Buffer.byteLength(pdf));
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  }
-  const xref = Buffer.byteLength(pdf);
-  pdf += `xref\n0 ${offsets.length}\n0000000000 65535 f \n`;
-  pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
-  return Buffer.from(`${pdf}trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+// Use the same PDF generator as the paper-upload integration tests.
+async function experimentPdf(): Promise<Buffer> {
+  const dataDir = process.env.SCIENCE_DISCOVERY_DATA_DIR || process.env.SCIENCE_AGENT_DATA_DIR;
+  const python = process.env.SCIENCE_AGENT_PAPER_PYTHON_PATH
+    || (dataDir ? resolve(dataDir, "envs/paper/bin/python") : fileURLToPath(new URL("../services/paper/.venv/bin/python", import.meta.url)));
+  const { stdout } = await promisify(execFile)(python, ["-c", [
+    "import sys",
+    "from reportlab.pdfgen import canvas",
+    "pdf = canvas.Canvas(sys.stdout.buffer, pagesize=(500, 300))",
+    "pdf.drawString(40, 240, 'Protocol: 25 C; three replicates; time in seconds.')",
+    "pdf.drawString(40, 220, 'Rate constant: 0.125 per second.')",
+    "pdf.save()",
+  ].join("\n")], { encoding: "buffer" });
+  return stdout;
 }
 
 test.describe("Workspace paper intake", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock"] }, () => {
@@ -50,13 +48,13 @@ test.describe("Workspace paper intake", { tag: ["@isolation:session", "@category
    *   2. Open the extracted text in the workspace Markdown reader.
    *   3. Open the CSV in its existing table viewer.
    *   4. Use the file picker to upload an invalid PDF, a MIME-identified PDF and another CSV; confirm partial failure and continued parsing.
-   * Environment: Isolated local Web/API with the real local paper worker; no agent Run required.
+   * Environment: Isolated local Web/API with the real local paper worker and its existing ReportLab test dependency; no agent Run required.
    * Type: mocked
    * LLM: none
    * WebSearch: none
    * PaperSources: locally generated PDF; real pdfplumber extraction, no remote paper source.
    * MCP: none
-   * OtherExternal: none; non-local browser traffic is blocked.
+   * OtherExternal: none; ReportLab generates the local fixture and non-local browser traffic is blocked.
    * Credentials: E2E_API_TOKEN for the isolated local API.
    * CostSideEffects: no external cost; temporary Project, Session and uploads are deleted in finally.
    */
@@ -89,7 +87,7 @@ test.describe("Workspace paper intake", { tag: ["@isolation:session", "@category
           data.items.add(new File([Uint8Array.from(pdf)], "experiment_notes.PDF", { type: "application/octet-stream" }));
           data.items.add(new File(["time_s,value\n0,1\n1,0.88\n"], "measurements.csv", { type: "text/csv" }));
           return data;
-        }, { pdf: [...experimentPdf()] });
+        }, { pdf: [...await experimentPdf()] });
         await drop.dispatchEvent("drop", { dataTransfer });
         await dataTransfer.dispose();
         await expect.poll(async () => (await papers()).length).toBe(1);
@@ -122,7 +120,7 @@ test.describe("Workspace paper intake", { tag: ["@isolation:session", "@category
         await page.keyboard.press("Escape");
         await page.locator("aside.workspace-panel label.drop-zone input[type=file]").setInputFiles([
           { buffer: Buffer.from("invalid pdf"), mimeType: "application/pdf", name: "broken.pdf" },
-          { buffer: experimentPdf(), mimeType: "application/pdf", name: "protocol" },
+          { buffer: await experimentPdf(), mimeType: "application/pdf", name: "protocol" },
           { buffer: Buffer.from("sample,value\nA,3\n"), mimeType: "text/csv", name: "additional.csv" },
         ]);
         await expect.poll(async () => (await papers()).length).toBe(2);

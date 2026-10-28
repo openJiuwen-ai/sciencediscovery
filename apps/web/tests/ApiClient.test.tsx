@@ -27,15 +27,16 @@ test("Drop files routes PDFs by MIME type or extension to paper intake and keeps
   globalThis.fetch = async (input, init) => {
     const url = String(input);
     calls.push(url);
-    assert.equal((init?.headers as Record<string, string>).authorization, "Bearer test-token");
+    assert.ok(init);
+    assert.equal((init.headers as Record<string, string>).authorization, "Bearer test-token");
     if (url.includes("/workspace/upload?")) {
-      assert.deepEqual((init!.body as FormData).getAll("files").map((file) => (file as File).name), [csv.name]);
+      assert.deepEqual((init.body as FormData).getAll("files").map((file) => (file as File).name), [csv.name]);
       return Response.json({ errors: [], files: [], uploaded: [{ originalName: csv.name, path: csv.name, status: "created" }] });
     }
     if (url.includes("/papers/upload?")) {
-      const file = init!.body as File;
+      const file = init.body as File;
       assert.ok(pdfs.includes(file));
-      assert.equal((init!.headers as Record<string, string>)["content-type"], "application/pdf");
+      assert.equal((init.headers as Record<string, string>)["content-type"], "application/pdf");
       return Response.json({ pdfPath: `papers/${file.name}/source.pdf` });
     }
     assert.equal(url, "/api/sessions/session%2Fa/files");
