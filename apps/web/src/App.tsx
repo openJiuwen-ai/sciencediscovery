@@ -4127,7 +4127,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // A new session is stored as UNTITLED_SESSION_TITLE until it is named. Multiple
   // such sessions receive display-only ordinals without changing that sentinel.
   const sessionTitle = (
-    item: Pick<Session, "createdAt" | "id" | "title">,
+    item: Pick<Session, "updatedAt" | "id" | "title">,
     candidates = artifactSessions,
   ) => sessionDisplayTitle(item, candidates, t("app.untitledSession"));
   const activeSessionLabel = session

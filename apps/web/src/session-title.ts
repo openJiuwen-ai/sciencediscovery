@@ -14,12 +14,12 @@
 
 import { UNTITLED_SESSION_TITLE, type Session } from "@sciencediscovery/schema";
 
-type SessionTitleEntry = Pick<Session, "createdAt" | "id" | "title">;
+type SessionTitleEntry = Pick<Session, "updatedAt" | "id" | "title">;
 
 /**
- * Gives otherwise identical default Session titles a stable, display-only
- * ordinal within the Project. The persisted sentinel stays intact so the
- * first-message title refinement can still recognize a new Session.
+ * Gives otherwise identical default Session titles a display-only ordinal
+ * by recent activity across the Project, including archived Sessions. The
+ * persisted sentinel stays intact so first-message title refinement still works.
  */
 export function sessionDisplayTitle(
   session: SessionTitleEntry,
@@ -29,7 +29,7 @@ export function sessionDisplayTitle(
   if (session.title !== UNTITLED_SESSION_TITLE) return session.title;
   const untitledSessions = sessions
     .filter((item) => item.title === UNTITLED_SESSION_TITLE)
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
   if (untitledSessions.length <= 1) return untitledSessionLabel;
   const index = untitledSessions.findIndex((item) => item.id === session.id);
   return index < 0 ? untitledSessionLabel : `${untitledSessionLabel} ${index + 1}`;

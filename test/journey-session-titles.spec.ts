@@ -8,6 +8,65 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedMo
 test.describe("journey-session-titles.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
   /**
    * E2E-META
+   * Purpose: Keep unnamed Session ordinals Project-wide and ordered by recent activity across active and archived views.
+   * Steps:
+   *   1. Create three unnamed Sessions, archive one, and update the oldest.
+   *   2. Read descending-activity ordinals across the full Project.
+   *   3. Switch active/archived views and reload without renumbering the subset.
+   * Environment: Isolated current-worktree API/Web at E2E_BASE_URL.
+   * Type: mocked
+   * LLM: Local scripted model registered for fixture setup; no generation requested.
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none
+   * Credentials: E2E_API_TOKEN for the isolated stack.
+   * CostSideEffects: Temporary Project, Sessions and model removed in finally; no external cost.
+   */
+  test("Unnamed Session ordinals follow Project-wide recent activity across filters", { tag: "@mocked" }, async ({ page, journey }) => {
+    await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "en"));
+    journey.scenario({ goal: "Identify unnamed conversations consistently across Project filters.", preconditions: ["Isolated stack is running"] });
+    const stub = await scriptedModel([{ text: "Unused." }]);
+    let fixture: JourneyFixture | undefined;
+    try {
+      fixture = await createProjectAndSession(page, { projectName: `Project ordinals ${Date.now()}`, sessionTitle: "Untitled session", model: { ...stub, name: `Ordinal model ${Date.now()}` } });
+      const headers = authorizationHeader();
+      let archivedId = "";
+      await journey.step("1. Prepare recent activity and one archived conversation", "The oldest conversation becomes most recently updated without changing its stored sentinel.", async () => {
+        const create = async () => {
+          const response = await page.request.post(`${apiBaseUrl()}/api/projects/${fixture!.project.id}/sessions`, { headers, data: { title: "Untitled session", modelId: fixture!.model!.id } });
+          expect(response.ok()).toBeTruthy();
+          return (await response.json()).id as string;
+        };
+        archivedId = await create();
+        await create();
+        expect((await page.request.post(`${apiBaseUrl()}/api/sessions/${archivedId}/archive`, { headers })).ok()).toBeTruthy();
+        expect((await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}`, { headers, data: { title: "Untitled session" } })).ok()).toBeTruthy();
+      });
+      const sidebar = page.locator("#sessions-panel-content button.nav-item > span[title]");
+      const url = `/projects/${fixture.project.id}/sessions/${fixture.session.id}`;
+      await journey.step("2. Read all Project conversations by recent activity", "All conversations show ordinals 1, 2 and 3 in updated order.", async () => {
+        await page.goto(`${url}?filter=all`);
+        await expect(sidebar).toHaveText(["Untitled session 1", "Untitled session 2 · Archived", "Untitled session 3"]);
+        await expect(page.getByRole("heading", { name: "Untitled session 1", exact: true })).toBeVisible();
+      });
+      await journey.step("3. Read the active subset", "The archived ordinal is retained; the active list shows 1 and 3.", async () => {
+        await page.goto(url);
+        await expect(sidebar).toHaveText(["Untitled session 1", "Untitled session 3"]);
+      });
+      await journey.step("4. Read the archived subset and reload", "The archived conversation stays ordinal 2 rather than restarting at 1.", async () => {
+        await page.goto(`/projects/${fixture!.project.id}/sessions/${archivedId}?filter=archived`);
+        await expect(sidebar).toHaveText(["Untitled session 2 · Archived"]);
+        await page.reload();
+        await expect(sidebar).toHaveText(["Untitled session 2 · Archived"]);
+      });
+    } finally {
+      try { if (fixture) await cleanupJourney(page, fixture); } finally { await stub.stop(); }
+    }
+  });
+
+  /**
+   * E2E-META
    * Purpose: Read complete Chinese and English automatic titles after long first messages without reasoning leaks or stored ellipses.
    * Steps:
    *   1. Send a long first message to an untitled Session using a local naming model.
