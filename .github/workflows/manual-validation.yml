@@ -1,0 +1,41 @@
+# Copyright (C) 2026 Huawei Technologies Co., Ltd
+# SPDX-License-Identifier: Apache-2.0
+
+# Run the existing cumulative CI policy through a separate manual entry point.
+# ci.yml keys concurrency on the caller's name and ref, so regular CI cannot
+# cancel this run. A newer manual validation at the same ref still replaces it.
+name: Manual validation
+
+run-name: "Manual validation · ${{ github.ref_name }} · ${{ inputs.profile }} · parallel=${{ inputs.max-parallel }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Cumulative validation profile (release includes L1-L5)"
+        type: choice
+        options: [pr, merge, daily, release]
+        default: release
+      backend:
+        description: "E2E execution backend"
+        type: choice
+        options: [jiuwenswarm, legacy]
+        default: jiuwenswarm
+      max-parallel:
+        description: "Maximum concurrent real E2E workers"
+        type: choice
+        options: ['1', '2', '4']
+        default: '4'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+    with:
+      profile: ${{ inputs.profile }}
+      backend: ${{ inputs.backend }}
+      max-parallel: ${{ fromJSON(inputs.max-parallel) }}
