@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IdeaTreeGraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { isAuthFailure } from "./api/auth.js";
 import { useLocale } from "./i18n/index.js";
 import { StructureIcon } from "./icons.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
@@ -74,7 +75,7 @@ function LegacyIdeaTreeView({
       setHasIdeaTreeRun(result.hasIdeaTreeRun);
       setTreeIds((current) => sameTreeIds(current, result.treeIds) ? current : result.treeIds);
     } catch (error) {
-      if (sequence === requestSequence.current) setLoadError(error instanceof Error ? error.message : t("ideaTree.view.loadError"));
+      if (sequence === requestSequence.current) setLoadError(isAuthFailure(error) ? null : error instanceof Error ? error.message : t("ideaTree.view.loadError"));
       if (sequence === requestSequence.current && reportFailure) {
         onError(error instanceof Error ? error : t("ideaTree.view.loadError"));
       }

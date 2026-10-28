@@ -1368,6 +1368,50 @@ test("a run whose model re-issues an invalid call after recovery feedback comple
   } finally { await started.close(); }
 });
 
+test("a task call that leaves out its prompt is withheld, and only the model's re-issued call starts the subagent", async () => {
+  const wires: string[] = [];
+  let subagents = 0;
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    const ask = async (messages: unknown[]) => wires.push(await fetch(`${body.model.baseUrl}/chat/completions`, {
+      method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}` },
+      body: JSON.stringify({ stream: true, messages }),
+    }).then((reply) => reply.text()));
+    // The first turn: the model calls task without its instructions.
+    await ask([{ role: "user", content: "go" }]);
+    // The recovery turn: the model re-issues the call with a prompt.
+    await ask([{ role: "user", content: "go" },
+      { role: "user", content: "[Tool argument recovery 1/2; invalid_tool_arguments] Re-issue it." }]);
+    // The re-issued call reaches the bridge and runs the real task tool.
+    const args = { description: "Check the uploaded CSV", prompt: "Read the CSV and report its quality." };
+    response.write(line({ event: { type: "tool.started", trace: { id: "call-1", name: "task", args, status: "running" } } }));
+    await fetch(body.bridge.url, {
+      method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+      body: JSON.stringify({ name: "task", arguments: args }),
+    });
+    response.end(line({ done: { finalText: "the CSV was checked" } }));
+  });
+  try {
+    let calls = 0;
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, modelStreamer: async () => ++calls === 1 ? {
+      assistantMessage: { role: "assistant", content: "" },
+      toolCalls: [{ id: "call-1", name: "task", args: { description: "Check the uploaded CSV" } }],
+    } : {
+      assistantMessage: { role: "assistant", content: "" },
+      toolCalls: [{ id: "call-1", name: "task",
+        args: { description: "Check the uploaded CSV", prompt: "Read the CSV and report its quality." } }],
+    } })(withRunSubagent({ runSubagent: (async () => {
+      subagents += 1;
+      return { id: "sub-1", status: "completed", steps: [] };
+    }) as never }));
+    await agent.execute("go");
+    assert.match(wires[0] ?? "", /invalid_tool_arguments:tool_calls_withheld/);
+    assert.match(wires[0] ?? "", /task \(missing required argument: prompt\)/);
+    assert.doesNotMatch(wires[0] ?? "", /"tool_calls"/, "the call that left out its prompt never reaches the bridge");
+    assert.equal(subagents, 1, "only the model's re-issued call starts a subagent");
+  } finally { await adapter.close(); }
+});
+
 test("with JiuwenSwarm's own sub-agents, which have no recovery boundary, an invalid call fails its request instead of being withheld", async () => {
   const { adapter, wires } = swarmAsking([[{ role: "user", content: "go" }]], "failed");
   const started = await adapter;
@@ -1667,7 +1711,9 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     assert.equal(sent.jiuwenSwarmTools, "all");
     assert.equal(sent.systemPrompt.includes("Use only the registered workspace tools"), false);
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
+    // These options give the run no web tools, so JiuwenSwarm's web tools are hidden as well.
     assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
+      "free_search", "paid_search", "fetch_webpage",
       "todo_create", "todo_modify", "todo_list", "todo_get",
       "subagent_spawn", "subagent_wait", "task_tool", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
@@ -1720,7 +1766,28 @@ test("with JiuwenSwarm's tools, web search and fetching are JiuwenSwarm's, in th
     const names = (body: any) => body.tools.map((tool: { name: string }) => tool.name);
     assert.equal(names(sent[0]).includes("web_search") || names(sent[0]).includes("web_fetch"), false);
     assert.equal(/\bweb_search\b|\bweb_fetch\b/.test(sent[0].systemPrompt), false, "the prompt names JiuwenSwarm's tools");
+    assert.equal(["free_search", "paid_search", "fetch_webpage"].some((name) => sent[0].hiddenJiuwenSwarmTools.includes(name)), false,
+      "JiuwenSwarm's web tools stay offered in place of ours");
     assert.ok(names(sent[1]).includes("web_search") && names(sent[1]).includes("web_fetch"), "ours with SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours");
+  } finally {
+    await adapter.close();
+  }
+});
+
+test("a Session with Web access unchecked gets neither ScienceDiscovery's nor JiuwenSwarm's web tools", async () => {
+  const sent: any[] = [];
+  const adapter = await fakeAdapter(async ({ body }, response) => { sent.push(body); response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
+  try {
+    // Run assembly leaves webSearch/webFetch out when the Session's connectors do not include "web".
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options()).execute("a");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ webSearch: (async () => []) as never })).execute("b");
+    const names = (body: any) => body.tools.map((tool: { name: string }) => tool.name);
+    assert.equal(names(sent[0]).includes("web_search") || names(sent[0]).includes("web_fetch"), false);
+    assert.equal(sent[0].jiuwenSwarmTools, "all");
+    assert.ok(["free_search", "paid_search", "fetch_webpage"].every((name) => sent[0].hiddenJiuwenSwarmTools.includes(name)));
+    // Each of JiuwenSwarm's web tools follows the one of ours it replaces.
+    assert.equal(sent[1].hiddenJiuwenSwarmTools.includes("free_search") || sent[1].hiddenJiuwenSwarmTools.includes("paid_search"), false);
+    assert.ok(sent[1].hiddenJiuwenSwarmTools.includes("fetch_webpage"));
   } finally {
     await adapter.close();
   }
@@ -1999,3 +2066,159 @@ test("idle cancellation does not wait for the trajectory finish queue", { timeou
     assert.equal(finish.mock.callCount(), 1);
   } finally { release(); await adapter.close(); }
 });
+
+test("MCP readiness and governed recovery tools are offered to JiuwenSwarm", async () => {
+  const adapter = await fakeAdapter(async (_request, response) => { response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ mcpReadiness: {
+      summary: "arxiv unavailable; omitted tools: search", decide: async () => ({}), invoke: async () => ({}),
+    } })).execute("go");
+    const tools = adapter.requests[0].body.tools;
+    assert.match(tools.find((tool: { name: string }) => tool.name === "mcp_readiness").description, /arxiv unavailable/);
+    assert.equal(tools.find((tool: { name: string }) => tool.name === "mcp_recovered_call").approval, "allow", "the bridge enforces concrete source/tool approval instead of a generic remembered grant");
+  } finally { await adapter.close(); }
+});
+
+test("recovered MCP approval is checked per source and tool even when the adapter calls the bridge directly", async () => {
+  const resources: string[] = [], invoked: string[] = [];
+  const results: Array<{ isError: boolean; text: string }> = [];
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    for (const [index, [sourceId, toolId]] of [["arxiv", "search"], ["pubmed", "search"], ["arxiv", "download"]].entries()) {
+      const args = { sourceId, toolId, input: {} };
+      response.write(line({ event: { type: "tool.started", trace: { id: `recovered-${index}`, name: "mcp_recovered_call", args, status: "running" } } }));
+      const reply = await fetch(body.bridge.url, { method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+        body: JSON.stringify({ name: "mcp_recovered_call", arguments: args }) });
+      results.push(await reply.json() as { isError: boolean; text: string });
+    }
+    response.end(line({ done: { finalText: "checked" } }));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+      requestApproval: async ({ resource }) => { resources.push(resource); return resource === "mcp__arxiv__search" ? "allow_matching" : "deny"; },
+      mcpReadiness: { summary: "sources repaired", decide: async () => ({}),
+        invoke: async (sourceId, toolId) => { invoked.push(`${sourceId}/${toolId}`); return { records: [] }; } },
+    })).execute("call repaired sources");
+    assert.deepEqual(resources, ["mcp__arxiv__search", "mcp__pubmed__search", "mcp__arxiv__download"]);
+    assert.deepEqual(invoked, ["arxiv/search"], "remembering one recovered tool does not authorize another source or tool");
+    assert.deepEqual(results.map(result => result.isError), [false, true, true]);
+  } finally { await adapter.close(); }
+});
+
+test("recovered MCP calls without an approval port never invoke the broker", async () => {
+  let invoked = false;
+  let result: any;
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    const args = { sourceId: "arxiv", toolId: "search", input: {} };
+    response.write(line({ event: { type: "tool.started", trace: { id: "no-approver", name: "mcp_recovered_call", args, status: "running" } } }));
+    const reply = await fetch(body.bridge.url, { method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+      body: JSON.stringify({ name: "mcp_recovered_call", arguments: args }) });
+    result = await reply.json();
+    response.end(line({ done: { finalText: "denied" } }));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ mcpReadiness: {
+      summary: "source repaired", decide: async () => ({}), invoke: async () => { invoked = true; return {}; },
+    } })).execute("go");
+    assert.equal(invoked, false);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /approval denied/);
+  } finally { await adapter.close(); }
+});
+
+test("stale generic recovery approval question is denied without consulting or minting a grant", async () => {
+  let asked = 0, answered!: string;
+  let resolveAnswer!: () => void;
+  const answer = new Promise<void>(resolve => { resolveAnswer = resolve; });
+  const adapter = await fakeAdapter(async ({body}, response) => {
+    if (body.decision) { answered = body.decision; response.writeHead(200); response.end("{}"); resolveAnswer(); return; }
+    response.writeHead(200);
+    response.write(line({event: {type: "permission.required", request: {
+      id: "stale", toolName: "mcp_recovered_call", resource: "mcp_recovered_call", toolCallId: "stale", summary: "Call recovered tool",
+    }}}));
+    await answer;
+    response.end(line({done: {finalText: "denied"}}));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({adapterUrl: adapter.url})(options({
+      requestApproval: async () => {asked++; return "allow_matching";},
+    })).execute("go");
+    assert.equal(answered, "deny");
+    assert.equal(asked, 0, "generic recovery grants must never reach the permission store");
+  } finally { await adapter.close(); }
+});
+
+test("recovered MCP approval rejection releases the wait without invoking", async () => {
+  let invoked = false;
+  let result: any;
+  const adapter = await fakeAdapter(async ({body}, response) => {
+    response.writeHead(200);
+    const args = {sourceId: "arxiv", toolId: "search", input: {}};
+    response.write(line({event: {type: "tool.started", trace: {id: "approval-error", name: "mcp_recovered_call", args, status: "running"}}}));
+    result = await (await fetch(body.bridge.url, {method: "POST", headers: {authorization: `Bearer ${body.bridge.token}`}, body: JSON.stringify({name: "mcp_recovered_call", arguments: args})})).json();
+    response.end(line({done: {finalText: "approval unavailable"}}));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({adapterUrl: adapter.url})(options({
+      requestApproval: async () => {throw new Error("approval disconnected");},
+      mcpReadiness: {summary: "repaired", decide: async () => ({}), invoke: async () => {invoked = true; return {}; }},
+    })).execute("go");
+    assert.equal(invoked, false);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /approval disconnected/);
+  } finally {await adapter.close();}
+});
+
+test("cancellation during recovered MCP approval prevents dispatch after an allow answer", async () => {
+  let invoked = false, asked = false;
+  const adapter = await fakeAdapter(async ({body}, response) => {
+    response.writeHead(200);
+    const args = {sourceId: "arxiv", toolId: "search", input: {}};
+    response.write(line({event: {type: "tool.started", trace: {id: "approval-abort", name: "mcp_recovered_call", args, status: "running"}}}));
+    // Cancellation can close the bridge before the response reaches the adapter.
+    await fetch(body.bridge.url, {method: "POST", headers: {authorization: `Bearer ${body.bridge.token}`}, body: JSON.stringify({name: "mcp_recovered_call", arguments: args})}).catch(() => undefined);
+    response.end(line({done: {finalText: "cancelled"}}));
+  });
+  const agent = createJiuwenSwarmAgentFactory({adapterUrl: adapter.url})(options({
+    requestApproval: async () => {asked = true; agent.abort(); return "allow_once";},
+    mcpReadiness: {summary: "repaired", decide: async () => ({}), invoke: async () => {invoked = true; return {}; }},
+  }));
+  try {
+    await assert.rejects(agent.execute("go"), /abort|cancel/i);
+    assert.equal(asked, true);
+    assert.equal(invoked, false);
+  } finally {agent.abort(); await adapter.close();}
+});
+
+
+for (const withMcpReadiness of [false, true]) {
+  test(`bridge forwards producer progress before the tool response (MCP readiness: ${withMcpReadiness})`, async () => {
+    const order: string[] = [];
+    const adapter = await fakeAdapter(async ({ body }, response) => {
+      response.writeHead(200);
+      response.write(line({ event: { type: "tool.started", trace: { id: "live", name: "live_probe", args: {}, status: "running" } } }));
+      const result = await fetch(body.bridge.url, {
+        method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+        body: JSON.stringify({ name: "live_probe", arguments: {} }),
+      });
+      assert.equal(result.status, 200);
+      response.end(line({ done: { finalText: "done" } }));
+    });
+    try {
+      const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+        ...(withMcpReadiness ? { mcpReadiness: { summary: "arxiv unavailable", decide: async () => ({}), invoke: async () => { throw new Error("Unexpected recovery call"); } } } : {}),
+        extraTools: [{
+        label: "Live", name: "live_probe", description: "Progress", parameters: Type.Object({}),
+        async execute(_id, _params, _signal, onProgress) {
+          onProgress?.("Error: source unavailable\n");
+          assert.deepEqual(order, ["tool_execution_start", "tool_execution_progress"]);
+          return { content: [{ type: "text", text: "recovered" }] };
+        },
+      }] }));
+      agent.subscribe(event => { if (event.type.startsWith("tool_execution")) order.push(event.type); });
+      await agent.execute("go");
+      assert.deepEqual(order, ["tool_execution_start", "tool_execution_progress", "tool_execution_end"]);
+    } finally { await adapter.close(); }
+  });
+}

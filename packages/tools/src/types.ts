@@ -23,8 +23,17 @@ export interface AgentTool<S extends TSchema = TSchema> {
   mcp?: { sourceId: string; toolId: string };
   name: string;
   parameters: S;
+  /**
+   * The arguments a call cannot run without.
+   *
+   * A call that omits one is rejected before the tool runs, and the model is
+   * asked to re-issue it. The tool's schema states the same requirement; this
+   * list is what the run enforces, so a tool does not have to fail deep
+   * inside to say that an argument never arrived.
+   */
+  requiredArguments?: readonly string[];
   routing?: { keywords: string[]; mode: "off" | "prefer"; priority: number };
-  execute(toolCallId: string, params: Static<S>, signal?: AbortSignal): Promise<AgentToolResult>;
+  execute(toolCallId: string, params: Static<S>, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<AgentToolResult>;
   /** Only an exact true permits overlap; omitted or throwing classifiers are exclusive. */
   isConcurrencySafe?(params: Static<S>): boolean;
 }

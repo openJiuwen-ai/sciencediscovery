@@ -44,9 +44,16 @@ function review(overrides: Partial<ArtifactReviewRun> = {}): ArtifactReviewRun {
   };
 }
 
+
+const deliveredComplete = {
+  required: [{ path: "report.md", state: "present" as const }],
+  source: "brief" as const,
+  status: "complete" as const,
+};
+
 test("ReviewerPanel shows the built-in Quick review identity", () => {
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
-    reviews: [review({ checks: ["citation", "computation"], reviewLevel: "quick" })],
+    reviews: [review({ checks: ["citation", "computation", "completeness"], completeness: deliveredComplete, reviewLevel: "quick" })],
     toolCallId: "review-call",
   }));
 
@@ -60,6 +67,84 @@ test("ReviewerPanel shows the built-in Quick review identity", () => {
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
   assert.doesNotMatch(html, /<details class="reviewer-specialist-card process-record passed"[^>]*\sopen(?:=|\s|>)/);
   assert.doesNotMatch(html, /Citation verified/);
+});
+
+test("ReviewerPanel labels citation-only Quick reviews as partial", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ checks: ["citation", "completeness"], completeness: deliveredComplete, reviewLevel: "quick" })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Citation-format checks passed/);
+  assert.match(html, /claim support was not checked/);
+  assert.doesNotMatch(html, /Quick review passed/);
+});
+
+test("ReviewerPanel never presents a citation pass as a delivery pass", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation"],
+      completeness: { required: [], source: "none", status: "unconfirmed" },
+      reviewLevel: "quick",
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Checks passed; delivery not verified/);
+  // The panel summary must not count an unverified delivery as a pass.
+  assert.match(html, /1 artifact · 1 delivery not verified/);
+  assert.doesNotMatch(html, /1 passed/);
+  assert.match(html, /Delivery completeness was not verified/);
+  assert.doesNotMatch(html, /Citation-format checks passed/);
+});
+
+test("ReviewerPanel does not count an outdated review as a pass", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "completeness"],
+      completeness: {
+        required: [{ path: "output/cl3/predictions.npy", state: "present" }],
+        source: "brief",
+        status: "complete",
+      },
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /1 passed/);
+  assert.match(html, /<i>Outdated<\/i>/);
+});
+
+test("ReviewerPanel lists a missing required deliverable by path", () => {
+  const finding = {
+    code: "DELIVERABLE_MISSING",
+    evidenceRefs: [],
+    id: "finding-1",
+    message: "Required task deliverable is missing: output/cl3/predictions.npy.",
+    severity: "critical" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "completeness"],
+      completeness: {
+        required: [{ path: "output/cl3/predictions.npy", state: "missing" }],
+        source: "brief",
+        status: "incomplete",
+      },
+      decision: "REVISE_AND_RETRY",
+      findings: [finding],
+      reviewLevel: "quick",
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Revision required/);
+  assert.match(html, /Required file missing/);
+  assert.match(html, /Required files missing or empty: output\/cl3\/predictions\.npy \(missing\)/);
 });
 
 test("ReviewerPanel shows missing citation identifiers", () => {
@@ -239,11 +324,12 @@ test("ReviewerPanel collapses a completed multi-Artifact group by default", () =
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointStatus: "completed",
     reviews: [
-      review(),
+      review({ completeness: deliveredComplete }),
       review({
         artifactId: "artifact-2",
         artifactLogicalName: "chart.png",
         artifactVersionId: "version-2",
+        completeness: deliveredComplete,
         id: "review-2",
       }),
     ],
@@ -296,11 +382,140 @@ test("ReviewerPanel keeps a checkpoint failure beside partial Artifact results",
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointError: "Second Artifact could not be read",
     checkpointStatus: "failed",
-    reviews: [review()],
+    reviews: [review({ completeness: deliveredComplete })],
     toolCallId: "review-call",
   }));
 
   assert.match(html, /Review failed/);
   assert.match(html, /Second Artifact could not be read/);
   assert.match(html, /Quick review passed/);
+});
+
+for (const reason of [
+  "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.",
+  "Automatic review skipped: automatic review was turned off for this session.",
+]) {
+  test(`ReviewerPanel keeps a completed automatic skip visible: ${reason}`, () => {
+    const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+      checkpointContent: reason,
+      checkpointStatus: "completed",
+      reviews: [],
+      toolCallId: "automatic-review:disabled-task",
+    }));
+
+    assert.match(html, /class="reviewer-specialist-panel process-record"/);
+    assert.ok(html.includes(`<strong>Reviewer Specialist · ${reason}</strong>`));
+    assert.ok(html.includes(`<p>${reason}</p>`), "expanded content retains the skip reason");
+    assert.doesNotMatch(html, /Review failed|Review passed|process-record failed/);
+  });
+
+  test(`ReviewerPanel displays a neutral automatic skip: ${reason}`, () => {
+    const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+      checkpointError: reason,
+      checkpointStatus: "failed",
+      reviews: [],
+      toolCallId: "automatic-review:disabled-task",
+    }));
+
+    assert.match(html, /class="reviewer-specialist-panel process-record"/);
+    assert.ok(html.includes(`<small>${reason}</small>`), "reason is visible in the collapsed heading");
+    assert.doesNotMatch(html, /Review failed|Review passed|process-record failed/);
+  });
+}
+
+test("ReviewerPanel keeps an outdated review out of the revision count", () => {
+  const finding = {
+    code: "DELIVERABLE_MISSING",
+    evidenceRefs: [],
+    id: "finding-1",
+    message: "Required task deliverable is missing: output/cl3/predictions.npy.",
+    severity: "critical" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "completeness"],
+      completeness: {
+        required: [{ path: "output/cl3/predictions.npy", state: "missing" }],
+        source: "brief",
+        status: "incomplete",
+      },
+      decision: "REVISE_AND_RETRY",
+      findings: [finding],
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /revision required/i);
+  assert.match(html, /<i>Outdated<\/i>/);
+});
+
+test("ReviewerPanel keeps an outdated computation warning out of the warning count", () => {
+  const finding = {
+    code: "COMPUTATION_EVIDENCE_INSUFFICIENT",
+    evidenceRefs: [],
+    id: "finding-warning-1",
+    message: "Numeric claim has no readable Evidence content.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({
+      checks: ["citation", "computation"],
+      decision: "REVISE_AND_RETRY",
+      findings: [finding],
+      reviewLevel: "quick",
+      stale: true,
+    })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  // A superseded verdict is history: it must not be counted as a current warning
+  // while the same card is labelled Outdated.
+  assert.doesNotMatch(html, /\b1 warning\b/i);
+  assert.match(html, /<i>Outdated<\/i>/);
+});
+
+test("ReviewerPanel keeps an outdated warning out of the warning count", () => {
+  const finding = {
+    code: "CITATION_REFERENCE_MISSING",
+    evidenceRefs: [],
+    id: "finding-1",
+    message: "The reference list entry is missing.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ decision: "REVISE_AND_RETRY", findings: [finding], stale: true })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /warnings? found/i);
+  assert.match(html, /<i>Outdated<\/i>/);
+});
+
+test("ReviewerPanel treats a review without a delivery verdict as unverified", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ checks: ["citation"], reviewLevel: "quick" })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Checks passed; delivery not verified/);
+  assert.doesNotMatch(html, /Quick review passed/);
+});
+
+test("ReviewerPanel labels a superseded failure as outdated, not as a current revision", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ reviewLevel: "quick", stale: true, status: "failed" })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /<i>Outdated<\/i>/);
+  assert.match(html, /1 outdated/);
+  assert.doesNotMatch(html, /revision required/i);
 });

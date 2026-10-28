@@ -1,0 +1,422 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 933:1123 */
+.messages {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px clamp(24px, 5vw, 60px) 8px;
+}
+.message {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 18px;
+  animation: msgIn .25s ease;
+}
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.message .avatar-mini {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+}
+/* The reader's turn sits on the right, mirroring the assistant's rows. The
+   body is first in the DOM and the grid puts it in the wide column, so the
+   avatar lands on the outer edge without a second markup shape. */
+.message.user {
+  grid-template-columns: minmax(0, 1fr) 32px;
+}
+.message.user .body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.message.user .role { justify-content: flex-end; }
+/* The default picture: a grey silhouette, the way a chat app draws an account
+   with no avatar of its own. */
+.message.user .avatar-mini {
+  background: var(--surface-soft);
+  color: var(--muted-light);
+}
+.message.user .avatar-mini svg {
+  width: 18px;
+  height: 18px;
+}
+.message.assistant .avatar-mini {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-strong) 100%);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.message .body { min-width: 0; }
+.message .role {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.message .text {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.message .text .msg-list {
+  margin: 8px 0;
+  padding-left: 22px;
+  list-style: disc;
+  color: var(--text-secondary);
+}
+.message .text .msg-list li { margin-bottom: 3px; }
+.message .text code {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunk);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-strong);
+}
+
+/* GFM tables, which the model uses for most of its results. Unstyled until now
+   — a bare `<table>` sizes its columns to their content, so on a narrow
+   workspace panel the right-hand columns fell outside a parent that clips
+   rather than scrolls. `.text` is the shared prose container: the transcript
+   and the panel's Markdown preview both put their Markdown inside one. */
+.md-scroll {
+  max-width: 100%;
+  margin: 10px 0;
+  overflow-x: auto;
+}
+.text table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.text th,
+.text td {
+  padding: 5px 10px;
+  border: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+.text th {
+  background: var(--surface-soft);
+  color: var(--text-strong);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/* assistant message role row */
+.message .role {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.back-to-new {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.back-to-new:hover { background: var(--primary-soft); border-color: var(--primary-border-soft); color: var(--primary-strong); }
+
+/* collapsible rows inside assistant message */
+.msg-collapse {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  margin-bottom: 8px;
+}
+.msg-collapse summary {
+  display: grid;
+  grid-template-columns: 22px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.msg-collapse summary::-webkit-details-marker { display: none; }
+.msg-collapse .collapse-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 11px;
+}
+.msg-collapse.thinking .collapse-icon { background: var(--insight-soft); color: var(--insight-strong); }
+.msg-collapse .collapse-title {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+.msg-collapse .collapse-meta {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: right;
+}
+.msg-collapse .collapse-chev {
+  color: var(--text-faint);
+  font-size: 11px;
+  transition: transform .12s ease;
+}
+.msg-collapse[open] .collapse-chev { transform: rotate(90deg); }
+/* `> summary` keeps a nested fold to its own state: without it, opening a run
+   fold would tell every tool card inside it that it is open too. */
+.msg-collapse[open] > summary .collapse-meta::before { content: attr(data-collapse); }
+.msg-collapse > summary .collapse-meta::before { content: attr(data-expand); }
+/* Live status on a collapsed block: the rules above own 展开/收起, so a running
+   block opts out of the hint to say something truthful instead. This has to
+   come after them — equal specificity, later rule wins. */
+.msg-collapse > summary .collapse-meta.is-live::before { content: none; }
+.msg-collapse .collapse-meta.is-live { color: var(--primary-strong); }
+
+.thinking-list {
+  margin: 0;
+  padding: 4px 18px 12px 36px;
+  list-style: decimal;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.thinking-list li { margin-bottom: 4px; }
+
+/* ===== the folded run =====
+   One line for everything a run did between the question and its answer, the
+   way a chat client reports a call: the elapsed time is the summary, and the
+   work is one click away. It is the same fold as the thinking block above,
+   because it is the same gesture — the title is just allowed to matter more,
+   since for a finished run this line is all the transcript shows of it. */
+.msg-collapse.run-fold {
+  margin-top: 2px;
+  border-color: var(--border);
+}
+.msg-collapse.run-fold .collapse-icon {
+  background: var(--surface-sunk);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+/* The only moving icon in the transcript: it turns while the model works and
+   gives the box back to a still glyph as soon as the run is waiting or over.
+   The shared `.spinner` is coloured for the composer's page background, so on
+   the sunk tile it needs a stronger pair of its own. */
+.msg-collapse.run-fold .collapse-icon .spinner {
+  width: 12px;
+  height: 12px;
+  border-color: var(--border-strong);
+  border-top-color: var(--primary-strong);
+}
+.msg-collapse.run-fold .collapse-title {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* The turns inside it are not sections: the fold's body is one stream, and
+   design.css owns its rhythm (and the single hairline under the summary). */
+
+.collapse-body {
+  padding: 6px 12px 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.collapse-body .kv {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.collapse-body .kv-label { color: var(--text-faint); font-weight: 700; }
+
+/* label / value pairs, used by tool inputs and by artifact provenance */
+.kv {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.kv-label {
+  flex: 0 0 96px;
+  color: var(--text-faint);
+  font-weight: 700;
+}
+.kv code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+.collapse-body code {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--surface);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.asst-output { margin-top: 8px; }
+.message.user .text {
+  max-width: min(100%, 560px);
+  background: var(--surface-soft);
+  border-radius: var(--radius-m);
+  padding: 10px 14px;
+}
+
+
+
+/* ── tool calls ─────────────────────────────────────────────────────────────
+   A tool call is a fold in the same family as the thinking block: it sits in
+   the message body, closed by default, and says what happened in its summary.
+   The three states are only distinguished by the icon and the title, so the
+   shape of the transcript does not change when a call fails. */
+.msg-collapse.tool-card {
+  margin: 6px 0;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-m);
+}
+.msg-collapse.tool-card .collapse-icon {
+  background: var(--surface-sunk);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.msg-collapse.tool-card.is-running .collapse-icon {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.msg-collapse.tool-card.is-failed .collapse-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.msg-collapse.tool-card.is-completed .collapse-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+/* The authorization note names the reason a tool ran, so it belongs beside the
+   title rather than in the body the user has to open. */
+.tool-authorized {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid var(--discovery-soft);
+  border-radius: var(--radius-pill);
+  background: var(--discovery-soft);
+  color: var(--discovery-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* The card's own input/result tile lives in design.css, with the rest of the
+   handoff's flat tool styling. */
+.tool-io-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+/* ── permission requests ────────────────────────────────────────────────────
+   Louder than a tool card on purpose: it is the one block in the transcript
+   that is waiting on the person reading it. */
+.permission-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 8px 0;
+  padding: 12px 14px;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-m);
+}
+.permission-body { flex: 1 1 auto; min-width: 0; }
+.permission-eyebrow {
+  display: block;
+  color: var(--warning-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.permission-card h4 {
+  margin: 4px 0 6px;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+.permission-card code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+.permission-details summary {
+  margin-top: 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.permission-details dl {
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: max-content 1fr;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.permission-details dt { color: var(--text-faint); font-weight: 700; }
+.permission-details dd { margin: 0; }
+.permission-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Runtime notices ride along in the persisted transcript as a status line
+   rather than a message bubble. They are also where a run states why it
+   stopped, so both the transcript and the run line read from the same rule. */
+.status-strip {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-subtle);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .03em;
+}
+
+/* A short note where a body would go: a truncated answer, or a section with
+   nothing in it yet. */
+.workspace-empty {
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  letter-spacing: .02em;
+}

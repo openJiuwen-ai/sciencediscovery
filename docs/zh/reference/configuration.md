@@ -64,6 +64,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单；内置镜像预设（TUNA/USTC）对应的频道 URL 始终被 Runner 接受，自定义频道仍须显式列入 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | 初始持久内核空闲超时（`0` = 无限） |
 | `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | 静态 UI 资源 |
+| `SCIENCE_AGENT_SAMPLE_SESSION` | `1` | 在没有任何会话的数据目录中写入一个示例项目与示例会话（一次已完成的分析，含过程、运行记录与工作区）。数据目录中的标记文件保证删除示例后不会再次写入；已有会话的数据目录不受影响。设为 `0` 则首次启动为空 |
 | `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data dir>/envs/paper/bin/python` | PDF worker Python |
 | `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF worker 入口 |
 

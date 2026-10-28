@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { reviewUnverifiedDelivery } from "@sciencediscovery/schema";
 import type { ArtifactReviewRun } from "@sciencediscovery/schema";
 import React, { useEffect, useRef, useState } from "react";
 
@@ -45,12 +46,23 @@ export function ReviewerSpecialistAvatar() {
 type Translate = ReturnType<typeof useLocale>["t"];
 
 function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; tone: string } {
+  // A superseded verdict is history, whatever it decided when it was written — a
+  // failed review that a newer version already replaced is not a current failure.
+  if (review.stale === true) return { label: t("reviewer.result.outdated"), tone: "skipped" };
   if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
   if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
   if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
+  // A citation/format pass is never a delivery pass. `reviewUnverifiedDelivery` is
+  // the same function the main-Agent feedback uses, so the card and the record
+  // cannot reach different conclusions about the same review.
+  if (review.decision === "ACCEPT_AND_PROCEED" && reviewUnverifiedDelivery(review)) {
+    return { label: t("reviewer.result.scopeLimited"), tone: "warning" };
+  }
   if (review.decision === "ACCEPT_AND_PROCEED") {
     return {
-      label: review.smartStatus === "inconclusive"
+      label: isCitationOnlyQuickReview(review)
+        ? t("reviewer.result.citationOnlyPassed")
+        : review.smartStatus === "inconclusive"
         ? t("reviewer.result.quickPassed")
         : t("reviewer.result.levelPassed", { level: levelLabel(review, t) }),
       tone: "passed",
@@ -58,6 +70,13 @@ function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; 
   }
   if (review.decision === "SKIPPED") return { label: t("reviewer.result.noChecks"), tone: "skipped" };
   return { label: t("reviewer.result.revisionRequired"), tone: "warning" };
+}
+
+function isCitationOnlyQuickReview(review: ArtifactReviewRun): boolean {
+  return review.reviewLevel === "quick"
+    && review.checks?.includes("citation") === true
+    && !review.checks.includes("computation")
+    && !review.checks.includes("structure");
 }
 
 const FINDING_KEYS: Record<string, MessageKey> = {
@@ -72,6 +91,8 @@ const FINDING_KEYS: Record<string, MessageKey> = {
   COMPUTATION_EVIDENCE_INTERPRETATION_OVERREACH: "reviewer.finding.overreach",
   COMPUTATION_EVIDENCE_SCOPE_MISMATCH: "reviewer.finding.scopeMismatch",
   COMPUTATION_EVIDENCE_VALUE_MISMATCH: "reviewer.finding.valueMismatch",
+  DELIVERABLE_EMPTY: "reviewer.finding.deliverableEmpty",
+  DELIVERABLE_MISSING: "reviewer.finding.deliverableMissing",
 };
 
 function findingType(code: string, t: Translate): string {
@@ -103,7 +124,10 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
           <strong>{review.artifactLogicalName}</strong>
-          <small>{t("reviewer.versionLine", { level: levelLabel(review, t), version: review.artifactVersionId.slice(0, 8) })}</small>
+          <small>
+            {review.stale ? `${t("reviewer.stale")} · ` : ""}
+            {t("reviewer.versionLine", { level: levelLabel(review, t), version: review.artifactVersionId.slice(0, 8) })}
+          </small>
         </span>
         <i>{presentation.label}</i>
       </summary>
@@ -145,7 +169,30 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
               ? t("reviewer.summary.deepPassed")
               : review.checks?.includes("structure")
                 ? t("reviewer.summary.structurePassed")
+                : isCitationOnlyQuickReview(review)
+                  ? t("reviewer.summary.citationOnlyPassed")
                 : t("reviewer.summary.citationPassed")}</p>
+        ) : null}
+        {review.completeness ? (
+          <section aria-label={t("reviewer.completeness.aria")} className="reviewer-completeness">
+            <p className={review.completeness.status}>
+              {review.completeness.status === "unconfirmed"
+                ? t("reviewer.completeness.unconfirmed")
+                : review.completeness.status === "incomplete"
+                  ? t("reviewer.completeness.incomplete", {
+                    paths: review.completeness.required
+                      .filter((entry) => entry.state !== "present")
+                      .map((entry) => `${entry.path} (${t(entry.state === "empty" ? "reviewer.deliverable.empty" : "reviewer.deliverable.missing")})`)
+                      .join(", "),
+                  })
+                  : t("reviewer.completeness.complete", {
+                    paths: review.completeness.required.map((entry) => entry.path).join(", "),
+                  })}
+            </p>
+            {review.completeness.scope === "session"
+              ? <p className="scope-note">{t("reviewer.completeness.sessionScope")}</p>
+              : null}
+          </section>
         ) : null}
         <footer>
           <span>{t("reviewer.footer", { detail: review.reusedFromReviewId ? t("reviewer.reused") : t("reviewer.levelReview", { level: levelLabel(review, t) }) })}</span>
@@ -239,12 +286,33 @@ function batchSummary(
   }
   if (status === "failed") return t("reviewer.statusFailed");
   if (!reviews.length) return t("reviewer.builtInSpecialist");
-  const passed = reviews.filter((review) => review.status !== "failed" && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length).length;
-  const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
-  const revision = reviews.filter((review) => review.status === "failed" || review.findings.some((finding) => finding.severity === "critical")).length;
+  // A review that could not verify delivery is not a pass, so it gets its own
+  // count instead of inflating "passed". The verdict comes from the same function
+  // the Reviewer feedback uses: an unverified delivery must read the same in both.
+  const unverifiedDelivery = (review: ArtifactReviewRun) => review.status !== "failed"
+    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
+    && reviewUnverifiedDelivery(review);
+  // A stale review is history: a newer Artifact version exists, so its verdict no
+  // longer describes what the Session holds and must not count as a current pass.
+  // A superseded verdict is history whatever it decided — including a failure the
+  // newer version already replaced.
+  const outdated = (review: ArtifactReviewRun) => review.stale === true;
+  const passed = reviews.filter((review) => review.status !== "failed"
+    && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length
+    && !reviewUnverifiedDelivery(review) && !outdated(review)).length;
+  const deliveryUnverified = reviews.filter((review) => unverifiedDelivery(review) && !outdated(review)).length;
+  const outdatedCount = reviews.filter(outdated).length;
+  // A superseded verdict is history: it belongs to the outdated count only, not to
+  // the current warnings or revisions the user is asked to act on.
+  const warning = reviews.filter((review) => review.status !== "failed" && !outdated(review)
+    && review.findings.some((finding) => finding.severity === "warning")).length;
+  const revision = reviews.filter((review) => !outdated(review)
+    && (review.status === "failed" || review.findings.some((finding) => finding.severity === "critical"))).length;
   const parts = [
     t(reviews.length === 1 ? "reviewer.artifactCountOne" : "reviewer.artifactCount", { count: reviews.length }),
     passed ? t("reviewer.passedCount", { count: passed }) : undefined,
+    deliveryUnverified ? t("reviewer.deliveryUnverifiedCount", { count: deliveryUnverified }) : undefined,
+    outdatedCount ? t("reviewer.outdatedCount", { count: outdatedCount }) : undefined,
     warning ? t(warning === 1 ? "reviewer.warningCountOne" : "reviewer.warningCount", { count: warning }) : undefined,
     revision ? t("reviewer.revisionCount", { count: revision }) : undefined,
   ].filter(Boolean);
@@ -252,6 +320,7 @@ function batchSummary(
 }
 
 export function ReviewerPanel({
+  checkpointContent,
   checkpointError,
   checkpointProgress,
   checkpointStatus,
@@ -259,6 +328,7 @@ export function ReviewerPanel({
   reviews,
   toolCallId,
 }: {
+  checkpointContent?: string;
   checkpointError?: string;
   checkpointProgress?: ReviewerProgress;
   checkpointStatus?: "completed" | "failed" | "running";
@@ -268,7 +338,13 @@ export function ReviewerPanel({
 }) {
   const { t } = useLocale();
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
-  const summary = batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
+  // Current opt-outs complete neutrally; keep older failed checkpoints readable.
+  const skipReason = checkpointStatus === "completed" ? checkpointContent : checkpointError;
+  const automaticSkip = !scopedReviews.length
+    && toolCallId.startsWith("automatic-review:")
+    && (checkpointStatus === "failed" || checkpointStatus === "completed")
+    && skipReason?.startsWith("Automatic review skipped:");
+  const summary = automaticSkip ? skipReason : batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
   const userExpanded = useRef<boolean | undefined>(undefined);
   useEffect(() => { userExpanded.current = undefined; setExpanded(checkpointStatus === "running"); }, [toolCallId]);
@@ -276,16 +352,16 @@ export function ReviewerPanel({
   if (!scopedReviews.length && !checkpointStatus) return null;
   // Automatic work is non-intrusive. A stale/deleted Artifact from an older
   // task must never leave a red failure card in the research conversation.
-  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running") return null;
+  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running" && !automaticSkip) return null;
   // Older versions could create checkpoints for code/data Artifacts. The API
   // now omits those records; suppress their empty completed shell as well so a
   // researcher only sees report-quality review activity.
-  if (!scopedReviews.length && checkpointStatus === "completed") return null;
+  if (!scopedReviews.length && checkpointStatus === "completed" && !automaticSkip) return null;
   return (
     <details
       aria-label={t("reviewer.panelAria")}
       aria-live="polite"
-      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${checkpointStatus === "failed" || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
+      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${(checkpointStatus === "failed" && !automaticSkip) || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
       onToggle={(event) => { if (event.currentTarget.open !== expanded) { userExpanded.current = event.currentTarget.open; setExpanded(event.currentTarget.open); } }}
       open={expanded}
     >
@@ -303,7 +379,7 @@ export function ReviewerPanel({
         {checkpointStatus === "running" && scopedReviews.length > 0 && checkpointProgress
           ? <ReviewProgress progress={checkpointProgress} />
           : null}
-        {checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
+        {automaticSkip ? <p>{skipReason}</p> : checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
           ? <CheckpointOnlyReview error={checkpointError} progress={checkpointProgress} reviewLevel={reviewLevel} status={checkpointStatus} />
           : null}
         {scopedReviews.map((review) => <CompletedReview key={review.id} review={review} />)}

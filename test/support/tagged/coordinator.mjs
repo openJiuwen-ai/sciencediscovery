@@ -148,7 +148,7 @@ export function relocateLcov(text, { root, cwd, source }) {
   }).join('\n');
 }
 
-export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pytestPlugins = [], nodeImports = [], coverageDir, env = process.env, timeoutMs = 300_000, signal }) {
+export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pytestPlugins = [], nodeImports = [], coverageDir, coverageName, env = process.env, timeoutMs = 300_000, signal }) {
   validatePlan(plan);
   for (const entry of plan.entries) inside(root, entry.source);
   mkdirSync(outputDir, { recursive: true });
@@ -177,10 +177,11 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
         const nativeReport = join(outputDir, `${name}-events.jsonl`);
         rmSync(nativeReport, { force: true });
         // A Node worker holds exactly one source (the grouping key above), so
-        // the coverage it records is that one test file's, named after it —
-        // never with a leading dot: `.ci/…` would make a hidden file, which
-        // artifact uploads leave out without a word.
-        const lcov = coverageDir && join(coverageDir, `${files[0].replaceAll('/', '__').replace(/^\./, '_')}.lcov`);
+        // the coverage it records is that one test file's, named after it,
+        // or after `coverageName` when a caller runs one file in more than one
+        // process — never with a leading dot: `.ci/…` would make a hidden
+        // file, which artifact uploads leave out without a word.
+        const lcov = coverageDir && join(coverageDir, `${(coverageName ?? files[0]).replaceAll('/', '__').replace(/^\./, '_')}.lcov`);
         if (lcov) { mkdirSync(coverageDir, { recursive: true }); rmSync(lcov, { force: true }); }
         const completed = await invokeWorker(process.execPath, [...nodeImports.flatMap(p => ['--import', p]),
           // Source maps let records from built output a test reaches — another

@@ -172,7 +172,7 @@ Isolation variables (set for `start-stack.sh` and the API alike):
 | Variable | Default | Meaning |
 |---|---|---|
 | `SCIENCE_AGENT_PORT` | `4410` in the E2E layer (the product itself defaults to `4310`) | API/Web port. The layer keeps its own block so a test stack never competes with the instance a person leaves running. |
-| `SCIENCE_AGENT_RUNNER_PORT` | `4411` in the E2E layer (product default `4311`) | where the runner listens; the layer also moves evolve to `4413` and memory-graph to `17774` |
+| `SCIENCE_AGENT_RUNNER_PORT` | `4411` in the E2E layer (product default `4311`) | where the runner listens; memory-graph uses `17774`. The launcher owns Evolve on an automatically chosen loopback port and passes its private control configuration to the API |
 | `SCIENCE_AGENT_RUNNER_URL` | `http://127.0.0.1:<port>` | **where the API dials** — the API does not read `SCIENCE_AGENT_RUNNER_PORT`, so on a non-default port always set the full URL too |
 | `SCIENCE_DISCOVERY_DATA_DIR` | `<CI_RUNTIME_DIR>/data`, and `CI_RUNTIME_DIR` itself falls back to the gitignored `.e2e-data/` | data root for a test run; also holds `envs/` (service venvs). Separate by default from `.sciencediscovery-data`, which belongs to a person's own instance. (`SCIENCE_AGENT_DATA_DIR` is the deprecated spelling.) |
 | `SCIENCE_AGENT_AUTH_TOKEN` | generated when omitted | Optional server-side override; never assume a literal default |

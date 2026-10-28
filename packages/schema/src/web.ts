@@ -23,27 +23,28 @@ import type { ProxyPolicy } from "./proxy.js";
  * aggregation, which is why paid Brave (keyed API) and free Brave (public
  * result page) are distinct entries.
  */
-export type PaidSearchProvider = "tavily" | "exa" | "brave";
+export type PaidSearchProvider = "tavily" | "exa" | "brave" | "deepseek";
 export type FreeSearchEngine = "duckduckgo" | "bing" | "brave-html";
 export type WebSearchProvider = PaidSearchProvider | FreeSearchEngine;
-export type WebFetchProvider = "jina" | "tavily" | "exa";
+export type WebFetchProvider = "jina" | "tavily" | "exa" | "deepseek";
 /** Search providers that only the JiuwenSwarm backend uses (its paid search: Bocha, Serper, Perplexity, and Jina). */
 export type JiuwenSwarmSearchProvider = "bocha" | "serper" | "perplexity";
 /** Every provider whose API key the settings store. */
-export type WebKeyProvider = "jina" | "tavily" | "exa" | "brave" | JiuwenSwarmSearchProvider;
-export const WEB_KEY_PROVIDERS: readonly WebKeyProvider[] = ["jina", "tavily", "exa", "brave", "bocha", "serper", "perplexity"];
+export type WebKeyProvider = "jina" | "tavily" | "exa" | "brave" | "deepseek" | JiuwenSwarmSearchProvider;
+export const WEB_KEY_PROVIDERS: readonly WebKeyProvider[] = ["jina", "tavily", "exa", "brave", "bocha", "serper", "perplexity", "deepseek"];
 export const JIUWENSWARM_SEARCH_PROVIDERS: readonly JiuwenSwarmSearchProvider[] = ["bocha", "serper", "perplexity"];
 
 /**
  * Which backend runs agent turns, and so which web settings take effect. On `jiuwenswarm` web search and fetching
  * are JiuwenSwarm's own: it has the DuckDuckGo and Bing free engines and Bocha, Serper, Perplexity and Jina as paid
- * search, and nothing else (no Brave, Tavily or Exa, no choice of fetch provider, no cache settings).
+ * search, plus opt-in DeepSeek search/fetch via the shipped compatibility patch. Brave, Tavily, Exa and cache
+ * settings remain native-only; the default Swarm fetch path is preserved unless DeepSeek is selected.
  */
 export type WebBackend = "native" | "jiuwenswarm";
 export const JIUWENSWARM_FREE_ENGINES: readonly FreeSearchEngine[] = ["duckduckgo", "bing"];
 
 /** Fixed attempt order for the paid tier; a provider joins once it has a key. */
-export const PAID_SEARCH_ORDER: readonly PaidSearchProvider[] = ["tavily", "exa", "brave"];
+export const PAID_SEARCH_ORDER: readonly PaidSearchProvider[] = ["tavily", "exa", "brave", "deepseek"];
 /** Fixed attempt order for the free tier; a disabled engine is never requested. */
 export const FREE_SEARCH_ORDER: readonly FreeSearchEngine[] = ["duckduckgo", "bing", "brave-html"];
 /** Resolved wire mode sent to the gateway; configuration uses ProxyPolicy. */
@@ -55,6 +56,8 @@ export interface WebProviderState {
 }
 
 export interface WebSettings {
+  /** Explicit opt-in for DeepSeek search and fetch on either backend. */
+  deepseekEnabled: boolean;
   fetchCacheTtlSeconds: number;
   fetchProvider: WebFetchProvider;
   /** Per-engine switches for the free tier. A disabled engine is not requested. */
@@ -66,6 +69,7 @@ export interface WebSettings {
 }
 
 export const DEFAULT_WEB_SETTINGS: WebSettings = {
+  deepseekEnabled: false,
   fetchCacheTtlSeconds: 24 * 60 * 60,
   fetchProvider: "jina",
   // Free engines default on so search works with no credential at all; the
@@ -130,6 +134,11 @@ export type WebOperation = "search" | "fetch";
 export type WebAttemptStatus =
   | "succeeded"
   | "cache-hit"
+  | "insufficient-balance"
+  | "missing-credentials"
+  | "provider-disabled"
+  | "no-results"
+  | "fetch-failed"
   | "unauthorized"
   | "rate-limited"
   | "timeout"
@@ -138,6 +147,10 @@ export type WebAttemptStatus =
   | "semantic-error";
 
 export type WebErrorCode =
+  | "INSUFFICIENT_BALANCE"
+  | "MISSING_CREDENTIALS"
+  | "PROVIDER_DISABLED"
+  | "FETCH_FAILED"
   | "CANCELLED"
   | "GATEWAY_CONTRACT_ERROR"
   | "INVALID_INPUT"

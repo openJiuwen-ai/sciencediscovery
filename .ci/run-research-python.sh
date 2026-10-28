@@ -3,19 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-case "${1:-}" in
-  unit)
-    if [[ -z "${DRB_UPSTREAM_DIR:-}" ]]; then
-      export DRB_UPSTREAM_DIR="${CI_RUNTIME_DIR:-$PWD/.test-runs}/drb-evaluator"
-      if [[ ! -d "$DRB_UPSTREAM_DIR/.git" ]]; then
-        git clone --no-checkout https://github.com/Ayanami0730/deep_research_bench.git "$DRB_UPSTREAM_DIR"
-        git -C "$DRB_UPSTREAM_DIR" checkout --detach 852f4022d1f98fb707222e395405136e8f0e8d52
-      fi
+# Keep benchmark coverage on the real worker's Python, independent of service venvs.
+research_python="${SCIENCE_RESEARCH_PYTHON:-3.14}"
+printf 'research test Python: %s\n' "$research_python"
+prepare_upstream() {
+  if [[ -z "${DRB_UPSTREAM_DIR:-}" ]]; then
+    export DRB_UPSTREAM_DIR="${CI_RUNTIME_DIR:-$PWD/.test-runs}/drb-evaluator"
+    if [[ ! -d "$DRB_UPSTREAM_DIR/.git" ]]; then
+      git clone --no-checkout https://github.com/Ayanami0730/deep_research_bench.git "$DRB_UPSTREAM_DIR"
+      git -C "$DRB_UPSTREAM_DIR" checkout --detach 852f4022d1f98fb707222e395405136e8f0e8d52
     fi
-    uv run --no-project --with pandas==2.3.3 --with numpy==2.2.6 --with scipy==1.15.3 \
-      python .ci/research-unittest.py test/benchmarks/biomnibench-da
-    uv run --no-project --with requests==2.32.3 --with python-dotenv==1.0.1 --with tqdm==4.67.1 \
-      python .ci/research-unittest.py test/benchmarks/deepresearchbench
+  fi
+}
+race_unit() {
+  uv run --no-project --python "$research_python" --no-build --with-requirements .ci/research-requirements.txt \
+    python .ci/research-unittest.py test/benchmarks/deepresearchbench
+}
+case "${1:-}" in
+  unit|race)
+    if [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]]; then
+      export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
+    fi
+    prepare_upstream
+    if [[ "$1" == unit ]]; then
+      uv run --no-project --python "$research_python" --no-build --with-requirements .ci/research-requirements.txt \
+        python .ci/research-unittest.py test/benchmarks/biomnibench-da
+    fi
+    race_unit
     ;;
   contract)
     export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-${CI_RUNTIME_DIR:-$PWD/.test-runs}/swarm-contract}"
@@ -32,5 +46,5 @@ cases = ET.parse(sys.argv[1]).findall('.//testcase')
 assert cases and not any(c.find('skipped') is not None for c in cases), 'empty/skipped contract suite'
 PY
     ;;
-  *) echo 'Usage: run-research-python.sh unit|contract' >&2; exit 2;;
+  *) echo 'Usage: run-research-python.sh unit|race|contract' >&2; exit 2;;
 esac

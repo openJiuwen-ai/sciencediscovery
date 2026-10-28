@@ -47,6 +47,8 @@ const CATEGORICAL_NAMES = new Set([
 ]);
 const DATE_NAME_PATTERN = /(?:^|_)(?:date|time|timestamp)(?:$|_)/i;
 
+export const MAX_CSV_DATA_ROWS = 1_000_000;
+
 function normalizeName(value: string): string {
   return value.trim().toLocaleLowerCase().replaceAll(/[\s.-]+/g, "_");
 }
@@ -142,15 +144,21 @@ export function profileRows(
   const columns: ColumnProfile[] = fields.map((field) => {
     const values = parsedRows.map((row) => row[field]);
     const present = values.filter((value): value is Exclude<DataValue, null> => value !== null);
-    const numeric = present.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    let min: number | undefined;
+    let max: number | undefined;
+    for (const value of present) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      min = min === undefined ? value : Math.min(min, value);
+      max = max === undefined ? value : Math.max(max, value);
+    }
     return {
       examples: [...new Set(present.map(String))].slice(0, 3),
       id: field,
       kind: kinds.get(field) ?? "text",
       label: field.replaceAll("_", " "),
-      ...(numeric.length ? {
-        max: Math.max(...numeric),
-        min: Math.min(...numeric),
+      ...(min !== undefined && max !== undefined ? {
+        max,
+        min,
       } : {}),
       missingCount: values.length - present.length,
       uniqueCount: new Set(present.map(String)).size,
@@ -195,20 +203,41 @@ function inferTableKind(fields: string[]): DataTableKind {
 }
 
 export function parseCsvText(content: string, source: DataSourceRecord): DataTable {
-  const result = Papa.parse<Record<string, string>>(content, {
+  const rows: Array<Record<string, string>> = [];
+  const errors: Papa.ParseError[] = [];
+  let fields: string[] = [];
+  let tooManyRows = false;
+  Papa.parse<Record<string, string>>(content, {
+    chunkSize: 256 * 1024,
     header: true,
     skipEmptyLines: "greedy",
+    step: (result, parser) => {
+      // Step callbacks exclude the header and skipped blank records, and keep
+      // quoted newlines inside their record. Do not silently truncate a file.
+      if (rows.length === MAX_CSV_DATA_ROWS) {
+        tooManyRows = true;
+        parser.abort();
+        return;
+      }
+      fields = result.meta.fields ?? [];
+      rows.push(result.data);
+      for (const error of result.errors) {
+        if (errors.length < 8) errors.push(error);
+      }
+    },
     transformHeader: (header) => header.replace(/^\uFEFF/, "").trim(),
   });
-  const fields = result.meta.fields ?? [];
-  if (!fields.length || !result.data.length) throw new Error(translateActive("csv.parseHeaderRequired"));
+  if (tooManyRows) {
+    throw new Error(translateActive("csv.tooManyRows", { count: MAX_CSV_DATA_ROWS.toLocaleString("en-US") }));
+  }
+  if (!fields.length || !rows.length) throw new Error(translateActive("csv.parseHeaderRequired"));
   return profileRows(
-    result.data,
+    rows,
     `artifact:${source.sourceArtifactVersionId}`,
     source.fileName,
     inferTableKind(fields),
     source,
-    result.errors.slice(0, 8).map((error) =>
+    errors.map((error) =>
       translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 })),
   );
 }

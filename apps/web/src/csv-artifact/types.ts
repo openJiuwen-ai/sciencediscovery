@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type {
+  ArtifactVersionProvenance,
+  ScientificArtifactVersion,
+} from "@sciencediscovery/schema";
+
 export type DataValue = boolean | null | number | string;
 
 export interface DataRow {
@@ -44,11 +49,38 @@ export type DataTableKind =
   | "generic"
   | "matrix";
 
+/**
+ * Where the CSV text shown in the viewer came from: a declared Artifact version,
+ * or a Workspace file opened directly, before (or without) any declaration.
+ */
+export type CsvViewerSource =
+  | {
+      kind: "artifact";
+      provenance?: ArtifactVersionProvenance;
+      version: ScientificArtifactVersion;
+    }
+  | {
+      kind: "workspace";
+      modifiedAt?: string;
+      /** When the bytes were read for this view. */
+      openedAt: string;
+      path: string;
+      /** Workspace revision observed for this path, when the file list has one. */
+      revisionId?: string;
+      sessionId: string;
+      size: number;
+    };
+
 export interface DataSourceRecord {
+  /** SHA-256 of an Artifact version; empty for a Workspace file, which has none recorded. */
   fileHash: string;
   fileName: string;
   fileSize: number;
   importedAt: string;
+  /**
+   * Identity that chart layouts are saved against: the Artifact version id, or
+   * a `workspace:` key for a Workspace file (see csvSourceRecord).
+   */
   sourceArtifactVersionId: string;
 }
 

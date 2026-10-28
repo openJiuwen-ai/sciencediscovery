@@ -24,6 +24,7 @@ import type { TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import type { ArtifactCandidate } from "@sciencediscovery/schema";
+import { CasStore } from "@sciencediscovery/cas";
 
 import { PaperService } from "./papers.js";
 import { SessionStore } from "./store.js";
@@ -60,6 +61,7 @@ async function fixture(context: TestContext) {
       sourceUrl: "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123/pdf/paper.pdf",
     } satisfies ArtifactCandidate,
     dataDir,
+    model,
     service: new PaperService(
       store,
       resolve(paperRoot, ".venv/bin/python"),
@@ -69,6 +71,41 @@ async function fixture(context: TestContext) {
     store,
   };
 }
+
+test("paper vision persists Chat usage and leaves incomplete usage unknown", async (context) => {
+  const { dataDir, model, session, store } = await fixture(context);
+  await store.updateModel(model.id, { baseUrl: model.baseUrl, model: model.model, name: model.name, vision: true });
+  const ref = await new CasStore(dataDir).put(Buffer.from("paper"));
+  await store.appendPaperAcquisition({
+    id: "paper-usage", sessionId: session.id, connectorId: "upload", identifier: "paper", license: "test",
+    createdAt: new Date().toISOString(), manifest: ref, manifestPath: "papers/paper-usage/manifest.json",
+    pdf: ref, pdfPath: "papers/paper-usage/paper.pdf", status: "succeeded", title: "Paper",
+    extraction: {
+      generatedAt: new Date().toISOString(), images: [], inputSha256: ref.hash, limits: {}, pageCount: 1,
+      pages: [{ needsVision: true, page: 1, previewPath: "page.png", textCharacters: 0 }],
+      parser: "fixture", pdfBytes: 5, schemaVersion: 1, tables: [], textCharacters: 0, textPath: "text.txt", warnings: [],
+    },
+  });
+  const root = resolve(store.workspacePath(session.id), "papers/paper-usage");
+  await mkdir(root, { recursive: true });
+  await writeFile(resolve(root, "page.png"), Buffer.from("image"));
+  const samples = [
+    { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 0, output_tokens: 0, total_tokens: 30477 },
+    { prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 },
+    { prompt_tokens: 10 },
+  ];
+  const service = new PaperService(store, "unused", "unused", async (url) => {
+    assert.match(String(url), /\/chat\/completions$/);
+    return new Response(JSON.stringify({ choices: [{ message: { content: "A scientific figure." } }], usage: samples.shift() }));
+  });
+  for (let i = 0; i < 3; i++) await service.analyzeVision({ modelId: model.id, paperId: "paper-usage", sessionId: session.id });
+  const runs = await store.listPaperVisionRuns(session.id);
+  assert.deepEqual(runs.map((run) => run.modelUsage), [
+    { inputTokens: 30393, outputTokens: 84, totalTokens: 30477 },
+    { inputTokens: 10, outputTokens: 0, totalTokens: 10 },
+    undefined,
+  ]);
+});
 
 test("explicit PDF extraction persists lifecycle and is idempotent after completion", async (context) => {
   const { candidate, service, session, store } = await fixture(context);

@@ -21,20 +21,19 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import type { ArtifactVersionProvenance } from "@sciencediscovery/schema";
-
 import { formatBytes } from "../csv/inferCsv.js";
 import { useLocale } from "../../i18n/index.js";
 import type {
   ChartSpec,
+  CsvViewerSource,
   DataRow,
   DataTable,
 } from "../types.js";
 
 interface InspectorPanelProps {
   hoveredRowId?: string;
-  provenance?: ArtifactVersionProvenance;
   selectedRowIds: string[];
+  source: CsvViewerSource;
   spec: ChartSpec;
   table: DataTable;
 }
@@ -48,8 +47,8 @@ function rowFields(row: DataRow, table: DataTable): Array<[string, string]> {
 
 export function InspectorPanel({
   hoveredRowId,
-  provenance,
   selectedRowIds,
+  source,
   spec,
   table,
 }: InspectorPanelProps) {
@@ -72,7 +71,7 @@ export function InspectorPanel({
       </> : <div className="csva-inspector-empty"><MousePointer2 size={22} /><strong>{t("csv.selectRecord")}</strong><p>{t("csv.selectRecordHint")}</p></div>}
       {selectedRowIds.length > 1 ? <details className="csva-selected-id-list"><summary>{t("csv.selectedIds")}</summary><ol>{selectedRowIds.slice(0, 50).map((id) => <li key={id}>{id}</li>)}</ol></details> : null}
     </div> : <div className="csva-inspector-content csva-lineage">
-      <section>
+      {source.kind === "artifact" ? <section>
         <h3><FileCheck2 size={15} /> {t("csv.sourceArtifact")}</h3>
         <dl>
           <div><dt>{t("csv.sourceFile")}</dt><dd>{table.source.fileName}</dd></div>
@@ -81,7 +80,17 @@ export function InspectorPanel({
           <div><dt>SHA-256</dt><dd title={table.source.fileHash}>{table.source.fileHash.slice(0, 16)}...</dd></div>
           <div><dt>{t("csv.importedAt")}</dt><dd>{new Date(table.source.importedAt).toLocaleString(locale)}</dd></div>
         </dl>
-      </section>
+      </section> : <section>
+        {/* No version, hash or recorded provenance exists for an undeclared
+            Workspace file; describe the file itself instead. */}
+        <h3><FileCheck2 size={15} /> {t("csv.workspaceFile")}</h3>
+        <dl>
+          <div><dt>{t("workspaceProvenance.path")}</dt><dd title={source.path}>{source.path}</dd></div>
+          <div><dt>{t("workspaceProvenance.size")}</dt><dd>{formatBytes(table.source.fileSize)}</dd></div>
+          {source.modifiedAt ? <div><dt>{t("workspaceProvenance.modifiedAt")}</dt><dd>{new Date(source.modifiedAt).toLocaleString(locale)}</dd></div> : null}
+          <div><dt>{t("csv.importedAt")}</dt><dd>{new Date(table.source.importedAt).toLocaleString(locale)}</dd></div>
+        </dl>
+      </section>}
       <section>
         <h3><Activity size={15} /> {t("csv.currentView")}</h3>
         <dl>
@@ -91,15 +100,15 @@ export function InspectorPanel({
           <div><dt>{t("csv.visualization")}</dt><dd>{t("csv.browserDerivedView")}</dd></div>
         </dl>
       </section>
-      <section className="csva-provenance-record">
+      {source.kind === "artifact" ? <section className="csva-provenance-record">
         <h3><Activity size={15} /> {t("csv.recordedProvenance")}</h3>
-        {provenance ? <dl>
-          <div><dt>{t("csv.inputDependencies")}</dt><dd>{provenance.dependencies.length}</dd></div>
-          <div><dt>{t("csv.executionRecords")}</dt><dd>{provenance.executionLog.length}</dd></div>
-          <div><dt>{t("csv.environmentRevisions")}</dt><dd>{provenance.environments.length}</dd></div>
-          <div><dt>{t("csv.reviewRecords")}</dt><dd>{provenance.review.length}</dd></div>
+        {source.provenance ? <dl>
+          <div><dt>{t("csv.inputDependencies")}</dt><dd>{source.provenance.dependencies.length}</dd></div>
+          <div><dt>{t("csv.executionRecords")}</dt><dd>{source.provenance.executionLog.length}</dd></div>
+          <div><dt>{t("csv.environmentRevisions")}</dt><dd>{source.provenance.environments.length}</dd></div>
+          <div><dt>{t("csv.reviewRecords")}</dt><dd>{source.provenance.review.length}</dd></div>
         </dl> : <small>{t("csv.loadingProvenance")}</small>}
-      </section>
+      </section> : null}
       {table.warnings.length ? <section className="csva-warning-list"><h3><TriangleAlert size={15} /> {t("csv.importWarnings")}</h3>{table.warnings.map((warning) => <p key={warning}>{warning}</p>)}</section> : null}
     </div>}
   </aside>;

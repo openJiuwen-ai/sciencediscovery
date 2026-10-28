@@ -40,6 +40,7 @@ If you need to install new Python packages, install them through the Tsinghua Py
 
 ```bash
 pip install [python package] -i https://pypi.tuna.tsinghua.edu.cn/simple
+
 ```
 
 ## Workflow
@@ -187,6 +188,7 @@ Every evaluation must produce the following structure:
   "revision_guidance": ["top 3 prioritized action items"],
   "limitations": ["accepted weaknesses, if CONDITIONAL"]
 }
+
 ```
 
 When presenting results to the user, format as a readable summary — not raw JSON. Highlight the verdict, failed dimensions (if any), and revision guidance (if REVISE).
@@ -241,12 +243,14 @@ This skill works best in combination with `code-engineer` — load both for anal
 Analysis task: "Correlate X and Y in `dataset.csv` and test statistical significance."
 
 **Structured data** (`--output-file` JSON):
+
 ```json
 [
   {"metric": "Pearson_r", "value": 0.8234},
   {"metric": "p_value", "value": 0.0003},
   {"metric": "sample_size", "value": 150}
 ]
+
 ```
 
 **Methodology documentation** (from conversation):
@@ -258,12 +262,14 @@ Analysis task: "Correlate X and Y in `dataset.csv` and test statistical signific
 - Source: `dataset.csv`, columns X (float64, 148 non-null) and Y (float64, 150 non-null), 150 rows total
 
 **Analysis code**:
+
 ```python
 import pandas as pd
 from scipy import stats
 data = pd.read_csv('dataset.csv')
 corr, p_value = stats.pearsonr(data['X'], data['Y'])
 print(f"Pearson correlation: r={corr:.4f}, p={p_value:.6f}")
+
 ```
 
 ### Evaluation Walkthrough
@@ -311,7 +317,7 @@ RISK items: 3 (2 MEDIUM + 1 LOW). Modifier: ≥3 RISK → downgrade 1 level. ACC
 
 ### Output
 
-```
+```text
 Verdict: REVISE_AND_RETRY
 Severity: MODERATE
 Quality Rating: NEEDS_IMPROVEMENT
@@ -332,4 +338,5 @@ Revision Guidance:
   3. Identify and document potential confounders
 
 Accepted Limitations: (none — REVISE)
+
 ```

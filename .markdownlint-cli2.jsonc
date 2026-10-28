@@ -3,7 +3,8 @@
     "README.md",
     "README_zh.md",
     "CONTRIBUTING.md",
-    "docs/**/*.md"
+    "docs/**/*.md",
+    "skills/**/*.md"
   ],
   "ignores": [
     "**/node_modules/**"

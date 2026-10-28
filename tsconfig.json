@@ -1,0 +1,13 @@
+{
+  "//": [
+    "The tagged test runner executes tests from the repository root, and tsx",
+    "resolves the JSX transform from the tsconfig in its working directory.",
+    "Without this file it falls back to the classic runtime, so a rendered",
+    "component would ask for a React binding it does not import. Every package",
+    "keeps its own tsconfig for building; this one exists only so the runner",
+    "compiles JSX the way the app does."
+  ],
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  }
+}

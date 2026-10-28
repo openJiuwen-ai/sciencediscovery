@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ApiClient } from "./api.js";
 import { isAuthFailure } from "./api/auth.js";
+import { classifySessionPollMiss } from "./api/session-miss.js";
 import type { AgentActivity } from "./api/runs.js";
 import { ProcessRecord } from "./ProcessRecord.js";
 import { useLocale } from "./i18n/index.js";
@@ -30,11 +31,19 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
   useEffect(() => {
     let disposed = false; let pending = false;
     setActivity(undefined); setLogs(undefined); setError("");
+    const applyMiss = async (reason: unknown, fallback: string) => {
+      const miss = await classifySessionPollMiss(client, sessionId, reason);
+      if (disposed) return;
+      if (miss.kind === "stale") { setError(""); return; }
+      if (miss.kind === "gone") { setActivity(undefined); setError(miss.message); return; }
+      if (miss.kind === "other") { setError(miss.message); return; }
+      setError(reason instanceof Error ? reason.message : fallback);
+    };
     const refresh = async () => {
       if (pending) return;
       pending = true;
       try { const next = await client.getAgentActivity(sessionId); if (!disposed) { setActivity(next); setError(""); } }
-      catch (reason) { if (!disposed && !isAuthFailure(reason)) setError(reason instanceof Error ? reason.message : t("activity.loadFailed")); }
+      catch (reason) { if (!disposed && !isAuthFailure(reason)) await applyMiss(reason, t("activity.loadFailed")); }
       finally { pending = false; }
     };
     void refresh(); const timer = setInterval(() => void refresh(), 2000);
@@ -46,7 +55,16 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
   async function action(operation: () => Promise<unknown>) {
     setBusy(true); setError("");
     try { await operation(); setActivity(await client.getAgentActivity(sessionId)); }
-    catch (reason) { if (!isAuthFailure(reason)) setError(reason instanceof Error ? reason.message : t("activity.actionFailed")); }
+    catch (reason) {
+      if (isAuthFailure(reason)) return;
+      const miss = await classifySessionPollMiss(client, sessionId, reason);
+      if (miss.kind === "stale") {
+        try { setActivity(await client.getAgentActivity(sessionId)); } catch { /* keep the list already on screen */ }
+        setError("");
+      } else if (miss.kind === "gone") { setActivity(undefined); setError(miss.message); }
+      else if (miss.kind === "other") setError(miss.message);
+      else setError(reason instanceof Error ? reason.message : t("activity.actionFailed"));
+    }
     finally { setBusy(false); }
   }
   const fold = (kind: "executions" | "timers" | "transfers") => ({

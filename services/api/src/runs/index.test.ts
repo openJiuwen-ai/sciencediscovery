@@ -22,6 +22,8 @@ import { resolve } from "node:path";
 import { installApiTestModelCatalog } from "../model-catalog.fixture.js";
 import { SessionStore } from "../store.js";
 import {
+  appendToolProgress,
+  publishRunEvent,
   buildCompletedToolTrace,
   buildSubagentToolStep,
   cloneRunEventDetails,
@@ -130,6 +132,7 @@ test("completed tool traces retain cloneable details through the assembly path",
     id: "call-1",
     name: "run_shell",
     outputChars: 2,
+    preview: "ok",
     outputStream: "tool-call-1",
     status: "completed",
   });
@@ -204,4 +207,56 @@ test("run snapshots narrow legacy Responses max to the selected model wire capab
   const snapshot = computeSettingsSnapshot(store, session.id);
   assert.equal(snapshot.thinkingMode, "enabled");
   assert.equal(snapshot.thinkingEffort, "xhigh");
+});
+
+
+test("completed subagent tools retain intermediate output beside their final result", () => {
+  const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "search", toolName: "search_pubmed", isError: false,
+    result: { content: [{ type: "text", text: "5 papers" }] },
+  }, { id: "search", createdAt: "2026-10-17T00:00:00Z", kind: "tool", status: "running", input: "query",
+    content: "Error: retrying\n", progress: "Error: retrying\n" });
+  assert.equal(step.content, "5 papers");
+  assert.equal(step.progress, "Error: retrying\n");
+  assert.equal(step.input, "query");
+});
+
+
+test("chatty subagent progress stays bounded and transient snapshots are not persisted", async () => {
+  const persisted: unknown[] = [];
+  const store = { appendRunStreamEvent: async (...args: unknown[]) => { persisted.push(args[3]); return { event: args[3] }; } } as unknown as SessionStore;
+  let progress = "first evidence\n";
+  for (let i = 0; i < 1000; i++) {
+    progress = appendToolProgress(progress, `${i}: ${"x".repeat(100)}\n`);
+    assert.ok(progress.length <= 16384);
+    await publishRunEvent(store, "session", "run", { type: "subagent.step", subagentId: "child",
+      step: { id: "tool", kind: "tool", createdAt: "now", content: progress, progress, status: "running" } }, { transient: true });
+  }
+  assert.equal(persisted.length, 0);
+  assert.ok(progress.startsWith("first evidence"));
+  assert.match(progress, /999: x/);
+  const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "tool", toolName: "run_shell", isError: false,
+    result: { content: [{ type: "text", text: "final result" }] } },
+    { id: "tool", kind: "tool", createdAt: "now", input: "command", content: progress, progress, status: "running" });
+  await publishRunEvent(store, "session", "run", { type: "subagent.step", subagentId: "child", step });
+  assert.equal(persisted.length, 1);
+  assert.ok(JSON.stringify(persisted).length < 17000);
+});
+
+test("completed traces retain bounded authoritative evidence and actual per-response paper counts", () => {
+  const trace = (text?:string) => buildCompletedToolTrace({ type:"tool_execution_end",toolCallId:"search",toolName:"search_pubmed",isError:false,
+    result:{content:text===undefined?[]:[{type:"text",text}]},
+  });
+  assert.equal(trace().preview,undefined);
+  assert.equal(trace("").preview,undefined,"empty tool text is omitted by the existing text aggregator");
+  assert.equal(trace("a\nb\nc\nd\ne").preview,"a\nb\nc\nd\ne");
+  assert.equal(trace("a\nb\nc\nd\ne\nf").preview,"a\nb\n…\ne\nf");
+  const long="h".repeat(100)+"t".repeat(100);
+  assert.equal(trace(long).preview,"h".repeat(80)+"…"+"t".repeat(77));
+  for(const sourceId of ["pubmed","arxiv","europe-pmc"]) {
+    const value=JSON.stringify({sourceId,toolId:"search",records:[{},{}],total:10000});
+    assert.equal(trace(value).paperCount,2);
+    assert.equal(trace(JSON.stringify({sourceId,toolId:"search",records:[]})).paperCount,0);
+  }
+  for(const value of ["null","plain evidence","{}",'{"sourceId":"other","toolId":"search","records":[]}',
+    '{"sourceId":"pubmed","toolId":"read","records":[]}','{"sourceId":"pubmed","toolId":"search","records":3}']) assert.equal(trace(value).paperCount,undefined);
 });

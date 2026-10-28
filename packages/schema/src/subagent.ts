@@ -71,6 +71,8 @@ export interface SubagentUsage {
 
 export interface SubagentStep {
   content: string;
+  /** Intermediate tool output retained alongside the terminal result. */
+  progress?: string;
   createdAt: string;
   /** Full structured tool result details, when the step records a completed tool call. */
   details?: unknown;
@@ -86,6 +88,15 @@ export interface SubagentStep {
 }
 
 export interface Subagent {
+  runtimeOptions?: Exclude<import("./specialist.js").SpecialistRuntime, { kind: "native" }>;
+  /** Credential-free interactive setup state; the secret travels over a dedicated API. */
+  runtimeInput?: { id: string; runtime: "codex" | "claude-code" | "acp"; state: "pending" | "configured" };
+  runtimeSessionId?: string;
+  runtimeDiagnostics?: {
+    failureReason?: "unavailable" | "policy_or_task" | "cancelled" | "timeout";
+    fallbackCount: number;
+    sandboxProbe?: { ok: boolean; mode: "sandbox" | "direct" };
+  };
   /** Closed model history in the existing agent-state pool, never executable replay. */
   contextRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   createdAt: string;

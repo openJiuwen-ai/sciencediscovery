@@ -14,7 +14,7 @@
     "@sciencediscovery/trajectory": "workspace:*",
     "@sciencediscovery/plugin-sdk": "workspace:*",
     "@sciencediscovery/artifact-manager": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@sciencediscovery/cas": "workspace:*",
     "@sciencediscovery/context": "workspace:*",
     "@sciencediscovery/data-source": "workspace:*",
@@ -38,17 +38,19 @@
     "@sciencediscovery/workspace": "workspace:*",
     "ajv": "8.18.0",
     "fflate": "0.8.3",
-    "undici": "8.9.0",
+    "typebox": "1.1.38",
+    "undici": "8.12.2",
     "yaml": "2.9.0",
     "@sciencediscovery/skill": "workspace:*",
     "@sciencediscovery/mcp": "workspace:*",
     "@sciencediscovery/scheduler": "workspace:*",
-    "@sciencediscovery/artifact-json": "workspace:*"
+    "@sciencediscovery/artifact-json": "workspace:*",
+    "@openai/codex-sdk": "0.162.1"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
     "tsx": "4.23.1",
-    "typebox": "1.1.38",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "@sciencediscovery/launcher": "workspace:*"
   }
 }

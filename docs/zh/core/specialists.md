@@ -27,3 +27,30 @@ ScienceDiscovery 提供若干预置 Specialist，覆盖文献检索、证据提�
 - [创建与使用自定义 Specialist](../advanced-setup/configure-specialists.md)：填写职责、配置资源并验证一次任务。
 - [科研 MCP 与 Skill](mcp-skills.md)：查看已有工具与方法，以及扩展入口。
 - [文献调研教程](../domains/literature-research.md)：从问题到可核查报告。
+
+### 平台决策回合
+
+Codex、Claude Code、ACP 统一使用多工具结构化决策：
+
+```json
+{"summary":"先检查再执行","tools":[{"tool":"run_shell","arguments":"{\"command\":\"pwd\"}"},{"tool":"run_shell","arguments":"{\"command\":\"ls\"}"}]}
+```
+
+`tools` 是有序数组，`arguments` 是符合对应平台工具参数 schema 的 JSON
+对象字符串。整批校验通过后，所有工具（包括独占工具）按数组顺序串行执行，
+继续经过平台权限、Runner 和审计绑定；下一次决策能看到每个工具的结果。
+`{"summary":"最终答复","tools":[]}` 表示完成；非空列表始终表示请求执行。
+不开放原生 shell 或文件修改，不调整主 Agent 的并行上限，也不按运行时分档。
+
+非法 JSON、多余字段、未知工具或非法参数会在同一回合内纠错一次；第二次仍然
+非法则明确失败，该决策中的工具均不执行。执行或权限失败不会触发纠错重试。
+旧的单个 `tool`/`arguments` 外层结构替换为 `tools`，运行时提示和 Codex 输出
+schema 自动提供新契约，用户配置无需迁移。
+
+无密钥验证方法：先运行 `pnpm build`，再运行
+`pnpm exec tsx --test services/api/src/specialist-runtime/decisions.test.ts`。
+自由 brief 的双工具合法响应现在首次即可通过（旧 schema 会拒绝）；非法响应
+经一次纠正后可完成，不再首败即终止；连续两次非法则零执行并明确失败。
+这是确定性契约测试，不代表已测量真实供应商首败率。联调 DSV 时，可在改动前后
+使用相同 brief 集合、模型和参数，分别统计首次非法响应、最终失败、纠错成功和
+审计中的实际工具调用数，两组均保持原生工具禁用。

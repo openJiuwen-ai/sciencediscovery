@@ -42,7 +42,7 @@ Agent 工具 mcp__<source>__<tool>
           队列满   → RATE_LIMIT_QUEUE_FULL
           排队超时 → RATE_LIMIT_QUEUE_TIMEOUT
       → McpNodeClient.invoke → MCP server → 上游 provider
-          Gateway 内按 retryPolicy 对 429/5xx/transport 做有限重试（尊重 Retry-After）
+          broker 每次只允许一个上游 attempt，后续调用重新经过准入与健康检查
           attempt 出现 rate-limited → ResourceRateLimiter.reportUpstreamRateLimit(rateLimitGroup, retryAfterMs)
       → lease.release()   finally 释放并发槽并 pump 队尾
 ```
@@ -60,19 +60,19 @@ Agent 工具 mcp__<source>__<tool>
 
 ### 2.4 Broker 逻辑要点
 
-- `acquire` 包住整次 Gateway invoke（含 invoke 内的 `retryPolicy` 重试）：lease 在 `gateway.invoke` 之前获取、在 `finally` 中 `release`，因此同一资源在一次调用内的多次 attempt 共占同一个并发槽。
-- 队列满映射为 `RATE_LIMIT_QUEUE_FULL`、排队超时映射为 `RATE_LIMIT_QUEUE_TIMEOUT`，两者均 `retryable`，并写入失败 `McpInvocation`（排队超时附带 `queueWaitMs`）。错误码全貌见第 4 节。
-- 四个底座维度均为 optional；`undefined` 或省略表示不启用该维度，broker 保留 governance 的缺失状态、不回填隐式默认（语义见第 3 节，内建源显式取值见第 5 节）。现有源之所以带 `8` / `20s` 队列参数，是 manifest 显式引用 `DEFAULT_MCP_RATE_LIMIT_QUEUE`（`maxQueueDepth: 8`、`queueTimeoutMs: 20_000`），而非底座硬编码。
-- 结果缓存命中时直接返回规范化结果，**不 acquire、不调用 Gateway**，因此缓存重放不占用出站配额。
+- `acquire` 包住一次 MCP attempt，并在 `finally` 释放；broker 把传给 Node MCP client 的 `maxAttempts` 固定为 1，防止持有同一个 slot 时的内部重试绕过请求间隔。
+- 队列满和排队超时分别映射 `RATE_LIMIT_QUEUE_FULL`、`RATE_LIMIT_QUEUE_TIMEOUT`，审计记录实际排队时间。省略队列参数时 broker 使用 `DEFAULT_MCP_RATE_LIMIT_QUEUE` 的 8 深度、20 秒上限，排队时间还不超过工具超时；省略并发或间隔仍保持原语义。
+- 缓存命中不出站。权限、启用和输入检查仍在准入前执行。
 
-### 2.5 Gateway 重试与 Node 限流的分工
+### 2.5 同进程共享健康与恢复
 
-两层不重复，互补：
+多个 broker 和科研 agent 默认复用同一个进程内 limiter/SourceHealth；独立 worker 不共享，不新增存储。429 以真实上游限流组和有效鉴权摘要划分；406 再按来源/工具隔离端点。鉴权摘要包含 server URL、headers、env、OAuth 和工具参数中的凭据，不把原值写入日志。
 
-- **Gateway 层（Python，`retryPolicy`）**：在一次 invoke 内部对瞬时错误（`transport-error` / `rate-limited` / `server-error`）做有限重试，尊重 `Retry-After`，逐次 attempt 记入 `response.attempts[]`。它处理「这一次调用撞墙了，退一下再试」。
-- **Node 限流层（`ResourceRateLimiter`）**：跨多次 invoke 的并发上限、最小间隔、FIFO 排队与排队超时，以及撞墙后的冷却。它处理「这次 invoke 整体排队、控并发、控节奏，撞墙后让后续调用也等」。
+429 尊重 Retry-After；缺失时从 1 秒指数退避至最多 30 秒。冷却发生后，受影响的排队者立即退出，后续调用直接得到 `retryAt`/`retryAfterMs`，不各自 sleep 重试。冷却后仍须经过原有并发和请求间隔控制。
 
-衔接点：Gateway 重试的 `attempts` 中出现 `rate-limited` 时，broker 调用 `reportUpstreamRateLimit(rateLimitGroup, retryAfterMs)`，把上游指示的冷却写回底座，使队列中等待的后续调用推迟到冷却结束再放行，而不是放行后立刻再撞同一个 429。
+406 使用 provider 自有 JSON envelope 分类。参数/查询错误与无法归因的拒绝只反馈本次请求；只有明确通用边缘拒绝且没有请求错误信号的情况才计入来源健康。同一分钟内连续三个不同请求遭到端点拒绝，才在来源/工具范围内抑制；同一输入反复失败不会累加到阈值。406 冷却从 30 秒指数增长，最多 120 秒。
+
+冷却结束只允许一个探测；其余调用快速返回。探测成功恢复，失败重新抑制，取消释放探测权和 slot。其他来源保持可用；只建议已启用、同类且实际有可用工具的来源，保留引用与证据要求。没有可用替代时诚实说明受阻，不假称已切换或已取得原来源内容。
 
 ### 2.6 不经此链的出站
 
@@ -96,14 +96,14 @@ Agent 工具 mcp__<source>__<tool>
 | `queueTimeoutMs` | 排队不超时，只能由放行或 Abort/取消结束等待 | > 0；到期返回结构化排队超时错误 |
 | `signal` | 不提供主动取消 | 提供 AbortSignal；排队中取消即出队，执行中取消由调用方释放槽位 |
 
-数值校验只针对已提供的字段。Broker 保留 governance 的缺失状态，不会把缺失字段回填为并发 1、队列 8 或排队 20 秒。
+上表描述通用 ResourceRateLimiter。数值校验只针对已提供字段；MCP broker 保留并发和间隔的省略语义，但对缺失队列参数使用 8/20s 有界默认，且排队不超过工具超时。
 
 超时分层：
 
 - **排队超时**（本底座）：等不到执行槽位。
-- **执行超时**（Gateway `timeoutMs` deadline）：拿到槽位后上游过慢。两者叠加的最坏等待仍显著小于 gateway idle 超时（240s），外层不会先断。
+- **执行超时**（Node client `timeoutMs` deadline）：拿到槽位后上游过慢。排队与执行各自有界。
 
-429 冷却：Gateway 重试明细中出现 `rate-limited` attempt 时，broker 调用 `reportUpstreamRateLimit(key, retryAfterMs)`，该资源键的后续放行推迟到冷却结束。无 `Retry-After` 时至少冷却 1 秒；若最近一次 acquire 或等待队列存在更长 pacing，则取更长值。即使该键没有 pacing 配置，冷却仍安全生效。
+429 的共享冷却与有限探测见第 2.5 节；底座仍通过 `reportUpstreamRateLimit` 保留原有间隔及冷却约束。
 
 ## 4. 错误语义（对模型与用户可读）
 
@@ -111,11 +111,12 @@ Agent 工具 mcp__<source>__<tool>
 |---|---|---|---|
 | 等待队列已满 | `RATE_LIMIT_QUEUE_FULL` | true | 建议减少并行调用、稍后重试 |
 | 排队超时 | `RATE_LIMIT_QUEUE_TIMEOUT` | true | 附实际排队时长（审计 `queueWaitMs`） |
-| 上游 429（重试耗尽） | `RATE_LIMITED` | true | 尽量携带真实 `retryAfterMs` |
+| 上游 429 | `RATE_LIMITED` | false | 携带共享 `retryAt`/`retryAfterMs`，禁止独立重试 |
+| 共享冷却或探测进行中 | `SOURCE_COOLDOWN` | false | 短说明与结构化恢复、替代来源指引 |
 | 执行超时 | `TIMEOUT` | true | 既有语义不变 |
 | 用户取消 | `CANCELLED` | false | 排队/执行中取消都会释放资源 |
 
-Retry-After 传播：Python MCP server 的 HTTP 封装不再使用裸 `raise_for_status()`（它会丢弃响应头），而是抛出形如 `HTTP 429 Too Many Requests from export.arxiv.org (retry-after: 5)` 的可解析错误；Gateway 错误分类器锚定 `retry-after` token 取值，重试与冷却都能拿到上游指示。
+Retry-After 传播：随包 Python MCP server 通过 JSON envelope 传递脱敏 origin、状态码、失败范围和毫秒重试时间，兼容数字及 HTTP-date。Node 提取结构化字段；状态转换日志与调用审计保留状态码、排队时间、决策和关联 ID，不保留完整 URL、响应正文或凭据。用户错误只是一句短说明，详细时间与证据要求放在工具详情中。
 
 ## 5. 配置面与内建源显式参数
 
@@ -130,7 +131,7 @@ per-source 配置在 source manifest 的 `governance` 字段（`packages/schema/
 | `queueTimeoutMs` | 20000（manifest 显式引用同一推荐值） | 20000 | 突发 6 个 arXiv 请求可在窗口内消化 |
 | `retryPolicy.initialDelayMs` | 500 | 3000 | 重试间隔不低于源 pacing |
 
-这些值不是 broker 的隐式默认。当前 public-biomed 与 UniProt manifest 显式选择它们，因此现有源行为保持不变；自定义或未来 source 可省略任一治理字段，以关闭对应限制维度。
+内建源仍显式选择这些参数。自定义或未来来源可以省略并发及间隔，但 broker 总会对排队施加有界保护。
 
 审计：每次 `McpInvocation` 记录 `queueWaitMs`（排队时长）；429/重试明细在 `attempts[]`；均可经 `GET /api/sessions/:sessionId/mcp/invocations` 查询。不记录 query 全文之外的新增敏感信息。
 

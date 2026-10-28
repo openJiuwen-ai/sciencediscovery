@@ -15,6 +15,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  DEFAULT_MCP_RATE_LIMIT_QUEUE,
   type JsonValue,
   type McpError,
   type McpInvocation,
@@ -43,9 +44,13 @@ import {
   ResourceRateLimitQueueFullError,
   ResourceRateLimitQueueTimeoutError,
 } from "./resource-rate-limiter.js";
+import { SourceHealth, SourceCoolingError, type SourceAdmission } from "./source-health.js";
 import { McpResultCache } from "./result-cache.js";
 import { McpSourceCatalog } from "./catalog.js";
 import type { McpTransportClient } from "./transport.js";
+
+const processLimiter = new ResourceRateLimiter();
+const healthByLimiter = new WeakMap<ResourceRateLimiter, SourceHealth>();
 
 /** Persistence and settings boundary required by the governed MCP domain. */
 export interface McpBrokerStore {
@@ -57,6 +62,7 @@ export interface McpBrokerStore {
 }
 
 export interface InvokeMcpToolRequest {
+  onProgress?: (chunk: string) => void;
   allowedSourceIds?: string[];
   authorize?: (
     action: PermissionAction,
@@ -117,6 +123,16 @@ function renderTemplate(template: string, input: JsonValue): string {
       ? String(value)
       : match;
   });
+}
+
+/** Extract only authentication-bearing arguments, including nested header maps. */
+function credentialArguments(value: JsonValue): Record<string, JsonValue> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([name, item]) => {
+    if (/(?:api|access|subscription)[_-]?key|token|authorization|password|secret|credential/i.test(name)) return [[name, item]];
+    const nested = credentialArguments(item);
+    return Object.keys(nested).length ? [[name, nested]] : [];
+  }));
 }
 
 function cachePolicy(
@@ -352,6 +368,7 @@ export class McpGovernanceBroker {
   private readonly dataCas: CasStore;
   private readonly cache: McpResultCache;
   private readonly limiter: ResourceRateLimiter;
+  private readonly health: SourceHealth;
   private readonly memoryGraphSink: MemoryGraphSink | null;
 
   constructor(
@@ -363,13 +380,16 @@ export class McpGovernanceBroker {
     options: {
       cache?: McpResultCache;
       limiter?: ResourceRateLimiter;
+      health?: SourceHealth;
       memoryGraphSink?: MemoryGraphSink | null;
     } = {},
   ) {
     this.cas = new CasStore(dataDir);
     this.dataCas = new CasStore(dataDir, "data");
     this.cache = options.cache ?? new McpResultCache(dataDir);
-    this.limiter = options.limiter ?? new ResourceRateLimiter();
+    this.limiter = options.limiter ?? processLimiter;
+    this.health = options.health ?? healthByLimiter.get(this.limiter) ?? new SourceHealth();
+    healthByLimiter.set(this.limiter, this.health);
     this.memoryGraphSink = options.memoryGraphSink ?? null;
   }
 
@@ -410,7 +430,7 @@ export class McpGovernanceBroker {
       sessionId: options.request.sessionId,
       sourceId: options.request.sourceId,
       startedAt: options.startedAt,
-      status: "failed",
+      status: options.error.code === "CANCELLED" ? "cancelled" : "failed",
       toolCallId: options.request.toolCallId,
       toolId: options.request.toolId,
       transport: source.manifest.transport.type,
@@ -552,16 +572,74 @@ export class McpGovernanceBroker {
       ?? (governance.rateLimitPerSecond !== undefined
         ? Math.ceil(1_000 / governance.rateLimitPerSecond)
         : undefined);
-    let lease: Awaited<ReturnType<ResourceRateLimiter["acquire"]>>;
+    const serverId = source.manifest.transport.mcpServerId;
+    const scope = this.gateway.sourceScope?.(serverId);
+    // Credentials passed as tool arguments must not share another user's cooldown.
+    const credentials = credentialArguments(input);
+    const authScope = scope || Object.keys(credentials).length
+      ? createHash("sha256").update(canonicalJson({ scope, credentials })).digest("hex") : undefined;
+    const rateKey = authScope ? `${governance.rateLimitGroup}:${authScope}` : governance.rateLimitGroup;
+    const healthKey = `${rateKey}:${request.sourceId}:${request.toolId}`;
+    const unavailable = (cause: SourceCoolingError): McpError => {
+      const fallbackSourceIds = this.registry.list().filter(candidate => {
+        const id = candidate.manifest.id;
+        if (id === request.sourceId || !enabledSourceIds.includes(id)
+          || !candidate.manifest.kinds.some(kind => source.manifest.kinds.includes(kind))) return false;
+        const tools = this.catalog.getStatus(id).availableTools;
+        return tools.some(toolId => {
+          const candidateScope = this.gateway.sourceScope?.(candidate.manifest.transport.mcpServerId);
+          const digest = candidateScope ? createHash("sha256").update(canonicalJson({ scope: candidateScope, credentials: {} })).digest("hex") : undefined;
+          const group = candidate.manifest.governance.rateLimitGroup;
+          const candidateRateKey = digest ? `${group}:${digest}` : group;
+          try {
+            this.health.check(`${candidateRateKey}:rate`);
+            this.health.check(`${candidateRateKey}:${id}:${toolId}`);
+            return true;
+          } catch { return false; }
+        });
+      }).map(candidate => candidate.manifest.id);
+      return { code: "SOURCE_COOLDOWN", retryable: false, retryAfterMs: cause.retryAfterMs,
+        sourceHealth: cause.diagnostic, fallbackSourceIds,
+        message: fallbackSourceIds.length
+          ? "This source is temporarily unavailable. Try other sources."
+          : "This source is temporarily unavailable. Research is blocked because no alternative source is available.",
+        guidance: "Preserve citation and evidence requirements. Do not claim content was retrieved from this source. "
+          + "Do not sleep or retry independently; the shared broker admits a single recovery probe after retryAt.",
+      };
+    };
+    const rateHealthKey = `${rateKey}:rate`;
+    let rateAdmission: SourceAdmission | undefined;
+    let admission: SourceAdmission | undefined;
+    let lease: Awaited<ReturnType<ResourceRateLimiter["acquire"]>> | undefined;
     try {
-      lease = await this.limiter.acquire(governance.rateLimitGroup, {
+      request.signal?.throwIfAborted();
+      this.health.check(rateHealthKey);
+      this.health.check(healthKey);
+      lease = await this.limiter.acquire(rateKey, {
+        queueScope: healthKey,
         maxConcurrent: governance.maxConcurrentRequests,
-        maxQueueDepth: governance.maxQueueDepth,
+        maxQueueDepth: governance.maxQueueDepth ?? DEFAULT_MCP_RATE_LIMIT_QUEUE.maxQueueDepth,
         minIntervalMs,
-        queueTimeoutMs: governance.queueTimeoutMs,
+        queueTimeoutMs: Math.min(governance.queueTimeoutMs ?? DEFAULT_MCP_RATE_LIMIT_QUEUE.queueTimeoutMs, tool.timeoutMs),
         ...(request.signal ? { signal: request.signal } : {}),
       });
+      request.signal?.throwIfAborted();
+      rateAdmission = this.health.admit(rateHealthKey);
+      admission = this.health.admit(healthKey);
     } catch (error) {
+      if (rateAdmission) this.health.abandon(rateHealthKey, rateAdmission);
+      lease?.release();
+      if (error instanceof SourceCoolingError) {
+        const normalized = unavailable(error);
+        const invocation = await this.appendFailure({ cacheKey: key, error: normalized,
+          permissionAuthorizationId, queueWaitMs: Math.round(lease?.queueWaitMs ?? error.queueWaitMs), request, requestRef, startedAt });
+        throw new McpInvocationError(normalized.message, invocation);
+      }
+      if (request.signal?.aborted) {
+        const cancelled = invocationError("CANCELLED", "MCP invocation cancelled", false);
+        const invocation = await this.appendFailure({ cacheKey: key, error: cancelled, permissionAuthorizationId, request, requestRef, startedAt });
+        throw new McpInvocationError(cancelled.message, invocation);
+      }
       if (error instanceof ResourceRateLimitQueueFullError
         || error instanceof ResourceRateLimitQueueTimeoutError) {
         const full = error instanceof ResourceRateLimitQueueFullError;
@@ -617,7 +695,9 @@ export class McpGovernanceBroker {
         },
         execution: {
           maxResponseBytes: source.manifest.governance.maxResponseBytes,
-          retryPolicy: tool.retryPolicy as McpRetryPolicy,
+          // Each governed invocation makes one attempt. Later calls re-enter pacing,
+          // admission and shared health rather than retrying while holding a slot.
+          retryPolicy: { ...tool.retryPolicy, maxAttempts: 1 } as McpRetryPolicy,
           timeoutMs: tool.timeoutMs,
         },
         // Per-server policy resolved through the global registry; the gateway
@@ -626,17 +706,53 @@ export class McpGovernanceBroker {
         requestId: randomUUID(),
         serverId,
         toolName,
-      }, request.signal);
+      }, request.signal, request.onProgress);
       attempts = response.attempts;
+      const last = attempts.at(-1);
+      if (!response.isError) {
+        this.health.success(healthKey, admission);
+        this.health.success(rateHealthKey, rateAdmission);
+      } else if (last) {
+        // Trust attribution only to a declared host, and never retain URL queries,
+        // dynamic path identifiers, userinfo or arbitrary provider error text.
+        if (last.upstream) {
+          try {
+            const endpoint = new URL(last.upstream.endpoint);
+            if (!governance.networkHosts.includes(endpoint.hostname)) delete last.upstream;
+            else last.upstream.endpoint = endpoint.origin;
+          } catch { delete last.upstream; }
+        }
+        const isRateLimit = last.status === "rate-limited";
+        let cooling = this.health.failure(isRateLimit ? rateHealthKey : healthKey,
+          isRateLimit ? rateAdmission : admission, last, key);
+        // A recovery probe must succeed to close its original failure scope,
+        // even when the upstream now fails with a different status.
+        if (rateAdmission.probe && !isRateLimit) {
+          const rateCooling = this.health.failure(rateHealthKey, rateAdmission, last, key);
+          cooling ??= rateCooling;
+        }
+        if (admission.probe && isRateLimit) this.health.failure(healthKey, admission, last, key);
+        if (cooling) {
+          const failure = cooling;
+          this.limiter.rejectPending?.(rateKey, waited => new SourceCoolingError(failure.diagnostic, failure.retryAfterMs, waited),
+            isRateLimit ? undefined : healthKey);
+          console.info("mcp_source_health", JSON.stringify({ sourceId: request.sourceId, toolId: request.toolId,
+            sessionId: request.sessionId, turnId: request.turnId, toolCallId: request.toolCallId,
+            queueWaitMs, ...cooling.diagnostic }));
+        }
+      }
       // Feed upstream throttling back into the limiter so queued peers slow
       // down instead of hitting the same 429 wall.
       const throttled = attempts.findLast((attempt) => attempt.status === "rate-limited");
       if (throttled) {
-        this.limiter.reportUpstreamRateLimit(governance.rateLimitGroup, throttled.retryAfterMs);
+        this.limiter.reportUpstreamRateLimit(rateKey, throttled.retryAfterMs);
       }
       rawResponse = await this.cas.put(JSON.stringify(response));
       if (response.isError) {
-        const error = upstreamError(response);
+        let error = upstreamError(response);
+        try { this.health.check(rateHealthKey); this.health.check(healthKey); } catch (cause) {
+          if (cause instanceof SourceCoolingError) error = { ...unavailable(cause), code: last?.status === "rate-limited" ? "RATE_LIMITED" : "SOURCE_COOLDOWN" };
+        }
         const invocation = await this.appendFailure({
           attempts,
           cacheKey: key,
@@ -667,9 +783,9 @@ export class McpGovernanceBroker {
     } catch (error) {
       if (error instanceof McpInvocationError) throw error;
       const normalizedError = invocationError(
-        error instanceof DOMException && error.name === "AbortError" ? "CANCELLED" : "UPSTREAM_UNAVAILABLE",
-        error instanceof Error ? error.message : String(error),
-        true,
+        request.signal?.aborted || error instanceof DOMException && error.name === "AbortError" ? "CANCELLED" : "UPSTREAM_UNAVAILABLE",
+        request.signal?.aborted ? "MCP invocation cancelled" : error instanceof Error ? error.message : String(error),
+        !request.signal?.aborted,
       );
       const invocation = await this.appendFailure({
         attempts,
@@ -684,6 +800,8 @@ export class McpGovernanceBroker {
       });
       throw new McpInvocationError(normalizedError.message, invocation);
     } finally {
+      this.health.abandon(rateHealthKey, rateAdmission);
+      this.health.abandon(healthKey, admission);
       lease.release();
     }
 

@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Pushing a version tag builds the release and publishes it.
+# Pushing a version tag builds the release and creates a draft after the gate.
 #
 # The gate is the merge gate, called from ci.yml rather than restated, so what
 # ships is checked by the same UT, ST, mocked E2E, both native binary builds
 # with their four-entry smoke gate, and the Docker deployment contract. Only
-# then does anything become downloadable: `publish` needs the whole called
-# workflow, so one red job anywhere leaves the tag without a release.
+# then does `publish` create the draft Release and its assets: it needs the
+# whole called workflow, so one red job anywhere leaves the tag without a
+# release. A person with write access reviews and publishes the draft from
+# the Releases page before it becomes publicly downloadable.
 #
 # The binaries are not rebuilt for publication. They are the artifacts the
 # gate already smoke-tested, downloaded and checked against the SHA256SUMS the
@@ -77,7 +79,7 @@ jobs:
     secrets: inherit
     with:
       # L5 contains L4 plus the existing eligible release cases; quality calibration is deferred.
-      # Failure leaves the existing tag without publishing Release/assets.
+      # Failure leaves the existing tag without creating a draft Release or its assets.
       profile: release
       release-version: ${{ needs.version.outputs.version }}
 
@@ -178,7 +180,7 @@ jobs:
             if [[ "${PRERELEASE}" == "true" ]]; then
               arguments+=(--prerelease)
             fi
-            gh release create "${TAG}" "${arguments[@]}" "${files[@]}"
+            gh release create "${TAG}" --draft "${arguments[@]}" "${files[@]}"
           fi
 
           {

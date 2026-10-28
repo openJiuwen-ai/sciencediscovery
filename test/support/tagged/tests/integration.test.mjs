@@ -14,12 +14,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collect, execute, discoverFiles } from '../coordinator.mjs';
-import { createPlan } from '../plan.mjs';
+import { createPlan, subplan } from '../plan.mjs';
+import { planGroups } from '../scheduler.mjs';
 import { hostPlatform, hostArch } from '../environment.mjs';
 const adapter = new URL('../node.mjs', import.meta.url).href;
 const target = { os: hostPlatform(process.platform), arch: hostArch(process.arch) };
@@ -42,6 +43,18 @@ test('native Node executes exact selected identities without runtime skips', asy
   const result = await execute({ ...scope, plan });
   assert.deepEqual(result.problems, []);
   assert.equal(result.passed, 2);
+});
+test('a file whose declaring tests run apart leaves coverage from both processes', async t => {
+  const scope = fixture(t, 'split.test.mjs', header + `test('plain',()=>assert.ok(true));\ntest('turn',{tags:['swarm:required']},()=>assert.ok(true));\n`);
+  const plan = makePlan(scope), coverageDir = join(scope.root, 'coverage');
+  const groups = planGroups(plan.entries);
+  assert.equal(groups.length, 2);
+  for (const group of groups) {
+    const result = await execute({ ...scope, outputDir: join(scope.outputDir, group.resource ?? 'plain'),
+      plan: subplan(plan, group.entries), coverageDir, coverageName: group.name });
+    assert.equal(result.passed, 1);
+  }
+  assert.deepEqual(readdirSync(coverageDir).sort(), ['split.test.mjs.jiuwenswarm.lcov', 'split.test.mjs.lcov']);
 });
 test('native Node selection does not register unselected tests', async t => {
   const scope = fixture(t, 'one.test.mjs', header + `test('one',()=>assert.ok(true));\ntest('not selected',{tags:['category:st']},()=>{throw new Error('must not execute')});\n`);

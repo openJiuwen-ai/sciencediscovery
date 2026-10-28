@@ -7,7 +7,8 @@
 ```text
 sciencediscovery/
 ├── apps/
-│   └── web/                  # React/Vite 浏览器工作台
+│   ├── web/                  # React/Vite 浏览器工作台
+│   └── desktop/              # v0.1 工作台，目标是替换 apps/web
 ├── services/
 │   ├── api/                  # Node 控制面与 composition root
 │   ├── adapter/              # JiuwenSwarm front door / 协议适配

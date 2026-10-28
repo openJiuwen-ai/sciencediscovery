@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createTest } from "../support/tagged/compat.mjs";
 import { collectFinalDelivery } from "./real-delivery.ts";
-import { finalReportArtifact, requiredArtifacts } from "./real-delivery.mjs";
+import { deliveryFailureMessage, finalReportArtifact, requiredArtifacts } from "./real-delivery.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:macos", "arch:amd64", "arch:arm64"] });
 
 function api(status = "completed", text = "[report](/artifact-versions/older/content)", content = "report", httpStatus = 200,
@@ -310,4 +310,56 @@ test("a wake acknowledgement uses the producing Run's report handoff", async () 
   assert.equal(delivery.answer, "Background work finished.");
   assert.equal(delivery.producer_answer, "Final report: results/review-v2.md");
   assert.equal(finalReportArtifact(delivery.artifacts, "deepresearchbench-59.md", delivery.producer_answer)?.id, "report");
+});
+
+test("delivery diagnostics retain product errors independently of artifact errors", async () => {
+  const error = "Model returned invalid tool arguments (tools: run_shell)";
+  const fake = api("failed", "", "report", 200, {
+    runs: [{ id: "r", status: "failed", error }], outputs: [],
+  });
+  const result = await collectFinalDelivery(fake.page, "s", "r");
+  assert.equal(result.run_error, error);
+  assert.deepEqual(result.errors, ["No declared Artifact from this Run chain"]);
+  const message = deliveryFailureMessage(result);
+  assert.ok(message.includes("delivery_status=failed; run_status=failed; delivered_artifacts=0"));
+  assert.ok(message.includes(`run_error=${error}`));
+});
+
+test("delivery diagnostics distinguish completed and running runs without outputs", async () => {
+  for (const status of ["completed", "running"]) {
+    const fake = api(status, "", "report", 200, { outputs: [] });
+    const result = await collectFinalDelivery(fake.page, "s", "r");
+    assert.equal(result.run_error, null);
+    assert.equal(result.status, status === "running" ? "running" : "failed");
+    const message = deliveryFailureMessage(result);
+    assert.ok(message.includes(`delivery_status=${result.status}; run_status=${status}; delivered_artifacts=0; run_error=none`));
+    assert.ok(!message.includes("timed_out"));
+  }
+});
+
+test("an unfinished run is not a failed delivery, with or without declared artifacts", async () => {
+  for (const status of ["queued", "running", "blocked"]) {
+    for (const outputs of [[], undefined]) {
+      const fake = api(status, "", "report", 200, outputs === undefined ? {} : { outputs });
+      const result = await collectFinalDelivery(fake.page, "s", "r");
+      assert.equal(result.status, "running");
+      assert.equal(result.run_status, status);
+    }
+  }
+});
+
+test("terminal runs with no declared artifact remain failed deliveries", async () => {
+  for (const status of ["completed", "failed", "cancelled", "interrupted"]) {
+    const fake = api(status, "", "report", 200, { outputs: [] });
+    assert.equal((await collectFinalDelivery(fake.page, "s", "r")).status, "failed");
+  }
+});
+
+test("delivery diagnostics include artifact read errors without report contents", async () => {
+  const fake = api("completed", "nested/report.md", "private report contents", 404);
+  const result = await collectFinalDelivery(fake.page, "s", "r");
+  const message = deliveryFailureMessage(result);
+  assert.ok(message.includes('artifact_errors=["a: Content HTTP 404"]'));
+  assert.ok(message.includes("run_error=none"));
+  assert.ok(!message.includes("private report contents"));
 });

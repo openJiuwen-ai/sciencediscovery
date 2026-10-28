@@ -22,6 +22,8 @@ import type { McpCatalog, McpInvokeRequest, McpInvokeResponse, ResolvedProxy } f
  * still driving the real broker and catalog code paths.
  */
 export interface McpTransportClient {
+  /** Opaque digest of the effective endpoint and credentials, never a raw secret. */
+  sourceScope?(serverId: string): string;
   catalog(signal?: AbortSignal): Promise<McpCatalog>;
   /**
    * Release whatever the client is holding open. An implementation that talks
@@ -30,6 +32,6 @@ export interface McpTransportClient {
    * this.
    */
   close?(): Promise<void>;
-  invoke(request: McpInvokeRequest, signal?: AbortSignal): Promise<McpInvokeResponse>;
+  invoke(request: McpInvokeRequest, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<McpInvokeResponse>;
   reload(proxies?: Record<string, ResolvedProxy>, signal?: AbortSignal): Promise<McpCatalog>;
 }

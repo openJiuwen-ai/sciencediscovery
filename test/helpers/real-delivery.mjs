@@ -9,7 +9,22 @@ export function finalAnswer(run, messages) {
 }
 
 export function deliveryStatus(runStatus, delivered) {
+  // Active Runs are still in flight; do not classify them as delivery failure.
+  if (["queued", "running", "blocked"].includes(runStatus)) return "running";
   return delivered.length ? runStatus === "completed" ? "passed" : "partial" : "failed";
+}
+
+/** Keep run errors separate from artifact read errors in CI diagnostics. */
+export function deliveryFailureMessage(delivery) {
+  const fields = [
+    "Main run must complete with readable, nonempty declared final artifacts",
+    `delivery_status=${delivery.status}`,
+    `run_status=${delivery.run_status}`,
+    `delivered_artifacts=${delivery.artifacts.length}`,
+    `run_error=${delivery.run_error ?? "none"}`,
+  ];
+  if (delivery.errors.length) fields.push(`artifact_errors=${JSON.stringify(delivery.errors)}`);
+  return fields.join("; ");
 }
 
 /**

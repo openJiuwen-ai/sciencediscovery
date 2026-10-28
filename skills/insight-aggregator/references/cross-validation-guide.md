@@ -6,7 +6,7 @@ Detailed methodology for cross-validating multiple independent expert assessment
 
 Inspired by the Arbor idea tree insight propagation system, insights flow upward through the tree:
 
-```
+```text
 Leaf (direct finding)
   → Parent (pattern across children)
     → Grandparent (higher-level synthesis)
@@ -81,7 +81,7 @@ The server computes the final weighted score using role weights. The aggregator 
 | stability (B) | 35% | Structural stability and durability |
 | sustainability (C) | 30% | Environmental safety and sustainability |
 
-```
+```text
 weighted_score = 0.35 × activity_overall + 0.35 × stability_overall + 0.30 × sustainability_overall
 ```
 

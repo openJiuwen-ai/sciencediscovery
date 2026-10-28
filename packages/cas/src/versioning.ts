@@ -3,8 +3,8 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, readdir, readFile, readlink, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { link, lstat, mkdir, open, readdir, readFile, readlink, rm, type FileHandle } from "node:fs/promises";
+import { dirname, resolve, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export type Pool = "data" | "agent-state";
@@ -50,7 +50,9 @@ export function assertRef(ref: ObjectRef, pool?: Pool): void {
 }
 
 async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY);
+  // Windows FlushFileBuffers requires a writable handle, including for a directory.
+  const access = process.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY;
+  const handle = await open(path, access | constants.O_DIRECTORY);
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
@@ -87,20 +89,43 @@ interface ObjectIdentity {
   ctimeNs: bigint;
 }
 
-interface VerifiedObject {
-  identity: ObjectIdentity;
-  dependencies: ObjectRef[];
-}
+/** Stored-object identity; mediaType only decides whether the bytes are parsed as a record. */
+const admissionKey = (ref: ObjectRef): string => `${ref.pool}:${ref.digest}:${ref.size}`;
 
 /** Each pool is a standalone OCI image layout. Live refs are owned by SQLite, not index.json. */
 export class VersionStore {
   private initialized?: Promise<void>;
   /**
-   * Objects are immutable after publication. Ref commits still walk the whole
-   * dependency graph, but unchanged objects need not be read and hashed again.
+   * Objects this instance has verified, mapped to whether they were verified as
+   * a record together with their whole dependency closure. CAS objects are
+   * never rewritten or deleted, so ref commits stop at admitted objects instead
+   * of rehashing history. Trust boundary: nothing outside this store changes an
+   * object after this process verified it. Reads, full audits and new instances
+   * still rehash; file metadata is never taken as evidence.
    */
-  private readonly commitValidationCache = new Map<string, VerifiedObject>();
+  private readonly admitted = new Map<string, boolean>();
+  /** Bumped when admission is revoked, so an in-flight validation cannot re-admit a stale closure. */
+  private admissionGeneration = 0;
+  private readonly workspaceFiles = new Map<string, { source: ObjectIdentity; object: ObjectIdentity; ref: DataRef }>();
   constructor(readonly dataDir: string) {}
+
+  /** Reuse only bytes already hashed by this store, while both file identities remain unchanged. */
+  async putWorkspaceFile(path: Buffer, file: FileHandle): Promise<DataRef> {
+    const key = path.toString("base64");
+    const before = await file.stat({ bigint: true });
+    const cached = this.workspaceFiles.get(key);
+    if (cached && this.sameIdentity(before, cached.source)) {
+      let object: ObjectIdentity | undefined;
+      try { object = await this.objectIdentity(cached.ref); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (object && this.sameIdentity(object, cached.object)) return cached.ref;
+    }
+    const ref = await this.putStream("data", file.createReadStream({ autoClose: false, start: 0 }));
+    const after = await file.stat({ bigint: true });
+    if (!this.sameIdentity(before, after)) throw new Error("Workspace changed during snapshot");
+    this.workspaceFiles.set(key, { source: after, object: await this.objectIdentity(ref), ref });
+    return ref;
+  }
 
   poolRoot(pool: Pool): string { return resolve(this.dataDir, "versioning", pool); }
 
@@ -129,7 +154,7 @@ export class VersionStore {
     await this.initialize();
     const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
     const ref: ObjectRef<P> = { pool, digest: `sha256:${hash(bytes)}`, size: bytes.length, mediaType };
-    await publish(this.objectPath(ref), bytes);
+    await this.checked(ref, () => publish(this.objectPath(ref), bytes));
     return ref;
   }
 
@@ -167,23 +192,35 @@ export class VersionStore {
   }
 
   async verifyRef(ref: ObjectRef): Promise<void> {
-    const file = await open(this.objectPath(ref), "r");
-    const digest = createHash("sha256"); let size = 0;
-    try {
-      for await (const chunk of file.createReadStream({ autoClose: false })) {
-        const bytes = chunk as Buffer; size += bytes.length; digest.update(bytes);
-      }
-    } finally { await file.close(); }
-    if (size !== ref.size || digest.digest("hex") !== ref.digest.slice(7)) throw new Error("Object integrity failure");
+    return this.checked(ref, async () => {
+      const file = await open(this.objectPath(ref), "r");
+      const digest = createHash("sha256"); let size = 0;
+      try {
+        for await (const chunk of file.createReadStream({ autoClose: false })) {
+          const bytes = chunk as Buffer; size += bytes.length; digest.update(bytes);
+        }
+      } finally { await file.close(); }
+      if (size !== ref.size || digest.digest("hex") !== ref.digest.slice(7)) throw new Error("Object integrity failure");
+    });
   }
 
   async readData(ref: DataRef): Promise<Buffer> { assertRef(ref, "data"); return this.read(ref); }
   async readState(ref: AgentStateRef): Promise<Buffer> { assertRef(ref, "agent-state"); return this.read(ref); }
 
   async read(ref: ObjectRef): Promise<Buffer> {
-    const bytes = await readFile(this.objectPath(ref));
-    if (bytes.length !== ref.size || hash(bytes) !== ref.digest.slice(7)) throw new Error("Object integrity failure");
-    return bytes;
+    return this.checked(ref, async () => {
+      const bytes = await readFile(this.objectPath(ref));
+      if (bytes.length !== ref.size || hash(bytes) !== ref.digest.slice(7)) throw new Error("Object integrity failure");
+      return bytes;
+    });
+  }
+
+  /** A missing or corrupt admitted object is tampering evidence: stop trusting any admission. */
+  private async checked<T>(ref: ObjectRef, operation: () => Promise<T>): Promise<T> {
+    try { return await operation(); } catch (error) {
+      if (this.admitted.has(admissionKey(ref))) { this.admitted.clear(); this.admissionGeneration++; }
+      throw error;
+    }
   }
 
   async putRecord<T>(kind: string, value: T, dependencies: ObjectRef[] = []): Promise<AgentStateRef> {
@@ -237,52 +274,43 @@ export class VersionStore {
       && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
   }
 
-  private async validateReachable(root: AgentStateRef, reuseVerified: boolean): Promise<number> {
+  /** Returns how many objects were read and hashed. */
+  private async validateReachable(root: AgentStateRef, trustAdmitted: boolean): Promise<number> {
+    const generation = this.admissionGeneration;
     const visited = new Set<string>();
     const pending: ObjectRef[] = [root];
-    // Publish cache entries only after the complete closure succeeds.
-    const verified = new Map<string, VerifiedObject>();
+    // Admit only after the complete closure succeeds.
+    const verified = new Map<string, boolean>();
+    let rehashed = 0;
     while (pending.length) {
       const ref = pending.pop()!;
       assertRef(ref);
       const key = canonicalize(ref);
       if (visited.has(key)) continue;
       visited.add(key);
-
-      // Capture identity before reading bytes so a concurrent mutation cannot
-      // be cached as if the newly written bytes had passed verification.
-      const before = reuseVerified ? await this.objectIdentity(ref) : null;
-      if (before) {
-        const cached = this.commitValidationCache.get(key);
-        if (cached && this.sameIdentity(before, cached.identity)) {
-          pending.push(...cached.dependencies);
-          continue;
-        }
-      }
-
-      let dependencies: ObjectRef[] = [];
-      if (ref.mediaType === RECORD_MEDIA_TYPE) {
+      const asRecord = ref.mediaType === RECORD_MEDIA_TYPE;
+      const known = this.admitted.get(admissionKey(ref));
+      // An admitted record already had its closure verified, so stop here.
+      if (trustAdmitted && (known === true || (known === false && !asRecord))) continue;
+      if (asRecord) {
         assertRef(ref, "agent-state");
-        const record = await this.readRecord(ref as AgentStateRef);
-        dependencies = record.dependencies;
+        pending.push(...(await this.readRecord(ref as AgentStateRef)).dependencies);
       } else await this.verifyRef(ref);
-      pending.push(...dependencies);
-      if (before) {
-        const after = await this.objectIdentity(ref);
-        if (!this.sameIdentity(before, after)) throw new Error("Object changed during validation");
-        verified.set(key, { identity: after, dependencies });
-      }
+      rehashed++;
+      verified.set(admissionKey(ref), asRecord || verified.get(admissionKey(ref)) === true);
     }
-    if (reuseVerified) for (const [key, entry] of verified) this.commitValidationCache.set(key, entry);
-    return visited.size;
+    if (generation === this.admissionGeneration) {
+      for (const [key, asRecord] of verified) this.admitted.set(key, asRecord || this.admitted.get(key) === true);
+    }
+    return rehashed;
   }
 
-  /** Full byte-and-hash audit of every object reachable from root. */
+  /** Full byte-and-hash audit of every object reachable from root; never skips admitted objects. */
   async validateClosure(root: AgentStateRef): Promise<number> {
     return this.validateReachable(root, false);
   }
 
-  /** Commit-time validation that reuses prior byte verification for unchanged immutable objects. */
+  /** Ref-commit validation: verify only objects this instance has not admitted yet. */
   async validateClosureForCommit(root: AgentStateRef): Promise<number> {
     return this.validateReachable(root, true);
   }
@@ -315,7 +343,7 @@ export async function snapshotWorkspace(store: VersionStore, root: string): Prom
         try {
           const opened = await file.stat({ bigint: true });
           if (!opened.isFile() || opened.ino !== info.ino || opened.dev !== info.dev) throw new Error("Workspace changed during snapshot");
-          content = await store.putStream("data", file.createReadStream({ autoClose: false }));
+          content = await store.putWorkspaceFile(child, file);
           const after = await file.stat({ bigint: true });
           if (opened.size !== after.size || opened.mtimeNs !== after.mtimeNs || opened.ctimeNs !== after.ctimeNs) throw new Error("Workspace changed during snapshot");
         } finally { await file.close(); }
@@ -338,7 +366,7 @@ export class RefStore {
 
   static async open(store: VersionStore): Promise<RefStore> {
     await store.initialize();
-    const db = new DatabaseSync(resolve(store.dataDir, "versioning", "refs.sqlite"));
+    const db = new DatabaseSync(toNamespacedPath(resolve(store.dataDir, "versioning", "refs.sqlite")));
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS live_refs (name TEXT PRIMARY KEY, target TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, target TEXT NOT NULL);

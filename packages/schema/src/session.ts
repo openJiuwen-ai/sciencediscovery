@@ -28,7 +28,7 @@ import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, PlanSnapshot } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SessionReviewerSpecialistSettings, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -48,12 +48,15 @@ export function createLocalSessionTitle(
   if (!normalized) return fallbackSessionTitle(createdAt);
   const characters = Array.from(normalized);
   if (characters.length <= maxCharacters) return normalized;
-  if (maxCharacters <= 1) return characters.slice(0, Math.max(0, maxCharacters)).join("");
-  return `${characters.slice(0, maxCharacters - 1).join("")}…`;
+  // A prefix is not a summary. Keep a neutral provisional title until the
+  // background model can produce a complete phrase; never store UI ellipses.
+  return fallbackSessionTitle(createdAt);
 }
 
 export interface Session {
   approvalMode: ApprovalMode;
+  /** Separate, opt-in authorization for reviewed low-risk Session configuration. */
+  autoApplyLowRiskConfiguration?: boolean;
   archivedAt?: string;
   createdAt: string;
   /** Compatibility mirror of the effective enabledConnectorIds. */
@@ -148,11 +151,13 @@ export interface RuntimeNotice {
 }
 
 export interface ChatMessage {
+  /** Durable conversational-configuration card; independent of task runs. */
+  configurationRequestId?: string;
   annotations?: ArtifactAnnotation[];
   content: string;
   createdAt: string;
   id: string;
-  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice" | "wake_notice";
+  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice" | "wake_notice" | "configuration_notice";
   modelId?: string;
   modelName?: string;
   /** Canonical provider transcript for this assistant turn. It is replayed to
@@ -349,6 +354,10 @@ export interface ToolTrace {
   /** Child stream holding the full tool output, e.g. "tool-<toolCallId>". */
   outputStream?: string;
   outputTruncated?: boolean;
+  /** Bounded final-result evidence retained in the main stream for collapsed replay. */
+  preview?: string;
+  /** Actual returned literature records for this result, never provider total hits. */
+  paperCount?: number;
   status: "completed" | "failed" | "running";
   summary?: string;
 }
@@ -369,6 +378,21 @@ export interface SessionRun {
     notifications: Array<{ id: string; sessionId: string; agentId: string; kind: "execution" | "timer"; sourceId: string; message: string; createdAt: number; readAt?: number }>;
   };
   automaticWake?: boolean;
+  /** Server-created continuation after a conversational configuration request. */
+  configurationContinuation?: { requestId: string; sourceRunId: string; connectorName: string };
+  /** Durable model/tool boundary for resuming this same run after a configuration decision. */
+  configurationCheckpoint?: {
+    requestId: string;
+    /** Legacy inline checkpoint. New checkpoints use the immutable CAS record. */
+    history?: Array<Record<string, unknown>>;
+    historyRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
+    stopGeneration: number;
+    committedAt: string;
+  };
+  /** True only while this run is durably parked for its configuration decision. */
+  configurationWait?: boolean;
+  configurationResume?: { requestId: string; decision: "apply" | "dismiss"; connectorName: string };
+  configurationNoticeMessageId?: string;
   annotationIds: string[];
   assistantMessageId?: string;
   createdAt: string;
@@ -380,7 +404,10 @@ export interface SessionRun {
   references: ComposerReference[];
   retryOfRunId?: string;
   sessionId: string;
-  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot;
+  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot & {
+    /** Frozen when queued; absent only for legacy persisted runs. Global Reviewer enablement remains a live gate. */
+    sessionReviewer?: SessionReviewerSpecialistSettings;
+  };
   /** Version-pinned skill libraries declared as prompt sources for this run. */
   skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;
@@ -403,6 +430,7 @@ export interface AgentEventEvidence {
 }
 
 export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
+  | { type: "mcp.readiness"; summary: string; agentId?: string }
   /** Evidence with no chat equivalent. Bodies remain in immutable CAS objects. */
   | { type: "agent.record"; name: "context.captured" | "state.committed" | "model.completed" | "context_recovery";
       payloadRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string } }
@@ -445,7 +473,7 @@ export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
   | { nodeId?: string; phase: IdeaTreePhase; treeId?: string; type: "idea_tree.phase" }
   | { trace: ToolTrace; type: "tool.started" }
   | { trace: ToolTrace; type: "tool.completed" }
-  | { chunk: string; toolCallId: string; type: "tool.output" }
+  | { chunk: string; toolCallId: string; type: "tool.output"; progress?: boolean }
   | { changedPaths: string[]; files: WorkspaceFile[]; type: "workspace.changed" }
   | { artifact: ScientificArtifact; type: "artifact.upserted"; version?: ScientificArtifactVersion }
   | { plan: PlanSnapshot; type: "plan.updated" }
@@ -497,6 +525,7 @@ export interface CreateSessionRequest {
   /** Compatibility shortcut for settingsOverrides.modelId. */
   modelId?: string;
   approvalMode?: ApprovalMode;
+  autoApplyLowRiskConfiguration?: boolean;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
   remoteRunnerHostIds?: string[];
@@ -508,6 +537,7 @@ export interface CreateSessionRequest {
 
 export interface UpdateSessionRequest {
   approvalMode?: ApprovalMode;
+  autoApplyLowRiskConfiguration?: boolean;
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
@@ -518,12 +548,27 @@ export interface UpdateSessionRequest {
   remoteRunnerHostIds?: string[] | null;
   runnerIds?: string[] | null;
   reviewModelId?: string;
+  reviewThinkingEffort?: ModelThinkingEffort;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
   specialistId?: string | null;
   thinkingEffort?: ModelThinkingEffort;
   thinkingMode?: ModelThinkingMode;
   title?: string;
+}
+
+/**
+ * The thinking choices the Session's effective model accepts — the same ones
+ * the composer offers — so a client can refuse a value the model would not
+ * honor instead of letting it be narrowed silently.
+ */
+export interface SessionThinkingControls {
+  efforts: ModelThinkingEffort[];
+  /** Absent when the Session resolves to no model. */
+  modelId?: string;
+  modelName?: string;
+  modes: ModelThinkingMode[];
+  supported: boolean;
 }
 
 export interface SendMessageRequest {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * Client for the evolve search sidecar (`services/evolve`, loopback :4313).
+ * Client for the evolve search sidecar (`services/evolve`, explicitly configured or launcher-owned loopback).
  *
  * The sidecar streams NDJSON event records on the response to `POST /runs`, so
  * the connection *is* the run's liveness signal: while it is open the search is
@@ -87,15 +87,16 @@ export type EvolveSidecarWarning = (message: string) => void;
 export interface EvolveSidecarOptions {
   internalToken: string;
   url: string;
+  connection?: () => Promise<{ url: string; internalToken: string }>;
 }
 
 export class EvolveSidecarClient {
-  private readonly url: string;
-  private readonly token: string;
+  constructor(private readonly options: EvolveSidecarOptions) {}
 
-  constructor(options: EvolveSidecarOptions) {
-    this.url = options.url.replace(/\/$/, "");
-    this.token = options.internalToken;
+  private async connection(): Promise<{ url: string; internalToken: string }> {
+    const connection = this.options.connection ? await this.options.connection() : this.options;
+    if (!connection.url) throw new EvolveSidecarError("Evolve is not initialized. Select Init Evolve to download and install it.", 503);
+    return { ...connection, url: connection.url.replace(/\/$/, "") };
   }
 
   /** The wire body, built once: `/runs` and `/probe` have to agree about every
@@ -143,9 +144,10 @@ export class EvolveSidecarClient {
     label: string;
     worsened: number | null;
   }> {
-    const response = await fetch(`${this.url}/probe`, {
+    const { url, internalToken } = await this.connection();
+    const response = await fetch(`${url}/probe`, {
       body: JSON.stringify(this.body(spec)),
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${internalToken}`, "content-type": "application/json" },
       method: "POST",
     });
     if (!response.ok) {
@@ -155,7 +157,9 @@ export class EvolveSidecarClient {
       // `{"detail":{"code":"probe_failed","message":"…"}}` onto the screen
       // hands them the wrapper and buries the sentence inside it.
       throw new EvolveSidecarError(
-        await refusal(response, "the discrimination probe could not be taken"),
+        response.status === 401 || response.status === 403
+          ? "Evolve authentication failed. Check the configured service or retry Init Evolve."
+          : await refusal(response, "the discrimination probe could not be taken"),
         response.status,
       );
     }
@@ -166,7 +170,8 @@ export class EvolveSidecarClient {
 
   async health(): Promise<{ engine?: string; status: string } | undefined> {
     try {
-      const response = await fetch(`${this.url}/health`);
+      const { url } = await this.connection();
+      const response = await fetch(`${url}/health`);
       if (!response.ok) return undefined;
       return await response.json() as { engine?: string; status: string };
     } catch {
@@ -182,16 +187,21 @@ export class EvolveSidecarClient {
    * exercised by every cancelled run rather than only by a disaster.
    */
   async *stream(spec: EvolveRunSpec, signal?: AbortSignal, warn?: EvolveSidecarWarning): AsyncGenerator<EvolveEventRecord> {
-    const response = await fetch(`${this.url}/runs`, {
+    const { url, internalToken } = await this.connection();
+    const response = await fetch(`${url}/runs`, {
       body: JSON.stringify(this.body(spec)),
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${internalToken}`, "content-type": "application/json" },
       method: "POST",
       signal,
     });
     if (!response.ok || !response.body) {
-      const detail = await response.text().catch(() => "");
+      // A refusal may be a proxy page or contain private upstream diagnostics.
+      // Discard it without buffering it into the user-facing run error.
+      await response.body?.cancel().catch(() => undefined);
       throw new EvolveSidecarError(
-        `evolve sidecar refused the run (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`,
+        response.status === 401 || response.status === 403
+          ? "Evolve authentication failed. Check the configured service or retry Init Evolve."
+          : `Evolve service ${response.ok ? "returned no run stream" : "refused the run"} (HTTP ${response.status}). Check the service configuration or retry Init Evolve.`,
         response.status,
       );
     }
@@ -202,8 +212,9 @@ export class EvolveSidecarClient {
    * no-op, because the API races the stream's own completion. */
   async stop(searchId: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.url}/runs/${encodeURIComponent(searchId)}/stop`, {
-        headers: { authorization: `Bearer ${this.token}` },
+      const { url, internalToken } = await this.connection();
+      const response = await fetch(`${url}/runs/${encodeURIComponent(searchId)}/stop`, {
+        headers: { authorization: `Bearer ${internalToken}` },
         method: "POST",
       });
       if (!response.ok) return false;

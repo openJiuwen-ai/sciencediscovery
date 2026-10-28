@@ -11,6 +11,7 @@ import type {
   ReviewerFeedbackPolicy,
   ReviewerSpecialistLevel,
   ReviewFeedback,
+  SessionReviewerSpecialistSettings,
 } from "@sciencediscovery/schema";
 import {
   cancelReviewerCheckpoints,
@@ -96,8 +97,8 @@ export class ReviewerAuditCoordinator {
     // platform-produced scientific conclusion. Reviewer Specialist is scoped
     // to readable report deliverables, never code or data intermediates.
     if (!version || !artifact || artifact.origin !== "llm_declared" || !isReviewerReportCandidate(artifact, version)) return undefined;
-    if (!this.store.getReviewerSpecialistSettings().enabled) return undefined;
-    const sessionSettings = this.store.getSessionReviewerSpecialistSettings(input.sessionId);
+    const sourceRun = await this.artifactSourceRun(input.sessionId, version.turnId);
+    const sessionSettings = sourceRun?.settingsSnapshot.sessionReviewer ?? this.store.getSessionReviewerSpecialistSettings(input.sessionId);
     if (!sessionSettings.automaticReviewEnabled) return undefined;
     // Structured data is always checked deterministically. It must not spend a
     // Deep model call merely because this Session selected Deep.
@@ -106,7 +107,7 @@ export class ReviewerAuditCoordinator {
       : sessionSettings.level;
     const tasks = await this.store.listReviewerAuditTasks(input.sessionId);
     const pending = tasks.find((task) => task.origin === "artifact_registered"
-      && task.status === "queued" && !task.checkpointPublishedAt);
+      && task.status === "queued" && !task.checkpointPublishedAt && task.sourceRunId === sourceRun?.id && task.reviewLevel === reviewLevel);
     if (pending) {
       const artifactVersionIds = this.mergeLatestArtifactVersions(input.sessionId, [
         ...pending.artifactVersionIds,
@@ -130,6 +131,7 @@ export class ReviewerAuditCoordinator {
       origin: "artifact_registered",
       reviewLevel,
       sessionId: input.sessionId,
+      ...(sourceRun ? { sourceRunId: sourceRun.id } : {}),
     }, false, this.automaticNotBefore(input.sessionId, reviewLevel, tasks));
     return task;
   }
@@ -207,6 +209,7 @@ export class ReviewerAuditCoordinator {
   }
 
   private async createTask(input: {
+    sourceRunId?: string;
     artifactVersionIds: string[];
     checkpointMessageId: string;
     feedbackPolicy: ReviewerFeedbackPolicy;
@@ -228,6 +231,7 @@ export class ReviewerAuditCoordinator {
         version: 1,
       });
     const task: ReviewerAuditTask = {
+      ...(input.sourceRunId ? { sourceRunId: input.sourceRunId } : {}),
       artifactVersionIds: [...input.artifactVersionIds],
       checkpointMessageId: input.checkpointMessageId,
       createdAt: now,
@@ -361,12 +365,21 @@ export class ReviewerAuditCoordinator {
           continue;
         }
         if (task.origin === "artifact_registered") {
-          const sessionSettings = this.store.getSessionReviewerSpecialistSettings(sessionId);
-          if (!this.store.getReviewerSpecialistSettings().enabled || !sessionSettings.automaticReviewEnabled) {
+          const sessionSettings = await this.automaticTaskSettings(task);
+          if (!this.store.getReviewerSpecialistSettings().enabled || !sessionSettings?.automaticReviewEnabled) {
+            const reason = task.sourceRunId && !sessionSettings
+              ? "The source Run is no longer available"
+              : !this.store.getReviewerSpecialistSettings().enabled
+                ? "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists."
+                : "Automatic review skipped: automatic review was turned off for this session.";
+            await this.publishCheckpoint(task);
             await this.store.updateReviewerAuditTask(sessionId, task.id, {
-              errorSummary: "Automatic review is disabled",
+              errorSummary: reason,
               finishedAt: new Date().toISOString(),
-              status: "superseded",
+              status: task.sourceRunId && !sessionSettings ? "failed" : "superseded",
+            });
+            await this.store.updateReviewerCheckpointMessage(sessionId, task.checkpointMessageId, {
+              content: reason, ...(task.sourceRunId && !sessionSettings ? { error: reason } : {}), status: task.sourceRunId && !sessionSettings ? "failed" : "completed",
             });
             continue;
           }
@@ -400,6 +413,19 @@ export class ReviewerAuditCoordinator {
             startedAt: new Date().toISOString(), status: "running",
           });
           if (running.status !== "running") continue;
+          // Admission above contains awaits (quiet/busy checks and durable checkpoint/claim).
+          // Re-read a bound Run first, then the live global gate synchronously at the
+          // last boundary before calling the potentially charging executor.
+          const automaticSettings = running.origin === "artifact_registered" ? await this.automaticTaskSettings(running) : undefined;
+          if (!this.store.getReviewerSpecialistSettings().enabled || running.origin === "artifact_registered" && !automaticSettings?.automaticReviewEnabled) {
+            const missingSource = running.origin === "artifact_registered" && Boolean(running.sourceRunId) && !automaticSettings;
+            const errorSummary = missingSource ? "The source Run is no longer available" : !this.store.getReviewerSpecialistSettings().enabled
+              ? "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists."
+              : "Automatic review skipped: automatic review was turned off for this session.";
+            await this.store.updateReviewerAuditTask(sessionId, running.id, { errorSummary, finishedAt: new Date().toISOString(), status: missingSource ? "failed" : "superseded" });
+            await this.store.updateReviewerCheckpointMessage(sessionId, running.checkpointMessageId, { content: errorSummary, ...(missingSource ? { error: errorSummary } : {}), status: missingSource ? "failed" : "completed" });
+            continue;
+          }
           controller = new AbortController();
           this.active.set(task.id, controller);
           const outcome = await this.execution.run({ ...running, checkpointPublishedAt: published.checkpointPublishedAt }, controller.signal);
@@ -468,6 +494,29 @@ export class ReviewerAuditCoordinator {
       const version = this.store.getArtifactVersion(sessionId, versionId);
       return Boolean(version && this.store.listArtifactVersions(sessionId, version.artifactId).at(-1)?.id === versionId);
     });
+  }
+
+  /** Same exact lineage used by the run Artifact UI; unknown/cyclic ancestry is never guessed from time. */
+  private async artifactSourceRun(sessionId: string, turnId: string | undefined) {
+    const runs = new Map((await this.store.listSessionRuns(sessionId)).map(run => [run.id, run]));
+    const parents = new Map(this.store.listSubagents(sessionId).map(child => [child.id, child.parentTurnId]));
+    const visited = new Set<string>();
+    let current = turnId;
+    while (current && !visited.has(current)) {
+      if (runs.has(current)) return runs.get(current);
+      visited.add(current); current = parents.get(current);
+    }
+    return undefined;
+  }
+
+  private async automaticTaskSettings(task: ReviewerAuditTask): Promise<SessionReviewerSpecialistSettings | undefined> {
+    const run = task.sourceRunId ? await this.store.getSessionRun(task.sessionId, task.sourceRunId) : undefined;
+    // A known binding disappearing is not an old, unbound Artifact. Never
+    // borrow another task's current preferences after losing that identity.
+    if (task.sourceRunId && !run) return undefined;
+    // Existing legacy Runs without a frozen preference retain the old live
+    // Session behavior; all newly queued Runs carry a snapshot.
+    return run?.settingsSnapshot.sessionReviewer ?? this.store.getSessionReviewerSpecialistSettings(task.sessionId);
   }
 
   private feedbackFor(task: ReviewerAuditTask, reviews: ArtifactReviewRun[]): ReviewFeedback {

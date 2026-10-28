@@ -55,7 +55,7 @@ export class ExecutionManager {
     const key = request.workspaceRoot; // already canonicalized by the authenticated endpoint
     const previous = this.queues.get(key) ?? Promise.resolve();
     const work = previous.then(() => withWorkspaceAdmission(this.versions, key, () => withWorkspaceLease(key, async () => {
-      await ensureWorkspaceBaseline(this.versions, key);
+      if (!request.explicitHandoff) await ensureWorkspaceBaseline(this.versions, key);
       let changed = false;
       let cursor = 0;
       let retained = 0;
@@ -85,7 +85,7 @@ export class ExecutionManager {
         this.save(execution);
         changed = true;
         execution.result = await operation(controller.signal, log);
-        execution.state = controller.signal.aborted ? "cancelled" : execution.result.exitCode === 0 ? "completed" : "failed";
+        execution.state = controller.signal.aborted ? "cancelled" : execution.result.exitCode === 0 && !execution.result.networkDeniedHosts?.length ? "completed" : "failed";
       } catch (error) {
         execution.state = controller.signal.aborted ? "cancelled" : "failed";
         execution.error = error instanceof Error ? error.message : "Execution failed";
@@ -93,14 +93,14 @@ export class ExecutionManager {
       try {
         if (changed) {
           // The operation must have joined its child before returning, including cancellation.
-          const workspace = await snapshotWorkspace(this.versions, request.workspaceRoot);
+          const workspace = request.explicitHandoff ? undefined : await snapshotWorkspace(this.versions, request.workspaceRoot);
           const readLog = (stream: string) => this.db.prepare("SELECT text FROM logs WHERE execution = ? AND stream = ? ORDER BY cursor")
             .all(execution.id, stream).map((row) => String(row.text)).join("");
           const stdout = await this.versions.put("agent-state", readLog("stdout") || execution.result?.stdout || "");
           const stderr = await this.versions.put("agent-state", readLog("stderr") || execution.result?.stderr || execution.error || "");
           const code = await this.versions.put("agent-state", request.code);
           const version = await this.versions.putRecord("WorkspaceExecution", {
-            executionId: execution.id, ...owner, workspace, code, stdout, stderr,
+            executionId: execution.id, ...owner, ...(workspace ? { workspace } : {}), code, stdout, stderr,
             environmentRevisionId: execution.result?.environmentRevisionId ?? null,
             state: execution.state,
           });

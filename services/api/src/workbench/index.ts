@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage, ComposerReference, WorkbenchSearchResponse, WorkbenchSearchResult } from "@sciencediscovery/schema";
+import { INBOX_PROJECT_KIND, type ChatMessage, type ComposerReference, type WorkbenchSearchResponse, type WorkbenchSearchResult } from "@sciencediscovery/schema";
 
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
@@ -37,6 +37,9 @@ export async function searchWorkbench(
   const results: WorkbenchSearchResult[] = [];
 
   for (const project of store.listProjects()) {
+    // Standalone conversations are not a Project a reader can navigate to or
+    // search for; folding them in would surface a name no client shows.
+    if (project.kind === INBOX_PROJECT_KIND) continue;
     if (matches(project.name)) {
       results.push({
         detail: "Project",

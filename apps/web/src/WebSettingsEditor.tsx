@@ -34,17 +34,18 @@ const ENGINE_LABELS: Record<FreeSearchEngine | PaidSearchProvider, string> = {
   "brave-html": "Brave (free)",
   duckduckgo: "DuckDuckGo",
   exa: "Exa",
+  deepseek: "DeepSeek",
   tavily: "Tavily",
 };
 
 const KEY_LABELS: Record<WebKeyProvider, string> = {
-  bocha: "Bocha", brave: "Brave", exa: "Exa", jina: "Jina", perplexity: "Perplexity", serper: "Serper", tavily: "Tavily",
+  deepseek: "DeepSeek", bocha: "Bocha", brave: "Brave", exa: "Exa", jina: "Jina", perplexity: "Perplexity", serper: "Serper", tavily: "Tavily",
 };
 
 /** Whose keys the page asks for: the built-in search's, or JiuwenSwarm's paid search in the order it tries them. */
 const KEYS_BY_BACKEND: Record<"native" | "jiuwenswarm", readonly WebKeyProvider[]> = {
-  native: ["jina", "tavily", "exa", "brave"],
-  jiuwenswarm: ["bocha", "perplexity", "serper", "jina"],
+  native: ["jina", "tavily", "exa", "brave", "deepseek"],
+  jiuwenswarm: ["bocha", "perplexity", "serper", "jina", "deepseek"],
 };
 
 export interface WebSettingsDraft {
@@ -68,6 +69,7 @@ export function webSettingsRequest(draft: WebSettingsDraft): UpdateWebSettingsRe
     else if (draft.keys[provider].trim()) providerApiKeys[provider] = draft.keys[provider].trim();
   }
   return {
+    deepseekEnabled: draft.values.deepseekEnabled,
     fetchCacheTtlSeconds: draft.values.fetchCacheTtlSeconds,
     fetchProvider: draft.values.fetchProvider,
     freeSearchEngines: draft.values.freeSearchEngines,
@@ -112,10 +114,10 @@ export function WebSettingsEditor({
       <p>{t("webSettings.help")}</p>
     </div>
     {jiuwenswarm ? <div className="config-note">{t("webSettings.jiuwenswarmNote")}</div> : null}
-    {jiuwenswarm ? null : <fieldset className="settings-array">
-      <legend>{t("webSettings.paidLegend")}</legend>
+    <fieldset className="settings-array">
+      <legend>{t(jiuwenswarm ? "webSettings.deepseekSearch" : "webSettings.paidLegend")}</legend>
       <div className="settings-choices">
-        {PAID_SEARCH_ORDER.map((provider) => {
+        {(jiuwenswarm ? ["deepseek"] as const : PAID_SEARCH_ORDER).map((provider) => {
           const saved = settings.providers.some((item) => item.provider === provider && item.hasApiKey);
           return <label key={provider}>
             <input
@@ -127,8 +129,8 @@ export function WebSettingsEditor({
           </label>;
         })}
       </div>
-      <span className="settings-hint">{t("webSettings.paidHint")}</span>
-    </fieldset>}
+      <span className="settings-hint">{t(jiuwenswarm ? "webSettings.deepseekSwarmHint" : "webSettings.paidHint")}</span>
+    </fieldset>
     <fieldset className="settings-array">
       <legend>{t("webSettings.freeLegend")}</legend>
       <div className="settings-choices">
@@ -147,10 +149,11 @@ export function WebSettingsEditor({
       </div>
       <span className="settings-hint">{t("webSettings.freeHint")}</span>
     </fieldset>
-    <label><span>{t("webSettings.fetchProvider")}{jiuwenswarm ? ` · ${notUsed}` : ""}</span><select disabled={jiuwenswarm} value={values.fetchProvider} onChange={(event) => onChange({ ...draft, values: { ...values, fetchProvider: event.target.value as typeof values.fetchProvider } })}>
-      <option value="jina">{t("webSettings.providerDefault", { provider: "Jina" })}</option>
-      <option value="tavily">Tavily</option>
-      <option value="exa">Exa</option>
+    <label><span>{t("webSettings.fetchProvider")}</span><select value={values.fetchProvider} onChange={(event) => onChange({ ...draft, values: { ...values, fetchProvider: event.target.value as typeof values.fetchProvider } })}>
+      <option value="jina">{jiuwenswarm ? t("webSettings.swarmDefaultFetch") : t("webSettings.providerDefault", { provider: "Jina" })}</option>
+      <option disabled={jiuwenswarm} value="tavily">Tavily</option>
+      <option disabled={jiuwenswarm} value="exa">Exa</option>
+      <option value="deepseek">DeepSeek</option>
     </select></label>
     <div className="config-note">{t("web.proxyMovedNote")}</div>
     <label><span>{t("webSettings.searchCache")}{jiuwenswarm ? ` · ${notUsed}` : ""}</span><input disabled={jiuwenswarm} min={0} max={2592000} type="number" value={values.searchCacheTtlSeconds} onChange={(event) => onChange({ ...draft, values: { ...values, searchCacheTtlSeconds: Number(event.target.value) } })} /></label>
@@ -159,6 +162,7 @@ export function WebSettingsEditor({
     {KEYS_BY_BACKEND[jiuwenswarm ? "jiuwenswarm" : "native"].map((provider) => {
       const saved = settings.providers.some((item) => item.provider === provider && item.hasApiKey);
       return <div key={provider}>
+        {provider === "deepseek" ? <label className="provider-token-optional"><input type="checkbox" checked={values.deepseekEnabled === true} onChange={(event) => onChange({ ...draft, values: { ...values, deepseekEnabled: event.target.checked } })} /><span>{t("webSettings.deepseekEnabled")}</span></label> : null}
         <label><span>{t("webSettings.providerApiKey", { provider: KEY_LABELS[provider] })}</span><input
           type="password"
           value={draft.keys[provider]}
@@ -169,7 +173,7 @@ export function WebSettingsEditor({
               remove: new Set([...draft.remove].filter((item) => item !== provider)),
             });
           }}
-          placeholder={saved ? t("webSettings.keyPlaceholderSaved") : provider === "jina" || jiuwenswarm ? t("webSettings.keyPlaceholderOptional") : t("webSettings.keyPlaceholderRequired")}
+          placeholder={saved ? t("webSettings.keyPlaceholderSaved") : provider === "jina" || (jiuwenswarm && provider !== "deepseek") ? t("webSettings.keyPlaceholderOptional") : t("webSettings.keyPlaceholderRequired")}
         /></label>
         {saved ? <button className={draft.remove.has(provider) ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => {
           const next = new Set(draft.remove);

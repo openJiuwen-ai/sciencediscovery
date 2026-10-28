@@ -90,6 +90,7 @@ Run knowledge discovery and evidence extraction, then integrate findings into a 
 
 1. Launch literature-searcher via the `task` tool, setting `specialistId=builtin-literature-searcher`, with the sub-task brief (see input format below) — inputs are passed in the task prompt directly
    - Input Format
+
    ```markdown
    ### Research Topic
    [required — research question or topic]
@@ -119,6 +120,7 @@ Run knowledge discovery and evidence extraction, then integrate findings into a 
    ### Output Directory  *(optional)*
    [directory for JSON artifacts; default /mnt/user-data/outputs/literature-searcher]
    ```
+
 2. Receive literature-searcher's output directly from the task result
 3. Validate the output according to the following rules:
    - **Source relevance** — every source addresses the research objective; titles and abstracts align with the question
@@ -131,6 +133,7 @@ Run knowledge discovery and evidence extraction, then integrate findings into a 
 
 1. Launch evidence-extractor via the `task` tool, setting `specialistId=builtin-evidence-extractor`, with the sub-task brief (see input format below) — inputs are passed in the task prompt directly
    - Input Format
+
    ```markdown
    ### Evidence Extraction Assignment
    [required — research objectives and questions that drive extraction]
@@ -153,6 +156,7 @@ Run knowledge discovery and evidence extraction, then integrate findings into a 
    ### Output Directory  *(optional)*
    [directory for evidence JSON artifacts]
    ```
+
 2. Receive evidence-extractor's output directly from the task result
 3. Validate the output according to the following rules:
    - **Evidence relevance** — each extracted finding directly addresses the research objective
@@ -171,6 +175,7 @@ Stitch sub-agent outputs into a single Knowledge Summary(see summary format belo
    2. **Content rule** — addresses the scoped objective, no off-topic content, no new claims outside the knowledge domain, provenance for every finding
 
 **Knowledge Summary Format**
+
 ```markdown
 ### Knowledge Findings
 [Source-supported claims that answer the research objective; each tied to one or more sources via provenance.]
@@ -197,6 +202,7 @@ Run computational analysis through an evaluate-and-revise loop, then finalize th
 
 1. Launch code-engineer via the `task` tool, setting `specialistId=builtin-code-engineer`, with the analysis sub-task brief (see input format below) — inputs are passed in the task prompt directly
    - Input Format
+
    ```markdown
    ### Analysis Objective
    [required — what this code-engineer run should answer]
@@ -216,6 +222,7 @@ Run computational analysis through an evaluate-and-revise loop, then finalize th
    ### Revision Guidance  *(optional — include only if round > 1)*
    [Revision Guidance from result-evaluator]
    ```
+
 2. Receive code-engineer's output directly from the task result
 3. Validate the output:
    - **Code executed** — actual executed code is present, not a bare "code ran" claim
@@ -227,6 +234,7 @@ Run computational analysis through an evaluate-and-revise loop, then finalize th
 
 1. Launch result-evaluator via the `task` tool, setting `specialistId=builtin-result-evaluator`, with the evaluation sub-task brief (see input format below) — inputs are passed in the task prompt directly
    - Input Format
+
    ```markdown
    ### Analysis Result
    [required — the code-engineer output package from Step 3.1, presented as the following sub-sections]
@@ -252,6 +260,7 @@ Run computational analysis through an evaluate-and-revise loop, then finalize th
    ### Evaluation Criteria  *(optional)*
    [criteria to apply to this round's result]
    ```
+
 2. Receive result-evaluator's output directly from the task result
 3. Validate the output:
    - **Decision present** — `decision` field is `ACCEPT_AND_PROCEED` or `REVISE_AND_RETRY`
@@ -281,6 +290,7 @@ Stitch the accepted output from code-engineer into a single Analysis Summary (se
    2. **Content rule** — addresses the scoped objective, no fabricated data, no off-scope analysis
 
 **Analysis Summary Format**
+
 ```markdown
 ### Objective
 [The specific analysis objective this Summary addresses.]
@@ -310,6 +320,7 @@ Always dispatch the report-writer to produce outputs. If the user specified outp
 
 1. Launch report-writer via the `task` tool, setting `specialistId=builtin-report-writer`, with the dispatch brief (see input format below) — inputs are passed in the task prompt directly
    - Input Format
+
    ```markdown
    ### Domain Summaries
    [required — path to `knowledge_summary.md` if knowledge domain was activated, path to `analysis_summary.md` if data domain was activated; at least one Domain Summary is required]
@@ -323,6 +334,7 @@ Always dispatch the report-writer to produce outputs. If the user specified outp
    ### Constraints  *(optional — only if the user specified any)*
    — audience, length, language, etc. that the user requested. Omit the section entirely if the user did not specify any.
    ```
+
 2. Receive report-writer's output file paths directly from the task result
 
 **Requirements**:

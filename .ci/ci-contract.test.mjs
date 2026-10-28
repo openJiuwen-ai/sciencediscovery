@@ -97,7 +97,6 @@ function mutableCatalog() {
     layers: structuredClone(catalog.layers),
     tagDimensions: structuredClone(catalog.tagDimensions),
     testCases: structuredClone(catalog.testCases),
-    jiuwenSwarmWrapper: [...catalog.jiuwenSwarmWrapper],
   };
 }
 
@@ -137,9 +136,8 @@ test("UT is one layer case and it runs the UT slice", () => {
   const utCases = catalog.testCases.filter((testCase) => testCase.tags.includes("layer:ut"));
   assert.deepEqual(utCases.map((testCase) => testCase.id), ["ut.all"]);
   assert.deepEqual(utCases[0].command, ["pnpm", "ci:ut"]);
-  // Agent turns in the UT slice run on JiuwenSwarm; the wrapper starts it and selects nothing.
-  assert.deepEqual(catalog.layers.ut,
-    [["bash", ["scripts/with-jiuwenswarm.sh", "node", "test/support/tagged/shared.mjs", "run", "--slice", "ut"]]]);
+  // No wrapper: the shared runner starts JiuwenSwarm only for tests that declare it.
+  assert.deepEqual(catalog.layers.ut, [["node", ["test/support/tagged/shared.mjs", "run", "--slice", "ut"]]]);
 });
 
 test("a layer:ut case that runs something other than ci:ut is rejected", async () => {
@@ -170,11 +168,11 @@ test("a layer that runs something other than a slice of the shared plan is rejec
   assert.match(problems.join("\n"), /layer ut runs pnpm --recursive test, which is not a slice of the shared plan/);
 });
 
-test("the JiuwenSwarm wrapper may start the backend but may not replace the shared runner", async () => {
+test("no wrapper may hand JiuwenSwarm to every process of a layer", async () => {
   const copy = mutableCatalog();
-  copy.layers.ut = [["bash", ["scripts/with-jiuwenswarm.sh", "pnpm", "--recursive", "test"]]];
+  copy.layers.ut = [["bash", ["scripts/with-jiuwenswarm.sh", "node", "test/support/tagged/shared.mjs", "run", "--slice", "ut"]]];
   const problems = await utContractProblems(copy);
-  assert.match(problems.join("\n"), /layer ut runs bash scripts\/with-jiuwenswarm\.sh pnpm --recursive test, which is not a slice of the shared plan/);
+  assert.match(problems.join("\n"), /layer ut runs bash scripts\/with-jiuwenswarm\.sh node test\/support\/tagged\/shared\.mjs run --slice ut, which is not a slice of the shared plan/);
   copy.layers.ut = [["bash", ["scripts/some-other-wrapper.sh", "node", "test/support/tagged/shared.mjs", "run", "--slice", "ut"]]];
   assert.match((await utContractProblems(copy)).join("\n"), /some-other-wrapper\.sh .* is not a slice of the shared plan/);
 });
@@ -246,7 +244,16 @@ function artifactUploads(workflow) {
       paths: listed.filter((path) => !path.startsWith("!")),
       excluded: listed.filter((path) => path.startsWith("!")).map((path) => path.slice(1)),
       hidden: /^\s*include-hidden-files:\s*true\s*$/m.test(step),
+      overwrite: /^\s*overwrite:\s*true\s*$/m.test(step),
     };
+  });
+}
+
+/** Artifact names a workflow downloads exactly, not by pattern. */
+function exactArtifactDownloads(workflow) {
+  return workflow.split(/\n(?= *- )/).filter((step) => /uses: actions\/download-artifact@/.test(step)).flatMap((step) => {
+    const name = step.match(/^\s+name:\s*(.+)$/m)?.[1];
+    return name && !name.includes("${{") ? [name] : [];
   });
 }
 
@@ -301,6 +308,25 @@ test("each layer uploads the coverage its run wrote, whichever profile ran it", 
   assert.equal(resultsLabel.length, 1);
 });
 
+test("a later job downloads the artifact from the latest attempt", async () => {
+  // Re-running a job leaves the previous attempt's artifact beside the new one.
+  // download-artifact resolves a name to one package, and that package can be
+  // the older attempt: Coverage then treats a passed re-run as incomplete
+  // because the manifest still says the first attempt failed. overwrite
+  // deletes the previous package before the new upload.
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  const uploads = [];
+  const downloads = new Set();
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".yml"))) {
+    const workflow = await readFile(join(directory, file), "utf8");
+    for (const upload of artifactUploads(workflow)) uploads.push(upload);
+    for (const name of exactArtifactDownloads(workflow)) downloads.add(name);
+  }
+  assert.ok(downloads.has("ut-coverage") && downloads.has("st-coverage"));
+  const missing = [...downloads].filter((name) => !uploads.some((upload) => upload.artifact === name && upload.overwrite));
+  assert.deepEqual(missing, []);
+});
+
 const scoreUploadPath = ".tmp/real-e2e-results";
 
 test("real E2E uploads only staged scores and keeps complete evidence separately", async () => {
@@ -331,6 +357,14 @@ test("real E2E uploads only staged scores and keeps complete evidence separately
     }
   }
   assert.ok(checked > 0, "no real E2E uploads checked");
+});
+
+test("no workflow gives UT a worker count of its own", async () => {
+  // The scheduler's one default is the GitHub runner's; a local `pnpm ci:ut` uses it too.
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  for (const name of await readdir(directory)) {
+    assert.doesNotMatch(await readFile(join(directory, name), "utf8"), /CI_UT_WORKERS/, name);
+  }
 });
 
 test("mocked E2E keeps the complete HTML and results upload", async () => {
@@ -369,6 +403,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     "e2e-real/tagged/preflight.json",
   ].sort();
   const diagnostics = [
+    "model-invalid-arguments.jsonl", "model-invalid-arguments.jsonl.1",
     "real-research/e2e/test-results/benchmark-case/trace.zip",
     "real-research/e2e/playwright-report/data/trace.zip",
     "real-research/e2e/playwright-report/index.html",
@@ -383,6 +418,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     "misnamed-directory/benchmark-metrics.json/trace.zip",
   ];
   const privateFields = {prompt: "PRIVATE_FIXTURE prompt", delivery: {artifacts: [{text: "PRIVATE_FIXTURE output"}]},
+    cancel_error: "PRIVATE_FIXTURE cancel error",
     tool_errors: [{content: "PRIVATE_FIXTURE error"}], configuration: {token: "PRIVATE_FIXTURE credential"},
     turns: [{prompt: "PRIVATE_FIXTURE follow-up"}], run: {messages: ["PRIVATE_FIXTURE message"]}};
   const metadata = {schema_version: 1, integration_status: "passed", started_at: "2026-10-06T21:00:00Z",
@@ -392,7 +428,8 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
       race: {status: "completed", overall_score: 0.72}, fact: {status: "completed", citation_accuracy: 80,
         verification_coverage: 75, effective_citations: 4}}}],
     ["real-research/e2e/test-results/benchmark-case/benchmark-metrics.json", {...metadata, case_id: "da-13-3", evaluation: {status: "passed", score: 87}}],
-    ["real-team/e2e/.hidden-case/team-metrics.json", {...metadata, case: "TC-E2E-01", integration: "passed", evaluation: {status: "completed", total_score: 92, gating: false}}],
+    ["real-team/e2e/.hidden-case/team-metrics.json", {...metadata, case: "TC-E2E-01", integration: "timed_out",
+      budget_ms: 55 * 60_000, budget_exceeded: true, cancel_requested: true, cancel_http_status: 202, evaluation: {status: "completed", total_score: 92, gating: false}}],
     ["evolve/e2e/test-results/evolve-case/evolve-metrics.json", {...metadata, case: "PUCT-COMPRESS",
       evaluation: {status: "completed", score: 0.61, baseline_gate_score: 0.55, best_gate_score: 0.63},
       llm_evaluation: {status: "error", total_score: null, gating: false}}],
@@ -463,4 +500,66 @@ test("missing or diagnostic-only real E2E results leave an empty score directory
   assert.match(run.stderr, /Skipping an invalid real E2E score/);
   assert.doesNotMatch(run.stderr + run.stdout, /PRIVATE_FIXTURE/);
   assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), []);
+});
+
+for (const [name, review, expected] of [
+  ["scored", { evaluator: "puct-artifact-review-v1", status: "scored", total_score: 86.25, gating: false }, "scored | 86.25 | false"],
+  ["zero score", { status: "scored", total_score: 0, gating: false }, "scored | 0 | false"],
+  ["judge timeout", { status: "error", total_score: null, gating: false }, "error | N/A | false"],
+  ["review not reached", undefined, "not_run | N/A | false"],
+  ["invalid fields", { status: "PRIVATE_FIXTURE\n| response", total_score: "PRIVATE_FIXTURE", gating: "PRIVATE_FIXTURE" }, "unknown | N/A | false"],
+]) {
+  test(`PUCT worker summary reports ${name} without exposing judge evidence`, async (t) => {
+    await mkdir(testRoot, { recursive: true });
+    const root = await mkdtemp(join(testRoot, "puct-summary-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const relative = "e2e-real/test-results/puct/evolve-metrics.json";
+    const source = join(root, ".ci-results", relative);
+    const summaryPath = join(root, "step-summary.md");
+    const privateFields = { error: "PRIVATE_FIXTURE error", prompt: "PRIVATE_FIXTURE prompt",
+      request: { token: "PRIVATE_FIXTURE credential" }, response: "PRIVATE_FIXTURE model response" };
+    const scorecard = review ? { ...privateFields, evaluator: "PRIVATE_FIXTURE evaluator", ...review } : undefined;
+    const metrics = { case: "PUCT-COMPRESS", integration_status: "passed", ...privateFields,
+      ...(scorecard ? { llm_evaluation: scorecard } : {}) };
+    await mkdir(dirname(source), { recursive: true });
+    await writeFile(source, JSON.stringify(metrics));
+    if (scorecard) await writeFile(join(dirname(source), "llm-scorecard.json"), JSON.stringify(scorecard));
+    const priorSummary = "### Real E2E\n\nplanned: 1, passed: 1\n\n";
+    await writeFile(summaryPath, priorSummary);
+    const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], {
+      cwd: root, encoding: "utf8", env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const summary = await readFile(summaryPath, "utf8");
+    assert.ok(summary.startsWith(priorSummary), "keep the existing case accounting summary");
+    assert.match(summary, /\| evaluator \| status \| total_score \| gating \|/);
+    assert.ok(summary.includes(`| puct-artifact-review-v1 | ${expected} |`), summary);
+    assert.match(summary, /Unofficial, non-gating/);
+    assert.doesNotMatch(summary + run.stdout + run.stderr, /PRIVATE_FIXTURE/);
+    assert.ok(!summary.includes(root), "do not expose local evidence paths");
+    const staged = JSON.parse(await readFile(join(root, scoreUploadPath, relative), "utf8"));
+    assert.equal(staged.integration_status, "passed", "judge outcome does not change delivery outcome");
+    if (review && typeof review.total_score !== "string") {
+      assert.equal(staged.llm_evaluation.total_score, review.total_score);
+      assert.equal(staged.llm_evaluation.gating, false);
+    }
+    assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), [relative]);
+    assert.deepEqual(JSON.parse(await readFile(source, "utf8")), metrics);
+    if (scorecard) assert.deepEqual(JSON.parse(await readFile(join(dirname(source), "llm-scorecard.json"), "utf8")), scorecard);
+  });
+}
+
+test("other real workers do not get a PUCT review summary", async (t) => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "other-review-summary-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const summaryPath = join(root, "step-summary.md");
+  await writeFile(summaryPath, "Existing summary\n");
+  await prepareRealE2EResults(root, { summaryPath });
+  await mkdir(join(root, ".ci-results"), { recursive: true });
+  await writeFile(join(root, ".ci-results", "team-metrics.json"), JSON.stringify({
+    case: "TC-E2E-01", llm_evaluation: { status: "scored", total_score: 92, gating: false },
+  }));
+  await prepareRealE2EResults(root, { summaryPath });
+  assert.equal(await readFile(summaryPath, "utf8"), "Existing summary\n");
 });

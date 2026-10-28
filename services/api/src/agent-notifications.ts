@@ -194,6 +194,12 @@ export class AgentNotifications {
       .run(this.clock(), owner.sessionId, owner.agentId, kind, sourceId).changes > 0;
   }
 
+  /** Withdraw an execution notice whose outcome proved not to be final, so the real end can notify again. */
+  reopenExecution(owner: ExecutionOwner, executionId: string): void {
+    this.db.prepare("DELETE FROM agent_notifications WHERE session = ? AND agent = ? AND kind = 'execution' AND source = ?")
+      .run(owner.sessionId, owner.agentId, executionId);
+  }
+
   complete(owner: ExecutionOwner, executionId: string, message: string): void {
     this.transaction(() => {
       this.insert(owner, "execution", executionId, message);

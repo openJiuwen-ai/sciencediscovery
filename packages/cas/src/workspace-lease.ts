@@ -4,7 +4,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { RefStore, snapshotWorkspace, type AgentStateRef, type VersionStore } from "./versioning.js";
@@ -31,7 +31,7 @@ export async function withWorkspaceLease<T>(root: string, operation: () => Promi
   onBusy?: () => Promise<T>): Promise<T> {
   const { canonical, path } = await coordinationPath(root);
   if (owned.getStore()?.get(canonical)?.active) return operation();
-  const db = new DatabaseSync(`${path}.sqlite`);
+  const db = new DatabaseSync(toNamespacedPath(`${path}.sqlite`));
   let acquired = false;
   let marked = false;
   const token = { active: true };
@@ -127,13 +127,17 @@ export async function withWorkspaceLeases<T>(roots: string[], operation: () => P
 /** Failed/cancelled operations still have real file effects. Commit those effects
  * before admitting the next writer, without masking the original operation error. */
 export async function withWorkspaceMutation<T>(versions: VersionStore, root: string, operation: () => Promise<T>,
-  metadata: { kind: string; id?: string; onCommitted?: (workspace: AgentStateRef) => void }, signal?: AbortSignal): Promise<T> {
+  metadata: { kind: string; id?: string; trackFiles?: boolean; onCommitted?: (workspace: AgentStateRef) => void }, signal?: AbortSignal): Promise<T> {
   return withWorkspaceAdmission(versions, root, () => withWorkspaceLease(root, async () => {
-    await ensureWorkspaceBaseline(versions, root);
+    if (metadata.trackFiles !== false) await ensureWorkspaceBaseline(versions, root);
     let value: T | undefined;
     let failure: unknown;
     let failed = false;
     try { value = await operation(); } catch (error) { failed = true; failure = error; }
+    if (metadata.trackFiles === false) {
+      if (failed) throw failure;
+      return value as T;
+    }
     try {
       const workspace = await snapshotWorkspace(versions, root);
       const version = await versions.putRecord("WorkspaceMutation", {

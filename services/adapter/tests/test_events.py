@@ -373,3 +373,38 @@ def test_the_run_tag_is_not_part_of_a_reported_call():
         "tool_call_id": "c1", "name": "mcp_sci_run_shell", "arguments": '{"command": "ls", "_sd_run": "abc"}'}}})
     started = next(event for event in events if event["type"] == "tool.started")
     assert started["trace"]["args"] == {"command": "ls"} and "_sd_run" not in started["trace"]["input"]
+
+
+@pytest.mark.parametrize("usage", [None, [], ["malformed"], "malformed", {}, {"input_tokens": "bad", "output_tokens": 2},
+                                   {"input_tokens": 2}, {"input_tokens": True, "output_tokens": 2},
+                                   "infinite-count", {"input_tokens": -1, "output_tokens": 2}, {"input_tokens": 0.5, "output_tokens": 2}])
+def test_malformed_usage_is_nonfatal_and_never_zero_filled(usage):
+    if usage == "infinite-count":
+        usage = {"input_tokens": float("inf"), "output_tokens": 2}
+    mapper = RunEventMapper()
+    assert mapper.feed({"type": "event", "event": "chat.usage_metadata", "payload": {"metadata": {"usage_metadata": usage}}}) == []
+    # The same stream can continue to a valid final answer.
+    mapper.feed({"type": "event", "event": "chat.final", "payload": {"content": "valid answer"}})
+
+
+def test_overflowing_usage_sum_stays_unknown_and_answer_continues():
+    mapper = RunEventMapper()
+    assert mapper.feed({"type": "event", "event": "chat.usage_metadata", "payload": {
+        "metadata": {"usage_metadata": {"input_tokens": 2**53 - 1, "output_tokens": 2**53 - 1}}}}) == []
+    mapper.feed({"type": "event", "event": "chat.final", "payload": {"content": "valid answer"}})
+    assert mapper.final_text == "valid answer"
+
+
+def test_reported_zero_usage_is_preserved():
+    events = RunEventMapper().feed({"type": "event", "event": "chat.usage_metadata", "payload": {
+        "metadata": {"usage_metadata": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}}})
+    assert events[0]["usage"]["totalTokens"] == 0
+    assert events[0]["usage"]["inputTokens"] == 0
+    assert events[0]["usage"]["outputTokens"] == 0
+
+
+def test_finite_integral_float_usage_counts_remain_usable():
+    events = RunEventMapper().feed({"type": "event", "event": "chat.usage_metadata", "payload": {
+        "metadata": {"usage_metadata": {"input_tokens": 1.0, "output_tokens": 2.0}}}})
+    assert events[0]["usage"]["totalTokens"] == 3
+    assert events[0]["usage"]["outputTokens"] == 2

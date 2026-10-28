@@ -42,7 +42,7 @@ export interface ExecutionRun {
   language: ExecutionLanguage | null;
   modifiedFiles: string[];
   /** Sandbox network mode of this run; historical rows always carry `"none"`. */
-  networkPolicy: SandboxNetworkMode;
+  networkPolicy: SandboxNetworkMode | "host";
   /** Sandbox network policy revision, when the run had a policy snapshot. */
   networkAccessRevision?: string;
   permissionEpochId: string;
@@ -64,7 +64,8 @@ export interface ExecutionRun {
   /** Historical runs recorded the compute resource profile they ran under. */
   resourceProfile?: Record<string, unknown>;
   runnerVersion: string;
-  sandbox: SandboxKind;
+  sandbox: SandboxKind | "none";
+  directAuthorization?: import("./environment.js").DirectExecutionAuthorization;
   sessionId: string;
   startedAt: string;
   /**
@@ -75,7 +76,7 @@ export interface ExecutionRun {
   status: "cancelled" | "failed" | "succeeded";
   stderr: CasObjectRef;
   stdout: CasObjectRef;
-  tool: "run_python" | "run_r" | "run_shell";
+  tool: "run_python" | "run_r" | "run_shell" | "run_direct_shell";
   /** Agent tool-call identifier that initiated this execution, when available. */
   toolCallId?: string;
   toolVersion: string;
@@ -232,8 +233,21 @@ export interface ArtifactReviewRun {
   artifactVersionId: string;
   checkpointId: string;
   /** Checks completed by this run. Older persisted MVP reviews omit it. */
-  checks?: Array<"structure" | "citation" | "computation">;
+  checks?: Array<"structure" | "citation" | "computation" | "completeness">;
   createdAt: string;
+  /**
+   * Deterministic delivery-completeness verdict for the task this report
+   * belongs to. `unconfirmed` means no authoritative deliverable requirement
+   * was available, so the review must never be presented as an overall pass.
+   */
+  completeness?: ArtifactReviewCompleteness;
+  /**
+   * Requirement set the completeness verdict was computed against. It lets a
+   * reused review tell "the same set, re-derived from live Artifacts" from "the
+   * Brief changed since", so a changed set is re-decided instead of freezing the
+   * verdict it once produced.
+   */
+  deliverableFingerprint?: string;
   decision: "ACCEPT_AND_PROCEED" | "REVISE_AND_RETRY" | "SKIPPED";
   finishedAt: string;
   findings: ArtifactReviewFinding[];
@@ -273,8 +287,69 @@ export interface ArtifactReviewRun {
     status: "completed" | "failed" | "inconclusive" | "reused";
   }>;
   sessionId: string;
+  /** Computed on read (never persisted): a newer Artifact version exists than the reviewed one. */
+  stale?: boolean;
+  /** Computed on read (never persisted): id of that newer version, when one exists. */
+  staleSinceVersionId?: string;
   status: "completed" | "failed";
   toolCallId?: string;
+}
+
+/** One task-required deliverable and whether the Session actually holds it. */
+export interface ArtifactReviewDeliverable {
+  /** Logical name of the matched Artifact, when one was found. */
+  artifactLogicalName?: string;
+  /** Version that satisfied the requirement, when one did. */
+  artifactVersionId?: string;
+  /** Requirement as declared by the task, e.g. `output/cl3/predictions.npy`. */
+  path: string;
+  state: "present" | "missing" | "empty";
+}
+
+/**
+ * Delivery completeness of the task behind a report. It answers only
+ * "is the required file there and non-empty", never "is the science right".
+ */
+export interface ArtifactReviewCompleteness {
+  required: ArtifactReviewDeliverable[];
+  /**
+   * `brief` is the reviewed run's own declaration; `session-fallback` means that
+   * run declared nothing and the Session's live declarations were used instead;
+   * `none` means nothing was declared at all. Only `brief` is authoritative
+   * enough to re-derive a reused verdict — a fallback describes other runs.
+   */
+  source: "brief" | "session-fallback" | "none";
+  /**
+   * Which declarations were enforced: `run` when the Briefs of the reviewed
+   * run(s) were found, `session` when none of them declared anything and the
+   * Session's live declarations were used instead. Recorded so a Session-wide
+   * fallback stays observable instead of looking like a scoped check.
+   */
+  scope?: "run" | "session";
+  status: "complete" | "incomplete" | "unconfirmed";
+}
+
+/**
+ * A review that recorded no delivery verdict never checked delivery, so it must
+ * not be presented as a delivery pass. A structure-only review is the one
+ * exception: it only parses the file and claims nothing about delivery.
+ *
+ * The Reviewer feedback and the Reviewer panel both answer "was delivery
+ * verified" through this one function: two independent readings of the same
+ * record are how a card can say "passed" while the main-Agent record says the
+ * scope was limited.
+ */
+export function reviewUnverifiedDelivery(
+  review: Pick<ArtifactReviewRun, "checks" | "completeness">,
+): boolean {
+  if (review.completeness) return review.completeness.status !== "complete";
+  return !isStructureOnlyReview(review);
+}
+
+/** A review that only parsed the file: no citation, computation or delivery claim. */
+export function isStructureOnlyReview(review: Pick<ArtifactReviewRun, "checks">): boolean {
+  const checks = review.checks ?? [];
+  return checks.length > 0 && checks.every((check) => check === "structure");
 }
 
 export interface ReviewCheckpoint {
@@ -305,6 +380,8 @@ export interface ReviewCheckpointResult {
 
 /** A durable, independently cancellable Reviewer Specialist work item. */
 export interface ReviewerAuditTask {
+  /** Exact artifact producing root Run. Automatic reviews use its frozen preferences; no timestamp inference. */
+  sourceRunId?: string;
   artifactVersionIds: string[];
   /** The visible checkpoint card associated with this work item. Automatic
    * batches publish it only when the quiet window closes. */

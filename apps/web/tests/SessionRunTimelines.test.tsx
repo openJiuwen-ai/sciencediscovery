@@ -913,3 +913,16 @@ test("a second response after tool calls never continues the first container", (
   assert.equal(answers[0]?.type === "assistant" && answers[0].streaming, false);
   assert.equal(answers[1]?.type === "assistant" && answers[1].content, "Tool finished; here is the report.");
 });
+
+test("MCP readiness starts a new run timeline before the first tool or model event", () => {
+  const previous = recordSessionTimelineEvent({}, "session-a", toolStarted, {runId: "old", sequence: 4});
+  const next = recordSessionTimelineEvent(previous, "session-a", {
+    type: "mcp.readiness", summary: "arxiv unavailable; omitted tools: search",
+  }, {runId: "new", sequence: 1});
+  assert.equal(next["session-a"]?.runId, "new");
+  assert.equal(next["session-a"]?.entries.length, 1);
+  assert.equal(next["session-a"]?.entries[0]?.type, "mcp-readiness");
+  assert.match(JSON.stringify(next["session-a"]?.entries), /MCP \(main\).*arxiv unavailable/);
+  const stale = recordSessionTimelineEvent(next, "session-a", {type: "tool.output", toolCallId: "old-tool", chunk: "late"}, {runId: "old", sequence: 5});
+  assert.equal(stale, next, "a stale non-start event cannot replace the new readiness notice");
+});

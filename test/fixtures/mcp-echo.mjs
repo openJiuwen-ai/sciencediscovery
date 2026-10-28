@@ -11,6 +11,7 @@
 // limitations under the License.
 
 // Local protocol fixture; never calls a model or an external service.
+import { readFileSync, appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 const require = createRequire(new URL("../../services/api/package.json", import.meta.url));
@@ -29,6 +30,15 @@ function makeServer() {
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     if (params.name === "echo") {
       const text = String(params.arguments?.text ?? "");
+      // Optional local failure injection used by the source-health API journey.
+      // No upstream requests are made; the journal counts actual MCP attempts.
+      if (process.env.MCP_FIXTURE_SOURCE_HEALTH_FILE) {
+        const state = JSON.parse(readFileSync(process.env.MCP_FIXTURE_SOURCE_HEALTH_FILE, "utf8"));
+        appendFileSync(state.journal, JSON.stringify({ statusCode: state.statusCode }) + "\n");
+        if (state.statusCode) return { isError: true, content: [{ type: "text", text: "SOURCE_HTTP_ERROR:" + JSON.stringify({
+          statusCode: state.statusCode, endpoint: state.endpoint, failureScope: state.failureScope ?? "endpoint", retryAfterMs: state.retryAfterMs,
+        }) }] };
+      }
       if (text === "slow") await new Promise((resolve) => setTimeout(resolve, 2_000));
       if (text === "error") return { isError: true, content: [{ type: "text", text: "Requested fixture error" }] };
       return { content: [{ type: "text", text: text.toUpperCase() }], structuredContent: { echoed: text.toUpperCase() } };

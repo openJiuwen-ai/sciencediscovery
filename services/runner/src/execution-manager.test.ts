@@ -200,3 +200,45 @@ test("failed atomic ref publication never reports an unrooted Execution version"
   assert.match(execution.error!, /ref publication failure/);
   assert.throws(() => manager.start(request(workspace, "later"), async () => result("later")), /repair storage/);
 });
+
+test("a caught HTTP denial still fails the managed execution and commits its partial workspace", async context => {
+  const { manager, workspace, root } = await fixture(context);
+  manager.start(request(workspace, "caught-denial"), async () => {
+    await writeFile(resolve(workspace, "partial.txt"), "already wrote");
+    return { ...result("caught-denial"), networkDeniedHosts: ["pypi.org:443"] };
+  });
+  await until(() => manager.get("caught-denial", owner).state === "failed");
+  const record = manager.get("caught-denial", owner);
+  assert.equal(record.result!.exitCode, 0, "retain actual process exit status rather than falsifying it");
+  assert.deepEqual(record.result!.networkDeniedHosts, ["pypi.org:443"]);
+  assert.ok(record.version);
+  await new VersionStore(root).validateClosure(record.version!);
+});
+
+test("cancellation wins over a successful late process result without losing its audit", async context => {
+  const { manager, workspace } = await fixture(context);
+  manager.start(request(workspace, "late-success"), async signal => {
+    await new Promise<void>(done => signal.addEventListener("abort", () => done(), { once: true }));
+    return result("late-success");
+  });
+  await until(() => manager.get("late-success", owner).state === "running");
+  manager.cancel("late-success", owner);
+  await until(() => manager.get("late-success", owner).state === "cancelled");
+  assert.equal(manager.get("late-success", owner).result!.exitCode, 0);
+  assert.ok(manager.get("late-success", owner).version);
+});
+
+test("explicit Specialist handoff records execution receipts without snapshotting undeclared files", async (context) => {
+  const { manager, workspace, root } = await fixture(context);
+  manager.start({ ...request(workspace, "explicit"), explicitHandoff: true }, async () => {
+    await writeFile(resolve(workspace, "private.txt"), "must-not-be-versioned");
+    return result("explicit");
+  });
+  await until(() => !["queued", "running"].includes(manager.get("explicit", owner).state));
+  const execution = manager.get("explicit", owner);
+  assert.equal(execution.state, "completed", execution.error ?? "");
+  assert.ok(execution.version, "execution receipt remains durable");
+  assert.equal(execution.result?.workspaceSnapshot, undefined);
+  const record = await new VersionStore(root).readRecord<{ workspace?: unknown }>(execution.version!, "WorkspaceExecution");
+  assert.equal(record.value.workspace, undefined, "no file tree or undeclared bytes in the execution version");
+});

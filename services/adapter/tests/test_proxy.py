@@ -25,6 +25,19 @@ pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 
 SETTINGS = Settings(host="127.0.0.1", port=4310, legacy_url="http://legacy.test")
 
 
+async def test_app_starts_with_socks_proxy_environment(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    for name in ("ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, "socks5://127.0.0.1:1")
+    monkeypatch.setattr("sciencediscovery_adapter.app.forget_stale_aliases", AsyncMock())
+    app = create_app(SETTINGS, transport=legacy_transport(lambda _: streamed(200, b'{"status":"ok"}')))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
+            response = await client.get("/health")
+    assert response.status_code == 200 and response.json() == {"status": "ok"}
+
+
 def streamed(status: int, body: bytes = b"", headers=None) -> httpx.Response:
     """A response whose body is still a stream, as a real transport returns it."""
     return httpx.Response(status, headers=headers, stream=httpx.ByteStream(body))

@@ -28,12 +28,13 @@
 import { createInterface } from "node:readline/promises";
 
 import { AUTH_TOKEN_FILE, resolveBootstrapToken } from "./bootstrap-tokens.js";
-import type { RunSettings } from "./cli-options.js";
+import type { RunSettings, ThinkingSwitch } from "./cli-options.js";
 import {
   ApiRequestError,
   ControlPlaneClient,
   type RunStreamEvent,
   type SessionRun,
+  type SessionThinkingControls,
 } from "./control-plane-client.js";
 import type { ServeSettings } from "./serve.js";
 
@@ -120,6 +121,40 @@ function buildSettingsOverrides(runSettings: RunSettings, input: ResolvedInput):
   return overrides;
 }
 
+/** The Project a `run` without `--project` puts its Session in. */
+const CLI_PROJECT_NAME = "cli";
+const THINKING_MODE: Record<ThinkingSwitch, string> = { auto: "auto", off: "disabled", on: "enabled" };
+const THINKING_SWITCH: Record<string, ThinkingSwitch> = { auto: "auto", disabled: "off", enabled: "on" };
+
+/**
+ * Why the session's model cannot honor `--thinking`/`--effort`, or undefined
+ * when it can. The accepted choices are the composer's for the same model, so
+ * a value is refused here instead of being narrowed silently by the server.
+ */
+export function thinkingRefusal(
+  controls: SessionThinkingControls,
+  { effort, thinking }: Pick<RunSettings, "effort" | "thinking">,
+): string | undefined {
+  if (!controls.modelId) return "--thinking and --effort need a model; choose one with --model";
+  const model = `Model "${controls.modelName ?? controls.modelId}"`;
+  if (!controls.supported) return `${model} has no thinking control, so --thinking and --effort cannot be applied`;
+  const requested = effort ? "on" : thinking!;
+  if (!controls.modes.includes(THINKING_MODE[requested])) {
+    const accepted = controls.modes.map((mode) => THINKING_SWITCH[mode] ?? mode).join(", ");
+    return `${model} does not accept --thinking ${requested}${effort ? ` (implied by --effort)` : ""}; it accepts ${accepted}`;
+  }
+  if (effort && !controls.efforts.length) return `${model} has no effort levels; use --thinking on instead of --effort`;
+  if (effort && !controls.efforts.includes(effort)) {
+    return `${model} does not accept --effort ${effort}; it accepts ${controls.efforts.join(", ")}`;
+  }
+  return undefined;
+}
+
+/** The session change `--thinking`/`--effort` make; an effort turns thinking on, as in the composer. */
+export function thinkingChanges({ effort, thinking }: Pick<RunSettings, "effort" | "thinking">): Record<string, string> {
+  return effort ? { thinkingEffort: effort, thinkingMode: "enabled" } : { thinkingMode: THINKING_MODE[thinking!] };
+}
+
 function emitJsonlError(payload: { message: string; code?: string; runId?: string; sessionId?: string }): void {
   process.stdout.write(JSON.stringify({ type: "error", ...payload }) + "\n");
 }
@@ -168,21 +203,38 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     return { exitCode: 1 };
   }
 
+  const explicitApproval = autoApprove || runSettings.approval || input.approvalMode;
+  const approvalSummary = (runSettings.sessionId ?? input.sessionId) && !explicitApproval ? "preserve_session" : approvalMode;
+
   // 元信息行
   if (outputMode === "text") {
-    log(`[run] serve=${baseUrl} approval=${approvalMode} interactive=${interactive}`);
+    log(`[run] serve=${baseUrl} approval=${approvalSummary} interactive=${interactive}`);
   } else {
-    process.stdout.write(JSON.stringify({ type: "meta", baseUrl, approvalMode, interactive }) + "\n");
+    process.stdout.write(JSON.stringify({ type: "meta", baseUrl, approvalMode: approvalSummary, interactive }) + "\n");
   }
 
   // 5. 建/复用项目与会话
   let projectId = runSettings.projectId ?? input.projectId;
   let sessionId = runSettings.sessionId ?? input.sessionId;
+  let createdFirstSession = false;
 
   if (!projectId && !sessionId) {
-    const created = await client.createProject({ name: "cli" });
-    projectId = String(created.id ?? created.project?.id ?? "");
-    sessionId = String(created.firstSession?.id ?? "");
+    // A second `run` in the same install belongs where the first one did:
+    // Project names are unique, so asking for "cli" again is a 409 rather than
+    // a second column the user cannot tell from the first. Reusing it keeps
+    // every CLI run in one 项目, with one 会话 per invocation.
+    const existing = await client.listProjects()
+      .then((projects) => projects.find((project) => project.name === CLI_PROJECT_NAME))
+      .catch(() => undefined);
+    const existingId = existing?.id;
+    if (typeof existingId === "string" && existingId !== "") {
+      projectId = existingId;
+    } else {
+      const created = await client.createProject({ name: CLI_PROJECT_NAME });
+      projectId = String(created.id ?? created.project?.id ?? "");
+      sessionId = String(created.firstSession?.id ?? "");
+      createdFirstSession = Boolean(sessionId);
+    }
   }
   if (!sessionId && projectId) {
     const session = await client.createSession(projectId, buildSessionBody(input, approvalMode, runSettings));
@@ -193,7 +245,8 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     if (Object.keys(overrides).length) {
       await client.replaceSessionSettings(sessionId, overrides);
     }
-    if (autoApprove || runSettings.approval || input.approvalMode) {
+    // A first Session created for this invocation must honor CLI intent, not saved defaults.
+    if (createdFirstSession || explicitApproval) {
       await client.updateSession(sessionId, { approvalMode });
     }
     const review = runSettings.review ?? input.reviewMode;
@@ -202,6 +255,18 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     }
   }
   if (!sessionId) throw new Error("internal: failed to resolve session");
+
+  // Thinking is checked against the model the run will use (after --model was
+  // applied) and only then saved on the session, like the other overrides.
+  if (runSettings.effort || runSettings.thinking) {
+    const refusal = thinkingRefusal(await client.getSessionThinkingControls(sessionId), runSettings);
+    if (refusal) {
+      if (outputMode === "text") process.stderr.write(`${refusal}\n`);
+      else emitJsonlError({ message: refusal, code: "THINKING_NOT_ACCEPTED", sessionId });
+      return { exitCode: 1 };
+    }
+    await client.updateSession(sessionId, thinkingChanges(runSettings));
+  }
 
   if (outputMode === "text") {
     log(`[run] project=${projectId ?? "—"} session=${sessionId}`);
@@ -316,7 +381,10 @@ export async function runCommand(context: RunContext, log: (message: string) => 
         else process.stdout.write(JSON.stringify(event) + "\n");
         break;
       case "tool.output":
-        if (outputMode === "text") process.stderr.write(`${String(event.chunk)}`);
+        if (outputMode === "text") {
+          // Progress can repeat the final result; text mode keeps its final-output contract.
+          if (!event.progress) process.stderr.write(`${String(event.chunk)}`);
+        }
         else process.stdout.write(JSON.stringify(event) + "\n");
         break;
       case "artifact.upserted":

@@ -42,3 +42,17 @@ test("research availability stays unknown until loading succeeds; initial errors
     else Reflect.deleteProperty(globalThis, "window");
   }
 });
+
+test('IdeaTree unknown usage displays admission reserve separately from measured token counts', async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: new EventTarget() });
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  let renderer: any;
+  try {
+    const research = { id: 'r', status: 'completed', objective: 'synthetic', phase: 'completed', round: 1, settings: { maxRounds: 1 }, batch: [], batchCompleted: 0, tokens: 7, usageKnown: false, unreportedBudgetEstimate: 321 };
+    const client = { listIdeaResearch: async () => ({ items: [{ research, graph: { treeId: 'r', nodes: [], edges: [] } }] }) };
+    await act(async () => { renderer = create(createElement(IdeaResearchCard, { client: client as any, sessionId: 's', onError: () => undefined })); });
+    await act(async () => { renderer.root.findByProps({ className: 'idea-tree-view' }).props.onClick(); });
+    const rendered = JSON.stringify(renderer.toJSON()); assert.match(rendered, /321/); assert.match(rendered, /7/); assert.ok(!rendered.includes('undefined'));
+  } finally { if (renderer) await act(async () => renderer.unmount()); if (previous) Object.defineProperty(globalThis, 'window', previous); else Reflect.deleteProperty(globalThis, 'window'); }
+});

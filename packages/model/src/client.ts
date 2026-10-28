@@ -37,6 +37,8 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { ModelUsage as AgentModelUsage } from "./types.js";
+import { normalizeUsage } from "./usage.js";
+export { normalizeUsage } from "./usage.js";
 
 export interface ModelEndpoint {
   apiToken?: string;
@@ -66,6 +68,12 @@ export interface ModelTurn {
   /** Wire-format assistant message appended verbatim to history. */
   assistantMessage: AgentHistoryMessage;
   toolCalls: NormalizedToolCall[];
+  /** Request-local evidence of stream assembly anomalies; absent means unmeasured. */
+  streamDiagnostics?: {
+    protocol: ModelApiProtocol;
+    unparseableSsePayloads: number;
+    toolCallDeltasWithoutIndex?: number;
+  };
   usage?: AgentModelUsage;
   /**
    * The turn hit `max_tokens` and was cut mid-sentence.
@@ -77,6 +85,8 @@ export interface ModelTurn {
    * looking for a bug that is not there.
    */
   truncated?: boolean;
+  /** Provider terminal evidence; false means a disconnected or malformed stream. */
+  completionObserved?: boolean;
 }
 
 export interface ModelStreamCallbacks {
@@ -106,6 +116,10 @@ export interface ModelClientPolicy {
   maxRetries: number;
   maxTokens: number;
   requestTimeoutMs: number;
+  maxResponseBytes?: number;
+  temperature?: number;
+  topP?: number;
+  thinking?: { type: string };
 }
 
 export class ModelRequestError extends Error {
@@ -182,40 +196,9 @@ export function proxyDispatcher(proxy: ResolvedProxy | undefined): Dispatcher | 
 function numberField(value: Record<string, unknown>, keys: string[]): number | undefined {
   for (const key of keys) {
     const raw = value[key];
-    if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) return raw;
+    if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) return raw;
   }
   return undefined;
-}
-
-/** Normalize provider usage payloads (OpenAI and Anthropic spellings). */
-export function normalizeUsage(raw: unknown): AgentModelUsage | undefined {
-  if (!isRecord(raw)) return undefined;
-  let inputTokens = numberField(raw, ["input_tokens", "prompt_tokens"]);
-  let outputTokens = numberField(raw, ["output_tokens", "completion_tokens"]);
-  let totalTokens = numberField(raw, ["total_tokens"]);
-  let cacheReadTokens = numberField(raw, ["cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"]);
-  const cacheWriteTokens = numberField(raw, ["cache_creation_input_tokens", "cache_write_tokens", "prompt_cache_miss_tokens"]);
-  const promptDetails = raw.prompt_tokens_details;
-  if (cacheReadTokens === undefined && isRecord(promptDetails)) {
-    cacheReadTokens = numberField(promptDetails, ["cached_tokens", "cache_read_tokens"]);
-  }
-  if (totalTokens === undefined && inputTokens !== undefined && outputTokens !== undefined) {
-    totalTokens = inputTokens + outputTokens;
-  }
-  if (inputTokens === undefined && totalTokens !== undefined && outputTokens !== undefined) {
-    inputTokens = Math.max(totalTokens - outputTokens, 0);
-  }
-  if (outputTokens === undefined && totalTokens !== undefined && inputTokens !== undefined) {
-    outputTokens = Math.max(totalTokens - inputTokens, 0);
-  }
-  if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined) return undefined;
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    cacheReadTokens: cacheReadTokens ?? null,
-    cacheWriteTokens: cacheWriteTokens ?? null,
-  };
 }
 
 function parseToolCallArgs(rawArguments: string): { args: Record<string, unknown>; error?: string } {
@@ -246,6 +229,8 @@ async function* sseData(body: AsyncIterable<Uint8Array>, onProgress?: () => void
       newline = buffer.indexOf("\n");
     }
   }
+  const last = buffer.trim();
+  if (last.startsWith("data:") && last.slice(5).trim() !== "[DONE]") yield last.slice(5).trim();
 }
 
 interface RequestOptions {
@@ -259,11 +244,11 @@ interface RequestOptions {
 
 /** POST with a bounded retry budget for pre-stream failures (connect errors,
  *  429, 5xx). Once the stream starts flowing, errors surface to the caller. */
-async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncIterable<Uint8Array> & { dump(): Promise<void> } }> {
+async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncIterable<Uint8Array> }> {
   const dispatcher = proxyDispatcher(options.proxy);
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= options.policy.maxRetries; attempt += 1) {
-    if (options.signal.aborted) throw new Error("aborted");
+    if (options.signal.aborted) { await dispatcher?.close(); throw new Error("aborted"); }
     let statusCode: number;
     let responseBody: AsyncIterable<Uint8Array> & { dump(): Promise<void> };
     let retryAfterMs: number | undefined;
@@ -284,16 +269,23 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
         retryAfterMs = Number(retryAfter) * 1_000;
       }
     } catch (error) {
-      if (options.signal.aborted) throw new Error("aborted");
+      if (options.signal.aborted) { await dispatcher?.close(); throw new Error("aborted"); }
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < options.policy.maxRetries) {
         await backoff(attempt, undefined, options.signal);
         continue;
       }
+      await dispatcher?.close();
       throw new Error(`Model endpoint is unavailable: ${lastError.message}`);
     }
-    if (statusCode >= 200 && statusCode < 300) return { body: responseBody };
-    const detail = (await collectBounded(responseBody, 2_000)).trim();
+    if (statusCode >= 200 && statusCode < 300) return { body: boundedModelBody(responseBody, dispatcher, options.policy.maxResponseBytes) };
+    let detail = (await collectBounded(responseBody, 2_000)).trim();
+    for (const [key, value] of Object.entries(options.headers)) {
+      if (["authorization", "x-api-key"].includes(key.toLowerCase())) {
+        const secret = value.replace(/^Bearer\s+/i, "");
+        if (secret) detail = detail.split(secret).join("[redacted]");
+      }
+    }
     const failure = new ModelRequestError(
       `Model request failed with status ${statusCode}${detail ? `: ${detail}` : ""}`,
       statusCode,
@@ -304,9 +296,23 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
       await backoff(attempt, retryAfterMs, options.signal);
       continue;
     }
+    await dispatcher?.close();
     throw failure;
   }
   throw lastError ?? new Error("Model request failed");
+}
+
+async function* boundedModelBody(body: AsyncIterable<Uint8Array>, dispatcher?: Dispatcher, cap = 16 * 1024 * 1024) {
+  let bytes = 0;
+  try {
+    for await (const chunk of body) {
+      bytes += chunk.byteLength;
+      if (bytes > cap) throw new Error("Model response exceeds the byte limit");
+      yield chunk;
+    }
+  } finally {
+    await dispatcher?.close();
+  }
 }
 
 async function collectBounded(body: AsyncIterable<Uint8Array>, cap: number): Promise<string> {
@@ -491,6 +497,13 @@ function chatHistory(history: AgentHistoryMessage[], variant: ModelApiVariant): 
   });
 }
 
+/** Error payloads are provider-controlled and may echo authorization values. */
+function streamErrorDetail(value: unknown, endpoint: ModelEndpoint): string {
+  let detail = typeof value === "string" ? value : JSON.stringify(value) ?? "unknown";
+  if (endpoint.apiToken) detail = detail.split(endpoint.apiToken).join("[redacted]");
+  return detail.slice(0, 2_000);
+}
+
 async function streamOpenAiTurn(
   endpoint: ModelEndpoint,
   systemPrompt: string,
@@ -502,23 +515,8 @@ async function streamOpenAiTurn(
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
   const { body } = await requestWithRetry({
-    url: chatUrl(endpoint.baseUrl),
-    headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
-    body: JSON.stringify({
-      model: endpoint.model,
-      messages: [{ role: "system", content: systemPrompt }, ...chatHistory(history, variant)],
-      ...(tools.length ? { tools: tools.map((tool) => ({
-        type: "function",
-        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-      })) } : {}),
-      stream: true,
-      stream_options: { include_usage: true },
-      max_tokens: policy.maxTokens,
-      ...chatThinkingFields(endpoint),
-    }),
-    policy,
-    proxy: endpoint.proxy,
-    signal,
+    ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
+    policy, proxy: endpoint.proxy, signal,
   });
 
   let text = "";
@@ -529,18 +527,23 @@ async function streamOpenAiTurn(
   const emitTool = toolDeltaEmitter(callbacks);
   let usage: AgentModelUsage | undefined;
   let truncated = false;
+  let completionObserved = false;
   const buffersInlineThinking = variant === "minimax" || variant === "ollama";
 
+  const streamDiagnostics = { protocol: "openai-chat-completions" as const, unparseableSsePayloads: 0, toolCallDeltasWithoutIndex: 0 };
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let chunk: Record<string, unknown>;
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
-    const chunkUsage = normalizeUsage(chunk.usage);
+    if (chunk.error) throw new Error(`Chat API error: ${streamErrorDetail(chunk.error, endpoint)}`);
+    const chunkUsage = normalizeUsage(chunk.usage, "openai-chat-completions");
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+    if (choices.length && isRecord(choices[0]) && typeof choices[0].finish_reason === "string") completionObserved = true;
     // Read before the `delta` guard below: the chunk that carries
     // `finish_reason` is the closing one, and it has no delta.
     if (choices.length && isRecord(choices[0]) && choices[0].finish_reason === "length") {
@@ -584,6 +587,7 @@ async function streamOpenAiTurn(
     if (Array.isArray(delta.tool_calls)) {
       for (const raw of delta.tool_calls) {
         if (!isRecord(raw)) continue;
+        if (typeof raw.index !== "number") streamDiagnostics.toolCallDeltasWithoutIndex += 1;
         const index = typeof raw.index === "number" ? raw.index : fragments.size;
         const existing = fragments.get(index) ?? { function: { arguments: "", name: "" } };
         for (const [key, value] of Object.entries(raw)) {
@@ -611,6 +615,7 @@ async function streamOpenAiTurn(
     if (text) callbacks.onTextDelta?.(text);
   }
   const orderedFragments = [...fragments.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+  if (orderedFragments.some(f => f.function?.name && !(typeof f.id === "string" && f.id))) throw new Error("Chat completion omitted a tool call ID");
   const wireToolCalls = orderedFragments.map((fragment) => ({
     ...fragment,
     id: typeof fragment.id === "string" && fragment.id ? fragment.id : `call_${randomUUID()}`,
@@ -631,7 +636,20 @@ async function streamOpenAiTurn(
     ...(variant === "qwen" && qwenReasoning !== undefined ? { reasoning: qwenReasoning } : {}),
     ...(variant === "minimax" && minimaxReasoning.length ? { reasoning_details: minimaxReasoning } : {}),
   };
-  return { assistantMessage, toolCalls, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
+  return { assistantMessage, toolCalls, streamDiagnostics, completionObserved, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
+}
+
+function imageParts(content: unknown, protocol: "responses" | "anthropic"): Record<string, unknown>[] {
+  if (!Array.isArray(content)) return [{ type: protocol === "responses" ? "input_text" : "text", text: contentText(content) }];
+  return content.map((part: unknown) => {
+    if (!isRecord(part)) throw new Error("Unsupported model content part");
+    if (part.type === "text" && typeof part.text === "string") return { type: protocol === "responses" ? "input_text" : "text", text: part.text };
+    if (part.type !== "image_url" || !isRecord(part.image_url) || typeof part.image_url.url !== "string") throw new Error("Unsupported model content part");
+    if (protocol === "responses") return { type: "input_image", image_url: part.image_url.url, detail: part.image_url.detail ?? "auto" };
+    const match = part.image_url.url.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
+    if (!match) throw new Error("Messages image input requires a base64 PNG, JPEG, GIF or WebP data URL");
+    return { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } };
+  });
 }
 
 function responsesInput(history: AgentHistoryMessage[]): unknown[] {
@@ -639,17 +657,27 @@ function responsesInput(history: AgentHistoryMessage[]): unknown[] {
   for (const message of history) {
     if (message.role === "assistant" && Array.isArray(message.response_items)) {
       input.push(...structuredClone(message.response_items));
+      // Some compatible streams omit the text-item snapshot. Keep observed text
+      // alongside native reasoning/tool state rather than dropping it on replay.
+      const hasText = message.response_items.some(item => isRecord(item) && item.type === "message" && contentText(item.content));
+      if (!hasText && contentText(message.content)) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: contentText(message.content) }] });
     } else if (message.role === "tool") {
       input.push({
         type: "function_call_output",
         call_id: typeof message.tool_call_id === "string" ? message.tool_call_id : "",
         output: contentText(message.content),
       });
+    } else if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
+      if (contentText(message.content)) input.push({ role: "assistant", content: [{ type: "output_text", text: contentText(message.content) }] });
+      for (const call of message.tool_calls) {
+        if (!isRecord(call) || !isRecord(call.function)) throw new Error("Invalid tool call history");
+        input.push({ type: "function_call", call_id: call.id, name: call.function.name, arguments: call.function.arguments });
+      }
     } else if (message.role === "user" || message.role === "assistant") {
       input.push({
         type: "message",
         role: message.role,
-        content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text: contentText(message.content) }],
+        content: message.role === "user" ? imageParts(message.content, "responses") : [{ type: "output_text", text: contentText(message.content) }],
       });
     }
   }
@@ -673,36 +701,24 @@ async function streamResponsesTurn(
   callbacks: ModelStreamCallbacks,
 ): Promise<ModelTurn> {
   const { body } = await requestWithRetry({
-    url: responsesUrl(endpoint.baseUrl),
-    headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
-    body: JSON.stringify({
-      model: endpoint.model,
-      instructions: systemPrompt,
-      input: responsesInput(history),
-      ...(tools.length ? { tools: tools.map((tool) => ({
-        type: "function", name: tool.name, description: tool.description, parameters: tool.parameters,
-      })) } : {}),
-      stream: true,
-      store: false,
-      include: ["reasoning.encrypted_content"],
-      max_output_tokens: policy.maxTokens,
-      ...responsesReasoning(endpoint),
-    }),
-    policy,
-    proxy: endpoint.proxy,
-    signal,
+    ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
+    policy, proxy: endpoint.proxy, signal,
   });
 
   let text = "";
   let usage: AgentModelUsage | undefined;
+  let truncated = false;
+  let completionObserved = false;
   const items = new Map<number, Record<string, unknown>>();
   const partialItems = new Map<number, Record<string, unknown>>();
   const emitTool = toolDeltaEmitter(callbacks);
+  const streamDiagnostics = { protocol: "openai-responses" as const, unparseableSsePayloads: 0 };
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
     if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
@@ -727,12 +743,17 @@ async function streamResponsesTurn(
       items.set(index, structuredClone(event.item));
       if (event.item.type === "function_call") emitTool(index, event.item.call_id, event.item.name,
         typeof event.item.arguments === "string" ? event.item.arguments : "{}");
-    } else if (event.type === "response.completed" && isRecord(event.response)) {
-      usage = normalizeUsage(event.response.usage) ?? usage;
+    } else if ((event.type === "response.completed" || event.type === "response.incomplete") && isRecord(event.response)) {
+      completionObserved = true;
+      usage = normalizeUsage(event.response.usage, "openai-responses") ?? usage;
+      truncated = event.type === "response.incomplete";
+    } else if (event.type === "error") {
+      throw new Error(`Responses API error: ${streamErrorDetail(event.message ?? "unknown", endpoint)}`);
     } else if (event.type === "response.failed") {
-      throw new Error(`Responses API failed${isRecord(event.response) && isRecord(event.response.error) && typeof event.response.error.message === "string" ? `: ${event.response.error.message}` : ""}`);
+      throw new Error(`Responses API failed${isRecord(event.response) && isRecord(event.response.error) && typeof event.response.error.message === "string" ? `: ${streamErrorDetail(event.response.error.message, endpoint)}` : ""}`);
     }
   }
+  if (truncated) for (const [index, item] of partialItems) if (!items.has(index)) items.set(index, item);
   const responseItems = [...items.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item);
   if (!text) {
     text = responseItems.filter((item) => item.type === "message")
@@ -740,6 +761,7 @@ async function streamResponsesTurn(
     if (text) callbacks.onTextDelta?.(text);
   }
   const functionCalls = responseItems.filter((item) => item.type === "function_call");
+  if (functionCalls.some(c => typeof c.call_id !== "string" || !c.call_id)) throw new Error("Responses completion omitted a tool call ID");
   const wireToolCalls = functionCalls.map((item) => ({
     id: typeof item.call_id === "string" ? item.call_id : `call_${randomUUID()}`,
     type: "function",
@@ -761,7 +783,10 @@ async function streamResponsesTurn(
       ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
     },
     toolCalls,
+    streamDiagnostics,
+    completionObserved,
     ...(usage ? { usage } : {}),
+    ...(truncated ? { truncated } : {}),
   };
 }
 
@@ -779,7 +804,7 @@ export function toAnthropicMessages(history: AgentHistoryMessage[]): Array<{ con
   for (const message of history) {
     if (message.role === "system") continue;
     if (message.role === "user") {
-      push("user", [{ type: "text", text: contentText(message.content) }]);
+      push("user", imageParts(message.content, "anthropic"));
     } else if (message.role === "assistant") {
       if (Array.isArray(message.anthropic_content)) {
         push("assistant", structuredClone(message.anthropic_content).filter(isRecord));
@@ -789,8 +814,9 @@ export function toAnthropicMessages(history: AgentHistoryMessage[]): Array<{ con
       const text = contentText(message.content);
       if (text) blocks.push({ type: "text", text });
       for (const raw of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
-        if (!isRecord(raw) || !isRecord(raw.function)) continue;
+        if (!isRecord(raw) || !isRecord(raw.function) || typeof raw.id !== "string" || !raw.id) throw new Error("Invalid tool call history");
         const parsed = parseToolCallArgs(typeof raw.function.arguments === "string" ? raw.function.arguments : "");
+        if (parsed.error) throw new Error("Cannot replay malformed tool arguments");
         blocks.push({
           type: "tool_use",
           id: typeof raw.id === "string" ? raw.id : `call_${randomUUID()}`,
@@ -837,43 +863,38 @@ async function streamAnthropicTurn(
   callbacks: ModelStreamCallbacks,
 ): Promise<ModelTurn> {
   const { body } = await requestWithRetry({
-    url: anthropicUrl(endpoint.baseUrl),
-    headers: { "content-type": "application/json", "x-api-key": endpoint.apiToken || "dummy", "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({
-      model: endpoint.model,
-      system: systemPrompt,
-      messages: toAnthropicMessages(history),
-      ...(tools.length ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
-      stream: true,
-      max_tokens: policy.maxTokens,
-      ...anthropicThinkingFields(endpoint, policy.maxTokens),
-    }),
-    policy,
-    proxy: endpoint.proxy,
-    signal,
+    ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
+    policy, proxy: endpoint.proxy, signal,
   });
 
-  let inputTokens = 0;
-  let outputTokens = 0;
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
   let truncated = false;
+  let completionObserved = false;
   let cacheReadTokens: number | null = null;
   let cacheWriteTokens: number | null = null;
   const blocks = new Map<number, AnthropicBlock>();
   const toolJson = new Map<number, string>();
+  const toolErrors = new Map<string, string>();
   const emitTool = toolDeltaEmitter(callbacks);
+  const streamDiagnostics = { protocol: "anthropic-messages" as const, unparseableSsePayloads: 0 };
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
+    if (event.type === "error") throw new Error(`Messages API error: ${streamErrorDetail(event.error, endpoint)}`);
     if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
-      inputTokens = numberField(event.message.usage, ["input_tokens"]) ?? 0;
+      inputTokens = numberField(event.message.usage, ["input_tokens"]);
       cacheReadTokens = numberField(event.message.usage, ["cache_read_input_tokens"]) ?? null;
       cacheWriteTokens = numberField(event.message.usage, ["cache_creation_input_tokens"]) ?? null;
     } else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
       blocks.set(event.index, structuredClone(event.content_block));
+      if (event.content_block.type === "text" && typeof event.content_block.text === "string" && event.content_block.text) callbacks.onTextDelta?.(event.content_block.text);
+      if (event.content_block.type === "thinking" && typeof event.content_block.thinking === "string" && event.content_block.thinking) callbacks.onThinkingDelta?.(event.content_block.thinking);
       if (event.content_block.type === "tool_use") {
         toolJson.set(event.index, "");
         emitTool(event.index, event.content_block.id, event.content_block.name, "");
@@ -898,13 +919,16 @@ async function streamAnthropicTurn(
       const json = toolJson.get(event.index);
       if (block?.type === "tool_use" && json !== undefined) {
         const raw = json || JSON.stringify(isRecord(block.input) ? block.input : {});
-        block.input = parseToolCallArgs(raw).args;
+        const parsed = parseToolCallArgs(raw);
+        block.input = parsed.args;
+        if (parsed.error) toolErrors.set(String(block.id), parsed.error);
         emitTool(event.index, block.id, block.name, raw);
       }
     } else if (event.type === "message_delta") {
       if (isRecord(event.usage)) {
         outputTokens = numberField(event.usage, ["output_tokens"]) ?? outputTokens;
       }
+      if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") completionObserved = true;
       // Anthropic's equivalent of `finish_reason: "length"`.
       if (isRecord(event.delta) && event.delta.stop_reason === "max_tokens") truncated = true;
     }
@@ -913,6 +937,7 @@ async function streamAnthropicTurn(
   const anthropicContent = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block);
   const text = anthropicContent.filter((block) => block.type === "text").map((block) => contentText(block)).join("");
   const toolBlocks = anthropicContent.filter((block) => block.type === "tool_use");
+  if (toolBlocks.some(b => typeof b.id !== "string" || !b.id)) throw new Error("Messages completion omitted a tool call ID");
   const wireToolCalls = toolBlocks.map((block) => ({
     id: typeof block.id === "string" ? block.id : `call_${randomUUID()}`,
     type: "function",
@@ -923,7 +948,7 @@ async function streamAnthropicTurn(
   }));
   const toolCalls = wireToolCalls.map((call): NormalizedToolCall => {
     const parsed = parseToolCallArgs(call.function.arguments);
-    return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
+    return { args: parsed.args, id: call.id, name: call.function.name, ...(toolErrors.get(call.id) || parsed.error ? { argsParseError: toolErrors.get(call.id) ?? parsed.error } : {}) };
   });
   return {
     assistantMessage: {
@@ -933,9 +958,78 @@ async function streamAnthropicTurn(
       ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
     },
     toolCalls,
-    usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens },
+    streamDiagnostics,
+    completionObserved,
+    ...(inputTokens !== undefined && outputTokens !== undefined && Number.isSafeInteger(inputTokens + outputTokens) ? { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens } } : {}),
     ...(truncated ? { truncated } : {}),
   };
+}
+
+/** The single protocol request boundary, used by streaming, auxiliary calls and probes. */
+export function createModelRequest(
+  endpoint: ModelEndpoint, systemPrompt: string, history: AgentHistoryMessage[],
+  tools: WireToolSpec[], policy: ModelClientPolicy, stream: boolean,
+): { url: string; headers: Record<string, string>; body: string } {
+  if (policy.topP !== undefined && (!Number.isFinite(policy.topP) || policy.topP < 0 || policy.topP > 1)) throw new Error("top_p must be between zero and one");
+  const variant = endpointVariant(endpoint);
+  switch (endpointProtocol(endpoint)) {
+    case "openai-chat-completions":
+      return {
+        url: chatUrl(endpoint.baseUrl),
+        headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
+        body: JSON.stringify({
+          model: endpoint.model,
+          ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+          ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
+          messages: [...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []), ...chatHistory(history, variant)],
+          ...(tools.length ? { tools: tools.map((tool) => ({
+            type: "function",
+            function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+          })) } : {}),
+          stream,
+          ...(stream ? { stream_options: { include_usage: true } } : {}),
+          max_tokens: policy.maxTokens,
+          ...chatThinkingFields(endpoint),
+          ...(policy.thinking ? { thinking: policy.thinking } : {}),
+        }),
+      };
+    case "openai-responses":
+      return {
+        url: responsesUrl(endpoint.baseUrl),
+        headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
+        body: JSON.stringify({
+          model: endpoint.model,
+          ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+          ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
+          instructions: systemPrompt,
+          input: responsesInput(history),
+          ...(tools.length ? { tools: tools.map((tool) => ({
+            type: "function", name: tool.name, description: tool.description, parameters: tool.parameters,
+          })) } : {}),
+          stream,
+          store: false,
+          include: ["reasoning.encrypted_content"],
+          max_output_tokens: policy.maxTokens,
+          ...responsesReasoning(endpoint),
+        }),
+      };
+    case "anthropic-messages":
+      return {
+        url: anthropicUrl(endpoint.baseUrl),
+        headers: { "content-type": "application/json", "x-api-key": endpoint.apiToken || "dummy", "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: endpoint.model,
+          ...(policy.temperature === undefined ? {} : { temperature: policy.temperature }),
+          ...(policy.topP === undefined ? {} : { top_p: policy.topP }),
+          system: systemPrompt,
+          messages: toAnthropicMessages(history),
+          ...(tools.length ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
+          stream,
+          max_tokens: policy.maxTokens,
+          ...anthropicThinkingFields(endpoint, policy.maxTokens),
+        }),
+      };
+  }
 }
 
 /** Stream one model turn using the explicitly configured protocol family. */

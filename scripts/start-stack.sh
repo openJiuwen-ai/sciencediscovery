@@ -166,12 +166,15 @@ wait_healthy() { # <name> <url>
   # here does not just skip one sidecar: the failure trips `set -e` and cleanup
   # takes the whole stack down, so the caller only ever sees "never healthy".
   local attempts="$health_attempts"
-  if [[ -n "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" ]]; then
+  if [[ "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" =~ [^[:space:]] ]]; then
     attempts=$((SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS * 5))
   fi
   local attempt
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    if curl --silent --fail "$2" >/dev/null 2>&1; then return 0; fi
+    # curl does not interpret NO_PROXY=127.* as a loopback wildcard. Keep
+    # existing exclusions for remote runners and explicitly bypass local probes.
+    if curl --noproxy "${no_proxy:-${NO_PROXY:-}},localhost,localhost.,127.0.0.1,::1" \
+      --silent --fail "$2" >/dev/null 2>&1; then return 0; fi
     sleep 0.2
   done
   echo "$1 did not become healthy at $2 after $((attempts / 5))s." >&2
@@ -213,7 +216,7 @@ report_dependency_problems() {
       echo
     done
     echo "  Requirements table: README.md#requirements"
-    echo "  Local source mode:  docs/en/how-to/deployment.md#local-mode-host-processes"
+    echo "  Local source mode:  docs/en/getting-started/deployment.md#local-source-mode-linux--macos"
   } >&2
   exit 1
 }
@@ -331,8 +334,10 @@ prepare_local() {
       *) echo "Native sandbox execution is unsupported on $(uname -s)." >&2; exit 1 ;;
     esac
   fi
-  # Installation/build do not require a working execution sandbox. The Runner
-  # probes in its own process and exposes a structured capability report.
+  # Installation/build do not require a working execution sandbox, so neither
+  # bubblewrap nor sandbox-exec is a preflight dependency here. The Runner
+  # probes in its own process, prints how to install a missing executable, and
+  # exposes the same text in its capability report.
   case "$sandbox_provider" in
     bubblewrap|seatbelt) ;;
     *) echo "SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt." >&2; exit 1 ;;
@@ -544,6 +549,8 @@ EOF
     mkdir -p "$HOME"
     export HOME
   fi
+  # Retain existing container registries/workspaces on the persisted volume.
+  export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$HOME}"
 
   if [[ ! -x "$gateway_python" ]]; then
     echo "The Python MCP server environment is missing at $gateway_python. Rebuild the image." >&2
@@ -627,13 +634,26 @@ start_stack() {
   # never sees a model key: model calls go back through the API's loopback
   # proxy with a one-shot run token, and everything needed to replay or resume
   # a run lives in the API's data/evolution/runs/<runId>/events.ndjson.
-  if [[ -x "$evolve_python" ]]; then
+  if [[ -x "$evolve_python" && -z "${SCIENCE_AGENT_EVOLVE_URL:-}" ]]; then
     echo "Starting the evolve service..." >&2
-    SCIENCE_AGENT_DATA_DIR="$data_dir" \
-    SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN="${SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN:-sciencediscovery-evolve-local}" \
-    "$evolve_python" -m sciencediscovery_evolve.server &
-    pids+=("$!")
-    wait_healthy "evolve" "http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT:-4313}/health"
+    local evolve_state evolve_pid evolve_attempts=300
+    evolve_state="$(mktemp "$data_dir/.evolve-control.XXXXXX")"
+    node services/launcher/dist/source-evolve.js "$evolve_python" "$data_dir" "$evolve_state" &
+    evolve_pid="$!"
+    pids+=("$evolve_pid")
+    if [[ "${SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS:-}" =~ [^[:space:]] ]]; then
+      evolve_attempts=$((SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS * 5))
+    fi
+    for ((attempt=0; attempt<evolve_attempts; attempt++)); do
+      [[ -s "$evolve_state" ]] && break
+      kill -0 "$evolve_pid" 2>/dev/null || { echo "Evolve exited before readiness." >&2; return 1; }
+      sleep 0.2
+    done
+    [[ -s "$evolve_state" ]] || { echo "Evolve did not become ready." >&2; return 1; }
+    # Private control coordinates availability and credentials; no model token is sent to a guessed port.
+    SCIENCE_AGENT_EVOLVE_CONTROL_URL="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).SCIENCE_AGENT_EVOLVE_CONTROL_URL)' "$evolve_state")"
+    SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN)' "$evolve_state")"
+    export SCIENCE_AGENT_EVOLVE_CONTROL_URL SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN
   fi
 
   if [[ "${SCIENCE_AGENT_EXECUTOR:-}" == "jiuwenswarm" ]]; then
@@ -652,6 +672,11 @@ start_stack() {
     fi
     # Where the JiuwenSwarm instance listens; scripts/jiuwenswarm.sh knows its ports.
     if [[ -z "${JIUWENSWARM_GATEWAY_URL:-}" || -z "${JIUWENSWARM_MGMT_URL:-}" ]]; then
+      # Another root may already listen on our old ports. Start checks this
+      # instance's PID and may allocate new ports; read endpoints afterwards.
+      if [[ "$use_jiuwenswarm" -eq 1 ]]; then
+        "$script_dir/jiuwenswarm.sh" start >&2 || exit 1
+      fi
       eval "$("$script_dir/jiuwenswarm.sh" env)" || {
         echo "Could not read the JiuwenSwarm instance; run scripts/jiuwenswarm.sh setup and start." >&2
         exit 1

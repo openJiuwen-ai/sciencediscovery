@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { projectMetrics } from "./biomni-gate.mjs";
 
 const metrics = new Set(["benchmark-metrics.json", "team-metrics.json", "evolve-metrics.json"]);
 const planFiles = new Set(["plan.json", "summary.json", "preflight.json"]);
@@ -37,8 +38,10 @@ function scoreFields(doc) {
 function scoreDocument(doc, name) {
   if (!doc || Array.isArray(doc) || typeof doc !== "object") throw new SyntaxError("Expected an object");
   if (metrics.has(name)) {
+    if (doc.benchmark === "biomnibench-da") return projectMetrics(doc);
     const out = pick(doc, ["schema_version", "case", "case_id", "integration_status", "integration",
-      "started_at", "finished_at", "generation_duration_ms"]);
+      "started_at", "finished_at", "generation_duration_ms", "budget_ms",
+      "budget_exceeded", "cancel_requested", "cancel_http_status"]);
     for (const key of ["evaluation", "llm_evaluation"]) {
       if (doc[key] && typeof doc[key] === "object") out[key] = scoreFields(doc[key]);
     }
@@ -56,12 +59,13 @@ function scoreDocument(doc, name) {
 
 // Stage only regular files; diagnostics, similarly named files and symlinks
 // cannot enter the score artifact. Preserve relative paths for the collector.
-export async function prepareRealE2EResults(root = process.cwd()) {
+export async function prepareRealE2EResults(root = process.cwd(), { summaryPath } = {}) {
   const source = resolve(root, ".ci-results");
   const output = resolve(root, ".tmp", "real-e2e-results");
   await rm(output, { force: true, recursive: true });
   await mkdir(output, { recursive: true });
   const files = [];
+  const reviews = [];
   async function visit(relative = "") {
     let entries;
     try {
@@ -91,14 +95,29 @@ export async function prepareRealE2EResults(root = process.cwd()) {
         await mkdir(dirname(destination), { recursive: true });
         await writeFile(destination, JSON.stringify(doc, null, 2) + "\n");
         files.push(path);
+        if (entry.name === "evolve-metrics.json" && doc.case === "PUCT-COMPRESS") {
+          // Use only projected fields. The timeout/error fallback omits the
+          // evaluator name, so identify this case's reviewer explicitly.
+          const review = doc.llm_evaluation;
+          reviews.push(`| puct-artifact-review-v1 | ${review?.status ?? (review ? "unknown" : "not_run")} | ${review?.total_score ?? "N/A"} | ${review?.gating ?? false} |`);
+        }
       }
     }
   }
   await visit();
+  if (summaryPath && reviews.length) {
+    await appendFile(summaryPath, [
+      "### PUCT artifact review", "",
+      "Unofficial, non-gating LLM review; delivery is evaluated separately.", "",
+      "| evaluator | status | total_score | gating |",
+      "| --- | --- | --- | --- |",
+      ...reviews, "", "",
+    ].join("\n"));
+  }
   return files.sort();
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const files = await prepareRealE2EResults();
+  const files = await prepareRealE2EResults(process.cwd(), { summaryPath: process.env.GITHUB_STEP_SUMMARY });
   console.log(`Staged ${files.length} real E2E score/plan files.`);
 }

@@ -1,0 +1,457 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* ============================================================================
+   The welcome page
+
+   A session with nothing in it draws the wordmark, the three categories and
+   the composer as one group in the middle of the page, instead of an empty
+   transcript with the composer pinned to the bottom. The composer is the
+   ordinary one in its landing arrangement: the white card sits on a grey
+   container whose lower strip carries the project and the permission mode.
+   ============================================================================ */
+
+.landing {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  padding: 24px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #dcdcdc transparent;
+}
+
+/* The blue haze the handoff puts behind the middle of the page. It is drawn
+   rather than shipped as a bitmap: it is one soft ellipse, and the image
+   export of it was two megabytes. */
+.landing::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  width: min(980px, 92%);
+  height: 560px;
+  transform: translate(-50%, -44%);
+  background:
+    radial-gradient(ellipse 46% 52% at 50% 46%, rgba(20, 118, 255, 0.15), rgba(20, 118, 255, 0) 72%),
+    radial-gradient(ellipse 36% 34% at 50% 72%, rgba(92, 170, 255, 0.13), rgba(92, 170, 255, 0) 74%);
+  pointer-events: none;
+}
+
+.landing-inner {
+  position: relative;
+  z-index: 1;
+  width: 816px;
+  max-width: 100%;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: landingIn 0.28s ease both;
+}
+
+@keyframes landingIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── the lockup ─────────────────────────────────────────────────────────── */
+
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 64px;
+}
+
+.landing-mascot {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 84px;
+  background: url("../assets/landing/mascot.png") center / contain no-repeat;
+}
+
+.landing-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.landing-wordmark {
+  color: #191919;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 2.6vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.06;
+}
+
+/* The tagline is tracked out until it is as wide as the wordmark above it,
+   which is what makes the lockup read as a block. The two scripts need very
+   different tracking to reach the same width, so the spacing is per
+   language. */
+.landing-tagline {
+  margin-top: 8px;
+  color: #8c8c8c;
+  font-size: 12px;
+  letter-spacing: 0.34em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+:root:lang(zh) .landing-tagline {
+  font-size: 14px;
+  letter-spacing: 1.7em;
+}
+
+/* The icons are solid glyphs from the handoff, tinted through a mask so one
+   file serves both the grey pills and the blue chip. */
+.landing-icon,
+.composer-tag-icon,
+.composer-strip-icon,
+.send-glyph {
+  display: inline-block;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.landing-icon { width: 16px; height: 16px; }
+
+.landing-icon[data-kind="research"],
+.composer-tag-icon[data-kind="research"] {
+  -webkit-mask-image: url("../assets/landing/research.svg");
+  mask-image: url("../assets/landing/research.svg");
+}
+
+.landing-icon[data-kind="experiment"],
+.composer-tag-icon[data-kind="experiment"] {
+  -webkit-mask-image: url("../assets/landing/experiment.svg");
+  mask-image: url("../assets/landing/experiment.svg");
+}
+
+.landing-icon[data-kind="analysis"],
+.composer-tag-icon[data-kind="analysis"] {
+  -webkit-mask-image: url("../assets/landing/analysis.svg");
+  mask-image: url("../assets/landing/analysis.svg");
+}
+
+.composer-strip-icon[data-kind="folder"] {
+  -webkit-mask-image: url("../assets/landing/folder.svg");
+  mask-image: url("../assets/landing/folder.svg");
+}
+
+.send-glyph {
+  width: 17px;
+  height: 17px;
+  -webkit-mask-image: url("../assets/landing/send.svg");
+  mask-image: url("../assets/landing/send.svg");
+}
+
+/* ── the three ways in ──────────────────────────────────────────────────── */
+
+.landing-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  max-width: 100%;
+  margin-bottom: 20px;
+}
+
+.landing-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 18px;
+  border: 1px solid #ececec;
+  border-radius: 999px;
+  background: #fff;
+  color: #333;
+  font-size: 15px;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(25, 25, 25, 0.04);
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease, color 0.12s ease;
+}
+
+.landing-pill .landing-icon {
+  color: #4d4d4d;
+  transition: color 0.12s ease;
+}
+
+.landing-pill:hover {
+  border-color: #dcdcdc;
+  background: #fcfcfc;
+  box-shadow: 0 4px 16px rgba(25, 25, 25, 0.07);
+}
+
+/* A topic is a quieter thing than a category: a filled row that inserts a
+   prompt, so it carries the arrow that says it goes in rather than opens. */
+.landing-pill.is-topic {
+  border-color: transparent;
+  background: #ececec;
+  color: #4d4d4d;
+  box-shadow: none;
+}
+
+.landing-pill.is-topic:hover {
+  background: #e3e3e3;
+  color: #191919;
+  box-shadow: none;
+}
+
+/* A down-right arrow: the prompt leaves the pill and lands in the input. */
+.landing-topic-arrow {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  background-color: currentColor;
+  color: #8c8c8c;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 4.5 11.5 11.5M6 11.5h5.5V6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 4.5 11.5 11.5M6 11.5h5.5V6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.landing-pill.is-topic:hover .landing-topic-arrow {
+  color: #4d4d4d;
+}
+
+/* ── the composer, landing arrangement ──────────────────────────────────── */
+
+.composer.is-landing {
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 6px 0;
+  border: 1px solid #ededed;
+  border-radius: 22px;
+  background: #f2f2f2;
+  box-shadow: 0 16px 40px rgba(25, 25, 25, 0.06);
+}
+
+.composer.is-landing .composer-input {
+  min-height: 86px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 16px 0;
+  border-radius: 16px 16px 0 0;
+  background: #fff;
+}
+
+.composer.is-landing .composer-footer {
+  padding: 4px 12px 8px 14px;
+  border-radius: 0 0 16px 16px;
+  background: #fff;
+}
+
+/* The handoff sets the model name as plain text on the card, not as a pill:
+   the only thing to press is the name itself. */
+.composer.is-landing .composer-model-pill {
+  padding: 0 6px;
+  background: transparent;
+  color: #4d4d4d;
+}
+
+.composer.is-landing .composer-model-pill:hover {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+.composer.is-landing .composer-model-pill .model-name {
+  color: inherit;
+  font-weight: 400;
+}
+
+.composer.is-landing textarea {
+  min-height: 52px;
+  font-size: 15px;
+  line-height: 23px;
+}
+
+.composer.is-landing .send-button-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  background: #1476ff;
+  color: #fff;
+}
+
+.composer.is-landing .send-button-icon:disabled {
+  background: #d9d9d9;
+  color: #fff;
+  opacity: 1;
+}
+
+.composer.is-landing .send-button-icon:hover:not(:disabled) {
+  background: #0f63d8;
+}
+
+/* The category chip sits at the start of the input line, in front of the
+   placeholder, the way the handoff draws it. */
+.composer-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0 5px 0 8px;
+  border-radius: 7px;
+  background: #deecff;
+  color: #1476ff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.composer-tag-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.composer-tag-label {
+  line-height: 1;
+}
+
+.composer-tag-clear {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: #6ea3ef;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.composer-tag-clear:hover {
+  background: rgba(20, 118, 255, 0.13);
+  color: #0f63d8;
+}
+
+/* ── the strip under the card ───────────────────────────────────────────── */
+
+.composer-strip {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 8px 10px 10px;
+  color: #4d4d4d;
+  font-size: 13px;
+}
+
+.composer-strip-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 70%;
+  /* A button that has to read as a label: no chrome until it is pointed at,
+     and the negative margin keeps the icon on the strip's own baseline now
+     that the box has padding of its own. */
+  margin: -3px -7px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.composer-strip-project:hover,
+.composer-strip-project[aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* No Project chosen. The chip is then not a name but an invitation, and it
+   says so in the placeholder grey. The fill belongs to the pointer: the chip
+   stays flat until it is hovered or open, so a resting page is not drawing a
+   button that nothing is pointing at. */
+.composer-strip-project.is-placeholder {
+  color: var(--text-faint);
+}
+
+.composer-strip-project.is-placeholder .composer-strip-icon {
+  color: var(--text-faint);
+}
+
+.composer-strip-project.is-placeholder:hover,
+.composer-strip-project.is-placeholder[aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.composer-strip-project .composer-strip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-strip-icon {
+  width: 16px;
+  height: 16px;
+  color: #4d4d4d;
+}
+
+.composer-strip-project:hover .composer-strip-icon,
+.composer-strip-project[aria-expanded="true"] .composer-strip-icon {
+  color: inherit;
+}
+
+.composer-strip-chev {
+  flex: 0 0 auto;
+  opacity: 0.55;
+}
+
+/* The folder mark inside the picker's menu, in the row's own icon column. */
+.ctx-folder {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask: url("../assets/landing/folder.svg") center / contain no-repeat;
+  mask: url("../assets/landing/folder.svg") center / contain no-repeat;
+}
+
+@media (max-width: 900px) {
+  .landing {
+    padding: 12px 20px 6vh;
+  }
+
+  .landing-brand {
+    gap: 14px;
+    margin-bottom: 32px;
+  }
+
+  .landing-mascot {
+    width: 68px;
+    height: 68px;
+    flex-basis: 68px;
+  }
+
+  .landing-pill {
+    height: 36px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+}

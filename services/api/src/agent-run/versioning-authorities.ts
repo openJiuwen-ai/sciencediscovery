@@ -4,6 +4,7 @@
 import { CasStore, type ObjectRef, type Pool } from "@sciencediscovery/cas";
 import type { CasObjectRef } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
+import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 
 /** Native task ownership, independent of which executor runs the Agent. */
 export interface AgentAuthorityScope {
@@ -53,7 +54,9 @@ export function versioningAuthorities(store: SessionStore, scope: AgentAuthority
       transfers: store.transfers.snapshot(sessionId, agentId),
       shellExecutions: store.shellExecutions.snapshot(sessionId, agentId),
       reviews: await store.listReviews(sessionId),
-      artifactReviews: await store.listArtifactReviews(sessionId),
+      // The main Agent acts on this snapshot, so it needs the same stale marker as the
+      // Web UI: a review that a newer version superseded must not read as current.
+      artifactReviews: annotateReviewStaleness(store, sessionId, await store.listArtifactReviews(sessionId)),
       executions,
     };
   };

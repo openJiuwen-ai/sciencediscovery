@@ -44,6 +44,7 @@ import {
 import {
   lookupModelCatalog,
   MODEL_PROVIDER_PRESETS,
+  roleThinking,
   type CreateModelProviderRequest,
   type CreateProviderModelRequest,
   type ModelFactOverrides,
@@ -212,6 +213,8 @@ import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-ex
 import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
 import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
+import { reviewCheckpointInput } from "../reviewer-specialist/required-deliverables.js";
+import { annotateReviewStaleness } from "../reviewer-specialist/review-staleness.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -346,6 +349,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const {
     artifactManager,
     evolutionStore,
+    evolveAvailability,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -426,8 +430,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             dataDir: store.dataDir,
             model: selectedModel.model,
             proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
-            thinkingEffort: selectedModel.thinkingEffort,
-            thinkingMode: selectedModel.thinkingMode,
+            // The review's own effort when one is set; otherwise the profile's
+            // thinking, as before the setting existed.
+            ...(roleThinking(selectedModel, store.listProviders(), runtimeSettings.reviewThinkingEffort)
+              ?? { thinkingEffort: selectedModel.thinkingEffort, thinkingMode: selectedModel.thinkingMode }),
           },
           enabledConnectorIds: reviewerConnectorIds,
           executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
@@ -487,10 +493,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         };
       }
       try {
+        // `task.toolCallId` is a synthetic `automatic-review:<taskId>` /
+        // `manual-review:<messageId>` label, never a run id. Both audit paths take
+        // the reviewed run from the Artifact versions; without it the delivery gate
+        // could never match a subagent's Brief and would silently pass. Each report
+        // is judged against the run that produced it, because a merged batch may
+        // hold versions from several runs.
         const result = await runReviewerCheckpoint({
-          artifactVersionIds: runnableTask.artifactVersionIds,
+          ...reviewCheckpointInput(store, runnableTask),
           cas: provenanceRecorder.cas,
-          parentRunId: task.toolCallId,
           reason: task.origin === "manual" ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
           reviewLevel: task.reviewLevel,
           sessionId: task.sessionId,
@@ -838,10 +849,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendError(response, 401, "Unauthorized");
         return;
       }
+      if (url.pathname === "/api/evolve/status" && request.method === "GET") {
+        return sendJson(response, 200, await evolveAvailability.refresh());
+      }
+      if (url.pathname === "/api/evolve/init" && request.method === "POST") {
+        return sendJson(response, 200, await evolveAvailability.refresh(true));
+      }
+      if ((url.pathname.startsWith("/api/evolve/") || /^\/api\/sessions\/[^/]+\/idea-tree(?:\/|$)/.test(url.pathname))
+          && (await evolveAvailability.refresh()).state !== "ready") {
+        return sendError(response, 503, "Evolve is not initialized or unavailable. Select Init Evolve or check the configured service.");
+      }
 
       if (await handleExecutionReadiness(request, response, url, store, runnerClient, remoteCompute, () => readJson(request))) return;
       if (request.method === "GET" && url.pathname === "/api/projects") {
-        sendJson(response, 200, store.listProjects());
+        // The inbox is a Project, not one the user made. Its id is handed out
+        // by `POST /api/inbox` instead, so it never appears in a picker.
+        sendJson(response, 200, store.listUserProjects());
         return;
       }
       if (await handlePluginRequest(request, response, url, store.plugins, () => readJson(request))) return;
@@ -1005,6 +1028,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (url.pathname === "/api/settings" && request.method === "PUT") {
         sendJson(response, 200, await store.replaceGlobalSettings(await readJson<RuntimeSettingsOverrides>(request)));
+        return;
+      }
+      if (url.pathname === "/api/settings/clear-model-if-current" && request.method === "POST") {
+        const body = await readJson<{ modelId?: unknown }>(request);
+        if (typeof body.modelId !== "string" || !body.modelId) throw new Error("modelId is required");
+        sendJson(response, 200, await store.clearGlobalModelIfCurrent(body.modelId));
         return;
       }
       if (url.pathname === "/api/reviewer-specialist/settings" && request.method === "GET") {
@@ -1656,6 +1685,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { discarded: draftId });
         return;
       }
+      const codexConfigMatch = url.pathname.match(/^\/api\/subagents\/([^/]+)\/(?:codex-config|runtime-config)$/);
+      if (codexConfigMatch && request.method === "POST") {
+        const input = await readJson<{ inputId: string; apiKey: string; fallback?: boolean }>(request).catch(() => {
+          throw new ApiStatusError(400, "Invalid Codex configuration request");
+        });
+        store.configureCodex(codexConfigMatch[1]!, input.inputId, input.apiKey, input.fallback);
+        sendJson(response, 200, { configured: true });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/specialists") {
         sendJson(response, 200, store.listSpecialists());
         return;
@@ -1936,7 +1974,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
         const profile = store.getModel(modelId);
         if (!profile) return sendError(response, 404, "Model not found");
-        const tested = await modelConnectivityTests.run(modelId, () => testModelConnectivity({
+        const consent = await readJson<{ consent?: boolean; compatibility?: boolean }>(request);
+        if (consent.consent !== true) return sendError(response, 400, "Explicit consent is required: model checks may consume paid tokens");
+        const tested = await modelConnectivityTests.run(`${modelId}:${profile.updatedAt}:${consent.compatibility === true}`, () => testModelConnectivity({
+          compatibility: consent.compatibility === true,
           apiToken: store.getModelApiToken(modelId),
           profile,
           resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
@@ -2081,9 +2122,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }));
         return;
       }
+      // The one way to reach the inbox. It creates it on first call and is a
+      // no-op afterwards, so a client can call it on every start; the id it
+      // returns then works with `/api/projects/:id/sessions` like any other.
+      if (request.method === "POST" && url.pathname === "/api/inbox") {
+        sendJson(response, 200, await store.ensureInboxProject());
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/projects") {
         const body = await readJson<CreateProjectRequest>(request);
-        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds, body.runnerIds);
+        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds, body.runnerIds, body.description);
         try {
           const firstSession = await store.createSession(
             project.id,
@@ -2242,7 +2290,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (stopSubagentMatch && request.method === "POST") {
         const sessionId = decodeURIComponent(stopSubagentMatch[1]!);
         const subagentId = decodeURIComponent(stopSubagentMatch[2]!);
-        if (!stopSessionSubagent(store, sessionId, subagentId)) sendError(response, 404, "Subagent not found in this Session");
+        if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
+        if (!stopSessionSubagent(store, sessionId, subagentId)) sendError(response, 404, `Subagent not found: ${subagentId}`);
         else sendJson(response, 200, { stopped: true, sessionId, subagentId });
         return;
       }
@@ -2319,6 +2368,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sessionSettingsMatch[1]!,
           await readJson<RuntimeSettingsOverrides>(request),
         ));
+        return;
+      }
+      const sessionThinkingControlsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/thinking-controls$/);
+      if (sessionThinkingControlsMatch && request.method === "GET") {
+        if (!store.getSession(sessionThinkingControlsMatch[1]!)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, store.getSessionThinkingControls(sessionThinkingControlsMatch[1]!));
         return;
       }
 
@@ -2994,12 +3049,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (artifactReviewsMatch && request.method === "GET") {
         const sessionId = artifactReviewsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const reviews = await store.listArtifactReviews(sessionId);
-        sendJson(response, 200, reviews.filter((review) => {
+        const reviews = (await store.listArtifactReviews(sessionId)).filter((review) => {
           const version = store.getArtifactVersion(sessionId, review.artifactVersionId);
           const artifact = version ? store.getArtifact(sessionId, version.artifactId) : undefined;
           return Boolean(version && artifact && isReviewerReportCandidate(artifact, version));
-        }));
+        });
+        // A review answers for one Artifact version: once a newer version exists it
+        // reads as history, never as the current verdict.
+        sendJson(response, 200, annotateReviewStaleness(store, sessionId, reviews));
         return;
       }
       const reviewerAuditTasksMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-audit-tasks$/);
@@ -3365,7 +3422,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const activityMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/agent-activity(?:\/(executions|transfers|timers)\/([^/]+)\/(logs|cancel))?$/);
       if (activityMatch) {
         const sessionId = decodeURIComponent(activityMatch[1]!);
-        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         const owners = [{ sessionId, agentId: "main" }, ...store.listSubagents(sessionId).map((child) => ({ sessionId, agentId: `subagent:${child.id}` }))];
         const executions = owners.flatMap((owner) => store.shellExecutions.list(owner));
         const transfers = owners.flatMap((owner) => store.transfers.list(owner));
@@ -3376,7 +3433,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         const kind = activityMatch[2]; const id = decodeURIComponent(activityMatch[3] ?? ""); const operation = activityMatch[4];
         const item = (kind === "executions" ? executions : kind === "transfers" ? transfers : timers).find((entry) => entry.id === id);
-        if (!item) return sendError(response, 404, "Record not found in this Session");
+        if (!item) {
+          const noun = kind === "executions" ? "Execution" : kind === "transfers" ? "Transfer" : "Timer";
+          return sendError(response, 404, `${noun} not found: ${id}`);
+        }
         const owner = { sessionId, agentId: item.agentId };
         const runner = (runnerId: string) => {
           if (runnerId === "local") return runnerClient;
@@ -3400,8 +3460,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const resumeChildMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/resume$/);
       if (resumeChildMatch && request.method === "POST") {
         const sessionId = decodeURIComponent(resumeChildMatch[1]!); const subagentId = decodeURIComponent(resumeChildMatch[2]!);
+        if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         store.assertSessionWritable(sessionId);
-        if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return sendError(response, 404, "Subagent not found in this Session");
+        if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return sendError(response, 404, `Subagent not found: ${subagentId}`);
         store.notifications.resumeAgent({ sessionId, agentId: `subagent:${subagentId}` });
         sendJson(response, 200, { resumed: true }); return;
       }
@@ -3577,6 +3638,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           message,
         );
       }
+      else if (code === "EVOLVE_UNAVAILABLE") sendError(response, 503, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");
@@ -3588,9 +3650,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "SKILL_LIBRARY_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
       else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);
-      else if (/^(Project|Session|Proxy server|Provider|Model) not found$/.test(message)) sendError(response, 404, message);
+      else if (/^(Project|Session|Proxy server|Provider|Model) not found(?:: .+)?$/.test(message)) sendError(response, 404, message);
+      else if (/^(Execution|Transfer|Timer|Subagent) not found: .+$/.test(message)) sendError(response, 404, message);
       else if (message === "Session is archived and read-only") sendError(response, 409, message);
       else if (message.startsWith("Proxy server is referenced by ")) sendError(response, 409, message);
+      else if (code === "SPECIALIST_RUNTIME_INVALID") sendError(response, 400, message);
       else if (isKnownClientInputError(error)) sendError(response, 400, message);
       else {
         apiLog.error("unclassified_request_error", {

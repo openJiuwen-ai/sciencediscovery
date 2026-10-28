@@ -1,0 +1,477 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 设置 follows the handoff's settings frame: it is a full surface next to the
+   rail rather than a box floating over a dimmed page. The directory keeps the
+   old front end's groups, on the handoff's quiet gray panel, and the pane sits
+   on white with the 1920px frame's margins. */
+
+.config-backdrop {
+  position: fixed;
+  inset: 0 0 0 var(--d-rail, 64px);
+  z-index: 1200;
+  display: flex;
+  padding: 0;
+  background: #fff;
+}
+
+.config-panel {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  display: grid;
+  /* The same 296px the session sidebar takes, so the two surfaces put their
+     directory's right edge on one line instead of a few pixels apart. */
+  grid-template-columns: 296px minmax(0, 1fr);
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+/* Folded away, not squeezed: a zero-width column keeps its border and its
+   content on screen, and the pane would reflow around it mid-animation. */
+.config-panel.is-nav-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.config-panel.is-nav-collapsed .settings-group-nav { display: none; }
+
+/* ── directory ──────────────────────────────────────────────────────────── */
+
+.settings-group-nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  border-right: 1px solid #ebebeb;
+  background: #f5f5f5;
+  overflow: hidden;
+}
+
+.settings-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 20px 14px 14px 22px;
+}
+
+.settings-nav-head h2 {
+  color: #191919;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.settings-nav-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 0 10px 24px;
+  overflow-y: auto;
+}
+
+/* 大类 is the section label and 小类 is what lives under it, so the label has
+   to be the stronger of the two: darker, heavier, and the items indented
+   beneath it. */
+.settings-tree-category + .settings-tree-category {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e4e4e4;
+}
+
+.settings-tree-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+}
+
+.settings-tree-heading > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 2px 4px;
+  border: 0;
+  background: none;
+  color: #191919;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.settings-tree-heading > button:hover { color: #000; }
+.settings-tree-heading > button > span { color: #8c8c8c; font-size: 9px; }
+
+.settings-tree-add {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #999;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-tree-add:hover { background: #e8e8e8; color: #191919; }
+
+.settings-group-nav ul {
+  display: grid;
+  gap: 1px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-group-nav ul[hidden] { display: none; }
+
+.settings-group-nav li button {
+  width: 100%;
+  display: block;
+  padding: 8px 10px 8px 24px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: #4d4d4d;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-group-nav li button strong { font-weight: inherit; }
+.settings-group-nav li button:hover { background: #ececec; color: #191919; }
+.settings-group-nav li button.active {
+  background: #e6e6e6;
+  color: #191919;
+  font-weight: 500;
+}
+
+/* ── pane ───────────────────────────────────────────────────────────────── */
+
+.settings-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #fff;
+}
+
+/* The control that brings the directory back, at the pane's top-left and level
+   with the title: outside the scrolling detail so a long page cannot carry it
+   away, and clear of the title's 48px margin. */
+.settings-main-fold {
+  position: absolute;
+  top: 44px;
+  left: 14px;
+  z-index: 1;
+}
+
+.settings-group-detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 42px max(48px, calc((100% - 1120px) / 2)) 48px;
+  background: #fff;
+  overflow-y: auto;
+}
+
+.settings-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 30px;
+  padding: 0;
+  border: 0;
+}
+
+.settings-detail-header h3 {
+  color: #191919;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  line-height: 1.25;
+}
+
+.settings-detail-header p {
+  margin-top: 8px;
+  color: #808080;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Shared form pieces: a pane is a stack of cards on white, as in the handoff's
+   settings frame. */
+.settings-group-detail .settings-section {
+  margin: 0 0 24px;
+  padding: 0;
+  border: 0;
+}
+
+.settings-group-detail .settings-section > h3 {
+  display: block;
+  margin: 0 0 12px;
+  color: #191919;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.settings-group-detail .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 8px;
+  padding: 14px 18px;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.settings-group-detail .settings-row .row-title { flex: 1; min-width: 0; }
+
+.settings-group-detail .settings-row .row-title strong {
+  color: #191919;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.settings-group-detail .settings-row .row-title small {
+  display: block;
+  margin-top: 2px;
+  color: #808080;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.settings-group-detail .settings-row .row-control {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-group-detail .settings-row.is-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.settings-group-detail .settings-row.is-stack .row-control { justify-content: stretch; }
+.settings-group-detail .settings-row.is-stack .row-control > * { width: 100%; }
+
+/* Inside a form card the rows are plain lines, not cards within a card. */
+.settings-group-detail .settings-card .settings-row {
+  align-items: flex-start;
+  gap: 16px;
+  margin: 0;
+  padding: 0 0 14px;
+  border: 0;
+  border-bottom: 1px solid #f0f0f0;
+  border-radius: 0;
+}
+
+.settings-group-detail .settings-card .settings-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.settings-group-detail .settings-card .settings-row .row-control { align-items: center; }
+
+.settings-group-detail .settings-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.settings-group-detail .settings-actions.is-end { justify-content: flex-end; }
+
+.row-inline-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.row-inline-control > small { color: var(--text-faint); font-size: 11.5px; }
+
+.settings-toggle-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-list.is-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.settings-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.settings-choice > strong {
+  flex: 0 0 100%;
+  color: var(--text-heading);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.runtime-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.runtime-stats > div {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+}
+
+.runtime-stats small { color: var(--text-faint); font-size: 11px; }
+.runtime-stats strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.field-input.is-number { width: 120px; }
+
+.mcp-secret-fields {
+  display: grid;
+  gap: 6px;
+}
+
+.mcp-secret-fields > strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mcp-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-secret-row .field-input { flex: 1; min-width: 0; }
+.mcp-secret-fields > .secondary-button { justify-self: start; }
+
+/* The tool list a built-in card expands to. It lives inside the card's main
+   button, so every part is phrasing content. */
+.settings-builtin-tools {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.settings-builtin-tools > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.settings-builtin-tools code {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* An environment proxy's resolved slots, shown under its card heading. */
+.proxy-environment {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.proxy-environment ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proxy-environment li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.proxy-environment code {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.proxy-environment .proxy-effective-value {
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.proxy-variable-state { color: var(--text-faint); }
+.proxy-variable-state.is-configured { color: var(--success); }
+.proxy-variable-state.is-invalid { color: var(--danger); }
+
+.link-button.is-danger { color: var(--danger); }
+.link-button.is-danger:hover { color: var(--danger-deep); }
+
+@media (max-width: 820px) {
+  .config-backdrop { inset: 0; }
+
+  .config-panel { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+
+  .settings-group-nav {
+    max-height: 190px;
+    border-right: 0;
+    border-bottom: 1px solid #ebebeb;
+  }
+
+  .settings-group-detail { padding: 28px 24px 40px; }
+}

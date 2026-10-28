@@ -38,6 +38,13 @@ function skill(id: string, description: string): RuntimeSkill {
   };
 }
 
+test("system prompt steers Python/R through run_shell, not retired run_python/run_r", () => {
+  const prompt = buildWorkspaceSystemPrompt([], true);
+  assert.match(prompt, /There is no run_python or run_r tool/);
+  assert.match(prompt, /exactly one of command or scriptPath/);
+  assert.match(prompt, /Prefer run_shell/);
+});
+
 test("managed environment prompt directs mutations through governed tools", () => {
   const prompt = buildWorkspaceSystemPrompt([], true);
   assert.match(prompt, /environment_list\/environment_create\/environment_delete\/environment_install\/environment_uninstall/);
@@ -243,4 +250,24 @@ test("memory graph prompt lays out the citation-chain flow in order", () => {
 test("memory graph prompt is absent when the feature is disabled", () => {
   const prompt = buildWorkspaceSystemPrompt([], false, { memoryGraphEnabled: false });
   assert.doesNotMatch(prompt, /Citation chain/i);
+  assert.doesNotMatch(prompt, /declare_claim|declare_evidence/i);
+});
+
+test("system prompt preserves MCP importance and separate direct execution consent", () => {
+  const prompt = buildWorkspaceSystemPrompt([], true);
+  assert.match(prompt, /Call continue with your reason if nonblocking, or wait with the important sourceIds/);
+  assert.match(prompt, /prefer sandbox by default/);
+  assert.match(prompt, /even while the sandbox is ready/);
+  assert.match(prompt, /Chat text alone is not consent/);
+  assert.match(prompt, /Only a NEW run_direct_shell call with the returned scope can submit that operation/);
+  assert.match(prompt, /Direct consent never inherits sandbox Always Allow/);
+});
+
+test("network consent guidance prevents alternating single-host retries without accumulating grants", () => {
+  const prompt = buildWorkspaceSystemPrompt([], false);
+  assert.match(prompt, /Declare all known required hosts together up front/);
+  assert.match(prompt, /approvals do not accumulate across executions/);
+  assert.match(prompt, /observed denial names only hosts attempted in that execution/);
+  assert.match(prompt, /reconcile prior side effects, request the complete known host set/);
+  assert.match(prompt, /new token only for a safe NEW execution/);
 });

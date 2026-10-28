@@ -73,6 +73,11 @@ export interface AgentStateSnapshot {
 /** Convert optional object fields to their existing JSON wire semantics before strict JCS. */
 export function jsonValue<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 
+function isSubagentHandoff(details: unknown): details is { subagent: unknown; summary: unknown } {
+  return typeof details === "object" && details !== null
+    && "subagent" in details && "summary" in details;
+}
+
 let buildDescriptor: Promise<AgentStateRef["digest"]> | undefined;
 export function harnessBuildDigest(): Promise<AgentStateRef["digest"]> {
   buildDescriptor ??= (async () => {
@@ -229,7 +234,11 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
 
   async recordObservation(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number }): Promise<void> {
     const content = await this.store.put("agent-state", input.content, "text/plain;charset=utf-8");
-    const ref = await this.store.putRecord("ToolObservation", jsonValue({ ...input, content }));
+    // `task` returns the live child snapshot for in-process consumers. That
+    // snapshot can contain refs from the child's store, which must not become
+    // dependencies of the parent's persisted observation.
+    const details = isSubagentHandoff(input.details) ? { summary: input.details.summary } : input.details;
+    const ref = await this.store.putRecord("ToolObservation", jsonValue({ ...input, ...(details === undefined ? {} : { details }), content }));
     this.turnObservations.push({ sequence: input.sequence, ref });
   }
 

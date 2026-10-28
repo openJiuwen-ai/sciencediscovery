@@ -112,3 +112,25 @@ test("process loss releases the OS lock but refuses unverified files instead of 
   await once(child.stdout, "data"); const exit = once(child, "exit"); child.kill("SIGKILL"); await exit;
   await assert.rejects(withWorkspaceLease(workspace, async () => assert.fail("must not replay")), /interrupted operation/);
 });
+
+test("explicit handoff mutation retains the lease without advancing a workspace snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explicit-handoff-"));
+  try {
+    const workspace = join(root, "workspace"); await mkdir(workspace);
+    const versions = new VersionStore(root);
+    await withWorkspaceMutation(versions, workspace, async () => {}, { kind: "initial" });
+    const refs = await RefStore.open(versions);
+    const name = workspaceHeadName(workspace);
+    const before = refs.head(name);
+    refs.close();
+    let captured = false;
+    await withWorkspaceMutation(versions, workspace, () => writeFile(join(workspace, "private.txt"), "private"), {
+      kind: "specialist", trackFiles: false, onCommitted: () => { captured = true; },
+    });
+    const after = await RefStore.open(versions);
+    assert.deepEqual(after.head(name), before);
+    after.close();
+    assert.equal(captured, false);
+    assert.equal(await readFile(join(workspace, "private.txt"), "utf8"), "private");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

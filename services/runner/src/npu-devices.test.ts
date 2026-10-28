@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
@@ -699,18 +700,23 @@ describe("an execution request drives the sandbox's cards", () => {
   });
 
   test("a card named on the request is bound into the sandbox by that request alone", async (context) => {
-    // Nothing else in the execution mentions NPU 4: the bind bwrap reports can
+    // Use an absent device even on a host with real Ascend cards. The fixture's
+    // inventory alone authorizes it; bwrap must still attempt the requested bind.
+    const hostIndex = 1_000_000;
+    assert.equal(existsSync(`/dev/davinci${hostIndex}`), false);
+    // Nothing else in the execution mentions this card: the bind bwrap reports can
     // only have come from `request.npuDevices`, which is the wiring under test.
     const { config, request } = await fixture(context, inventory([
-      { chipName: "910B3", health: "OK", hostIndex: 4, sandboxUsable: true },
+      { chipName: "910B3", health: "OK", hostIndex, sandboxUsable: true },
     ]));
-    const python = await executePython(config, { ...request, code: "print('unreached')", npuDevices: [4] });
+    const python = await executePython(config, { ...request, code: "print('unreached')", npuDevices: [hostIndex] });
     assert.notEqual(python.exitCode, 0);
-    assert.match(python.stderr, /\/dev\/davinci4/u);
+    assert.ok(python.stderr.includes(`/dev/davinci${hostIndex}`), python.stderr);
     const shell = await executeShell(config, {
-      ...request, code: "echo unreached", executionId: "npu-request-shell-bound", npuDevices: [4],
+      ...request, code: "echo unreached", executionId: "npu-request-shell-bound", npuDevices: [hostIndex],
     });
-    assert.match(shell.stderr, /\/dev\/davinci4/u);
+    assert.notEqual(shell.exitCode, 0);
+    assert.ok(shell.stderr.includes(`/dev/davinci${hostIndex}`), shell.stderr);
   });
 
   test("a request naming a card this machine cannot open fails by name instead of running without it", async (context) => {

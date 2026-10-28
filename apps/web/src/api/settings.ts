@@ -154,6 +154,10 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/mcp/proxy-policies", { body: JSON.stringify(body), method: "PUT" });
   }
 
+  configureCodex(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): Promise<{ configured: boolean }> {
+    return this.request(`/api/subagents/${encodeURIComponent(subagentId)}/runtime-config`, { method: "POST", body: JSON.stringify({ inputId, apiKey, fallback }) });
+  }
+
   listSpecialists(): Promise<Specialist[]> {
     return this.request("/api/specialists");
   }
@@ -277,6 +281,10 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   replaceGlobalSettings(body: RuntimeSettingsOverrides): Promise<RuntimeSettingsDetails> {
     return this.request("/api/settings", { body: JSON.stringify(body), method: "PUT" });
+  }
+
+  clearGlobalModelIfCurrent(modelId: string): Promise<{ cleared: boolean }> {
+    return this.request("/api/settings/clear-model-if-current", { body: JSON.stringify({ modelId }), method: "POST" });
   }
 
   getReviewerSpecialistSettings(): Promise<ReviewerSpecialistSettings> {
@@ -454,7 +462,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
   }
 
-  testModel(modelId: string): Promise<ModelConnectivityTestResult> {
-    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST" });
+  testModel(modelId: string, compatibility = false): Promise<ModelConnectivityTestResult> {
+    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST", body: JSON.stringify({ consent: true, compatibility }) });
   }
 }

@@ -8,7 +8,7 @@
     },
     "fixture": {
       "multiple": false,
-      "values": ["standard", "research", "literature"],
+      "values": ["standard", "research", "literature", "governed"],
       "default": "standard"
     },
     "category": {
@@ -76,6 +76,14 @@
         "none",
         "bubblewrap",
         "seatbelt"
+      ],
+      "default": "none"
+    },
+    "swarm": {
+      "multiple": false,
+      "values": [
+        "none",
+        "required"
       ],
       "default": "none"
     },

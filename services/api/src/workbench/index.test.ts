@@ -116,3 +116,16 @@ test("results carry the parts of their English detail, so a client can show them
   assert.equal(deleted.sessionTitle, undefined);
   assert.equal(deleted.detail, "Mixed catalog / Deleted Session · user_upload");
 });
+
+test("the recent-sessions Project and its contents never appear in search results", async () => {
+  const inbox: Project = { ...project, id: "inbox-1", kind: "inbox", name: "Recent sessions" };
+  const store = {
+    listProjectArtifacts: (projectId: string) => (projectId === inbox.id ? [{ ...artifact(1), projectId: inbox.id, name: "standalone.csv" }] : []),
+    listProjects: () => [project, inbox],
+    listSessions: (projectId: string) => (projectId === inbox.id ? [{ ...session(9), projectId: inbox.id, title: "Standalone chat" }] : [session(0)]),
+  } as unknown as SessionStore;
+
+  const results = (await searchWorkbench(store, "")).results;
+  assert.deepEqual(results.map((result) => result.projectId), [project.id, project.id]);
+  assert.equal(results.some((result) => result.label === "Recent sessions" || result.label === "Standalone chat"), false);
+});

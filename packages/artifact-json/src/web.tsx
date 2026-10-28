@@ -10,12 +10,13 @@ export interface JsonPreviewInput {
   source: string;
   truncated: boolean;
   labels: { invalidJson: string; truncated: string };
+  renderSource?: (source: string) => ReactNode;
 }
-export function JsonPreview({ parsed, source, truncated, labels }: JsonPreviewInput) {
+export function JsonPreview({ parsed, source, truncated, labels, renderSource }: JsonPreviewInput) {
   return <div className="json-source-preview">
     {parsed ? null : <p className="artifact-empty compact">{labels.invalidJson}</p>}
-    <pre className="artifact-source-preview">{source}</pre>
     {truncated ? <p className="dataset-table-meta">{labels.truncated}</p> : null}
+    {renderSource ? renderSource(source) : <pre className="artifact-source-preview">{source}</pre>}
   </div>;
 }
 export const jsonViewer: ViewContribution<JsonPreviewInput, ReactNode> = {

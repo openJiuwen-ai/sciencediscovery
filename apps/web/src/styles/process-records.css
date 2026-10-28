@@ -20,6 +20,9 @@
 .run-timeline > .assistant-continuation { margin-bottom: 12px; }
 .run-timeline > .run-identity { align-items: center; margin-bottom: 8px; }
 .run-identity .message-role { margin: 0; }
+/* The identity row already owns the gap below it, and the model disclosure can
+   follow on its own line: the meta row must not push either of them apart. */
+.run-identity .message-meta { margin: 0; }
 
 /* Only collapsed terminal records lose their card surface. */
 .process-record { min-width: 0; margin: 4px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
@@ -70,6 +73,19 @@
   content: ""; display: block; flex: 0 0 6px; width: 6px; height: 6px;
   margin-left: 0; border-radius: 50%; background: var(--danger-bright);
 }
+/* Tool evidence can be much wider than its title. Keep the failure marker
+   beside that title instead of at the far edge of the evidence block. */
+.messages .process-record.tool:not([open]):not(:has(> button[aria-expanded="true"])).failed:not(:has(> summary > .record-failure-dot)) > :is(summary, button[aria-expanded])::after { display: none; }
+.messages .process-record.tool.failed:not([open]) > summary .timeline-label > strong {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+}
+.messages .process-record.tool.failed:not([open]) > summary .timeline-title-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.messages .process-record.tool.failed:not([open]) > summary .timeline-label > strong::after {
+  content: ""; flex: 0 0 6px; width: 6px; height: 6px;
+  margin-left: 0; border-radius: 50%; background: var(--danger-bright);
+}
 .record-chevron { flex: 0 0 auto; }
 details[open] > summary > .record-chevron { transform: rotate(90deg); }
 .process-record-body { padding: 0 12px 12px; }
@@ -95,7 +111,7 @@ details[open] > summary > .record-chevron { transform: rotate(90deg); }
 .timeline-disclosure.tool:has(> summary > .tool-authorization) > summary { grid-template-columns: 16px 28px minmax(0, 1fr) auto auto; }
 /* The prose grid and every process row share the same avatar gutter. */
 .run-timeline > .process-record, .messages > .process-record {
-  width: calc(100% - var(--timeline-gutter)); max-width: calc(820px - var(--timeline-gutter));
+  width: calc(100% - var(--timeline-gutter)); max-width: calc(var(--conversation-column-width) - var(--timeline-gutter));
   margin: 4px 0 11px var(--timeline-gutter);
 }
 .run-timeline > .process-record:not([open]):not(:has(> button[aria-expanded="true"])),

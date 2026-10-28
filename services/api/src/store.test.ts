@@ -24,6 +24,7 @@ import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from
 
 import type { ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import {
+  INBOX_PROJECT_NAME,
   lookupModelCatalog,
   resolveModelFacts,
   reviewerSpecialistSupportsLevel,
@@ -37,6 +38,7 @@ import {
 
 import {
   SessionStore,
+  SessionStoreHttpError,
 } from "./store.js";
 import { listWorkspaceFiles, workspaceFileProvenance } from "./artifacts/index.js";
 import { API_TEST_CATALOG_RECORDS, installApiTestModelCatalog } from "./model-catalog.fixture.js";
@@ -54,6 +56,7 @@ interface PersistedCatalog {
   reviewerSpecialistEnabled?: boolean;
   reviewerSpecialistFeedbackPolicy?: string;
   reviewerSpecialistLevel?: string;
+  reviewerSpecialistDefaultOnMigrated?: boolean;
   sessions: Array<{
     approvalMode: "always_allow" | "ask_for_dangerous";
     id: string;
@@ -238,6 +241,30 @@ test("SessionStore seeds web connector on first load of a pre-migration catalog 
   assert.equal(afterReopen.webConnectorMigrated, true);
 });
 
+test("a new Session inherits Web access unless a layer sets a list without it", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `web-access-default-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const project = await store.createProject("Web access default");
+  const newSession = async () => (await store.createSession(project.id, "Inherits", {}, {}, { allowUnconfiguredModel: true })).id;
+
+  // Clearing every Global override falls back to the built-in default, as the approval default does.
+  await store.replaceGlobalSettings({});
+  const cleared = store.getSessionSettings(await newSession());
+  assert.deepEqual(cleared.effective.enabledConnectorIds, ["web"]);
+  assert.equal(cleared.sources.enabledConnectorIds, "unset");
+
+  // A list set at any layer, even an empty one, still replaces it.
+  await store.replaceGlobalSettings({ enabledConnectorIds: [] });
+  assert.deepEqual(store.getSessionSettings(await newSession()).effective.enabledConnectorIds, []);
+  await store.replaceProjectSettings(project.id, { enabledConnectorIds: ["web", "pubmed"] });
+  const overSession = await newSession();
+  assert.deepEqual(store.getSessionSettings(overSession).effective.enabledConnectorIds, ["web", "pubmed"]);
+  await store.replaceSessionSettings(overSession, { enabledConnectorIds: ["pubmed"] });
+  assert.deepEqual(store.getSessionSettings(overSession).effective.enabledConnectorIds, ["pubmed"]);
+});
+
 test("late execution provenance retains history without rolling back the latest business revision", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `publication-order-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));
@@ -261,6 +288,22 @@ test("late execution provenance retains history without rolling back the latest 
   assert.equal(store.getWorkspaceFileProvenance(session.id, input.path)!.currentRevision.id, edit.id, "unreceipted newer writer wins ties with its baseline publication");
   const unrooted = await versions.putRecord("WorkspaceExecution", { executionId: "not-published" });
   await assert.rejects(store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: unrooted }), /not rooted/);
+});
+
+test("createProject persists an optional trimmed description and omits blank ones", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `project-description-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const described = await store.createProject("Described project", {}, [], undefined, "  Compare tumor vs normal samples.  ");
+  assert.equal(described.description, "Compare tumor vs normal samples.");
+  const plain = await store.createProject("Plain project");
+  assert.equal(plain.description, undefined);
+  const blank = await store.createProject("Blank project", {}, [], undefined, "   ");
+  assert.equal(blank.description, undefined);
+
+  const reloaded = new SessionStore(root); await reloaded.load();
+  assert.equal(reloaded.listProjects().find((project) => project.id === described.id)?.description, "Compare tumor vs normal samples.");
+  assert.equal(reloaded.listProjects().find((project) => project.id === plain.id)?.description, undefined);
 });
 
 test("Reviewer Specialist levels are cumulative", () => {
@@ -517,7 +560,7 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
 
   const store = new SessionStore(tempRoot);
   await store.load();
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "record" });
 
   await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest" });
   assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
@@ -550,6 +593,9 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
   });
   await reopened.updateReviewerSpecialistSettings({ enabled: false });
   assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest" });
+  const disabledReload = new SessionStore(tempRoot);
+  await disabledReload.load();
+  assert.equal(disabledReload.getReviewerSpecialistSettings().enabled, false);
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: "yes" }),
     /enabled must be a boolean/,
@@ -562,6 +608,103 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
     store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "unsafe" }),
     /feedback policy must be record, explain, suggest, or repair/,
   );
+});
+
+test("catalogs without a Reviewer switch enable automatic review on migration", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-default-migration-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const catalog = await readPersistedCatalog(tempRoot);
+  delete catalog.reviewerSpecialistEnabled;
+  delete catalog.reviewerSpecialistDefaultOnMigrated;
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
+  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistDefaultOnMigrated, true);
+});
+
+test("pre-#353 Reviewer default-off catalogs migrate to enabled once", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-legacy-off-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const catalog = await readPersistedCatalog(tempRoot);
+  catalog.reviewerSpecialistEnabled = false;
+  delete catalog.reviewerSpecialistDefaultOnMigrated;
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
+  const persisted = await readPersistedCatalog(tempRoot);
+  assert.equal(persisted.reviewerSpecialistEnabled, true);
+  assert.equal(persisted.reviewerSpecialistDefaultOnMigrated, true);
+});
+
+test("intentional Reviewer opt-out survives reload after default-on migration", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-opt-out-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  assert.equal(store.getReviewerSpecialistSettings().enabled, true);
+  await store.updateReviewerSpecialistSettings({ enabled: false });
+  assert.equal(store.getReviewerSpecialistSettings().enabled, false);
+  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistDefaultOnMigrated, true);
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, false);
+});
+
+test("new Session under an existing Project gets current Automatic review defaults without rewriting older Sessions", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-new-session-defaults-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Existing project with history");
+  const legacy = await store.createSession(project.id, "Legacy session", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateSessionReviewerSpecialistSettings(legacy.id, {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(legacy.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+
+  const created = await store.createSession(project.id, "Fresh session", {}, {}, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(created.id), {
+    automaticReviewEnabled: true,
+    level: "quick",
+  });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(legacy.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+
+  const persisted = await readPersistedCatalog(tempRoot);
+  const persistedLegacy = persisted.sessions.find((item) => item.id === legacy.id);
+  const persistedCreated = persisted.sessions.find((item) => item.id === created.id);
+  assert.equal(persistedLegacy?.reviewerAutomaticReviewEnabled, false);
+  assert.equal(persistedLegacy?.reviewerSpecialistLevel, "deep");
+  assert.equal(persistedCreated?.reviewerAutomaticReviewEnabled, true);
+  assert.equal(persistedCreated?.reviewerSpecialistLevel, "quick");
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getSessionReviewerSpecialistSettings(legacy.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  assert.deepEqual(reopened.getSessionReviewerSpecialistSettings(created.id), {
+    automaticReviewEnabled: true,
+    level: "quick",
+  });
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
 });
 
 test("SessionStore appends run events losslessly and survives reload", async (context) => {
@@ -780,7 +923,7 @@ test("SessionStore persists global web settings while keeping provider keys writ
   const store = new SessionStore(tempRoot);
   await store.load();
   const defaults = store.getWebSettings();
-  assert.deepEqual(defaults.paidSearchProviders, ["tavily", "exa", "brave"]);
+  assert.deepEqual(defaults.paidSearchProviders, ["tavily", "exa", "brave", "deepseek"]);
   assert.deepEqual(defaults.freeSearchEngines, { bing: true, "brave-html": true, duckduckgo: true });
   assert.equal(defaults.fetchProvider, "jina");
   assert.equal(defaults.proxyPolicy, "inherit");
@@ -1672,12 +1815,14 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       semanticReviewEnabled: false,
     },
     sources: {
+      defaultApprovalMode: "unset",
       plugins: "unset",
       enabledConnectorIds: "session",
       enabledSkillLibraries: "unset",
       enabledSkillIds: "unset",
       modelId: "session",
       reviewModelId: "session",
+      reviewThinkingEffort: "unset",
       semanticReviewEnabled: "session",
       skillSelectionMode: "unset",
       thinkingEffort: "unset",
@@ -1693,7 +1838,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
   assert.deepEqual(await readPersistedCatalog(tempRoot), firstPersisted);
 });
 
-test("SessionStore defaults new projects to selected mode with no mounted skill libraries", async (context) => {
+test("SessionStore defaults new projects to every installed skill, with no mounted libraries", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-default-skills-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -1712,17 +1857,43 @@ test("SessionStore defaults new projects to selected mode with no mounted skill 
   assert.deepEqual(project.settingsOverrides, {
     enabledSkillIds: [],
     enabledSkillLibraries: [],
-    skillSelectionMode: "selected",
+    skillSelectionMode: "all",
   });
 
   const session = await store.createSession(project.id, "Default skill session");
   const settings = store.getSessionSettings(session.id);
-  assert.deepEqual(settings.effective.enabledSkillIds, []);
+  assert.deepEqual(settings.effective.enabledSkillIds, ["life-science-evidence-brief", "managed-skill"]);
   assert.deepEqual(settings.effective.enabledSkillLibraries, []);
-  assert.equal(settings.effective.skillSelectionMode, "selected");
+  assert.equal(settings.effective.skillSelectionMode, "all");
   assert.equal(settings.sources.enabledSkillIds, "project");
   assert.equal(settings.sources.enabledSkillLibraries, "project");
   assert.equal(settings.sources.skillSelectionMode, "project");
+});
+
+test("SessionStore refuses a second project with the same name", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-project-names-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const notes = await store.createProject("Notes");
+
+  // Case and stray whitespace are the same name to a reader, so they are the
+  // same name here.
+  await assert.rejects(store.createProject("  notes "), (error: unknown) => {
+    assert.ok(error instanceof SessionStoreHttpError);
+    assert.equal(error.statusCode, 409);
+    return true;
+  });
+  assert.deepEqual(store.listProjects().map((project) => project.name), ["Notes"]);
+
+  // A rename collides the same way; re-saving a Project's own name does not.
+  const other = await store.createProject("Other");
+  await store.updateProject(other.id, { name: "OTHER" });
+  await assert.rejects(store.updateProject(other.id, { name: "Notes" }), /already exists/);
+  assert.equal(store.getProject(other.id)?.name, "OTHER");
+  assert.equal(store.getProject(notes.id)?.name, "Notes");
 });
 
 test("SessionStore resolves and persists hierarchical runtime settings", async (context) => {
@@ -1773,12 +1944,14 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
     },
     overrides: { reviewModelId: modelB.id },
     sources: {
+      defaultApprovalMode: "unset",
       plugins: "unset",
       enabledConnectorIds: "project",
       enabledSkillLibraries: "unset",
       enabledSkillIds: "project",
       modelId: "project",
       reviewModelId: "session",
+      reviewThinkingEffort: "unset",
       semanticReviewEnabled: "global",
       skillSelectionMode: "project",
       thinkingEffort: "unset",
@@ -2237,6 +2410,90 @@ test("SessionStore defaults the global task model to the first configured model"
     name: "Second model",
   });
   assert.equal(store.getGlobalSettings().overrides.modelId, second.id);
+});
+
+test("SessionStore clears an auto-default only while the attempted model still owns it", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-conditional-model-clear-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const attempted = await store.createModel({
+    apiToken: "token-attempted", baseUrl: "https://models.example.test/v1", model: "attempted", name: "Attempted model",
+  });
+  // A second writer commits a replacement between this attempt's model
+  // creation and its cleanup. The cleanup must not erase that newer choice.
+  const replacement = await store.createModel({
+    apiToken: "token-replacement", baseUrl: "https://models.example.test/v1", model: "replacement", name: "Replacement model",
+  });
+  await store.replaceGlobalSettings({ enabledConnectorIds: [], modelId: replacement.id, thinkingEffort: "high" });
+  const notOwner = await store.clearGlobalModelIfCurrent(attempted.id);
+  assert.equal(notOwner.cleared, false);
+  assert.deepEqual(store.getGlobalSettings().overrides, {
+    enabledConnectorIds: [], modelId: replacement.id, thinkingEffort: "high",
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getGlobalSettings().overrides, store.getGlobalSettings().overrides);
+
+  const cleared = await reopened.clearGlobalModelIfCurrent(replacement.id);
+  assert.equal(cleared.cleared, true);
+  assert.deepEqual(reopened.getGlobalSettings().overrides, {
+    enabledConnectorIds: [], thinkingEffort: "high",
+  });
+});
+
+test("SessionStore persists project description edits and clears without changing other fields or projects", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-description-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Project A", { enabledConnectorIds: [] }, [], undefined, "  Original research  ");
+  const other = structuredClone(await store.createProject("Project B"));
+  const original = structuredClone(project);
+  assert.equal(project.description, "Original research");
+
+  const updated = await store.updateProject(project.id, { description: "  Updated RNA-seq note\n肿瘤与正常样本  " });
+  assert.deepEqual(updated, { ...original, description: "Updated RNA-seq note\n肿瘤与正常样本" });
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getProject(project.id), updated);
+  assert.deepEqual(reopened.getProject(other.id), other);
+  assert.equal((await reopened.updateProject(project.id, { name: "Project A renamed" })).description, updated.description);
+
+  for (const blank of ["", "  \n\t "]) {
+    await reopened.updateProject(project.id, { description: "Temporary description" });
+    const cleared = await reopened.updateProject(project.id, { description: blank });
+    assert.equal(Object.hasOwn(cleared, "description"), false);
+    const reloaded = new SessionStore(tempRoot);
+    await reloaded.load();
+    assert.equal(Object.hasOwn(reloaded.getProject(project.id)!, "description"), false);
+    assert.deepEqual(reloaded.getProject(other.id), other);
+    const { description: _description, ...expected } = original;
+    assert.deepEqual(cleared, { ...expected, name: "Project A renamed" });
+  }
+});
+
+test("SessionStore validates project description before mutation and shares creation limits", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `project-description-limit-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const maxDescription = "研".repeat(2000);
+  const project = await store.createProject("Limit project", {}, [], undefined, `  ${maxDescription}  `);
+  assert.equal(project.description, maxDescription);
+  assert.equal((await store.updateProject(project.id, { description: `  ${maxDescription}  ` })).description, maxDescription);
+  const before = structuredClone(project);
+  for (const description of ["x".repeat(2001), null, 42, {}, []]) {
+    await assert.rejects(store.updateProject(project.id, {
+      description: description as string, name: "Must not rename", runnerIds: [],
+    }), /Project description must/);
+    assert.deepEqual(store.getProject(project.id), before);
+    await assert.rejects(store.createProject("Rejected project", {}, [], undefined, description as string), /Project description must/);
+  }
+  assert.equal(Object.hasOwn(await store.createProject("Blank project", {}, [], undefined, "  \n "), "description"), false);
 });
 
 test("SessionStore persists validated Project and Session renames", async (context) => {
@@ -3438,6 +3695,36 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
   assert.equal(store.getProviderApiToken(provider.id), undefined);
 });
 
+test("rolling back the first provider model restores the previous global settings", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-rollback-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const before = { semanticReviewEnabled: true, thinkingEffort: "high" as const };
+  await store.replaceGlobalSettings(before);
+
+  const provider = await store.createProvider({ apiToken: "sk-rollback", presetId: "deepseek" });
+  const profile = await store.materializeProviderModel(provider.id, "deepseek-chat");
+  assert.equal(store.getGlobalSettings().overrides.modelId, profile.id);
+  await assert.rejects(store.deleteModel(profile.id), /referenced by runtime settings/);
+  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
+
+  await store.replaceGlobalSettings(before);
+  await store.deleteModel(profile.id);
+  await store.deleteProvider(provider.id);
+
+  assert.deepEqual(store.getGlobalSettings().overrides, before);
+  assert.equal(store.listModels().length, 0);
+  assert.equal(store.listProviders().length, 0);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getGlobalSettings().overrides, before);
+  assert.equal(reopened.listModels().length, 0);
+  assert.equal(reopened.listProviders().length, 0);
+});
+
 test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
@@ -3551,6 +3838,49 @@ test("runtime settings carry legal thinking overrides through scopes and narrow 
   const cleared = store.getSessionSettings(session.id);
   assert.equal(cleared.effective.thinkingMode, undefined);
   assert.equal(cleared.sources.thinkingMode, "unset");
+});
+
+test("a Session reports its model's thinking choices and resolves the Reviewer effort through scopes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-controls-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  installApiTestModelCatalog();
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "tok", apiVariant: "deepseek", baseUrl: "https://api.example/v1", model: "deepseek-v4-pro", name: "示例模型",
+  });
+  const plain = await store.createModel({
+    apiToken: "tok", apiVariant: "openai", baseUrl: "https://api.example/v1", model: "plain-chat", name: "Plain",
+  });
+  const project = await store.createProject("reviewer-effort");
+  const session = await store.createSession(project.id, "会话", { modelId: model.id });
+
+  // The CLI checks --effort against these before writing anything.
+  assert.deepEqual(store.getSessionThinkingControls(session.id), {
+    efforts: ["high", "max"], modelId: model.id, modelName: "示例模型", modes: ["auto", "enabled", "disabled"], supported: true,
+  });
+  await store.updateSession(session.id, { modelId: plain.id });
+  assert.deepEqual(store.getSessionThinkingControls(session.id), {
+    efforts: [], modelId: plain.id, modelName: "Plain", modes: [], supported: false,
+  });
+
+  // Unset by default: the review keeps the profile's thinking.
+  assert.equal(store.getSessionSettings(session.id).effective.reviewThinkingEffort, undefined);
+  assert.equal(store.getSessionSettings(session.id).sources.reviewThinkingEffort, "unset");
+  await store.replaceGlobalSettings({ ...store.getGlobalSettings().overrides, reviewThinkingEffort: "max" });
+  assert.equal(store.getSessionSettings(session.id).effective.reviewThinkingEffort, "max");
+  assert.equal(store.getSessionSettings(session.id).sources.reviewThinkingEffort, "global");
+  await store.updateSession(session.id, { reviewThinkingEffort: "high" });
+  const details = store.getSessionSettings(session.id);
+  assert.equal(details.effective.reviewThinkingEffort, "high");
+  assert.equal(details.sources.reviewThinkingEffort, "session");
+  // The conversation's own thinking is untouched by the Reviewer's.
+  assert.equal(details.effective.thinkingEffort, undefined);
+  await assert.rejects(
+    store.updateSession(session.id, { reviewThinkingEffort: "ultra" as never }),
+    /reviewThinkingEffort must be/,
+  );
 });
 
 test("switching Session models persists a legal model-level effort across reloads", async (context) => {
@@ -4212,7 +4542,9 @@ test("an SSH machine keeps its optional port, and a Session pinned under the old
     const candidate = await store.registerRemoteHost({ alias: "node-check", capabilities: {
       ...capabilities, nodeVersion, runnerCommandAvailable: false,
     } });
-    const accepted = await store.createProject("SEA does not require remote Node", {}, [candidate.id]);
+    // One Project per candidate: Project names are unique now, and each of
+    // these is a different machine under the same rule.
+    const accepted = await store.createProject(`SEA does not require remote Node ${nodeVersion ?? "unset"}`, {}, [candidate.id]);
     assert.deepEqual(accepted.remoteRunnerHostIds, [candidate.id]);
   }
 
@@ -4413,4 +4745,63 @@ test("an action JiuwenSwarm's permission engine let through is allowed and recor
   assert.equal(authorization.source, "jiuwenswarm");
   assert.equal(authorization.outcome, "allowed");
   assert.equal(store.getPermissionAuthorization(authorization.id)?.toolCallId, "c1");
+});
+
+
+test("direct consent is separate from sandbox Always Allow and matching grants are revocable", async context => {
+  const root = resolve(process.cwd(), ".tmp", `direct-permissions-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Direct permissions");
+  const session = await store.createSession(project.id, "Direct", {}, {}, { allowUnconfiguredModel: true });
+  const request = await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Host command", { executionId: "run" });
+  assert.equal(request.allowed, false);
+  if (request.allowed) throw new Error("Expected consent");
+  await store.setApprovalMode(session.id, "always_allow");
+  assert.equal(store.getPermissionRequest(request.request.id)?.state, "pending");
+  assert.equal((await store.requestPermission(session.id, "code", "workspace-code", "Sandbox")).allowed, true);
+  const decision = await store.decidePermissionRequest(request.request.id, "allow_matching");
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Same scope", { executionId: "run" })).allowed, true);
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-b", "Changed scope", { executionId: "run" })).allowed, false);
+  await store.revokePermissionGrant(decision.grant!.id);
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Revoked", { executionId: "run" })).allowed, false);
+});
+
+test("the recent-sessions Project is created once, hidden from user listings, and cannot be renamed or deleted", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `inbox-project-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  store.setAvailableSkillIds([]);
+  await store.load();
+
+  const inbox = await store.ensureInboxProject();
+  assert.equal(inbox.kind, "inbox");
+  assert.equal(inbox.name, INBOX_PROJECT_NAME);
+  assert.equal((await store.ensureInboxProject()).id, inbox.id);
+  assert.equal(store.listProjects().filter((project) => project.kind === "inbox").length, 1);
+
+  const project = await store.createProject("Bench");
+  assert.deepEqual(store.listUserProjects().map((entry) => entry.id), [project.id]);
+  assert.ok(store.listProjects().some((entry) => entry.id === inbox.id));
+
+  const conflict = (reason: unknown) => reason instanceof SessionStoreHttpError && reason.statusCode === 409;
+  await assert.rejects(store.updateProject(inbox.id, { name: "Renamed" }), conflict);
+  await assert.rejects(store.updateProject(inbox.id, { description: "Standalone" }), conflict);
+  assert.throws(() => store.getProjectDeletionImpact(inbox.id), conflict);
+  await assert.rejects(store.deleteProject(inbox.id, inbox.id), conflict);
+  assert.ok(store.getProject(inbox.id));
+
+  // 设置 › 远程 configures whichever Project the open Session belongs to, so
+  // the inbox's runner allowlist has to stay writable.
+  assert.deepEqual((await store.updateProject(inbox.id, { runnerIds: ["local"] })).runnerIds, ["local"]);
+
+  const session = await store.createSession(inbox.id, "Standalone", {}, {}, { allowUnconfiguredModel: true });
+  assert.equal(store.listSessions(inbox.id, "all")[0]?.id, session.id);
+
+  const reopened = new SessionStore(root);
+  await reopened.load();
+  assert.equal(reopened.listProjects().find((entry) => entry.id === inbox.id)?.kind, "inbox");
+  assert.equal(reopened.listSessions(inbox.id, "all")[0]?.id, session.id);
 });

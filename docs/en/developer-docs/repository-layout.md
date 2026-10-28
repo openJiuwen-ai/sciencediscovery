@@ -7,7 +7,8 @@ This is code navigation for deep developers and code agents. Directory presence 
 ```text
 sciencediscovery/
 ├── apps/
-│   └── web/                  # React/Vite workbench
+│   ├── web/                  # React/Vite workbench
+│   └── desktop/              # v0.1 workbench, intended to replace apps/web
 ├── services/
 │   ├── api/                  # Node control plane and composition root
 │   ├── adapter/              # JiuwenSwarm front door / protocol adapter

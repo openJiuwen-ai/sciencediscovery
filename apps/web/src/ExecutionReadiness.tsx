@@ -63,12 +63,12 @@ export function ExecutionBlockCards({ client, sessionId }: { client: ApiClient; 
     finally { setBusy(undefined); }
   };
   return <>{blocks.map(block => <section className="runner-readiness-card" key={block.id} aria-label={zh ? "执行受阻" : "Execution blocked"}>
-    <strong>{zh ? "等待用户处理：代码尚未执行" : "Waiting for user: code has not executed"}</strong>
+    <strong>{block.kind === "mcp" ? (zh ? "等待 MCP 修复" : "Waiting for MCP repair") : (zh ? "等待用户处理：代码尚未执行" : "Waiting for user: code has not executed")}</strong>
     {block.agentId && <p>{block.agentId}</p>}
     {block.summary && <p>{block.summary}</p>}
     <p>{block.runnerId}: {block.reason}</p>
     {block.suggestions?.map((suggestion, index) => <p key={index}>{suggestion}</p>)}
-    <p>{zh ? "您的选择会返回 Agent。重新检查或切换 Runner 都不会自动执行代码，由 Agent 确认目标工作区与环境后决定下一步。" : "Your choice returns to the Agent. Rechecking or switching Runners never executes code automatically; the Agent decides the next step after verifying the target workspace and environment."}</p>
+    <p>{block.kind === "mcp" ? (zh ? "修复并重新加载 MCP 后，点击重新检查。Agent 将检查工具状态后继续；此操作不授予权限。" : "Repair and reload MCP, then recheck. The Agent verifies tool status before continuing; this does not grant permission.") : zh ? "您的选择会返回 Agent。重新检查或切换 Runner 都不会自动执行代码，由 Agent 确认目标工作区与环境后决定下一步。" : "Your choice returns to the Agent. Rechecking or switching Runners never executes code automatically; the Agent decides the next step after verifying the target workspace and environment."}</p>
     <button type="button" disabled={busy === block.id} onClick={() => void decide(block.id, { action: "retry" })}>{zh ? "已修复，重新检查" : "Recheck after repair"}</button>
     {block.alternatives.map(target => <button type="button" key={target.runnerId} disabled={busy === block.id} onClick={() => void decide(block.id, { action: "switch", runnerId: target.runnerId })}>{zh ? "改用 " : "Use "}{target.label}</button>)}
     <button type="button" disabled={busy === block.id} onClick={() => void decide(block.id, { action: "cancel" })}>{zh ? "取消本次操作（非整个任务）" : "Cancel operation (not the whole task)"}</button>

@@ -42,9 +42,10 @@ test.use({ locale: "zh-CN" });
  * Steps:
  *   1. Open an empty zh-CN workbench and configure a Chat Completions reasoning variant through System settings.
  *   2. Create a Project through the UI, then explicitly select the newly registered model for the task.
- *   3. Send a shell-backed request, inspect its marked tool input/output, and observe completion.
- *   4. Send a second request proving Workspace files persist but Shell cwd/export do not.
- *   5. Reload and verify the same Project, Session, messages, and expandable tool history remain.
+ *   3. Verify empty sessions keep a neutral heading and usable composer with no connectors, literature connectors, or PubMed/UniProt.
+ *   4. Send a shell-backed request, inspect its marked tool input/output, and observe completion.
+ *   5. Send a second request proving Workspace files persist but Shell cwd/export do not.
+ *   6. Reload and verify the same Project, Session, messages with their send times, and expandable tool history remain.
  * Environment: Isolated local stack at E2E_BASE_URL with an empty model/project catalog; zh-CN browser locale and persisted UI locale.
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; two deterministic user turns.
@@ -244,6 +245,39 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     );
 
     await journey.step(
+      "空会话不推荐与任务无关的示例",
+      "无连接器、文献连接器和 PubMed/UniProt 会话都只显示中性的标题，输入框仍可编辑。",
+      async () => {
+        const sessionPath = `/api/sessions/${fixture!.session.id}`;
+        const original = await apiJsonSafe(sessionPath) as { enabledConnectorIds: string[] };
+        try {
+          for (const enabledConnectorIds of [[], ["arxiv", "pubmed"], ["pubmed", "uniprot"]]) {
+            const response = await api.patch(sessionPath, { data: { enabledConnectorIds } });
+            expect(response.ok()).toBeTruthy();
+            expect((await response.json()).enabledConnectorIds).toEqual(enabledConnectorIds);
+            // Reload retains the selected session. Its default title is localized
+            // in this zh-CN journey, unlike the raw title returned by the API.
+            await page.reload();
+            await expect(page.getByRole("heading", { name: "未命名会话", exact: true })).toBeVisible();
+            const intro = page.locator(".session-intro");
+            await expect(intro.getByRole("heading")).toBeVisible();
+            await expect(intro).not.toContainText(/CSV|TP53/);
+            const composer = page.locator("form.composer").getByRole("textbox");
+            await expect(composer).toBeEditable();
+            await composer.fill("我的研究问题");
+            await expect(composer).toHaveValue("我的研究问题");
+            await composer.fill("");
+          }
+        } finally {
+          const response = await api.patch(sessionPath, { data: { enabledConnectorIds: original.enabledConnectorIds } });
+          expect(response.ok()).toBeTruthy();
+        }
+        await page.reload();
+        await expect(page.getByRole("heading", { name: "未命名会话", exact: true })).toBeVisible();
+      },
+    );
+
+    await journey.step(
       "发出第一条分析任务并批准权限请求",
       "任务发出后主按钮变成可点的「停止当前运行」；受控动作的审批卡出现在主对话，批准后本轮运行完成。",
       async () => {
@@ -294,12 +328,15 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
 
     await journey.step(
       "刷新页面后回到同一个会话",
-      "两轮的用户消息都还在，两条工具步骤都还在，展开后仍能看到上一轮读回的值。",
+      "两轮的用户消息都还在，各自带发送时间；两条工具步骤都还在，展开后仍能看到上一轮读回的值。",
       async () => {
         await page.reload();
         await openProjectSession(page, fixture!);
         await expect(page.locator(".message.user").filter({ hasText: firstPrompt })).toBeVisible();
         await expect(page.locator(".message.user").filter({ hasText: secondPrompt })).toBeVisible();
+        // 每条消息显示发送时间（本地时间，YYYY-MM-DD HH:MM:SS），刷新后仍可读。
+        await expect(page.locator(".message.user").filter({ hasText: firstPrompt })
+          .locator(".message-time")).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
         // Each run exposes the requested shell tool on its first model step.
         await expect(page.getByRole("region", { name: "Agent 活动" }).locator("details.timeline-disclosure.tool"))
           .toHaveCount(2);

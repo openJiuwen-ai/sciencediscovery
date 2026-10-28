@@ -14,7 +14,12 @@
 
 import type { ConnectorId } from "./connectors.js";
 
+/** Runtime metadata is credential-free; omitted runtime means native. */
+export type ExternalSpecialistRuntimeKind = "codex" | "claude-code" | "acp";
+export type SpecialistRuntime = { kind: "native" } | { [K in ExternalSpecialistRuntimeKind]: { kind: K; model?: string; fallback?: boolean; execution?: "sandbox" | "direct"; timeoutSeconds?: number; reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" } }[ExternalSpecialistRuntimeKind];
+
 export interface Specialist {
+  runtime?: SpecialistRuntime;
   /** Optional one-line summary shown in settings and the task tool's specialist enum. */
   description: string;
   /** Built-in specialists are seeded by the application, read-only, and cannot be deleted. */
@@ -36,6 +41,7 @@ export interface Specialist {
 }
 
 export interface CreateSpecialistRequest {
+  runtime?: SpecialistRuntime;
   connectorIds?: ConnectorId[];
   description: string;
   enabledSkillIds?: string[];

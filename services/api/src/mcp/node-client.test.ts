@@ -24,7 +24,7 @@ import type { LogFields, OperationalLogger } from "@sciencediscovery/operational
 import type { McpInvokeRequest, ResolvedProxy } from "@sciencediscovery/schema";
 
 import { effectiveRouting, loadExtensionsConfig } from "./extensions-config.js";
-import { McpNodeClient, proxyEnvOverlay, resolveMcpPython } from "./node-client.js";
+import { McpNodeClient, proxyEnvOverlay, resolveMcpPython, sourceHttpFailure } from "./node-client.js";
 
 const SDK_SERVER = import.meta.resolve("@modelcontextprotocol/sdk/server/index.js");
 const SDK_STDIO = import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js");
@@ -54,6 +54,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const text = String(request.params.arguments?.text ?? "");
+  if (text === "progress") {
+    await server.notification({ method: "notifications/progress", params: { progressToken: request.params._meta.progressToken, progress: 1, total: 2, message: "Searching PubMed" } });
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (text === "progress-count" || text === "progress-total") {
+    await server.notification({ method: "notifications/progress", params: { progressToken: request.params._meta.progressToken, progress: 2, ...(text === "progress-total" ? { total: 5 } : {}) } });
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (text === "http429" || text === "http406") return { isError: true, content: [{ type: "text", text: "HTTP failure SOURCE_HTTP_ERROR:" + JSON.stringify({
+    statusCode: text === "http429" ? 429 : 406, endpoint: "https://user:password@export.arxiv.org/api/query?token=secret", failureScope: "endpoint", retryAfterMs: 7000,
+  }) }] };
   if (text === "explode") return { content: [{ type: "text", text: "synthetic failure" }], isError: true };
   if (text === "large-error") return { content: [{ type: "text", text: "x".repeat(5_000) }], isError: true };
   return {
@@ -420,4 +431,81 @@ test("bundled python MCP servers resolve to a configured interpreter", () => {
   // With nothing configured and no provisioned environment, the bare command
   // is the documented last resort rather than a hard failure.
   assert.equal(resolveMcpPython({}), "python");
+});
+
+
+test("MCP notifications and attempt failures reach progress observers", async () => {
+  const { client } = fixtureClient();
+  const chunks: string[] = [];
+  let finished = false;
+  try {
+    const response = await client.invoke(invokeRequest({ text: "progress" }), undefined, (chunk) => {
+      assert.equal(finished, false);
+      chunks.push(chunk);
+    });
+    finished = true;
+    assert.equal(response.isError, false);
+    assert.deepEqual(chunks, ["Searching PubMed\n"]);
+    await client.invoke(invokeRequest({ text: "explode" }), undefined, (chunk) => chunks.push(chunk));
+    assert.match(chunks.at(-1)!, /Error: synthetic failure/);
+  } finally { await client.close(); }
+});
+
+test("MCP numeric progress reports only producer counts with optional totals", async () => {
+  const { client } = fixtureClient();
+  const chunks: string[] = [];
+  const controller = new AbortController();
+  try {
+    await client.invoke(invokeRequest({ text: "progress-count" }), controller.signal, chunk => chunks.push(chunk));
+    await client.invoke(invokeRequest({ text: "progress-total" }), controller.signal, chunk => chunks.push(chunk));
+    assert.deepEqual(chunks, ["Progress: 2\n", "Progress: 2/5\n"]);
+  } finally { await client.close(); }
+});
+
+
+test("stdio HTTP failures retain typed status and Retry-After with sanitized endpoint diagnostics", async () => {
+  const recorded = recordingLogger();
+  const { client } = fixtureClient(recorded.logger);
+  try {
+    for (const [text, code, status] of [["http429", 429, "rate-limited"], ["http406", 406, "semantic-error"]] as const) {
+      const request = invokeRequest({ text }); request.execution.retryPolicy.maxAttempts = 1;
+      const response = await client.invoke(request);
+      assert.equal(response.isError, true);
+      assert.equal(response.attempts.length, 1);
+      assert.equal(response.attempts[0]!.status, status);
+      assert.equal(response.attempts[0]!.retryAfterMs, 7000);
+      assert.deepEqual(response.attempts[0]!.upstream, { endpoint: "https://export.arxiv.org", statusCode: code, failureScope: "endpoint" });
+      assert.doesNotMatch(JSON.stringify(response), /password|token=secret|api\/query/);
+    }
+    const diagnostics = recorded.events.filter(event => event.event === "mcp_invocation_attempt_failed");
+    assert.deepEqual(diagnostics.map(event => event.fields.statusCode), [429, 406]);
+    assert.ok(diagnostics.every(event => event.fields.retryDecision === "return-to-broker" && event.fields.sessionId === "s"));
+    assert.doesNotMatch(JSON.stringify(recorded.events), /password|token=secret/);
+  } finally { await client.close(); }
+});
+
+test("HTTP metadata rejects malformed envelopes and never infers endpoint refusal from prose", () => {
+  assert.equal(sourceHttpFailure("HTTP 406 from export.arxiv.org"), undefined);
+  for (const value of [null, { statusCode: 406, endpoint: "bad", failureScope: "endpoint" },
+    { statusCode: 406, endpoint: "file:///private", failureScope: "endpoint" },
+    { statusCode: "406", endpoint: "https://export.arxiv.org", failureScope: "endpoint" }]) {
+    assert.equal(sourceHttpFailure(`SOURCE_HTTP_ERROR:${JSON.stringify(value)}`), undefined);
+  }
+});
+
+test("endpoint and credential scope is stable across clients and changes when effective credentials change", async () => {
+  const { client, dir } = fixtureClient(undefined, { API_KEY: "credential-a" });
+  try {
+    const config = join(dir, "extensions_config.json");
+    const sibling = new McpNodeClient(() => loadExtensionsConfig(config));
+    const original = client.sourceScope("echo");
+    assert.equal(original, sibling.sourceScope("echo"));
+    assert.match(original, /^[0-9a-f]{64}$/);
+    const value = JSON.parse(readFileSync(config, "utf8"));
+    value.mcpServers.echo.env.API_KEY = "credential-b";
+    writeFileSync(config, JSON.stringify(value));
+    assert.notEqual(client.sourceScope("echo"), original);
+    assert.doesNotMatch(original, /credential-a/);
+    await sibling.close();
+  } finally { await client.close(); }
 });

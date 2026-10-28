@@ -26,6 +26,10 @@ test("delivery uses the latest declared output, even when the final reply only a
   assert.equal(deliveryStatus("failed", [artifacts[0]]), "partial");
   assert.equal(deliveryStatus("cancelled", [artifacts[0]]), "partial");
   assert.equal(deliveryStatus("completed", [artifacts[0]]), "passed");
+  for (const status of ["queued", "running", "blocked"]) {
+    assert.equal(deliveryStatus(status, []), "running");
+    assert.equal(deliveryStatus(status, [artifacts[0]]), "running");
+  }
 });
 test("the final reply does not override the newest declared version", () => {
   assert.equal(finalAnswer(run, messages("[report](/artifact-versions/old-version/content)")), "[report](/artifact-versions/old-version/content)");

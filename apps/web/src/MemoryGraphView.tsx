@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import type { MemorySubgraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { classifySessionPollMiss } from "./api/session-miss.js";
 import { useLocale } from "./i18n/LocaleProvider.js";
 import { InfoIcon } from "./icons.js";
 
@@ -93,7 +94,14 @@ export function useMemorySubgraph(
     let alive = true;
     void client.getMemorySubgraph(sessionId)
       .then((result) => { if (alive) setSubgraph(result); })
-      .catch((error: Error) => { if (alive) onError(error); });
+      .catch((error: Error) => {
+        if (!alive) return;
+        void classifySessionPollMiss(client, sessionId, error).then((miss) => {
+          if (!alive || miss.kind === "stale") return;
+          if (miss.kind === "gone" || miss.kind === "other") onError(new Error(miss.message));
+          else onError(error);
+        });
+      });
     void client.getMemoryHealth()
       .then((result) => { if (alive) setHealth(result.memoryGraph ?? "unknown"); })
       .catch(() => { if (alive) setHealth("unknown"); });

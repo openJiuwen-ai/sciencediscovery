@@ -59,6 +59,7 @@ Runner fields come from its health response. If the runner is unavailable, the A
 | `PATCH /api/projects/:projectId` | `{"name":"New name"}` | `200`, updated `Project` |
 | `GET /api/projects/:projectId/sessions?state=active|archived|all` | none | `200`, `Session[]`; default `state=active` |
 | `POST /api/projects/:projectId/sessions` | `CreateSessionRequest` | `201`, created `Session` |
+| `GET /api/sessions/:sessionId/thinking-controls` | none | `200`, `SessionThinkingControls`: the `modes` and `efforts` the Session's effective model accepts, the same choices the composer offers |
 | `GET /api/sessions/:sessionId/files` | none | `200`, workspace-file array |
 | `POST /api/sessions/:sessionId/workspace/upload?conflict=reject|overwrite|rename` | multipart `file` field | `201`, `WorkspaceUploadResult` |
 

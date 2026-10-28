@@ -23,11 +23,11 @@ name: CI
 on:
   push:
     branches: [main, master]
-  # These are the activity types GitHub applies by default; naming them keeps
-  # the contract visible: every pull request is checked when it is opened,
-  # whenever new commits are pushed to it, and if it is reopened.
+  # Drafts run policy and L1. UT/ST, mocked E2E, coverage, binary, Docker and
+  # merge-gate skip drafts; ready_for_review and non-draft open/update/reopen
+  # events enable the remaining jobs according to the selected profile.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -40,6 +40,11 @@ on:
         type: choice
         options: [jiuwenswarm, legacy]
         default: jiuwenswarm
+      max-parallel:
+        description: "Real E2E workers for this manual run (allowed: 1, 2, 4)"
+        type: choice
+        options: ['1', '2', '4']
+        default: '2'
   workflow_call:
     inputs:
       release-version:
@@ -60,6 +65,10 @@ on:
         description: "Independent E2E backend; legacy selects the native loop"
         type: string
         default: ""
+      max-parallel:
+        description: "Maximum concurrent isolated real workers (allowed: 1, 2, 4)"
+        type: number
+        default: 2
 
 # Keyed on the calling workflow as well as the ref: a nightly run and a push
 # run land on refs/heads/main at the same time, and without the workflow name
@@ -126,6 +135,7 @@ jobs:
   e2e-plan:
     name: Freeze mocked E2E matrix
     needs: [policy, l1]
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -151,6 +161,9 @@ jobs:
         with:
           name: mocked-e2e-plan
           path: .ci-mocked-plan
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -170,6 +183,7 @@ jobs:
     with:
       profile: ${{ needs.policy.outputs.profile }}
       backend: ${{ needs.policy.outputs.backend }}
+      max-parallel: ${{ fromJSON(format('{0}', inputs.max-parallel || 2)) }}
 
   real-scheduled:
     name: L4/L5 real E2E
@@ -182,10 +196,12 @@ jobs:
     with:
       profile: ${{ needs.policy.outputs.profile }}
       backend: ${{ needs.policy.outputs.backend }}
+      max-parallel: ${{ fromJSON(format('{0}', inputs.max-parallel || 2)) }}
 
   ut:
     needs: [policy, l1]
     name: UT
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -214,10 +230,11 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
-      # Agent turns in the UT slice run on JiuwenSwarm: `pnpm ci:ut` wraps the
-      # shared runner in scripts/with-jiuwenswarm.sh, which installs the pinned
-      # release when missing (about 1.5 GB with its virtualenv), starts one
-      # instance and one adapter for the whole run, and stops them afterwards.
+      # UT tests that declare `swarm:required` run their agent turns on
+      # JiuwenSwarm: the shared runner starts it through
+      # scripts/with-jiuwenswarm.sh, which installs the pinned release when
+      # missing (about 1.5 GB with its virtualenv), starts one instance and one
+      # adapter for those tests, and stops them afterwards.
       - name: Cache the JiuwenSwarm install
         uses: actions/cache@v4
         with:
@@ -265,6 +282,9 @@ jobs:
         with:
           name: ut-coverage
           path: .ci-results/ut/tagged/coverage
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
           # A layer that passed has recorded its coverage: finding none means
@@ -280,7 +300,7 @@ jobs:
     # nothing to report. Release calls skip it: a tagged build publishes no
     # coverage.
     needs: [ut, st]
-    if: ${{ !cancelled() && github.workflow != 'Release' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -357,6 +377,7 @@ jobs:
   st:
     needs: [policy, l1]
     name: ST
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -372,6 +393,13 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+
+      - name: Provision sandbox for the installed Evolve task journey
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev true
 
       # The hermetic agent loop drives a scripted local endpoint and performs a
       # real workspace tool round trip; no sandbox and no model credential. It
@@ -407,6 +435,9 @@ jobs:
         with:
           name: st-coverage
           path: .ci-results/st/tagged/coverage
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
           # A layer that passed has recorded its coverage: finding none means
@@ -417,6 +448,7 @@ jobs:
   e2e:
     needs: [policy, l1, e2e-plan]
     name: L2 E2E (mocked, ${{ matrix.shard }})
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -535,7 +567,7 @@ jobs:
   # the four entry points end to end.
   binary:
     needs: [policy, l1]
-    if: ${{ needs.policy.outputs.distribution == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -620,7 +652,7 @@ jobs:
   # comes out actually serves.
   docker:
     needs: [policy, l1]
-    if: ${{ needs.policy.outputs.distribution == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -785,7 +817,7 @@ jobs:
   merge-gate:
     name: merge-gate
     needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker]
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -4,7 +4,7 @@ Python front door for the JiuwenSwarm migration (issue 84). It owns the public
 port, proxies every route it has not taken over to the legacy TypeScript API, and
 runs agent turns on JiuwenSwarm when `SCIENCE_AGENT_EXECUTOR=jiuwenswarm`.
 
-To run it from source, see [Local mode](../../docs/en/getting-started/deployment.md#local-mode-host-processes).
+To run it from source, see [Local mode](../../docs/en/getting-started/deployment.md#local-source-mode-linux--macos).
 This file is for people working on the adapter.
 
 ## Direction
@@ -122,7 +122,7 @@ so a run is reproducible.
 ## Configuration
 
 Choosing the backend and every variable, with defaults, is in one place:
-[Local mode](../../docs/en/getting-started/deployment.md#local-mode-host-processes). In short:
+[Local mode](../../docs/en/getting-started/deployment.md#local-source-mode-linux--macos). In short:
 `./scripts/start-stack.sh --mode local --jiuwenswarm` (the same as `SCIENCE_AGENT_ADAPTER=1
 SCIENCE_AGENT_EXECUTOR=jiuwenswarm`); `GET /agent/info` on the public port says which backend runs and
 whether JiuwenSwarm answers (it takes the API's `SCIENCE_AGENT_AUTH_TOKEN`, or `SCIENCE_AGENT_ADAPTER_TOKEN`).
@@ -130,6 +130,14 @@ The adapter itself reads `SCIENCE_AGENT_HOST`, `SCIENCE_AGENT_PORT`, `SCIENCE_AG
 `JIUWENSWARM_GATEWAY_URL`, `JIUWENSWARM_MGMT_URL`, `SCIENCE_AGENT_ADAPTER_PUBLIC_URL`,
 `SCIENCE_AGENT_ADAPTER_TOKEN`, `SCIENCE_AGENT_ADAPTER_TOOL_TIMEOUT_S`, `SCIENCE_AGENT_EXECUTOR` and
 `SCIENCE_AGENT_ADAPTER_DEBUG` (`config.py`).
+
+The adapter connects directly to loopback services (`localhost`, `127.0.0.1`,
+`::1`) for HTTP forwarding, tool/model callbacks and JiuwenSwarm WebSockets.
+These connections do not depend on `NO_PROXY` matching rules. Remote endpoints
+retain the HTTP/WebSocket libraries' environment proxy behavior, and HTTPX
+continues to honor custom CA certificate settings.
+The stack launcher's local health probes also bypass environment proxies while
+preserving existing `NO_PROXY` entries for remote runners.
 
 ## Tests
 

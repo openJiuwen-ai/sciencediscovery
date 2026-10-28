@@ -28,6 +28,23 @@ test("readiness refresh observes repairs in the Runner process and keeps instanc
   assert.notEqual((await new RunnerReadiness("bubblewrap", executable).get()).instanceId, missing.instanceId);
 });
 
+test("a missing sandbox executable says how to install it, in at most three lines", async t => {
+  const root = await mkdtemp(join(tmpdir(), "runner-missing-sandbox-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bubblewrap = await new RunnerReadiness("bubblewrap", join(root, "bwrap")).get();
+  assert.equal(bubblewrap.reason, "dependency-unavailable");
+  // The package and the executable have different names; the message carries both.
+  assert.match(bubblewrap.detail ?? "", /ENOENT/);
+  assert.match(bubblewrap.detail ?? "", /bubblewrap package, which provides the bwrap executable/);
+  assert.match(bubblewrap.detail ?? "", /sudo apt-get install -y bubblewrap/);
+  assert.match(bubblewrap.detail ?? "", /docs\/en\/getting-started\/deployment\.md#linux-reports-missing-bwrap/);
+  const seatbelt = await new RunnerReadiness("seatbelt", join(root, "sandbox-exec")).get();
+  assert.equal(seatbelt.reason, "dependency-unavailable");
+  assert.match(seatbelt.detail ?? "", /ships with macOS and is not installed separately/);
+  assert.match(seatbelt.detail ?? "", /#macos-reports-seatbelt-is-unavailable/);
+  for (const detail of [bubblewrap.detail, seatbelt.detail]) assert.ok((detail ?? "").split("\n").length <= 3);
+});
+
 test("management remains reachable and execution fails closed without a sandbox", async t => {
   const root = await mkdtemp(join(tmpdir(), "runner-no-sandbox-"));
   t.after(() => rm(root, { recursive: true, force: true }));

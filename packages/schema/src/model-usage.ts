@@ -38,6 +38,9 @@ export type ModelApiVariant =
 export type ModelThinkingMode = "auto" | "disabled" | "enabled";
 export type ModelThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Every effort stop the product knows, weakest first. A model accepts a subset. */
+export const MODEL_THINKING_EFFORTS: readonly ModelThinkingEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
 export const MODEL_API_VARIANTS: Record<ModelApiProtocol, readonly ModelApiVariant[]> = {
   "openai-chat-completions": ["openai", "deepseek", "kimi-k3", "qwen", "minimax", "gemini", "ollama"],
   "openai-responses": ["responses"],
@@ -108,13 +111,36 @@ export type ModelConnectivityTestCategory =
   | "provider_error"
   | "invalid_response";
 
+export interface ModelCompatibilityOutcome {
+  /** Valid response exhausted the small synthetic budget; not confirmed compatible. */
+  inconclusiveReason?: "output_limit";
+  category: ModelConnectivityTestCategory;
+  message: string;
+  ok: boolean;
+  providerStatus?: number;
+}
+
+/** Snapshot of the manually selected target; never an Agent permission grant. */
+export interface ManualModelDestination {
+  baseUrl: string;
+  profileUpdatedAt: string;
+}
+
 export interface ModelConnectivityTestResult {
+  inconclusiveReason?: ModelCompatibilityOutcome["inconclusiveReason"];
   category: ModelConnectivityTestCategory;
   latencyMs: number;
   message: string;
   ok: boolean;
   providerStatus?: number;
   testedAt: string;
+  protocols?: Array<{
+    apiProtocol: ModelApiProtocol;
+    basic: ModelCompatibilityOutcome;
+    streaming: ModelCompatibilityOutcome;
+    tools: ModelCompatibilityOutcome;
+    usage: "available" | "unknown";
+  }>;
 }
 
 export interface ModelRunInfo {

@@ -17,6 +17,11 @@ import type { ApiError } from "@sciencediscovery/schema";
 
 import { translateActive } from "../i18n/index.js";
 
+function errorDetails(body: ApiError & { field?: unknown }): Record<string, unknown> | undefined {
+  return typeof body.field === "string" && body.field.length <= 200
+    ? { ...body.details, field: body.field } : body.details;
+}
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -68,7 +73,7 @@ export class AuthApiClient {
         body.error || translateActive("error.requestFailed", { status: response.status }),
         response.status,
         body.code,
-        body.details,
+        errorDetails(body),
       );
     }
     return (await response.json()) as T;
@@ -93,7 +98,7 @@ export class AuthApiClient {
         body.error || translateActive("error.requestFailed", { status: response.status }),
         response.status,
         body.code,
-        body.details,
+        errorDetails(body),
       );
     }
     return await response.text();

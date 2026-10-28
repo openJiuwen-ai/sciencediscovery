@@ -21,7 +21,7 @@ import type {
 } from "@sciencediscovery/schema";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import { RunnerUnavailableError } from "@sciencediscovery/workspace";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createOperationalLogger } from "@sciencediscovery/operational-logging";
 
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
@@ -29,12 +29,13 @@ import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
+import { createSandboxNetworkConsent } from "./sandbox-network-consent.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import { readPreparedSkillBundle, readPreparedSkillManifest } from "../skill-sandbox.js";
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers" | "runnerReadiness"
+  "sandboxNetwork" | "directExecution" | "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers" | "runnerReadiness"
 >;
 
 /**
@@ -52,8 +53,10 @@ export interface RemoteExecutionTarget {
 }
 
 export interface WorkspaceExecutionBindingOptions {
+  explicitHandoff?: boolean;
   beginExternalWait?: () => (() => void);
   agentId: string;
+  rootRunId?: string;
   artifactPathPrefix?: string;
   executionId: string;
   executionTimeoutMs?: number;
@@ -103,8 +106,8 @@ export function createWorkspaceExecutionBindings(
    * Spread into the recorder options, which keeps the field absent — rather
    * than explicitly undefined — for a sandbox with no network.
    */
-  const sandboxEgressProxy = (): { sandboxEgressProxy?: ResolvedProxy } => {
-    const resolved = options.store.resolveSandboxEgressProxy(options.permission.getEpoch());
+  const sandboxEgressProxy = (epoch = options.permission.getEpoch()): { sandboxEgressProxy?: ResolvedProxy } => {
+    const resolved = options.store.resolveSandboxEgressProxy(epoch);
     return resolved ? { sandboxEgressProxy: resolved } : {};
   };
   /**
@@ -224,13 +227,16 @@ export function createWorkspaceExecutionBindings(
     signal?.throwIfAborted();
     return target;
   };
+  const networkConsent = createSandboxNetworkConsent({ ...options,
+    assertRunner: (runnerId) => { resolveExecutionTarget(runnerId); },
+  });
   const prepareShell = async (
       code: string,
       kernelMode: KernelMode,
       signal?: AbortSignal,
       toolCallId?: string,
       machine?: string,
-      environment?: { environmentId?: string; cwd?: string },
+      environment?: { environmentId?: string; cwd?: string; networkAuthorizationId?: string },
     ) => {
       options.store.assertSessionWritable(options.sessionId);
       let target = resolveExecutionTarget(machine);
@@ -243,6 +249,7 @@ export function createWorkspaceExecutionBindings(
         summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
       target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code);
+      const permissionEpoch = await networkConsent.consume(environment?.networkAuthorizationId, target.runnerId, signal);
       return {
         agentId: options.agentId,
         code,
@@ -254,7 +261,7 @@ export function createWorkspaceExecutionBindings(
         kernelMode,
         maxOutputBytes: options.maxOutputBytes,
         maxWorkspaceBytes: options.maxWorkspaceBytes,
-        permissionEpoch: options.permission.getEpoch(),
+        permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
         runnerId: target.runnerId,
@@ -262,13 +269,13 @@ export function createWorkspaceExecutionBindings(
         ...npuDevices(target.runnerId),
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
-        ...sandboxEgressProxy(),
+        ...sandboxEgressProxy(permissionEpoch),
         sessionId: options.sessionId,
         signal,
         ...(toolCallId ? { toolCallId } : {}),
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
-        parentSubagentId: options.parentSubagentId,
+        parentSubagentId: options.parentSubagentId, explicitHandoff: options.explicitHandoff,
       };
   };
   const executionOwner = { sessionId: options.sessionId, agentId: options.agentId };
@@ -289,7 +296,82 @@ export function createWorkspaceExecutionBindings(
     if (job.sessionId !== options.sessionId) throw new Error("NPU job not found in this Session");
     return job;
   };
+  // Per-binding tickets cannot be inherited by a child or a later Agent run.
+  const directTickets = new Map<string, { command: string; cwd: string; target: string; account: string; workspaceRoot: string; runnerId: string; runnerWorkspaceKey?: string; grantId?: string }>();
+  const directScope = async (runnerId: string, cwdValue: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const target = resolveExecutionTarget(runnerId);
+    options.store.assertSessionWritable(options.sessionId);
+    if (!options.rootRunId) throw new Error("Direct execution requires an active owning run");
+    const run = await options.store.getSessionRun(options.sessionId, options.rootRunId);
+    if (!run || !["running", "blocked"].includes(run.status)) throw new Error("Direct execution consent ended with its run");
+    if (options.store.shellExecutions.list(executionOwner).some(record => record.runnerId === runnerId && record.state === "unknown")) {
+      throw new Error("Reconcile the unknown target execution outcome before authorizing more host side effects");
+    }
+    const runner = await checkRunner(runnerId, signal, true);
+    if (!runner.connected) throw new Error("Direct execution requires a reachable Runner. Ask the user or network administrator to check the Runner service, connection and authentication; SSH repair is not provided.");
+    const capability = await target.runnerClient.directExecutionCapability(signal, {
+      ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : { workspaceRoot: options.workspaceRoot }), cwd: cwdValue,
+    });
+    if (!capability.available || capability.workspaceRoot === undefined || capability.cwd === undefined) throw new Error("Target direct shell workspace capability is unavailable");
+    // Re-resolve after network I/O: removal from the Session must revoke access.
+    resolveExecutionTarget(runnerId);
+    signal?.throwIfAborted();
+    return { cwd: capability.cwd, workspaceRoot: capability.workspaceRoot, target: capability.target, account: capability.account,
+      runnerId, ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}) };
+  };
   const common: ExecutionBindings = {
+    sandboxNetwork: { request: networkConsent.request },
+    directExecution: {
+      request: async (input, signal, toolCallId) => {
+        const blocked = input.operationId === undefined ? undefined : blockedOperations.get(input.operationId);
+        if (input.operationId !== undefined && !blocked) throw new Error("Direct recovery requires this Agent's failed, undispatched operation");
+        const runnerId = input.runnerId?.trim() || blocked?.runner.runnerId || "local";
+        if (blocked && runnerId !== blocked.runner.runnerId) throw new Error("Direct recovery Runner must match the failed operation");
+        if (!input.command.trim() || input.command.length > 20000) throw new Error("Provide a nonempty command of at most 20000 characters");
+        const scope = await directScope(runnerId, input.cwd, signal);
+        const resource = "direct:" + createHash("sha256").update(JSON.stringify({ ...scope,
+          run: options.executionId, agent: options.agentId, session: options.sessionId, command: input.command })).digest("hex");
+        const authorization = await options.permission.requirePrivilege({ action: "direct_code", executionId: options.executionId,
+          toolCallId, resource, signal,
+          summary: `DIRECT HOST EXECUTION: Runner ${scope.runnerId}, ${scope.target}, account ${scope.account}, workspace ${scope.workspaceRoot}, cwd ${scope.cwd || "."}. No sandbox filesystem, process or network isolation; host credentials may be accessible. Host effects cannot all be tracked or rolled back. Matching consent covers only this exact command and scope during this Agent run, with no fixed TTL. Approval does not execute. Command:\n${input.command}` });
+        signal?.throwIfAborted();
+        if (authorization.action !== "direct_code" || authorization.outcome !== "allowed" || authorization.resource !== resource) throw new Error("Direct authorization scope mismatch");
+        const current = await directScope(runnerId, input.cwd, signal);
+        if (JSON.stringify(current) !== JSON.stringify(scope)) throw new Error("Target or workspace changed during consent; request new consent");
+        if (directTickets.size >= 128) throw new Error("Too many unused direct approvals in this run");
+        directTickets.set(authorization.id, { ...scope, command: input.command, grantId: authorization.permissionGrantId });
+        return { authorizationId: authorization.id, ...scope, command: input.command, dispatched: false,
+          instruction: "No code executed. Confirm these values in a NEW run_direct_shell call. Use a new consent request for any changed scope." };
+      },
+      start: async (input, signal, toolCallId) => {
+        signal?.throwIfAborted();
+        const ticket = directTickets.get(input.authorizationId);
+        if (!ticket || ticket.command !== input.command || ticket.cwd !== input.cwd || ticket.target !== input.target || ticket.account !== input.account) {
+          throw new Error("Missing, consumed or mismatched direct execution authorization");
+        }
+        // Consume before the first await: simultaneous calls cannot both dispatch.
+        directTickets.delete(input.authorizationId);
+        const scope = await directScope(ticket.runnerId, input.cwd, signal);
+        if (scope.runnerWorkspaceKey !== ticket.runnerWorkspaceKey || scope.cwd !== ticket.cwd || scope.workspaceRoot !== ticket.workspaceRoot || scope.target !== ticket.target || scope.account !== ticket.account) throw new Error("Direct target/account/workspace changed");
+        if (ticket.grantId && options.store.getPermissionGrant(ticket.grantId)?.state !== "active") throw new Error("Direct execution grant was revoked");
+        signal?.throwIfAborted();
+        const directAuthorization = { authorizationId: input.authorizationId, ...scope, runId: options.executionId, agentId: options.agentId };
+        return delivered(await options.store.shellExecutions.start(executionOwner, {
+          runnerId: ticket.runnerId, turnId: options.executionId, workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, ticket.runnerId).id,
+        }, () => resolveExecutionTarget(ticket.runnerId).runnerClient,
+        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({
+          agentId: options.agentId, code: ticket.command, cwd: ticket.cwd, directAuthorization,
+          executionId: id, dispatch, completionStatus, executionTimeoutMs: options.executionTimeoutMs,
+          maxOutputBytes: options.maxOutputBytes, maxWorkspaceBytes: options.maxWorkspaceBytes,
+          artifactPathPrefix: options.artifactPathPrefix, parentSubagentId: options.parentSubagentId, explicitHandoff: options.explicitHandoff,
+          permissionEpoch: options.permission.getEpoch(), runnerId: ticket.runnerId, runnerClient: resolveExecutionTarget(ticket.runnerId).runnerClient,
+          ...(ticket.runnerWorkspaceKey ? { runnerWorkspaceKey: ticket.runnerWorkspaceKey } : {}),
+          ...(resolveExecutionTarget(ticket.runnerId).remoteHostAlias ? { remoteHostAlias: resolveExecutionTarget(ticket.runnerId).remoteHostAlias } : {}),
+          sessionId: options.sessionId, toolCallId, turnId: options.executionId, workspaceRoot: ticket.workspaceRoot,
+        })));
+      },
+    },
     runnerReadiness: {
       check: (machine, signal) => checkRunner(machine, signal),
       wait: async (operationId, signal, waitToolCallId) => {
@@ -495,10 +577,13 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
-        parentSubagentId: options.parentSubagentId,
+        parentSubagentId: options.parentSubagentId, explicitHandoff: options.explicitHandoff,
       });
     },
-    executeShell: async (...args) => options.provenanceRecorder.executeShell(await prepareShell(...args)),
+    executeShell: async (...args) => {
+      const prepared = await prepareShell(...args);
+      return networkConsent.observe(await options.provenanceRecorder.executeShell(prepared), prepared.runnerId, args[2]);
+    },
     shellExecutions: {
       start: async (code, environment, signal, toolCallId, runnerId) => {
         const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
@@ -506,12 +591,13 @@ export function createWorkspaceExecutionBindings(
           runnerId: prepared.runnerId!, turnId: options.executionId,
           workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
         }, () => resolveExecutionTarget(runnerId).runnerClient,
-        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus })));
+        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId)));
       },
       wait: async (id, waitMs, signal) => {
         const record = await options.store.shellExecutions.get(id, executionOwner);
         if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
-        return delivered(await options.store.shellExecutions.wait(id, executionOwner, waitMs, signal));
+        return delivered(await options.store.shellExecutions.wait(id, executionOwner, waitMs, signal,
+          (runnerId) => resolveExecutionTarget(runnerId).runnerClient));
       },
       list: () => options.store.shellExecutions.list(executionOwner).filter((record) => {
         try { if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId); return true; } catch { return false; }
@@ -642,7 +728,7 @@ export function createWorkspaceExecutionBindings(
           ...(toolCallId ? { toolCallId } : {}),
           turnId: options.executionId,
           workspaceRoot: options.workspaceRoot,
-          parentSubagentId: options.parentSubagentId,
+          parentSubagentId: options.parentSubagentId, explicitHandoff: options.explicitHandoff,
         });
       },
     } : {}),

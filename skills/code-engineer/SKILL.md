@@ -30,7 +30,6 @@ This skill writes and executes Python/R code to process, transform, and analyze 
 - User asks for code-level methodology documentation alongside results (method justification, data traceability, key function calls, limitations)
 - User wants a multi-step analysis pipeline with re-runnable code (Python or R scripts) rather than ad-hoc one-off answers
 
-
 ## Python Package Installation
 
 If you need to install new Python packages, install them through the Tsinghua PyPI mirror for reliability:
@@ -220,6 +219,15 @@ Caching applies **only to `--action inspect`**. The script stores loaded DuckDB 
 - Cache is transparent — no extra parameters needed
 
 Note: `--action run` does **not** use this cache. The Python (`pandas`) and R (`readxl`/`read.csv`) subprocesses re-read the data files on every invocation. If you want run-time caching for an analysis pipeline, cache results yourself and reuse them.
+
+## Nonlinear fitting and confidence intervals (lmfit)
+
+When the analysis needs nonlinear least-squares fits or parameter **confidence intervals** with **lmfit** (especially the pinned **1.3.4** used in science demos), read [references/lmfit-conf-interval.md](references/lmfit-conf-interval.md) **before** the first `conf_interval` / `run_python` call.
+
+- Prefer `result.conf_interval()` after `Model.fit(...)`.
+- Or `conf_interval(minimizer, result)` after `Minimizer.minimize()` — minimizer first.
+- Do not guess alternate signatures; wrong calls fail under 1.3.4 and produce opaque failed cards before a later self-repair.
+- Never swallow fit/CI exceptions or invent confidence-interval numbers.
 
 ## Quality Assurance （optional but highly recommended）
 

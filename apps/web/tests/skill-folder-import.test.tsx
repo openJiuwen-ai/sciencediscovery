@@ -61,6 +61,17 @@ test("rejects folders without a root SKILL.md or with multiple roots", async () 
   ]), /exactly one Skill folder/);
 });
 
+test("rejects file-only picker results with complete-package recovery guidance", async (context) => {
+  context.after(() => setActiveLocale("en"));
+  for (const locale of ["en", "zh-CN"] as const) {
+    setActiveLocale(locale);
+    await assert.rejects(
+      createSkillFolderArchive([new File(["# Instructions"], "SKILL.md")]),
+      (error: Error) => error.message.includes("ZIP") && error.message.includes("Git"),
+    );
+  }
+});
+
 test("tells a Chinese reader why a folder was refused, in Chinese", async (context) => {
   setActiveLocale("zh-CN");
   context.after(() => setActiveLocale("en"));

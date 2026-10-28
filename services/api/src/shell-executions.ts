@@ -5,14 +5,18 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { VersionStore, type AgentStateRef } from "@sciencediscovery/cas";
 import type { RunnerClient } from "@sciencediscovery/executor";
+import { shortErrorMessage, type OperationalLogger } from "@sciencediscovery/operational-logging";
 import type { AgentShellExecution, ExecutionOwner, ManagedExecution, ShellExecutionResult } from "@sciencediscovery/schema";
 import type { AgentNotifications } from "./agent-notifications.js";
+import { apiLog } from "./logging.js";
 
 type Record = Omit<AgentShellExecution, "result"> & { resultRef?: AgentStateRef };
 type RecordExecution = (id: string, dispatch: RunnerClient["executeShell"], status: () => "succeeded" | "failed" | "cancelled") => Promise<ShellExecutionResult>;
+type RunnerResolver = (runnerId: string) => RunnerClient;
 const terminal = (state: ManagedExecution["state"]) => state !== "queued" && state !== "running";
 const MAX_CONSECUTIVE_OBSERVATION_FAILURES = 5;
 const MAX_OBSERVATION_RETRY_DELAY_MS = 5_000;
+const RUNNER_REQUEST_TIMEOUT_MS = 10_000;
 class RecordedRunnerFailure extends Error {}
 type ObservationFailure = { cause?: unknown; code?: unknown; message?: unknown; name?: unknown; statusCode?: unknown };
 const observationFailureChain = (error: unknown): ObservationFailure[] => {
@@ -53,22 +57,62 @@ const errorDetail = (error: unknown): string => {
   const status = observationHttpStatus(chain);
   return status !== undefined && !error.message.includes(String(status)) ? `${error.message} (HTTP ${status})` : error.message;
 };
+/** Log fields naming what actually failed: `fetch failed` alone does not say whether a socket, a gateway or the Runner did. */
+const failureFields = (error: unknown) => {
+  const chain = observationFailureChain(error);
+  const causes = chain.slice(1).flatMap((failure) => typeof failure.message === "string" && failure.message ? [failure.message] : []);
+  const code = chain.map((failure) => failure.code).find((value): value is string => typeof value === "string");
+  const status = observationHttpStatus(chain);
+  return {
+    errorMessage: shortErrorMessage(error),
+    ...(causes.length ? { errorCause: shortErrorMessage(causes.join(": ")) } : {}),
+    ...(code ? { errorCode: code } : {}),
+    ...(status !== undefined ? { httpStatus: status } : {}),
+  };
+};
+const correlation = (execution: Record) => ({
+  executionId: execution.id, runnerId: execution.runnerId, sessionId: execution.sessionId, agentId: execution.agentId,
+});
+const ownerOf = (execution: Record): ExecutionOwner => ({ sessionId: execution.sessionId, agentId: execution.agentId });
+const assertOwner = (execution: Record, value: ManagedExecution) => {
+  if (value.id !== execution.id || value.sessionId !== execution.sessionId || value.agentId !== execution.agentId) {
+    throw new Error("Runner Execution identity mismatch");
+  }
+};
+/** The API lost track of the outcome; the Runner that owns this Execution ID may still know it. */
+const reconcilable = (execution: Record) => execution.state === "unknown" && execution.provenance === "unconfirmed";
 
 /** Tracks accepted work independently of an Agent turn. It never replays commands. */
 export class ShellExecutions {
   private readonly active = new Map<string, Promise<void>>();
+  private readonly reconciling = new Map<string, Promise<void>>();
+  private runnerConnection?: (runnerId: string) => string;
 
   constructor(private readonly db: DatabaseSync, private readonly versions: VersionStore,
     private readonly notifications: AgentNotifications, private readonly pollMs = 200,
-    private readonly waitForPoll: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+    private readonly waitForPoll: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    private readonly log: Pick<OperationalLogger, "info" | "warn"> = apiLog) {
     db.exec("CREATE TABLE IF NOT EXISTS shell_executions (id TEXT PRIMARY KEY, session TEXT NOT NULL, agent TEXT NOT NULL, record TEXT NOT NULL)");
     for (const row of db.prepare("SELECT record FROM shell_executions").all()) {
       const execution = JSON.parse(String(row.record)) as Record;
-      if (!terminal(execution.state)) this.finish(execution, {
+      if (terminal(execution.state)) continue;
+      this.log.warn("shell_execution_orphaned", { ...correlation(execution), state: execution.state, accepted: execution.accepted });
+      this.finish(execution, {
         state: "unknown", provenance: "unconfirmed",
-        error: "API restarted before finalization; inspect Runner state. The command was not replayed.",
+        error: "API restarted before finalization; execution_status reconciles it with the Runner. The command was not replayed.",
       });
     }
+  }
+
+  /** Names the connection each Runner request went through, so a lost observation is not read as a failed job. */
+  describeRunnerConnections(describe: (runnerId: string) => string): void {
+    this.runnerConnection = describe;
+  }
+
+  private connection(runnerId: string): { runnerConnection?: string } {
+    if (!this.runnerConnection) return {};
+    try { return { runnerConnection: this.runnerConnection(runnerId) }; }
+    catch { return { runnerConnection: "unavailable" }; }
   }
 
   private save(execution: Record): void {
@@ -125,54 +169,25 @@ export class ShellExecutions {
     let acknowledge!: () => void;
     const accepted = new Promise<void>((resolve) => { acknowledge = resolve; });
     let observed: ManagedExecution | undefined;
-    let consecutiveObservationFailures = 0;
-    let nextPollDelayMs = this.pollMs;
-    const assertOwner = (value: ManagedExecution) => {
-      if (value.id !== execution.id || value.sessionId !== owner.sessionId || value.agentId !== owner.agentId) {
-        throw new Error("Runner Execution identity mismatch");
-      }
-    };
+    // Which step lost the outcome: the submission response, an observation
+    // of accepted work, or finalization after the Runner reported an end.
+    let stage: "submission" | "observation" | "finalization" = "submission";
     const work = Promise.resolve().then(async () => {
       try {
         const result = await recordExecution(execution.id, async (request) => {
-          observed = await runner().startShellExecution(request, AbortSignal.timeout(10_000));
-          assertOwner(observed);
+          observed = await runner().startShellExecution(request, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
+          assertOwner(execution, observed);
           execution.accepted = true;
           this.save(execution);
           acknowledge();
-          while (true) {
-            assertOwner(observed);
-            // When it started, on this machine's clock. The Runner reports its
-            // own `startedAt`, and a machine whose clock nobody disciplines can
-            // be minutes off — copying it here would file the start before the
-            // queue time and scramble every timeline built from these records.
-            if (observed.startedAt && !execution.startedAt) execution.startedAt = new Date().toISOString();
-            // Runner termination is not API completion until provenance has committed.
-            execution.state = observed.state === "queued" ? "queued" : "running";
-            this.save(execution);
-            if (terminal(observed.state)) break;
-            await this.waitForPoll(nextPollDelayMs);
-            try {
-              observed = await runner().getShellExecution(execution.id, owner, AbortSignal.timeout(10_000));
-              consecutiveObservationFailures = 0;
-              nextPollDelayMs = this.pollMs;
-            } catch (error) {
-              if (!retryableObservationFailure(error)) throw error;
-              consecutiveObservationFailures++;
-              if (consecutiveObservationFailures >= MAX_CONSECUTIVE_OBSERVATION_FAILURES) {
-                throw new Error(`Runner status remained unavailable after ${consecutiveObservationFailures} consecutive attempts: ${
-                  errorDetail(error)}`, { cause: error });
-              }
-              // The command has already been accepted. A failed status read is
-              // not a failed execution; query the same ID again, never submit it.
-              nextPollDelayMs = Math.min(this.pollMs * 2 ** (consecutiveObservationFailures - 1), MAX_OBSERVATION_RETRY_DELAY_MS);
-            }
-          }
+          stage = "observation";
+          observed = await this.follow(execution, runner, observed, (value) => { observed = value; });
+          stage = "finalization";
           if (!observed.result && (observed.state === "failed" || observed.state === "cancelled")
             && (observed.version || !observed.startedAt)) {
             throw new RecordedRunnerFailure(observed.error ?? `Execution ${observed.state} before producing a result`);
           }
-          if (!observed.result || !observed.version || !observed.result.workspaceSnapshot) {
+          if (!observed.result || !observed.version || (!request.explicitHandoff && !observed.result.workspaceSnapshot)) {
             throw new Error(observed.error ?? "Runner ended without a committed result; inspect its state before retrying");
           }
           // The envelope receipt is authoritative, including older Runners
@@ -186,6 +201,10 @@ export class ShellExecutions {
         // A lost submit response or failed provenance does not prove the command did not run.
         const recorded = error instanceof RecordedRunnerFailure;
         if (observed?.version) execution.runnerVersionId = observed.version.digest;
+        if (!recorded) {
+          this.log.warn("shell_execution_unconfirmed", { ...correlation(execution), accepted: execution.accepted, stage,
+            ...failureFields(error), ...this.connection(execution.runnerId) });
+        }
         this.finish(execution, { state: recorded ? observed!.state : "unknown", provenance: recorded ? "committed" : "unconfirmed",
           error: error instanceof Error ? errorDetail(error) : "Execution finalization failed" });
       } finally { acknowledge(); }
@@ -196,6 +215,119 @@ export class ShellExecutions {
     this.active.set(execution.id, work);
     await accepted;
     return this.get(execution.id, owner);
+  }
+
+  /**
+   * Query the same Execution ID until the Runner reports a terminal state.
+   * A retryable failure only delays the next query and any answer resets the
+   * count; MAX_CONSECUTIVE_OBSERVATION_FAILURES in a row ends the observation,
+   * never the command, and is never answered by submitting it again.
+   */
+  private async follow(execution: Record, runner: () => RunnerClient, first: ManagedExecution,
+    seen: (value: ManagedExecution) => void = () => undefined): Promise<ManagedExecution> {
+    let observed = first;
+    let failures = 0;
+    let delayMs = this.pollMs;
+    while (true) {
+      assertOwner(execution, observed);
+      seen(observed);
+      // When it started, on this machine's clock. The Runner reports its
+      // own `startedAt`, and a machine whose clock nobody disciplines can
+      // be minutes off — copying it here would file the start before the
+      // queue time and scramble every timeline built from these records.
+      if (observed.startedAt && !execution.startedAt) execution.startedAt = new Date().toISOString();
+      // Runner termination is not API completion until provenance has committed.
+      execution.state = observed.state === "queued" ? "queued" : "running";
+      this.save(execution);
+      if (terminal(observed.state)) return observed;
+      await this.waitForPoll(delayMs);
+      try {
+        observed = await runner().getShellExecution(execution.id, ownerOf(execution), AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
+        if (failures) this.log.info("shell_execution_observation_recovered", { ...correlation(execution), consecutiveFailures: failures });
+        failures = 0;
+        delayMs = this.pollMs;
+      } catch (error) {
+        const retryable = retryableObservationFailure(error);
+        failures++;
+        const exhausted = !retryable || failures >= MAX_CONSECUTIVE_OBSERVATION_FAILURES;
+        // The command has already been accepted. A failed status read is
+        // not a failed execution; query the same ID again, never submit it.
+        delayMs = Math.min(this.pollMs * 2 ** (failures - 1), MAX_OBSERVATION_RETRY_DELAY_MS);
+        this.log.warn("shell_execution_observation_failed", { ...correlation(execution), consecutiveFailures: failures,
+          maxConsecutiveFailures: MAX_CONSECUTIVE_OBSERVATION_FAILURES, retryable, ...(exhausted ? {} : { retryInMs: delayMs }),
+          ...failureFields(error), ...this.connection(execution.runnerId) });
+        if (!retryable) throw error;
+        if (exhausted) {
+          throw new Error(`Runner status remained unavailable after ${failures} consecutive attempts: ${errorDetail(error)}`, { cause: error });
+        }
+      }
+    }
+  }
+
+  /**
+   * Ask the Runner for its record of an execution the API could not confirm.
+   * Only the same Execution ID is queried: a committed Runner outcome is
+   * adopted, a live one is followed again, and anything else stays unknown.
+   */
+  private async reconcile(id: string, owner: ExecutionOwner, runner: RunnerResolver, signal?: AbortSignal): Promise<void> {
+    const execution = this.record(id, owner);
+    if (!reconcilable(execution) || this.active.has(id)) return;
+    const timeout = AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS);
+    let observed: ManagedExecution;
+    try {
+      observed = await runner(execution.runnerId).getShellExecution(id, ownerOf(execution), signal ? AbortSignal.any([signal, timeout]) : timeout);
+      assertOwner(execution, observed);
+    } catch (error) {
+      // Still unreachable or not recognized: keep the uncertainty, try again on the next inspection.
+      this.log.warn("shell_execution_reconcile_failed", { ...correlation(execution), ...failureFields(error), ...this.connection(execution.runnerId) });
+      return;
+    }
+    if (!reconcilable(this.record(id, owner)) || this.active.has(id)) return;
+    execution.accepted = true; // the Runner holds this ID, even if its submission response was lost
+    if (terminal(observed.state)) {
+      await this.settle(execution, observed);
+    } else {
+      // Still queued or running: the earlier notice reported an outcome that
+      // has not happened, so withdraw it and let the real end notify again.
+      execution.provenance = "pending";
+      delete execution.finishedAt;
+      delete execution.error;
+      this.notifications.reopenExecution(execution, id);
+      const work = this.follow(execution, () => runner(execution.runnerId), observed)
+        .then((final) => this.settle(execution, final))
+        .catch((error: unknown) => {
+          this.log.warn("shell_execution_unconfirmed", { ...correlation(execution), accepted: true, stage: "observation",
+            ...failureFields(error), ...this.connection(execution.runnerId) });
+          this.finish(execution, { state: "unknown", provenance: "unconfirmed", error: errorDetail(error) });
+        })
+        .catch(() => undefined)
+        .finally(() => this.active.delete(id));
+      this.active.set(id, work);
+    }
+    const reconciled = this.record(id, owner);
+    this.log.info("shell_execution_reconciled", { ...correlation(execution), runnerState: observed.state,
+      state: reconciled.state, provenance: reconciled.provenance });
+  }
+
+  /** Adopt the Runner's terminal record under the same rules as an uninterrupted observation. */
+  private async settle(execution: Record, observed: ManagedExecution): Promise<void> {
+    if (observed.version) execution.runnerVersionId = observed.version.digest;
+    if (observed.state !== "unknown" && observed.result && observed.version) {
+      execution.resultRef = await this.versions.put("agent-state",
+        JSON.stringify({ ...observed.result, workspaceVersion: observed.version }), "application/json");
+      delete execution.error;
+      this.finish(execution, { state: observed.state, provenance: "committed" });
+      return;
+    }
+    if ((observed.state === "failed" || observed.state === "cancelled") && (observed.version || !observed.startedAt)) {
+      this.finish(execution, { state: observed.state, provenance: "committed",
+        error: observed.error ?? `Execution ${observed.state} before producing a result` });
+      return;
+    }
+    // A Runner restart or an uncommitted end leaves the Runner itself without an outcome.
+    const error = `Runner could not confirm the outcome: ${observed.error ?? "it ended without a committed result"}. The command was not replayed.`;
+    if (execution.state === "unknown") this.save({ ...execution, error });
+    else this.finish(execution, { state: "unknown", provenance: "unconfirmed", error });
   }
 
   private finish(execution: Record, patch: Pick<Record, "state" | "provenance"> & { error?: string }): void {
@@ -212,10 +344,24 @@ export class ShellExecutions {
     }
   }
 
-  /** A wait deadline never reaches the process controller. */
-  async wait(id: string, owner: ExecutionOwner, waitMs: number, signal?: AbortSignal): Promise<AgentShellExecution> {
-    this.record(id, owner);
+  /**
+   * A wait deadline never reaches the process controller. With a Runner
+   * resolver, an unconfirmed execution is first reconciled with its Runner.
+   */
+  async wait(id: string, owner: ExecutionOwner, waitMs: number, signal?: AbortSignal, runner?: RunnerResolver): Promise<AgentShellExecution> {
+    const execution = this.record(id, owner);
     if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > 30_000) throw new Error("wait_ms must be between 0 and 30000");
+    if (runner && reconcilable(execution) && !this.active.has(id)) {
+      // Concurrent inspections share one Runner query instead of racing to adopt the same answer.
+      let reconciliation = this.reconciling.get(id);
+      if (!reconciliation) {
+        reconciliation = this.reconcile(id, owner, runner, signal).catch((error: unknown) => {
+          this.log.warn("shell_execution_reconcile_failed", { ...correlation(execution), ...failureFields(error) });
+        }).finally(() => this.reconciling.delete(id));
+        this.reconciling.set(id, reconciliation);
+      }
+      await reconciliation;
+    }
     const work = this.active.get(id);
     if (work && waitMs > 0 && !signal?.aborted) {
       await new Promise<void>((resolve) => {
@@ -230,14 +376,14 @@ export class ShellExecutions {
 
   async logs(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient, cursor = 0) {
     const execution = this.record(id, owner);
-    return runner(execution.runnerId).shellExecutionLogs(id, owner, cursor, AbortSignal.timeout(10_000));
+    return runner(execution.runnerId).shellExecutionLogs(id, owner, cursor, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
   }
 
   async cancel(id: string, owner: ExecutionOwner, runner: (id: string) => RunnerClient): Promise<AgentShellExecution> {
     const execution = this.record(id, owner);
     // Unknown after restart may still be running remotely; cancellation is safe, resubmission is not.
     if (!terminal(execution.state) || execution.state === "unknown") {
-      await runner(execution.runnerId).cancelShellExecution(id, owner, AbortSignal.timeout(10_000));
+      await runner(execution.runnerId).cancelShellExecution(id, owner, AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS));
     }
     return this.get(id, owner);
   }

@@ -4,9 +4,11 @@
 
 This guide covers custom MCP management in system settings. Existing built-in sources remain available in their own tab and do not need to be added again.
 
+> **Release availability:** Custom MCP server management is available in 0.3.0-beta and later builds. It is not included in the 0.2.0 release: that version has neither the **MCP servers** settings page nor the `/api/mcp/servers` routes described below. Upgrade before following this guide.
+
 ## Before you start
 
-- Start the product and connect your browser using the `Open to sign in` URL (or the local service access token) printed by the backend.
+- Start the product, open its regular Web address, and connect using the local service access token from `<data-dir>/secrets/auth-token` or your configured `SCIENCE_AGENT_AUTH_TOKEN`. The printed sign-in URL is optional.
 - Obtain the MCP provider's startup command or remote MCP URL and authentication requirements. An MCP URL is not an ordinary web page or an OpenAI-compatible LLM base URL.
 - STDIO runs on the API backend machine, not the browser machine, and does not automatically enter the Session sandbox. Configure only trusted commands and install the required runtime there. With Docker, executable paths and dependencies must be available inside the container.
 
@@ -92,7 +94,7 @@ The Agent decides whether a task needs a tool, so selection does not force a cal
 
 | Symptom | Check |
 |---|---|
-| Connection guide opens or shows Unauthorized | The local service access token, not the MCP provider token or external model API Key; open the backend's `Open to sign in` URL or paste the current backend's access token |
+| Connection guide opens or shows Unauthorized | The local service access token, not the MCP provider token or external model API Key; paste the current token from `<data-dir>/secrets/auth-token` or the configured `SCIENCE_AGENT_AUTH_TOKEN` into Connection |
 | STDIO cannot start | Executable, arguments, working directory and dependencies on the backend machine/container |
 | HTTP/SSE authentication failure | MCP URL, header names/values, OAuth state and provider permissions |
 | Save blocked after renaming a key | Re-enter the value, or restore the original key if the value was not edited |

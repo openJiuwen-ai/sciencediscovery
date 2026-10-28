@@ -38,6 +38,7 @@ import type {
 
 import { appendBounded, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
+import { EgressGatewayRegistry, MAX_UNIX_SOCKET_PATH_BYTES } from "./egress-gateway.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
@@ -1973,16 +1974,15 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   })).json() as RunnerRuntimeStatus;
   const waitFor = async (predicate: (value: RunnerRuntimeStatus) => boolean) => {
     const startedAt = Date.now();
+    const deadline = startedAt + 5_000;
     let current: RunnerRuntimeStatus | undefined;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    while (Date.now() < deadline) {
       current = await status();
       if (predicate(current)) return current;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
-    // The state it did reach and how long it waited for it. This budget counts
-    // polls, so its wall time shrinks as the machine slows: without the
-    // elapsed figure a failure cannot say whether the runner never did the
-    // thing or whether this simply gave up early.
+    // The deadline is wall-clock based so CPU pressure cannot silently shorten
+    // the cancellation grace period by making individual status polls slower.
     throw new Error(`Runner status did not reach the expected state after ${Date.now() - startedAt} ms: `
       + JSON.stringify(current));
   };
@@ -1991,7 +1991,9 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   const running = fetch(`${origin}/execute`, {
     ...signedExecutionInit("runner-test-token", {
       agentId: "main",
-      code: "import time\ntime.sleep(30)",
+      // Keep the sandbox busy while the disconnect arrives. The runner itself
+      // must still observe the abort and kill the whole sandbox process group.
+      code: "while True:\n    pass",
       executionId: "cancel-running",
       executionTimeoutMs: 0,
       permissionEpoch: epoch(),
@@ -2145,4 +2147,21 @@ test("the runner socket is configured by environment like every other listener s
   }, "/tmp");
   assert.equal(socketConfig.socketPath, "/tmp/data/run/runner.sock");
   assert.equal(loadRunnerConfig({}, "/tmp").socketPath, undefined);
+});
+
+test("health marks egress unavailable when the configured data directory cannot hold its socket", async (context) => {
+  const dataDir = resolve(tmpdir(), "x".repeat(MAX_UNIX_SOCKET_PATH_BYTES));
+  const socketPath = new EgressGatewayRegistry(dataDir).socketPath("capability");
+  assert.ok(Buffer.byteLength(socketPath) > MAX_UNIX_SOCKET_PATH_BYTES);
+
+  const server = createRunnerServer(config(dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const health = await (await fetch(`${origin}/health`)).json() as RunnerHealth;
+
+  assert.equal(health.sandboxNetwork.available, false);
+  assert.deepEqual(health.sandboxNetwork.modes, ["none"]);
+  assert.match(health.sandboxNetwork.unavailableReason ?? "", /Unix socket path limit/);
+  assert.match(health.sandboxNetwork.unavailableReason ?? "", /SCIENCE_DISCOVERY_DATA_DIR/);
 });

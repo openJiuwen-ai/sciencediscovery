@@ -166,6 +166,24 @@ function classifyError(message: string): { retryAfterMs?: number; status: McpAtt
   return { status: "semantic-error", ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
 }
 
+/** Only the bundled provider envelope supplies endpoint attribution. Legacy text
+ * remains classifiable as 429, but cannot trip endpoint-wide 406 suppression. */
+export function sourceHttpFailure(message: string): (NonNullable<McpAttempt["upstream"]> & { retryAfterMs?: number }) | undefined {
+  const raw = message.match(/SOURCE_HTTP_ERROR:(\{[^\n]*?\})/);
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw[1]!) as Record<string, unknown>;
+    if (!Number.isInteger(value.statusCode) || Number(value.statusCode) < 400 || Number(value.statusCode) > 599
+      || typeof value.endpoint !== "string" || !["endpoint", "request", "unknown"].includes(String(value.failureScope))) return undefined;
+    const endpoint = new URL(value.endpoint);
+    if (!["https:", "http:"].includes(endpoint.protocol)) return undefined;
+    const retry = value.retryAfterMs;
+    return { statusCode: Number(value.statusCode), endpoint: endpoint.origin,
+      failureScope: value.failureScope as "endpoint" | "request" | "unknown",
+      ...(typeof retry === "number" && Number.isFinite(retry) && retry >= 0 ? { retryAfterMs: retry } : {}) };
+  } catch { return undefined; }
+}
+
 function errorCodeFor(status: McpAttemptStatus, message: string): string {
   const lowered = message.toLowerCase();
   if (message.startsWith("RESPONSE_TOO_LARGE:")) return "RESPONSE_TOO_LARGE";
@@ -211,6 +229,15 @@ export class McpNodeClient {
     private readonly oauth?: McpOAuthManager,
     private readonly logger: OperationalLogger = apiLog,
   ) {}
+
+  sourceScope(serverId: string): string {
+    const server = this.currentConfig().servers[serverId];
+    const stableMap = (value: Record<string, string> = {}) => Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    return createHash("sha256").update(JSON.stringify({ serverId, url: server?.url, command: server?.command,
+      args: server?.args, cwd: server?.cwd, env: stableMap(server?.env), headers: stableMap(server?.headers),
+      oauth: this.oauth?.credentialScope(serverId),
+    })).digest("hex");
+  }
 
   private currentConfig(): ExtensionsConfigFile {
     return this.loadConfig();
@@ -436,7 +463,7 @@ export class McpNodeClient {
     return this.catalog();
   }
 
-  async invoke(request: McpInvokeRequest, signal?: AbortSignal): Promise<McpInvokeResponse> {
+  async invoke(request: McpInvokeRequest, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<McpInvokeResponse> {
     const started = Date.now();
     if (request.proxy) {
       // Self-healing: a proxy change (or restart that lost the overlays)
@@ -471,6 +498,7 @@ export class McpNodeClient {
       const attemptStarted = Date.now();
       const remaining = deadline - attemptStarted;
       let retryAfterMs: number | undefined;
+      let upstream: McpAttempt["upstream"];
       if (remaining <= 0) {
         finalStatus = "timeout";
         finalError = "MCP invocation deadline exceeded (timeout)";
@@ -483,7 +511,11 @@ export class McpNodeClient {
           const result = await client.callTool(
             { arguments: request.arguments as Record<string, unknown>, name: request.toolName },
             undefined,
-            { ...(signal ? { signal } : {}), timeout },
+            { ...(signal ? { signal } : {}), timeout,
+              ...(onProgress ? { onprogress: (progress: { message?: string; progress: number; total?: number }) => {
+                onProgress(`${progress.message ?? `Progress: ${progress.progress}${progress.total === undefined ? "" : `/${progress.total}`}`}\n`);
+              } } : {}),
+            },
           ) as Record<string, unknown>;
           const { blocks, structured } = contentBlocks(result);
           const responseBytes = Buffer.byteLength(JSON.stringify({ content: blocks, structuredContent: structured ?? null }), "utf8");
@@ -513,16 +545,23 @@ export class McpNodeClient {
           };
         } catch (error) {
           signal?.throwIfAborted();
-          finalError = error instanceof Error ? error.message : String(error);
-          const classified = classifyError(finalError);
-          finalStatus = classified.status;
-          retryAfterMs = classified.retryAfterMs;
+          const message = error instanceof Error ? error.message : String(error);
+          const http = sourceHttpFailure(message);
+          upstream = http ? { endpoint: http.endpoint, statusCode: http.statusCode, failureScope: http.failureScope } : undefined;
+          const classified = classifyError(message);
+          finalStatus = http ? http.statusCode === 429 ? "rate-limited" : http.statusCode >= 500 ? "server-error" : "semantic-error" : classified.status;
+          retryAfterMs = http?.retryAfterMs ?? classified.retryAfterMs;
+          finalError = http ? `HTTP ${http.statusCode} from ${http.endpoint}` : shortErrorMessage(message, 1_000);
+          onProgress?.(`Error: ${finalError}\n`);
           const stderrTail = this.sessions.get(request.serverId)?.stderrTail?.read();
           const level = finalStatus === "semantic-error" ? "debug" : "warn";
           this.logger[level]("mcp_invocation_attempt_failed", {
             attempt: attemptNumber,
             errorCode: errorCodeFor(finalStatus, finalError),
-            errorMessage: shortErrorMessage(error),
+            errorMessage: finalError,
+            ...(upstream ? { endpoint: upstream.endpoint, statusCode: upstream.statusCode, failureScope: upstream.failureScope } : {}),
+            retryDecision: request.execution.retryPolicy.maxAttempts === 1 ? "return-to-broker" : "policy",
+            sessionId: request.context.sessionId, turnId: request.context.turnId, toolCallId: request.context.toolCallId,
             requestId: request.requestId,
             serverId: request.serverId,
             status: finalStatus,
@@ -541,6 +580,7 @@ export class McpNodeClient {
         durationMs: Date.now() - attemptStarted,
         errorCode: errorCodeFor(finalStatus, finalError),
         errorMessage: finalError.slice(0, 1_000),
+        ...(upstream ? { upstream } : {}),
         finishedAt: new Date().toISOString(),
         ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
         startedAt: attemptStartedAt,

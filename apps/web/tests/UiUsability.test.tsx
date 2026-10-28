@@ -111,10 +111,10 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
-  assert.match(app, /<span title=\{item\.archivedAt \? `\$\{sessionTitle\(item\.title\)\} · \$\{t\("sidebar\.archived"\)\}` : sessionTitle\(item\.title\)\}>/);
+  assert.match(app, /<span title=\{item\.archivedAt \? `\$\{sessionTitle\(item\)\} · \$\{t\("sidebar\.archived"\)\}` : sessionTitle\(item\)\}>/);
   // The "session created" toast names a new session in the UI's language too, not "Untitled session".
   assert.doesNotMatch(app, /t\("app\.sessionCreated"\), created\.title\)/);
-  assert.match(app, /t\("app\.sessionCreated"\), sessionTitle\(created\.title\)\)/);
+  assert.match(app, /t\("app\.sessionCreated"\), sessionTitle\(created, \[\.\.\.artifactSessions, created\]\)/);
   // The removed Paper reader no longer mounts a second model picker.
   assert.doesNotMatch(app, /modelOptionLabel\(/);
   assert.match(app, /<ModelPicker/);
@@ -124,11 +124,21 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   assert.doesNotMatch(app, /ModelDraftFields/);
 });
 
+test("a completed session deletion closes its dialog without a follow-up catalog refresh", () => {
+  const app = source("App.tsx");
+  const deletionHandler = app.slice(app.indexOf("async function confirmDeletion"), app.indexOf("function toggleConnector"));
+
+  assert.match(deletionHandler, /await client\.deleteSession\(deletionTarget\.id\);[\s\S]*?const nextSessionId = selectAfterRemoval\(sessions, deletionTarget\.id, activeSessionId\);[\s\S]*?activeSessionIdRef\.current = nextSessionId;[\s\S]*?setArtifactSessions\(\(current\) => current\.filter\(\(item\) => item\.id !== deletionTarget\.id\)\);/);
+  assert.doesNotMatch(deletionHandler, /setArtifactSessions\(await client\.listSessions\(activeProjectId, "all"\)\);/);
+  assert.doesNotMatch(deletionHandler, /setArtifacts\(await client\.listProjectArtifacts\(activeProjectId\)\);/);
+  assert.match(deletionHandler, /setDeletionTarget\(undefined\);[\s\S]*?setDeletionImpact\(undefined\);[\s\S]*?setDeletionConfirmation\(""\);/);
+});
+
 test("the session bar constrains long names and preserves their full hover text", () => {
   const app = source("App.tsx");
   const conversation = source("styles/conversation.css");
 
-  assert.match(conversation, /\.session-bar-session \{[^}]*min-width: 0;[^}]*flex: 1 1 0;/);
+  assert.match(conversation, /\.session-bar-session \{[^}]*min-width: 0;[^}]*flex: 1 1 120px;/, "reserve title width beside the full-loop usage chip");
   assert.match(conversation, /\.session-bar-session-title \{[^}]*width: 100%;[^}]*max-width: 100%;/);
   assert.match(app, /title=\{t\("app\.renameProjectHint", \{ name: activeProjectLabel \}\)\}/);
   assert.match(app, /title=\{t\("app\.renameSessionTitle", \{ name: activeSessionLabel \}\)\}/);

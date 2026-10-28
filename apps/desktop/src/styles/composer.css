@@ -1,0 +1,207 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 530:932 */
+/* composer */
+.composer {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  width: calc(100% - clamp(48px, 12vw, 120px));
+  max-width: 880px;
+  margin: 12px clamp(24px, 6vw, 60px) 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  overflow: visible;
+}
+
+.composer-input {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px 8px;
+}
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  max-height: 200px;
+  display: block;
+  padding: 2px 0 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+}
+.composer textarea::placeholder { color: var(--muted-light); }
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 8px 8px;
+  background: var(--surface);
+  border-top: 1px solid var(--border-soft);
+}
+/* 上传文件. Same footprint as the model pill — one row, so a different size
+   would read as a different kind of control — but it is the one button here
+   that puts something into the turn rather than deciding who answers it. */
+.composer-attach {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  transition: background .12s ease, color .12s ease;
+}
+.composer-attach:hover { background: var(--primary-soft); color: var(--primary-strong); }
+.composer-attach:disabled { opacity: .5; cursor: default; }
+.composer-attach:disabled:hover { background: none; color: var(--text-secondary); }
+/* The real input is unreachable by design: the button is what the user sees and
+   what a keyboard can reach, and `display: none` keeps the native control — whose
+   styling cannot be made to match — out of the row entirely. */
+.composer-file-input { display: none; }
+/* model selector pill (replaces previous icons) */
+.composer-model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.composer-model-pill:hover { background: var(--primary-soft); }
+.composer-model-pill[aria-expanded="true"] {
+  background: var(--primary-softer);
+  box-shadow: 0 0 0 1px var(--primary-border-soft);
+}
+.composer-model-pill .model-mark {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #1c2531 0%, #344054 100%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+.composer-model-pill .model-name { font-weight: 600; }
+.composer-model-pill .model-chev { color: var(--text-faint); }
+.composer-model-pill[aria-expanded="true"] .model-chev { transform: rotate(180deg); color: var(--primary-strong); }
+
+.send-button-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  transition: background .12s ease, color .12s ease, border-color .12s ease, transform .12s ease;
+}
+.send-button-icon svg { transform: rotate(45deg); }
+.send-button-icon:hover:not(:disabled) {
+  background: var(--primary-softer);
+  color: var(--primary-strong);
+  border-color: var(--primary-border-soft);
+}
+.send-button-icon:active:not(:disabled) { transform: scale(.96); }
+.send-button-icon:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+/* `display` is not optional. In the composer this span is a flex child, so it
+   is blockified and the 14px box holds. Dropped into an inline flow — the
+   transcript body, `.workspace-empty` — a bare span ignores width and height,
+   and the ring collapses into the two side borders: a 4×20 vertical sliver,
+   which is exactly what a streaming response used to show. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+  border: 2px solid rgba(0,0,0,.1);
+  border-top-color: var(--text-faint);
+  border-radius: 50%;
+  /* No `transform` on the ring itself: an `!important` reset here used to sit
+     in this rule and, being important, outranked every keyframe in every
+     sheet — so no ring in the app turned. */
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* composer dropdown */
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Positioned against `.composer-menu-anchor`, the box around the button that
+   opened it, so the menu always opens directly above that button. */
+.composer-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: 320px;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  padding: 8px;
+  animation: popIn .12s ease;
+}
+/* What goes inside — the model list and 会话设置's two cards — is styled in
+   design.css, which is the sheet that carries this screen's layout. */
+
+/* messages (after send) */
+
+/* 2658:2687 */
+/* The send button becomes the stop button in place — never a bare spinner. The teardown
+   is a real cancel: closing the window does not stop the run. */
+.send-button-icon.is-stop {
+  background: var(--danger-bright);
+  color: #fff;
+}
+.send-button-icon.is-stop:hover { background: var(--danger); }
+.stop-glyph {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+/* Held for a beat after the turn ends so a send click cannot land on the stop button's
+   old position by reflex. */
+.send-button-icon.is-cooling { opacity: .55; cursor: default; }
+

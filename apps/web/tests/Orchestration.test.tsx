@@ -192,7 +192,7 @@ test("subagent cards link to a page-level view without embedding their process",
 
   assert.match(html, /Method A/);
   assert.match(html, /completed/);
-  assert.match(html, /general-purpose · 2\/300 turns · 150 tokens/);
+  assert.doesNotMatch(html, /150 tokens|2\/300 turns/);
   assert.match(html, /class="subagent-open-icon"/);
   assert.doesNotMatch(html, /aria-expanded=/);
   assert.doesNotMatch(html, /Created method-a\.json/);
@@ -208,6 +208,7 @@ test("a running subagent card shows the current streamed step", () => {
       createdAt: timestamp,
       id: "step-running",
       input: "vitamin C randomized trials",
+      args: { query: "vitamin C randomized trials" },
       kind: "tool",
       status: "running",
       toolName: "search_papers",
@@ -219,11 +220,11 @@ test("a running subagent card shows the current streamed step", () => {
   }));
 
   assert.match(html, /1 running · 1 total/);
-  assert.match(html, /Current: search_papers · vitamin C randomized trials/);
+  assert.match(html, /Searching the evidence catalog/);
   assert.doesNotMatch(html, /Subagent steps/);
 });
 
-test("a running subagent without a step reports that it is starting", () => {
+test("a running subagent without a step reports its status", () => {
   const running = buildSubagent({ id: "subagent-running", status: "running", steps: [], turnCount: 0 });
   const html = renderToStaticMarkup(createElement(SubagentCards, {
     onOpenSubagent: () => undefined,
@@ -231,10 +232,10 @@ test("a running subagent without a step reports that it is starting", () => {
   }));
 
   assert.match(html, /1 running · 1 total/);
-  assert.match(html, /Starting…/);
+  assert.match(html, /running/);
 });
 
-test("a running subagent whose snapshot carries turns but no step reports its turn, not a start", () => {
+test("a running subagent whose snapshot carries turns but no step keeps turn telemetry out of the card", () => {
   // The main stream's snapshot omits steps; a child on its second turn has
   // clearly started, and the card must say so.
   const running = buildSubagent({ id: "subagent-running", status: "running", steps: [], turnCount: 2 });
@@ -243,7 +244,8 @@ test("a running subagent whose snapshot carries turns but no step reports its tu
     subagents: [running],
   }));
 
-  assert.match(html, /Current: Turn 2 · Started/);
+  assert.match(html, /running/);
+  assert.doesNotMatch(html, /Turn 2/);
   assert.doesNotMatch(html, /Starting…/);
 });
 
@@ -277,4 +279,104 @@ test("specialist editor starts collapsed behind the specialist list", () => {
   assert.match(html, />＋ New specialist</);
   assert.doesNotMatch(html, /specialist-form-card/);
   assert.doesNotMatch(html, /specialist-description-card/);
+});
+
+test("parallel research lanes expose a source failure without prompts or telemetry", () => {
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent() {},
+    subagents: [
+      buildSubagent({ id: "clinical", status: "running",
+        input: { description: "Clinical CRISPR evidence", prompt: "LONG_PRIVATE_PROMPT" },
+        steps: [{ id: "search", createdAt: timestamp, kind: "tool", toolName: "pubmed_search",
+          status: "failed", content: "PubMed source unavailable: network denied", input: "subagents/uuid" }] }),
+      buildSubagent({ id: "mechanism", status: "running",
+        input: { description: "Mechanism evidence", prompt: "LONG_PRIVATE_PROMPT" }, steps: [] }),
+    ],
+  }));
+  assert.match(html, /Clinical CRISPR evidence/);
+  assert.match(html, /Mechanism evidence/);
+  assert.match(html, /<small class="timeline-failure-summary">PubMed source unavailable: network denied<\/small>/);
+  assert.doesNotMatch(html, /LONG_PRIVATE_PROMPT|subagents\/uuid|150 tokens|2\/300 turns/);
+});
+
+
+test("research branch progress advances through search, results and synthesis, retaining source failures", () => {
+  const branch = buildSubagent({ status: "running", steps: [] });
+  const render = () => renderToStaticMarkup(createElement(SubagentCards, { subagents: [branch], onOpenSubagent() {} }));
+  branch.steps.push({ id: "search", createdAt: timestamp, kind: "tool", toolName: "search_pubmed", args: { query: "CRISPR clinical trials" }, status: "running", content: "" });
+  assert.match(render(), /CRISPR clinical trials/);
+  branch.steps[0] = { ...branch.steps[0]!, status: "completed", content: JSON.stringify({ sourceId: "pubmed", toolId: "search", records: [{}, {}, {}, {}, {}] }) };
+  assert.match(render(), /5 papers returned by this search/);
+  branch.steps.push({ id: "synthesis", createdAt: timestamp, kind: "thinking", content: "**Synthesizing 5 papers**\nInternal deliberation" });
+  assert.match(render(), /Synthesizing 5 papers/);
+  assert.doesNotMatch(render(), /Internal deliberation/);
+  branch.steps.push({ id: "failure", createdAt: timestamp, kind: "tool", status: "failed", content: "Source unavailable: network denied" });
+  branch.steps.push({ id: "retry", createdAt: timestamp, kind: "thinking", content: "**Trying another source**" });
+  assert.match(render(), /Source unavailable: network denied/);
+  assert.match(render(), /Trying another source/);
+});
+
+
+test("running branch promotes an intermediate source failure over its phase", () => {
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent: () => undefined,
+    subagents: [buildSubagent({ status: "running", steps: [{
+      id: "search", createdAt: timestamp, kind: "tool", status: "running", input: "query",
+      content: "Searching PubMed\nError: source unavailable\n", toolName: "search_pubmed",
+    }] })],
+  }));
+  assert.match(html, /Error: source unavailable/);
+});
+
+
+test("system turn bookkeeping does not erase the running branch's last research phase", () => {
+  const branch = buildSubagent({ status: "running", steps: [
+    { id: "search", createdAt: timestamp, kind: "tool", toolName: "search_pubmed", status: "completed",
+      content: JSON.stringify({ sourceId: "pubmed", toolId: "search", records: [{}, {}, {}] }) },
+    { id: "turn", createdAt: timestamp, kind: "system", status: "completed", content: "Turn 2 started" },
+  ] });
+  const render = () => renderToStaticMarkup(createElement(SubagentCards, { subagents: [branch], onOpenSubagent() {} }));
+  assert.match(render(), /3 papers returned by this search/);
+  assert.doesNotMatch(render(), /Turn 2 started/);
+  branch.steps.push({ id: "synthesis", createdAt: timestamp, kind: "thinking", content: "**Synthesizing evidence**" });
+  assert.match(render(), /Synthesizing evidence/);
+});
+
+
+test("a completed foreground shell keeps a readable command phase between subagent turns", () => {
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent() {},
+    subagents: [buildSubagent({ status: "running", steps: [
+      { id: "shell", createdAt: timestamp, kind: "tool", toolName: "run_shell", status: "completed",
+        input: "printf FG-evidence", args: { command: "printf FG-evidence" },
+        content: JSON.stringify({ sessionId: "PRIVATE_SESSION_ID", agentId: "PRIVATE_AGENT_ID", result: { stdout: "FG-evidence" } }) },
+      { id: "turn", createdAt: timestamp, kind: "system", content: "Turn 2 started" },
+    ] })],
+  }));
+  assert.match(html, /Ran · printf FG-evidence/);
+  assert.doesNotMatch(html, /PRIVATE_SESSION_ID|PRIVATE_AGENT_ID|Turn 2 started/);
+});
+
+test("research lanes retain meaningful phases and deliberate failure states", () => {
+  const render = (overrides: Partial<Subagent>) => renderToStaticMarkup(createElement(SubagentCards, {
+    subagents: [buildSubagent({ status: "running", ...overrides })], onOpenSubagent() {},
+  }));
+  const step = (content: string, kind: "thinking" | "assistant" | "tool", extra = {}) => ({
+    id: "phase", createdAt: timestamp, content, kind, status: "running" as const, ...extra,
+  });
+  assert.match(render({ error: " Network error: source down ", steps: [] }), /Network error: source down/);
+  assert.match(render({ steps: [step("Failure: source down", "tool", { status: "failed" })] }), /timeline-failure-summary/);
+  assert.match(render({ steps: [step("Synthesizing 5 papers", "assistant")] }), /Synthesizing 5 papers/);
+  assert.match(render({ steps: [step("private prose", "thinking")] }), /Thinking/);
+  assert.doesNotMatch(render({ steps: [step("private prose", "thinking")] }), /private prose/);
+  assert.match(render({ steps: [step("**Searching PubMed**", "thinking")] }), /Searching PubMed/);
+  assert.match(render({ steps: [step("input", "tool", { input: "input", args: { query: "Clinical evidence" } })] }), /Clinical evidence/);
+  assert.match(render({ steps: [step("", "tool", { status: "completed", args: { description: "Retrieve evidence" } })] }), /Retrieve evidence/);
+  assert.match(render({ steps: [step("Error: source down", "tool", { input: "query" })] }), /Error: source down/);
+  const result = JSON.stringify({ sourceId: "pubmed", toolId: "search", records: [{}, {}] });
+  assert.match(render({ steps: [step(result, "tool", { status: "completed" })] }), /2 papers returned/);
+  assert.match(render({ steps: [step("result", "tool", { status: "completed", input: "echo result", toolName: "run_shell" })] }), /Ran · echo result/);
+  assert.match(render({ steps: [step("result", "tool", { status: "completed" })] }), />result</);
+  assert.doesNotMatch(render({ status: "completed", steps: [] }), /150 tokens|general-purpose|2\/300/);
+  assert.doesNotMatch(render({ status: "cancelled", steps: [step("private prose", "thinking")] }), /private prose|Thinking/);
 });

@@ -73,7 +73,7 @@ export interface BootstrapIo {
   run: (
     command: string,
     args: string[],
-    options?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
+    options?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal },
   ) => Promise<RunResult>;
 }
 
@@ -86,7 +86,7 @@ export interface GatewayProbeRuntime {
 async function defaultRun(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<RunResult> {
   try {
     return await execFileAsync(command, args, {
@@ -94,6 +94,7 @@ async function defaultRun(
       env: options.env ?? process.env,
       maxBuffer: RUN_MAX_BUFFER_BYTES,
       timeout: options.timeoutMs,
+      signal: options.signal,
     });
   } catch (error) {
     const detail = error as NodeJS.ErrnoException & { stderr?: string };
@@ -493,12 +494,14 @@ export async function withBootstrapLock<T>(
   dataDir: string,
   io: BootstrapIo,
   action: () => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const lockDir = join(dataDir, ".bootstrap.lock");
   const pidFile = join(lockDir, "pid");
   const started = Date.now();
   let announced = false;
   for (;;) {
+    signal?.throwIfAborted();
     try {
       await mkdir(lockDir);
       await writeFile(pidFile, String(process.pid));

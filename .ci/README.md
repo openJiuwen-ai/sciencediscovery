@@ -2,6 +2,12 @@
 
 This directory defines a source-free CI toolchain image and the repository
 entry points for unit tests (UT), hermetic system tests (ST), and browser E2E.
+Local hosts can set `SCIENCE_AGENT_BWRAP_PATH` and `SCIENCE_TEST_DASH` when
+those binaries are outside their usual paths. Research Python checks and the
+Evolve distribution journey honor `SCIENCE_AGENT_PYPI_INDEX`; the distribution
+journey also honors `BINARY_CACHE_DIR` for checksum-verified runtime archives
+and `evolve-<pinned-commit>.tar.gz` release sources; the installer verifies the
+source's pinned size and hash before using cached bytes.
 Here the `e2e` layer is the mocked browser subset, not the definition of all
 E2E: public API, CLI and local-stack user journeys also qualify when they use
 the real product entry path and assert user outcomes. Their separate driver
@@ -22,11 +28,11 @@ No workflow maintains its own list of case titles.
 
 | Tier | Event / authorization | Cumulative content | Gate / job ceiling |
 | --- | --- | --- | --- |
-| L1 | Every PR opened, synchronized or reopened | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
-| L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
+| L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
+| L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + all 50 public BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -76,7 +82,9 @@ no fake research fixture is injected into real tests.
 
 The real matrix is generated from the frozen catalog: one serialized worker holds
 all L3 cases; each research case gets a separate job, with at most two workers
-running concurrently. The aggregate compares every shard to the parent plan's
+running concurrently by default. Manual runs can explicitly select 1, 2 or 4
+via `max-parallel`; other values fail planning before any worker starts.
+The aggregate compares every shard to the parent plan's
 SHA, configuration and exact identities, then requires
 `planned == executed == passed`. Missing, cancelled, skipped, duplicate or
 wrong-backend results fail. Existing quarantined cases are excluded by policy
@@ -84,25 +92,39 @@ before freezing the plan and are never counted as passed.
 
 ### Parallel UT processes inside one job
 
-`pnpm ci:ut` runs a bounded pool of two child processes by default. Set
-`CI_UT_WORKERS=1` for serial diagnosis, or `2` through `4` to compare concurrency
-on the same machine. The standard public Linux runner has four vCPUs and
-16 GB RAM; two workers leave capacity for the shared SDK/adapter and for
-subprocesses started by a test. This does not create additional Actions jobs.
+`pnpm ci:ut` runs a pool of four child processes, locally and in the GitHub
+Actions UT job alike. The number is `UT_WORKERS` in
+`test/support/tagged/scheduler.mjs`, sized for the public GitHub-hosted
+`ubuntu-latest` runner the job uses (four vCPUs, 16 GB RAM), never for the host
+running it; the workflow sets no second value. `CI_UT_WORKERS` can narrow it
+(`1` for serial diagnosis) but not exceed it. This does not create additional
+Actions jobs.
 
-Node files remain separate processes, with serial tests inside each file.
-All API files retain their order because they share the wrapper's JiuwenSwarm
-instance. Python projects also retain their order, while their lane overlaps
-Node execution. Other Node files can use free pool slots. Every group has its
-own product-data directory and reports; the SDK instance remains shared.
-Dependency preparation, collection, command checks and coverage aggregation
-remain outside the pool. Other slices retain serial execution.
+Each Node file is a process of its own, with serial tests inside it, and each
+Python project is one pytest process. These groups start independently and
+share the pool. A test that needs a real JiuwenSwarm declares
+`swarm:required` on itself; its directory or file is never a declaration. The
+runner then starts one instance and one adapter through
+`scripts/with-jiuwenswarm.sh`, beside the other groups rather than ahead of
+them, and only a run whose plan holds such a test starts it. A file's declaring
+tests get a process of their own that holds the instance's lock, so they run
+one at a time across all files, while the same file's other tests run in the
+pool without it. Only declaring processes receive `SCIENCE_AGENT_EXECUTOR`,
+`SCIENCE_AGENT_ADAPTER_URL` and the instance's endpoints; every other worker
+has them removed, even if the calling shell exported them, so a test that
+boots `createApiServer` without declaring stays on the built-in loop. Every
+group has its own product-data directory and reports. Dependency preparation,
+collection, command checks and coverage aggregation remain outside the pool.
+Other slices retain serial execution.
 
 The frozen plan and exact result/coverage checks are unchanged. A failed
 group does not discard remaining groups; cancellation stops queued groups and
 terminates running worker process groups. `ut/tagged/timing.json` records the
-worker limit, peak active groups, CPU/memory information and each group's
-duration. Worker logs and timing records stay in their original group folders.
+worker limit, peak active groups, CPU/memory information, each group's
+duration, and how many tests declared JiuwenSwarm and how long it took to be
+ready; the instance's startup log is `ut/tagged/swarm.log`. If it cannot start,
+the declaring tests fail with `SWARM_UNAVAILABLE` and the rest still run.
+Worker logs and timing records stay in their original group folders.
 The recorded host memory is capacity, not measured peak usage.
 
 ### Parallel mocked browser workers
@@ -153,7 +175,8 @@ so a failed L1 check cannot hide the requested real suite. Real workers still
 require a successfully frozen real plan and respect workflow cancellation.
 This changes execution eligibility, not the final verdict: `merge-gate` still
 requires every selected job and complete mocked/real accounting; any failure
-continues to block Release/assets publication.
+continues to block creating the draft Release and its assets, which become
+public only after a person publishes the draft from the Releases page.
 No extra accounting job or human approval is added. The combined `e2e-results`
 artifact preserves worker HTML/image links and the suite-level plan/summary.
 
@@ -245,8 +268,8 @@ echo, ordered-addition and numeric-argument probes; there is no external MCP
 server or AI judge. Each case owns its Project, Session, model and files. The
 basic Project disables optional skill, planning and delegation plugins through
 the public API. `--backend jiuwenswarm|legacy` changes execution only; the case
-list and assertions remain identical. L4/L5 inherit these seven basic cases and
-two Runner-recovery cases, then add twelve nightly cases.
+list and assertions remain identical. L4/L5 inherit these seven cases and keep
+the ten existing nightly cases unchanged.
 
 `journey-runner-recovery-real.spec.ts` adds two real API cases: the Agent chooses
 to wait after Runner execution is blocked, or explains the failure and finishes
@@ -265,8 +288,7 @@ These are failure bounds, not monetary limits.
 
 Research cost is separate and has not yet been measured. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
-minutes. Biomni generation allows 80 minutes, with up to 65 minutes for rubric
-evaluation. Team generation allows 55 minutes; PUCT generation 120 minutes.
+minutes. Team generation allows 55 minutes; PUCT generation 120 minutes.
 Its optional AI audit allows up to 65 more minutes when explicitly enabled
 locally; both daily and release leave that audit disabled. Job setup counts toward the four-hour worker
 ceiling. `fail-fast: false` retains evidence from independent workers; there
@@ -275,32 +297,62 @@ Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
 call counts, not timeout ceilings, determine money spent.
 
-`prepare-real-research.sh` runs only for research workers. Daily and release
-set `CI_PREPARE_BIOMNI=1` only in the two Biomni shards and use
-`HF_TOKEN` to download their pinned inputs. The DRB evaluator is pinned to
-`852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs have
-committed blob checksums. Missing prerequisites for selected cases fail;
-they do not filter selection.
+`prepare-real-research.sh` runs only for research workers. Biomni workers
+prepare one task selected by the frozen plan, at dataset revision
+`e1c8ca5e11a620087bc48d97888eb69176a1f235`, using approved `HF_TOKEN` access.
+The DRB evaluator remains pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`.
+Missing prerequisites fail before model calls; they do not filter selection.
 
-### Initial release scope and future quality calibration
+Research preparation and `run-research-python.sh unit` share the exact pins in
+`research-requirements.txt` and require binary wheels, including on Python 3.14.
+Both default to Python 3.14 independently of the product service environments;
+`SCIENCE_RESEARCH_PYTHON` overrides only the benchmark interpreter. The existing
+offline research UT check therefore exercises the same dependencies as real
+workers without model calls or gated dataset downloads.
 
-L5 runs the existing eligible cases and their current assertions, including AI
-judging where declared, and preserves scores/usage for later comparison. It
-requires every selected identity to pass, but does not require a historical
-quality baseline or apply a newly calibrated regression threshold. A green run
-certifies this selected suite, not measured capability non-regression or a
-complete upstream benchmark leaderboard.
+### L5 full-public benchmark and baseline candidate
 
-The real case counts are L3 **9**, L4 **21**, L5 **21**. L4 includes
-twelve nightly cases and inherits the nine L3 cases. L5 currently uses the
-same cases and evaluation modes as L4; its separate profile and `tier:l5`
-extension row remain available for future additions. The two Biomni cases
-return to daily and release; the seeded literature-review journey remains
-quarantined pending its CI prerequisites.
+For a full L5 CI run, manually dispatch **CI** (`ci.yml`) on the desired
+branch with `profile=release`. This runs the cumulative CI gates and the
+complete real E2E suite, including the L3/L4 cases and all 50 public
+BiomniBench-DA tasks.
+The shared real E2E workflow defaults to two concurrent workers across the
+whole matrix. To use four workers, select `max-parallel=4` in the manual
+**CI** dispatch alongside `profile=release`. The input accepts only 1, 2 or 4;
+invalid reusable-workflow inputs fail planning before any worker starts.
+Merge queue, nightly and release-tag runs keep the default of two workers.
 
-Broader cases and measured quality regression thresholds are follow-up work.
-Stored scores retain generator, backend, judge and evaluator/input fingerprints
-so a future reference dataset can use comparable executions.
+The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50
+public BiomniBench-DA tasks, with one task per isolated worker, sharing the
+selected concurrency limit and a six-hour worker ceiling including preparation. The
+other 50 upstream tasks remain private. The seeded literature-review journey
+remains quarantined pending its saved models, connector and skill setup.
+
+Biomni measures each task's rubric score, tool-call count and rounds, sampled
+worker RSS, end-to-end time and generation/Judge tokens. Every field is required;
+missing, duplicate or mismatched metrics fail the aggregate. All original data
+formats and nested paths are retained; large inputs are streamed into local
+fixtures rather than sent through the buffered HTTP upload endpoint.
+
+The checked-in `biomni-gate.json` uses a temporary aggregate baseline from two
+complete A3 diagnostic runs: mean score 67.7, total tokens 195,099,712, tool
+rounds 2,042, research time 1,312.753472 minutes and task-peak RSS P95
+11.201639801 GiB. All 50 valid results are required. A score drop of 3 points
+warns and 5 points blocks; resources have independent configured limits.
+Per-task status and metrics appear in JSON, Markdown and the GitHub step summary.
+The resumable serial driver finishes all first-pass tasks before classified
+evaluation-only/end-to-end recovery, with at most three additional retries per
+task. Failed attempts remain in diagnostic records and separate known-cost
+accounting. Temporary success is not approved capability non-regression.
+Explicit candidate and approved compare modes remain available; no run
+automatically approves or replaces a baseline.
+
+Set `CI_BIOMNI_RUNNER` to a Linux x64 runner with adequate storage and RAM.
+The public data total is approximately 83 GB counting copies across tasks;
+workers download only their selected task and reserve room for a separate
+workspace copy. Ordinary runners can fail disk preflight on large tasks.
+See [BiomniBench-DA gate](../test/benchmarks/biomnibench-da/README.md) for exact
+metric scopes, runtime prerequisites, baseline approval and retained artifacts.
 
 ### Results and dashboard compatibility
 
@@ -452,9 +504,10 @@ still exists, with reports under `e2e[-group]-legacy`. The layer installs and
 starts JiuwenSwarm itself (`scripts/jiuwenswarm.sh setup` then `start`) before
 the stack comes up, so nothing needs to be running beforehand; cache
 `.sciencediscovery-data/jiuwenswarm` to avoid repeating the ~1.5 GB install on
-every run. UT's agent turns run on JiuwenSwarm too: `pnpm ci:ut` wraps the
-shared runner in `scripts/with-jiuwenswarm.sh`, which starts one instance and
-one adapter for the whole run.
+every run. UT's tests that declare `swarm:required` run their agent turns on
+JiuwenSwarm too: the shared runner starts one instance and one adapter through
+`scripts/with-jiuwenswarm.sh` and gives it to them one at a time (see
+[Parallel UT processes inside one job](#parallel-ut-processes-inside-one-job)).
 
 ## The sandbox capability
 

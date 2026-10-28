@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sciencediscovery/runtime-core": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*",
     "typebox": "1.1.38"
   },
   "devDependencies": { "@types/node": "26.1.1" }

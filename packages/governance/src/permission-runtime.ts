@@ -15,7 +15,7 @@
 import type { PermissionAuthorization, PermissionEpoch, PermissionRequest } from "@sciencediscovery/schema";
 
 /** Privileged action classes understood by the Agent-facing governance port. */
-export type PrivilegedAction = "code" | "connector" | "host";
+export type PrivilegedAction = "sandbox_network" | "direct_code" | "code" | "connector" | "host";
 
 export interface PrivilegeRequest {
   action: PrivilegedAction;

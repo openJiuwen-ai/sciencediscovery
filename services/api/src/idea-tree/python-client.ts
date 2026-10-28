@@ -8,15 +8,17 @@ import {
 
 /** Scope comes from SessionStore; Agent arguments cannot choose filesystem paths. */
 export function ideaTreeRepositoryForSession(
-  options: { url: string; token?: string },
+  options: { url: string; token?: string; connection?: () => Promise<{ url: string; internalToken: string }> },
   scope: { projectId: string; sessionId: string },
 ): IdeaTreePersistence {
   async function call<T>(operation: string, params: object, context: IdeaTreeCommandContext = {}): Promise<T> {
+    const connection = options.connection ? await options.connection() : { url: options.url, internalToken: options.token };
+    if (!connection.url) throw new IdeaTreePersistenceError("PERSISTENCE_UNAVAILABLE", "Evolve is not initialized. Select Init Evolve.");
     let response: Response;
     try {
-      response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/command`, {
+      response = await fetch(`${connection.url.replace(/\/$/, "")}/idea-tree/command`, {
         method: "POST",
-        headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
+        headers: { "content-type": "application/json", ...(connection.internalToken ? { authorization: `Bearer ${connection.internalToken}` } : {}) },
         body: JSON.stringify({ ...scope, ...context, operation, params }),
         signal: AbortSignal.timeout(60_000),
       });

@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import type { ConfigurationSnapshot } from "./configuration/types.js";
+import type { SkillLibrary } from "@sciencediscovery/schema";
+import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
+import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
+import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
@@ -112,6 +118,7 @@ import type {
   Session,
   SessionDetail,
   SessionRun,
+  SessionThinkingControls,
   SessionRunEvent,
   SessionRunStatus,
   IdeaTreeRunSettingsSnapshot,
@@ -152,11 +159,16 @@ import type {
 } from "@sciencediscovery/schema";
 import {
   LOCAL_RUNNER_ID,
+  INBOX_PROJECT_KIND,
+  INBOX_PROJECT_NAME,
+  DEFAULT_ENABLED_CONNECTOR_IDS,
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
   DEFAULT_REVIEWER_FEEDBACK_POLICY,
+  DEFAULT_REVIEWER_SPECIALIST_SETTINGS,
+  DEFAULT_SESSION_REVIEWER_SPECIALIST_SETTINGS,
   DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
@@ -179,6 +191,7 @@ import {
   getModelProviderPreset,
   lookupModelCatalog,
   MODEL_API_VARIANTS,
+  modelThinkingControls,
   resolveModelFacts,
 } from "@sciencediscovery/schema";
 import {
@@ -289,6 +302,15 @@ interface StagedDeletion {
   committed?: boolean;
 }
 
+/**
+ * A Project starts with every installed skill on.
+ *
+ * The three keys are written explicitly rather than left to the global
+ * default, so the Project carries the choice it was made with and a later
+ * change to 全局 › 技能 does not silently move it. `all` with no libraries
+ * mounted is "everything installed", which is what a user who has not
+ * curated anything means by not having curated anything.
+ */
 function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
   if (
     hasOwn(input, "enabledSkillIds")
@@ -301,8 +323,23 @@ function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): Runti
     ...input,
     enabledSkillIds: [],
     enabledSkillLibraries: [],
-    skillSelectionMode: "selected",
+    skillSelectionMode: "all",
   };
+}
+
+/** How two Project names are compared: the whitespace `cleanLabel` collapses
+ *  is collapsed here too, and case is ignored, because the sidebar cannot
+ *  tell "Notes" from "notes" apart any better than the user can. */
+function projectNameKey(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function normalizeProjectDescription(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value !== "string") throw new SessionStoreHttpError("Project description must be a string", 400);
+  const description = value.trim();
+  if (description.length > 2_000) throw new SessionStoreHttpError("Project description must be at most 2000 characters", 400);
+  return description;
 }
 
 function requiredLabel(value: unknown, field: string): string {
@@ -408,6 +445,13 @@ function savedWorkspaceFileRevision(value: unknown): WorkspaceFileRevision | und
   } as WorkspaceFileRevision;
 }
 
+/** Keep rows inserted on the live catalog while a cloned snapshot is restored. */
+function retainAddedById<T extends { id: string }>(restored: T[], live: T[]): T[] {
+  const ids = new Set(restored.map((item) => item.id));
+  const added = live.filter((item) => !ids.has(item.id));
+  return added.length ? [...restored, ...added] : restored;
+}
+
 export class SessionStoreHttpError extends Error {
   constructor(message: string, readonly statusCode: 400 | 404 | 409) {
     super(message);
@@ -418,6 +462,9 @@ export class SessionStoreHttpError extends Error {
 export class SessionStore {
   readonly executionBlocks = new ExecutionBlocks();
   readonly dataDir: string;
+  // Ephemeral provenance: after a restart, stale rename requests fail closed.
+  // Weak keys avoid retaining deleted sessions solely for title tracking.
+  private readonly refinedSessionTitles = new WeakMap<Session, { previous: string; title: string }>();
   // Catalog mutations replace Subagent objects. Cache by object identity so an
   // unchanged record is serialized once, without retaining superseded revisions.
   private readonly subagentAuthorityRefs = new WeakMap<Subagent, Promise<AgentStateRef>>();
@@ -548,6 +595,10 @@ export class SessionStore {
       CREATE TABLE IF NOT EXISTS catalog_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS specialist_runtime_secrets (
+        session_id TEXT PRIMARY KEY,
+        encrypted_value TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS model_secrets (
         model_id TEXT PRIMARY KEY,
@@ -864,7 +915,7 @@ export class SessionStore {
     // (every other field is overwritten by the pinned definition on each load,
     // so pinned upgrades always propagate).
     const specialists = [
-      ...savedSpecialists.filter((specialist) => !specialist.builtIn),
+      ...savedSpecialists.filter((specialist) => !specialist.builtIn).map(specialist => ({ ...specialist, runtime: normalizeSpecialistRuntime(specialist.runtime) })),
       ...BUILTIN_SPECIALISTS.map((builtin) => {
         const existing = savedSpecialists.find((candidate) => candidate.id === builtin.id);
         return existing?.builtIn
@@ -947,7 +998,7 @@ export class SessionStore {
       const semanticReviewEnabled = session.semanticReviewEnabled ?? true;
       const reviewerAutomaticReviewEnabled = typeof session.reviewerAutomaticReviewEnabled === "boolean"
         ? session.reviewerAutomaticReviewEnabled
-        : true;
+        : DEFAULT_SESSION_REVIEWER_SPECIALIST_SETTINGS.automaticReviewEnabled;
       const reviewerSpecialistLevel = isReviewerSpecialistLevel(session.reviewerSpecialistLevel)
         ? session.reviewerSpecialistLevel
         : DEFAULT_REVIEWER_SPECIALIST_LEVEL;
@@ -1088,6 +1139,20 @@ export class SessionStore {
       ? savedReviewerFeedbackPolicy
       : DEFAULT_REVIEWER_FEEDBACK_POLICY;
     const migratedReviewerFeedbackPolicy = saved.reviewerSpecialistFeedbackPolicy !== reviewerSpecialistFeedbackPolicy;
+    // #323/#413: Reviewer capability defaults on. Missing field → on. A persisted
+    // false without the one-time migration flag is the pre-#353 product default
+    // and is lifted once; later explicit opt-outs set the flag and stay off.
+    let reviewerSpecialistEnabled = saved.reviewerSpecialistEnabled
+      ?? DEFAULT_REVIEWER_SPECIALIST_SETTINGS.enabled;
+    let reviewerSpecialistDefaultOnMigrated = saved.reviewerSpecialistDefaultOnMigrated === true;
+    let migratedReviewerSpecialistDefaultOn = false;
+    if (!reviewerSpecialistDefaultOnMigrated) {
+      if (reviewerSpecialistEnabled === false) {
+        reviewerSpecialistEnabled = DEFAULT_REVIEWER_SPECIALIST_SETTINGS.enabled;
+      }
+      reviewerSpecialistDefaultOnMigrated = true;
+      migratedReviewerSpecialistDefaultOn = true;
+    }
     this.catalog = {
       artifactAnnotations,
       artifactVersions,
@@ -1111,9 +1176,10 @@ export class SessionStore {
       proxyServers,
       quotaSettings,
       sandboxNetworkSettings,
-      reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled === true,
+      reviewerSpecialistEnabled,
       reviewerSpecialistFeedbackPolicy,
       reviewerSpecialistLevel,
+      reviewerSpecialistDefaultOnMigrated,
       remoteHosts,
       remoteJobs,
       remoteWorkspaceSyncs,
@@ -1163,6 +1229,7 @@ export class SessionStore {
       || migratedPermissionGrants
       || migratedReviewerSpecialistLevel
       || migratedReviewerFeedbackPolicy
+      || migratedReviewerSpecialistDefaultOn
       || migratedSpecialists
       || migratedArtifactCatalog
       || migratedWorkspaceFileProvenance
@@ -1183,12 +1250,28 @@ export class SessionStore {
     this.loaded = false;
   }
 
-  private async saveCatalog(): Promise<void> {
-    this.saveQueue = this.saveQueue.then(() => {
-      if (!this.database) throw new Error("Catalog database is not initialized");
-      this.database.prepare("INSERT INTO catalog_state (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json").run(JSON.stringify(this.catalog));
-    });
-    await this.saveQueue;
+  /**
+   * Persist the catalog. `mutate` runs in the same synchronous turn as the
+   * sqlite write, so a reader cannot observe a session that has been removed
+   * from memory but not committed. A failed write restores the pre-mutate
+   * catalog, including rows added while this save waited for the queue.
+   */
+  private async saveCatalog(mutate?: () => void): Promise<void> {
+    const apply = () => {
+      const previous = mutate ? structuredClone(this.catalog) : undefined;
+      try {
+        mutate?.();
+        if (!this.database) throw new Error("Catalog database is not initialized");
+        this.database.prepare("INSERT INTO catalog_state (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json").run(JSON.stringify(this.catalog));
+      } catch (error) {
+        if (previous) this.catalog = previous;
+        throw error;
+      }
+    };
+    // A rejected save must not drop every later write. `run` still rejects for this caller.
+    const run = this.saveQueue.then(apply, apply);
+    this.saveQueue = run.then(() => undefined, () => undefined);
+    await run;
   }
 
   private async withSubagentMutation<T>(subagentId: string, mutation: () => Promise<T>): Promise<T> {
@@ -1637,8 +1720,10 @@ export class SessionStore {
   private resolveSettingsLayers(
     layers: Array<{ overrides: RuntimeSettingsOverrides; source: Exclude<RuntimeSettingsSource, "unset"> }>,
   ): ResolvedRuntimeSettings {
+    // Built-in defaults, each replaced whole by the first layer that sets the field. Clearing every
+    // override (for example PUT /api/settings {}) therefore leaves Web access on, not every connector off.
     const effective: ResolvedRuntimeSettings["effective"] = {
-      enabledConnectorIds: [],
+      enabledConnectorIds: [...DEFAULT_ENABLED_CONNECTOR_IDS],
       enabledSkillLibraries: [],
       enabledSkillIds: [],
       semanticReviewEnabled: true,
@@ -1659,10 +1744,11 @@ export class SessionStore {
         else if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
+        else if (field === "defaultApprovalMode") effective.defaultApprovalMode = value as Session["approvalMode"];
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
-        else if (field === "thinkingEffort") effective.thinkingEffort = value as ModelThinkingEffort;
+        else if (field === "thinkingEffort" || field === "reviewThinkingEffort") effective[field] = value as ModelThinkingEffort;
         else effective[field] = value as string;
         sources[field] = source;
       }
@@ -1702,6 +1788,138 @@ export class SessionStore {
     for (const session of this.catalog.sessions) {
       if (!projectId || session.projectId === projectId) this.syncSessionCompatibility(session);
     }
+  }
+
+  private configurationSkillLibrarySource: () => SkillLibrary[] = () => [];
+
+  setConfigurationSkillLibrarySource(source: () => SkillLibrary[]): void { this.configurationSkillLibrarySource = source; }
+
+  /** Read-only catalog facts for scoped discovery, without collecting unrelated secrets or version hashes. */
+  configurationSkillResources(): { ids: string[]; libraries: SkillLibrary[]; selectionAvailable: boolean } {
+    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: !this.everySkillEverywhere };
+  }
+
+  private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
+
+  setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
+    this.configurationConnectorRevisionSource = source;
+  }
+
+  /** DEV-CFG-02: share the catalog connection with requests, receipts and outbox. */
+  getConfigurationDatabase(): DatabaseSync {
+    if (!this.database) throw new Error("Catalog database is not initialized");
+    return this.database;
+  }
+
+  /** No awaits or network calls inside the SQLite boundary. Domain and audit roll back together. */
+  async runConfigurationTransaction<T>(sessionId: string, action: () => T): Promise<T> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      const session = this.assertSessionWritable(sessionId);
+      const database = this.getConfigurationDatabase();
+      const previous = structuredClone(this.catalog);
+      const secretRows = () => this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all() as Array<{ model_id: string; encrypted_token: string }>;
+      const previousSecrets = secretRows();
+      const pluginRevisions = (secrets: typeof previousSecrets) => new Map(this.catalog.sessions.map(item => {
+        const settings = this.getSessionSettings(item.id).effective;
+        const modelIds = [settings.modelId, settings.reviewModelId].filter((id): id is string => Boolean(id));
+        return [item.id, canonicalConfiguration([settings, modelIds.map(id => {
+          const model = this.getModel(id);
+          return [model, this.getProvider(model?.providerId), secrets.filter(row => row.model_id === id || model?.providerId && row.model_id === providerSecretKey(model.providerId))];
+        })])];
+      }));
+      database.exec("BEGIN IMMEDIATE");
+      let result: T;
+      try {
+        result = action();
+        if (result && typeof (result as { then?: unknown }).then === "function") {
+          throw new Error("Configuration transactions must be synchronous");
+        }
+        database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
+          .run(JSON.stringify(this.catalog));
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        this.catalog = previous;
+        throw error;
+      }
+      const afterSecrets = secretRows();
+      if (canonicalConfiguration(previous) !== canonicalConfiguration(this.catalog) || canonicalConfiguration(previousSecrets) !== canonicalConfiguration(afterSecrets)) {
+        const committed = this.catalog;
+        let beforePlugins: Map<string, string>;
+        try { this.catalog = previous; beforePlugins = pluginRevisions(previousSecrets); }
+        finally { this.catalog = committed; }
+        for (const [affectedId, revision] of pluginRevisions(afterSecrets)) {
+          if (beforePlugins.get(affectedId) !== revision) {
+            const affected = this.getSession(affectedId);
+            if (affected) this.pluginControl?.changed(affected.projectId, affected.id);
+          }
+        }
+      }
+      return result;
+    });
+  }
+
+  configurationSnapshot(sessionId: string, capabilityId: ConfigurationCapabilityId, target: string): ConfigurationSnapshot {
+    const session = this.assertSessionWritable(sessionId);
+    const settings = this.getSessionSettings(sessionId);
+    const project = this.getProject(session.projectId)!;
+    const model = this.getModel(target);
+    const provider = this.getProvider(model?.providerId);
+    const version = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
+    // Ciphertext generations, never plaintext token hashes, invalidate old approvals.
+    const secretRows = this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all();
+    const resourceVersions = {
+      settings: version([this.catalog.globalSettings, project.settingsOverrides, session.settingsOverrides]),
+      models: version([this.catalog.models, this.catalog.providers]), credentials: version(secretRows),
+      connectors: version([...this.connectorIds].sort()), connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
+      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
+      autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
+      skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource(), this.everySkillEverywhere]),
+      reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
+    };
+    const timeoutSettings = this.getTimeoutSettings();
+    const quotaSettings = this.getQuotaSettings();
+    const ideaTreeSettings = this.getIdeaTreeSettings();
+    let systemVersions: Record<string, string> | undefined;
+    if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
+    else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
+    else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    return {
+      projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
+      // A connector grant does not alter a model, credential, Skill or Reviewer.
+      // Binding those unrelated records made a harmless standalone-model to
+      // Provider grouping migration invalidate an already committed run overlay.
+      resourceVersions: systemVersions ?? (capabilityId === "connector.enable" ? {
+        settings: resourceVersions.settings, connectors: resourceVersions.connectors,
+        connectorCatalog: resourceVersions.connectorCatalog, policies: resourceVersions.policies,
+        autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
+      } : resourceVersions),
+      data: {
+        capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
+        model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
+        tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
+        installedConnectorIds: [...this.connectorIds], inheritedConnectorIds: [...this.getProjectSettings(project.id).effective.enabledConnectorIds],
+        sources: structuredClone(settings.sources),
+        projectOverrides: structuredClone(project.settingsOverrides),
+        projectEffective: structuredClone(this.getProjectSettings(project.id).effective),
+        installedSkillIds: [...this.skillIds].sort(),
+        skillLibraries: structuredClone(this.configurationSkillLibrarySource()),
+        skillSelectionAvailable: !this.everySkillEverywhere,
+        effectiveModel: structuredClone(this.getModel(settings.effective.modelId)),
+        sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
+        reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
+        timeoutSettings, quotaSettings, ideaTreeSettings,
+      },
+    };
+  }
+
+  configurationSecretCipher(): { encrypt(id: string, secret: string): string; decrypt(id: string, ciphertext: string): string } {
+    return {
+      encrypt: (id, secret) => this.encryptModelApiToken(id, secret),
+      decrypt: (id, ciphertext) => this.decryptModelApiToken(id, ciphertext),
+    };
   }
 
   getGlobalSettings(): RuntimeSettingsDetails {
@@ -1760,6 +1978,81 @@ export class SessionStore {
     return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
   }
 
+  /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
+  applySystemConfigurationSync(capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    if (capabilityId === "timeouts.configure") this.catalog.timeoutSettings = normalizeTimeoutSettings({ ...this.getTimeoutSettings(), ...values });
+    else if (capabilityId === "quotas.configure") this.catalog.quotaSettings = normalizeQuotaSettings({ ...this.getQuotaSettings(), ...values });
+    else if (capabilityId === "idea_tree.configure") this.catalog.ideaTreeSettings = normalizeIdeaTreeSettings(values as Parameters<typeof normalizeIdeaTreeSettings>[0], this.getIdeaTreeSettings());
+    else throw new Error("Unsupported system configuration");
+  }
+
+  /** The same formal runtime settings and reviewer state as the settings pages, in the shared audit transaction. */
+  applyP1ConfigurationSync(sessionId: string, capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues, scope: ConfigurationScope): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    const project = this.getProject(session.projectId)!;
+    if (scope.kind === "global" || scope.kind === "project" && (capabilityId !== "skill.select" || scope.id !== project.id)
+      || scope.kind === "session" && scope.id !== sessionId) throw new Error("Unsupported P1 scope");
+    const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const patch: RuntimeSettingsOverrides = {};
+    if (capabilityId === "skill.select") {
+      if (this.everySkillEverywhere) throw new Error("SKILL_SELECTION_UNAVAILABLE");
+      if (values.skillSelectionMode !== undefined) patch.skillSelectionMode = values.skillSelectionMode as SkillSelectionMode;
+      if (values.enabledSkillIds !== undefined) patch.enabledSkillIds = [...values.enabledSkillIds as string[]];
+      if (values.enabledSkillLibraryIds !== undefined) {
+        const libraries = this.configurationSkillLibrarySource();
+        const effectiveLibraries = (scope.kind === "project" ? this.getProjectSettings(project.id) : this.getSessionSettings(sessionId)).effective.enabledSkillLibraries;
+        patch.enabledSkillLibraries = (values.enabledSkillLibraryIds as string[]).map(id => {
+          const library = libraries.find(item => item.id === id);
+          if (!library?.headVersionId) throw new Error("SKILL_LIBRARY_UNAVAILABLE");
+          // Pin exactly the approved head. Preserve other selected library properties.
+          const previous = effectiveLibraries.find(item => item.libraryId === id);
+          return previous ?? { libraryId: id, versionId: library.headVersionId };
+        });
+      }
+    } else if (capabilityId === "thinking.configure") {
+      const effective = this.getSessionSettings(sessionId).effective;
+      const model = this.getModel(effective.modelId);
+      if (!model) throw new Error("MODEL_NOT_SELECTED");
+      const constrained = constrainCatalogThinking(model.model, values.thinkingMode as ModelThinkingMode | undefined,
+        values.thinkingEffort as ModelThinkingEffort | undefined, model.facts);
+      if (values.thinkingMode !== undefined) {
+        if (constrained.mode !== values.thinkingMode) throw new Error("THINKING_MODE_UNSUPPORTED");
+        patch.thinkingMode = constrained.mode;
+      }
+      if (values.thinkingEffort !== undefined) {
+        if (constrained.effort !== values.thinkingEffort) throw new Error("THINKING_EFFORT_UNSUPPORTED");
+        patch.thinkingEffort = constrained.effort;
+      }
+    } else if (capabilityId === "review.configure") {
+      if (values.reviewModelId !== undefined) patch.reviewModelId = String(values.reviewModelId);
+      if (values.semanticReviewEnabled !== undefined) patch.semanticReviewEnabled = values.semanticReviewEnabled as boolean;
+      const reviewer = this.getSessionReviewerSpecialistSettings(sessionId);
+      this.applySessionReviewerSpecialistSettingsSync(sessionId, {
+        automaticReviewEnabled: values.automaticReviewEnabled ?? reviewer.automaticReviewEnabled,
+        level: values.level ?? reviewer.level,
+      });
+    } else throw new Error("Unsupported P1 capability");
+    const next = this.normalizeSettings({ ...current, ...patch });
+    if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
+    else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
+    session.updatedAt = new Date().toISOString();
+  }
+
+  private applySessionReviewerSpecialistSettingsSync(sessionId: string, value: unknown): void {
+    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
+      throw new Error("Reviewer Specialist automatic review must be a boolean");
+    }
+    if (!isReviewerSpecialistLevel(value.level)) {
+      throw new Error("Reviewer Specialist level must be quick or deep");
+    }
+    const session = this.assertSessionWritable(sessionId);
+    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
+    session.reviewerSpecialistLevel = value.level;
+    session.updatedAt = new Date().toISOString();
+  }
+
   getTimeoutSettings(): SystemTimeoutSettings {
     return structuredClone(this.catalog.timeoutSettings);
   }
@@ -1800,6 +2093,9 @@ export class SessionStore {
     }
     this.catalog.reviewerSpecialistEnabled = value.enabled;
     if (value.feedbackPolicy !== undefined) this.catalog.reviewerSpecialistFeedbackPolicy = value.feedbackPolicy;
+    // Record that the user (or API) chose a value so the default-on migration
+    // will not override an intentional opt-out on the next load.
+    this.catalog.reviewerSpecialistDefaultOnMigrated = true;
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
   }
@@ -1817,16 +2113,7 @@ export class SessionStore {
     sessionId: string,
     value: unknown,
   ): Promise<SessionReviewerSpecialistSettings> {
-    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
-      throw new Error("Reviewer Specialist automatic review must be a boolean");
-    }
-    if (!isReviewerSpecialistLevel(value.level)) {
-      throw new Error("Reviewer Specialist level must be quick or deep");
-    }
-    const session = this.assertSessionWritable(sessionId);
-    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
-    session.reviewerSpecialistLevel = value.level;
-    session.updatedAt = new Date().toISOString();
+    this.applySessionReviewerSpecialistSettingsSync(sessionId, value);
     await this.saveCatalog();
     return this.getSessionReviewerSpecialistSettings(sessionId);
   }
@@ -2193,6 +2480,13 @@ export class SessionStore {
     };
   }
 
+  /** What the Session's next Run can be asked to think at: the controls of its effective model. */
+  getSessionThinkingControls(sessionId: string): SessionThinkingControls {
+    const model = this.getModel(this.resolveRuntimeSettings(sessionId).effective.modelId);
+    const { efforts, modes, supported } = modelThinkingControls(model, this.listProviders());
+    return { efforts, modes, supported, ...(model ? { modelId: model.id, modelName: model.name } : {}) };
+  }
+
   resolveRuntimeSettings(sessionId: string): ResolvedRuntimeSettings {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
@@ -2220,6 +2514,19 @@ export class SessionStore {
       await this.saveCatalog();
       this.pluginControl?.changed();
       return this.getGlobalSettings();
+    });
+  }
+
+  /** Remove a model default only when this caller still owns that slot. */
+  async clearGlobalModelIfCurrent(modelId: string): Promise<{ cleared: boolean }> {
+    return this.withSettingsMutation(async () => {
+      if (this.catalog.globalSettings.modelId !== modelId) return { cleared: false };
+      const { modelId: _removed, ...remaining } = this.catalog.globalSettings;
+      this.catalog.globalSettings = remaining;
+      this.syncSessionCompatibilityForProject();
+      await this.saveCatalog();
+      this.pluginControl?.changed();
+      return { cleared: true };
     });
   }
 
@@ -2256,7 +2563,14 @@ export class SessionStore {
         this.database.exec("COMMIT");
       } catch (error) {
         this.database.exec("ROLLBACK");
+        const live = this.catalog;
         this.catalog = previous;
+        // The clone predates anything inserted while the transaction ran.
+        // Put those rows back; the failed settings edit itself stays rolled back.
+        this.catalog.sessions = retainAddedById(previous.sessions, live.sessions);
+        this.catalog.subagents = retainAddedById(previous.subagents, live.subagents);
+        this.catalog.projects = retainAddedById(previous.projects, live.projects);
+        this.catalog.permissionEpochs = retainAddedById(previous.permissionEpochs, live.permissionEpochs);
         throw error;
       }
       this.pluginControl?.changed(projectId);
@@ -2268,6 +2582,7 @@ export class SessionStore {
       assertCurrent?.();
       const session = this.assertSessionWritable(sessionId);
       const normalized = this.normalizeSettings(value);
+      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       session.settingsOverrides = normalized;
       session.updatedAt = new Date().toISOString();
       this.syncSessionCompatibility(session);
@@ -2610,27 +2925,105 @@ export class SessionStore {
     input: RuntimeSettingsOverrides = {},
     remoteRunnerHostIds: string[] = [],
     runnerIds?: string[],
+    description?: string,
   ): Promise<Project> {
+    // Two Projects with one name are two rows the sidebar cannot tell apart,
+    // and the user's only handle on a Project is the word they typed. The
+    // queue is the same one settings writes use, so two creates racing on the
+    // same name cannot both pass the check.
+    return this.withSettingsMutation(async () => {
+      const project = this.buildProject(name, input, remoteRunnerHostIds, runnerIds, description);
+      this.assertProjectNameFree(project.name);
+      this.catalog.projects.push(project);
+      await this.saveCatalog();
+      return project;
+    });
+  }
+
+  /** Throws when another Project already answers to `name`. */
+  private assertProjectNameFree(name: string, exceptId?: string): void {
+    const wanted = projectNameKey(name);
+    const clash = this.catalog.projects.find(
+      (project) => project.id !== exceptId && projectNameKey(project.name) === wanted,
+    );
+    if (clash) {
+      throw new SessionStoreHttpError(`A Project named "${clash.name}" already exists`, 409);
+    }
+  }
+
+  /**
+   * The single Project that holds standalone conversations.
+   *
+   * It is a real Project — settings, runner allowlist, workspace directory —
+   * so everything that keys on `projectId` keeps working, but it is server
+   * owned: `kind` is set here and never by a request, it is left out of
+   * `GET /api/projects`, it cannot be renamed and it cannot be deleted.
+   *
+   * Idempotent, and serialized on the settings queue so two first calls in one
+   * process cannot create two. `kind` is part of the record before the first
+   * write, so a concurrent reader never sees a kind-less Project that would
+   * list like a user's.
+   */
+  async ensureInboxProject(): Promise<Project> {
+    return this.withSettingsMutation(async () => {
+      const existing = this.catalog.projects
+        .filter((project) => project.kind === INBOX_PROJECT_KIND)
+        .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+      if (existing) return existing;
+      const project = this.buildProject(INBOX_PROJECT_NAME, {}, [], undefined, undefined, INBOX_PROJECT_KIND);
+      // Pushed inside the write, so a failed save cannot leave a Project that
+      // every later call returns but the next process start has never heard of.
+      await this.saveCatalog(() => this.catalog.projects.push(project));
+      return project;
+    });
+  }
+
+  /**
+   * The Projects a client may list. `listProjects` still returns every Project,
+   * including the inbox: recovery, runtime status, runner binding and usage all
+   * have to see it.
+   */
+  listUserProjects(): Project[] {
+    return this.listProjects().filter((project) => project.kind !== INBOX_PROJECT_KIND);
+  }
+
+  /** The shared record builder: one place that applies every default a Project
+   *  needs, so the inbox cannot be a partial object. */
+  private buildProject(
+    name: string,
+    input: RuntimeSettingsOverrides,
+    remoteRunnerHostIds: string[],
+    runnerIds?: string[],
+    description?: string,
+    kind?: Project["kind"],
+  ): Project {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
     const allowedRunners = runnerIds === undefined ? undefined : this.validateRunnerIds(runnerIds);
     const allowedHosts = this.validateProjectRemoteRunnerHosts(allowedRunners?.filter((id) => id !== "local") ?? remoteRunnerHostIds);
-    const project: Project = {
+    const trimmedDescription = normalizeProjectDescription(description);
+    return {
       createdAt: new Date().toISOString(),
+      ...(trimmedDescription ? { description: trimmedDescription } : {}),
       id: randomUUID(),
+      ...(kind ? { kind } : {}),
       name: cleanLabel(name, "Untitled project"),
       remoteRunnerHostIds: allowedHosts,
       ...(allowedRunners ? { runnerIds: allowedRunners } : {}),
       settingsOverrides,
     };
-    this.catalog.projects.push(project);
-    await this.saveCatalog();
-    return project;
   }
 
   async updateProject(projectId: string, changes: UpdateProjectRequest): Promise<Project> {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
+    // The inbox's name is a server label, not a user's. Its runner allowlist
+    // and settings stay writable: 设置 › 远程 configures whichever Project the
+    // open Session belongs to, and that can be the inbox.
+    if (project.kind === INBOX_PROJECT_KIND && (changes.name !== undefined || changes.description !== undefined)) {
+      throw new SessionStoreHttpError("The recent-sessions Project cannot be renamed or described", 409);
+    }
     const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
+    const description = normalizeProjectDescription(changes.description);
     if (changes.runnerIds !== undefined) {
       const ids = this.validateRunnerIds(changes.runnerIds);
       project.runnerIds = ids;
@@ -2640,7 +3033,15 @@ export class SessionStore {
       delete project.runnerIds;
       project.remoteRunnerHostIds = ids;
     }
-    if (name !== undefined) project.name = name;
+    if (name !== undefined) {
+      // A rename is the same collision as a create: the name is the handle.
+      this.assertProjectNameFree(name, project.id);
+      project.name = name;
+    }
+    if (changes.description !== undefined) {
+      if (description) project.description = description;
+      else delete project.description;
+    }
     await this.saveCatalog();
     return project;
   }
@@ -2751,6 +3152,7 @@ export class SessionStore {
     const settingsOverrides = this.normalizeSettings(typeof input === "string"
       ? { modelId: input, reviewModelId: input }
       : input);
+    if (settingsOverrides.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
     const resolved = this.resolveSettingsLayers([
       ...this.projectSettingsLayers(project),
       { overrides: settingsOverrides, source: "session" },
@@ -2771,13 +3173,13 @@ export class SessionStore {
     const sessionId = randomUUID();
     const permissionEpoch = createPermissionEpoch(
       sessionId,
-      "Session created",
+      `Session created; approval mode from ${governance.approvalMode !== undefined ? "explicit Session choice" : resolved.sources.defaultApprovalMode === "unset" ? "built-in Ask" : `${resolved.sources.defaultApprovalMode} default`}`,
       undefined,
       undefined,
       this.currentSandboxNetworkAccess(),
     );
     const session: Session = {
-      approvalMode: governance.approvalMode ?? "ask_for_dangerous",
+      approvalMode: governance.approvalMode ?? resolved.effective.defaultApprovalMode ?? "ask_for_dangerous",
       createdAt: now,
       enabledConnectorIds: [...resolved.effective.enabledConnectorIds],
       enabledSkillIds: [...resolved.effective.enabledSkillIds],
@@ -2790,8 +3192,8 @@ export class SessionStore {
       reviewMode: governance.reviewMode === "manual" ? "manual" : "auto",
       ...(remoteRunnerHostIds ? { remoteRunnerHostIds } : {}),
       ...(runnerIds ? { runnerIds } : {}),
-      reviewerAutomaticReviewEnabled: true,
-      reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+      reviewerAutomaticReviewEnabled: DEFAULT_SESSION_REVIEWER_SPECIALIST_SETTINGS.automaticReviewEnabled,
+      reviewerSpecialistLevel: DEFAULT_SESSION_REVIEWER_SPECIALIST_SETTINGS.level,
       semanticReviewEnabled: resolved.effective.semanticReviewEnabled,
       settingsOverrides,
       ...(governance.specialistId ? { specialistId: governance.specialistId } : {}),
@@ -2816,6 +3218,38 @@ export class SessionStore {
     return this.catalog.sessions.find((session) => session.id === sessionId);
   }
 
+  /** Session-scoped Codex credential uses the platform encrypted secret channel. */
+  codexApiKey(sessionId: string): string | undefined { return this.runtimeApiKey(sessionId, "codex"); }
+
+  runtimeApiKey(sessionId: string, kind: "codex" | "claude-code" | "acp"): string | undefined {
+    const secretId = kind === "codex" ? sessionId : `${kind}:${sessionId}`;
+    const row = this.database?.prepare("SELECT encrypted_value FROM specialist_runtime_secrets WHERE session_id = ?")
+      .get(secretId) as { encrypted_value: string } | undefined;
+    return row && this.secretKey ? decryptSecretValue(this.secretKey, `${kind}:${sessionId}`, row.encrypted_value) : undefined;
+  }
+
+  configureCodex(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): void {
+    return this.configureRuntime(subagentId, inputId, apiKey, fallback);
+  }
+
+  configureRuntime(subagentId: string, inputId: string, apiKey: string, fallback?: boolean): void {
+    const child = this.catalog.subagents.find(candidate => candidate.id === subagentId);
+    if (!child || child.status !== "running" || child.runtimeInput?.state !== "pending" || child.runtimeInput.id !== inputId) {
+      throw new SessionStoreHttpError("Codex configuration request is no longer pending", 409);
+    }
+    this.assertSessionWritable(child.sessionId);
+    const kind = child.runtimeInput!.runtime;
+    const secretId = kind === "codex" ? child.sessionId : `${kind}:${child.sessionId}`;
+    if (fallback !== undefined && typeof fallback !== "boolean") throw new SessionStoreHttpError("Invalid Codex fallback option", 400);
+    const key = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!key || key.length > 16384) throw new SessionStoreHttpError("Codex API key must be 1-16384 characters", 400);
+    if (!this.database || !this.secretKey) throw new Error("Secret storage is unavailable");
+    this.database.prepare("INSERT INTO specialist_runtime_secrets (session_id, encrypted_value) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET encrypted_value = excluded.encrypted_value")
+      .run(secretId, encryptSecretValue(this.secretKey, `${kind}:${child.sessionId}`, key));
+    if (fallback !== undefined) child.runtimeOptions = { kind, ...this.getSpecialist(child.specialistId)?.runtime, ...child.runtimeOptions, fallback } as NonNullable<Subagent["runtimeOptions"]>;
+    child.runtimeInput.state = "configured";
+  }
+
   listSpecialists(): Specialist[] {
     return structuredClone(this.catalog.specialists).toSorted((left, right) => left.name.localeCompare(right.name));
   }
@@ -2837,7 +3271,7 @@ export class SessionStore {
     const connectorIds = [...new Set(input.connectorIds ?? [])];
     const unavailableConnectors = connectorIds.filter((id) => !this.connectorIds.has(id));
     if (unavailableConnectors.length) throw new Error(`Specialist connectors are unavailable: ${unavailableConnectors.join(", ")}`);
-    return { connectorIds, description, enabledSkillIds, instructions, name };
+    return { connectorIds, description, enabledSkillIds, instructions, name, runtime: normalizeSpecialistRuntime(input.runtime) };
   }
 
   async createSpecialist(input: CreateSpecialistRequest): Promise<Specialist> {
@@ -2858,7 +3292,7 @@ export class SessionStore {
     if (specialist.builtIn) {
       // Built-in specialists are read-only except for the on/off `enabled` toggle.
       const touchedCoreField = "name" in input || "description" in input || "instructions" in input
-        || "connectorIds" in input || "enabledSkillIds" in input;
+        || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input;
       if (touchedCoreField) {
         throw new Error("Built-in specialists are read-only; only their enabled flag can be toggled");
       }
@@ -2871,7 +3305,7 @@ export class SessionStore {
       await this.saveCatalog();
       return structuredClone(specialist);
     }
-    const normalized = this.normalizeSpecialistInput(input);
+    const normalized = this.normalizeSpecialistInput({ ...specialist, ...input });
     if (this.catalog.specialists.some((candidate) => candidate.id !== specialistId
       && candidate.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
       throw new Error("Specialist name already exists");
@@ -4171,6 +4605,7 @@ export class SessionStore {
   getProjectDeletionImpact(projectId: string): DeletionImpact {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
+    if (project.kind === INBOX_PROJECT_KIND) throw new SessionStoreHttpError("The recent-sessions Project cannot be deleted", 409);
     const sessions = this.listSessions(projectId, "all");
     return {
       activeSessionCount: sessions.filter((session) => !session.archivedAt).length,
@@ -4190,41 +4625,31 @@ export class SessionStore {
     return this.withDeletionBoundary(() => this.knownSessionDataPaths(session), () => [session.id],
       [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation) => {
     await this.stageDeletion(operation);
-    const previousSessions = this.catalog.sessions;
-    const previousPermissionEpochs = this.catalog.permissionEpochs;
-    const previousPermissionGrants = this.catalog.permissionGrants;
-    const previousPermissionRequests = this.catalog.permissionRequests;
-    const previousSubagents = this.catalog.subagents;
-    const previousRemoteJobs = this.catalog.remoteJobs;
-    const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
-    const previousRemoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs;
-    const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => job.sessionId === session.id).map((job) => job.id));
     try {
-      this.catalog.sessions = this.catalog.sessions.filter((item) => item.id !== session.id);
-      this.catalog.permissionEpochs = this.catalog.permissionEpochs.filter((epoch) => epoch.sessionId !== session.id);
-      this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.sessionId !== session.id);
-      this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.sessionId !== session.id
-        && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
-      this.catalog.subagents = this.catalog.subagents.filter((subagent) => subagent.sessionId !== session.id);
-      this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== session.id);
-      this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
-        record.sessionId === session.id ? { ...record, sessionTitle: session.title } : record);
-      this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId !== session.id);
-      await this.saveCatalog();
+      // Unpublish only inside the catalog write. Until that callback runs, the
+      // open Session page can still read the session it is showing.
+      await this.saveCatalog(() => {
+        const current = this.getSession(session.id);
+        if (!current) throw new Error("Session not found");
+        const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => job.sessionId === current.id).map((job) => job.id));
+        this.catalog.sessions = this.catalog.sessions.filter((item) => item.id !== current.id);
+        this.catalog.permissionEpochs = this.catalog.permissionEpochs.filter((epoch) => epoch.sessionId !== current.id);
+        this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.sessionId !== current.id);
+        this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.sessionId !== current.id
+          && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
+        this.catalog.subagents = this.catalog.subagents.filter((subagent) => subagent.sessionId !== current.id);
+        this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== current.id);
+        this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
+          record.sessionId === current.id ? { ...record, sessionTitle: current.title } : record);
+        this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId !== current.id);
+      });
       operation.committed = true;
     } catch (error) {
-      this.catalog.sessions = previousSessions;
-      this.catalog.permissionEpochs = previousPermissionEpochs;
-      this.catalog.permissionGrants = previousPermissionGrants;
-      this.catalog.permissionRequests = previousPermissionRequests;
-      this.catalog.subagents = previousSubagents;
-      this.catalog.remoteJobs = previousRemoteJobs;
-      this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
-      this.catalog.remoteWorkspaceSyncs = previousRemoteWorkspaceSyncs;
       await this.rollbackStagedDeletion(operation);
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
+    this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id IN (?, ?, ?)").run(session.id, `claude-code:${session.id}`, `acp:${session.id}`);
     this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
     });
@@ -4233,6 +4658,7 @@ export class SessionStore {
   async deleteProject(projectId: string, confirmationId: string): Promise<void> {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
+    if (project.kind === INBOX_PROJECT_KIND) throw new SessionStoreHttpError("The recent-sessions Project cannot be deleted", 409);
     if (confirmationId !== project.id) throw new Error("Project deletion confirmation does not match the target");
     let sessions: Session[] = [];
     return this.withDeletionBoundary(() => {
@@ -4241,63 +4667,45 @@ export class SessionStore {
     }, () => sessions.map((session) => session.id),
       [resolve(this.dataDir, "projects", projectId)], async (operation) => {
     await this.stageDeletion(operation);
-    const sessionIds = new Set(sessions.map((session) => session.id));
-    const previousProjects = this.catalog.projects;
-    const previousSessions = this.catalog.sessions;
-    const previousPermissionEpochs = this.catalog.permissionEpochs;
-    const previousPermissionGrants = this.catalog.permissionGrants;
-    const previousPermissionRequests = this.catalog.permissionRequests;
-    const previousSubagents = this.catalog.subagents;
-    const previousRemoteJobs = this.catalog.remoteJobs;
-    const previousRemoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs;
-    const previousArtifacts = this.catalog.artifacts;
-    const previousArtifactVersions = this.catalog.artifactVersions;
-    const previousArtifactAnnotations = this.catalog.artifactAnnotations;
-    const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
-    const previousWorkspaceFileRevisions = this.catalog.workspaceFileRevisions;
-    const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => sessionIds.has(job.sessionId)).map((job) => job.id));
-    const projectArtifactIds = new Set(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId).map((artifact) => artifact.id));
-    const projectArtifactVersionIds = new Set(this.catalog.artifactVersions
-      .filter((version) => projectArtifactIds.has(version.artifactId))
-      .map((version) => version.id));
     try {
-      this.catalog.projects = this.catalog.projects.filter((item) => item.id !== projectId);
-      this.catalog.sessions = this.catalog.sessions.filter((session) => !sessionIds.has(session.id));
-      this.catalog.permissionEpochs = this.catalog.permissionEpochs.filter((epoch) => !sessionIds.has(epoch.sessionId));
-      this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.projectId !== projectId
-        && (!request.sessionId || !sessionIds.has(request.sessionId)));
-      this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.projectId !== projectId
-        && (!grant.sessionId || !sessionIds.has(grant.sessionId))
-        && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
-      this.catalog.subagents = this.catalog.subagents.filter((subagent) => !sessionIds.has(subagent.sessionId));
-      this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => !sessionIds.has(job.sessionId));
-      this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => !sessionIds.has(record.sessionId));
-      this.catalog.artifacts = this.catalog.artifacts.filter((artifact) => artifact.projectId !== projectId);
-      this.catalog.artifactVersions = this.catalog.artifactVersions.filter((version) => !projectArtifactIds.has(version.artifactId));
-      this.catalog.artifactAnnotations = this.catalog.artifactAnnotations.filter((annotation) => !projectArtifactVersionIds.has(annotation.artifactVersionId));
-      this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((record) => record.projectId !== projectId);
-      this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((revision) => revision.projectId !== projectId);
-      await this.saveCatalog();
+      await this.saveCatalog(() => {
+        if (!this.getProject(projectId)) throw new Error("Project not found");
+        // Include a Session inserted while this delete waited: it belongs to
+        // the project that is about to disappear.
+        sessions = this.listSessions(projectId, "all");
+        const sessionIds = new Set(sessions.map((session) => session.id));
+        const remoteJobIds = new Set(this.catalog.remoteJobs.filter((job) => sessionIds.has(job.sessionId)).map((job) => job.id));
+        const projectArtifactIds = new Set(this.catalog.artifacts.filter((artifact) => artifact.projectId === projectId).map((artifact) => artifact.id));
+        const projectArtifactVersionIds = new Set(this.catalog.artifactVersions
+          .filter((version) => projectArtifactIds.has(version.artifactId))
+          .map((version) => version.id));
+        this.catalog.projects = this.catalog.projects.filter((item) => item.id !== projectId);
+        this.catalog.sessions = this.catalog.sessions.filter((session) => !sessionIds.has(session.id));
+        this.catalog.permissionEpochs = this.catalog.permissionEpochs.filter((epoch) => !sessionIds.has(epoch.sessionId));
+        this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.projectId !== projectId
+          && (!request.sessionId || !sessionIds.has(request.sessionId)));
+        this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.projectId !== projectId
+          && (!grant.sessionId || !sessionIds.has(grant.sessionId))
+          && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
+        this.catalog.subagents = this.catalog.subagents.filter((subagent) => !sessionIds.has(subagent.sessionId));
+        this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => !sessionIds.has(job.sessionId));
+        this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => !sessionIds.has(record.sessionId));
+        this.catalog.artifacts = this.catalog.artifacts.filter((artifact) => artifact.projectId !== projectId);
+        this.catalog.artifactVersions = this.catalog.artifactVersions.filter((version) => !projectArtifactIds.has(version.artifactId));
+        this.catalog.artifactAnnotations = this.catalog.artifactAnnotations.filter((annotation) => !projectArtifactVersionIds.has(annotation.artifactVersionId));
+        this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((record) => record.projectId !== projectId);
+        this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((revision) => revision.projectId !== projectId);
+      });
       operation.committed = true;
     } catch (error) {
-      this.catalog.projects = previousProjects;
-      this.catalog.sessions = previousSessions;
-      this.catalog.permissionEpochs = previousPermissionEpochs;
-      this.catalog.permissionGrants = previousPermissionGrants;
-      this.catalog.permissionRequests = previousPermissionRequests;
-      this.catalog.subagents = previousSubagents;
-      this.catalog.remoteJobs = previousRemoteJobs;
-      this.catalog.remoteWorkspaceSyncs = previousRemoteWorkspaceSyncs;
-      this.catalog.artifacts = previousArtifacts;
-      this.catalog.artifactVersions = previousArtifactVersions;
-      this.catalog.artifactAnnotations = previousArtifactAnnotations;
-      this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
-      this.catalog.workspaceFileRevisions = previousWorkspaceFileRevisions;
       await this.rollbackStagedDeletion(operation);
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
-    for (const session of sessions) this.notifications.deleteSession(session.id);
+    for (const session of sessions) {
+      this.database?.prepare("DELETE FROM specialist_runtime_secrets WHERE session_id IN (?, ?, ?)").run(session.id, `claude-code:${session.id}`, `acp:${session.id}`);
+      this.notifications.deleteSession(session.id);
+    }
     await this.finishStagedDeletion(operation);
     }, projectId);
   }
@@ -4311,6 +4719,7 @@ export class SessionStore {
       const { approvalMode, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
       const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
       const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+      if (nextSettings.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       const nextModel = this.getModel(nextSettings.modelId);
       if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {
         const constrained = constrainCatalogThinking(
@@ -4330,6 +4739,7 @@ export class SessionStore {
         ? undefined
         : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
       session.settingsOverrides = nextSettings;
+      if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
       if (reviewMode) session.reviewMode = reviewMode;
       if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
@@ -4360,11 +4770,20 @@ export class SessionStore {
     sessionId: string,
     expectedTitle: string,
     nextTitle: string,
+    source?: "refinement" | "user_request",
   ): Promise<Session | undefined> {
     const session = this.assertSessionWritable(sessionId);
-    if (session.title !== expectedTitle) return undefined;
+    const refinement = this.refinedSessionTitles.get(session);
+    const replacesRefinement = source === "user_request"
+      && refinement?.previous === expectedTitle && refinement.title === session.title;
+    if (session.title !== expectedTitle && !replacesRefinement) return undefined;
     const normalizedTitle = nextTitle.trim().replace(/\s+/gu, " ");
     if (!normalizedTitle) throw new Error("Session title is required");
+    if (source === "refinement") {
+      this.refinedSessionTitles.set(session, { previous: expectedTitle, title: normalizedTitle });
+    } else {
+      this.refinedSessionTitles.delete(session);
+    }
     session.title = normalizedTitle;
     session.updatedAt = new Date().toISOString();
     await this.saveCatalog();
@@ -4564,11 +4983,11 @@ export class SessionStore {
     | { allowed: false; request: PermissionRequest }
   > {
     const session = this.assertSessionWritable(sessionId);
-    if (!new Set<PermissionAction>(["artifact_download", "code", "connector", "directory", "host", "remote_job"]).has(action)) {
+    if (!new Set<PermissionAction>(["sandbox_network", "direct_code", "artifact_download", "code", "connector", "directory", "host", "remote_job"]).has(action)) {
       throw new Error("Unsupported permission action");
     }
     const resource = resourceValue.trim().slice(0, 500);
-    const summary = summaryValue.trim().replace(/\s+/g, " ").slice(0, 500);
+    const summary = action === "direct_code" ? summaryValue.trim() : summaryValue.trim().replace(/\s+/g, " ").slice(0, action === "sandbox_network" ? 6000 : 500);
     if (!resource || !summary) throw new Error("Permission resource and summary are required");
     if (!context.executionId) {
       const approvedPreflight = this.catalog.permissionRequests.findLast((request) =>
@@ -4589,7 +5008,7 @@ export class SessionStore {
         }
       }
     }
-    if (session.approvalMode === "always_allow") {
+    if (session.approvalMode === "always_allow" && action !== "direct_code") {
       const authorization = this.createPermissionAuthorization({
         action,
         ...context,
@@ -4804,7 +5223,7 @@ export class SessionStore {
     this.catalog.permissionEpochs.push(permissionEpoch);
     const resolvedPendingRequests = approvalMode === "always_allow"
       ? this.catalog.permissionRequests.filter((request) =>
-          request.sessionId === session.id && request.state === "pending")
+          request.sessionId === session.id && request.state === "pending" && request.action !== "direct_code")
       : [];
     const authorizations = resolvedPendingRequests.map((request) => {
       request.decidedAt = permissionEpoch.createdAt;
@@ -4947,6 +5366,7 @@ export class SessionStore {
         settingsSnapshot: {
           ...structuredClone(input.settingsSnapshot),
           ideaTreeEnabled: input.settingsSnapshot.ideaTreeEnabled === true,
+          sessionReviewer: structuredClone(input.settingsSnapshot.sessionReviewer ?? this.getSessionReviewerSpecialistSettings(input.sessionId)),
         },
         ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),

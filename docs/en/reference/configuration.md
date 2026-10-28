@@ -64,6 +64,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated allowed channels; built-in TUNA/USTC presets are always recognized |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | Initial persistent-kernel idle timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | Static UI assets |
+| `SCIENCE_AGENT_SAMPLE_SESSION` | `1` | Seed one sample Project and Session — a finished analysis with its transcript, runs and workspace — into a data directory that has no conversation of its own. A marker in the data directory keeps a deleted sample from coming back; a data directory that already has conversations is never touched. Set to `0` to start empty |
 | `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data-dir>/envs/paper/bin/python` | PDF-worker Python |
 | `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF-worker entry point |
 

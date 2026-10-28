@@ -54,3 +54,4 @@ export {
   type RunnerConfig,
 } from "./server.js";
 export { skillBundleIdentity, skillBundleManifest, verifySkillBundle } from "./skill-packages.js";
+export { prepareSpecialistLauncher } from "./specialist-launch.js";

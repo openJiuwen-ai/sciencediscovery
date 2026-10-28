@@ -61,13 +61,25 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-启动成功后，终端会打印 `Open to sign in` 链接。用浏览器打开即可进入 ScienceDiscovery。
+启动成功后，直接打开 <http://127.0.0.1:4310>。如果出现连接引导，将 `<数据目录>/secrets/auth-token`（默认 `.sciencediscovery-data/secrets/auth-token`）中的本地服务访问令牌粘贴到连接页面并保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。终端打印的 `Open to sign in` 链接只是快捷方式，无需查找启动日志。
 
 ### 首次启动会做什么
 
 第一次 `serve` 会准备部分运行依赖，因此需要联网。后续启动会复用已准备好的环境。
 
 如果主机无法联网，请在联网环境提前准备数据目录，或配置可访问的软件源。相关变量见[配置参考](../reference/configuration.md)。
+
+### 命令
+
+```text
+ScienceDiscovery serve [options]        启动 Web UI、控制 API 和沙箱 Runner
+ScienceDiscovery run [input] [options]  向运行中的 serve 提交 Agent 任务
+ScienceDiscovery extract --to <dir>     解出内置运行时，但不启动服务
+ScienceDiscovery version                打印发布版本和内置运行时版本
+ScienceDiscovery help                   显示全部命令和选项
+```
+
+`run` 是面向脚本和管道的命令行客户端：在终端中输出文本，在管道中输出 JSONL；非交互运行必须传入 `--auto-approve`。选项和输出模式见 [CLI 参考](../reference/cli.md#run)。本地源码模式下，同一客户端的入口是 `node services/launcher/dist/main.js run`。
 
 ### 常用启动选项
 
@@ -139,6 +151,8 @@ scripts/jiuwenswarm.sh setup
 
 源码模式现在也默认使用 JiuwenSwarm。需要旧版 Node 原生循环时，使用 `./scripts/start-stack.sh --mode local --no-jiuwenswarm`，或在 `.env` 中设置 `SCIENCE_AGENT_EXECUTOR=native`。行为差异和当前后端检查方法见 [Agent 后端](../reference/agent-backends.md)。
 
+JiuwenSwarm 本地运行数据默认保存到 `$HOME/.sciencediscovery/jiuwenswarm`，与独立安装隔离；旧数据不会自动迁移或修改。显式设置 `JIUWENSWARM_HOME` 可选择其他运行目录。Docker 保留 `/data/.home` 持久化目录。旧用户兼容方式、目录和端口说明见[运行数据与旧安装](../../en/getting-started/deployment.md#jiuwenswarm-runtime-data-and-existing-installations)。
+
 第一次启动会安装依赖并构建项目，需要联网。
 
 后续已经构建完成时可以使用：
@@ -147,7 +161,7 @@ scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-启动成功后，终端同样会打印 `Open to sign in` 链接。
+启动成功后，直接打开 <http://127.0.0.1:4310>，按连接引导填写 `.sciencediscovery-data/secrets/auth-token` 中的令牌（或自定义数据目录 / `SCIENCE_AGENT_AUTH_TOKEN` 配置值）。后台运行且原终端输出不可用时也可使用此方式。
 
 ### macOS 注意事项
 
@@ -243,15 +257,7 @@ docker compose logs --tail=200
 
 ### 3. 打开 Web UI
 
-查看日志，找到 `Open to sign in` 链接：
-
-```text
-docker compose logs -f
-```
-
-在浏览器打开打印出的 `Open to sign in` 链接。
-
-如果直接打开 <http://127.0.0.1:4310>，也可以按界面提示粘贴本地服务访问令牌。
+直接打开 <http://127.0.0.1:4310>。出现连接引导时，读取宿主机的 `./data/secrets/auth-token`（容器内为 `/app/data/secrets/auth-token`），粘贴本地服务访问令牌并保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。日志中的登录链接只是快捷方式。
 
 登录链接和令牌等同于密码，请勿分享。
 
@@ -282,13 +288,13 @@ ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>
 
 ## 二进制与本地模式的首次启动排障
 
-### 没有出现 `Open to sign in`
+### 服务未能启动
 
 先看启动终端中最早出现的错误。很多后续错误只是前一个启动失败的结果。
 
 ### 浏览器提示令牌无效
 
-重新打开启动日志中的 `Open to sign in` 链接。
+读取 `<数据目录>/secrets/auth-token`（Docker 宿主机为 `./data/secrets/auth-token`）中的当前令牌，或使用 `SCIENCE_AGENT_AUTH_TOKEN` 配置值，粘贴到连接页面并保存，无需查找启动日志。
 
 如果手动输入令牌，请确认填写的是**本地服务访问令牌**，不是模型 API Key。
 
@@ -429,3 +435,43 @@ Windows 用户若发现沙箱探针失败，请检查 Docker Desktop 和 WSL 是
 - 沙箱隔离和执行机制：[开发者文档：沙箱执行](../developer-docs/sandbox-execution.md)
 - 系统内部进程与模块边界：[开发者文档：整体架构](../developer-docs/architecture.md)
 - 仓库布局和源码入口：[开发者文档：仓库布局](../developer-docs/repository-layout.md)
+
+## 按需初始化 Evolve
+
+精简二进制启动后，Evolve 及相关 Idea Tree 研究路径会如实显示为**尚未初始化**，
+聊天仍可使用。在会话中打开 **任务 → Evolve 演化**，点击**初始化 Evolve**；
+也可以输入 `/evolve-design`，使用输入框上方的初始化入口。
+启动 `serve` 不会自动下载演化服务或候选程序运行环境。
+
+初始化下载已指定的 `v0.3.0-rc1` 应用源码归档，提交为
+`844947da87b27528d9a34d0ee6d0efd591e57749`，校验 SHA-256
+`2cea0ea513eef43c94e697e72a21cf7bb3d4b8883117479240b6c8d3e0cc2e99`，
+并使用发布版自带的 Python（3.12 或更高）安装其中的 `services/evolve` 和冻结的
+候选程序依赖。不需要 Git 检出或主机 Python。请预留至少 1 GiB 可用磁盘空间，
+并允许访问 GitHub 和配置的 Python 包索引。源码包本地版本 `0.0.0` 通过上述
+发布版本、提交和归档摘要确定身份，不依赖单独的 PyPI 演化服务发布。
+完整依赖导出和校验值保存在 `services/launcher/src/evolve-lock.ts`。
+
+启动器让服务自行绑定空闲的本地回环端口，并使用每个安装实例独立随机生成的内部凭据。
+凭据以仅所有者可读写的权限保存在 `<数据目录>/evolve/secrets/internal-token`，
+不会作为浏览器令牌或模型密钥使用。关闭 `serve` 会停止其管理的服务进程；
+重启复用已校验的安装及凭据。下载、校验、安装或启动失败时，Evolve 保持不可用，
+可以再次点击**初始化 Evolve**重试。失败会清理本次临时目录；进程被中断后，
+显式重试会在安装锁内回收具有该固定运行环境所有权标记的私有临时目录。
+未知或无标记的目录会保留供管理员检查，不会自动删除。
+
+管理员仍可显式配置 `SCIENCE_AGENT_EVOLVE_URL` 和
+`SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN`，使用已有服务；启动器不会安装或停止该外部服务。
+健康与鉴权检查成功后才提供演化工具。不使用发布版启动器且未配置服务时，界面会说明
+初始化不可用。源码与容器栈通过同一个启动器监督机制启动已准备好的服务，不再依赖
+隐式固定端口或公开凭据。
+
+按需安装的托管演化环境只使用锁定的依赖，任务不会再从可变索引静默安装其他包；
+缺少额外依赖时会拒绝执行。扩展托管依赖需要更新经过审查的锁定清单。
+显式准备的源码栈或管理员配置的外部服务保留其自身的运行环境管理策略。
+
+启动器只向服务传递已记录的候选目录和日志设置，使 API 与服务共用
+`SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR`。显式准备的源码或容器运行环境还保留管理员的
+代理、包索引和证书路径配置；按需安装的托管环境仍只使用锁定依赖。
+模型密钥、HOME 和任意其他环境变量不会继承。Evolve 不可用时，其工作区和历史接口
+一并禁用；持久化记录仍保存在磁盘上，服务恢复就绪后重新显示。

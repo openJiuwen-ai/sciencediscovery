@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { AgentEvent } from "@sciencediscovery/orchestration";
-import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, type AgentTool } from "@sciencediscovery/tools";
+import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool } from "@sciencediscovery/tools";
 
 import { DurableContextStore } from "@sciencediscovery/context";
 
@@ -123,6 +123,14 @@ export const SUBAGENT_DELEGATION_SECTION = [
 export const JIUWENSWARM_WEB_TOOLS: Record<string, string> = { web_search: "free_search (or paid_search)", web_fetch: "fetch_webpage" };
 
 /**
+ * The same JiuwenSwarm tools by name, under the ScienceDiscovery tool each one stands in for. They stand in only for
+ * a tool the run has: a Session with Web access unchecked gets neither ours nor these.
+ */
+export const JIUWENSWARM_NATIVE_WEB_TOOLS: Record<string, readonly string[]> = {
+  web_search: ["free_search", "paid_search"], web_fetch: ["fetch_webpage"],
+};
+
+/**
  * JiuwenSwarm's own tools that act on the host: the model never gets them. Commands and file writes go through
  * ScienceDiscovery's `run_shell`, reads through its file tools, so they run in its sandbox and Runner, with its
  * provenance. The adapter turns away a call the model makes to one anyway.
@@ -143,6 +151,7 @@ export const JIUWENSWARM_ASK_TOOLS: ReadonlySet<string> = new Set([
   "pdb_prepare_structure_download",
 ]);
 
+// mcp_recovered_call enforces concrete source/tool approval inside its bridge callback.
 export const approvalFor = (name: string): "allow" | "ask" => JIUWENSWARM_ASK_TOOLS.has(name) || name.startsWith("mcp__") ? "ask" : "allow";
 
 /**
@@ -283,7 +292,29 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     this.trajectory = trajectory;
     // The same registry the native loop dispatches through: output guard, detail sanitisation,
     // neutralised untrusted content, loop protection, the standard error shape.
-    const registry = createToolRegistry(this.options, plugins, durable, {
+    // Recovery multiplexes several source/tool identities through one tool. Enforce
+    // approval at dispatch with the concrete identity, never an adapter-wide
+    // remembered grant for the generic mcp_recovered_call name.
+    const registryOptions: NativeAgentOptions = this.options.mcpReadiness ? {
+      ...this.options,
+      mcpReadiness: {
+        ...this.options.mcpReadiness,
+        invoke: async (sourceId, toolId, input, signal, toolCallId) => {
+          signal?.throwIfAborted();
+          const resource = `mcp__${sourceId.replace(/[^A-Za-z0-9_-]/g, "_")}__${toolId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+          const release = this.beginExternalWait();
+          let decision: "allow_once" | "allow_matching" | "deny";
+          try {
+            decision = await this.options.requestApproval?.({ resource, summary: `Call repaired MCP tool ${sourceId}/${toolId}`, toolCallId }, signal) ?? "deny";
+          } finally { release(); }
+          signal?.throwIfAborted();
+          if (decision === "deny") throw new Error(`MCP recovery approval denied: ${sourceId}/${toolId}`);
+          return this.options.mcpReadiness!.invoke(sourceId, toolId, input, signal, toolCallId);
+        },
+      },
+    } : this.options;
+    const registry = createToolRegistry(registryOptions, plugins, durable, {
+      onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       ...(trajectory.enabled ? { recordResult: (input) => trajectory.observe(input as never) } : {}),
     });
     const tools = new Map(registry.values().map((tool) => [tool.name, tool]));
@@ -303,8 +334,11 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // plugin is switched off has no update_plan, and then no planning tool of either kind.
     const jiuwenSwarmPlans = (this.config.planning ?? "todo") === "todo" && Boolean(this.options.planStore) && tools.has("update_plan");
     if (jiuwenSwarmPlans) tools.delete("update_plan");
-    // Web search and page fetching are JiuwenSwarm's own when its tools are in use.
+    // Web search and page fetching are JiuwenSwarm's own when its tools are in use, but only in place of ours: a run
+    // without web_search or web_fetch (Web access unchecked for the Session) must not get JiuwenSwarm's either.
     const allJiuwenSwarmTools = (this.config.tools ?? "jiuwenswarm") === "jiuwenswarm";
+    const hiddenWebTools = allJiuwenSwarmTools
+      ? Object.entries(JIUWENSWARM_NATIVE_WEB_TOOLS).flatMap(([ours, theirs]) => tools.has(ours) ? [] : theirs) : [];
     if (allJiuwenSwarmTools) for (const name of Object.keys(JIUWENSWARM_WEB_TOOLS)) tools.delete(name);
     // With JiuwenSwarm's own sub-agent tools the model does not also get ours: those sub-agents run inside
     // JiuwenSwarm, with none of ScienceDiscovery's tools, sandbox, handoff or provenance.
@@ -333,7 +367,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
       { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }),
         // Only the run's own instance has the output-recovery boundary; JiuwenSwarm's sub-agents do not.
-        recoversWithheldCalls: !jiuwenSwarmSubagents });
+        recoversWithheldCalls: !jiuwenSwarmSubagents,
+        // A call that leaves out an argument its tool cannot run without is withheld and re-issued
+        // by the model, instead of the run carrying a failed card for a call that never ran.
+        requiredArguments: requiredArgumentsOf(registry.values()) });
     const deadlines = new RunDeadlines(this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS,
       this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => {
         this.logGatewayProgress(`${deadlines.expired ?? "unknown"}_deadline_expired`, modelGateway);
@@ -347,7 +384,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       ? setInterval(() => this.logGatewayProgress("heartbeat", modelGateway), 30_000) : undefined;
     progressTimer?.unref();
     try {
-      const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents);
+      const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents, hiddenWebTools);
       this.controller.signal.throwIfAborted();
       // An unrecovered partial answer must never be reported as completed.
       if (modelGateway.lastTurn()?.truncated) {
@@ -435,7 +472,9 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
    * send the answer back. The run waits in JiuwenSwarm meanwhile. Without a way to ask, the call is denied.
    */
   private answerApproval(question: ApprovalQuestion): void {
-    const ask = this.options.requestApproval;
+    // A stale adapter must not mint a generic recovery grant. Concrete recovery
+    // approval is checked inside the bridge even if its engine caches a decision.
+    const ask = question.toolName === "mcp_recovered_call" ? undefined : this.options.requestApproval;
     // A stable resource for a tool whose native equivalent always checks one fixed resource (run_shell and
     // the rest of JIUWENSWARM_APPROVAL_RESOURCE), so a standing grant applies here too. Any other tool the
     // adapter matched to its call is named by the tool itself: JiuwenSwarm's own question text ("mcp_sci_…
@@ -508,7 +547,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   private async stream(
     text: string, tools: Map<string, AgentTool>, bridgeUrl: string, bridgeToken: string,
     announcements: ToolAnnouncements, transcript: Transcript, modelGateway: { token: string; url: string },
-    jiuwenSwarmPlans = false, jiuwenSwarmSubagents = false,
+    jiuwenSwarmPlans = false, jiuwenSwarmSubagents = false, hiddenWebTools: readonly string[] = [],
   ): Promise<string> {
     const { config: model } = this.options;
     const toolNames = new Set(tools.keys());
@@ -561,6 +600,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
         hiddenJiuwenSwarmTools: [
           ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
+          ...hiddenWebTools,
           ...(!jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []),
           ...(!jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS : []),
         ],

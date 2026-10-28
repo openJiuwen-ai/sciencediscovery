@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  ArtifactVersionProvenance,
-  ScientificArtifactVersion,
-} from "@sciencediscovery/schema";
 import {
   Braces,
   Check,
@@ -49,10 +45,12 @@ import { InspectorPanel } from "./components/InspectorPanel.js";
 import { VirtualDataTable } from "./components/VirtualDataTable.js";
 import { formatBytes, parseCsvText } from "./csv/inferCsv.js";
 import { translateActive, useLocale } from "../i18n/index.js";
+import { csvSourceRecord } from "./source.js";
 import {
   DEFAULT_CHART_DRAG_MODE,
   type ChartDragMode,
   type ChartSpec,
+  type CsvViewerSource,
   type DataRow,
 } from "./types.js";
 import {
@@ -66,8 +64,7 @@ interface CsvArtifactWindowProps {
   content: string;
   fileName: string;
   onClose: () => void;
-  provenance?: ArtifactVersionProvenance;
-  version: ScientificArtifactVersion;
+  source: CsvViewerSource;
 }
 
 function cloneSpec(spec: ChartSpec): ChartSpec {
@@ -88,16 +85,10 @@ function nextCustomSequence(specs: ChartSpec[]): number {
 function parsedArtifact(
   content: string,
   fileName: string,
-  version: ScientificArtifactVersion,
+  source: CsvViewerSource,
 ) {
   try {
-    const table = parseCsvText(content, {
-      fileHash: version.content.hash,
-      fileName,
-      fileSize: version.content.size,
-      importedAt: version.createdAt,
-      sourceArtifactVersionId: version.id,
-    });
+    const table = parseCsvText(content, csvSourceRecord(source, fileName));
     const specs = createDefaultSpecs(table);
     return { specs, table };
   } catch (error) {
@@ -113,13 +104,12 @@ export default function CsvArtifactWindow({
   content,
   fileName,
   onClose,
-  provenance,
-  version,
+  source,
 }: CsvArtifactWindowProps) {
   const { t } = useLocale();
   const parsed = useMemo(
-    () => parsedArtifact(content, fileName, version),
-    [content, fileName, version],
+    () => parsedArtifact(content, fileName, source),
+    [content, fileName, source],
   );
   const initialWorkspace = useMemo(() => {
     if (!parsed.table || typeof window === "undefined") {
@@ -149,6 +139,7 @@ export default function CsvArtifactWindow({
 
   const spec = specs.find((item) => item.id === activeSpecId) ?? specs[0];
   const table = parsed.table;
+  const workspacePath = source.kind === "workspace" ? source.path : undefined;
   const visibleRows = useMemo(
     () => spec && table ? filterRows(table.rows, spec.displayFilters) : [],
     [spec, table],
@@ -252,11 +243,11 @@ export default function CsvArtifactWindow({
         <header className="csva-header">
           <div className="csva-identity">
             <span>CSV</span>
-            <div><strong>{t("csv.workspaceTitle")}</strong><small>{t("csv.workspaceSubtitle")}</small></div>
+            <div><strong>{t("csv.workspaceTitle")}</strong><small>{t(workspacePath === undefined ? "csv.workspaceSubtitle" : "csv.workspaceFileSubtitle")}</small></div>
           </div>
-          <div className="csva-file-heading" title={fileName}>
+          <div className="csva-file-heading" title={workspacePath ?? fileName}>
             <strong>{fileName}</strong>
-            <span>v{version.version}</span>
+            <span>{source.kind === "artifact" ? `v${source.version.version}` : t("csv.workspaceFile")}</span>
           </div>
           <button aria-label={t("csv.closeWorkspace")} onClick={onClose} ref={closeButton} title={t("csv.close")} type="button"><X size={18} /></button>
         </header>
@@ -268,8 +259,12 @@ export default function CsvArtifactWindow({
             <span>{formatBytes(table.source.fileSize)}</span>
             <span>{t("csv.rowsCount", { count: table.rows.length.toLocaleString() })}</span>
             <span>{t("csv.fieldsCount", { count: table.columns.length })}</span>
-            <code title={table.source.sourceArtifactVersionId}>{compactVersion(table.source.sourceArtifactVersionId)}</code>
-            <i><Check size={13} /> {t("csv.inputVersionPinned")}</i>
+            {/* A Workspace file has no immutable version to pin: show where it
+                lives instead of a version id and a "pinned" claim. */}
+            {workspacePath === undefined ? <>
+              <code title={table.source.sourceArtifactVersionId}>{compactVersion(table.source.sourceArtifactVersionId)}</code>
+              <i><Check size={13} /> {t("csv.inputVersionPinned")}</i>
+            </> : <code className="csva-source-path" title={workspacePath}>{workspacePath}</code>}
             <button aria-label={t(leftOpen ? "csv.hideChartSettings" : "csv.showChartSettings")} onClick={() => setLeftOpen((current) => !current)} title={t(leftOpen ? "csv.hideChartSettings" : "csv.showChartSettings")} type="button"><PanelLeftClose size={16} /></button>
             <button aria-label={t(rightOpen ? "csv.hideInspector" : "csv.showInspector")} onClick={() => setRightOpen((current) => !current)} title={t(rightOpen ? "csv.hideInspector" : "csv.showInspector")} type="button"><PanelRightClose size={16} /></button>
           </div>
@@ -361,8 +356,8 @@ export default function CsvArtifactWindow({
 
             <InspectorPanel
               hoveredRowId={hoveredRowId}
-              provenance={provenance}
               selectedRowIds={selectedRowIds}
+              source={source}
               spec={spec}
               table={table}
             />
@@ -372,7 +367,7 @@ export default function CsvArtifactWindow({
             <span>{t("app.selectedArtifacts", { count: selectedRowIds.length.toLocaleString() })}</span>
             <span>{t("csv.displayFiltersCount", { count: spec.displayFilters.length })}</span>
             <span>ChartSpec v{spec.schemaVersion}</span>
-            <strong>{t("csv.browserOnlyNote")}</strong>
+            <strong>{t(workspacePath === undefined ? "csv.browserOnlyNote" : "csv.browserOnlyWorkspaceNote")}</strong>
           </footer>
         </> : <div className="csva-parse-error">
           <strong>{t("csv.openFailed")}</strong>

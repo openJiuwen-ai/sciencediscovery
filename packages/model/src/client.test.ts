@@ -67,6 +67,46 @@ for (const protocol of ["openai-chat-completions", "openai-responses", "anthropi
       assert.deepEqual(deltas.filter((d) => d.id).map((d) => d.id), ["c1"]);
       assert.deepEqual(deltas.filter((d) => d.name).map((d) => d.name), ["write"]);
       assert.deepEqual(turn.toolCalls[0]?.args, { text: "report" });
+      assert.deepEqual(turn.streamDiagnostics, {
+        protocol, unparseableSsePayloads: 0,
+        ...(protocol === "openai-chat-completions" ? { toolCallDeltasWithoutIndex: 0 } : {}),
+      });
+    });
+  });
+}
+
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`${protocol} counts skipped payloads per request without changing argument handling`, async () => {
+    let requests = 0;
+    await withServer(async (request, response) => {
+      await readBody(request);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      if (requests++ === 0) {
+        response.write('data: {invalid JSON\n\n');
+        if (protocol === "openai-chat-completions") {
+          response.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+            { id: "bad", function: { name: "write", arguments: '{"text":' } },
+            { function: { arguments: '"report"}' } },
+          ] } }] })}\n\n`);
+        }
+      }
+      response.end("data: [DONE]\n\n");
+    }, async (baseUrl) => {
+      const run = () => streamModelTurn({ apiProtocol: protocol, baseUrl, model: "stub" }, "s", [], [], policy,
+        new AbortController().signal);
+      const first = await run();
+      assert.deepEqual(first.streamDiagnostics, {
+        protocol, unparseableSsePayloads: 1,
+        ...(protocol === "openai-chat-completions" ? { toolCallDeltasWithoutIndex: 2 } : {}),
+      });
+      if (protocol === "openai-chat-completions") {
+        assert.ok(first.toolCalls[0]?.argsParseError);
+        assert.equal(first.toolCalls.length, 1, "index-less fragments retain existing assembly behavior");
+      }
+      assert.deepEqual((await run()).streamDiagnostics, {
+        protocol, unparseableSsePayloads: 0,
+        ...(protocol === "openai-chat-completions" ? { toolCallDeltasWithoutIndex: 0 } : {}),
+      });
     });
   });
 }
@@ -766,6 +806,32 @@ test("usage normalization tolerates provider spellings", () => {
   assert.equal(normalizeUsage(null), undefined);
 });
 
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`${protocol} counts the last cumulative usage once using its own fields`, async () => {
+    const usage = { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 8, output_tokens: 5, total_tokens: protocol === "openai-chat-completions" ? 30477 : 13 };
+    const frames = protocol === "openai-chat-completions" ? [
+      { choices: [], usage: { prompt_tokens: 30393, completion_tokens: 2, input_tokens: 0, output_tokens: 0, total_tokens: 30395 } },
+      { choices: [], usage }, { choices: [], usage },
+    ] : protocol === "openai-responses" ? [
+      { type: "response.completed", response: { usage } },
+      { type: "response.completed", response: { usage } },
+    ] : [
+      { type: "message_start", message: { usage } },
+      { type: "message_delta", usage: { output_tokens: 2, completion_tokens: 84 } },
+      { type: "message_delta", usage }, { type: "message_delta", usage },
+    ];
+    await withServer(async (request, response) => {
+      await readBody(request);
+      sse(response, frames);
+    }, async (baseUrl) => {
+      const turn = await streamModelTurn({ apiProtocol: protocol, baseUrl, model: "stub" }, "s", [], [], policy, new AbortController().signal);
+      assert.equal(turn.usage?.inputTokens, protocol === "openai-chat-completions" ? 30393 : 8);
+      assert.equal(turn.usage?.outputTokens, protocol === "openai-chat-completions" ? 84 : 5);
+      assert.equal(turn.usage?.totalTokens, protocol === "openai-chat-completions" ? 30477 : 13);
+    });
+  });
+}
+
 test("model client policy env parsing validates values", () => {
   assert.equal(resolveModelClientPolicy({}).requestTimeoutMs, 600_000);
   assert.equal(resolveModelClientPolicy({ SCIENCE_AGENT_LLM_TIMEOUT_SECONDS: "30" }).requestTimeoutMs, 30_000);
@@ -781,4 +847,11 @@ test("model proxy policy selects the right dispatcher", () => {
   assert.notEqual(proxyDispatcher({ mode: "direct" }), undefined);
   assert.notEqual(proxyDispatcher({ mode: "url", url: "http://pinned.test:3128" }), undefined);
   assert.throws(() => proxyDispatcher({ mode: "url" } as ResolvedProxy), /requires a proxy URL/);
+});
+
+
+test("OpenAI usage aliases with zero placeholders do not erase reported token counts", () => {
+  assert.deepEqual(normalizeUsage({ input_tokens: 0, output_tokens: 0, prompt_tokens: 15, completion_tokens: 64, total_tokens: 79 }),
+    { inputTokens: 15, outputTokens: 64, totalTokens: 79, cacheReadTokens: null, cacheWriteTokens: null,
+      aliasConflict: { prompt_tokens: 15, completion_tokens: 64, input_tokens: 0, output_tokens: 0 } });
 });

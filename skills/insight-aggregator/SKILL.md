@@ -11,7 +11,7 @@ Synthesize insights from multiple independent assessment artifacts into a cohere
 
 Dispatched by the Lead agent during leaf execution (Step 4.3 of the Idea Tree workflow), after all independent assessors have checkpointed their results:
 
-```
+```text
 Lead agent
   ├── dispatches: assessment-screener (agent-a)  → scores + pros/cons
   ├── dispatches: assessment-screener (agent-b)  → scores + pros/cons

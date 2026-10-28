@@ -191,6 +191,15 @@
   white-space: nowrap;
 }
 
+/* A workspace path can be far longer than a compacted version id. It takes
+   the free space and gives it up first, so the size/row/field facts keep one
+   line and the panel toggles stay at the end of the strip. The explicit line
+   height keeps underscores in file names inside the clipped box at 1x. */
+.csva-source-strip .csva-source-path {
+  flex: 1 1 0;
+  line-height: 1.5;
+}
+
 .csva-source-strip i {
   display: inline-flex;
   align-items: center;

@@ -442,6 +442,32 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("export.arxiv.org", message)
         self.assertNotIn("secret", message)
 
+    def test_406_classification_requires_edge_evidence_and_excludes_request_errors(self) -> None:
+        request = httpx.Request("GET", "https://export.arxiv.org/api/query?search_query=secret")
+        for body, headers, scope in [
+            ("<title>406 Not Acceptable</title>", {}, "endpoint"),
+            ("blocked", {"x-cache": "Error from cloudfront"}, "endpoint"),
+            ("invalid query syntax", {"x-cache": "Error from cloudfront"}, "request"),
+            ("unknown refusal", {}, "unknown"),
+        ]:
+            with self.assertRaises(RuntimeError) as caught:
+                _raise_for_status(httpx.Response(406, text=body, headers=headers, request=request))
+            metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
+            self.assertEqual(metadata["failureScope"], scope)
+            self.assertEqual(metadata["statusCode"], 406)
+            self.assertEqual(metadata["endpoint"], "https://export.arxiv.org")
+            self.assertNotIn("secret", str(caught.exception))
+            self.assertNotIn(body, str(caught.exception))
+
+    def test_retry_after_supports_http_date_and_ignores_invalid_values(self) -> None:
+        request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+        for header, expected in [("Thu, 01 Jan 1970 00:00:07 GMT", 7000), ("invalid", None), ("inf", None)]:
+            with patch("sciencediscovery_gateway.http_errors.time.time", return_value=0):
+                with self.assertRaises(RuntimeError) as caught:
+                    _raise_for_status(httpx.Response(429, headers={"retry-after": header}, request=request))
+            metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
+            self.assertEqual(metadata.get("retryAfterMs"), expected)
+
     def test_raise_for_status_passes_successful_responses(self) -> None:
         request = httpx.Request("GET", "https://export.arxiv.org/api/query")
         _raise_for_status(httpx.Response(200, request=request))

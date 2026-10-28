@@ -22,7 +22,7 @@ scripts/jiuwenswarm.sh setup                          # once: clone the pinned t
 ./scripts/start-stack.sh --mode local --jiuwenswarm    # starts JiuwenSwarm if needed, then the stack
 ```
 
-See [Local mode](docs/en/getting-started/deployment.md#local-mode-host-processes) for requirements, every environment
+See [Local mode](docs/en/getting-started/deployment.md#local-source-mode-linux--macos) for requirements, every environment
 variable, and troubleshooting, and [JiuwenSwarm migration: status and hand-over](docs/en/reference/jiuwenswarm-migration-status.md)
 for what is verified and what is still open.
 
@@ -319,8 +319,8 @@ mirror: nothing runs there.
 
 | Tier / profile | Trigger and added coverage |
 | --- | --- |
-| L1 | Every PR: light static/catalog/document checks |
-| L2 / `pr` | Every PR after L1: all hermetic UT, ST and mock E2E |
+| L1 | Every PR, including drafts, on open, update, reopen and ready for review: light static/catalog/document checks |
+| L2 / `pr` | Non-draft PR opened, updated, reopened or marked ready for review, after L1: all hermetic UT, ST and mock E2E |
 | L3 / `merge` | Reviewed PR enters merge queue: rerun L1/L2 on group SHA, basic real APIs and distribution gates |
 | L4 / `daily` | Nightly at 16:00 UTC: L3 plus all ten previously eligible nightly cases (17 real cases total) |
 | L5 / `release` | Version tag: same current cases and evaluation modes as L4; independent profile for future additions; no historical baseline gate |
@@ -329,7 +329,7 @@ mirror: nothing runs there.
 `merge-gate`; queue success merges automatically, without Environment approval
 or a final approval job. Configure branch rules and scoped Environments as
 specified in [.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
-L5 failure blocks Release/assets while leaving the already-created tag intact.
+L5 failure blocks creating the draft Release and its assets while leaving the already-created tag intact. A person with write access reviews and publishes the draft from the Releases page before it becomes public.
 
 Backend selection (`--backend jiuwenswarm|legacy`, or `CI_E2E_BACKEND`) is
 independent of tiers and case selection. Native real ST and adapter live UT
@@ -359,6 +359,21 @@ from — `refactor: move domain capabilities into packages` is `c151f58` on
 GitCode and `625d7e0` on GitHub, and neither resolves on the other. And a GitHub
 remote can look diverged when the trees are identical, so compare trees
 (`git diff --stat`) rather than SHAs before concluding that work is missing.
+
+## Working on an issue
+
+When you start implementing an existing issue, try to assign it to your current
+GitHub account without removing other assignees; skip assignment only if you
+are already an assignee. If others are assigned, add yourself and say in a
+comment that you are also working on it. Post an English comment with the
+plan and completion criteria even if assignment does not persist. In that
+case, do not retry or report it as assigned; say you are working on it and
+ask a maintainer to assign you. Add progress comments when a PR opens, work
+is blocked or the plan changes. Leave other people's titles, bodies and
+comments unchanged. Reading, a brief reply or creating an issue does not
+require assignment. Follow
+[the GitHub skill](.agents/skills/github/SKILL.md#work-on-an-existing-issue)
+for commands and assignee verification.
 
 ## Opening a pull request
 
@@ -442,7 +457,7 @@ git fetch github && git checkout -b <type>/<short-topic> github/main
 git push -u github-fork <branch>
 gh pr create --repo openJiuwen-ai/sciencediscovery \
   --head <github-login>:<branch> --base main \
-  --title "<type>: <what changed>" --body-file <file>
+  --draft --title "<type>: <what changed>" --body-file <file>
 ```
 
 Apply exactly one `release:*` label so the release note can group the change;
@@ -456,6 +471,37 @@ why — do not weaken an assertion to get a green run.
 
 Check `git status` before committing: no `.tmp/`, no local editor or tooling
 config, no private notes.
+
+### From pull request to merge
+
+The `gh pr create` above opens the pull request as a draft (`--draft`); keep
+it a draft until it is ready. From there, the path into `main` is:
+
+1. Opening or pushing to a draft runs L1 for lightweight static feedback;
+   L2 / `pr` (UT, ST and mocked E2E) waits until the PR is ready. GitHub
+   Actions runs L1 and then L2 — the four local slices above, run again on
+   the PR head — when a PR is opened as non-draft, marked ready for review,
+   pushed to after becoming ready, or reopened as non-draft (see
+   [What the pipeline covers](#what-the-pipeline-covers)).
+2. When the pull request is ready, mark it ready for review
+   (`gh pr ready <number>`). This is the step that requests review from the
+   code owners listed in [.github/CODEOWNERS](.github/CODEOWNERS). While you
+   wait, an automated review also runs on the pull request.
+3. Ask a maintainer to add the pull request to the merge queue, or use
+   GitHub's **Merge when ready** (auto-merge). A pull request enters the
+   queue only when its gates have passed, a code owner has approved the
+   current head, and no code review comments are still open. Pushing new
+   commits dismisses stale approvals; see the
+   [merge queue requirements](.ci/README.md#merge-queue-and-credentials-repository-setup).
+4. The merge queue runs L3 / `merge` on the group SHA — the "Reviewed PR
+   enters merge queue" row in [What the pipeline covers](#what-the-pipeline-covers).
+5. When L3 passes, the pull request merges into `main` automatically.
+6. If L3 does not pass, the pull request is removed from the merge queue.
+   Address the failure, push the fix, and request review again.
+
+The queue's branch rules, required checks and Environment credentials are
+administrator configuration, not contributor steps; they are documented in
+[.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
 
 ## License headers
 

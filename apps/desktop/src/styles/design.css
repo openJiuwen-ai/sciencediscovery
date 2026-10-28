@@ -1,0 +1,4887 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* ============================================================================
+   The handoff, in one place
+
+   Every measurement below is taken from the Pixso frames in
+   /home/huyingtong/huyingtong/main: a 1920x1080 canvas with a 64px rail, a
+   296px sidebar, a 68px header, an 816px conversation column and a 24px
+   composer radius. The app is responsive where the handoff is fixed, but the
+   type scale, radii and neutrals are the handoff's.
+   ============================================================================ */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: #f5f5f5;
+  color: #191919;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+}
+
+button {
+  color: inherit;
+}
+
+input,
+textarea,
+select {
+  color: #191919;
+  font: inherit;
+}
+
+/* ── shell ────────────────────────────────────────────────────────────────────── */
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.app-shell.is-resizing,
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.rail {
+  width: 64px;
+  flex: 0 0 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 8px 18px;
+  min-height: 0;
+  background: #f5f5f5;
+  z-index: 3;
+}
+
+.rail-logo {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  margin: 0 0 20px;
+  border-radius: 7px;
+  background: #1476ff;
+  color: #fff;
+}
+
+.rail-logo svg {
+  width: 16px;
+  height: 16px;
+}
+
+.rail-nav {
+  width: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rail-item {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+  border-radius: 8px;
+  color: #191919;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+}
+
+.rail-item svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rail-item:hover {
+  background: rgba(25, 25, 25, 0.04);
+}
+
+.rail-item.is-active {
+  background: #e6e6e6;
+}
+
+/* ── sidebars ─────────────────────────────────────────────────────────────────── */
+
+.sidebar,
+.settings-side,
+.artifacts-side {
+  width: 296px;
+  flex: 0 0 296px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 16px 18px;
+  background: #f5f5f5;
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--d-head);
+  padding: 0 8px 0 12px;
+  flex: 0 0 var(--d-head);
+}
+
+.side-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.side-toggle.icon-btn,
+.bar-icon-button,
+.panel-icon-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #4d4d4d;
+  background: transparent;
+}
+
+.side-toggle.icon-btn:hover,
+.bar-icon-button:hover,
+.panel-icon-button:hover {
+  background: #e8e8e8;
+  color: #191919;
+}
+
+.side-new,
+.side-row {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: #191919;
+  font-size: 14px;
+  text-align: left;
+}
+
+.side-new:hover,
+.side-row:hover {
+  background: rgba(25, 25, 25, 0.04);
+}
+
+.side-new {
+  margin-top: 2px;
+}
+
+.side-new svg,
+.side-project-toggle svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: #4d4d4d;
+}
+
+.side-label {
+  padding: 24px 12px 8px;
+  color: #777;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.side-label-spaced {
+  padding-top: 28px;
+}
+
+.side-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.side-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.side-scroll::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #dedede;
+}
+
+.side-project {
+  padding: 0 12px;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.side-project-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.side-project-toggle .label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-project-toggle .chev {
+  color: #777;
+  transition: transform 0.15s ease;
+}
+
+.side-row.side-project.is-open .chev {
+  transform: rotate(180deg);
+}
+
+/* A Project row carries a `+` beside its toggle. The toggle keeps `width:
+   100%` everywhere else, so only here is it made shrinkable. */
+.side-row.side-project {
+  padding-right: 8px;
+}
+
+.side-row.side-project .side-project-toggle {
+  flex: 1;
+  width: auto;
+}
+
+.side-row.side-project.is-active {
+  background: rgba(25, 25, 25, 0.05);
+}
+
+/* The `+` is a Project-level action, like the session row's `⋯`: present on
+   hover, on keyboard focus, or in the open Project, not competing with the
+   fold's own name. `:focus-within` is what keeps it reachable without a mouse:
+   focusing the fold reveals the button beside it. */
+.side-row.side-project .side-actions {
+  display: none;
+}
+
+.side-row.side-project:hover .side-actions,
+.side-row.side-project:focus-within .side-actions,
+.side-row.side-project.is-active .side-actions {
+  display: flex;
+}
+
+.side-mini-button.is-add {
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* A section label with an action on its right: 项目 and its 新建项目 button. */
+.side-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.side-row.side-sub {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 0;
+}
+
+/* Sessions outside a Project sit at the column's own indent: there is no fold
+   above them to indent under. */
+.side-flat .side-session,
+.side-flat .side-more {
+  padding-left: 12px;
+}
+
+.side-session {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 32px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #4d4d4d;
+  text-align: left;
+}
+
+.side-session-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-row.side-sub.is-active {
+  background: #e8e8e8;
+}
+
+.side-row.side-sub.is-active .side-session {
+  color: #191919;
+}
+
+.side-row.side-sub .side-actions {
+  display: none;
+}
+
+.side-row.side-sub:hover .side-actions,
+.side-row.side-sub.is-active .side-actions {
+  display: flex;
+}
+
+.side-mini-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: #777;
+  font-size: 14px;
+}
+
+.side-mini-button:hover {
+  background: rgba(25, 25, 25, 0.06);
+  color: #191919;
+}
+
+.side-session-time {
+  flex: 0 0 auto;
+  color: #808080;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.side-spinner {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border-radius: 50%;
+  border: 1.5px solid #c9c9c9;
+  border-top-color: #191919;
+  animation: d-spin 0.9s linear infinite;
+}
+
+.side-rename-input {
+  width: 100%;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--primary);
+  border-radius: 5px;
+  background: #fff;
+  font-size: 14px;
+}
+
+.side-empty {
+  padding: 8px 12px;
+  color: #a6a6a6;
+  font-size: 13px;
+}
+
+.side-more {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px 0 32px;
+  border-radius: 8px;
+  color: #777;
+  font-size: 13px;
+  text-align: left;
+}
+
+.side-more:hover {
+  background: rgba(25, 25, 25, 0.04);
+  color: #191919;
+}
+
+/* The repository's star pill, pinned to the column's bottom corner. */
+.side-star {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 7px 12px;
+  border: 1px solid #e3e3e3;
+  border-radius: 10px;
+  background: #fff;
+  color: #6b6b6b;
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.side-star:hover {
+  border-color: #d4d4d4;
+  background: #fafafa;
+  color: #191919;
+}
+
+.side-star svg {
+  flex: 0 0 auto;
+}
+
+.side-star .side-star-count {
+  color: #191919;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* ── the task column ──────────────────────────────────────────────────────────── */
+
+.main-area {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0 6px 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.task-head {
+  flex: 0 0 var(--d-head);
+  height: var(--d-head);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+}
+
+.task-head-title {
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+}
+
+.task-head-title[role="button"] {
+  cursor: text;
+}
+
+.task-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.task-head-meta svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.task-head-meta .project {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-head-meta .sep {
+  width: 1px;
+  height: 10px;
+  background: #dcdcdc;
+}
+
+.task-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-head-actions .bar-icon-button {
+  color: #4d4d4d;
+}
+
+.conversation {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #dcdcdc transparent;
+}
+
+.conversation::-webkit-scrollbar {
+  width: 8px;
+}
+
+.conversation::-webkit-scrollbar-thumb {
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: #dedede;
+}
+
+.messages {
+  width: 816px;
+  max-width: calc(100% - 48px);
+  margin: 0 auto;
+  padding: 8px 0 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+/* The opener: what the reader typed, in a soft bubble against the right edge. */
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.message.user {
+  justify-content: flex-end;
+  padding-left: 96px;
+}
+
+/* Files sent with the question sit above its bubble in one right-aligned
+ *  column: the attachment row is as wide as its cards, the bubble as wide as
+ *  what was typed, and both end at the same edge. */
+.message.user > .user-turn {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* The bubble is as wide as what was typed. `fit-content` on a flex item that
+ *  no longer grows is what keeps a two-word question from being drawn as a
+ *  560px block; the ceiling still wraps a long one before it reaches the
+ *  assistant's avatar below. */
+.message.user .body {
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: 560px;
+  padding: 12px 18px;
+  border-radius: 16px;
+  background: #f2f2f2;
+  color: #191919;
+  font-size: 15px;
+  line-height: 23px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The attachment row: two cards at most, then a count card that opens the
+ *  rest. A card is 207px so two of them and the count fit inside the bubble's
+ *  560px ceiling; a narrow window shrinks the cards rather than dropping the
+ *  row off the edge. */
+.upload-cards {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* The row is exactly as wide as its cards ask for — 207px each, plus the gap
+ *  and the 40px count card — so a card is never squeezed by an intrinsic
+ *  width pass. A narrow window shrinks them as a last resort. */
+.upload-cards.is-one { width: 207px; }
+.upload-cards.is-two { width: 424px; }
+.upload-cards.is-two.has-more { width: 474px; }
+
+.upload-card {
+  flex: 0 1 207px;
+  min-width: 0;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 0 8px;
+  /* The handoff draws these on a grey page, where white alone is a card. The
+   *  transcript's page is white, so the edge has to be drawn. */
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.upload-glyph {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.upload-card-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upload-card-text strong {
+  overflow: hidden;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-card-text small {
+  color: #a6a6a6;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.upload-more {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.upload-more-button {
+  width: 40px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #fff;
+  color: #191919;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.upload-more-button:hover {
+  background: #fafafa;
+}
+
+/* The rest of the files: names, not cards, because the card already said what
+ *  was sent and this list is only for telling the folded ones apart. */
+.upload-more-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: max-content;
+  min-width: 223px;
+  max-width: 320px;
+  max-height: 214px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  overflow-y: auto;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .14);
+}
+
+.upload-more-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  color: #272727;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.upload-more-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The bubble is the body itself; an older rule also painted and padded the
+ *  text inside it, which drew a box within a box and left a line of empty
+ *  bubble under every question. */
+.message.user .text {
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 15px;
+  line-height: 23px;
+}
+
+.message.user .role,
+.message.user .avatar-mini {
+  display: none;
+}
+
+/* The mark and the name sit on a line of their own; the answer starts below
+ *  them at the column's left edge, not indented past the avatar. */
+.message.assistant {
+  display: block;
+}
+
+.message.assistant.is-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.assistant-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+}
+
+.assistant-head .role {
+  margin: 0;
+  color: #191919;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 20px;
+  text-transform: none;
+}
+
+.message .avatar-mini {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #47a6ff, #1273ff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+}
+
+.message .avatar-mini svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* The product mark is an exported PNG with its own gradient and soft edge,
+ *  so the generic circle behind it would be a second blue disc. It is drawn a
+ *  little larger than the box: the artwork carries a margin of glow, and the
+ *  face itself should be the size of the rows around it. */
+.message .avatar-mini.is-brand {
+  /* The artwork is a transparent PNG: the disc is 56 of its 72 pixels, and the
+     rest is glow. A background is always clipped to its box, so drawing the
+     file larger than the box squares off that glow into an octagon. 33px keeps
+     the whole disc (about 26px) and its soft edge inside the 28px tile. */
+  background: transparent url("../assets/avatar/assistant.png") center / 33px 33px no-repeat;
+}
+
+.message .body {
+  flex: 1;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 8px;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.message.assistant > .avatar-mini + .body > .role {
+  margin-top: 7px;
+}
+
+.text {
+  color: #191919;
+  font-size: 14px;
+  line-height: 22px;
+  word-break: break-word;
+}
+
+/* The transcript's prose is a step larger than a document preview's: it is
+ *  read at arm's length, in a column, rather than scanned in a panel. */
+.message .text {
+  font-size: 15px;
+  line-height: 24px;
+}
+
+.text > :first-child {
+  margin-top: 0;
+}
+
+.text > :last-child {
+  margin-bottom: 0;
+}
+
+.text p {
+  margin: 0 0 10px;
+}
+
+.text ul,
+.text ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.text li {
+  margin: 2px 0;
+}
+
+.text h1,
+.text h2,
+.text h3 {
+  margin: 18px 0 8px;
+  font-weight: 600;
+}
+
+.text h1 {
+  font-size: 22px;
+}
+
+.text h2 {
+  font-size: 18px;
+}
+
+.text h3 {
+  font-size: 15px;
+}
+
+.text a {
+  color: #1476ff;
+  text-decoration: none;
+}
+
+.text a:hover {
+  text-decoration: underline;
+}
+
+.text code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f3f3f3;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.text pre {
+  margin: 10px 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #f7f7f7;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* In the transcript, code is a passage with a rule beside it rather than a
+ *  card: the handoff draws the block flush with the prose it belongs to. */
+.message .text pre {
+  margin: 10px 0;
+  padding: 8px 0 8px 14px;
+  border-left: 2px solid #e6e6e6;
+  border-radius: 0;
+  background: transparent;
+  color: #4d4d4d;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.text pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.text table {
+  width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.text th,
+.text td {
+  padding: 8px 10px;
+  border: 1px solid #e6e6e6;
+  text-align: left;
+}
+
+.text th {
+  background: #fafafa;
+  font-weight: 500;
+}
+
+.text blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 2px solid #e0e0e0;
+  color: #777;
+}
+
+/* Run summary line: "正在规划下一步 · 运行 1min50s ›" — a line of quiet text,
+ *  not a pill. The border, the background and the 展开/收起 hint all belonged
+ *  to the old card; the handoff asks for the sentence alone. */
+.msg-collapse {
+  width: 100%;
+  max-width: none;
+  margin: 8px 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.msg-collapse > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0;
+  color: #9a9a9a;
+  font-size: 14.5px;
+  line-height: 22px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.msg-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.msg-collapse > summary:hover {
+  color: #191919;
+}
+
+.msg-collapse .collapse-icon {
+  display: inline-grid;
+  place-items: center;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: #b3b3b3;
+  font-size: 12px;
+}
+
+/* The run line has no glyph of its own — the sentence is the whole line — but
+ *  a live run keeps its ring, which is the only thing on screen saying the
+ *  model is still working. */
+/* `> summary >` rather than the descendant combinator: this rule is about the
+ *  run line's own glyph, and matching every descendant also hid the glyph of
+ *  each tool card and thinking block nested inside the fold. */
+.msg-collapse.run-fold > summary > .collapse-icon {
+  display: none;
+}
+
+/* The ring is the run line's only icon, and it stands on the page itself:
+ *  the sunk tile the older fold drew behind its glyphs has no place on a line
+ *  of grey text. It sits after the sentence, with the row's own gap. */
+.msg-collapse.run-fold > summary > .collapse-icon:has(.run-spinner) {
+  display: inline-grid;
+  background: transparent;
+}
+
+.msg-collapse .collapse-title {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.msg-collapse.run-fold .collapse-title {
+  font-size: inherit;
+}
+
+/* The hint is still in the markup for the language switch, but the handoff's
+ *  line says it with the chevron instead of printing 展开 beside it. */
+.msg-collapse .collapse-meta {
+  display: none;
+}
+
+.msg-collapse .collapse-chev {
+  color: #b3b3b3;
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.msg-collapse[open] > summary .collapse-chev {
+  transform: rotate(90deg);
+}
+
+/* The fold's contents are the transcript continued, not an indented card:
+ *  they start at the same left edge as the answer below them. */
+.collapse-body,
+.run-fold .collapse-body {
+  margin: 2px 0 10px;
+  padding: 0;
+  border: 0;
+  border-left: 0;
+}
+
+/* The one line the run draws: a hairline under the summary, so the folded
+ *  line and the work it stands for are two things rather than one paragraph.
+ *  Everything inside is a single stream, so nothing down there draws a line. */
+.run-fold > .collapse-body {
+  margin-top: 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* One rhythm for the run's parts. The model's prose, every tool call, every
+ *  delegation and every thought are modules of the same stream, and the gap
+ *  between two of them is the same whichever kinds happen to be adjacent:
+ *  the modules' own margins are reset first, then every module but the first
+ *  takes the gap from the one above. */
+.run-fold > .collapse-body > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* `:first-child` / `:not(:first-child)` rather than `* + *`: `.msg-collapse.
+ *  tool-card` is exactly as specific as a universal direct child, and it comes
+ *  later in this sheet, so the tool's own 8px would otherwise come back. */
+.run-fold > .collapse-body > :first-child {
+  margin-top: 0;
+}
+
+.run-fold > .collapse-body > :not(:first-child) {
+  margin-top: 18px;
+}
+
+.run-fold > .collapse-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* The answer is the run's visible result and lives outside the fold — it is
+ *  the next module after the body rather than a separate message. */
+.run-fold + .text {
+  margin-top: 18px;
+}
+
+/* A tool call reads as 查看技能 name ›, the handoff's row. */
+.tool-card,
+.msg-collapse.tool-card {
+  width: 100%;
+  margin: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.msg-collapse.tool-card > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 0;
+  color: #8c8c8c;
+  /* Work is a note beside the answer, so its rows are a step smaller than the
+     prose. The line-height and min-height are left alone: the size changes,
+     the rhythm between modules does not. */
+  font-size: 13px;
+}
+
+.msg-collapse.tool-card > summary .collapse-title {
+  color: #8c8c8c;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* The glyph carries the state by itself. The older soft tiles were the
+ *  background of a card; on a line they read as a badge, and the run's
+ *  tools all step back to the same quiet gray. The selectors are longer than
+ *  the state rules in conversation.css on purpose: `is-completed` and friends
+ *  still win over the plain `.collapse-icon` rules there. */
+.msg-collapse.tool-card > summary .collapse-icon,
+.run-fold .msg-collapse.tool-card > summary .collapse-icon {
+  color: #b3b3b3;
+  background: transparent;
+  font-size: 13px;
+}
+
+.run-fold .msg-collapse.tool-card.is-failed > summary .collapse-icon,
+.run-fold .msg-collapse.tool-card.is-timed_out > summary .collapse-icon {
+  background: transparent;
+  color: #d84a3a;
+}
+
+.tool-authorized {
+  color: #1476ff;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* ── a tool call's input and result ────────────────────────────────────────
+   The expanded card is the call's own small sheet: one rounded frame with a
+   quiet label and a gray code tile for the input and for each slice of the
+   result. The tiles are previews — the panel is where the full text is read —
+   so they are clipped to a few lines rather than scrolling inside a column
+   that is already narrow. */
+.tool-card > .tool-io-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 10px;
+  padding: 12px 14px 14px;
+  border: 1px solid #ececec;
+  border-radius: 10px;
+  background: #fff;
+}
+
+/* A call with nothing to show yet is a sentence, not an empty sheet: the
+   frame and its padding belong to the tiles inside it. */
+.tool-card > .tool-io-sections:not(:has(.tool-io-block)) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.tool-io-block {
+  min-width: 0;
+}
+
+.tool-io-block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tool-io-label {
+  color: #8c8c8c;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tool-io-hint {
+  color: #b3b3b3;
+  font-size: 11px;
+}
+
+.tool-io-code {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: #f5f5f5;
+  color: #3d3d3d;
+  text-align: left;
+}
+
+.tool-io-code.is-openable {
+  cursor: pointer;
+}
+
+.tool-io-code.is-openable:hover {
+  background: #f0f0f0;
+}
+
+/* More text than the tile shows: the text fades into the tile's own edge
+   rather than being sliced through the middle of a line. Measured in the
+   component, so a short tile keeps its last line at full strength. */
+.tool-io-code.is-clipped {
+  position: relative;
+}
+
+.tool-io-code.is-clipped::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 30px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(to bottom, rgba(245, 245, 245, 0), #f5f5f5);
+  content: "";
+  pointer-events: none;
+}
+
+.tool-io-code.is-openable:focus-visible {
+  outline: 2px solid #1476ff;
+  outline-offset: 1px;
+}
+
+.tool-io-code-text {
+  display: block;
+  margin: 0;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* In the panel there is nothing to clip and nowhere further to go. */
+.tool-detail {
+  width: 100%;
+  max-width: 860px;
+}
+
+.tool-detail .tool-io-code {
+  max-height: none;
+  padding: 14px 16px;
+}
+
+.tool-detail .tool-io-code-text {
+  font-size: 12.5px;
+}
+
+.panel-body.is-tool {
+  display: block;
+  padding: 4px 20px 24px;
+  overflow-y: auto;
+}
+
+.thinking-block,
+.thinking-block summary {
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.thinking-block .text {
+  margin-top: 6px;
+  color: #777;
+  font-size: 13px;
+}
+
+/* A thought is an aside in the run, so it steps back with the tool lines:
+ *  the glyph and the steps use the same gray and the same size — the keep of
+ *  the 22px line-height and 24px min-height is what holds the spacing. */
+.run-fold .msg-collapse.thinking > summary {
+  font-size: 13px;
+}
+
+.run-fold .msg-collapse.thinking .collapse-icon {
+  background: transparent;
+  color: #b3b3b3;
+  font-size: 12px;
+}
+
+.run-fold .thinking-list {
+  color: #8c8c8c;
+}
+
+.run-spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
+
+/* Run notices keep the handoff's quiet gray strip. */
+.status-strip {
+  margin: 4px 0;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: #8c8c8c;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.message.assistant > .avatar-mini + .body > .status-strip {
+  margin-top: 0;
+}
+
+/* How a run that stopped says so: a hairline across the column, the word in
+ *  the middle, and nothing else. The mark-and-strip notice below is for what
+ *  went wrong or needs looking into; a stop the reader asked for is neither. */
+.status-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #a6a6a6;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.status-divider::before,
+.status-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #ededed;
+}
+
+/* Feedback under an answer: icon-only, like the handoff's row. */
+.answer-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 14px 0 2px;
+  color: #a6a6a6;
+}
+
+.answer-tool {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #8c8c8c;
+}
+
+.answer-tool:hover {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+.answer-tool svg {
+  width: 15px;
+  height: 15px;
+}
+
+.answer-tool-meta {
+  margin-left: 8px;
+  color: #a6a6a6;
+  font-size: 12px;
+}
+
+/* Artifact cards inside a reply. */
+.attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 6px;
+}
+
+.attachment-card {
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px 10px 10px;
+  border: 1px solid #ededed;
+  border-radius: 12px;
+  background: #fff;
+  text-align: left;
+}
+
+.attachment-card:hover {
+  border-color: #dcdcdc;
+  background: #fcfcfc;
+}
+
+.attachment-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #e5f6f0;
+  color: #1f9d7a;
+}
+
+.attachment-mark.is-text {
+  background: #e8f2ff;
+  color: #1476ff;
+}
+
+.attachment-mark.is-page {
+  background: #fdf3de;
+  color: #a8750c;
+}
+
+.attachment-mark.is-structure {
+  background: #f1ebff;
+  color: #7455c7;
+}
+
+.attachment-mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.attachment-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.attachment-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.attachment-sub {
+  display: block;
+  margin-top: 2px;
+  color: #a6a6a6;
+  font-size: 12px;
+}
+
+.attachment-chev {
+  color: #8c8c8c;
+  font-size: 14px;
+}
+
+/* Spinner used across the app. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid #d8d8d8;
+  border-top-color: #191919;
+  border-radius: 50%;
+  animation: d-spin 0.9s linear infinite;
+  vertical-align: -2px;
+}
+
+@keyframes d-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── permission ───────────────────────────────────────────────────────────────── */
+
+.permission-card {
+  display: block;
+  margin: 10px 0 0;
+  padding: 14px 16px;
+  border: 1px solid #ececec;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(25, 25, 25, 0.06);
+}
+
+.permission-head,
+.permission-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.permission-eyebrow {
+  color: #191919;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.permission-card h4 {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  color: #4d4d4d;
+}
+
+.permission-card > code,
+.permission-body > code {
+  display: none;
+}
+
+.permission-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.permission-actions button {
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid #dcdcdc;
+  border-radius: 999px;
+  background: #fff;
+  color: #191919;
+  font-size: 12px;
+}
+
+.permission-actions button:hover {
+  background: #f7f7f7;
+}
+
+.permission-actions .danger-button {
+  color: #b3b3b3;
+}
+
+.permission-details {
+  display: none;
+}
+
+/* ── composer ───────────────────────────────────────────────────────────── */
+
+.composer {
+  position: relative;
+  flex: 0 0 auto;
+  width: 816px;
+  max-width: calc(100% - 48px);
+  min-height: 130px;
+  margin: 10px auto 24px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(25, 25, 25, 0.1);
+  border-radius: 24px;
+  background: #fff;
+  /* A tight, faint halo under a hairline edge. The handoff draws the card as
+     something laid on the page rather than floating above it: the old 30px blur
+     spread a grey cloud well past the border and made the edge read as a shadow
+     instead of an outline. */
+  box-shadow: 0 2px 10px rgba(25, 25, 25, 0.045);
+}
+
+.composer-input {
+  flex: 1;
+  display: flex;
+  min-height: 74px;
+  padding: 16px 20px 0;
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 54px;
+  max-height: 220px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: #191919;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.composer textarea::placeholder {
+  color: #a6a6a6;
+}
+
+.composer textarea:focus-visible {
+  box-shadow: none;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 12px 16px;
+  /* composer.css separates the input from the footer with a rule and fills the
+     row with white. Neither belongs on this card: it is one white surface, and a
+     child with a square white background paints over the card's own rounded
+     bottom corners — the border there vanished and the card ended flat, as if
+     the radius had been cut off. */
+  border-top: 0;
+  border-radius: 0 0 23px 23px;
+}
+
+.composer:not(.is-landing) .composer-footer {
+  background: transparent;
+}
+
+.composer-plus {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #4d4d4d;
+}
+
+.composer-plus:hover {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+.composer-plus svg {
+  width: 17px;
+  height: 17px;
+}
+
+.composer-plus:disabled {
+  color: #c2c2c2;
+  cursor: not-allowed;
+}
+
+.composer-plus:disabled:hover {
+  background: none;
+  color: #c2c2c2;
+}
+
+.composer-settings {
+  margin-left: 2px;
+}
+
+.composer-spacer {
+  flex: 1;
+}
+
+/* The model is set as plain text on the card, the way the handoff draws it:
+   no pill, no fill. The only thing that says it can be pressed is the chevron
+   and the light grey it gains on hover. */
+.composer-model-pill {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: transparent;
+  color: #4d4d4d;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.composer-model-pill:hover {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+/* composer.css fills the pill while its menu is open. On a selector that is
+   already just text, a fill appearing on the press would undo the point. */
+.composer-model-pill[aria-expanded="true"] {
+  background: transparent;
+  box-shadow: none;
+  color: #191919;
+}
+
+.composer-model-pill .model-mark {
+  display: none;
+}
+
+.composer-model-pill .model-name {
+  color: inherit;
+  font-weight: 400;
+}
+
+.composer-model-pill .model-chev {
+  color: #8c8c8c;
+}
+
+/* The shared rule tints the chevron blue while the menu is open. On a text
+   selector that tint is the loudest thing in the footer, and the reference
+   keeps the arrow grey and simply turns it over. */
+.composer-model-pill[aria-expanded="true"] .model-chev {
+  color: #8c8c8c;
+}
+
+.composer-attach,
+.send-button-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.composer-attach {
+  color: #4d4d4d;
+  background: transparent;
+}
+
+/* The same blue as the welcome page's button: sending is the same act in both
+   places, so it should not change colour when the session stops being empty.
+   The disabled disc is a filled grey rather than a faded one — composer.css
+   already fades the whole button, and fading a pale fill leaves nothing to
+   see. */
+.send-button-icon {
+  flex: 0 0 32px;
+  border: 0;
+  background: #1476ff;
+  color: #fff;
+}
+
+.send-button-icon:disabled {
+  background: #d9d9d9;
+  color: #fff;
+  opacity: 1;
+  cursor: default;
+}
+
+.send-button-icon:hover:not(:disabled) {
+  background: #0f63d8;
+}
+
+.composer-file-input {
+  display: none;
+}
+
+/* Each menu hangs off the button that opened it. The anchor is a box around
+   that button, so `bottom: 100%` puts the menu just above the button rather
+   than above the whole card — with the card being as tall as the input, the
+   old anchor left the menu an entire input area away from its trigger. The
+   menu is allowed to cover the input: it closes as soon as the reader
+   touches anything else. */
+.composer-menu-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.composer-dropdown {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: 248px;
+  padding: 6px;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 40px rgba(25, 25, 25, 0.14);
+}
+
+/* The model pill is at the right edge, so its menu grows leftwards. The card
+   is the handoff's: one list of rows, a hairline, the add action. */
+.composer-dropdown.is-models {
+  left: auto;
+  right: 0;
+  width: 340px;
+  max-height: none;
+  padding: 10px;
+  border-radius: 16px;
+  overflow: visible;
+}
+
+/* Only the rows scroll, so the add action stays put under the hairline no
+   matter how many models there are. Four rows and a sliver show that there
+   are more; the list is what moves, not the card. */
+.model-menu-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 216px;
+  padding: 10px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #d9d9d9 transparent;
+}
+
+.model-menu-list::-webkit-scrollbar { width: 4px; }
+.model-menu-list::-webkit-scrollbar-track { background: transparent; }
+.model-menu-list::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: #d9d9d9;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 0 16px;
+  border-radius: 10px;
+  color: #191919;
+  font-size: 15px;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.model-option:hover {
+  background: #f5f5f5;
+}
+
+.model-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The marks are 16px artwork that already carries its own rounded tile, so
+   the slot only has to be big enough for it to read at a glance. */
+.model-option-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 5px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.model-option-icon[data-brand="anthropic"] { background-image: url("../assets/providers/anthropic.svg"); }
+.model-option-icon[data-brand="dashscope"] { background-image: url("../assets/providers/dashscope.svg"); }
+.model-option-icon[data-brand="deepseek"] { background-image: url("../assets/providers/deepseek.svg"); }
+.model-option-icon[data-brand="minimax"] { background-image: url("../assets/providers/minimax.svg"); }
+.model-option-icon[data-brand="moonshot"] { background-image: url("../assets/providers/moonshot.svg"); }
+.model-option-icon[data-brand="openai"] { background-image: url("../assets/providers/openai.svg"); }
+.model-option-icon[data-brand="zhipu"] { background-image: url("../assets/providers/zhipu.svg"); }
+.model-option-icon[data-brand="custom"] { background-image: url("../assets/providers/custom.svg"); }
+
+/* The tick, not a filled row, is what marks the model in use: with several
+   rows sharing the same colours it would otherwise read as a hover. */
+.model-option-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #191919;
+}
+
+.model-menu-divider {
+  height: 1px;
+  margin: 10px 0;
+  background: #f0f0f0;
+}
+
+.model-option.is-add {
+  color: #4d4d4d;
+}
+
+.model-option.is-add:hover {
+  color: #191919;
+}
+
+/* The plus sits in the same slot as a brand mark so the labels line up. */
+.model-option-plus {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 20px;
+  color: #8c8c8c;
+}
+
+.model-option.is-add:hover .model-option-plus {
+  color: #4d4d4d;
+}
+
+/* 会话设置 is two cards laid side by side: the session's rows, and the choices
+   of whichever row is open. They are siblings rather than a nested flyout so
+   the choices are never clipped by the row column. The outer element is only
+   the anchor, which is why it drops the plain dropdown's chrome. */
+.composer-dropdown.is-settings {
+  left: 0;
+  width: max-content;
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The choices open beside the rows, not inside the column's flow: the menu is
+   anchored to its button by its bottom edge, so a flyout that made the menu
+   taller would drag the rows the reader is already looking at upwards. Taken
+   out of flow, the flyout leaves the rows exactly where they were. */
+.session-menu {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+}
+
+.session-menu-panel,
+.session-menu-flyout {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 40px rgba(25, 25, 25, 0.14);
+}
+
+.session-menu-flyout {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 4px);
+}
+
+.session-menu-panel {
+  width: 320px;
+}
+
+.session-menu-flyout {
+  width: 300px;
+}
+
+.session-menu-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: #191919;
+  font-size: 14px;
+  text-align: left;
+}
+
+.session-menu-row:hover:not(:disabled),
+.session-menu-row.is-open {
+  background: #f5f5f5;
+}
+
+.session-menu-row:disabled {
+  cursor: default;
+}
+
+.session-menu-row:disabled .session-menu-icon,
+.session-menu-row:disabled .session-menu-label {
+  color: #b3b3b3;
+}
+
+.session-menu-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: #4d4d4d;
+}
+
+.session-menu-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The row's current value, as the reference draws it: a quiet pill that also
+   carries the mark saying a panel opens from here. */
+.session-menu-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #f2f2f2;
+  color: #4d4d4d;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* The text's ink sits half a pixel above the line box's middle in this font at
+   12px; on a 24px capsule that reads as high, so the label alone is lowered to
+   where the eye expects it. The icon and chevron are already symmetric. */
+.session-menu-value-text {
+  transform: translateY(0.5px);
+}
+
+.session-menu-value-icon {
+  display: inline-flex;
+  color: #8c8c8c;
+}
+
+.session-menu-value-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-menu-chev {
+  color: #a6a6a6;
+}
+
+.session-menu-divider {
+  height: 1px;
+  margin: 3px -6px;
+  background: #f0f0f0;
+}
+
+.session-flyout-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: #191919;
+  font-size: 14px;
+  text-align: left;
+}
+
+.session-flyout-row:hover {
+  background: #f5f5f5;
+}
+
+.session-flyout-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: #4d4d4d;
+}
+
+.session-flyout-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The permission options carry their consequence under the name: what the
+   switch allows is text here, not a tooltip that only a mouse can reach. */
+.session-flyout-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-flyout-text .session-flyout-label {
+  flex: none;
+}
+
+.session-flyout-desc {
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Read by assistive technology, drawn for nobody: the row's explanation is in
+   a tooltip the eye sees and the name must not swallow. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.session-flyout-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: #0f766e;
+}
+
+/* 完全访问 is the one option that widens the session's reach, so it is the one
+   option that is coloured rather than told apart by position alone. */
+.session-flyout-row.is-danger,
+.session-flyout-row.is-danger .session-flyout-icon {
+  color: #c2410c;
+}
+
+/* 无's mark: a dash in a quiet square, the shape the reference uses for
+   "nothing chosen" rather than an empty tick slot. */
+.session-flyout-none {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #f2f2f2;
+  color: #8c8c8c;
+}
+
+.session-flyout-row.is-action {
+  color: #8c8c8c;
+}
+
+/* ── 专家's catalog ─────────────────────────────────────────────────────────
+   专家 is a list of the experts a session can be bound to, not a pair of
+   fixed choices: the reference draws it as a search line over a scrolling
+   column of two-line rows — initial, name, what the expert does. 无 and 新建
+   stay below the list, one as the way to unbind and the other as the way to
+   an expert this catalog does not have yet. */
+/* Anchored by its bottom edge, unlike 权限's short flyout: this card is as tall
+   as the catalog, and the composer it hangs off sits at the bottom of the
+   window — grown downwards from the top of the menu it would run off screen. */
+.session-menu-flyout.is-experts {
+  top: auto;
+  bottom: 0;
+  width: 380px;
+  padding: 8px;
+}
+
+.expert-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 6px 8px 8px;
+  color: #a6a6a6;
+}
+
+.expert-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #191919;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.expert-search input::placeholder {
+  color: #a6a6a6;
+}
+
+/* The search removes the browser's own clear button: the field is one quiet
+   line, and a second control inside it would be louder than the field. */
+.expert-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.session-menu-flyout.is-experts .session-menu-divider {
+  margin: 4px -8px;
+}
+
+.expert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(340px, 52vh);
+  margin: 4px 0;
+  overflow-y: auto;
+  scrollbar-color: #dedede transparent;
+  scrollbar-width: thin;
+}
+
+.expert-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  flex: 0 0 auto;
+  padding: 7px 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.expert-row:hover,
+.expert-row.is-selected {
+  background: #f5f5f5;
+}
+
+.expert-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.expert-mark.is-none {
+  background: #f2f2f2;
+  color: #8c8c8c;
+}
+
+/* A skill's mark is the tile 设置 › 技能 draws: the skill's initial on the soft
+   surface, so the same catalog looks the same in both lists. */
+.expert-mark.is-skill {
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+/* The `/` palette, anchored to the input it belongs to: it floats above the
+   composer rather than pushing the page down, because the draft underneath is
+   still the thing being written. */
+.composer-skills {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  max-height: min(340px, 52vh);
+  overflow-y: auto;
+  scrollbar-color: #dedede transparent;
+  scrollbar-width: thin;
+}
+
+.expert-mark.is-blue { background: #4a7cf5; }
+.expert-mark.is-pink { background: #ef5da8; }
+.expert-mark.is-amber { background: #f5a524; }
+.expert-mark.is-violet { background: #a855f7; }
+.expert-mark.is-teal { background: #14b8a6; }
+
+.expert-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.expert-name {
+  overflow: hidden;
+  color: #191919;
+  font-size: 13px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The description is one line by design: it is there to tell two experts
+   apart at a glance, and the full text lives in settings. */
+.expert-desc {
+  overflow: hidden;
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expert-note {
+  margin: 0;
+  padding: 10px 8px;
+  color: #8c8c8c;
+  font-size: 12px;
+  text-align: center;
+}
+
+.expert-row .session-flyout-check {
+  margin-left: 2px;
+}
+
+/* The row's explanation, shown over the row above rather than pushing the
+   panel wider. */
+.session-menu-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 40px;
+  z-index: 2;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: #191919;
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.session-menu-row:hover .session-menu-tip,
+.session-menu-row:focus-visible .session-menu-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── workspace panel ────────────────────────────────────────────────────── */
+
+.workspace-panel {
+  position: relative;
+  flex: 0 0 var(--panel-width, 720px);
+  width: var(--panel-width, 720px);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0 6px 6px;
+  background: #fff;
+}
+
+/* Closed means gone from the shell, not just narrower than its content: the
+   panel is rendered for the whole task page so its splitter keeps its identity,
+   and this is the one rule that decides whether the column is there. */
+.app-shell.workspace-hidden .workspace-panel {
+  display: none;
+}
+
+.workspace-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.workspace-splitter:hover,
+.workspace-splitter:focus-visible {
+  background: rgba(20, 118, 255, 0.08);
+  outline: 0;
+}
+
+.panel-head {
+  flex: 0 0 var(--d-head);
+  height: var(--d-head);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+}
+
+.panel-group-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.panel-group-tab {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  border-radius: 8px;
+  color: #4d4d4d;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.panel-group-tab svg {
+  width: 16px;
+  height: 16px;
+}
+
+.panel-group-tab:hover {
+  background: #f7f7f7;
+}
+
+.panel-group-tab.is-active {
+  background: rgba(243, 243, 243, 0.85);
+  color: #191919;
+}
+
+.panel-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.panel-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* The list's width is the divider's, not the handoff's fixed 240: the reader
+   sets it by dragging, and the token is only where it starts. */
+.panel-list {
+  width: var(--panel-list-width, var(--d-panel-list));
+  flex: 0 0 var(--panel-list-width, var(--d-panel-list));
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 16px 20px;
+  border-right: 1px solid #e6e6e6;
+  overflow-y: auto;
+}
+
+/* Dragged to its end, the list goes rather than becoming a strip of rows that
+   cannot be read. The document then has the panel to itself. */
+.panel-body.is-list-closed .panel-list {
+  display: none;
+}
+
+/* The same at the other end: the document column closes and the list takes the
+   whole panel. It comes back when a row is clicked or the divider is dragged
+   back — see `openDoc`. */
+.panel-body.is-doc-closed .panel-doc {
+  display: none;
+}
+
+.panel-body.is-doc-closed .panel-list {
+  width: auto;
+  flex: 1 1 auto;
+  border-right: 0;
+}
+
+/* The divider between the two columns. It overlays the list's border rather
+   than taking a column of its own, so neither side loses a pixel to chrome. */
+.panel-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--panel-list-width, var(--d-panel-list)) - 5px);
+  width: 10px;
+  z-index: 4;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.panel-splitter:hover,
+.panel-splitter:focus-visible {
+  background: rgba(20, 118, 255, 0.08);
+  outline: 0;
+}
+
+/* A closed edge keeps the divider as wide as the control drawn on it: the
+   pointer has to be able to reach the control without the first few pixels
+   belonging to something else, and a press anywhere in the band is still a
+   drag. No tint on hover — the control itself is the feedback, and a band the
+   height of the panel would be the hairline again in another colour. */
+.panel-body.is-list-closed .panel-splitter {
+  left: 0;
+  width: 26px;
+  /* The whole edge is the button while a column is closed: a click anywhere in
+     the band brings it back, so the pointer says so everywhere in it. Dragging
+     still works, but that is the less likely thing to do with a column that is
+     already gone. */
+  cursor: pointer;
+  background: transparent;
+}
+
+.panel-body.is-doc-closed .panel-splitter {
+  left: auto;
+  right: 0;
+  width: 26px;
+  cursor: pointer;
+  background: transparent;
+}
+
+/* A closed column has no border left to show where it was, and a hairline on
+   the empty edge reads as a stray line rather than a handle. The edge stays
+   bare until the pointer reaches the divider; then the control below appears. */
+.panel-expand {
+  position: absolute;
+  top: 50%;
+  z-index: 5;
+  width: 22px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 1px solid #ececec;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(25, 25, 25, 0.12);
+  color: #555;
+  opacity: 0;
+  /* A click is what this is for, so it reads as a button to the pointer even
+     though the press carries on to the divider underneath and can still start
+     a drag. */
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+.panel-expand:hover {
+  border-color: #dcdcdc;
+  background: #fafafa;
+  color: #191919;
+}
+
+.panel-expand.is-left {
+  left: 3px;
+}
+
+.panel-expand.is-right {
+  right: 3px;
+}
+
+/* It sits inside the divider's band, so the band's hover — and its own, which
+   counts as the band's — keeps it out. */
+.panel-splitter:hover .panel-expand {
+  opacity: 1;
+}
+
+.panel-list-title {
+  flex: 0 0 auto;
+  padding: 0 8px 12px;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* The list is a scrolling column of flex items, so everything in it above the
+   rows has to refuse to shrink. Without this the search box gave up ten of its
+   32 pixels as soon as the tree was long enough to overflow — the artifacts
+   panel, with four rows, kept the height the workspace panel lost. */
+.panel-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 32px;
+  min-height: 32px;
+  margin: 0 0 12px;
+  padding: 0 10px;
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  color: #a6a6a6;
+}
+
+.panel-search svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.panel-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+/* A text input matches :focus-visible even when it was clicked, so the global
+   focus rule drew a blue ring inside the field the moment the pointer landed in
+   it. The box is already drawn; its border darkening is the whole cue a search
+   field needs. */
+.panel-search input:focus-visible {
+  box-shadow: none;
+}
+
+.panel-search:focus-within {
+  border-color: #c9c9c9;
+  color: #777;
+}
+
+.panel-list-row {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: #4d4d4d;
+  font-size: 13px;
+  text-align: left;
+}
+
+.panel-list-row svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  color: #777;
+}
+
+.panel-list-row .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The second fact beside a repeated name — `v2` for another version, or the
+   folder for another artifact. It is the row's secondary fact, so it takes the
+   space the name leaves and never more than half the row. */
+.panel-list-row .label-meta {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  color: #a6a6a6;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-list-row:hover {
+  background: #f7f7f7;
+}
+
+.panel-list-row.is-active {
+  background: #ededed;
+  color: #191919;
+}
+
+.panel-list-row.is-folder {
+  color: #191919;
+  font-weight: 500;
+}
+
+.panel-list-row .tree-chev {
+  width: 10px;
+  color: #a6a6a6;
+  font-size: 9px;
+  transition: transform 0.15s ease;
+}
+
+.panel-list-row.is-open .tree-chev {
+  transform: rotate(90deg);
+}
+
+.panel-list-group {
+  padding-left: 10px;
+}
+
+/* One Session's artifacts. The list is a scrolling flex column, so a section
+   keeps its rows together and refuses to shrink them away; the gap is what
+   separates one Session from the next without a rule between them. */
+.panel-output {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
+.panel-output + .panel-output {
+  margin-top: 14px;
+}
+
+/* The heading names the Session the rows below belong to, so it carries the
+   weight of a section title rather than of a caption: the same 13px as a file
+   name, in the darkest ink and semibold, which is what makes the group
+   findable when the reader is scanning past several of them. Every Session's
+   name is set alike — which one is open is the badge's job at the end of the
+   row, not a change of type between rows the reader is comparing. It is a row
+   like the folders in the tree beside it — same 30px height, same hover —
+   because clicking it folds its group away. */
+.panel-output-head {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.panel-output-head:hover {
+  background: #f7f7f7;
+}
+
+.panel-output-head .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The same 15px slot as a row's file glyph, so the Session's name starts on
+   the same stem as the file names under it. */
+.panel-output-head .tree-chev {
+  width: 15px;
+  flex: 0 0 15px;
+  color: #a6a6a6;
+  font-size: 9px;
+  text-align: center;
+  transition: transform 0.15s ease;
+}
+
+.panel-output-head.is-open .tree-chev {
+  transform: rotate(90deg);
+}
+
+.panel-output-head .label-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #a6a6a6;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+
+.panel-empty {
+  padding: 40px 16px;
+  color: #a6a6a6;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+}
+
+.panel-doc {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The strip row: the tabs on the left, the document actions on the right.
+   These two must stay separate elements — a single row that is also the
+   tablist gets its fixed 46px height read as a width when it becomes a flex
+   item itself, which clipped every tab past the first few pixels. */
+.doc-tabbar {
+  flex: 0 0 46px;
+  height: 46px;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  padding: 0 20px;
+  min-width: 0;
+}
+
+.doc-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 46px;
+  display: flex;
+  align-items: stretch;
+  gap: 20px;
+  /* Many open documents scroll instead of widening the panel; the wheel and
+     a trackpad are enough, so the bar stays 46px with no scrollbar gutter. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.doc-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.doc-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  /* A tab is as wide as what it says: a short name gets a short tab, and one
+     document does not leave the next one squeezed into an ellipsis. The strip
+     scrolls once the tabs together outgrow it, and the ceiling stops a single
+     long path from pushing every other tab off screen. */
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 0;
+  color: #8c8c8c;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.doc-tab::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+}
+
+.doc-tab.is-active {
+  color: #191919;
+}
+
+.doc-tab.is-active::after {
+  background: #191919;
+}
+
+.doc-tab-label {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+/* The name keeps the space; the second fact only gets what is left, and only
+   when two open documents share a name (two versions of one `trace.md`, or two
+   files of the same name in different folders). */
+.doc-tab-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-tab-hint {
+  /* A far larger shrink factor makes the folder give up its room first: the
+     name is what identifies the document, and it keeps its ellipsis budget
+     until the folder has none left. */
+  flex: 0 50 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  color: #a6a6a6;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+/* The ✕ is an svg, not the character: a glyph carries its own side bearings
+   and baseline, so the 18px hover square was visibly off-centre around it. */
+.doc-tab-close {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 4px;
+  color: #a6a6a6;
+}
+
+.doc-tab-close svg {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+}
+
+.doc-tab-close:hover {
+  background: #f0f0f0;
+  color: #191919;
+}
+
+.doc-tabs-actions {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The open artifact's version picker, at the document's top right. It is drawn
+   here rather than left to a native select: the platform's popup is a square
+   list in the system highlight colour, which sits badly in a panel this quiet.
+   The trigger is a soft pill; the menu is the composer menus' card. */
+.doc-versions {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 2px;
+}
+
+.doc-version-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 7px 0 9px;
+  border: 1px solid #ececec;
+  border-radius: 7px;
+  color: #4d4d4d;
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.doc-version-button svg {
+  color: #a6a6a6;
+  flex: 0 0 10px;
+}
+
+.doc-version-button:hover,
+.doc-version-button.is-open {
+  border-color: #dcdcdc;
+  background: #f7f7f7;
+  color: #191919;
+}
+
+.doc-version-button:focus-visible {
+  border-color: #c9c9c9;
+  box-shadow: none;
+}
+
+.doc-version-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 92px;
+  padding: 4px;
+  border: 1px solid #ececec;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(25, 25, 25, 0.14);
+}
+
+.doc-version-option {
+  width: 100%;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: #4d4d4d;
+  font-size: 12px;
+  text-align: left;
+}
+
+.doc-version-option:hover {
+  background: #f5f5f5;
+  color: #191919;
+}
+
+/* The tick, not a filled row: with the rows this close in weight a highlight
+   would read as hover, and the version in use has to survive the pointer
+   leaving. */
+.doc-version-option.is-current {
+  color: #191919;
+}
+
+.doc-version-option svg {
+  color: #191919;
+  flex: 0 0 12px;
+}
+
+.doc-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px 40px;
+}
+
+.doc-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.doc-body::-webkit-scrollbar-thumb {
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: #dedede;
+}
+
+.doc-body .text {
+  font-size: 15px;
+  line-height: 26px;
+}
+
+.doc-body .text h1 {
+  margin: 18px 0 16px;
+  font-size: 30px;
+  line-height: 40px;
+  letter-spacing: -0.01em;
+}
+
+.doc-body .text h2 {
+  margin: 26px 0 10px;
+  font-size: 20px;
+  line-height: 30px;
+}
+
+.doc-body .text h3 {
+  margin: 20px 0 8px;
+  font-size: 16px;
+}
+
+.doc-body .text p,
+.doc-body .text li {
+  font-size: 15px;
+  line-height: 26px;
+}
+
+.doc-body .text table {
+  font-size: 13px;
+}
+
+/* A generated page is sandboxed in a frame, so it scrolls inside the document
+   rather than stretching the panel; the canvas around it keeps the frame off
+   the document's own padding. */
+.artifact-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.artifact-html-frame {
+  width: 100%;
+  min-height: 520px;
+  border: 1px solid #ececec;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.tab-content-source {
+  margin: 0;
+  padding: 4px 0;
+  color: #4d4d4d;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Plain text without a markup language: the answer, the note, the report a
+   model wrote out as .txt. It becomes a page rather than a box of source — the
+   document's own type and measure, no border, and no scroll area of its own
+   inside the document's. The blank lines the author wrote still do the
+   paragraphing, so nothing has to be guessed at. */
+.tab-content-source.is-prose {
+  max-width: 70ch;
+  max-height: none;
+  overflow: visible;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #333;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.doc-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #a6a6a6;
+  font-size: 13px;
+}
+
+.doc-placeholder .mark {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  background: #f5f5f5;
+  color: #b3b3b3;
+}
+
+.doc-placeholder .mark svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* 任务 progress */
+.progress-view {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 24px 40px;
+  overflow-y: auto;
+}
+
+.progress-title {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.progress-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 22px;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.progress-stats .percent {
+  color: #191919;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.progress-stats strong {
+  margin-left: 4px;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.progress-elapsed {
+  margin-left: auto;
+  color: #a6a6a6;
+  font-size: 12px;
+}
+
+.progress-track {
+  height: 3px;
+  margin: 10px 0 22px;
+  border-radius: 2px;
+  background: #ededed;
+  overflow: hidden;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #22a06b;
+  transition: width 0.3s ease;
+}
+
+.progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.progress-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: #4d4d4d;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.progress-step .step-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #22a06b;
+  font-size: 10px;
+}
+
+.progress-step.is-running .step-icon {
+  color: #1476ff;
+  background: transparent;
+}
+
+.progress-step.is-pending {
+  color: #a6a6a6;
+}
+
+.progress-step.is-pending .step-icon {
+  color: #b3b3b3;
+  background: transparent;
+}
+
+/* ── settings ───────────────────────────────────────────────────────────── */
+
+.settings-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 6px 0 6px 6px;
+  background: #fff;
+  overflow-y: auto;
+}
+
+.settings-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 42px 64px 80px;
+}
+
+.set-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 24px;
+}
+
+.set-head h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.set-head .sub {
+  margin-top: 4px;
+  color: #777;
+  font-size: 13px;
+}
+
+.set-eyebrow {
+  display: none;
+}
+
+.set-nav-row {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: #191919;
+  font-size: 14px;
+  text-align: left;
+}
+
+.set-nav-row svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  color: #4d4d4d;
+}
+
+.set-nav-row:hover {
+  background: rgba(25, 25, 25, 0.04);
+}
+
+.set-nav-row.is-active {
+  background: #e8e8e8;
+}
+
+.set-nav-row.is-active svg {
+  color: #191919;
+}
+
+.set-category {
+  display: none;
+}
+
+.set-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 2px;
+}
+
+.set-scroll > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-save-all {
+  position: sticky;
+  top: 0;
+}
+
+/* Settings form primitives, retuned for the handoff. */
+.settings-section {
+  margin: 0 0 26px;
+}
+
+.settings-group-head,
+.settings-section > h2 {
+  margin: 0 0 12px;
+  color: #4d4d4d;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 90px;
+  padding: 16px 20px;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.settings-card-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #eef5ff;
+  color: #1476ff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-card-main strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #191919;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.settings-card-main small {
+  display: block;
+  margin-top: 2px;
+  color: #777;
+  font-size: 13px;
+}
+
+.settings-card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-tag {
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: #f5f5f5;
+  color: #4d4d4d;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.settings-tag.is-primary {
+  background: #eef5ff;
+  color: #1476ff;
+}
+
+.settings-tag.is-on,
+.settings-tag.is-ok {
+  background: #e9f7ef;
+  color: #1a8a5a;
+}
+
+.settings-tag.is-warn {
+  background: #fdf3de;
+  color: #8a5a00;
+}
+
+.settings-tag.is-off {
+  background: #f5f5f5;
+  color: #a6a6a6;
+}
+
+.settings-link {
+  padding: 4px 8px;
+  color: #1476ff;
+  font-size: 13px;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
+}
+
+.settings-icon-button,
+.settings-card-actions .icon-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #4d4d4d;
+}
+
+.settings-icon-button:hover,
+.settings-card-actions .icon-button:hover {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+.settings-icon-button svg,
+.settings-card-actions .icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: #ececec;
+}
+
+.pill-button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid #dcdcdc;
+  background: #fff;
+  color: #191919;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pill-button:hover {
+  background: #f7f7f7;
+}
+
+.pill-button.is-dark {
+  border-color: #191919;
+  background: #191919;
+  color: #fff;
+}
+
+.pill-button.is-dark:hover {
+  background: #000;
+}
+
+.pill-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.set-head .pill-button.is-dark {
+  margin-left: auto;
+}
+
+.settings-empty {
+  padding: 26px;
+  border: 1px dashed #e0e0e0;
+  border-radius: 12px;
+  color: #a6a6a6;
+  font-size: 13px;
+  text-align: center;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.field-label {
+  color: #4d4d4d;
+  font-size: 12px;
+}
+
+.field-label .opt {
+  margin-left: 4px;
+  color: #a6a6a6;
+}
+
+.field-input,
+.field-select {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  outline: 0;
+  background: #fff;
+  font-size: 13px;
+}
+
+.field-input:focus,
+.field-select:focus {
+  border-color: #191919;
+  box-shadow: 0 0 0 1px #191919;
+}
+
+.field-secret {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.field-secret .field-input {
+  padding-right: 62px;
+}
+
+.field-secret-toggle {
+  position: absolute;
+  right: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #777;
+  font-size: 12px;
+}
+
+.field-secret-toggle:hover {
+  background: #f2f2f2;
+}
+
+.field-row.is-action {
+  display: flex;
+  gap: 8px;
+}
+
+.field-row.is-action .field-input {
+  flex: 1;
+}
+
+.test-result {
+  margin: 6px 0 14px;
+  color: #8a5a00;
+  font-size: 12px;
+}
+
+.test-result.is-ok {
+  color: #1a8a5a;
+}
+
+.test-result.is-fail {
+  color: #c23b3b;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.secondary-button,
+.primary-button {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid #dcdcdc;
+  background: #fff;
+  color: #191919;
+  font-size: 12px;
+}
+
+.secondary-button:hover {
+  background: #f7f7f7;
+}
+
+.primary-button {
+  border-color: #191919;
+  background: #191919;
+  color: #fff;
+}
+
+.primary-button:hover {
+  background: #000;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* A settings form that opens over its page — 添加模型 and 新增/编辑专家. Its
+   own title is the modal's. */
+.settings-modal {
+  width: min(520px, calc(100vw - 64px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  padding: 22px 24px 20px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(25, 25, 25, 0.25);
+}
+
+/* The specialist form stacks a textarea and two checkbox groups, so it needs
+   room the model form's five fields do not. */
+.settings-modal.is-wide {
+  width: min(640px, calc(100vw - 64px));
+}
+
+.settings-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.settings-modal-head h2 {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.settings-modal-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #777;
+  font-size: 18px;
+}
+
+.settings-modal-close:hover {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+/* The specialist form keeps the settings card's stacked rows, but inside a
+   modal the card itself is not a card — only the modal's own surface shows. */
+.settings-modal .settings-card.is-form {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* A field whose label carries a character counter, as the specialist form's
+   name and description do. */
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* A section title has to read before the sentence under it: the title carries
+   the weight and the heading colour, the hint steps back. */
+.settings-field-label {
+  color: #191919;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.settings-field-count {
+  color: #a6a6a6;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-field-hint {
+  color: #808080;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.settings-field-hint.is-error {
+  color: var(--danger);
+}
+
+/* Two short optional fields — the skill form's license and version. */
+.settings-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .settings-field-pair {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The instructions box carries its counter inside the field, clear of the
+   native resize handle in the corner. */
+.settings-textarea-wrap {
+  position: relative;
+  display: block;
+}
+
+.settings-textarea-wrap .field-textarea {
+  display: block;
+  padding-bottom: 28px;
+}
+
+.settings-textarea-count {
+  position: absolute;
+  right: 18px;
+  bottom: 8px;
+  color: #a6a6a6;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ── 能力: the options a specialist may call ─────────────────────────────── */
+
+.settings-ability {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-ability .settings-field-hint {
+  margin-top: -4px;
+}
+
+.settings-ability-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.settings-ability-option.is-selected {
+  border-color: var(--primary);
+  background: var(--primary-softer);
+}
+
+.settings-ability-option input[type="radio"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--primary);
+}
+
+.settings-ability-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-ability-option-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-ability-option-title {
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-ability-default {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.6;
+}
+
+.settings-ability-option-hint {
+  color: #808080;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-ability-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #a6a6a6;
+  font-size: 12px;
+}
+
+.settings-ability-divider::before,
+.settings-ability-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.settings-ability-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-ability-tabs {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.settings-ability-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #777;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.settings-ability-tab:hover {
+  background: var(--surface-soft);
+  color: #191919;
+}
+
+.settings-ability-tab.is-active {
+  border-color: var(--border);
+  background: var(--surface-subtle);
+  color: #191919;
+}
+
+.settings-ability-tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+  color: #777;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.settings-ability-tab.is-active .settings-ability-tab-count {
+  background: #e9e9e9;
+  color: #191919;
+}
+
+.settings-ability-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+  color: #4d4d4d;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.settings-ability-add:hover {
+  border-color: #191919;
+  color: #191919;
+}
+
+.settings-ability-add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-ability-empty {
+  margin: 0;
+  padding: 22px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  color: #a6a6a6;
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.settings-ability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-ability-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.settings-ability-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-ability-remove {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #a6a6a6;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.settings-ability-remove:hover {
+  background: var(--surface-soft);
+  color: #191919;
+}
+
+.settings-ability-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: #777;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.settings-ability-note-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #b3b3b3;
+  border-radius: 50%;
+  color: #8c8c8c;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* The picker is a settings modal nested in the specialist form. */
+.settings-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-picker .settings-ability-tab {
+  height: 32px;
+}
+
+.settings-picker .settings-card-actions {
+  justify-content: flex-end;
+}
+
+.settings-picker-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.settings-picker-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.settings-picker-option + .settings-picker-option {
+  border-top: 1px solid var(--border-soft);
+}
+
+.settings-picker-option:hover {
+  background: var(--surface-subtle);
+}
+
+.settings-picker-option input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--primary);
+}
+
+.settings-picker-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-picker-option-name {
+  color: #191919;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.settings-picker-option-detail {
+  color: #8c8c8c;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings-picker-empty {
+  margin: 0;
+  padding: 28px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  color: #a6a6a6;
+  font-size: 12.5px;
+  text-align: center;
+}
+
+/* A picker nested inside a settings modal covers everything, including the
+   form that opened it. */
+.settings-modal .modal-scrim {
+  z-index: 90;
+  background: rgba(25, 25, 25, 0.18);
+}
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(25, 25, 25, 0.28);
+}
+
+/* ── responsive ───────────────────────────────────────────────────────────────── */
+
+@media (max-width: 1080px) {
+  .sidebar {
+    width: 256px;
+    flex-basis: 256px;
+  }
+}
+
+@media (max-width: 820px) {
+  .sidebar {
+    display: none;
+  }
+
+  .workspace-panel {
+    display: none;
+  }
+}
+
+/* ── additions for the wiring pass ──────────────────────────────────────── */
+
+.settings-note {
+  margin: 0 0 12px;
+  color: #777;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.model-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.pill-button.is-dark {
+  height: 36px;
+  padding: 0 18px;
+  border-color: #191919;
+  background: #191919;
+  color: #fff;
+  font-size: 13px;
+}
+
+.pill-button.is-dark:hover {
+  background: #000;
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.model-row {
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid #e6e6e6;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.model-row-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.model-row-mark.tone-1 { background: #191919; }
+.model-row-mark.tone-2 { background: #7b61ff; }
+.model-row-mark.tone-3 { background: #1476ff; }
+.model-row-mark.tone-4 { background: #1f9d7a; }
+.model-row-mark.tone-5 { background: #d09016; }
+.model-row-mark.tone-6 { background: #d4517d; }
+
+/* The identity of a row is also the control that opens it, so it is a button
+   that has to look like the text it replaces. */
+.model-row-main {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-row-main:hover strong { color: var(--primary-strong); }
+
+.model-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-row-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-row-main small {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #777;
+  font-size: 12.5px;
+}
+
+.model-row-probe {
+  color: #8c8c8c;
+}
+
+.model-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.model-row-actions .sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 6px;
+  background: #ececec;
+}
+
+/* An open row keeps its identity on the first line and takes the editor on a
+   line of its own, so the mark and the actions do not move when it opens. */
+.model-row.is-open {
+  flex-wrap: wrap;
+  border-color: var(--primary-border-soft);
+}
+
+.model-row-detail {
+  flex: 0 0 100%;
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.model-row-detail .field-input { max-width: 360px; }
+
+.model-row-detail-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.model-field {
+  display: grid;
+  gap: 5px;
+}
+
+.model-field > span {
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* A row's delete can fail after its dialog has closed; the message stays on
+   the row it belongs to, on a line of its own. */
+.model-row-failure { flex: 0 0 100%; }
+
+/* The hint and the listing's age share the line under the field: the first
+   explains what the list is, the second when it was read. */
+.model-picker-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.model-picker-source { margin: 0 0 0 auto; }
+
+/* The model dropdown and its refresh share a line: refreshing only makes sense
+   next to the list it replaces, so it sits at the trigger's own baseline rather
+   than at the end of the action row. */
+.model-pick-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.list-select {
+  display: grid;
+  flex: 0 1 360px;
+  gap: 5px;
+  min-width: 0;
+}
+
+.list-select-caption {
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* In a row whose title already names the field, as 界面语言 does. The trigger
+   takes the width its longest choice needs and no more, so it sits at the right
+   edge of the row instead of stretching the card. */
+.list-select.is-bare { flex: 0 0 200px; }
+
+.list-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+  color: #191919;
+  font-size: 13px;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.list-select-trigger:hover:not(:disabled) { border-color: #c9c9c9; }
+
+.list-select-trigger.is-open,
+.list-select-trigger:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(20, 118, 255, 0.12);
+  outline: none;
+}
+
+.list-select-trigger:disabled {
+  background: #fafafa;
+  color: #a6a6a6;
+  cursor: default;
+}
+
+.list-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-select-chevron {
+  flex: 0 0 auto;
+  color: #8c8c8c;
+  transition: transform 0.15s ease;
+}
+
+.list-select-trigger.is-open .list-select-chevron { transform: rotate(180deg); }
+
+/* Portalled to the body: the settings pane scrolls, so a menu drawn inside it
+   would be cut off at the pane's edge. Above the settings surface (1200) and
+   the confirmation dialog (1300), below a toast (2000). */
+.list-select-menu {
+  position: fixed;
+  z-index: 1400;
+  max-height: 264px;
+  overflow-y: auto;
+  /* The list scrolls on its own; reaching its end should not start scrolling
+     the settings pane behind it. */
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid #ececec;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14), 0 2px 6px rgba(15, 23, 42, 0.06);
+  outline: none;
+}
+
+.list-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  color: #2b2b2b;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.list-select-option.is-active { background: #f4f7fd; }
+
+.list-select-option.is-selected {
+  color: var(--primary-strong);
+  font-weight: 500;
+}
+
+.list-select-option.is-disabled {
+  color: #b3b3b3;
+  cursor: default;
+}
+
+.list-select-option.is-disabled.is-active { background: transparent; }
+
+.list-select-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-select-badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #f2f2f2;
+  color: #999;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.list-select-check {
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+
+/* Reads the provider's list again. Neutral at rest — a blue label would claim
+   it is the row's primary action, which is 保存 — and only picks up the accent
+   under the pointer. */
+.model-refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+  color: #6b6b6b;
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.model-refresh:hover:not(:disabled) {
+  border-color: var(--primary-border-soft);
+  background: #f7f9ff;
+  color: var(--primary-strong);
+}
+
+.model-refresh:disabled {
+  background: #fafafa;
+  color: #a6a6a6;
+  cursor: progress;
+}
+
+.model-refresh .spinner {
+  width: 12px;
+  height: 12px;
+  border-color: #e0e0e0;
+  border-top-color: #8c8c8c;
+}
+
+.link-button {
+  padding: 4px 2px;
+  color: #1476ff;
+  font-size: 12.5px;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.model-icon-button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #777;
+}
+
+.model-icon-button:hover:not(:disabled) {
+  background: #f2f2f2;
+  color: #191919;
+}
+
+.model-icon-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.model-icon-button .spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 1.4px;
+}
+
+/* ── delegated subagent ──────────────────────────────────────────────────── */
+
+/* The one line a delegation leaves in the run: same rhythm as a tool call, so
+ *  it reads as part of the work rather than as a second kind of message. It is
+ *  a button because pressing it opens the child's own record in the panel. */
+.subagent-line {
+  display: grid;
+  /* The first column is as wide as a tool card's glyph and the row has no
+     side padding: a delegation has to start on the same vertical as the
+     thought and tool rows above it, not six pixels in. */
+  grid-template-columns: 11px minmax(0, 1fr) auto 12px;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 28px;
+  margin: 4px 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8c8c8c;
+  font: inherit;
+  /* The same 13px as the thought and tool rows: every kind of work in the
+     stream is one size, and only the answer is prose. The 22px line-height
+     and 28px min-height are what hold the row's height, so the rhythm between
+     modules does not move. */
+  font-size: 13px;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.subagent-line:hover {
+  background: #f7f7f7;
+  color: #191919;
+}
+
+.subagent-line-icon {
+  display: inline-grid;
+  place-items: center;
+  color: #b3b3b3;
+  font-size: 12px;
+}
+
+.subagent-line.is-failed .subagent-line-icon,
+.subagent-line.is-timed_out .subagent-line-icon {
+  color: #d84a3a;
+}
+
+.subagent-line-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* "Subagent" names what the row is; the task beside it is only its subject,
+ *  so the label carries the weight and the summary steps back. Both stay in
+ *  the run's quiet gray: a delegation is work, not an answer. */
+.subagent-line-label {
+  flex: 0 0 auto;
+  color: #8c8c8c;
+  font-weight: 500;
+}
+
+.subagent-line-text {
+  min-width: 0;
+  overflow: hidden;
+  color: #8c8c8c;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.subagent-line:hover .subagent-line-label {
+  color: #191919;
+}
+
+.subagent-line:hover .subagent-line-text {
+  color: #6b6b6b;
+}
+
+.subagent-line-status {
+  color: #b3b3b3;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.subagent-line.is-failed .subagent-line-status,
+.subagent-line.is-timed_out .subagent-line-status {
+  color: #d84a3a;
+}
+
+.subagent-line-chev {
+  color: #b3b3b3;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.subagent-line:hover .subagent-line-chev {
+  color: #191919;
+}
+
+/* The subagent mode of the panel: the task, in the place the group tabs
+ *  normally occupy. 团队 is deliberately not one of those tabs, and the head
+ *  carries no back arrow: the transcript line that opened the child is the way
+ *  back out. */
+.panel-head.is-subagent {
+  gap: 8px;
+}
+
+.panel-subagent-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.panel-subagent-label {
+  flex: 0 0 auto;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.panel-subagent-text {
+  min-width: 0;
+  overflow: hidden;
+  color: #8a8a8a;
+  font-size: 13.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.panel-body.is-subagent {
+  display: block;
+  padding: 4px 20px 24px;
+  overflow-y: auto;
+}
+
+.subagent-detail {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.subagent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 14px;
+  border-bottom: 1px solid #ececec;
+  color: #4d4d4d;
+  font-size: 13px;
+}
+
+.subagent-status-icon {
+  display: inline-grid;
+  place-items: center;
+  color: #1476ff;
+}
+
+.subagent-status.is-failed .subagent-status-icon,
+.subagent-status.is-timed_out .subagent-status-icon {
+  color: #d84a3a;
+}
+
+.subagent-status-meta {
+  color: #9a9a9a;
+  font-size: 12px;
+}
+
+.subagent-status-meta::before {
+  margin-right: 8px;
+  color: #b3b3b3;
+  content: "·";
+}
+
+.subagent-error {
+  margin: 14px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(216, 74, 58, 0.06);
+  color: #a3301f;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.subagent-error-title {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.subagent-steps {
+  padding-top: 4px;
+}
+
+.subagent-step {
+  margin: 2px 0;
+}
+
+.subagent-step > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: #4d4d4d;
+  font-size: 13px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.subagent-step > summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-step > summary:hover {
+  background: #f7f7f7;
+}
+
+.subagent-step-icon {
+  width: 14px;
+  display: inline-grid;
+  place-items: center;
+  color: #b3b3b3;
+  font-size: 12px;
+}
+
+.subagent-step.is-failed > summary .subagent-step-icon {
+  color: #d84a3a;
+}
+
+.subagent-step-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-step .collapse-chev {
+  margin-left: auto;
+  color: #b3b3b3;
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+
+.subagent-step[open] > summary .collapse-chev {
+  transform: rotate(90deg);
+}
+
+.subagent-step-body {
+  padding: 4px 8px 10px 30px;
+}
+
+.subagent-step-label {
+  margin: 6px 0 4px;
+  color: #9a9a9a;
+  font-size: 12px;
+}
+
+.subagent-pre {
+  max-height: 320px;
+  margin: 4px 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #f7f7f7;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A tool's result sits in a box of its own, as the child's final answer does,
+ *  so a long result cannot be mistaken for the timeline around it. */
+.subagent-tool-output {
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  background: #fbfbfb;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.subagent-tool-output > :first-child {
+  margin-top: 0;
+}
+
+.subagent-tool-output > :last-child {
+  margin-bottom: 0;
+}
+
+.subagent-tool-output .subagent-pre {
+  margin: 8px 0 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* The panel is read in three parts — what was asked, what was done, what came
+ *  back — so each is named, and the later two are ruled off from the one above.
+ *  Without the headings the brief and the first reply ran together. */
+.subagent-section-title {
+  margin-bottom: 6px;
+  color: #9a9a9a;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* The brief and the timeline are cards that start closed: the panel opens on
+ *  what the child concluded, and each card is a fold the reader opens when the
+ *  answer raises a question. The card is the frame, so what it holds needs no
+ *  box of its own. */
+.subagent-card {
+  margin-top: 14px;
+  border: 1px solid #ececec;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.subagent-card > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.subagent-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-card > summary:hover {
+  background: #fafafa;
+}
+
+.subagent-card[open] > summary {
+  border-bottom: 1px solid #f0f0f0;
+  border-radius: 9px 9px 0 0;
+}
+
+.subagent-card > summary .subagent-section-title {
+  margin-bottom: 0;
+}
+
+.subagent-card > summary .collapse-chev {
+  margin-left: auto;
+  color: #b3b3b3;
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+
+.subagent-card[open] > summary .collapse-chev {
+  transform: rotate(90deg);
+}
+
+.subagent-card-body {
+  padding: 12px 14px 14px;
+}
+
+.subagent-card-body > :first-child {
+  margin-top: 0;
+}
+
+.subagent-card-body > :last-child {
+  margin-bottom: 0;
+}
+
+.subagent-task-paths {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #e0e0e0;
+  font-size: 12px;
+}
+
+/* The path row opens the card body when there is no prompt to separate it from. */
+.subagent-task-paths:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.subagent-task-paths-label {
+  margin-right: 2px;
+  color: #9a9a9a;
+}
+
+/* A path is a token, not a sentence: a chip keeps it apart from the prose
+ *  around it and lets a long name show its tail through the title. */
+.subagent-task-path {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1px solid #e0e0e0;
+  border-radius: 999px;
+  background: #fff;
+  color: #4d4d4d;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A reply is prose, not a row: always open, at the indent of the body above. */
+.subagent-step.is-assistant > .subagent-step-body {
+  padding: 2px 8px 12px 30px;
+  color: #4d4d4d;
+}
+
+.subagent-output {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid #ececec;
+}

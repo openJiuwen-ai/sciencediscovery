@@ -79,7 +79,13 @@ stack_pid=""
 jiuwenswarm_started=0
 fixture_pid=""
 fixture="${CI_E2E_FIXTURE:-standard}"
-case "$fixture" in standard|research|literature) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
+case "$fixture" in standard|research|literature|governed) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
+# Research and literature replace a JiuwenSwarm instance's own tool contracts,
+# so they need that setup and its exclusive-instance guard. The governed
+# download fixture only swaps the API's MCP transport and artifact fetch, which
+# every backend supports, so it must stay off that path.
+swarm_offline_fixture=0
+case "$fixture" in research|literature) swarm_offline_fixture=1 ;; esac
 if [[ "$fixture" != standard && "$group" != mocked ]]; then echo 'Offline fixtures must never reach real E2E' >&2; exit 2; fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -195,23 +201,21 @@ IFS= read -r auth_token < "$auth_token_path"
 
 export SCIENCE_AGENT_AUTH_TOKEN="$auth_token"
 export SCIENCE_DISCOVERY_DATA_DIR="$runtime_root/data"
-# The product's own defaults — 4310/4311, evolve 4313, memory-graph 17674 — belong
+if [[ "$group" == real ]]; then export E2E_BIOMNI_FIXTURE_ROOT="$SCIENCE_DISCOVERY_DATA_DIR"; fi
+# The product's API/Runner/memory-graph default ports belong
 # to the instance a person leaves running. A test stack that reuses them competes
 # with that instance for the port and puts its own address in front of whoever the
 # suite then talks to, so the layer keeps a block of its own. An explicit override
 # still wins, which is how two runs share one machine.
 export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4410}"
 export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4411}"
-export SCIENCE_AGENT_EVOLVE_PORT="${SCIENCE_AGENT_EVOLVE_PORT:-4413}"
 export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774}"
 # Moving a service is only half of it: the API dials each sidecar by URL, and
-# every one of those has its own hardcoded default (see
-# services/api/src/bootstrap/config.ts). Setting only the port starts the
-# service on the new one and leaves the API knocking on the old one, which
-# fails as a connection refused the API reports to the browser as a bare
-# "fetch failed". Derive every URL from the port that was just chosen.
+# Runner and memory-graph still have defaults in API configuration. Derive
+# their URLs from the chosen test ports. Evolve uses private owned control.
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
-export SCIENCE_AGENT_EVOLVE_URL="http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT}"
+# Evolve is started by the source launcher on its owned socket. Do not invent
+# an operator URL here: that explicitly opts out of owned service startup.
 export SCIENCE_AGENT_MEMORY_GRAPH_URL="http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
@@ -248,7 +252,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # docs/en/reference/jiuwenswarm-migration-status.md).
   export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task
   export E2E_SWARM_TASK=1
-  if [[ "$fixture" != standard ]]; then
+  if [[ "$swarm_offline_fixture" == 1 ]]; then
     # Research mocks script platform tool contracts; standard/real use product defaults.
     export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
     export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
@@ -271,7 +275,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     exit 2
   }
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
-  if [[ "$fixture" != standard ]]; then
+  if [[ "$swarm_offline_fixture" == 1 ]]; then
     if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
       echo 'BLOCKED: research fixture refuses to modify a running Swarm instance' >&2; exit 2
     fi
@@ -320,6 +324,13 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   export JIUWENSWARM_GATEWAY_URL JIUWENSWARM_MGMT_URL
 fi
 
+if [[ "$fixture" == governed ]]; then
+  # The governed download journeys only need the API's MCP transport and
+  # artifact fetch to stay on this machine, so they run on either backend.
+  export E2E_GOVERNED_DOWNLOAD_FIXTURE=1
+  export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/governed-download-api.mjs"
+fi
+
 stack_arguments=(--mode local)
 if [[ "$backend" == "jiuwenswarm" ]]; then
   stack_arguments+=(--jiuwenswarm)
@@ -335,13 +346,13 @@ if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
 # journeys reach whoever already owns the address, and the run reports a wall of
 # 401s that reads like a broken token. Say it here instead, while the port is
 # still the answer.
-busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
+busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
 if [[ "$backend" == jiuwenswarm ]]; then
   busy_ports+=("${SCIENCE_AGENT_LEGACY_PORT:-$((SCIENCE_AGENT_PORT + 100))}")
 fi
 for busy_port in "${busy_ports[@]}"; do
   if ss -ltn "sport = :$busy_port" 2>/dev/null | grep -q LISTEN; then
-    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner, evolve and memory-graph ports.\n' \
+    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner and memory-graph ports. Evolve uses a launcher-owned ephemeral port.\n' \
       "$busy_port" | tee -a "$test_log" >&2
     exit 2
   fi

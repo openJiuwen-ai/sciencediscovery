@@ -193,7 +193,8 @@ test("renders Global settings as direct defaults without inheritance or skill co
   assert.match(html, /These settings are the defaults for all Projects and Sessions/);
   assert.match(html, /<option value="model-1" selected="">Primary model · test-model · OpenAI standard · Model default<\/option>/);
   assert.match(html, /type="checkbox" checked=""/);
-  assert.doesNotMatch(html, /Inherit|Override|Built-in fallback|Effective:/);
+  assert.doesNotMatch(html, /Inherit|Override|Effective:/);
+  assert.match(html, /New sessions: Ask for dangerous actions \(source: Built-in fallback\)/);
   assert.doesNotMatch(html, /settings mode/);
   assert.doesNotMatch(html, /managed-workflow|Only use selected skills|Allow all skills/);
 });
@@ -304,4 +305,28 @@ test("with the JiuwenSwarm backend a Session has no skill selection, only a note
   const skillFieldset = html.slice(html.indexOf("<legend>Skills</legend>"), html.indexOf("<legend>Skill libraries</legend>"));
   assert.match(skillFieldset, /one set of skills for every session/);
   assert.doesNotMatch(skillFieldset, /<select|Allow all skills/);
+});
+
+test("connector overrides group data sources, Web access and custom MCP servers like the composer picker", () => {
+  const connectors = [
+    connector,
+    { displayName: "Lab inventory", id: "custom-0123456789ab", publisher: "Lab inventory" } as ConnectorManifest,
+    { displayName: "Web", id: "web", publisher: "ScienceDiscovery" } as ConnectorManifest,
+  ];
+  const renderWith = (settings: RuntimeSettingsDetails) => {
+    const html = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
+      connectors, details: settings, models: [model], onSave: () => undefined, scopeLabel: "Session", skillLibraries, skills,
+    }));
+    return html.slice(html.indexOf("<legend>Connectors</legend>"), html.indexOf("<legend>Skills</legend>"));
+  };
+  const overridden = renderWith(details({ enabledConnectorIds: ["custom-0123456789ab"] }, { enabledConnectorIds: ["custom-0123456789ab"] }));
+  const groups = overridden.split('<div aria-label="').slice(1);
+  assert.deepEqual(groups.map((part) => part.slice(0, part.indexOf('"'))), ["Data sources", "Web access", "Custom MCP"]);
+  const group = (label: string) => groups.find((part) => part.startsWith(`${label}" class="settings-choice-group" role="group"`)) ?? "";
+  assert.match(group("Custom MCP"), /type="checkbox" checked=""\/><span>Lab inventory<\/span>/);
+  // Unchecking Web access is a Session choice like any connector: the override list simply leaves "web" out.
+  assert.match(group("Web access"), /<input type="checkbox"\/><span>Web<\/span>/);
+  assert.match(group("Data sources"), /<input type="checkbox"\/><span>PubMed<\/span>/);
+  // Inheriting keeps today's behaviour: the parent's list applies and no per-connector boxes are shown.
+  assert.doesNotMatch(renderWith(details()), /type="checkbox"/);
 });

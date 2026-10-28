@@ -11,3 +11,4 @@ export * from "./web/broker.js";
 export * from "./web/cache.js";
 export * from "./web/native/index.js";
 export * from "./web/workspace-tools.js";
+export * from "./source-health.js";

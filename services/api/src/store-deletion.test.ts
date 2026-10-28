@@ -51,6 +51,30 @@ test("Session deletion waits for main/child commits and fences late creation; fi
   assert.equal(reopened.getSession(session.id), undefined);
 });
 
+test("an open session stays readable until its catalog deletion commits", async (t) => {
+  const { store, project, session } = await fixture(t);
+  const internal = store as unknown as { saveCatalog(mutate?: () => void): Promise<void> };
+  const save = internal.saveCatalog.bind(store);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  t.after(() => release.resolve());
+  internal.saveCatalog = async (mutate?: () => void) => {
+    if (mutate) {
+      entered.resolve();
+      await release.promise;
+    }
+    await save(mutate);
+  };
+  const deletion = store.deleteSession(session.id, session.id);
+  await entered.promise;
+  assert.ok(store.getSession(session.id), "the session the page is showing is still in the catalog");
+  const created = await store.createSession(project.id, "During delete", {}, {}, { allowUnconfiguredModel: true });
+  release.resolve();
+  await deletion;
+  assert.equal(store.getSession(session.id), undefined);
+  assert.ok(store.getSession(created.id), "a session created while the delete waited is not rolled away");
+});
+
 test("catalog failure rolls back Session root and reopens admission only after restoring files", async (t) => {
   const { store, session, root } = await fixture(t);
   await writeFile(join(root, "input"), "keep");
@@ -84,11 +108,11 @@ test("startup restores a staged Session under its persistent deletion gate", asy
 
 test("Project deletion waits for admitted Session creation and blocks subsequent creation", async (t) => {
   const { store, project } = await fixture(t);
-  const internal = store as unknown as { saveCatalog(): Promise<void> };
+  const internal = store as unknown as { saveCatalog(mutate?: () => void): Promise<void> };
   const save = internal.saveCatalog.bind(store);
   const ready = Promise.withResolvers<void>(); const finish = Promise.withResolvers<void>();
   t.after(() => finish.resolve());
-  internal.saveCatalog = async () => { ready.resolve(); await finish.promise; await save(); };
+  internal.saveCatalog = async (mutate?: () => void) => { ready.resolve(); await finish.promise; await save(mutate); };
   const creation = store.createSession(project.id, "Concurrent", {}, {}, { allowUnconfiguredModel: true });
   await ready.promise;
   let deleted = false;

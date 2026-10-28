@@ -11,7 +11,7 @@ Evaluate material design candidates against configurable multi-dimensional scori
 
 Dispatched by the Lead agent during leaf execution (Step 4.2 of the Idea Tree workflow). The Lead may dispatch multiple independent instances, each loading a different rubric perspective:
 
-```
+```text
 Lead agent
   ├── dispatches: assessment-screener  (rubric: agent-a)  → independent scores
   ├── dispatches: assessment-screener  (rubric: agent-b)  → independent scores
@@ -47,7 +47,7 @@ If no perspective is specified, default to `agent-a`.
 
 Each assessor evaluates 4 role-specific dimensions and produces an `overall_score` (1-10). The server computes the final weighted score:
 
-```
+```text
 final_score = 0.35 × activity_overall + 0.35 × stability_overall + 0.30 × sustainability_overall
 ```
 

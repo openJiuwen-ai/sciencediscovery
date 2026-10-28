@@ -138,7 +138,13 @@ export function contentSections(detail: TrajectoryDetail, zh: boolean): ContentS
     add(tr("工具", "Tool"), [name, status].filter(v => v !== undefined).map(text).join(" · "));
     add(tr("输入参数", "Input arguments"), parseArguments(call.args ?? call.arguments ?? call.input ?? step.args ?? step.input ?? value.arguments ?? request.arguments ?? request.params), "fields");
     if (step.status !== "running") add(tr("执行结果", "Result"), value.content ?? result.content ?? object(result.message).content ?? step.content);
-    if (value.type === "tool.output") add(tr("命令输出", "Command output"), packets.length ? packets.map(p => text(p.chunk ?? p.text ?? p.content ?? p.delta ?? "")).join("") : value.chunk ?? value.text ?? value.delta);
+    if (value.type === "tool.output") {
+      const chunks = (progress: boolean) => packets.filter(p => (p.progress === true) === progress)
+        .map(p => text(p.chunk ?? p.text ?? p.content ?? p.delta ?? "")).join("");
+      add(tr("命令输出", "Command output"), packets.length
+        ? [chunks(true), chunks(false)].filter(Boolean).join("\n\n---\n\n")
+        : value.chunk ?? value.text ?? value.delta);
+    }
     add(tr("MCP 返回", "MCP response"), object(payloads.rawResponse).content ?? payloads.rawResponse ?? payloads.normalizedResult, "fields");
     add(tr("错误", "Error"), value.error ?? call.error);
   } else if (detail.entry.kind === "input") {

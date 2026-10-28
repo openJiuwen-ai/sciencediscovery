@@ -3,7 +3,7 @@
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
-import { requiredArtifacts } from "./helpers/real-delivery.mjs";
+import { deliveryFailureMessage, requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { evaluateTeam } from "./helpers/research-team.ts";
 import { expect } from "@playwright/test";
 import { test, allowRealEnvException, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
@@ -11,12 +11,12 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
-import { startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
+import { deliverableHeadingRule, startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
 
 import { mainRunChain } from "./helpers/run-chain.ts";
 import { RunChainTimeoutError } from "./helpers/journeys.ts";
 
-const prompt = "综述 2020—2025 年 BRCA1 致病性或可能致病性胚系变异与女性乳腺癌风险的证据。提取可追溯的风险比或效应量，按指标类型及可比研究条件分组，进行小规模描述性统计，不进行合并效应估计；提供输入数据、可复现代码和结果。输出含 Methods、Results、References 章节的证据简报，并完成团队配置的交付审核。证据不足时明确说明，不得补造数据。";
+const prompt = "综述 2020—2025 年 BRCA1 致病性或可能致病性胚系变异与女性乳腺癌风险的证据。提取可追溯的风险比或效应量，按指标类型及可比研究条件分组，进行小规模描述性统计，不进行合并效应估计；提供输入数据、可复现代码和结果。输出证据简报：Methods、Results、References 三节都必须使用代码块之外的 Markdown ATX 标题，无编号的 `## Methods` 和带章节号的 `## 3. Methods` 都算，Results、References 同样。只允许去掉标题开头的一个数字章节号（例如 `3.`、`3.1`、`3.1.`、`4)`），章节号后必须有空白；剥掉行末标题标记 `#` 后，剩余文字忽略大小写必须正好是上述一个单词。`## Methods and materials`、`## 3. Methodology`、段落中的同名文字和代码块里的标题都不算。完成团队配置的交付审核。证据不足时明确说明，不得补造数据。";
 const roles = ["literature-searcher", "evidence-extractor", "code-engineer", "result-evaluator", "report-writer"];
 
 function extension(reviewer: string) {
@@ -31,7 +31,7 @@ For machine-readable delivery in this test, declare these final artifacts (norma
 - analysis_results.json: {groups:[{group_key,measure,observation_ids,count,mean,min,max}]} produced by executing the code. Means are descriptive, not pooled clinical effects.
 - evaluation-N.json (N=1..3 per branch): evaluator's original structured evaluation, including verdict or decision and revision_guidance if REVISE. The builtin evaluator uses verdict and may return CONDITIONAL; preserve it verbatim rather than fabricating decision. CONDITIONAL is an incomplete quality outcome, not unconditional acceptance. A formatting re-emission is not a new evaluation round.
 - analysis_summary.md: integrate actual analysis outputs, methods, caveats and reproducibility information.
-- evidence_brief.md: report-writer output consuming both summaries, with exact Markdown Methods, Results, References headings and source-linked citations. This is the report to audit.
+- evidence_brief.md: report-writer output consuming both summaries, with source-linked citations. Heading rule: ${deliverableHeadingRule} The coordinator must copy this heading rule verbatim into the Format Expectation delegated to report-writer; do not omit it or replace these three required sections with the default seven-section template. This is the report to audit.
 The reviewer must not rewrite the report. Explicitly name evidence_brief.md in the final response and append the audit's ok and missing values. No silent replacement of failed specialists or invented results.`;
 }
 
@@ -139,10 +139,23 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
       terminal = stopped.status === "stopped";
     }
     metrics.generation_duration_ms = Date.now() - started;
+    metrics.budget_exceeded = metrics.run_status === "budget_exhausted";
+    metrics.cancel_requested = metrics.budget_exceeded;
+    // Session shutdown records cancel outcome in metrics.shutdown; HTTP status is not always available.
+    metrics.cancel_http_status = null;
+    // Persist timeout attribution before delivery collection can throw.
+    if (metrics.budget_exceeded) metrics.integration = "timed_out";
     await save("team-metrics.json", metrics);
     const delivery = await collectFinalDelivery(page, fixture.session.id, runId, metrics.initial_run_id);
     metrics.delivery = delivery;
-    metrics.integration = metrics.run_status === "budget_exhausted" && delivery.status === "passed" ? "partial" : delivery.status;
+    if (metrics.budget_exceeded) {
+      // Budget exhaustion stays timed_out even if cancellation raced to a terminal delivery.
+      metrics.integration = "timed_out";
+    } else if (delivery.status === "passed") {
+      metrics.integration = "passed";
+    } else {
+      metrics.integration = delivery.status;
+    }
     const required = requiredArtifacts(delivery.artifacts, ["evidence_brief.md"]);
     metrics.required_outputs = { missing: required.missing };
     if (required.missing.length && delivery.status === "passed") {
@@ -153,8 +166,11 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     await save("team-metrics.json", metrics);
     children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
+    expect(metrics.budget_exceeded,
+      `Team run exceeded ${budget}ms budget after ${metrics.generation_duration_ms}ms; cancel requested=${metrics.cancel_requested}, HTTP=${metrics.cancel_http_status}, observed delivery=${delivery.status}, run=${delivery.run_status}`
+    ).toBe(false);
     expect(metrics.run_status, "A budget-expired generation is not a passed E2E, even if partial artifacts exist").not.toBe("budget_exhausted");
-    expect(delivery.status, "Main run must complete with readable, nonempty declared final artifacts").toBe("passed");
+    expect(delivery.status, deliveryFailureMessage(delivery)).toBe("passed");
     expect(required.missing, "The final handoff must include the audited evidence brief").toEqual([]);
     try {
       const catalog = await api<any[]>(`${prefix}/artifacts`);
@@ -179,6 +195,9 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     metrics.quality = metrics.evaluation.status;
     await info.attach("quality-scorecard", { contentType: "application/json", body: JSON.stringify(metrics.evaluation, null, 2) });
 
+  } catch (error) {
+    metrics.error = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
     metrics.finished_at = new Date().toISOString();
     if (fixture) {
@@ -190,6 +209,7 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
       metrics.usage = await api(`${prefix}/usage`).catch(() => null);
       children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     }
+    // timed_out must stay distinct from delivery failure; only remap leftover running.
     if (metrics.integration === "running") metrics.integration = "failed";
     await save("team-metrics.json", metrics); await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
     await info.attach("team-metrics", { path: info.outputPath("team-metrics.json"), contentType: "application/json" });

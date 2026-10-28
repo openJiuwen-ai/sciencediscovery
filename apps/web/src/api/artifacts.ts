@@ -541,6 +541,41 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
   }
 
+  async uploadDroppedFiles(sessionId: string, files: File[]): Promise<WorkspaceUploadResult> {
+    const isPdf = (file: File) => file.type.toLowerCase() === "application/pdf" || /\.pdf$/i.test(file.name);
+    const papers = files.filter(isPdf);
+    const attachments = files.filter((file) => !isPdf(file));
+    if (!papers.length) return this.uploadWorkspaceFiles(sessionId, attachments);
+
+    const result: WorkspaceUploadResult = { errors: [], files: [], uploaded: [] };
+    const failed = (file: File, reason: unknown) => {
+      const error = reason instanceof Error ? reason.message : String(reason);
+      result.errors.push({ error, name: file.name });
+      result.uploaded.push({ error, originalName: file.name, status: "failed" });
+    };
+    if (attachments.length) {
+      try {
+        const uploaded = await this.uploadWorkspaceFiles(sessionId, attachments);
+        result.uploaded.push(...uploaded.uploaded);
+        result.errors.push(...uploaded.errors);
+      } catch (reason) {
+        for (const file of attachments) failed(file, reason);
+      }
+    }
+    // Reuse paper intake so the session receives the extraction and provenance.
+    // Parse sequentially and retain per-file errors so one bad PDF cannot stop a batch.
+    for (const file of papers) {
+      try {
+        const paper = await this.uploadPaper(sessionId, file);
+        result.uploaded.push({ originalName: file.name, path: paper.pdfPath, size: file.size, status: "created" });
+      } catch (reason) {
+        failed(file, reason);
+      }
+    }
+    result.files = await this.listFiles(sessionId);
+    return result;
+  }
+
   getWorkspaceCapabilities(): Promise<WorkspaceCapabilities> {
     return this.request<{ workspace?: WorkspaceCapabilities }>("/api/health").then((health) => ({
       maxFileBytes: health.workspace?.maxFileBytes ?? 1_073_741_824,

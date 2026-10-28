@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { CodexConfigCard } from "./CodexConfigCard.js";
 import type { ComposerReference, SkillReviewDraftSummary, Subagent } from "@sciencediscovery/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale } from "./i18n/index.js";
 import { BrandIcon, ChevronDownIcon, ChevronRightIcon, WarningIcon } from "./icons.js";
 import { MarkdownRenderer } from "./Markdown.js";
+import { MessageTime } from "./MessageTime.js";
 import { subagentStatusLabel } from "./Orchestration.js";
 import { RunTimeline, type RunTimelineEntry } from "./timeline/RunTimeline.js";
+
+import { evidencePreview, reportedFailure } from "./timeline/research-label.js";
 
 const TURN_STARTED = /^Turn (\d+) started$/i;
 
@@ -50,14 +54,17 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
     }
 
     if (step.kind === "tool") {
+      const output = status !== "running" || (step.input !== undefined && step.content !== step.input) ? step.content : undefined;
       entries.push({
+        ...(output ? { preview: evidencePreview(output), ...(status === "running" ? { liveFailure: reportedFailure(output) } : {}) } : {}),
         expanded: status === "running",
         id,
         trace: {
           id: `${subagent.id}:${step.toolCallId ?? step.id}`,
           ...(step.input !== undefined ? { input: step.input } : {}),
           name: step.toolName ?? "tool",
-          ...(status === "running" ? {} : { output: step.content }),
+          ...(output !== undefined ? { output: status !== "running" && step.progress ? `${step.progress}\n\n---\n\n${output}` : output } : {}),
+          ...(step.args ? { args: step.args } : {}),
           status,
         },
         type: "tool",
@@ -65,7 +72,7 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
       continue;
     }
 
-    entries.push({ content: step.content, id, type: "assistant" });
+    entries.push({ content: step.content, createdAt: step.createdAt, id, type: "assistant" });
   }
 
   return entries;
@@ -149,6 +156,7 @@ export function SubagentConversation({
 
   const roleLabel = specialistName ? t("subagent.roleWithSpecialist", { name: specialistName }) : t("subagent.role");
   return <section aria-label={t("subagent.pageAria", { description: subagent.input.description })} className="conversation subagent-conversation">
+    <CodexConfigCard key={subagent.runtimeInput?.id} subagent={subagent} />
     <header className="session-bar subagent-session-bar">
       <div className="subagent-session-bar-title">
         <button aria-label={t("subagent.backToMain")} className="icon-button subagent-back-button" onClick={onBack} title={t("subagent.backToMain")} type="button"><ChevronRightIcon size={17} /></button>
@@ -172,7 +180,7 @@ export function SubagentConversation({
       <article className="message user subagent-prompt-message">
         <div className="avatar"><BrandIcon size={18} /></div>
         <div>
-          <span className="message-role">{t("subagent.coordinator")}</span>
+          <span className="message-meta"><span className="message-role">{t("subagent.coordinator")}</span><MessageTime value={subagent.createdAt} /></span>
           <MarkdownRenderer className="message-content" content={subagent.input.prompt} />
         </div>
       </article>

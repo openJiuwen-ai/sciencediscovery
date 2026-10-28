@@ -1,0 +1,511 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 100:477 */
+/* ===== app shell =====
+   Three columns, one viewport tall, and the shell itself never scrolls: the
+   conversation and the workspace panel each own their own overflow, which is
+   what keeps the composer pinned to the bottom of the middle column.
+   The third track is a variable because the user can drag it: `App` sets
+   `--panel-width` on this element, and the panel reads the same value for its
+   own width, so the column and what fills it cannot disagree. */
+.app-shell {
+  display: grid;
+  grid-template-columns: 256px minmax(0, 1fr) var(--panel-width, 360px);
+  grid-template-rows: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+/* While the splitter is being dragged the pointer is over whatever it has been
+   dragged across, so the cursor and the text selection have to be pinned to the
+   drag rather than to whatever is underneath it. The descendants need the
+   declaration as much as the body does, and with `!important`: a file row is
+   `cursor: pointer` and a button is `cursor: pointer` from the user agent, and
+   either of them would take the cursor back the moment the drag crossed it. */
+body.is-resizing,
+body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+/* Collapsed is a zero-width third column rather than `display: none`, so the
+   middle column keeps its own width instead of reflowing mid-animation. */
+.app-shell.workspace-hidden {
+  grid-template-columns: 256px minmax(0, 1fr) 0;
+}
+/* A closed column is zero thin, and a panel inside it would only be a one-pixel
+   strip: hiding it is the same state, said once. */
+.app-shell.workspace-hidden .workspace-panel {
+  display: none;
+}
+
+/* ===== sidebar ===== */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 16px 18px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-subtle);
+  /* The column itself does not scroll: the 最近 list below takes the height
+     that is left and scrolls on its own, so the brand, 新增会话 and the
+     settings entry stay where they are while a long list moves. */
+  overflow: hidden;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 6px 6px;
+}
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-strong) 100%);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .35);
+}
+.brand-text { min-width: 0; }
+.brand-text strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -.015em;
+  color: var(--text-strong);
+}
+.brand-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.brand-status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success-bright);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+
+.resource-block { display: flex; flex: 1 1 auto; flex-direction: column; gap: 6px; min-height: 0; }
+.resource-block + .resource-block { margin-top: 6px; }
+.resource-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.resource-label .count {
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.resource-add {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.resource-add:hover { border-color: var(--primary-border-soft); background: var(--primary-soft); color: var(--primary-strong); }
+
+
+/* ===== new-session button ===== */
+.new-session-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.new-session-btn:hover {
+  border-color: var(--primary-border-soft);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+}
+.new-session-plus { font-size: 14px; line-height: 1; }
+
+/* ===== the session list ===== */
+.recent-label { margin-top: 10px; }
+.side-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  transition: background .12s ease, color .12s ease;
+}
+.side-session:hover { background: var(--surface-hover); color: var(--text-strong); }
+.side-session.active {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+  font-weight: 650;
+}
+.side-session-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Scrolling belongs to this list and to one axis only: a vertical bar on the
+   session column's right edge when the sessions no longer fit. `overflow-x`
+   has to be said out loud — `overflow-y: auto` alone computes the other axis
+   to `auto` too, which is how a horizontal bar ends up under the list. */
+.recent-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+.recent-list::-webkit-scrollbar { width: 8px; }
+.recent-list::-webkit-scrollbar-track { background: transparent; }
+.recent-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+
+/* ===== sidebar footer: settings entry pinned to the bottom ===== */
+.sidebar-spacer { flex: 0 0 auto; min-height: 12px; }
+.sidebar-foot { border-top: 1px solid var(--border); padding-top: 10px; }
+.side-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  color: var(--text-secondary);
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background .12s ease, color .12s ease;
+}
+.side-action:hover { background: var(--surface-hover); color: var(--text-strong); }
+.side-action-icon {
+  width: 16px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+}
+.icon-button:hover { background: var(--surface-hover); color: var(--text-heading); }
+
+/* ===== main area ===== */
+.main-area {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.session-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 50px;
+  padding: 8px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex: 0 0 auto;
+}
+.breadcrumb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* The crumb is the session alone now, so the bar's width is its own. */
+  max-width: 420px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crumb:hover { color: var(--primary-strong); background: var(--primary-soft); }
+.crumb.current { color: var(--text-strong); font-weight: 700; }
+
+/* The bar holds two groups: the crumb on the left, and the workspace toggle pinned right.
+   Renaming and retiring a session live on its sidebar row, so the bar does not repeat
+   them behind a ⋯. */
+.bar-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.bar-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 168px;
+  padding: 5px 8px 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: left;
+  transition: border-color .12s ease, background .12s ease;
+}
+.bar-search:hover { border-color: var(--border-strong); background: var(--surface); }
+.bar-search-glyph { flex: 0 0 auto; font-size: 13px; }
+.bar-search-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bar-search kbd {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.bar-icon-button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+  font-size: 15px;
+  transition: background .12s ease, color .12s ease;
+}
+.bar-icon-button:hover { background: var(--surface-hover); color: var(--text-heading); }
+.conversation {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 2378:2506 */
+/* ============================================================================
+   Sidebar: per-row controls, inline rename, drag-to-project
+   ============================================================================ */
+
+/* Revealed on hover so the resting list stays quiet; pinned open for the active row. */
+.side-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-s);
+  min-width: 0;
+}
+.side-row:hover { background: var(--surface-hover); }
+.side-row > .side-session { background: transparent; }
+.side-row.is-active { background: var(--surface-hover); }
+.side-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 4px;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.side-row:hover .side-actions,
+.side-row:focus-within .side-actions { opacity: 1; }
+/* Touch and keyboard users never get a hover; the active row keeps its controls. */
+.side-row.is-active .side-actions { opacity: 1; }
+.side-mini-button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  color: var(--text-faint);
+  font-size: 13px;
+  transition: background .12s ease, color .12s ease;
+}
+.side-mini-button:hover { background: var(--surface-sunk); color: var(--text-heading); }
+.side-mini-button.is-add { font-size: 14px; }
+.side-mini-button:hover.is-add { color: var(--primary-strong); }
+
+/* In-place rename: swaps the label for an input, same metrics so nothing shifts. */
+.side-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  outline: 0;
+}
+
+/* A session that has a run in flight: it can be neither archived nor deleted, so the row
+   says so rather than offering actions that would fail. */
+.side-session-lock {
+  flex: 0 0 auto;
+  color: var(--insight-strong);
+  font-size: 11px;
+}
+.side-session.is-running .side-session-name { color: var(--text-strong); }
+
+/* The list before there is anything in it. */
+.side-empty {
+  margin: 6px 0 2px;
+  padding: 6px 8px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* ---- shared popup menu (project / session ⋯) ---- */
+.ctx-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 168px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: ctxIn .12s ease;
+}
+@keyframes ctxIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+}
+.ctx-item:hover { background: var(--surface-hover); }
+.ctx-item[disabled] {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+.ctx-item[disabled]:hover { background: transparent; }
+.ctx-item.is-danger { color: var(--danger-bright); }
+.ctx-item.is-danger:hover { background: var(--danger-soft); }
+.ctx-item-icon { width: 14px; display: grid; place-items: center; font-size: 12px; }
+/* The label takes the room the ✓ needs, so every row's check lines up in the
+   same column whether or not the row is the one chosen. */
+.ctx-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-item-check { flex: 0 0 auto; color: var(--text); font-size: 12px; }
+.ctx-divider { height: 1px; margin: 4px 6px; background: var(--border-soft); }
+/* The reason a disabled entry is disabled, spelled out rather than hidden. */
+.ctx-note {
+  padding: 5px 9px 6px 31px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+
+/* 4006:4014 */
+/* ===== responsiveness ===== */
+@media (max-width: 1100px) {
+  .app-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  .workspace-panel { display: none !important; }
+}
+@media (max-width: 720px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+}
+
+
+/* The status dot is the only place the connection state appears, so it has to
+   change colour and not merely wording. The prototype has no such state: it
+   never talks to a real service. */
+.brand-status.is-degraded .dot {
+  background: var(--warning-strong);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+.brand-status.is-offline .dot {
+  background: var(--danger-bright);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+

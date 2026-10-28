@@ -168,15 +168,25 @@ class IdeaTreeEngine:
     def assessors(self):
         return self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))['assessors']
 
-    def transport(self, system, payload, ceiling):
+    def role_effort(self, role):
+        """The stage's own thinking effort, if one was configured; assessors share `assess`."""
+        stage = 'assess' if role in {item['id'] for item in self.assessors()} else role
+        return self.state['settings'].get('roleThinkingEfforts', {}).get(stage)
+
+    def transport(self, system, payload, ceiling, effort=None):
         # No temperature: some gateways accept only their own value (Kimi: "only 1 is allowed"). See completion.py.
-        body = json.dumps(dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)).encode()
+        fields = dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)
+        if effort:
+            # The control plane narrows it to a stop the model accepts.
+            fields['reasoning_effort'] = effort
+        body = json.dumps(fields).encode()
         request = urllib.request.Request(self.endpoint['url'], data=body, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.endpoint['token']})
         for attempt in range(2):
             try:
                 with urllib.request.urlopen(request, timeout=1230) as response:
                     result = json.load(response)
-                return result['choices'][0]['message']['content'], result.get('usage', {}).get('total_tokens')
+                usage = result.get('usage')
+                return result['choices'][0]['message']['content'], usage.get('total_tokens') if isinstance(usage, dict) else None
             except urllib.error.HTTPError as error:
                 if error.code >= 500 and attempt == 0:
                     continue
@@ -216,28 +226,32 @@ class IdeaTreeEngine:
             estimate = len((system + json.dumps(payload, ensure_ascii=False)).encode()) + ceiling + 256
             async with self.usage_lock:
                 budget = self.state['settings'].get('maxTokens')
-                if budget and self.state['tokens'] + self.reserved + estimate > budget:
+                if budget and self.state['tokens'] + self.state.get('unreportedBudgetEstimate', 0) + self.reserved + estimate > budget:
                     raise BudgetReached('Remaining token budget cannot fund the next stage')
                 self.reserved += estimate
-            usage = 0
+            usage = None
+            received = False
             try:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
-                    raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling)
+                    raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling, self.role_effort(role))
+                received = True
             finally:
                 async with self.usage_lock:
                     # Settle actual usage and release its reservation together.
-                    if isinstance(usage, int) and not isinstance(usage, bool) and usage >= 0:
+                    if isinstance(usage, int) and not isinstance(usage, bool) and 0 <= usage <= 2**53 - 1:
                         self.state['tokens'] += usage
                     else:
                         self.state['usageKnown'] = False
+                        # Admission reserve only, never reported usage or a cost estimate.
+                        if received:
+                            self.state['unreportedBudgetEstimate'] = self.state.get('unreportedBudgetEstimate', 0) + estimate
                     self.reserved -= estimate
-                    missing_usage = budget and not self.state['usageKnown']
             self.save()
             self.check_stop()
-            if missing_usage:
-                raise RuntimeError('Model did not report token usage; cannot enforce the configured token budget')
+            if raw is None or isinstance(raw, str) and not raw.strip():
+                raise ValueError(f'{role}: empty or truncated model output; stage cannot continue')
             try:
                 result = validate_result(role, parse_json(raw), {item['id'] for item in self.assessors()})
                 if check:

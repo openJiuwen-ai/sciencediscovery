@@ -23,8 +23,10 @@ import { activityCardId, type ActivityCardDisclosure } from "./session/run-activ
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
 const ACTION_LABELS: Record<PermissionRequest["action"], MessageKey> = {
+  sandbox_network: "permissions.sandboxNetwork",
   artifact_download: "permissions.download",
   code: "permissions.code",
+  direct_code: "permissions.directExecution",
   connector: "permissions.connector",
   directory: "permissions.directory",
   host: "permissions.host",
@@ -67,12 +69,12 @@ export function PermissionCards({
       return <article className="permission-card" key={request.id}>
         <button aria-expanded={expanded} className="permission-card-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
           <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4>{request.summary}</h4></span>
+          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4 style={request.action === "direct_code" ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : undefined}>{request.summary}</h4></span>
         </button>
         {expanded ? <div className="permission-card-body">
           <code>{request.resource}</code>
         </div> : null}
-        <PermissionDecisionActions busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
+        <PermissionDecisionActions action={request.action} resource={request.resource} busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
       </article>;
     })}
   </section>;
@@ -88,6 +90,6 @@ export function PermissionGrantManager({
   const { t } = useLocale();
   return <div className="permission-grant-manager">
     <div className="settings-detail-header"><span className="eyebrow">{t("permissions.governance")}</span><h3>{t("permissions.grants")}</h3><p>{t("permissions.grantsHelp")}</p></div>
-    {grants.length ? grants.map((grant) => <article className="permission-grant" key={grant.id}><div><strong>{t(ACTION_LABELS[grant.action])}</strong><small>{grant.resource} · this Session</small></div><button className="danger-button" onClick={() => onRevoke(grant)} type="button">{t("permissions.revoke")}</button></article>) : <p className="muted">{t("permissions.noGrants")}</p>}
+    {grants.length ? grants.map((grant) => <article className="permission-grant" key={grant.id}><div><strong>{t(ACTION_LABELS[grant.action])}</strong><small>{grant.resource} · {grant.action === "sandbox_network" ? t("permissions.grantScopeSandboxNetworkRun") : "this Session"}</small></div><button className="danger-button" onClick={() => onRevoke(grant)} type="button">{t("permissions.revoke")}</button></article>) : <p className="muted">{t("permissions.noGrants")}</p>}
   </div>;
 }

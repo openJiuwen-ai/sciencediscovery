@@ -703,7 +703,7 @@ Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
 License: MIT
 Please see above
 
-Software: commander 8.3.0
+Software: commander 15.0.0
 Copyright notice:
 Copyright (c) 2011 TJ Holowaychuk <tj@vision-media.ca>
 License: MIT
@@ -1808,7 +1808,7 @@ Copyright (c) 2017 Evgeny Poberezkin
 License: MIT
 Please see above
 
-Software: katex 0.16.47
+Software: katex 0.18.10
 Copyright notice:
 Copyright (c) 2013-2020 Khan Academy and other contributors
 License: MIT
@@ -3734,7 +3734,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Software: undici 8.9.0
+Software: undici 8.12.2
 Copyright notice:
 Copyright (c) Matteo Collina and Undici contributors
 License: MIT

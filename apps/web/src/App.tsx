@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useMcpReadiness } from "./composer/useMcpReadiness.js";
 import { ExecutionBlockCards } from "./ExecutionReadiness.js";
 
 import {
@@ -106,18 +108,16 @@ import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery
 import {
   classifyScientificArtifact,
   createLocalSessionTitle,
-  isEvolveRunActive,
   resolveScientificArtifactKind,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
 
-/** How often the workspace card re-reads the run list while a search is live.
- *  Slower than the panel's SSE stream on purpose: this is a card showing a
- *  count and a status, not a progress view. */
-const EVOLVE_CARD_POLL_MS = 3_000;
-
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
+import { sessionDisplayTitle } from "./session-title.js";
+import { replaceDefaultModelOverride } from "./default-model-override.js";
+import { settleLoads, startupLoads, systemSettingsLoads, workspaceCapabilitiesFromQuota } from "./settings-loads.js";
 import { isAuthFailure } from "./api/auth.js";
+import { classifySessionPollMiss } from "./api/session-miss.js";
 import { TrajectoryViewer } from "@sciencediscovery/trajectory/web";
 import { createSessionActivity } from "./run-stream/session-activity.js";
 import { groupArtifactsBySession, upsertArtifactSession } from "./artifact-session-groups.js";
@@ -143,6 +143,7 @@ import {
   ImageIcon,
   InfoIcon,
   MarkdownIcon,
+  MenuIcon,
   NotebookIcon,
   PanelRightIcon,
   ProjectIcon,
@@ -159,6 +160,7 @@ import {
   UploadIcon,
 } from "./icons.js";
 import { CopyButton } from "./CopyButton.js";
+import { ProjectDescriptionEditor } from "./ProjectDescriptionEditor.js";
 import { findMarkdownFigureArtifact, KIND_TO_LABEL, MarkdownRenderer } from "./Markdown.js";
 import {
   DeletionDialog,
@@ -202,6 +204,8 @@ import { AgentActivityPanel, type ActivityFocus } from "./AgentActivityPanel.js"
 import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
+import { SourcePreview } from "./SourcePreview.js";
+import { readPreviewText } from "./source-preview.js";
 import { WorkspaceFileProvenanceModal } from "./WorkspaceFileProvenanceModal.js";
 import {
   artifactArchiveBlob,
@@ -231,21 +235,30 @@ import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRe
 import { EvidenceModal } from "./EvidenceModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
+import { MessageTime } from "./MessageTime.js";
 import { isMemoryGraphVisible, MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
+import { EvolveSetup, useEvolveStatus } from "./evolve/EvolveSetup.js";
 import { EvolveAlgorithmPicker } from "./evolve/EvolveAlgorithmPicker.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
+import { useEvolveRunPolling } from "./evolve/useEvolveRunPolling.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // The full-screen explorer is heavy (d3-force + the artifacts panel) and only
 // opened on demand, so it is split out of the main bundle. Lazy-imported at the
 // App layer so the right-rail card can open it directly (previously the only
 // entries were the per-product modals).
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
+// The interactive CSV viewer carries Plotly; it loads only when a table opens.
+const CsvArtifactWindow = lazy(() => import("./csv-artifact/CsvArtifactWindow.js"));
+import type { CsvViewerSource } from "./csv-artifact/types.js";
+import { opensInCsvViewer } from "./csvArtifact.js";
 import { IdeaTreeView } from "./IdeaTreeView.js";
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
+import { automaticReviewComposerState } from "./automatic-review-composer.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
 import { ReviewerPanel } from "./ReviewerPanel.js";
 import { ToastViewport, useToasts } from "./Toasts.js";
+import { watchLocalAccessToken } from "./local-access-token.js";
 import { createAuthTokenPromptGate } from "./auth-token-prompt.js";
 import { InlineErrorAlert, updateInlineErrors } from "./InlineErrorAlert.js";
 import { createSettingsErrorRouter } from "./settings-error-routing.js";
@@ -295,7 +308,6 @@ import {
   buildConversationBlocks,
   followSessionTitleRefinement,
   forgetSession,
-  getVisibleProjects,
   messageForSessionTitle,
   sortSessionRuns,
 } from "./session/model.js";
@@ -855,10 +867,16 @@ export function remoteCredentialDraftSaveError(editing: boolean): string | undef
 
 function measureWorkspaceMaxWidth(): number {
   if (typeof window === "undefined") return DEFAULT_WORKSPACE_WIDTH;
-  const sidebarWidth = typeof document === "undefined"
+  const sidebar = typeof document === "undefined"
+    ? undefined
+    : document.querySelector<HTMLElement>(".sidebar") ?? undefined;
+  // Below the 1024px breakpoint the sidebar is a fixed off-canvas drawer and
+  // no longer takes layout width, so it must not shrink the workspace budget.
+  const sidebarWidth = sidebar === undefined
     ? fallbackSidebarWidth(window.innerWidth)
-    : document.querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().width
-      ?? fallbackSidebarWidth(window.innerWidth);
+    : getComputedStyle(sidebar).position === "fixed"
+      ? 0
+      : sidebar.getBoundingClientRect().width;
   return workspaceMaxWidth(window.innerWidth, sidebarWidth);
 }
 
@@ -1047,6 +1065,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [, setPermissionEpoch] = useState<PermissionEpoch>();
   const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
+  // The governed-download poll needs to know which permissions the UI already
+  // holds. A ref, not the array as a dependency: depending on it would restart
+  // that poll on every permission change.
+  const permissionRequestIdsRef = useRef<ReadonlySet<string>>(new Set());
+  permissionRequestIdsRef.current = new Set(permissionRequests.map((request) => request.id));
   const [executionRuns, setExecutionRuns] = useState<ExecutionRun[]>([]);
   const [derivations, setDerivations] = useState<ArtifactDerivation[]>([]);
   const [promptManifests, setPromptManifests] = useState<PromptManifest[]>([]);
@@ -1129,8 +1152,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
-  const showEvolveAlgorithmPicker =
-    /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
+
 
   function selectEvolveAlgorithm(algorithm: "puct" | "openevolve"): void {
     const afterCommand = message.replace(/^\/evolve-design\s*/, "");
@@ -1157,7 +1179,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sandboxNetworkSettings, setSandboxNetworkSettings] = useState<SandboxNetworkSettings>();
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
-  const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
   const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
@@ -1197,9 +1218,20 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [sidebarSplit, setSidebarSplit] = useState(36);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [sidebarDrawerOpen, setSidebarDrawerOpen] = useState(false);
+  const sidebarDrawerToggleRef = useRef<HTMLButtonElement>(null);
+  const sidebarDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const [projectCreationOpen, setProjectCreationOpen] = useState(false);
   const [sessionCreationPending, setSessionCreationPending] = useState(false);
-  const [markdownDocument, setMarkdownDocument] = useState<{ content: string; path: string }>();
+  const [workspaceDocument, setWorkspaceDocument] = useState<{ content: string; path: string; file: Blob; markdown: boolean }>();
+  const [workspaceTable, setWorkspaceTable] = useState<{
+    content: string;
+    fileName: string;
+    source: Extract<CsvViewerSource, { kind: "workspace" }>;
+  }>();
+  // Stable so the viewer's open/close effect (body scroll lock, initial focus)
+  // does not re-run on every App render while a run streams.
+  const closeWorkspaceTable = useCallback(() => setWorkspaceTable(undefined), []);
   const [artifactModalName, setArtifactModalName] = useState<string | undefined>(() => initialView.artifact);
   // The version a chip pinned (the one its claim cited) so the ArtifactModal
   // opens that version instead of the drifted-latest. Cleared on navigation.
@@ -1279,6 +1311,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const authPromptGate = useRef(createAuthTokenPromptGate());
   const activeTokenRef = useRef(token);
   activeTokenRef.current = token;
+  useEffect(() => watchLocalAccessToken(window, (nextToken) => {
+    activeTokenRef.current = nextToken;
+    setToken(nextToken);
+  }), []);
   const promptForToken = useCallback(() => {
     if (activeTokenRef.current !== token) return; // Ignore a late verdict on the previous credential.
     setTokenRejected(Boolean(token));
@@ -1287,6 +1323,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const mcpReadiness = useMcpReadiness(client);
+  const mcpSources = mcpReadiness.sources;
+
+  const { status: evolveStatus, setStatus: setEvolveStatus } = useEvolveStatus(client);
+  const evolveReady = evolveStatus.state === "ready";
+  const evolveCommandBlocked = /^(?:\/evolve-design|\/idea-tree(?:-team)?)(?:\s|$)/.test(message) && !evolveReady;
+  const showEvolveAlgorithmPicker =
+    evolveReady && /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
   // With the JiuwenSwarm backend its language follows the UI's: on load, and whenever the user switches.
   useEffect(() => {
     if (webSettings?.backend !== "jiuwenswarm") return;
@@ -1299,36 +1343,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // without the panel holding its own stale copy.
   const openEvolveRun = evolveRuns.find((run) => run.id === openEvolveRunId);
 
-  useEffect(() => {
-    if (!activeSessionId) {
-      setEvolveRuns([]);
-      return;
-    }
-    let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // The card carries an expansion count and a status, so it cannot be a
-    // one-shot read: a search left running behind a closed panel froze at
-    // whatever "19/20" it happened to be at when the list was fetched, and
-    // only a session switch corrected it. Poll while at least one run is
-    // active, stop as soon as none are — a session whose searches have all
-    // finished settles back to zero requests.
-    const load = () => {
-      void client.listEvolveRuns(activeSessionId)
-        .then((runs) => {
-          if (!live) return;
-          setEvolveRuns(runs);
-          if (runs.some((run) => isEvolveRunActive(run.status))) {
-            timer = setTimeout(load, EVOLVE_CARD_POLL_MS);
-          }
-        })
-        // A session with no runs is the common case and 404s nothing; a failure
-        // here must not take the workspace panel down with it. Polling stops:
-        // a broken list will not fix itself by being asked again every 3s.
-        .catch(() => { if (live) setEvolveRuns([]); });
-    };
-    load();
-    return () => { live = false; if (timer) clearTimeout(timer); };
-  }, [activeSessionId, client, evolveRefreshKey]);
+  useEvolveRunPolling(client, activeSessionId, evolveReady, evolveRefreshKey, setEvolveRuns);
   // The session-bar badge needs the catalog whenever a Session is open, not
   // only when one is pinned to a remote host.
   useEffect(() => {
@@ -1359,6 +1374,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
   }, [artifacts, client, session?.id]);
   const openMarkdownImageArtifacts = useCallback(() => {
+    setSidebarDrawerOpen(false);
     setWorkspaceView("session");
     setWorkspaceCollapsed(false);
     window.requestAnimationFrame(() => {
@@ -1443,46 +1459,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   useEffect(() => {
     if (!showConfig) return;
     let active = true;
-    // The provider registry loads on its own: an unrelated settings request
-    // failing must not leave the model wizard without its preset list.
-    void client.listProviders().then((registry) => {
-      if (!active) return;
-      setModelProviders(registry.providers);
-      setModelProviderPresets(registry.presets);
-    }).catch((reason: Error) => {
-      if (active) reportSystemSettingsError(reason);
-    });
-    void Promise.all([
-      client.listModels(),
-      client.listConnectors(),
-      client.listSkills(),
-      client.listSkillLibraries(),
-      client.getGlobalSettings(),
-      client.getTimeoutSettings(),
-      client.getQuotaSettings(),
-      client.getSandboxNetworkSettings(),
-      client.getWebSettings(),
-      client.getMemoryGraphSettings(),
-      client.getIdeaTreeSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
-      if (!active) return;
-      setModels(modelItems);
-      setConnectors(connectorItems);
-      setSkills(skillItems);
-      setSkillLibraries(skillLibraryItems);
-      setGlobalSettings(settings);
-      setTimeoutSettings(timeouts);
-      setQuotaSettings(quotas);
-      setSandboxNetworkSettings(sandboxNetwork);
-      setWebSettings(web);
-      setMemoryGraphSettings(memoryGraph);
-      setIdeaTreeSettings(ideaTree);
-      setWorkspaceCapabilities({
-        maxFileBytes: quotas.uploadMaxFileBytes,
-        maxRequestBytes: quotas.uploadMaxRequestBytes,
-        maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
-      });
-    }).catch((reason: Error) => {
+    // Each read settles on its own. One settings endpoint failing must not
+    // discard the provider presets, models, global defaults, or any other panel that loaded.
+    const whenActive = <T,>(apply: (value: T) => void) => (value: T) => {
+      if (active) apply(value);
+    };
+    void settleLoads(systemSettingsLoads(client, {
+      providers: whenActive((registry) => {
+        setModelProviders(registry.providers);
+        setModelProviderPresets(registry.presets);
+      }),
+      models: whenActive(setModels),
+      connectors: whenActive(setConnectors),
+      skills: whenActive(setSkills),
+      skillLibraries: whenActive(setSkillLibraries),
+      globalSettings: whenActive(setGlobalSettings),
+      timeouts: whenActive(setTimeoutSettings),
+      quotas: whenActive((quotas) => {
+        setQuotaSettings(quotas);
+        setWorkspaceCapabilities(workspaceCapabilitiesFromQuota(quotas));
+      }),
+      sandboxNetwork: whenActive(setSandboxNetworkSettings),
+      web: whenActive(setWebSettings),
+      memoryGraph: whenActive(setMemoryGraphSettings),
+      ideaTree: whenActive(setIdeaTreeSettings),
+    }), (reason) => {
       if (active) reportSystemSettingsError(reason);
     });
     return () => { active = false; };
@@ -1571,6 +1572,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const memoryRefreshKey = `exec:${executionRuns.length}:msg:${session?.messages.length ?? 0}:plans:${plans.length}:mg:${memoryGraphSettings ? `${memoryGraphSettings.enabled ? 1 : 0}:${memoryGraphSettings.memoryGraphStatus}` : "none"}`;
   const { subgraph: memorySubgraph, health: memoryHealth } = useMemorySubgraph(client, session?.id, memoryRefreshKey, reportError, isRunning);
 
+  // Fetch the approvals that manual downloads are waiting on. It merges rather
+  // than replaces, so a plan noticed by the poll cannot drop unrelated
+  // approvals, and the Session guard still keeps another Session's state out.
+  const reconcilePendingDownloadApprovals = useCallback(async (sessionId: string, requestIds: readonly string[]): Promise<void> => {
+    if (!requestIds.length) return;
+    const wanted = new Set(requestIds);
+    const snapshots = (await client.listPermissionRequests(sessionId)).filter((request) => wanted.has(request.id));
+    if (snapshots.length) reconcilePermissionSnapshots(sessionId, snapshots);
+  }, [client]);
+
   const refreshGovernedDownloads = useCallback(async (sessionId: string): Promise<void> => {
     const [candidates, jobs, plans, invocations] = await Promise.all([
       client.listMcpArtifactCandidates(sessionId),
@@ -1578,6 +1589,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.listMcpArtifactPlans(sessionId),
       client.listMcpInvocations(sessionId),
     ]);
+    // A plan can wait on a permission the UI has never seen: the request is
+    // created when a download is prepared, which for a manual click happens
+    // outside any Agent event stream. Without this the card would keep showing
+    // an approval nobody can act on until the Session is reloaded.
+    const undecided = plans.filter((plan) => plan.state === "awaiting_approval"
+      && plan.permissionRequestId
+      && !permissionRequestIdsRef.current.has(plan.permissionRequestId));
+    if (undecided.length) await reconcilePendingDownloadApprovals(sessionId, undecided.map((plan) => plan.permissionRequestId));
     if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
     // Polling keeps long downloads current after the Agent turn finishes. Keep
     // object identity when nothing changed so a quiet poll neither rerenders
@@ -1586,7 +1605,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setDownloadJobs((current) => preserveEqualSnapshot(current, jobs));
     setDownloadPlans((current) => preserveEqualSnapshot(current, plans));
     setMcpInvocations((current) => preserveEqualSnapshot(current, invocations));
-  }, [client]);
+  }, [client, reconcilePendingDownloadApprovals]);
 
   useEffect(() => {
     setDownloadCandidates([]);
@@ -1595,7 +1614,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (!activeSessionId) return;
     let active = true;
     const refresh = () => refreshGovernedDownloads(activeSessionId).catch((reason: Error) => {
-      if (active) reportError(reason);
+      if (!active) return;
+      void classifySessionPollMiss(client, activeSessionId, reason).then((miss) => {
+        if (!active || miss.kind === "stale") return;
+        if (miss.kind === "gone" || miss.kind === "other") reportError(new Error(miss.message));
+        else reportError(reason);
+      });
     });
     void refresh();
     const timer = window.setInterval(() => void refresh(), 2_000);
@@ -1603,7 +1627,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       active = false;
       window.clearInterval(timer);
     };
-  }, [activeSessionId, refreshGovernedDownloads, reportError]);
+  }, [activeSessionId, client, refreshGovernedDownloads, reportError]);
   const addPendingAnnotation = useCallback((annotation: ArtifactAnnotation) => {
     setPendingAnnotations((current) => [...current.filter((item) => item.id !== annotation.id), annotation]);
   }, []);
@@ -1654,6 +1678,36 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       sidebarObserver?.disconnect();
     };
   }, []);
+
+  // Below the 1024px breakpoint the sidebar leaves the grid and becomes an
+  // off-canvas drawer (see responsive.css). Keep the drawer's state in
+  // lockstep with that media query so a widened viewport cannot leave an
+  // invisible drawer marked open.
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1024px)");
+    const closeWhenWide = () => { if (!media.matches) setSidebarDrawerOpen(false); };
+    media.addEventListener("change", closeWhenWide);
+    return () => media.removeEventListener("change", closeWhenWide);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarDrawerOpen) return;
+    sidebarDrawerCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSidebarDrawerOpen(false);
+      sidebarDrawerToggleRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [sidebarDrawerOpen]);
+
+  // Picking a destination closes the drawer, whether the navigation came from
+  // the drawer itself, the address bar, or the Usage page. Section
+  // expand/collapse and the in-drawer menus are not destinations.
+  useEffect(() => {
+    setSidebarDrawerOpen(false);
+  }, [activeProjectId, activeSessionId, workspaceView]);
 
   // Main view → URL: the address bar is a shareable, reload-safe projection of
   // where the user is. The path carries the resource identity (Project /
@@ -1813,65 +1867,51 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       if (initialView.settingsKind === "system") reportSystemSettingsError(reason);
       else setError(reason);
     };
-    void client.listProviders().then((registry) => {
-      setModelProviders(registry.providers);
-      setModelProviderPresets(registry.presets);
-    }).catch(reportStartupError);
-    void Promise.all([
-      client.listProjects(),
-      client.listModels(),
-      client.getModelCatalog(),
-      client.listConnectors(),
-      client.listSkills(),
-      client.listSkillLibraries(),
-      client.getGlobalSettings(),
-      client.getTimeoutSettings(),
-      client.getQuotaSettings(),
-      client.getSandboxNetworkSettings(),
-      client.getProxySettings(),
-      client.getMcpProxyPolicies(),
-      client.listMcpSources(),
-      client.getWebSettings(),
-      client.getMemoryGraphSettings(),
-      client.getIdeaTreeSettings(),
-    ]).then(([projectItems, modelItems, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
-      setProjects(projectItems);
-      setModels(modelItems);
-      applyModelCatalog(catalog);
-      setConnectors(connectorItems);
-      setSkills(skillItems);
-      setSkillLibraries(skillLibraryItems);
-      setGlobalSettings(settings);
-      setTimeoutSettings(timeouts);
-      setQuotaSettings(quotas);
-      setSandboxNetworkSettings(sandboxNetwork);
-      setProxySettings(proxies);
-      setMcpProxyPolicies(mcpPolicyDetails.policies);
-      setMcpSources(mcpSourceDetails.map((item) => item.manifest));
-      setWebSettings(web);
-      setMemoryGraphSettings(memoryGraph);
-      setIdeaTreeSettings(ideaTree);
-      setWorkspaceCapabilities({
-        maxFileBytes: quotas.uploadMaxFileBytes,
-        maxRequestBytes: quotas.uploadMaxRequestBytes,
-        maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
-      });
-      // A Project named by the URL wins over the "first item" default.
-      const pending = pendingSelectionRef.current;
-      const pendingProjectId = pending?.projectId && projectItems.some((item) => item.id === pending.projectId) ? pending.projectId : undefined;
-      if (pending?.projectId && !pendingProjectId) pendingSelectionRef.current = null; // URL Project is gone: drop its Session preference too
-      const nextProjectId = projectItems.some((item) => item.id === activeProjectIdRef.current) ? activeProjectIdRef.current : pendingProjectId ?? projectItems[0]?.id;
-      setActiveProjectId(nextProjectId);
-      // Project-scoped settings named by the URL open against this fresh list;
-      // a target that is not in it degrades to "dialog closed".
-      const pendingSettings = pendingSettingsRef.current;
-      if (pendingSettings?.kind === "project") {
-        pendingSettingsRef.current = null;
-        const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
-        if (target) void openScopedSettings(target);
-      }
-
-    }).catch(reportStartupError).finally(() => setProjectsLoaded(true));
+    void settleLoads(startupLoads(client, {
+      providers: (registry) => {
+        setModelProviders(registry.providers);
+        setModelProviderPresets(registry.presets);
+      },
+      projects: (projectItems) => {
+        setProjects(projectItems);
+        // A Project named by the URL wins over the "first item" default.
+        const pending = pendingSelectionRef.current;
+        const pendingProjectId = pending?.projectId && projectItems.some((item) => item.id === pending.projectId) ? pending.projectId : undefined;
+        if (pending?.projectId && !pendingProjectId) pendingSelectionRef.current = null; // URL Project is gone: drop its Session preference too
+        const nextProjectId = projectItems.some((item) => item.id === activeProjectIdRef.current) ? activeProjectIdRef.current : pendingProjectId ?? projectItems[0]?.id;
+        setActiveProjectId(nextProjectId);
+        // Project-scoped settings named by the URL open against this fresh list;
+        // a target that is not in it degrades to "dialog closed".
+        const pendingSettings = pendingSettingsRef.current;
+        if (pendingSettings?.kind === "project") {
+          pendingSettingsRef.current = null;
+          const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
+          if (target) void openScopedSettings(target);
+        }
+      },
+      models: setModels,
+      catalog: applyModelCatalog,
+      connectors: setConnectors,
+      skills: setSkills,
+      skillLibraries: setSkillLibraries,
+      globalSettings: setGlobalSettings,
+      timeouts: setTimeoutSettings,
+      quotas: (quotas) => {
+        setQuotaSettings(quotas);
+        setWorkspaceCapabilities(workspaceCapabilitiesFromQuota(quotas));
+      },
+      sandboxNetwork: setSandboxNetworkSettings,
+      proxies: setProxySettings,
+      mcpPolicies: (details) => setMcpProxyPolicies(details.policies),
+      mcpSources: mcpReadiness.applyListing,
+      web: setWebSettings,
+      memoryGraph: setMemoryGraphSettings,
+      ideaTree: setIdeaTreeSettings,
+      // The project sidebar and the address bar wait on this flag. It follows
+      // the project request alone, so a hung settings read cannot keep the
+      // sidebar on its skeleton after the project list has already arrived.
+      onProjectsSettled: () => setProjectsLoaded(true),
+    }), reportStartupError);
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {
@@ -2172,7 +2212,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     // buffer is rendered, so a run left streaming in the background still has
     // its steps on screen when the user returns to it.
     setIsFollowingOutput(true);
-    setMarkdownDocument(undefined);
+    setWorkspaceDocument(undefined);
+    setWorkspaceTable(undefined);
     void refreshSession(visibleSessionId).catch((reason: Error) => {
       if (shouldApplySessionScopedUpdate(visibleSessionId, activeSessionIdRef.current)) setError(reason);
     });
@@ -2208,13 +2249,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }, [activeSessionId, client, files]);
 
   useEffect(() => {
-    if (!markdownDocument) return;
+    if (!workspaceDocument) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMarkdownDocument(undefined);
+      if (event.key === "Escape") setWorkspaceDocument(undefined);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [markdownDocument]);
+  }, [workspaceDocument]);
 
   useEffect(() => {
     if (!isFollowingOutput) return;
@@ -2337,9 +2378,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setSession((current) => current?.id === summary.id ? mergeSessionDetailWithSummary(current, summary) : current);
   }
 
-  async function createProject(name: string, settingsOverrides: RuntimeSettingsOverrides): Promise<void> {
+  async function createProject(name: string, description: string, settingsOverrides: RuntimeSettingsOverrides): Promise<void> {
     try {
-      const { firstSession, project } = await client.createProject({ name, settingsOverrides });
+      const { firstSession, project } = await client.createProject({ name, ...(description ? { description } : {}), settingsOverrides });
       setProjects((current) => [...current, project]);
       setSessionListState("active");
       setSessions([firstSession]);
@@ -2372,7 +2413,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isInFlight: () => sessionCreationInFlight.current,
       onCreated: (created) => {
         if (activeProjectIdRef.current !== projectId) {
-          pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
+          pushToast("success", t("app.sessionCreated"), sessionTitle(created, [...artifactSessions, created]));
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
@@ -2385,7 +2426,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setMessage(initialMessage);
           setComposerReferences([]);
         }
-        pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
+        pushToast("success", t("app.sessionCreated"), sessionTitle(created, [...artifactSessions, created]));
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
@@ -2587,7 +2628,15 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   const [modelWizardRequested, setModelWizardRequested] = useState(false);
 
+  function openProjectCreation(): void {
+    if (!projectsLoaded || !globalSettings) return;
+    setProjectsExpanded(true);
+    setSidebarDrawerOpen(false);
+    setProjectCreationOpen(true);
+  }
+
   function openSystemSettings(group?: SystemSettingsGroup, options?: { wizard?: boolean }): void {
+    setSidebarDrawerOpen(false);
     reportSystemSettingsError();
     if (group) setSystemSettingsGroup(group);
     setModelWizardRequested(options?.wizard === true);
@@ -2992,6 +3041,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function openScopedSettings(target: ResourceTarget): Promise<void> {
+    setSidebarDrawerOpen(false);
     setSettingsTarget(target);
     setScopedSettings(undefined);
     setScopedSettingsRevision(undefined);
@@ -3055,6 +3105,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function openDeletion(target: ResourceTarget): Promise<void> {
+    setSidebarDrawerOpen(false);
     setDeletionTarget(target);
     setDeletionImpact(undefined);
     setDeletionConfirmation("");
@@ -3081,15 +3132,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         await client.deleteSession(deletionTarget.id);
         latestSessionSummaries.current.delete(deletionTarget.id);
         const remaining = sessions.filter((item) => item.id !== deletionTarget.id);
+        const nextSessionId = selectAfterRemoval(sessions, deletionTarget.id, activeSessionId);
+        // A refresh begun for the deleted Session can finish after its DELETE
+        // response. Update the ref immediately so that stale request cannot
+        // surface its expected 404 as a deletion failure.
+        activeSessionIdRef.current = nextSessionId;
         setSessions(remaining);
-        setActiveSessionId(selectAfterRemoval(sessions, deletionTarget.id, activeSessionId));
+        setArtifactSessions((current) => current.filter((item) => item.id !== deletionTarget.id));
+        setActiveSessionId(nextSessionId);
         setRunTimelines((current) => forgetSession(current, deletionTarget.id));
         setTimelineMessageIds((current) => forgetSession(current, deletionTarget.id));
-        if (activeProjectId) {
-          setArtifactSessions(await client.listSessions(activeProjectId, "all"));
-          setArtifactSessionCatalogProjectId(activeProjectId);
-          setArtifacts(await client.listProjectArtifacts(activeProjectId));
-        }
       }
       setDeletionTarget(undefined);
       setDeletionImpact(undefined);
@@ -3126,9 +3178,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       pushToast("error", t("app.uploadSkipped"), t("app.uploadSkippedDetail", { limit: formatByteLimit(maxFileBytes), name: file.name }));
     }
     if (!accepted.length) return;
-    const result = await client.uploadWorkspaceFiles(activeSessionId, accepted);
+    const result = await client.uploadDroppedFiles(activeSessionId, accepted);
+    if (!shouldApplySessionScopedUpdate(activeSessionId, activeSessionIdRef.current)) return;
     setFiles(result.files);
-    if (activeProjectId) setArtifacts(await client.listProjectArtifacts(activeProjectId));
+    if (activeProjectId) {
+      const projectArtifacts = await client.listProjectArtifacts(activeProjectId);
+      if (activeProjectId === activeProjectIdRef.current) setArtifacts(projectArtifacts);
+    }
     for (const item of result.uploaded) {
       if (item.status === "failed") {
         pushToast("error", t("app.uploadFailed"), `${item.originalName}: ${item.error ?? t("app.unknownError")}`);
@@ -3155,8 +3211,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
     const file = await client.readFile(targetSessionId, path);
-    if (/\.(md|markdown)$/i.test(path)) {
-      setMarkdownDocument({ content: await file.text(), path });
+    // Preserve the specialized table reader before trying generic UTF-8 text.
+    if (opensInCsvViewer(path, file.type)) {
+      const entry = targetSessionId === activeSessionId
+        ? files.find((item) => item.path === path)
+        : undefined;
+      setWorkspaceTable({
+        content: await file.text(),
+        fileName: path.split("/").at(-1) || path,
+        source: {
+          kind: "workspace",
+          modifiedAt: entry?.modifiedAt,
+          openedAt: new Date().toISOString(),
+          path,
+          revisionId: entry?.provenance?.revisionId,
+          sessionId: targetSessionId,
+          size: file.size,
+        },
+      });
+      return;
+    }
+    const text = await readPreviewText(file, path);
+    // HTML and molecular files retain their existing browser/specialized path.
+    if (text !== undefined && !/\.(?:html?|pdb|cif|mmcif|sdf|mol|mol2|xyz)$/i.test(path)) {
+      const markdown = /\.(md|markdown)$/i.test(path);
+      setWorkspaceDocument({ content: markdown ? await file.text() : text, path, file, markdown });
       return;
     }
     const url = URL.createObjectURL(file);
@@ -3215,12 +3294,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
       sessionTitle,
     });
-    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
+    if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail, routing.toast.technicalDetail);
     if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
       void refreshUsageData().catch((reason: Error) => setError(reason));
     }
     if (!routing.updatesSessionView) return;
     if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
+      mcpReadiness.check();
       void refreshArtifactOutputs(sessionId).catch(() => undefined);
     }
     if (streamEvent.type === "artifact_review.completed") {
@@ -3312,7 +3392,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         });
       }
     }
-    if (streamEvent.type === "run.failed") setError(formatRunFailure(streamEvent.errorCode, streamEvent.error));
+    if (streamEvent.type === "run.failed") {
+      const message = formatRunFailure(streamEvent.errorCode);
+      // Keep the original diagnostic in the connection chip's tooltip while
+      // the notification leads with localized recovery guidance.
+      setErrorState(streamEvent.error || message);
+      pushToast("error", t("error.request"), message, streamEvent.error);
+    }
   }
 
   async function loadToolOutput(
@@ -3322,9 +3408,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   ): Promise<string | undefined> {
     if (!runId || !trace.outputStream) return undefined;
     const records = await client.listRunStreamEvents(sessionId, runId, trace.outputStream);
-    return records
-      .flatMap((record) => record.event.type === "tool.output" ? [record.event.chunk] : [])
-      .join("") || undefined;
+    const outputs = records.flatMap(record => record.event.type === "tool.output" ? [record.event] : []);
+    const progress = outputs.filter(event => event.progress).map(event => event.chunk).join("");
+    const result = outputs.filter(event => !event.progress).map(event => event.chunk).join("");
+    return (progress && result ? `${progress}\n\n---\n\n${result}` : progress || result) || undefined;
   }
 
   function resumeSessionRun(
@@ -3365,6 +3452,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   async function submitMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (evolveCommandBlocked) return;
     if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
     if (message.trim() === "/web-usage") {
       try {
@@ -3748,6 +3836,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   function openGlobalSearch(): void {
+    setSidebarDrawerOpen(false);
     setGlobalSearchOpen(true);
     setGlobalSearchQuery("");
   }
@@ -3971,6 +4060,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     ...runTimeline,
     ...Object.values(sessionReplayTimelines).flatMap((timeline) => timeline.entries),
   ]);
+  // A download awaiting approval offers that decision on its own card, so the
+  // generic approvals panel would repeat it. Keep one entry point per download.
+  const downloadApprovalRequestIds = new Set(downloadPlans
+    .filter((plan) => plan.state === "awaiting_approval" && plan.permissionRequestId)
+    .map((plan) => plan.permissionRequestId));
   const queuedRuns = sessionRuns.filter((run) => run.status === "queued");
   // Timeline activity cards (subagents, remote jobs, permission prompts, and
   // result previews) are attributed to the run that produced them and rendered right
@@ -3982,7 +4076,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     downloadCandidates,
     downloadJobs,
     downloadPlans,
-    permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)),
+    permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)
+      && !downloadApprovalRequestIds.has(request.id)),
     plans: [],
     previewFiles: [],
     remoteJobs,
@@ -4026,14 +4121,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     projectId: activeProjectId,
     sessions: artifactSessions,
   });
-  const visibleProjects = getVisibleProjects(projects, activeProjectId, projectsExpanded);
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
     : t("app.workspace");
-  // A new session is stored as UNTITLED_SESSION_TITLE until it is named; shown in the UI's language.
-  const sessionTitle = (title: string) => title === UNTITLED_SESSION_TITLE ? t("app.untitledSession") : title;
+  // A new session is stored as UNTITLED_SESSION_TITLE until it is named. Multiple
+  // such sessions receive display-only ordinals without changing that sentinel.
+  const sessionTitle = (
+    item: Pick<Session, "createdAt" | "id" | "title">,
+    candidates = artifactSessions,
+  ) => sessionDisplayTitle(item, candidates, t("app.untitledSession"));
   const activeSessionLabel = session
-    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, sessionTitle(session.title))
+    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, sessionTitle(session))
     : t("app.startResearchSession");
   const mainProjectRenameTarget = activeProject
     && renameTarget?.kind === "project"
@@ -4055,6 +4153,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     runningSessionIds,
     sessionArchived,
     stoppingSessionIds,
+  });
+  const automaticReviewComposer = automaticReviewComposerState({
+    reviewerSettings: reviewerSpecialistSettings,
+    sessionAutomaticReviewEnabled: session?.reviewerAutomaticReviewEnabled ?? false,
   });
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
@@ -4111,11 +4213,15 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function prepareGovernedDownload(item: GovernedDownloadCandidate): Promise<void> {
     if (!session) return;
     try {
-      await client.createMcpArtifactPlan(session.id, {
+      const created = await client.createMcpArtifactPlan(session.id, {
         candidateId: item.candidate.id,
         destination: { path: `downloads/${item.candidate.logicalName}`, type: "workspace" },
         mcpInvocationId: item.invocationId,
       });
+      // The consent policy may have answered this click with a new permission.
+      // No Agent event stream covers a manual click, so adopt the request the
+      // response already carries instead of waiting for a poll or a reload.
+      if (created.permissionRequest) reconcilePermissionSnapshots(session.id, [created.permissionRequest]);
       await refreshGovernedDownloads(session.id);
     } catch (error) {
       reportError(error instanceof Error ? error : t("error.prepareDownload"));
@@ -4169,8 +4275,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           groupId={group.runId ?? "unattributed"}
           jobs={group.downloadJobs}
           onAction={actOnGovernedDownload}
+          onDecision={decidePermission}
           onPrepare={prepareGovernedDownload}
           onToggleCard={toggleActivityCard}
+          permissionRequests={permissionRequests}
           plans={group.downloadPlans}
         />
 
@@ -4179,28 +4287,54 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   return (
-    <PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
+    <RuntimeConfigClient.Provider value={client}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
-      <aside className="sidebar">
+      <button
+        aria-controls="app-sidebar"
+        aria-expanded={sidebarDrawerOpen}
+        aria-label={t("app.openNavigation")}
+        className="sidebar-drawer-toggle"
+        onClick={() => setSidebarDrawerOpen(true)}
+        ref={sidebarDrawerToggleRef}
+        title={t("app.openNavigation")}
+        type="button"
+      ><MenuIcon size={18} /></button>
+      {sidebarDrawerOpen ? <div className="sidebar-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSidebarDrawerOpen(false); }} /> : null}
+      <aside
+        aria-label={sidebarDrawerOpen ? t("app.workbenchNavigation") : undefined}
+        aria-modal={sidebarDrawerOpen ? "true" : undefined}
+        className={sidebarDrawerOpen ? "sidebar drawer-open" : "sidebar"}
+        id="app-sidebar"
+        role={sidebarDrawerOpen ? "dialog" : undefined}
+      >
         <div className="brand">
           <div className="brand-mark"><BrandIcon size={24} /></div>
           <div><strong>ScienceDiscovery</strong><span>{t("app.localRuntime")}</span></div>
+          <button
+            aria-label={t("app.closeNavigation")}
+            className="icon-button sidebar-drawer-close"
+            onClick={() => setSidebarDrawerOpen(false)}
+            ref={sidebarDrawerCloseRef}
+            title={t("app.closeNavigation")}
+            type="button"
+          ><CloseIcon size={18} /></button>
         </div>
 
         <div className={sidebarResourceClass} style={{ "--sidebar-split": `${sidebarSplit}%` } as CSSProperties}>
           <div className={projectsExpanded ? "sidebar-section projects" : "sidebar-section projects collapsed"}>
             <SidebarSectionHeader
+              addDisabled={!projectsLoaded || !globalSettings}
               addLabel={t("sidebar.addProject")}
-              count={projects.length}
+              count={projectsLoaded ? projects.length : undefined}
               expanded={projectsExpanded}
               label={t("sidebar.projects")}
-              onAdd={() => { setProjectsExpanded(true); setProjectCreationOpen(true); }}
+              onAdd={openProjectCreation}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
               panelId="projects-panel-content"
             />
-            <div className="sidebar-panel-content" id="projects-panel-content">
+            {projectsExpanded ? <div className="sidebar-panel-content" id="projects-panel-content">
               <div className="nav-list">
-              {!projectsLoaded ? <SkeletonRows className="nav-skeleton" count={3} /> : visibleProjects.map((project) => {
+              {!projectsLoaded ? <SkeletonRows className="nav-skeleton" count={3} /> : projects.map((project) => {
                 const target = { id: project.id, kind: "project" as const, label: project.name };
                 const inlineTarget = renameTarget?.kind === "project"
                   && renameTarget.id === project.id
@@ -4224,6 +4358,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     onClick={() => {
                       setOpenSubagentId(undefined);
                       setActiveProjectId(project.id);
+                      setSidebarDrawerOpen(false);
                       setOpenProjectMenuId(undefined);
                       setOpenSessionMenuId(undefined);
                       setSessionFilterOpen(false);
@@ -4250,7 +4385,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </div>
               })}
               </div>
-            </div>
+            </div> : null}
           </div>
           {activeProject ? <>
             <SidebarPanelResizer
@@ -4296,12 +4431,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     && renameTarget.location === "sidebar"
                     ? renameTarget
                     : undefined;
-                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, sessionTitle(item.title));
+                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, sessionTitle(item));
                   return <div className="nav-resource" key={item.id}>
                     {inlineTarget && !item.archivedAt ? <div className={item.id === activeSessionId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                       <span className="nav-icon"><SessionIcon size={15} /></span>
                       <InlineRenameInput
-                        ariaLabel={t("app.renameSessionAria", { name: sessionTitle(item.title) })}
+                        ariaLabel={t("app.renameSessionAria", { name: sessionTitle(item) })}
                         className="nav-inline-rename"
                         disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                         onChange={setRenameDraft}
@@ -4310,19 +4445,19 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       />
                     </div> : <button
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
-                      onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
+                      onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setSidebarDrawerOpen(false); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
-                      title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item.title) })}
+                      title={item.archivedAt ? `${sessionTitle(item)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item) })}
                       type="button"
                     >
-                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : sessionTitle(item.title)}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
+                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${sessionTitle(item)} · ${t("sidebar.archived")}` : sessionTitle(item)}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
                       busy={runningSessionIds.has(item.id) || lifecycleBusy}
                       label={label}
                       onArchive={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("archive", item.id); }}
-                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item.title) }); }}
+                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item) }); }}
                       onRename={() => { setOpenSessionMenuId(undefined); beginInlineRename(target, "sidebar"); }}
                       onRestore={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("restore", item.id); }}
                       onSettings={() => { setOpenSessionMenuId(undefined); void openScopedSettings({ id: item.id, kind: "session", label: item.title }); }}
@@ -4428,7 +4563,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: sessionTitle(session.title) })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
+                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: sessionTitle(session) })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
                 {session ? <span className="session-runner-target" title={selectedRunnerIds.length
                   ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
                   : t("app.runnerSelectionEmpty")}>
@@ -4452,17 +4587,42 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <h2>{t("empty.title")}</h2>
                 <p>{t("empty.description")}</p>
                 <ol className="empty-steps">
-                  <li><span className="empty-step-icon"><SettingsIcon size={16} /></span><div><strong>{t("empty.configureModel")}</strong><small>{t("empty.configureModelHelp")}</small></div></li>
-                  <li><span className="empty-step-icon"><ProjectIcon size={16} /></span><div><strong>{t("empty.createProject")}</strong><small>{t("empty.createProjectHelp")}</small></div></li>
-                  <li><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
+                  <li>
+                    <button
+                      aria-describedby="empty-configure-model-help"
+                      aria-labelledby="empty-configure-model"
+                      className="empty-step-action"
+                      onClick={() => openSystemSettings("models", { wizard: true })}
+                      type="button"
+                    >
+                      <span className="empty-step-icon"><SettingsIcon size={16} /></span>
+                      <span><strong id="empty-configure-model">{t("empty.configureModel")}</strong><small id="empty-configure-model-help">{t("empty.configureModelHelp")}</small></span>
+                      <ChevronRightIcon size={16} />
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      aria-describedby="empty-create-project-help"
+                      aria-labelledby="empty-create-project"
+                      className="empty-step-action"
+                      disabled={!projectsLoaded || !globalSettings}
+                      onClick={openProjectCreation}
+                      type="button"
+                    >
+                      <span className="empty-step-icon"><ProjectIcon size={16} /></span>
+                      <span><strong id="empty-create-project">{t("empty.createProject")}</strong><small id="empty-create-project-help">{t("empty.createProjectHelp")}</small></span>
+                      <ChevronRightIcon size={16} />
+                    </button>
+                  </li>
+                  <li className="empty-step-info"><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
                 </ol>
               </div>
             ) : trajectorySession && session.id === trajectorySession.id ? (
-              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session.title)} port={client.trajectory} locale={locale} onClose={() => {
+              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session)} port={client.trajectory} locale={locale} onClose={() => {
                 setTrajectorySession(undefined);
-                // The inline view lives in the document flow, so on narrow stacked
-                // layouts the page may sit scrolled past the session bar; bring the
-                // conversation toggle back into view after the messages remount.
+                // The trajectory replaces the message list in the document flow;
+                // make sure the conversation toggle is back in view after the
+                // messages remount.
                 requestAnimationFrame(() => document.querySelector(".session-trajectory-button")?.scrollIntoView({ block: "nearest" }));
               }} />
             ) : (
@@ -4472,15 +4632,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <div className="session-intro">
                       <span className="eyebrow">{t("empty.sessionReady")}</span>
                       <h2>{t("empty.investigate")}</h2>
-                      <p>{session.enabledConnectorIds.includes("pubmed") && session.enabledConnectorIds.includes("uniprot")
-                        ? t("app.sessionIntroPrompt")
-                        : t("empty.sessionCsvHelp")}</p>
                     </div>
                   ) : null}
                   {conversationBlocks.map((block) => block.kind === "message" ? (
                     <Fragment key={block.message.id}>
                       {block.message.kind === "reviewer_checkpoint" && block.message.reviewerCheckpoint ? (
                         <ReviewerPanel
+                          checkpointContent={block.message.content}
                           checkpointError={block.message.reviewerCheckpoint.error}
                           checkpointProgress={block.message.reviewerCheckpoint.progress}
                           checkpointStatus={block.message.reviewerCheckpoint.status}
@@ -4493,7 +4651,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       ) : (
                         <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
                           <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
-                          <div><span className="message-role">{block.message.role === "user" ? t("app.roleResearcher") : block.message.kind === "review_notice" ? t("app.roleReviewerNotice") : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MarkdownRenderer
+                          <div><span className="message-meta"><span className="message-role">{block.message.role === "user" ? t("app.roleResearcher") : block.message.kind === "review_notice" ? t("app.roleReviewerNotice") : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MessageTime value={block.message.createdAt} /></span><MarkdownRenderer
                             className="message-content"
                             content={block.message.content}
                             loadWorkspaceImage={block.message.role === "assistant" ? loadMarkdownImage : undefined}
@@ -4603,6 +4761,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
+                  {evolveCommandBlocked ? <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} /> : null}
                   {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
@@ -4625,6 +4784,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
+                  {automaticReviewComposer.showUnavailableNotice
+                    ? <div className="composer-thinking-notice" role="status">{t("reviewer.automaticUnavailable")}</div>
+                    : null}
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
@@ -4646,6 +4808,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         disabled={isRunning || sessionArchived}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
+                        specialistIds={specialists.find(item => item.id === session.specialistId)?.connectorIds ?? []}
+                        sourceStatuses={mcpReadiness.sourceStatuses}
+                        onOpen={mcpReadiness.check}
+                        onReload={mcpReadiness.reload}
+                        refreshing={mcpReadiness.refreshing}
+                        refreshError={mcpReadiness.error}
                       />
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
@@ -4654,7 +4822,29 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
-                    <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
+                    <button
+                      aria-checked={automaticReviewComposer.switchChecked}
+                      aria-label={t("reviewer.automaticReview")}
+                      className="automatic-review-toggle"
+                      disabled={sessionArchived || reviewerSessionSettingsBusy || !automaticReviewComposer.capabilityKnown}
+                      onClick={() => {
+                        if (!automaticReviewComposer.capabilityKnown) return;
+                        if (automaticReviewComposer.capabilityEnabled) {
+                          void updateSessionReviewerSpecialistSettings({
+                            automaticReviewEnabled: !session.reviewerAutomaticReviewEnabled,
+                            level: session.reviewerSpecialistLevel,
+                          });
+                          return;
+                        }
+                        openSystemSettings("specialists");
+                      }}
+                      role="switch"
+                      title={t(automaticReviewComposer.titleKey)}
+                      type="button"
+                    >
+                      {t("reviewer.automaticReview")}: {t(automaticReviewComposer.labelOn ? "common.on" : "common.off")}
+                    </button>
+                    <ComposerRunButton action={{ ...composerRunAction, runDisabled: composerRunAction.runDisabled || evolveCommandBlocked }} onStop={() => void stopRun()} />
                   </div>
                 </form>
               </>
@@ -4815,6 +5005,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             </details> : null}
             </WorkspaceFolder>
             <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")} reveal={activityFocus?.token}>
+            <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} />
             {workspacePlans.length ? <details className="workspace-fold workspace-plan-section">
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
@@ -4826,7 +5017,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               </div>
             </details> : null}
 
-            {session ? <IdeaTreeView client={client} onOpenSubagent={setOpenSubagentId} onOpenArtifact={(id) => { const artifact = artifacts.find(item => item.id === id); if (artifact) setArtifactModalName(artifact.name); }} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}`} sessionId={session.id} /> : null}
+            {session && evolveReady ? <IdeaTreeView client={client} onOpenSubagent={setOpenSubagentId} onOpenArtifact={(id) => { const artifact = artifacts.find(item => item.id === id); if (artifact) setArtifactModalName(artifact.name); }} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}`} sessionId={session.id} /> : null}
 
             {session && evolveRuns.length ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("evolve.card.title")}</strong><span className="fold-meta">{evolveRuns.length}</span></summary><EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /></details> : null}
 
@@ -4875,16 +5066,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
 
-      {markdownDocument ? (
-        <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMarkdownDocument(undefined); }}>
-          <section aria-label={t("app.renderedMarkdownAria", { path: markdownDocument.path })} aria-modal="true" className="document-panel" role="dialog">
+      {workspaceDocument ? (
+        <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorkspaceDocument(undefined); }}>
+          <section aria-label={t(workspaceDocument.markdown ? "app.renderedMarkdownAria" : "artifact.textFileAria", { path: workspaceDocument.path })} aria-modal="true" className="document-panel" role="dialog">
             <header className="document-header">
-              <div><span className="eyebrow">{t("app.renderedMarkdown")}</span><h2>{markdownDocument.path.split("/").at(-1)}</h2><small title={markdownDocument.path}>{markdownDocument.path}</small></div>
-              <button aria-label={t("app.closeMarkdownReader")} className="icon-button" onClick={() => setMarkdownDocument(undefined)} title={t("app.closeMarkdownReader")}><CloseIcon size={20} /></button>
+              <div><span className="eyebrow">{t(workspaceDocument.markdown ? "app.renderedMarkdown" : "artifact.sourceTitle")}</span><h2>{workspaceDocument.path.split("/").at(-1)}</h2><small title={workspaceDocument.path}>{workspaceDocument.path}</small></div>
+              <button aria-label={t("artifact.downloadText")} className="icon-button" onClick={() => downloadBlob(workspaceDocument.file, workspaceDocument.path.split("/").at(-1) || "download")} title={t("artifact.downloadText")}><DownloadIcon size={18} /></button>
+              <button aria-label={t(workspaceDocument.markdown ? "app.closeMarkdownReader" : "artifact.closeTextReader")} className="icon-button" onClick={() => setWorkspaceDocument(undefined)} title={t(workspaceDocument.markdown ? "app.closeMarkdownReader" : "artifact.closeTextReader")}><CloseIcon size={20} /></button>
             </header>
-            <MarkdownRenderer className="document-markdown" content={markdownDocument.content} />
+            {workspaceDocument.markdown ? <div className="document-markdown">
+              <MarkdownRenderer content={workspaceDocument.content} />
+              <details><summary>{t("artifact.sourceFold")}</summary><SourcePreview name={workspaceDocument.path} source={workspaceDocument.content} /></details>
+            </div> : <div className="document-source"><SourcePreview name={workspaceDocument.path} mediaType={workspaceDocument.file.type} source={workspaceDocument.content} /></div>}
           </section>
         </div>
+      ) : null}
+
+      {workspaceTable ? (
+        <Suspense fallback={<div className="csv-artifact-loading" role="status"><span>{t("artifact.loadingCsvWorkspace")}</span></div>}>
+          <CsvArtifactWindow
+            content={workspaceTable.content}
+            fileName={workspaceTable.fileName}
+            onClose={closeWorkspaceTable}
+            source={workspaceTable.source}
+          />
+        </Suspense>
       ) : null}
 
       {artifactModalName && activeSessionId ? (
@@ -4898,7 +5104,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setArtifactModalVersion(undefined);
             setArtifactModalSessionId(undefined);
           }}
-          onEvolve={(seed) => {
+          onEvolve={evolveReady ? (seed) => {
             // Into the composer, not into a form. The agent designs the run in
             // conversation — it can read this artifact, ask what "better" means
             // here, and *run* its own scoring before spending a budget — so the
@@ -4908,7 +5114,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setArtifactModalName(undefined);
             setArtifactModalVersion(undefined);
             setMessage(`/evolve-design make the artifact ${seed.label} better: `);
-          }}
+          } : undefined}
           onMissing={closeMissingArtifact}
           onNavigateArtifact={(name, version) => {
             // Provenance links can target an older version of the artifact
@@ -5042,13 +5248,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   models={models}
                   onCatalogChange={applyModelCatalog}
                   onDefaultModelSet={async (modelId) => {
-                    // One setting, written from the wizard and from the
-                    // registry's default-model row alike; keep every other
-                    // global override instead of replacing the whole object.
-                    const overrides = { ...(globalSettings?.overrides ?? {}) };
-                    if (modelId) overrides.modelId = modelId;
-                    else delete overrides.modelId;
-                    const updated = await client.replaceGlobalSettings(overrides);
+                    // Read the stored overrides at save time. The in-memory
+                    // copy is empty when that load failed or has not returned,
+                    // and writing it would replace every other global override.
+                    const updated = await replaceDefaultModelOverride(client, modelId);
                     setGlobalSettings(updated);
                     if (activeProjectId) {
                       setProjectSettings(await client.getProjectSettings(activeProjectId));
@@ -5067,9 +5270,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 />
               </> : null}
               {systemSettingsGroup === "mcp" ? <McpServerSettings client={client} sources={mcpSources} sessionId={activeSessionId || undefined} sessionTitle={session?.title} onChanged={async () => {
-                const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
+                const [items] = await Promise.all([client.listConnectors(), mcpReadiness.refresh()]);
                 setConnectors(items);
-                setMcpSources(sourceDetails.map((item) => item.manifest));
               }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings
@@ -5175,6 +5377,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeScopedSettings(); }}>
           <section aria-label={t("app.scopedSettingsAria", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })} aria-modal="true" className="config-panel" role="dialog">
             <div className="config-header"><div><span className="eyebrow">{t("app.scopedOverrides", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })}</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label={t("app.closeScopedSettings")} title={t("app.closeScopedSettings")}><CloseIcon size={20} /></button></div>
+            {scopedSettingsProject ? <ProjectDescriptionEditor
+              key={scopedSettingsProject.id}
+              project={scopedSettingsProject}
+              onSave={async (description) => {
+                const updated = await client.updateProject(scopedSettingsProject.id, { description });
+                setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
+              }}
+            /> : null}
             {scopedSettingsErrors.map((detail) => <InlineErrorAlert
               detail={detail}
               key={detail}
@@ -5223,7 +5433,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       /> : null}
 
     </div>
-    </PluginWebHost>
+    </PluginWebHost></RuntimeConfigClient.Provider>
   );
 }
 
@@ -5237,7 +5447,6 @@ export {
   ComposerRunButton,
   followSessionTitleRefinement,
   forgetSession,
-  getVisibleProjects,
   hydrateSessionRunTimeline,
   hydrateTimelineSubagents,
   hydrateTerminalRunTimelines,

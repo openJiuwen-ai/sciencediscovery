@@ -22,6 +22,8 @@ export interface ResourceRateLimitOptions {
   /** Longest a request may wait in the queue; omitted disables the timeout. */
   queueTimeoutMs?: number;
   signal?: AbortSignal;
+  /** Internal broker scope for targeted rejection of queued endpoint siblings. */
+  queueScope?: string;
 }
 
 export interface ResourceRateLease {
@@ -152,6 +154,20 @@ export class ResourceRateLimiter {
     );
     const cooldownMs = retryAfterMs !== undefined && retryAfterMs >= 0 ? retryAfterMs : fallback;
     state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + cooldownMs);
+    this.pump(key, state);
+  }
+
+  /** Stop already queued siblings when the provider enters a shared cooldown. */
+  rejectPending(key: string, error: (queueWaitMs: number) => Error, scope?: string): void {
+    const state = this.keys.get(key);
+    if (!state) return;
+    const pending = state.queue.filter(waiter => scope === undefined || waiter.options.queueScope === scope);
+    state.queue = state.queue.filter(waiter => !pending.includes(waiter));
+    for (const waiter of pending) {
+      if (waiter.timeoutTimer) clearTimeout(waiter.timeoutTimer);
+      waiter.options.signal?.removeEventListener("abort", waiter.onAbort);
+      waiter.reject(error(Date.now() - waiter.enqueuedAt));
+    }
     this.pump(key, state);
   }
 

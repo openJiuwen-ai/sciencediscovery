@@ -8,7 +8,7 @@ import { deliveryStatus, finalAnswer, selectFinalOutputs } from "./real-delivery
 
 export interface DeliveredArtifact { id: string; logicalName: string; version: string; text: string; bytes: number;
   producerAnswer?: string; producerRunOrder?: number }
-export async function collectFinalDelivery(page: Page, sessionId: string, runId: string, rootRunId = runId) {
+export async function collectFinalDelivery(page: Page, sessionId: string, runId: string, rootRunId = runId, artifactNames?: readonly string[]) {
   const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
   const [runs, session, outputs, subagents] = await Promise.all([
     drbApi<any[]>(page, `${prefix}/runs`), drbApi<any>(page, prefix),
@@ -26,11 +26,13 @@ export async function collectFinalDelivery(page: Page, sessionId: string, runId:
   const artifacts: DeliveredArtifact[] = [];
   const errors: string[] = [...selected.errors];
   for (const { artifact, version } of selected.selected) {
+    const logicalName = artifact.name ?? artifact.logicalName;
+    // Scientific tasks may declare multi-GB supplementary files. Fetch only scoring inputs when requested.
+    if (artifactNames && !artifactNames.some(name => logicalName === name || logicalName.endsWith(`/${name}`))) continue;
     try {
       const content = await page.request.get(`${apiBaseUrl()}${prefix}/artifact-versions/${encodeURIComponent(version.id)}/content`, { headers: authorizationHeader() });
       if (!content.ok()) throw new Error(`Content HTTP ${content.status()}`);
       const bytes = await content.body();
-      const logicalName = artifact.name ?? artifact.logicalName;
       if (!bytes.length || (/\.(md|txt|json|csv|py)$/i.test(logicalName) && !bytes.toString("utf8").trim())) throw new Error("Empty final artifact");
       const artifactProducer = chain.find(({ id }) => id === selected.producerRunIds[version.id]);
       artifacts.push({ id: artifact.id, logicalName, version: version.id, text: bytes.toString("utf8"),
@@ -40,5 +42,5 @@ export async function collectFinalDelivery(page: Page, sessionId: string, runId:
   }
   // A broken supplementary file remains diagnostic; required output checks decide whether it blocks the E2E.
   const status = deliveryStatus(run.status, artifacts);
-  return { status, run_status: run.status, answer, producer_answer: producerAnswer, artifacts, errors };
+  return { status, run_status: run.status, run_error: run.error ?? null, answer, producer_answer: producerAnswer, artifacts, errors };
 }

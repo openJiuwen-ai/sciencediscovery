@@ -101,7 +101,10 @@ export async function assertPublicUrl(
     throw new PublicUrlError("local and private network URLs are not allowed");
   }
   const addresses = isIP(hostname) ? [hostname] : await resolveHost(hostname);
-  if (!addresses.length || addresses.some(isBlockedAddress)) {
+  if (!addresses.length) {
+    throw new PublicUrlError("host could not be resolved");
+  }
+  if (addresses.some(isBlockedAddress)) {
     throw new PublicUrlError("local and private network URLs are not allowed");
   }
   return rawUrl;

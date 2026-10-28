@@ -105,3 +105,52 @@ for (const status of [401, 500] as const) {
     }
   });
 }
+
+test("an open session keeps its execution list when the activity poll's session miss does not stick", async (context) => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  context.mock.timers.enable({ apis: ["setInterval"] });
+  const activity = { executions: [{ id: "job", agentId: "main", runnerId: "local", workspaceId: "ws", state: "running", provenance: "pending" }], transfers: [], timers: [], agents: [] };
+  let mode: "ok" | "bare" | "named" | "other" | "gone" = "ok";
+  let sessionReads = 0;
+  const client = {
+    getAgentActivity: async () => {
+      if (mode === "bare") throw new Error("Session not found");
+      if (mode === "named" || mode === "gone") throw new Error("Session not found: session");
+      if (mode === "other") throw new Error("Execution not found: job-9");
+      return activity;
+    },
+    getSession: async () => {
+      sessionReads += 1;
+      if (mode === "gone") throw new Error("Session not found");
+      return { id: "session" };
+    },
+  } as unknown as ApiClient;
+  let view: ReactTestRenderer;
+  await act(async () => { view = create(createElement(AgentActivityPanel, { client, sessionId: "session" })); });
+  try {
+    const alerts = () => view.root.findAllByProps({ role: "alert" });
+    const listed = () => view.root.findAllByType("button").some((button) => button.children.join("") === "Cancel execution");
+    mode = "bare";
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.equal(sessionReads, 1);
+    assert.equal(alerts().length, 0);
+    assert.equal(listed(), true);
+    mode = "named";
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.equal(alerts().length, 0);
+    assert.equal(listed(), true);
+    mode = "other";
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.deepEqual(alerts().map((alert) => alert.children.join("")), ["Execution not found: job-9"]);
+    assert.equal(listed(), true);
+    const readsBeforeGone = sessionReads;
+    mode = "gone";
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.equal(sessionReads, readsBeforeGone + 1);
+    assert.deepEqual(alerts().map((alert) => alert.children.join("")), ["Session not found: session"]);
+    assert.equal(listed(), false);
+  } finally {
+    await act(async () => view!.unmount());
+    context.mock.timers.reset();
+  }
+});

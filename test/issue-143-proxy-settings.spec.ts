@@ -24,6 +24,10 @@ const screenshotDirectory = process.env.E2E_SCREENSHOT_DIR ?? "screenshots";
 async function openProxySettings(page: Page) {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
+  // Below the 1024px breakpoint the sidebar is an off-canvas drawer: open it
+  // before reaching for its entries.
+  const drawerToggle = page.getByRole("button", { name: "Open navigation" });
+  if (await drawerToggle.isVisible()) await drawerToggle.click();
   await page.getByRole("button", { name: "System configuration" }).click();
   const configuration = page.getByRole("dialog", { name: "System configuration" });
   await configuration.getByRole("button", { name: "Network proxies" }).click();

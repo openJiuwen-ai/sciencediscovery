@@ -28,7 +28,6 @@ import type {
   ProviderModelPreview,
   ProxyPolicy,
   ProxySettingsDetails,
-  RuntimeSettingsOverrides,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_MODEL_API_VARIANT,
@@ -37,6 +36,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
+import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
 import {
@@ -128,9 +128,11 @@ export function ModelConnectWizard({
   }, [advancedOpen, preview]);
 
   const [testing, setTesting] = useState(false);
+  const [probeConsent, setProbeConsent] = useState(false);
+  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, proxyPolicy, baseUrlOverride, selectedPresetId]);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
-  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
+  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string; inconclusive?: boolean }>();
 
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
@@ -338,6 +340,7 @@ export function ModelConnectWizard({
   }
 
   async function handleTestAndEnable(): Promise<void> {
+    if (!probeConsent) return;
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
@@ -356,16 +359,13 @@ export function ModelConnectWizard({
 
     let createdProviderId: string | undefined;
     const createdModelIds: string[] = [];
-    let initialOverrides: RuntimeSettingsOverrides = {};
+    const clearAttemptDefault = async (): Promise<void> => {
+      for (const id of createdModelIds) {
+        try { await client.clearGlobalModelIfCurrent(id); } catch { /* ignore */ }
+      }
+    };
 
     try {
-      try {
-        if (typeof client.getGlobalSettings === "function") {
-          const currentDetails = await client.getGlobalSettings();
-          initialOverrides = currentDetails.overrides ?? {};
-        }
-      } catch { /* ignore */ }
-
       // Whether the system already has models BEFORE this connect decides the
       // default: only the first model ever becomes the global default. When
       // the list cannot be read, stay conservative and leave the default alone.
@@ -387,14 +387,12 @@ export function ModelConnectWizard({
 
       const testOutcome = await client.testModel(firstProfile.id);
 
-      if (!testOutcome.ok) {
+      const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
+      if (!testOutcome.ok && !budgetLimited) {
         // Failed: roll back everything this attempt created.
-        // Restore settings first so deleteModel is not blocked by runtime settings.
-        try {
-          if (typeof client.replaceGlobalSettings === "function") {
-            await client.replaceGlobalSettings(initialOverrides);
-          }
-        } catch { /* ignore */ }
+        // Remove only this attempt's auto-default; unrelated concurrent
+        // settings edits and newer default selections must remain intact.
+        await clearAttemptDefault();
         for (const id of createdModelIds) {
           try { await client.deleteModel(id); } catch { /* ignore */ }
         }
@@ -418,7 +416,7 @@ export function ModelConnectWizard({
         if (onDefaultModelSet) {
           await onDefaultModelSet(firstProfile.id);
         } else {
-          await client.replaceGlobalSettings({ modelId: firstProfile.id });
+          await replaceDefaultModelOverride(client, firstProfile.id);
         }
       }
 
@@ -435,27 +433,24 @@ export function ModelConnectWizard({
       const count = createdModelIds.length;
       const defaultChanged = !hadModels;
       const successDesc = defaultChanged
-        ? t("wizard.successDesc", { count, model: firstProfile.name })
-        : t("wizard.successDescKeepDefault", { count });
+        ? t(budgetLimited ? "wizard.savedDesc" : "wizard.successDesc", { count, model: firstProfile.name })
+        : t(budgetLimited ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count });
 
       setSuccessInfo({
         count,
         defaultChanged,
         latencyMs: testOutcome.latencyMs,
+        inconclusive: budgetLimited,
         modelName: firstProfile.name,
       });
       // The plan belonged to the provider that now exists; the next connect
       // starts from a clean slate.
       resetPlan();
 
-      onNotice?.(t("wizard.successTitle"), successDesc);
+      onNotice?.(t(budgetLimited ? "wizard.savedInconclusive" : "wizard.successTitle"), successDesc + (budgetLimited ? " " + t("wizard.outputLimitNotice") : ""));
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
-      try {
-        if (typeof client.replaceGlobalSettings === "function") {
-          await client.replaceGlobalSettings(initialOverrides);
-        }
-      } catch { /* ignore */ }
+      await clearAttemptDefault();
       for (const id of createdModelIds) {
         try { await client.deleteModel(id); } catch { /* ignore */ }
       }
@@ -812,15 +807,16 @@ export function ModelConnectWizard({
         {failureNode}
 
         {successInfo ? (
-          <div className="wizard-alert wizard-alert-success" role="status">
-            <CheckIcon size={16} />
+          <div className={successInfo.inconclusive ? "wizard-alert" : "wizard-alert wizard-alert-success"} role="status">
+            {successInfo.inconclusive ? <AlertCircleIcon size={16} /> : <CheckIcon size={16} />}
             <div className="wizard-alert-content">
-              <strong>{t("wizard.successTitle")}: </strong>
+              <strong>{t(successInfo.inconclusive ? "wizard.savedInconclusive" : "wizard.successTitle")}: </strong>
               <span>
                 {successInfo.defaultChanged
-                  ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
-                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
+                  ? t(successInfo.inconclusive ? "wizard.savedDesc" : "wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
+                  : t(successInfo.inconclusive ? "wizard.savedDescKeepDefault" : "wizard.successDescKeepDefault", { count: successInfo.count })}
                 {" "}({successInfo.latencyMs} ms)
+                {successInfo.inconclusive ? <span className="wizard-alert-detail">{t("wizard.outputLimitNotice")}</span> : null}
               </span>
             </div>
           </div>
@@ -838,7 +834,10 @@ export function ModelConnectWizard({
             >
               {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
             </button>
-            <span className="wizard-plan-summary">{planSummary}</span>
+            <div className="wizard-fetch-copy">
+              <span className="wizard-plan-summary">{planSummary}</span>
+              <label className="wizard-probe-consent"><input type="checkbox" checked={probeConsent} onChange={e => setProbeConsent(e.target.checked)} disabled={busy} />{t("settings.modelTest.basicConsent")}</label>
+            </div>
           </div>
           {/* The surrounding settings dialog closes when a press lands on its
               backdrop; a press on the wizard's own buttons must never take
@@ -847,7 +846,7 @@ export function ModelConnectWizard({
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"
-              disabled={busy}
+              disabled={busy || !probeConsent}
               onClick={() => void handleTestAndEnable()}
               type="button"
             >

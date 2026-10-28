@@ -114,6 +114,15 @@ for different per-run Swarm policies. Platform user approval modes continue to
 be handled by the existing approval bridge. Permission RPC failures are retried
 on the next registration attempt before publishing the tool.
 
+Compatibility patch `0009-batch-tool-permissions.patch` adds incremental batches
+to the existing management methods: `permissions.tools.update` accepts a `tools`
+map of names to levels, and `permissions.tools.delete` accepts a `tools` list of
+names. Each batch validates before one locked YAML transaction and preserves
+unrelated rules. The single-tool forms remain supported. The adapter sends one
+batch per new generation and one per inactive generation's retirement; unchanged
+catalogs retain their permissions and existing MCP connection. Failed retirement
+batches are retried without removing any live generation's rules.
+
 ### Cross-framework boundary regression checks
 
 Run the deterministic adapter checks without a model or live Swarm service:
@@ -291,11 +300,28 @@ call when `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=jiuwenswarm`: JiuwenSwarm's own
 sub-agents share the run's gateway without the boundary and would take a withheld
 response for their final answer.
 
+The same holds for a call whose arguments parse but leave out an argument the
+tool cannot run without — a `task` call without its `prompt`. The gateway
+withholds it the same way, naming the missing argument, so the model re-issues
+it instead of the run carrying a failed tool card for a call that never ran. A
+tool that declares no such requirement is left alone. Where there is no recovery
+boundary the call reaches the tool, which answers it with the same
+invalid-arguments result any other unusable call gets; the same is true on the
+last recovery attempt, so a run ends on a tool error rather than on a withheld
+call.
+
 ### Invalid tool argument diagnostics
 
 Invalid model tool arguments produce a `[model-arguments]` warning with the gateway
 request ID, tool-call IDs, tool names, token usage and truncation flag. Ordinary logs
 exclude raw arguments and parser messages (which may quote private input).
+`streamDiagnostics` records the protocol and the number of unparseable SSE payloads
+skipped during that request; OpenAI Chat also records tool-call deltas without an
+`index`. An absent diagnostics object means unmeasured, not zero. Nonzero counts
+identify assembly anomalies, but do not prove they caused the invalid arguments;
+zero counts do not rule out other assembly or upstream errors.
+Nightly real E2E enables the file below at `.ci-results/model-invalid-arguments.jsonl`.
+It and its rotation backup are retained in `real-e2e-evidence-*`, outside the score artifact.
 For reproduction, set `SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE=/private/path/invalid-arguments.jsonl`
 on the Node API process before startup. The parent directory must exist and should
 be private. This opt-in file includes parser errors and assembled raw arguments,
@@ -466,3 +492,25 @@ docstring lists the local stub scripts and gateway configuration needed.
   outcome. The action may already have executed; inspect state before replay.
 - External source failures (for example, an arXiv HTTP 406) are not repaired
   by these changes. They remain visible tool failures the model can handle.
+
+## DeepSeek Web tools
+
+Compatibility patch `0008-deepseek-web.patch` extends the actual default
+Agent web classes and the MCP toolkit on the pinned tag. Web settings reach
+`config.set` as `deepseek_api_key`, `deepseek_search_enabled` and
+`deepseek_fetch_enabled`; management and live search metadata reload recognize
+all three. DeepSeek is appended to auto paid search; Fetch uses it only when
+explicitly selected. Existing providers keep their original implementations.
+The shared request helper bounds responses to 1 MB, does not follow redirects
+with credentials, and classifies authentication, balance, rate, timeout and
+fetch errors without returning upstream response bodies. See the
+[Web tools reference](../docs/en/reference/web-tools.md) for configuration.
+
+Run the HTTP-stub checks using the patched source and its virtualenv:
+
+```bash
+JIUWENSWARM_DATA_DIR="$PWD/.tmp/deepseek-swarm" \
+PYTHONPATH="$JIUWENSWARM_SRC" \
+  "$JIUWENSWARM_SRC/.venv/bin/python" -m unittest discover \
+  -s jiuwen_swarm/tests -p test_deepseek_web.py
+```

@@ -24,7 +24,8 @@ import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, python
 import { preflight } from './environment.mjs';
 import { executionConfig, realShards, mockedShards } from './execution.mjs';
 import { checks } from './checks.mjs';
-import { groupResource, schedule, utWorkers } from './scheduler.mjs';
+import { planGroups, schedule, utWorkers, SWARM, SWARM_TAG } from './scheduler.mjs';
+import { startSwarm, withoutSwarm } from './swarm.mjs';
 import { availableParallelism, totalmem } from 'node:os';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
@@ -137,7 +138,7 @@ export function resultsLabel(slice, query=false) {
 }
 
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard;const query={};
+  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard,targetArch;const query={};
   while(args.length){
     const flag=args.shift();
     // pnpm versions differ on whether the conventional separator is stripped,
@@ -149,6 +150,10 @@ export async function main(args=process.argv.slice(2)) {
     else if(flag==='--coverage')coverage=true;
     else if(flag==='--backend')backend=args.shift();
     else if(flag==='--shard')shard=args.shift();
+    else if(flag==='--target-arch'){
+      targetArch=args.shift();
+      if(!['amd64','arm64'].includes(targetArch))throw new Error('Invalid --target-arch; use amd64 or arm64');
+    }
     else if(flag?.startsWith('--')&&schema.groups[flag.slice(2)]){
       const group=flag.slice(2),value=args.shift();
       if(!schema.groups[group].values.includes(value))throw new Error(`Unknown ${group}: ${value}; expected ${schema.groups[group].values.join('|')}`);
@@ -176,18 +181,18 @@ export async function main(args=process.argv.slice(2)) {
   // the sandbox network tests fail on the path length rather than on anything
   // they assert. The system temporary directory is what these suites used
   // before they were planned, and it is what they keep.
-  const env={...process.env,CI:'1',UV_CACHE_DIR:join(root,'.tmp/cache/uv'),
+  const env={...process.env,CI:'1',UV_CACHE_DIR:process.env.UV_CACHE_DIR||join(root,'.tmp/cache/uv'),
     UV_PYTHON_INSTALL_DIR:join(root,'.tmp/python'),npm_config_cache:join(root,'.tmp/cache/npm'),
     PLAYWRIGHT_BROWSERS_PATH:join(root,'.e2e/browsers'),CI_RESULTS_DIR:outputDir,
-    // The harness self-test needs an interpreter with pytest; the project
-    // virtualenvs preparation just built are the ones this revision pins.
-    SCIENCE_TEST_PYTHON:python('paper'),
+    // Gateway pins Python 3.12 and includes pytest for the tagged harness.
+    // Benchmark checks select their own Python via SCIENCE_RESEARCH_PYTHON.
+    SCIENCE_TEST_PYTHON:process.env.SCIENCE_TEST_PYTHON||python('gateway'),
     SCIENCE_DISCOVERY_DATA_DIR:join(outputDir,'runtime'),SCIENCE_AGENT_DATA_DIR:join(outputDir,'runtime')};
   // Collection scope follows the categories asked for, whichever way they were
   // asked: a query for `--category e2e` needs Chromium and not the Python
   // virtualenvs, exactly as `--slice e2e` does.
   const light=slice==='l1'||profileName==='l1';
-  const workers=slice==='ut'?utWorkers(process.env.CI_UT_WORKERS??'2'):1;
+  const workers=slice==='ut'?utWorkers(process.env.CI_UT_WORKERS):1;
   const categories=query.category??(light?['ut']:slice==='shared'?['ut','st','e2e']:[slice === 'e2e-real' ? 'e2e' : slice]);
   const needUT=!light&&categories.includes('ut'), needPW=categories.includes('e2e');
   env.CI_E2E_BACKEND=execution.backend;
@@ -242,12 +247,12 @@ export async function main(args=process.argv.slice(2)) {
   // selector is then evaluated on that concrete instance.
   const targets=dimensions.length
     ?(requestedOs??[profile.targets[0].os]).flatMap(os=>(requestedArch??[profile.targets[0].arch]).map(arch=>({os,arch})))
-    :profile.targets;
+    :profile.targets.map(t=>targetArch?{...t,arch:targetArch}:t);
   let plan=createPlan(catalog,{revision,selector:selector||'',targets,execution,...(dimensions.length?{}:{profile:profileName})});
   if(needPW){
     // Pin the evaluator/input implementation independently of the candidate
     // product SHA so stored scores identify their judge/rubric version.
-    const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/helpers/*result.mjs'],{cwd:root})].sort();
+    const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/benchmarks/**/*.mjs','test/helpers/*result.mjs','test/helpers/real-delivery.*','test/biomnibench-da-swarm.spec.ts','.ci/biomni-gate.mjs'],{cwd:root})].sort();
     const evaluatorRevision=fileDigest(sources.map(p=>p+'\n'+fileDigest(readFileSync(join(root,p)))).join('\n'));
     plan=subplan({...plan,evaluatorRevision},plan.entries);
   }
@@ -277,49 +282,67 @@ export async function main(args=process.argv.slice(2)) {
   // Instrumentation reaches execution only: collection above, and the command
   // checks below, run exactly as they do without `--coverage`.
   const recording=coverage?coverageSetup(outputDir,coverageDir):null;
-  // What this run owes the artifact: one lcov per Node test file it executed.
+  // What this run owes the artifact: one lcov per Node worker process it ran,
+  // which is two for a file whose `swarm:required` tests run apart from the rest.
   const owed={node:0};
   if(checked.ok){
-    const groups=new Map();
-    for(const e of plan.entries.filter(e=>['node','python'].includes(e.runner))){
-      const group=e.runner==='python'?e.source.split('/').slice(0,2).join('/'):e.source;
-      const entries=groups.get(group)??[];entries.push(e);groups.set(group,entries);
-    }
+    const groups=planGroups(plan.entries);
     let peakWorkers=0;
     const timings=[],controller=new AbortController();
     const abort=()=>controller.abort();
+    const aborted=new Promise((_,reject)=>controller.signal.addEventListener('abort',()=>reject(new Error('UT scheduling aborted')),{once:true}));
+    aborted.catch(()=>{});
     process.once('SIGINT',abort);process.once('SIGTERM',abort);
     console.log(`Worker pool: ${workers}; available CPUs: ${availableParallelism()}; host memory GiB: ${(totalmem()/2**30).toFixed(1)}`);
-    const tasks=[...groups].map(([group,entries],index)=>({resource:groupResource(group,entries[0].runner),run:async()=>{
-      const project=entries[0].runner==='python'?group.split('/')[1]:null;
-      const parts=group.split('/');const cwd=['packages','services','apps'].includes(parts[0])?join(root,...parts.slice(0,2)):root;
+    // JiuwenSwarm starts only for a plan that holds a test declaring it, and
+    // beside the other groups rather than ahead of them: only a declaring
+    // group waits for it. Every other group runs without its variables.
+    const declaring=groups.filter(group=>group.resource===SWARM);
+    const swarmLog=join(outputDir,'swarm.log');
+    const swarm=declaring.length?startSwarm({root,env,log:swarmLog}):null;
+    const swarmTiming=swarm&&{tests:declaring.reduce((n,group)=>n+group.entries.length,0),groups:declaring.length,readyMs:null,exitCode:null};
+    if(swarm){
+      const requested=Date.now();
+      swarm.ready.then(()=>{swarmTiming.readyMs=Date.now()-requested;},()=>{});
+      console.log(`JiuwenSwarm: ${swarmTiming.tests} test(s) declare ${SWARM_TAG}; starting one instance for them (log: ${swarmLog})`);
+    }
+    const isolated=withoutSwarm(env);
+    const tasks=groups.map((group,index)=>({resource:group.resource,run:async()=>{
+      const {entries,source}=group;
+      const project=group.runner==='python'?source.split('/')[1]:null;
+      const parts=source.split('/');const cwd=['packages','services','apps'].includes(parts[0])?join(root,...parts.slice(0,2)):root;
+      const label=group.resource===SWARM?`${source} [${SWARM_TAG}]`:source;
       const directory=join(outputDir,`group-${index+1}`);
+      const instance=group.resource===SWARM?await Promise.race([swarm.ready,aborted]):{};
       const startedAt=new Date();
-      console.log(`Run ${index+1}/${groups.size}: ${group} (${entries.length})`);
+      console.log(`Run ${index+1}/${groups.length}: ${label} (${entries.length})`);
       if(coverage&&!project)owed.node++;
-      const workerEnv={...env,SCIENCE_DISCOVERY_DATA_DIR:join(directory,'runtime'),SCIENCE_AGENT_DATA_DIR:join(directory,'runtime')};
+      const workerEnv={...isolated,...instance,SCIENCE_DISCOVERY_DATA_DIR:join(directory,'runtime'),SCIENCE_AGENT_DATA_DIR:join(directory,'runtime')};
       const base=project?projectEnv(workerEnv,project):workerEnv;
       try {
         return await execute({root,cwd,plan:subplan(plan,entries),outputDir:directory,
-          python:project?python(project):undefined,pytestPlugins:project?pythonPlugins[project]??[]:[],coverageDir:!project&&coverage?join(coverageDir,'node'):undefined,
+          python:project?python(project):undefined,pytestPlugins:project?pythonPlugins[project]??[]:[],coverageDir:!project&&coverage?join(coverageDir,'node'):undefined,coverageName:group.name,
           nodeImports:['tsx'],env:recording?recording.env(base):base,timeoutMs:600_000,signal:controller.signal});
       } finally {
         const durationMs=Date.now()-startedAt.getTime();
-        timings.push({group,index:index+1,runner:entries[0].runner,startedAt,durationMs});
-        console.log(`Done ${index+1}/${groups.size}: ${group} (${durationMs}ms)`);
+        timings.push({group:label,index:index+1,runner:group.runner,resource:group.resource,startedAt,durationMs});
+        console.log(`Done ${index+1}/${groups.length}: ${label} (${durationMs}ms)`);
       }
     }}));
     let completed;
     try {completed=await schedule(tasks,{workers,signal:controller.signal,onChange:active=>{peakWorkers=Math.max(peakWorkers,active);}});}
-    finally {process.removeListener('SIGINT',abort);process.removeListener('SIGTERM',abort);}
-    json(join(outputDir,'timing.json'),{workers,peakWorkers,availableCpus:availableParallelism(),hostMemoryBytes:totalmem(),groups:timings.sort((a,b)=>a.index-b.index)});
+    finally {
+      process.removeListener('SIGINT',abort);process.removeListener('SIGTERM',abort);
+      if(swarm)swarmTiming.exitCode=await swarm.stop();
+    }
+    json(join(outputDir,'timing.json'),{workers,peakWorkers,availableCpus:availableParallelism(),hostMemoryBytes:totalmem(),swarm:swarmTiming,groups:timings.sort((a,b)=>a.index-b.index)});
     for(const item of completed){
       if(item.status==='fulfilled'){results.push(...item.value.results);errors.push(...item.value.problems);}
       else errors.push(`GROUP_EXECUTION_FAILED: ${item.reason?.message??item.reason}`);
     }
     if(controller.signal.aborted)errors.push('EXECUTION_ABORTED');
     for(const entry of plan.entries.filter(e=>e.runner==='command'&&!controller.signal.aborted)){
-      const [command,...argv]=entry.command;const code=await run(command,argv,env,join(outputDir,entry.id.replaceAll(':','-')+'.log'));
+      const [command,...argv]=entry.command;const code=await run(command,argv,isolated,join(outputDir,entry.id.replaceAll(':','-')+'.log'));
       results.push({key:entry.key,outcome:code?'FAIL':'PASS',actualTarget:entry.target});
     }
     const batches=new Map();

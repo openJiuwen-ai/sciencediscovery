@@ -133,7 +133,7 @@ Map each connection to its source domain summary — embedded in Executive Summa
 
 **Surface contradictions verbatim** — for every CONTRADICTS connection:
 
-```
+```text
 Claim A: [finding from Knowledge domain] — Source: [sub-agent-id]
 Claim B: [finding from Analysis domain] — Source: [sub-agent-id]
 Status: UNRESOLVED — Human decides
@@ -183,6 +183,7 @@ Produce the final report and save to `/mnt/user-data/outputs/report-<topic-slug>
 
 Used when user does not specify a format:
 
+```markdown
 ## 1. Executive Summary
 [2-3 sentence overview of the research question, key findings, and overall verdict]
 

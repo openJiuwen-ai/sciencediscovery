@@ -33,13 +33,16 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
+import { completeChatRequest, InvalidModelResponseError, type ChatCompletionRequest } from "@sciencediscovery/model";
 
-import type { ModelInvocationUsage } from "@sciencediscovery/schema";
+import { resolveProxyForUrl } from "@sciencediscovery/data-source";
+
+import { MODEL_THINKING_EFFORTS, roleThinking, type ModelInvocationUsage, type ModelThinkingEffort } from "@sciencediscovery/schema";
 
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
 import { apiLog } from "../logging.js";
+import { parseProviderUsage } from "../provider-usage.js";
 import type { SessionStore } from "../store.js";
 
 /** What a run token is allowed to do, and for whom. */
@@ -111,60 +114,7 @@ export interface EvolveCompletionDeps {
   tokens: RunTokenRegistry;
 }
 
-interface CompletionBody {
-  max_tokens?: number;
-  messages?: Array<{ content: string; role: string }>;
-  temperature?: number;
-  /** Passed through. Unlike `model` this is the caller's to decide: it changes
-   *  how the chosen model answers, not which model is billed. */
-  thinking?: { type: string };
-  /** Ignored: the model is the one the run was created with, not the one the
-   *  caller asks for. A sidecar that could name any model could bill the user
-   *  for a model they never chose. */
-  model?: string;
-}
-
-/**
- * `POST /internal/evolve-llm/:runId/v1/chat/completions`.
- *
- * OpenAI-shaped because that is what the vendored port's completion adapter
- * speaks; the provider on the other side may be anything the user configured.
- */
-/**
- * Dispatcher for the one call this module makes.
- *
- * `bodyTimeout: 0` because the response arrives in one piece once it starts;
- * `headersTimeout` is the real budget, and it is the *thinking* time of a model
- * asked to rewrite a program. Fifteen minutes rather than undici's five: at five
- * the call was aborted mid-thought and the search recorded a candidate that
- * "would not run".
- *
- * It is paired with undici's own `fetch` below, and the pairing is the point.
- * Node's global `fetch` is backed by the copy of undici built into the runtime,
- * which does not recognise a dispatcher constructed from the package in
- * `node_modules` — the call fails immediately with a bare "fetch failed", which
- * reads exactly like an unreachable provider. Both sides come from the same
- * copy here, as they do everywhere else in this product that talks to a model.
- */
-const LONG_CALL_DISPATCHER = new UndiciAgent({ bodyTimeout: 0, headersTimeout: 15 * 60_000 });
-
-/**
- * A wall-clock ceiling on one mutation, because the dispatcher's is not one.
- *
- * `bodyTimeout: 0` is deliberate — a reasoning model streams for minutes and a
- * body timeout would cut a call that is working. But that leaves nothing at all
- * bounding a call whose headers arrived and whose body never ends, and with
- * thinking on that is the observed shape: two calls out, neither finished,
- * a search that reported "running" for as long as anyone watched it.
- *
- * Generous on purpose. This is not tuning, it is the difference between a slow
- * expansion and a run that never reports anything again.
- */
 const CALL_CEILING_MS = 20 * 60_000;
-
-/** Calls this process currently has open to a provider, by start time. Only for
- *  the log line: how many were already in flight is what tells a serialised
- *  proxy apart from a slow provider. */
 const inFlight = new Set<number>();
 
 export async function handleEvolveCompletion(
@@ -189,13 +139,22 @@ export async function handleEvolveCompletion(
     return sendError(response, 503, "The model this run was created with has no API token");
   }
 
-  const body = await readJson<CompletionBody>(request);
+  const { reasoning_effort: requestedEffort, ...body } = await readJson<ChatCompletionRequest & { reasoning_effort?: unknown }>(request);
   if (!Array.isArray(body.messages) || !body.messages.length) {
     return sendError(response, 400, "messages is required");
   }
+  if (requestedEffort !== undefined && !MODEL_THINKING_EFFORTS.includes(requestedEffort as ModelThinkingEffort)) {
+    return sendError(response, 400, "reasoning_effort must be low, medium, high, xhigh, or max");
+  }
+  // An Idea Tree stage with its own effort asks for it per call. It is narrowed
+  // to a stop this model accepts, and a model with no effort control keeps its
+  // profile's thinking, the same as a call that asks for nothing.
+  const stageThinking = requestedEffort === undefined
+    ? undefined
+    : roleThinking(model, deps.store.listProviders(), requestedEffort as ModelThinkingEffort);
 
   const startedAt = new Date().toISOString();
-  const call = deps.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
+
   let upstream: Response;
   // Timed, and logged at both ends, because a search that produces nothing
   // looks identical from outside whether the provider is slow, the proxy is
@@ -204,67 +163,50 @@ export async function handleEvolveCompletion(
   const began = Date.now();
   apiLog.info("evolve_llm_call_started", {
     ceiling: body.max_tokens, inFlight: inFlight.size, runId,
-    thinking: body.thinking?.type ?? "default",
+    thinking: stageThinking?.thinkingEffort ?? body.thinking?.type ?? "default",
   });
   inFlight.add(began);
   try {
-    // `${baseUrl}/chat/completions`, not `/v1/chat/completions`: a profile's
-    // base URL already carries the provider's version segment, which is the
-    // convention every other caller in this product follows (session-naming,
-    // papers, native-agent/model-client). Appending another one produced
-    // `.../api/coding/v3/v1/chat/completions` and a 404 that the proxy
-    // faithfully forwarded — so every expansion became an empty reply, and the
-    // search read as a model that could not write code.
-    const ceiling = AbortSignal.timeout(CALL_CEILING_MS);
-    upstream = await call(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      signal: ceiling,
-      body: JSON.stringify({
-        max_tokens: body.max_tokens,
-        messages: body.messages,
-        model: model.model,
-        temperature: body.temperature,
-        // Forwarded, not invented: the sidecar decides whether this workload
-        // wants a reasoning model's thinking, and for a whole-program rewrite
-        // upstream's answer is that it does not — with it on, the model spends
-        // the entire output budget thinking and returns nothing.
-        ...(body.thinking === undefined ? {} : { thinking: body.thinking }),
-      }),
-      // A reasoning model rewriting a program thinks for minutes before the
-      // first byte, and undici's 300-second default aborted the call — which
-      // arrived at the sidecar as "the provider could not be reached" and
-      // became a failed candidate. Same shape the agent's model client uses:
-      // no body timeout, an explicit ceiling on the wait for headers.
-      dispatcher: LONG_CALL_DISPATCHER,
-      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-      method: "POST",
-    } as RequestInit);
+    const controller = new AbortController();
+    response.on("close", () => { if (!response.writableEnded) controller.abort(); });
+    upstream = await completeChatRequest({ ...model, ...stageThinking, apiToken, proxy: resolveProxyForUrl(deps.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, body,
+      AbortSignal.any([controller.signal, AbortSignal.timeout(CALL_CEILING_MS)]), deps.fetchImpl);
   } catch (error) {
     inFlight.delete(began);
-    apiLog.warn("evolve_llm_unreachable", {
+    const invalidResponse = error instanceof InvalidModelResponseError;
+    apiLog.warn(invalidResponse ? "evolve_llm_invalid_response" : "evolve_llm_unreachable", {
       elapsedMs: Date.now() - began,
-      reason: error instanceof Error ? error.message : String(error), runId,
+      reason: error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "Unknown model failure", runId,
     });
-    return sendError(response, 502, "The model provider could not be reached");
+    return sendError(response, invalidResponse ? 422 : 502, error instanceof Error ? error.message.split(apiToken).join("[redacted]") : "The model provider could not be reached");
   }
   inFlight.delete(began);
 
-  const payload = await upstream.json().catch(() => ({})) as Record<string, unknown>;
+  const rawPayload = await upstream.text();
+  let payload: Record<string, unknown>;
+  try {
+    const decoded: unknown = JSON.parse(rawPayload);
+    payload = decoded !== null && typeof decoded === "object" && !Array.isArray(decoded)
+      ? decoded as Record<string, unknown> : { error: rawPayload.slice(0, 2000) };
+  } catch {
+    payload = { error: rawPayload.slice(0, 2000) };
+  }
   const choices = Array.isArray(payload.choices) ? payload.choices : [];
   const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
-  const spend = (payload.usage ?? {}) as Record<string, unknown>;
+  const spend = parseProviderUsage(payload.usage, "openai-chat-completions");
   apiLog.info("evolve_llm_call_finished", {
     // Named "count", not "tokens": the operational logger redacts any field
     // whose name looks like a credential, and it redacted these — which left
     // the log unable to answer the one question it was added for. These are
     // counts of output, not secrets.
-    completionCount: Number(spend.completion_tokens ?? -1),
+    completionCount: spend.outputTokens ?? -1,
     contentChars: typeof content === "string" ? content.length : -1,
     elapsedMs: Date.now() - began,
     // The pair that separates "the model thought and said nothing" from "the
     // provider returned nothing at all": the first reports a completion count
     // with no content, the second reports neither. Only one is worth paying
     // for again, and they are indistinguishable from the sidecar.
-    promptCount: Number(spend.prompt_tokens ?? -1),
+    promptCount: spend.inputTokens ?? -1,
     runId,
     status: upstream.status,
   });
@@ -301,17 +243,15 @@ async function recordUsage(
   payload: Record<string, unknown>,
   startedAt: string,
 ): Promise<ModelInvocationUsage> {
-  const reported = payload.usage as
-    | { completion_tokens?: number; prompt_tokens?: number; total_tokens?: number }
-    | undefined;
+  const reported = parseProviderUsage(payload.usage, "openai-chat-completions");
   const record: ModelInvocationUsage = {
     attemptIndex: 0,
-    cacheReadTokens: null,
-    cacheWriteTokens: null,
+    cacheReadTokens: reported.cacheReadTokens,
+    cacheWriteTokens: reported.cacheWriteTokens,
     costUsd: null,
     finishedAt: new Date().toISOString(),
     id: randomBytes(16).toString("hex"),
-    inputTokens: reported?.prompt_tokens ?? null,
+    inputTokens: reported.inputTokens,
     invocationId: `evolve:${grant.runId}`,
     // Its own kind: a search's spend is not a chat turn, and the usage page has
     // to be able to say "this month went on evolution" rather than burying it.
@@ -319,14 +259,14 @@ async function recordUsage(
     model: model.model,
     modelProfileId: model.id,
     modelProfileName: model.name,
-    outputTokens: reported?.completion_tokens ?? null,
+    outputTokens: reported.outputTokens,
     runId: grant.runId,
     sessionId: grant.sessionId,
     startedAt,
-    totalTokens: reported?.total_tokens ?? null,
+    totalTokens: reported.totalTokens,
     // A provider that reports nothing is recorded as such rather than as zero:
     // "we do not know" and "it was free" are different facts.
-    usageStatus: reported?.total_tokens === undefined ? "provider-not-reported" : "reported",
+    usageStatus: reported.usageStatus,
   };
   await deps.store.appendModelInvocationUsage(record);
   return record;

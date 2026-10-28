@@ -35,6 +35,7 @@ import type {
 
 import { MAX_PROVIDER_RESPONSE_BYTES, ProviderRequestError, thrownErrorCode, type ProviderErrorCode } from "./http.js";
 import { fetchExa, fetchJina, fetchTavily } from "./fetch.js";
+import { fetchDeepSeek, searchDeepSeek } from "./deepseek.js";
 import { searchBing, searchBraveHtml, searchDuckDuckGo } from "./free-engines.js";
 import { searchBraveApi, searchExa, searchTavily } from "./search.js";
 import { PublicUrlError, assertPublicUrl } from "./url-guard.js";
@@ -43,12 +44,13 @@ import type { ProviderCallOptions, SearchRow } from "./types.js";
 const MAX_QUERY_LENGTH = 2_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RESULTS = 5;
-const KEYED_FETCH_PROVIDERS = new Set<WebFetchProvider>(["exa", "tavily"]);
+const KEYED_FETCH_PROVIDERS = new Set<WebFetchProvider>(["exa", "tavily", "deepseek"]);
 
 type SearchRunner = (query: string, options: ProviderCallOptions) => Promise<SearchRow[]>;
 
 const PAID_RUNNERS: Record<PaidSearchProvider, SearchRunner> = {
   brave: searchBraveApi,
+  deepseek: searchDeepSeek,
   exa: searchExa,
   tavily: searchTavily,
 };
@@ -156,7 +158,7 @@ export class NativeWebProviderClient {
       ? isPaidSearchProvider(input.provider)
       : KEYED_FETCH_PROVIDERS.has(input.provider as WebFetchProvider);
     if (needsKey && !input.apiKey?.trim()) {
-      throw new WebProviderError(`${input.provider} requires a non-empty API key`, "unauthorized", false);
+      throw new WebProviderError(`${input.provider} requires a non-empty API key`, input.provider === "deepseek" ? "missing-credentials" : "unauthorized", false);
     }
     let argument: string;
     try {
@@ -177,7 +179,10 @@ export class NativeWebProviderClient {
           throw new WebProviderError(`${input.provider} does not support search`, "invalid-input", false);
         }
         const rows = await runner(argument, options);
-        if (!rows.length) throw new ProviderRequestError("No results found", "semantic-error");
+        if (!rows.length) {
+          if (input.provider === "deepseek") return { content: "", durationMs: Date.now() - started, errorCode: "no-results", errorMessage: "No search results found", isError: true };
+          throw new ProviderRequestError("No results found", "semantic-error");
+        }
         return finalize(renderSearchDocument(argument, rows), Date.now() - started);
       }
       if (input.provider === "jina") {
@@ -195,7 +200,7 @@ export class NativeWebProviderClient {
         }
         return finalize(result.content, durationMs, result.attempts);
       }
-      const fetcher = input.provider === "tavily" ? fetchTavily : input.provider === "exa" ? fetchExa : undefined;
+      const fetcher = input.provider === "deepseek" ? fetchDeepSeek : input.provider === "tavily" ? fetchTavily : input.provider === "exa" ? fetchExa : undefined;
       if (!fetcher) {
         throw new WebProviderError(`${input.provider} does not support fetch`, "invalid-input", false);
       }

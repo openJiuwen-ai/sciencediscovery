@@ -87,16 +87,6 @@ export const tagDimensions = {
  */
 const sharedSlice = (slice) => ["node", "test/support/tagged/shared.mjs", "run", "--slice", slice];
 
-/**
- * What runs a command with JiuwenSwarm, the agent backend, and its adapter
- * (`scripts/with-jiuwenswarm.sh`). On this branch agent turns in the UT slice
- * run on a real JiuwenSwarm behind a real adapter: the wrapper installs and
- * starts one of each for the whole run, and the tests reach it through
- * `SCIENCE_AGENT_ADAPTER_URL`. It is part of the layer's definition, not of
- * the machine, so `pnpm ci:ut` means the same run on a laptop and in CI.
- */
-export const jiuwenSwarmWrapper = ["bash", "scripts/with-jiuwenswarm.sh"];
-
 const step = (command) => [command[0], command.slice(1)];
 
 /**
@@ -127,6 +117,10 @@ const buildStep = ["pnpm", ["build"]];
  * `e2e` is deliberately not here. `pnpm ci:e2e` calls the slice directly,
  * because `.ci/run-e2e.sh` already owns `<results>/e2e/run.log` and a layer
  * wrapper would be a second writer of that same file.
+ *
+ * No layer wraps the shared runner in `scripts/with-jiuwenswarm.sh`: that would
+ * hand one JiuwenSwarm instance to every process of the run. The runner starts
+ * the instance itself, and only for the tests that declare `swarm:required`.
  */
 export const layers = {
   st: [step(sharedSlice("st"))],
@@ -134,7 +128,7 @@ export const layers = {
     [process.env.SCIENCE_AGENT_NPU_PYTHON?.trim() || "python3", ["services/runner/workloads/npu-smoke-test.py"]],
   ],
   "st-real": [installStep, buildStep, ["bash", ["test/api/run_real_smoke.sh"]]],
-  ut: [step([...jiuwenSwarmWrapper, ...sharedSlice("ut")])],
+  ut: [step(sharedSlice("ut"))],
 };
 
 export const testCases = [

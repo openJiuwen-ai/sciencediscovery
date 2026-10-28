@@ -104,8 +104,10 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
       providerId,
       source: "remote" as const,
     }),
+    getGlobalSettings: async () => ({ effective: {}, overrides: {} } as any),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
+    clearGlobalModelIfCurrent: async () => ({ cleared: true }),
     testModel: async () => successResult,
     updateProvider: async (id: string, body: any) => ({
       id,
@@ -113,6 +115,12 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
     } as ModelProvider),
     ...overrides,
   } as unknown as SettingsApiClient;
+}
+
+async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
+  const label = renderer.root.findAllByType("label").find(node => /我同意发送一次|I agree to one/.test(extractText(node)));
+  assert.ok(label, "Cost disclosure must be reachable before a model request");
+  await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
 }
 
 test("renders preset provider selection, official registration link, and billing notice in zh-CN and en", async () => {
@@ -235,6 +243,7 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
   });
 
   // Click "保存并连接"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -314,6 +323,7 @@ test("successful flow with existing models: registers all listed models but leav
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -334,6 +344,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   let deletedModelId: string | undefined;
   let deletedProviderId: string | undefined;
   let defaultModelSetCalled = false;
+  const rollbackCalls: string[] = [];
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => ({
@@ -357,12 +368,20 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
       updatedAt: "2026-09-17T00:00:00.000Z",
     } as ModelProvider),
     deleteModel: async (modelId: string) => {
+      rollbackCalls.push(`delete:${modelId}`);
       deletedModelId = modelId;
       return { deleted: modelId };
     },
     deleteProvider: async (providerId: string) => {
       deletedProviderId = providerId;
       return { deleted: providerId };
+    },
+    clearGlobalModelIfCurrent: async (modelId: string) => {
+      rollbackCalls.push(`clear:${modelId}`);
+      return { cleared: true };
+    },
+    replaceGlobalSettings: async () => {
+      throw new Error("failed connections must not restore a stale settings snapshot");
     },
     testModel: async () => authFailResult,
   });
@@ -391,6 +410,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   });
 
   // Click "测试并启用"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -399,6 +419,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   // Temporary objects rolled back
   assert.equal(deletedModelId, "temp-profile-to-delete");
   assert.equal(deletedProviderId, "temp-provider-to-delete");
+  assert.deepEqual(rollbackCalls, ["clear:temp-profile-to-delete", "delete:temp-profile-to-delete"]);
 
   // Default model was NOT changed
   assert.equal(defaultModelSetCalled, false);
@@ -482,6 +503,7 @@ test("bad key with an existing provider: new provider is rolled back, existing r
   });
 
   // Click "测试并启用"
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -596,6 +618,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   });
 
   // Submit
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -659,6 +682,7 @@ test("custom provider without model id: registers every listed model", async () 
   });
 
   // Model identifier intentionally left empty: the listing decides.
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -715,6 +739,7 @@ test("empty model listing: readable error, provider rolled back, default untouch
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -764,6 +789,7 @@ test("model listing failure: readable error with detail, provider rolled back, d
     keyInput.props.onChange({ target: { value: "sk-bad-key" } });
   });
 
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -801,6 +827,7 @@ test("validation errors: missing key prevents client API calls", async () => {
   });
 
   // Submit without key
+  await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -901,6 +928,7 @@ test("advanced preset fields: base URL override is honored when creating a provi
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-test" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -978,6 +1006,7 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
   const variantSelect = renderer!.root.findByProps({ id: "wizard-api-variant" });
   assert.equal(variantSelect.props.value, "anthropic-adaptive");
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1074,6 +1103,7 @@ test("same preset can be added again with its own name and key; the existing row
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-second-key" } });
   });
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1162,6 +1192,7 @@ test("advanced manual selection: the fetched list starts fully ticked, unticking
   assert.equal(renderer.root.findByProps({ "aria-label": "全选" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1196,6 +1227,7 @@ test("advanced: unticking every listed row is an explicit none — readable erro
   assert.equal(renderer.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 0 个模型/);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1249,6 +1281,7 @@ test("advanced manual entry: a model described by hand is registered with its fa
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
   assert.deepEqual(registered, []);
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1306,6 +1339,7 @@ test("advanced: a failed preview is readable, keeps the card usable, and writes 
   assert.equal(extractText(renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" })), "获取模型列表");
   // The card is still the same card: the simple path remains one click away.
   assert.equal(renderer.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  await acceptProbeCost(renderer!);
   assert.equal(renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.disabled, false);
 });
 
@@ -1341,6 +1375,7 @@ test("advanced preset fields: protocol and variant overrides drive creation just
   });
   assert.equal(renderer.root.findByProps({ id: "wizard-api-variant" }).props.value, "responses");
 
+  await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
@@ -1529,4 +1564,138 @@ test("an API key entered before presets arrive keeps automatic custom mode and t
   assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
   assert.equal(hasCustomFields(renderer!), true);
   assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-kept");
+});
+
+test("a failed settings read after the probe rolls back the created provider and model", async () => {
+  let replaceCalls = 0;
+  let createCalls = 0;
+  const rollbackCalls: string[] = [];
+  const errors: unknown[] = [];
+  const client = createMockClient({
+    createProvider: async (body: any) => {
+      createCalls += 1;
+      return {
+        apiProtocol: body.apiProtocol,
+        apiVariant: body.apiVariant,
+        baseUrl: body.baseUrl,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        id: "settings-read-provider",
+        modelDiscovery: body.modelDiscovery,
+        name: body.name,
+        presetId: body.presetId,
+        proxyPolicy: "inherit",
+        tokenOptional: false,
+        updatedAt: "2026-09-17T00:00:00.000Z",
+      } as ModelProvider;
+    },
+    clearGlobalModelIfCurrent: async (modelId: string) => {
+      rollbackCalls.push(`clear:${modelId}`);
+      return { cleared: true };
+    },
+    deleteModel: async (modelId: string) => {
+      rollbackCalls.push(`delete:${modelId}`);
+      return { deleted: modelId };
+    },
+    deleteProvider: async (providerId: string) => {
+      rollbackCalls.push(`provider:${providerId}`);
+      return { deleted: providerId };
+    },
+    getGlobalSettings: async () => { throw new Error("settings 500"); },
+    replaceGlobalSettings: async () => {
+      replaceCalls += 1;
+      return {} as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          onError: (reason) => { errors.push(reason); },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-invalid-key" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.equal(createCalls, 1);
+  assert.equal(replaceCalls, 0);
+  assert.deepEqual(rollbackCalls, [
+    "clear:profile-settings-read-provider-listed-model-first",
+    "clear:profile-settings-read-provider-listed-model-second",
+    "delete:profile-settings-read-provider-listed-model-first",
+    "delete:profile-settings-read-provider-listed-model-second",
+    "provider:settings-read-provider",
+  ]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
+  const alert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
+  assert.match(extractText(alert), /settings 500/);
+});
+
+test("the first model merges into the settings read at save time when no callback is passed", async () => {
+  const writes: unknown[] = [];
+  const client = createMockClient({
+    getGlobalSettings: async () => ({
+      effective: {},
+      overrides: { enabledConnectorIds: [], semanticReviewEnabled: true, thinkingEffort: "high" },
+    } as any),
+    replaceGlobalSettings: async (body: unknown) => {
+      writes.push(body);
+      return { effective: {}, overrides: body } as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS }),
+      ),
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-deepseek-test-123" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.deepEqual(writes, [{
+    enabledConnectorIds: [],
+    modelId: "profile-created-provider-1-listed-model-first",
+    semanticReviewEnabled: true,
+    thinkingEffort: "high",
+  }]);
+});
+
+for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'budget', 'auth', 'empty'] as const) test(`${locale} mounted wizard setup result ${kind} is honest and preserves rollback`, async () => {
+  const deleted: string[] = []; let saved = false, probes = 0, renderer: ReactTestRenderer;
+  const outcome: ModelConnectivityTestResult = kind === 'valid' ? successResult : kind === 'auth' ? { ...authFailResult, inconclusiveReason: 'output_limit' }
+    : { ...successResult, ok: false, category: 'invalid_response', ...(kind === 'budget' ? { inconclusiveReason: 'output_limit' as const } : {}) };
+  const client = createMockClient({ testModel: async () => { probes++; return outcome; }, deleteModel: async id => { deleted.push('model'); return { deleted: id }; }, deleteProvider: async id => { deleted.push('provider'); return { deleted: id }; } });
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS, onSuccess: () => { saved = true; } }))); });
+  try {
+    await act(async () => { renderer!.root.findByProps({ id: 'wizard-api-key' }).props.onChange({ target: { value: 'synthetic' } }); });
+    assert.equal(probes, 0); await acceptProbeCost(renderer!);
+    await act(async () => { renderer!.root.findByProps({ className: 'primary-button wizard-submit-button' }).props.onClick(); const end = Date.now()+2000; while (!saved && deleted.length < 2 && Date.now()<end) await new Promise(r => setTimeout(r,10)); });
+    assert.equal(probes, 1);
+    if (kind === 'auth' || kind === 'empty') { assert.equal(saved, false); assert.deepEqual(deleted, ['model','provider']); }
+    else { assert.equal(saved, true); assert.deepEqual(deleted, []); }
+    if (kind === 'budget') { const rendered = extractText(renderer!.toJSON()); assert.match(rendered, locale === 'en' ? /compatibility unconfirmed/ : /兼容性未确认/); assert.doesNotMatch(rendered, /Connected —|已成功连接/); }
+  } finally { await act(async () => renderer!.unmount()); }
 });

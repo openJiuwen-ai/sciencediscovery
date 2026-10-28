@@ -259,6 +259,11 @@ for (const child of [false, true]) test(`legacy parallel ${child ? "child" : "ma
           status: n === 0 ? "running" : id === "shell" ? "failed" : "completed", content: n === 0 ? "input" : `result-${id}` } } : event });
     }
     const open = (events = source) => openSessionTrajectory(directory, { sessionId: "s", agents: [{ id: agentId, label: "Main" }], events }, new AbortController().signal);
+    const withProgress = await open([...source, {
+      ...source[0]!, id: "progress", event: { type: "tool.output", toolCallId: "python", chunk: "intermediate output", progress: true },
+    }]);
+    assert.equal(withProgress.index.entries.filter(e => e.id.startsWith("segment:")).length, 0,
+      "progress is transcript evidence, not part of the final result identity");
     const view = await open();
     assert.equal(view.index.entries.filter(e => e.eventType === "tool.started").length, 2);
     assert.equal(view.index.entries.filter(e => e.id.startsWith("segment:")).length, 0);

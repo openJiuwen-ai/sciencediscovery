@@ -75,7 +75,13 @@ Agent 生成的文件位于：
 
 ### 非交互模式
 
-通过管道或脚本运行时默认使用 JSONL 输出。非交互环境无法回答权限卡片，因此必须显式使用相应的自动批准选项，否则任务会拒绝启动。
+通过管道或脚本运行时默认使用 JSONL 输出。非交互环境无法回答权限卡片，因此必须传入 `--auto-approve`（或 `--approval always_allow`），否则任务会拒绝启动。自动批准作用于本次运行所在会话的工具操作；沙箱失效后直接在主机上执行仍须明确同意，因此请求这类执行的非交互运行会停下等待。
+
+如果只想把答案写入文件，请显式选择 text 输出：
+
+```bash
+./ScienceDiscovery run --auto-approve --output text "用一段话解释 p 值能说明什么、不能说明什么" > answer.md
+```
 
 精确选项以当前版本的：
 
@@ -84,6 +90,29 @@ Agent 生成的文件位于：
 ```
 
 为准。
+
+### 思考与推理力度
+
+`--thinking` 与 `--effort` 设置本次运行所用模型的思考方式。与 `--model` 一样，选择会保存在本次运行所在的会话上。
+
+| 选项 | 效果 |
+| --- | --- |
+| `--thinking off` | 关闭思考 |
+| `--thinking auto` | 由模型默认决定 |
+| `--thinking on` | 开启思考，沿用会话当前的力度 |
+| `--effort <level>` | 以 `low`、`medium`、`high`、`xhigh` 或 `max` 力度思考，等同于同时开启 `--thinking on` |
+
+可接受的取值与输入框为该模型提供的选项完全一致。检查发生在 `--model` 生效之后、保存任何设置和启动运行之前。模型不接受的取值会让命令以退出码 1 失败，并列出该模型实际接受的取值；JSONL 模式下这条信息是一行 `"code": "THINKING_NOT_ACCEPTED"` 的 `error`。这包括模型没有对应档位的力度、不能关闭思考的模型上的 `off`，以及没有思考控制字段的模型上的任一选项。`--effort` 与 `--thinking off` 或 `--thinking auto` 同时给出属于自相矛盾，会被拒绝。两个选项都不给时，会话的思考设置保持不变。
+
+比较不同力度时，对同一任务每档运行一次：
+
+```bash
+for level in high max; do
+  ./ScienceDiscovery run --auto-approve --output text --effort "$level" "总结这个数据集" > "answer-$level.md"
+done
+```
+
+每次运行生效的思考方式记录在 `GET /api/sessions/:sessionId/runs/:runId` 的 `settingsSnapshot.thinkingMode` 与 `settingsSnapshot.thinkingEffort` 中；力度只在模式为 `enabled` 时生效。Reviewer 与 Idea Tree 各阶段可以有自己的力度，它们属于设置而不是 `run` 选项，见[按角色的思考力度](runtime-behavior.md#按角色的思考力度)。
 
 ### 本地源码模式
 

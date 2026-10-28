@@ -1,0 +1,668 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* 3601:3798 */
+/* ============================================================================
+   Settings: general, model, skills, network, runtime
+   ============================================================================ */
+.settings-list { display: grid; gap: 8px; }
+/* 一键启用 / 一键关闭: the two writes that act on the list below them, drawn as
+   one segmented control because they are one choice about it. Two bare links
+   read as a caption; the joined border makes the pair a control. */
+.settings-bulk {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.settings-bulk .bulk-button {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.settings-bulk .bulk-button:first-child {
+  border-radius: var(--radius-s) 0 0 var(--radius-s);
+}
+.settings-bulk .bulk-button:last-child {
+  border-left: none;
+  border-radius: 0 var(--radius-s) var(--radius-s) 0;
+}
+.settings-bulk .bulk-button:hover:not(:disabled) {
+  background: var(--surface-soft);
+  color: var(--text-strong);
+}
+.settings-bulk .bulk-button:active:not(:disabled) { background: var(--surface-subtle); }
+.settings-bulk .bulk-button:disabled {
+  color: var(--text-faint);
+  cursor: progress;
+}
+.settings-bulk .bulk-button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--primary-border-soft);
+  outline-offset: 1px;
+}
+.settings-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.settings-card.is-off { background: var(--surface-subtle); }
+.settings-card-mark {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+/* The main area of a row doubles as the "open details" affordance, so it is a button that
+   has to look like text. */
+button.settings-card-main {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.settings-card-main:hover strong { color: var(--primary-strong); }
+.settings-card-main { flex: 1; min-width: 0; }
+.settings-card-main strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+.settings-card-main small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.settings-card-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.settings-tag {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.settings-tag.is-on { background: var(--success-soft); color: var(--success); }
+.settings-tag.is-key { background: var(--insight-soft); color: var(--insight-strong); }
+.settings-tag.is-off { background: var(--surface-sunk); color: var(--text-faint); }
+.settings-tag.is-ok { background: var(--success-soft); color: var(--success); }
+.settings-tag.is-warn { background: var(--warning-soft); color: var(--warning-strong, #745612); }
+.settings-tag.is-primary { background: var(--primary-soft); color: var(--primary-strong); }
+
+.settings-card-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+/* A form row stacks instead of sitting on one line. */
+.settings-card.is-form {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px 15px;
+}
+.settings-card-form { display: flex; flex-direction: column; gap: 12px; }
+.settings-card.is-form .settings-card-actions { justify-content: flex-end; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.settings-empty {
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-m);
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: center;
+}
+/* Showing an enabled switch for a skill that is off would be the wrong default to imply. */
+.skill-detail {
+  margin-top: 8px;
+  padding: 11px 13px;
+  border: 1px solid var(--primary-border-soft);
+  border-radius: var(--radius-m);
+  background: var(--primary-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.skill-detail strong { color: var(--primary-strong); }
+.chip-select { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.chip-pick:hover { border-color: var(--border-strong); }
+.chip-pick.is-on {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-weight: 650;
+}
+.mirror-row { display: flex; align-items: center; gap: 8px; }
+.mirror-row .field-input { flex: 1; }
+
+/* An artifact reference inside a reply body renders as a jump chip, so a filename in prose
+   is also the way to open it in the workspace panel. */
+.artifact-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 1px;
+  padding: 1px 8px;
+  border: 1px solid var(--primary-border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+.artifact-jump:hover {
+  background: var(--primary-tint);
+  border-color: var(--primary);
+}
+.artifact-jump-arrow { font-family: var(--font-sans); font-size: 11px; }
+
+/* Interactive timeline cards are repainted in place, so each one owns a stable host node. */
+.card-host { display: block; }
+.card-host > .timeline-card { margin: 10px 0; }
+
+/* drop zone: the list of files already staged for this session */
+.drop-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.drop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-soft);
+}
+.drop-item:first-child { border-top: none; }
+.drop-item-name { flex: 1; font-family: var(--font-mono); color: var(--text-strong); }
+.drop-item-meta { color: var(--text-faint); }
+.drop-item-hint { justify-content: center; color: var(--text-faint); }
+
+/* Confirmation under a control that writes only to this machine, so it never
+   earns a toast. */
+.row-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--success);
+  font-size: 11.5px;
+}
+.row-note.is-error { color: var(--danger); }
+.row-note.is-warn { color: var(--warning-strong, #745612); margin: 0 0 12px; }
+
+/* ============================================================================
+   Settings pages: the nine nav entries share these primitives
+   ============================================================================ */
+
+
+/* The title's hint goes on its own line under the name, not beside it. */
+.settings-section .settings-row .row-title small {
+  display: block;
+  margin-top: 3px;
+  line-height: 1.55;
+}
+
+/* A row whose control needs the full width, so it stops sharing the line. */
+.settings-section .settings-row.is-stack .row-control,
+.settings-section .settings-row.is-stack .row-title { justify-content: stretch; }
+.settings-section .settings-row.is-stack .row-control > * { width: 100%; }
+
+/* Inside a form the controls stack under their labels and fill the card,
+   because a form row is read top to bottom rather than scanned. */
+.settings-card.is-form .settings-row .row-control { justify-content: stretch; }
+.settings-card.is-form .settings-row .row-control > .field-input,
+.settings-card.is-form .settings-row .row-control > .field-textarea,
+.settings-card.is-form .settings-row .row-control > select { width: 100%; }
+.settings-card.is-form .settings-row .row-control > .mirror-row { width: 100%; }
+
+/* The on/off control. A real switch element, so the state is announced as
+   "on"/"off" rather than as "pressed". */
+.switch {
+  width: 38px;
+  height: 22px;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.switch:hover:not(:disabled) { border-color: var(--primary); }
+.switch.is-on { background: var(--primary); border-color: var(--primary-strong); }
+.switch:disabled { opacity: .5; cursor: default; }
+.switch-knob {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transition: transform .15s ease;
+}
+.switch.is-on .switch-knob { transform: translateX(16px); }
+
+.field-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.field-textarea.is-code { font-family: var(--font-mono); font-size: 12px; }
+/* The allowlist box is only an input in the mode that reads it. Everywhere
+   else it stays visible — turned grey rather than removed — so the page does
+   not change shape when the mode changes. */
+.field-textarea:disabled {
+  border-color: var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-faint);
+  cursor: not-allowed;
+  resize: none;
+}
+.allowlist-editor { display: grid; gap: 8px; }
+.allowlist-actions { display: flex; justify-content: flex-end; }
+
+/* A path or identifier being shown so it can be copied, not typed into. */
+.path-chip,
+.mono-inline {
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.mono-inline { padding: 0; background: none; }
+
+/* A link that has to look like the buttons beside it. */
+a.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.danger-button {
+  min-height: 38px;
+  padding: 8px 18px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 650;
+}
+.danger-button:hover:not(:disabled) { background: var(--danger-soft); }
+.danger-button:disabled { opacity: .5; }
+
+/* An expanded row keeps the hover treatment so it is clear which one is open. */
+.settings-card.is-open { border-color: var(--primary-border-soft); }
+/* A card that opens in place pins its mark and switch to the first line, so
+   neither moves when the details below grow the card. */
+.settings-card.is-expandable { align-items: flex-start; }
+.settings-detail {
+  display: block;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.settings-detail-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+/* The expanded skill card shows the body of SKILL.md, which is the one thing
+   the row above the divider does not already say. The heading names it, and
+   the body is capped: a long skill should not push the rest of the list off
+   the page, and a reader who wants the whole text can scroll this box. */
+.settings-detail-heading {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+}
+.settings-detail-body {
+  display: block;
+  max-height: 12em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.settings-detail-body.is-muted { color: var(--text-faint); }
+
+/* A failed read is not an empty result, and it must not look like one. */
+.settings-empty.is-error {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  border-style: solid;
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.settings-empty.is-error p { margin: 0; }
+
+/* A form-shaped page needs a plain label above a control, because its inputs are
+   too wide to sit beside a title. */
+.settings-card.is-form .settings-row { margin-bottom: 12px; }
+
+/* A machine card's details wrap onto their own lines: a card carries up to five
+   actions, and the identity beside them has to stay readable rather than be
+   squeezed to an ellipsis. */
+.settings-card.is-machine { flex-wrap: wrap; }
+.settings-card.is-machine .settings-card-actions { row-gap: 6px; }
+
+/* A form field with a label above it, outside `.settings-row`: the machine
+   forms are read top to bottom, so every control owns a full line. */
+.machine-field { display: grid; gap: 5px; }
+.machine-field > span { color: var(--text-strong); font-size: 12.5px; font-weight: 650; }
+
+/* The connect story. Fixed height with its own scroll so a long attempt cannot
+   push the cards below it off the page while it runs. */
+.connect-log {
+  flex: 1 0 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+}
+.connect-log-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.connect-log-head strong { flex: 1; color: var(--text-strong); font-size: 12px; }
+.connect-log-head small { color: var(--primary-strong); font-size: 11px; font-weight: 650; }
+.connect-log-body {
+  display: grid;
+  gap: 3px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.connect-log-line {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+/* The question an unknown host key asks. It is not a failure, so it is not
+   painted like one: the fingerprint is the content, and it is the only thing
+   that makes "trust and continue" a decision rather than a click. */
+.host-key-card {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  margin: 10px 0;
+  padding: 14px 15px;
+  border: 1px solid var(--warning-border, var(--border-strong));
+  border-radius: var(--radius-m);
+  background: var(--warning-soft);
+}
+.host-key-card strong { color: var(--text-strong); font-size: 13px; }
+.host-key-card p { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.6; }
+
+/* Which machines a Project's Sessions may use. A checkbox list rather than a
+   row per machine: the question is "which of these", so the answers belong
+   together. */
+.runner-choices { display: grid; gap: 8px; }
+.runner-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  cursor: pointer;
+}
+.runner-choice:hover { border-color: var(--border-strong); }
+.runner-choice input { margin: 2px 0 0; flex: 0 0 auto; }
+.runner-choice span { color: var(--text-strong); font-size: 13px; }
+.runner-choice small { display: block; margin-top: 2px; color: var(--text-faint); font-size: 11.5px; }
+
+/* The one action a machine section carries. The section's heading is the
+   group's, so this row holds the button and nothing else. */
+.machine-actions { display: flex; justify-content: flex-end; margin: 0 0 10px; }
+
+/* What a connected machine is made of. Folded away under the card, because the
+   connection is the card's subject and these readings are what someone opens
+   when the connection is not the question. */
+.machine-details { flex: 1 0 100%; min-width: 0; }
+.machine-details > summary {
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: .04em;
+}
+.resource-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+}
+.resource-tile { display: grid; gap: 4px; }
+.resource-meter { display: grid; gap: 4px; }
+.resource-meter-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.resource-meter-head span { flex: 1; color: var(--text-secondary); }
+.resource-meter-head strong { color: var(--text-strong); font-family: var(--font-mono); font-size: 11.5px; }
+.resource-meter-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  overflow: hidden;
+}
+.resource-meter-track > span { display: block; height: 100%; border-radius: var(--radius-pill); }
+.resource-meter.is-success .resource-meter-track > span { background: var(--success-bright); }
+.resource-meter.is-info .resource-meter-track > span { background: var(--primary); }
+.resource-meter.is-warning .resource-meter-track > span { background: var(--insight); }
+.resource-path { color: var(--text-faint); font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+/* A disk about to run out is an alert, not a colour: it says what will fail. */
+.resource-alert {
+  padding: 8px 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-s);
+  background: var(--warning-soft);
+  color: var(--warning-strong);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.resource-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.resource-stats > div {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+.resource-stats small { color: var(--text-faint); font-size: 10.5px; }
+.resource-stats strong { color: var(--text-strong); font-family: var(--font-mono); font-size: 13px; }
+.resource-stats strong small { font-family: var(--font-sans); font-size: 10.5px; }
+.resource-captured { color: var(--text-faint); font-size: 11px; }
+
+/* The NPU cards. Rows rather than cards: what an operator compares across them
+   is one column at a time, and the columns only line up on a grid. */
+.npu-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+}
+.npu-head { display: flex; align-items: baseline; gap: 8px; }
+.npu-head strong { flex: 1; color: var(--text-strong); font-size: 12px; }
+.npu-head small { color: var(--text-faint); font-size: 11px; }
+.npu-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.npu-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) minmax(90px, 1fr) minmax(90px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+/* An unusable card stays in the list — hiding it would leave someone wondering
+   where NPU 0 went — but is not painted as a usable one. */
+.npu-row.is-unusable { background: var(--surface-soft); border-style: dashed; }
+.npu-pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.npu-pick input { margin: 0; flex: 0 0 auto; }
+.npu-name {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.npu-cell { display: grid; gap: 3px; }
+.npu-cell-caption { color: var(--text-faint); font-size: 10px; }
+.npu-cell-value { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px; }
+/* Every reading keeps its slot even when it did not arrive, so the columns stay
+   aligned from one card to the next. */
+.npu-bar { display: block; height: 6px; }
+.npu-bar.is-empty { background: var(--surface-sunk); border-radius: var(--radius-pill); }
+.npu-bar-track {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  overflow: hidden;
+}
+.npu-bar-track > span { display: block; height: 100%; background: var(--primary); border-radius: var(--radius-pill); }
+.npu-bar.is-high .npu-bar-track > span { background: var(--insight); }
+.npu-chip {
+  min-width: 62px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+.npu-chip.is-warm { color: var(--insight-strong); }
+.npu-chip.is-hot { color: var(--danger); font-weight: 650; }
+.npu-reason { grid-column: 1 / -1; color: var(--warning-strong); font-size: 11px; line-height: 1.55; }
+.npu-foot { display: grid; gap: 6px; }
+.npu-foot > small { color: var(--text-faint); font-size: 11px; }
+.npu-unsaved { color: var(--warning-strong); font-size: 11px; font-weight: 650; }
+
+/* The key-file browser. A dialog rather than an inline panel: it is a detour
+   from the form, and the form has to be exactly as it was when it closes. */
+.key-path-row { display: flex; align-items: center; gap: 8px; }
+.key-path-row .field-input { flex: 1; min-width: 0; }
+.key-browser {
+  display: grid;
+  gap: 10px;
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+}
+.key-browser-head { display: flex; align-items: center; gap: 8px; }
+.key-browser-head strong { flex: 1; color: var(--text-strong); font-size: 13px; }
+.key-browser-actions { display: flex; gap: 6px; }
+.key-browser-directory { color: var(--text-faint); font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+.key-browser-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.key-browser-list button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  justify-content: space-between;
+}
+.key-browser-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-browser-list small { color: var(--text-faint); font-size: 10.5px; }
+
+/* What is offered to import from the user's own ssh_config. */
+.ssh-config-list {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+}
+.ssh-config-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.ssh-config-entry:hover { border-color: var(--border-strong); background: var(--surface-hover); }
+.ssh-config-entry:disabled { opacity: .6; }
+.ssh-config-entry strong { color: var(--text-strong); font-family: var(--font-mono); font-size: 12px; }
+.ssh-config-entry small { color: var(--text-faint); font-size: 11px; }

@@ -84,9 +84,11 @@ the real project and configured generator/Judge credentials.
 The default run budget is one hour (`E2E_DRB_RUN_TIMEOUT_MS=3600000`).
 DRB-58, DRB-62, and DRB-75 default to 90 minutes; DRB-59 and DRB-64 default
 to 120 minutes. Their case-specific overrides (`E2E_DRB_<id>_RUN_TIMEOUT_MS`)
-take precedence over the suite-wide budget. The daily CI suite-wide budget is
-one hour, matching the default here. The separate evaluation budget is one hour
-(`E2E_DRB_EVAL_TIMEOUT_MS`). These
+take precedence over the suite-wide budget. The daily CI suite-wide run budget is
+one hour, matching the default here. The separate evaluation budget defaults to
+one hour (`E2E_DRB_EVAL_TIMEOUT_MS`). Daily CI sets it to 40 minutes
+(`2400000`): RACE and FACT share that deadline, and citation accuracy is recorded
+only when FACT finishes. These
 are harness deadlines, not injected research-count instructions. Judge mode
 `full` is the default and requests RACE and FACT. Missing Judge credentials
 record an evaluation error without preventing the research run or failing delivery.

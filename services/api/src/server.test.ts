@@ -17,6 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { connect, type AddressInfo } from "node:net";
@@ -71,6 +72,7 @@ import type {
   SessionDetail,
   SessionRun,
   SessionRunEvent,
+  SessionThinkingControls,
   SessionUsageSummary,
   RunnerHealth,
   ScientificEnvironmentSetup,
@@ -94,6 +96,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { createLocalSessionTitle, UNTITLED_SESSION_TITLE } from "@sciencediscovery/schema";
 import {
+  createWorkspaceTools,
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
 } from "@sciencediscovery/workspace";
 import {
@@ -116,6 +119,10 @@ import {
   type ServerConfig,
 } from "./server.js";
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
+import { createJiuwenSwarmAgentFactory } from "./agent-run/jiuwenswarm-agent.js";
+import type { NativeAgentOptions } from "./native-agent/index.js";
+import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
+import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
 import { SessionStore } from "./store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
@@ -124,8 +131,10 @@ const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
 
 /**
- * Agent turns run on JiuwenSwarm (behind a real adapter) when this suite is invoked under
- * scripts/with-jiuwenswarm.sh (which `pnpm ci:ut` wraps around the shared runner). Some assertions are true only
+ * Agent turns run on JiuwenSwarm (behind a real adapter) in the tests that declare `swarm:required`: the shared
+ * runner starts one instance for them and gives only their process SCIENCE_AGENT_EXECUTOR=jiuwenswarm, one test
+ * at a time; every other test here runs on the built-in loop. A test that starts a gateway turn declares it.
+ * Some assertions are true only
  * of one backend and are branched on this: JiuwenSwarm has one set of skills for every session
  * (Settings > Skills, not per-Project/Session selection),
  * and it runs behind extra process hops (Node API -> Python adapter -> JiuwenSwarm gateway), which
@@ -291,7 +300,7 @@ function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerCo
       maxWorkspaceBytes: 10_737_418_240,
     },
     memoryGraph: { url: "http://127.0.0.1:17674", internalToken: "test" },
-    evolve: { url: "http://127.0.0.1:4313", internalToken: "test" },
+    evolve: { url: "", internalToken: "" },
   };
 }
 
@@ -420,7 +429,11 @@ async function removeTestRoot(root: string): Promise<void> {
     // A completed foreground request may have queued a completion turn. Close
     // the Session gates before removing files that those turns still own.
     const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, { headers: authorization });
-    for (const project of projects.body) {
+    // `/api/projects` leaves the inbox out, so a fixture that used it would be
+    // drained through the one call that names it. It is idempotent and the data
+    // root is removed at the end, so asking every time costs one catalog write.
+    const inbox = await jsonRequest<Project>(`${origin}/api/inbox`, { headers: authorization, method: "POST" });
+    for (const project of [...projects.body, inbox.body]) {
       const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${project.id}/sessions`, { headers: authorization });
       for (const session of sessions.body) {
         await jsonRequest(`${origin}/api/sessions/${session.id}/run/cancel`, { headers: authorization, method: "POST" });
@@ -688,6 +701,117 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<{ body: 
   return { body: (await response.json()) as T, response };
 }
 
+test("a first start seeds the sample Session, and a later one does not repeat it", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `sample-session-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root, undefined, { sampleSession: true });
+
+  const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, { headers: authorization });
+  const sample = projects.body.find((project) => project.name === "示例项目");
+  assert.ok(sample, "the sample Project is listed like any other");
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${sample.id}/sessions`, { headers: authorization });
+  assert.deepEqual(sessions.body.map((session) => session.title), ["脓毒症亚型聚类分析"]);
+  // The transcript replays two finished runs, which is what makes the sample
+  // worth opening: the process, not just the answer.
+  const runs = await jsonRequest<unknown[]>(`${origin}/api/sessions/${sessions.body[0]!.id}/runs`, {
+    headers: authorization,
+  });
+  assert.equal(runs.body.length, 2);
+  const files = await jsonRequest<{ path: string }[]>(`${origin}/api/sessions/${sessions.body[0]!.id}/files`, {
+    headers: authorization,
+  });
+  assert.ok(files.body.some((file) => file.path === "analysis_summary.md"));
+  // 产物 is served from the catalog, so the seed has to publish the artifacts
+  // too — the workspace files alone leave that tab empty.
+  const outputs = await jsonRequest<{ artifact: { name: string }; version: { version: number } }[]>(
+    `${origin}/api/sessions/${sessions.body[0]!.id}/artifact-outputs`,
+    { headers: authorization },
+  );
+  assert.deepEqual(outputs.body.map((output) => output.artifact.name).toSorted(),
+    ["app/answer.txt", "app/trace.md", "app/trace.md", "audit_report.md"]);
+
+  // The marker is what makes this a one-time gift: the next boot on this
+  // directory finds a user's own install, not another empty one.
+  assert.ok(existsSync(resolve(root, SAMPLE_SESSION_MARKER)));
+});
+
+// Metadata-only requests never start a specialist or contact a model provider.
+for (const kind of ["codex", "claude-code", "acp"] as const) {
+  test(`specialist runtime HTTP contract retains ${kind} metadata after an unrelated update`, async (context) => {
+    const root = resolve(process.cwd(), ".tmp", `api-specialist-runtime-${kind}-${randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const { origin } = await startTestApi(context, root);
+    const headers = { ...authorization, "content-type": "application/json" };
+    const runtime = {
+      kind,
+      model: "test-model",
+      execution: "sandbox",
+      fallback: false,
+      timeoutSeconds: 120,
+      reasoningEffort: "high",
+    };
+    const created = await jsonRequest<Specialist>(`${origin}/api/specialists`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: `${kind} contract`, description: "Original", instructions: "Test only", runtime }),
+    });
+    assert.equal(created.response.status, 201);
+    assert.deepEqual(created.body.runtime, runtime);
+
+    // PUT is the specialist API's partial-update route; omit runtime entirely.
+    const updated = await jsonRequest<Specialist>(`${origin}/api/specialists/${created.body.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ description: "Updated description" }),
+    });
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.body.description, "Updated description");
+    assert.deepEqual(updated.body.runtime, runtime);
+
+    const listed = await jsonRequest<Specialist[]>(`${origin}/api/specialists`, { headers });
+    assert.equal(listed.response.status, 200);
+    assert.deepEqual(listed.body.find(({ id }) => id === created.body.id)?.runtime, runtime);
+  });
+}
+
+for (const method of ["POST", "PUT"] as const) {
+  for (const invalid of [
+    { name: "credential fields", runtime: { kind: "codex", apiKey: "synthetic-not-a-secret" }, error: /Unknown runtime option/ },
+    { name: "unsupported kinds", runtime: { kind: "unsupported-runtime" }, error: /Unsupported Specialist runtime/ },
+  ]) {
+    test(`specialist runtime HTTP contract rejects ${invalid.name} on ${method}`, async (context) => {
+      const root = resolve(process.cwd(), ".tmp", `api-specialist-runtime-invalid-${randomUUID()}`);
+      await mkdir(root, { recursive: true });
+      const { origin } = await startTestApi(context, root);
+      const headers = { ...authorization, "content-type": "application/json" };
+      const created = await jsonRequest<Specialist>(`${origin}/api/specialists`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "Valid specialist", description: "Original", instructions: "Test only", runtime: { kind: "codex" } }),
+      });
+      assert.equal(created.response.status, 201);
+      const before = await jsonRequest<Specialist[]>(`${origin}/api/specialists`, { headers });
+      assert.equal(before.response.status, 200);
+
+      const rejected = await jsonRequest<ApiError>(
+        `${origin}/api/specialists${method === "PUT" ? `/${created.body.id}` : ""}`,
+        {
+          method,
+          headers,
+          body: JSON.stringify({ name: "Rejected specialist", description: "Must not persist", instructions: "Test only", runtime: invalid.runtime }),
+        },
+      );
+      assert.equal(rejected.response.status, 400);
+      // HTTP exposes the runtime validation message rather than its internal code.
+      assert.match(rejected.body.error, invalid.error);
+      const after = await jsonRequest<Specialist[]>(`${origin}/api/specialists`, { headers });
+      assert.equal(after.response.status, 200);
+      assert.deepEqual(after.body, before.body);
+    });
+  }
+}
+
 test("global Runner management routes remotely, requires authentication and never falls back locally", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `runner-management-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -915,6 +1039,32 @@ test("authenticated proxy REST returns complete settings URLs and manages MCP po
   assert.match((await referencedDelete.json() as { error: string }).error, /referenced/);
 });
 
+test("a Session's thinking controls are those of the model its next run resolves to", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `thinking-controls-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin, { apiVariant: "kimi-k3", model: "custom-k3", name: "K3 gateway" });
+  const project = await jsonRequest<{ firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "thinking", settingsOverrides: { modelId: model.id } }),
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(project.response.status, 201);
+  const sessionId = project.body.firstSession.id;
+
+  const controls = await jsonRequest<SessionThinkingControls>(`${origin}/api/sessions/${sessionId}/thinking-controls`, {
+    headers: authorization,
+  });
+  assert.equal(controls.response.status, 200);
+  // The composer's choices for the same model: Kimi K3 cannot turn thinking off.
+  assert.deepEqual(controls.body, {
+    efforts: ["low", "high", "max"], modelId: model.id, modelName: "K3 gateway", modes: ["auto", "enabled"], supported: true,
+  });
+  assert.equal((await fetch(`${origin}/api/sessions/${sessionId}/thinking-controls`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/sessions/missing/thinking-controls`, { headers: authorization })).status, 404);
+});
+
 async function startToolModel(context: TestContext): Promise<{
   authorizations: string[];
   baseUrl: string;
@@ -1033,21 +1183,11 @@ async function startSkillCreatorModel(context: TestContext): Promise<{
     toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
     const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
     const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
-    // With the JiuwenSwarm backend skill-creator is imported there as
-    // "sciencediscovery-skill-creator" (to avoid its built-in name clash) and normally loaded
-    // with skill_tool; our read_skill remains available as a fallback.
+    // Exercise ScienceDiscovery's public read_skill contract on both executors.
+    // SDK-local import aliases depend on which built-in skills its distribution
+    // contains; they are not the identity of this platform-owned skill.
     const delta = toolResultCount === 0
-      ? onJiuwenSwarm
-        ? {
-            role: "assistant",
-            tool_calls: [{
-              function: { arguments: JSON.stringify({ skill_name: "sciencediscovery-skill-creator" }), name: "skill_tool" },
-              id: "call-read-skill-creator",
-              index: 0,
-              type: "function",
-            }],
-          }
-        : {
+      ? {
           role: "assistant",
           tool_calls: [{
             function: { arguments: JSON.stringify({ skillId: "skill-creator" }), name: "read_skill" },
@@ -1383,7 +1523,7 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
 }
 
 const AUTO_NAMING_RESPONSE_TITLE = "Refined TP53 expression study";
-const AUTO_NAMING_STORED_TITLE = createLocalSessionTitle(AUTO_NAMING_RESPONSE_TITLE);
+const AUTO_NAMING_STORED_TITLE = AUTO_NAMING_RESPONSE_TITLE;
 
 async function startAutoNamingModel(
   context: TestContext,
@@ -1673,7 +1813,7 @@ test("loadServerConfig validates gateway timeout bounds", () => {
   );
 });
 
-test("creating a Project opens an implicit Session and refines its first-message title", async (context) => {
+test("creating a Project opens an implicit Session and refines its first-message title", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1744,7 +1884,7 @@ test("creating a Project opens an implicit Session and refines its first-message
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("every later unnamed Session independently reuses first-message automatic naming", async (context) => {
+test("every later unnamed Session independently reuses first-message automatic naming", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `later-session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1820,7 +1960,7 @@ test("every later unnamed Session independently reuses first-message automatic n
   assert.equal(namingModel.namingRequests.length, firstMessages.length);
 });
 
-test("Session title refinement completes while the first task is still running", async (context) => {
+test("Session title refinement completes while the first task is still running", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-concurrent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1873,7 +2013,7 @@ test("Session title refinement completes while the first task is still running",
   assert.match(await run.text(), /"status":"completed"/);
 });
 
-test("Session title refinement persists when the naming model finishes after the run stream closes", async (context) => {
+test("Session title refinement persists when the naming model finishes after the run stream closes", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-after-terminal-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -1944,7 +2084,7 @@ test("Session title refinement persists when the naming model finishes after the
   assert.ok(refinedEvent.sequence > terminalEvent.sequence);
 });
 
-test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
+test("concurrent first messages keep every run and auto-name only once from queue order one", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-first-message-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2006,7 +2146,7 @@ test("concurrent first messages keep every run and auto-name only once from queu
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("an asynchronous title refinement never overwrites a manual rename", async (context) => {
+test("an asynchronous title refinement never overwrites a manual rename", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-manual-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2058,7 +2198,7 @@ test("an asynchronous title refinement never overwrites a manual rename", async 
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("a second message never triggers another naming request", async (context) => {
+test("a second message never triggers another naming request", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-dedupe-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2105,7 +2245,7 @@ test("a second message never triggers another naming request", async (context) =
   assert.equal(namingModel.namingRequests.length, 1);
 });
 
-test("an explicitly named Session is never auto-renamed", async (context) => {
+test("an explicitly named Session is never auto-renamed", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-explicit-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2257,7 +2397,7 @@ test("runtime-status Kernel teardown is authenticated and proxied to the Runner"
   });
 });
 
-test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", async (context) => {
+test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `timeout-runtime-status-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2330,6 +2470,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
           : "print('A paper title says: Python execution timed out after 25 ms')";
         send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
+      send({ choices: [{ delta: {}, finish_reason: !notification && lastRole !== "tool" && !body.messages.some(message => message.role === "tool") ? "tool_calls" : "stop" }] });
       response.write("data: [DONE]\n\n");
       response.end();
     });
@@ -2545,7 +2686,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.deepEqual(afterCancellation.body.sessions, []);
 });
 
-test("native MCP literature flow produces an audited cited summary", async (context) => {
+test("native MCP literature flow produces an audited cited summary", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `literature-review-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2780,7 +2921,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
   assert.match(systemPrompt, /never invent a paper or identifier/i);
 });
 
-test("workbench search and Composer references use authenticated authoritative identities", async (context) => {
+test("workbench search and Composer references use authenticated authoritative identities", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `workbench-search-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2873,7 +3014,7 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.match(await invalid.text(), /Referenced Project artifact is unavailable/);
 });
 
-test("running sessions accept queued runs and start them after the active run completes", async (context) => {
+test("running sessions accept queued runs and start them after the active run completes", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `queued-runs-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -2929,7 +3070,7 @@ test("running sessions accept queued runs and start them after the active run co
   ]);
 });
 
-test("completed runs persist the assistant message identity used by hydrated timeline deduplication", async (context) => {
+test("completed runs persist the assistant message identity used by hydrated timeline deduplication", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `completed-run-message-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3231,7 +3372,7 @@ test("the built-in Runner answers setup queries before its scientific environmen
   assert.deepEqual(mirrored.body.map((item) => item.id), ["starter-python"]);
 });
 
-test("an active run keeps its effective settings snapshot while later runs use updates", { timeout: 60_000 }, async (context) => {
+test("an active run keeps its effective settings snapshot while later runs use updates", { timeout: 60_000, tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3575,7 +3716,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
 });
 
-test("Agent-created Skill stays in draft until review publishes it to a Skill Library", async (context) => {
+test("Agent-created Skill stays in draft until review publishes it to a Skill Library", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3606,7 +3747,7 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
   assert.equal(run.status, 200);
   const stream = await run.text();
   assert.match(stream, /pending agent-created-demo draft/);
-  assert.ok(modelServer.toolNames.some((names) => names.includes(onJiuwenSwarm ? "skill_tool" : "read_skill")), JSON.stringify(modelServer.toolNames));
+  assert.ok(modelServer.toolNames.some((names) => names.includes("read_skill")), JSON.stringify(modelServer.toolNames));
   assert.ok(modelServer.toolNames.some((names) => names.includes("create_skill")), JSON.stringify(modelServer.toolNames));
 
   assert.equal((await fetch(`${origin}/api/skills/agent-created-demo`, { headers: authorization })).status, 404);
@@ -3691,12 +3832,33 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
     headers: authorization,
   });
   assert.equal(listed.body.length, 1);
+  assert.equal(listed.body[0]?.status, "succeeded");
+  assert.equal(listed.body[0]?.sessionId, session.body.id);
   const textPath = `${uploaded.body.manifestPath.replace(/manifest\.json$/, "")}${uploaded.body.extraction.textPath}`;
+  const files = await jsonRequest<WorkspaceFile[]>(`${origin}/api/sessions/${session.body.id}/files`, {
+    headers: authorization,
+  });
+  assert.ok(files.body.some((file) => file.path === textPath), "Extracted text must be discoverable in the session workspace");
+  const tablePath = `${uploaded.body.manifestPath.replace(/manifest\.json$/, "")}${uploaded.body.extraction.tables[0]!.csvPath}`;
+  const tableResponse = await fetch(`${origin}/api/sessions/${session.body.id}/file?path=${encodeURIComponent(tablePath)}`, {
+    headers: authorization,
+  });
+  assert.equal(tableResponse.status, 200);
+  assert.match(await tableResponse.text(), /Treatment,2.4/);
   const textResponse = await fetch(`${origin}/api/sessions/${session.body.id}/file?path=${encodeURIComponent(textPath)}`, {
     headers: authorization,
   });
   assert.equal(textResponse.status, 200);
   assert.match(await textResponse.text(), /Scientific result with embedded text/);
+  const workspaceStore = new SessionStore(tempRoot);
+  await workspaceStore.load();
+  const readTool = createWorkspaceTools(workspaceStore.workspacePath(session.body.id), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("PDF text reading does not need Python execution"); },
+  }).find((tool) => tool.name === "read_file")!;
+  const agentRead = await readTool.execute("read-uploaded-paper", { path: textPath });
+  assert.ok(agentRead.content.some((item) => item.type === "text" && item.text.includes("Scientific result with embedded text")),
+    "The session agent's read_file tool must receive the parsed text, not PDF bytes");
   const sourceProvenance = await jsonRequest<WorkspaceFileProvenance>(
     `${origin}/api/sessions/${session.body.id}/workspace/provenance?path=${encodeURIComponent(uploaded.body.pdfPath)}`,
     { headers: authorization },
@@ -3756,7 +3918,7 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
   assert.doesNotMatch(await readFile(resolve(tempRoot, "catalog.sqlite"), "utf8"), /ephemeral-vision-token/);
 });
 
-test("legacy Reviewer does not inject findings or block the main agent", async (context) => {
+test("legacy Reviewer does not inject findings or block the main agent", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `review-loop-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3800,7 +3962,7 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
   assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/reviews`, { headers: authorization })).status, 404);
 });
 
-test("API runs a configured OpenAI-compatible model through the gateway and Python", async (context) => {
+test("API runs a configured OpenAI-compatible model through the gateway and Python", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -4284,7 +4446,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.doesNotMatch(taskResultContent, /"steps"|"prompt"/);
 });
 
-test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", async (context) => {
+test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-wall-clock-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5197,7 +5359,7 @@ async function startTwoPythonCallModel(
   };
 }
 
-test("switching to always-allow during a run stops asking for the tool calls that follow", async (context) => {
+test("switching to always-allow during a run stops asking for the tool calls that follow", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-always-allow-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5338,7 +5500,7 @@ test("switching to always-allow during a run stops asking for the tool calls tha
   );
 });
 
-test("switching to ask during a run stops the tool calls that follow for approval", async (context) => {
+test("switching to ask during a run stops the tool calls that follow for approval", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-ask-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5955,6 +6117,61 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   assert.equal(parentResultRequest, undefined);
 });
 
+test("Web access follows the inherited or overridden connector selection into the model's tools", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `web-access-selection-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const offered: string[][] = [];
+  const modelServer = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { tools?: Array<{ function?: { name?: string } }> };
+    // Session auto-naming sends no tools; only the Agent's own turns matter here.
+    if (body.tools?.length) offered.push(body.tools.map((tool) => tool.function?.name ?? ""));
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const delta of [{ content: "Done" }, {}]) {
+      response.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: "content" in delta ? null : "stop", index: 0 }],
+        created: 1, id: "chatcmpl-web-access", model: "web-access-model", object: "chat.completion.chunk" })}\n\n`);
+    }
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { modelServer.close(() => resolveClose()); modelServer.closeAllConnections(); }));
+  const model = await createTestModel(origin, {
+    baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`, model: "web-access-model", name: "Web access model",
+  });
+  const json = { ...authorization, "content-type": "application/json" };
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Web access project" }), headers: json, method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Web access session" }), headers: json, method: "POST",
+  });
+  const webTools = async () => {
+    const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+      body: JSON.stringify({ content: "Search the web for the latest perovskite results." }), headers: json, method: "POST",
+    });
+    assert.equal(run.status, 200);
+    await run.text();
+    return offered.at(-1)?.filter((name) => name === "web_search" || name === "web_fetch");
+  };
+
+  // A new data directory enables Web access globally; Project and Session inherit it.
+  assert.deepEqual(await webTools(), ["web_search", "web_fetch"]);
+  const projectSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${project.body.id}/settings`, {
+    body: JSON.stringify({ enabledConnectorIds: ["pubmed"] }), headers: json, method: "PUT",
+  });
+  assert.deepEqual(projectSettings.body.effective.enabledConnectorIds, ["pubmed"]);
+  // The Project override replaces the inherited list, so the Session that inherits it has no web tools.
+  assert.deepEqual(await webTools(), []);
+  const sessionSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${session.body.id}/settings`, {
+    body: JSON.stringify({ enabledConnectorIds: ["pubmed", "web"], modelId: model.id }), headers: json, method: "PUT",
+  });
+  assert.equal(sessionSettings.body.sources.enabledConnectorIds, "session");
+  assert.deepEqual(await webTools(), ["web_search", "web_fetch"]);
+});
+
 test("hierarchical settings and Project/Session lifecycle APIs preserve and delete the expected data", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-lifecycle-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -5982,11 +6199,13 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
+  // A new Project starts with every installed skill on: an empty enable list
+  // under `all` is what that means, not "none of them".
   assert.deepEqual(project.body.settingsOverrides, {
     enabledSkillIds: [],
     enabledSkillLibraries: [],
     reviewModelId: modelB.id,
-    skillSelectionMode: "selected",
+    skillSelectionMode: "all",
   });
   const renamedProject = await jsonRequest<Project>(`${origin}/api/projects/${project.body.id}`, {
     body: JSON.stringify({ name: "Renamed lifecycle project" }),
@@ -6344,8 +6563,11 @@ test("model connectivity endpoint uses the encrypted saved credential", async (c
   });
   assert.equal(created.response.status, 201);
   assert.equal((await fetch(`${origin}/api/models/${created.body.id}/test`, { method: "POST" })).status, 401);
+  assert.equal((await fetch(`${origin}/api/models/${created.body.id}/test`, { method: "POST", headers: authorization, body: "{}" })).status, 400);
+  assert.equal(providerAuthorization, "");
   const tested = await jsonRequest<ModelConnectivityTestResult>(`${origin}/api/models/${created.body.id}/test`, {
     headers: authorization,
+    body: JSON.stringify({ consent: true }),
     method: "POST",
   });
   assert.equal(tested.response.status, 200);
@@ -7820,4 +8042,325 @@ test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", asy
   const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-anything/content`, { headers: authorization });
   assert.equal(response.status, 502);
   assert.match((await response.json() as { error?: string }).error ?? "", /memory graph unreachable/);
+});
+
+test("deep checkpoint forwards selected MCP readiness without duplicating main notices", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-mcp-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, {recursive: true});
+  context.after(() => removeTestRoot(tempRoot));
+  const pubmed = createPublicBiomedSources(["pubmed"])[0]!;
+  const catalog: McpCatalog = {revision: "reviewer", loadedAt: "now", servers: [{id: "biomed", enabled: true, transport: "stdio",
+    tools: Object.values(pubmed.manifest.tools).map(tool => ({name: tool.mcpToolName!, inputSchema: tool.inputSchema, description: tool.description, schemaHash: "fixture"})),
+  }]};
+  let sourceCalls = 0;
+  const transport: McpTransportClient = {catalog: async () => catalog, reload: async () => catalog, invoke: async () => {
+    sourceCalls++;
+    return {requestId: "search", serverId: "biomed", toolName: "pubmed_search", isError: false, attempts: [], durationMs: 1,
+      content: [{type: "json", value: {sourceId: "pubmed", toolId: "search", retrievedAt: "now", untrusted: true, attribution: "NLM", license: "NCBI", warnings: [],
+        records: [{identifier: "12524540", citations: [], primaryCitation: {source: "pubmed", identifier: "12524540", url: "https://pubmed.ncbi.nlm.nih.gov/12524540/"}, title: "Fixture study", url: "https://pubmed.ncbi.nlm.nih.gov/12524540/", abstract: "Observed result", source: "pubmed", warnings: []}],
+      }}]} as unknown as McpInvokeResponse;
+  }};
+  const {origin} = await startTestApi(context, tempRoot, transport);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {headers: authorization, method: "POST", body: JSON.stringify({name: "Review MCP"})});
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {headers: authorization, method: "POST",
+    body: JSON.stringify({title: "Review", modelId: model.id, settingsOverrides: {enabledConnectorIds: ["arxiv", "pubmed"]}, approvalMode: "always_allow"})});
+  await jsonRequest(`${origin}/api/reviewer-specialist/settings`, {headers: authorization, method: "PUT", body: JSON.stringify({enabled: true})});
+  await jsonRequest(`${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`, {headers: authorization, method: "PUT", body: JSON.stringify({automaticReviewEnabled: false, level: "deep"})});
+  const form = new FormData();
+  form.append("files", new Blob(["Observed result [1].\n[1] Fixture study. PMID: 12524540"], {type: "text/markdown"}), "report.md");
+  const upload = await fetch(`${origin}/api/sessions/${session.body.id}/workspace/upload`, {headers: authorization, method: "POST", body: form});
+  assert.equal(upload.status, 201);
+  const artifacts = await jsonRequest<ScientificArtifact[]>(`${origin}/api/sessions/${session.body.id}/artifacts`, {headers: authorization});
+  const versions = await jsonRequest<ScientificArtifactVersion[]>(`${origin}/api/sessions/${session.body.id}/artifacts/${artifacts.body[0]!.id}/versions`, {headers: authorization});
+  const versionId = versions.body[0]!.id;
+  const previousExecutor = process.env.SCIENCE_AGENT_EXECUTOR, previousAdapter = process.env.SCIENCE_AGENT_ADAPTER_URL;
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = "http://unused.test";
+  context.after(() => {
+    if (previousExecutor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR; else process.env.SCIENCE_AGENT_EXECUTOR = previousExecutor;
+    if (previousAdapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL; else process.env.SCIENCE_AGENT_ADAPTER_URL = previousAdapter;
+  });
+  // Replace only model execution at the existing AgentHandle boundary; run setup,
+  // checkpoint construction, catalog, broker and semantic review stay production.
+  const prototype = Object.getPrototypeOf(createJiuwenSwarmAgentFactory({adapterUrl: "http://unused.test"})({} as NativeAgentOptions));
+  let checkpoints = 0;
+  const deepOptions: NativeAgentOptions[] = [];
+  context.mock.method(prototype, "execute", async function(this: {options: NativeAgentOptions}) {
+    const options = this.options;
+    assert.ok(options.mcpReadiness, "the real run setup must forward unhealthy selection diagnostics");
+    assert.match(options.mcpReadiness.summary, /arxiv.*degraded/);
+    const decision = await options.mcpReadiness.decide("continue", "PubMed is sufficient for this review", []);
+    assert.match(JSON.stringify(decision), /arxiv.*search/);
+    if (options.contextScope === "reviewer") {
+      deepOptions.push(options);
+      return {finalMessages: [{role: "assistant", content: JSON.stringify({citation: {status: "INCONCLUSIVE", findings: [], assessment: "INCONCLUSIVE", locatorIds: [], rationale: "Fixture"}})}]};
+    }
+    assert.ok(options.mcpTools?.some(tool => tool.sourceId === "pubmed"));
+    for (let i = 0; i < 2; i++) {
+      await options.reviewCheckpoint!({artifactVersionIds: [versionId], reason: "Validate evidence"}, undefined, `checkpoint-${i}`);
+      checkpoints++;
+    }
+    return {finalMessages: [{role: "assistant", content: "Reviewed"}]};
+  });
+  const response = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {headers: authorization, method: "POST", body: JSON.stringify({content: "Ask Reviewer Specialist to review the report"})});
+  const stream = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(checkpoints, 2, stream);
+  assert.ok(deepOptions.length > 0, "checkpoint must enter the real semantic Reviewer composition");
+  for (const options of deepOptions) {
+    assert.ok(options.mcpReadiness);
+    assert.match(options.mcpReadiness.summary, /arxiv.*degraded/);
+    assert.deepEqual(options.toolPolicy?.allowed, [], "Deep reviewer remains read-only despite receiving readiness metadata");
+  }
+  assert.ok(sourceCalls > 0, "Reviewer uses the healthy selected source through the broker");
+  assert.equal((stream.match(/"type":"mcp.readiness"/g) ?? []).length, 1, "repeated checkpoints do not duplicate main diagnostics");
+});
+
+
+test("approval defaults API covers implicit first Sessions and explicit Session overrides", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `approval-defaults-api-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const model = await createTestModel(origin, { model: "approval-fixture", name: "Approval fixture" });
+  const request = <T>(path: string, body: unknown, method = "PUT") => jsonRequest<T>(origin + path, {
+    method, headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const global = await request<RuntimeSettingsDetails>("/api/settings", { modelId: model.id, defaultApprovalMode: "always_allow" });
+  assert.equal(global.response.status, 200);
+  const project = await request<CreateProjectResponse>("/api/projects", { name: "Inherits global" }, "POST");
+  assert.equal(project.response.status, 201);
+  assert.equal(project.body.firstSession.approvalMode, "always_allow");
+  const projectId = project.body.project.id;
+  const updated = await request<RuntimeSettingsDetails>(`/api/projects/${projectId}/settings`, { defaultApprovalMode: "ask_for_dangerous" });
+  assert.equal(updated.response.status, 200);
+  const inherited = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Project default"}, "POST");
+  assert.equal(inherited.response.status, 201);
+  assert.equal(inherited.body.approvalMode, "ask_for_dangerous");
+  const explicit = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Explicit override", approvalMode:"always_allow"}, "POST");
+  assert.equal(explicit.body.approvalMode, "always_allow");
+  await request(`/api/sessions/${explicit.body.id}`, {approvalMode:"ask_for_dangerous"}, "PATCH");
+  const current = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${projectId}/settings`, {headers:authorization});
+  assert.equal(current.body.overrides.defaultApprovalMode, "ask_for_dangerous");
+  const first = await jsonRequest<Session>(`${origin}/api/sessions/${project.body.firstSession.id}`, {headers:authorization});
+  assert.equal(first.body.approvalMode, "always_allow");
+  const invalid = await request("/api/settings", {defaultApprovalMode:"invalid"});
+  assert.equal(invalid.response.status, 400);
+  const invalidSessionDefault = await request(`/api/sessions/${explicit.body.id}`, {defaultApprovalMode:"always_allow"}, "PATCH");
+  assert.equal(invalidSessionDefault.response.status, 400);
+  const sessionSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${explicit.body.id}/settings`, {headers:authorization});
+  assert.equal(sessionSettings.body.overrides.defaultApprovalMode, undefined);
+  const stillEditable = await request(`/api/sessions/${explicit.body.id}`, {title:"Still editable"}, "PATCH");
+  assert.equal(stillEditable.response.status, 200);
+});
+
+test("Session-only approval defaults are HTTP client errors without mutations", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `approval-scope-http-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const request = <T>(path: string, body: unknown, method = "PUT") => jsonRequest<T>(origin + path, {
+    method, headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const project = await request<CreateProjectResponse>("/api/projects", { name: "Approval scope fixture" }, "POST");
+  const projectId = project.body.project.id;
+  const sessionId = project.body.firstSession.id;
+  const before = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {headers:authorization});
+  const invalidPut = await request(`/api/sessions/${sessionId}/settings`, {defaultApprovalMode:"always_allow"});
+  const invalidPost = await request(`/api/projects/${projectId}/sessions`, {title:"Denied creation", settingsOverrides:{defaultApprovalMode:"always_allow"}}, "POST");
+  console.log("Approval-scope HTTP probe", JSON.stringify({put:{status:invalidPut.response.status, body:invalidPut.body}, post:{status:invalidPost.response.status, body:invalidPost.body}}));
+  assert.deepEqual([invalidPut.response.status, invalidPost.response.status], [400, 400]);
+  for (const result of [invalidPut, invalidPost]) {
+    assert.match((result.body as {error:string}).error, /only supported at Global and Project scope/);
+  }
+  const after = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {headers:authorization});
+  assert.deepEqual(after.body.overrides, before.body.overrides);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${projectId}/sessions`, {headers:authorization});
+  assert.deepEqual(sessions.body.map(session => session.id), [sessionId]);
+  const validPut = await request<RuntimeSettingsDetails>(`/api/sessions/${sessionId}/settings`, {semanticReviewEnabled:false});
+  assert.equal(validPut.response.status, 200);
+  assert.equal(validPut.body.overrides.semanticReviewEnabled, false);
+  const validPost = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Valid creation"}, "POST");
+  assert.equal(validPost.response.status, 201);
+  assert.equal(validPost.body.approvalMode, "ask_for_dangerous");
+  assert.equal(validPost.body.settingsOverrides.defaultApprovalMode, undefined);
+
+});
+
+test("CLI auto-created first Session honors explicit Ask despite global Always allow", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `cli-approval-intent-${Date.now()}-${process.pid}`);
+  await mkdir(root, {recursive:true});
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const { parseInvocation } = await import("@sciencediscovery/launcher/cli-options");
+  const { runCommand } = await import("@sciencediscovery/launcher/run");
+  const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, {
+    method:"PUT", headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify({defaultApprovalMode:"always_allow"}),
+  });
+  assert.equal(global.response.status, 200);
+  const invocation = parseInvocation(["run", "--port", new URL(origin).port, "--host", "127.0.0.1", "--data-dir", root, "--token", "test-token", "--output", "text", "Synthetic CLI boundary probe"], {}, root);
+  const printed: string[] = [];
+  const requests: Array<{method:string; path:string; body?:unknown}> = [];
+  const originalFetch = globalThis.fetch;
+  const trackedFetch = context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const target = new URL(String(input));
+    if (target.origin === origin) requests.push({method:init?.method ?? "GET", path:target.pathname, ...(typeof init?.body === "string" ? {body:JSON.parse(init.body)} : {})});
+    return originalFetch(input, init);
+  });
+  const originalTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", {value:true, configurable:true});
+  try {
+    // Actual Run creation/streaming fails at the missing-model boundary, before any paid/model/tool call.
+    const result = await runCommand({settings:invocation.settings, runSettings:invocation.runSettings!, baseEnv:{}}, line => printed.push(line));
+    assert.equal(result.exitCode, 1);
+  } finally {
+    trackedFetch.mock.restore();
+    if (originalTty) Object.defineProperty(process.stdout, "isTTY", originalTty);
+    else delete (process.stdout as {isTTY?:boolean}).isTTY;
+  }
+  const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, {headers:authorization});
+  assert.equal(projects.body.length, 1);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${projects.body[0]!.id}/sessions`, {headers:authorization});
+  assert.equal(sessions.body.length, 1);
+  console.log("CLI actual HTTP/store probe", JSON.stringify({tty:true, global:global.body.overrides.defaultApprovalMode, printed, requests, storedMode:sessions.body[0]!.approvalMode, expectedMode:"ask_for_dangerous", stoppedAt:"unconfigured-model Run failure"}));
+  assert.equal(sessions.body[0]!.approvalMode, "ask_for_dangerous");
+  assert.match(printed.join("\n"), /approval=ask_for_dangerous interactive=true/);
+});
+
+test("CLI approval flags, explicit Projects and existing Sessions preserve intentional modes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `cli-approval-cases-${Date.now()}-${process.pid}`);
+  await mkdir(root, {recursive:true});
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const { parseInvocation } = await import("@sciencediscovery/launcher/cli-options");
+  const { runCommand } = await import("@sciencediscovery/launcher/run");
+  const request = <T>(path:string, body:unknown, method = "PUT") => jsonRequest<T>(origin+path, {method, headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify(body)});
+  await request("/api/settings", {defaultApprovalMode:"always_allow"});
+  const fixture = await request<CreateProjectResponse>("/api/projects", {name:"Existing CLI target"}, "POST");
+  const projectId = fixture.body.project.id;
+  const sessionId = fixture.body.firstSession.id;
+  const cases: Array<{name:string; flags:string[]; tty:boolean; output:"text"|"jsonl"; expected:"always_allow"|"ask_for_dangerous"|"refused"; input?:string; summary?:"preserve_session"}> = [
+    {name:"auto-approve new Project", flags:["--auto-approve"], tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"explicit Always allow new Project", flags:["--approval","always_allow"], tty:true, output:"text", expected:"always_allow"},
+    {name:"explicit Ask new Project", flags:["--approval","ask_for_dangerous"], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"JSON explicit mode", flags:[], input:JSON.stringify({content:"Synthetic input mode",approvalMode:"always_allow"}), tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"explicit Project creates Ask", flags:["--project",projectId], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"existing Session no flag", flags:["--session",sessionId], tty:true, output:"text", expected:"always_allow", summary:"preserve_session"},
+    {name:"JSON existing Session no flag", flags:[], input:JSON.stringify({content:"Synthetic existing input",sessionId}), tty:true, output:"jsonl", expected:"always_allow", summary:"preserve_session"},
+    {name:"existing Session explicit Ask", flags:["--session",sessionId,"--approval","ask_for_dangerous"], tty:true, output:"text", expected:"ask_for_dangerous"},
+    {name:"existing Session explicit auto-approve", flags:["--session",sessionId,"--auto-approve"], tty:false, output:"jsonl", expected:"always_allow"},
+    {name:"noninteractive refusal", flags:[], tty:false, output:"jsonl", expected:"refused"},
+  ];
+  for (const scenario of cases) {
+    const invocation = parseInvocation(["run","--host","127.0.0.1","--port",new URL(origin).port,"--data-dir",root,"--token","test-token","--output",scenario.output,"--content",scenario.input ?? "Synthetic CLI case",...scenario.flags], {}, root);
+    const printed: string[] = [];
+    const requests: Array<{method:string; path:string; body?:Record<string,unknown>}> = [];
+    const originalFetch = globalThis.fetch;
+    const tracked = context.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?:RequestInit) => {
+      const target = new URL(String(input));
+      if (target.origin === origin) requests.push({method:init?.method ?? "GET",path:target.pathname,...(typeof init?.body === "string" ? {body:JSON.parse(init.body)} : {})});
+      return originalFetch(input, init);
+    });
+    const originalTty = Object.getOwnPropertyDescriptor(process.stdout,"isTTY");
+    const originalWrite = process.stdout.write;
+    Object.defineProperty(process.stdout,"isTTY",{value:scenario.tty,configurable:true});
+    if (scenario.output === "jsonl") process.stdout.write = ((chunk:string|Uint8Array) => { printed.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    try {
+      const result = await runCommand({settings:invocation.settings, runSettings:invocation.runSettings!, baseEnv:{}}, line => printed.push(line));
+      assert.equal(result.exitCode,1, scenario.name+": synthetic Run stops at the missing-model boundary");
+    } finally {
+      tracked.mock.restore();
+      process.stdout.write = originalWrite;
+      if (originalTty) Object.defineProperty(process.stdout,"isTTY",originalTty);
+      else delete (process.stdout as {isTTY?:boolean}).isTTY;
+    }
+    if (scenario.expected === "refused") {
+      assert.deepEqual(requests, [], "guard must refuse before contacting HTTP or creating data");
+      assert.match(printed.join(""), /NON_INTERACTIVE_NO_AUTO_APPROVE/);
+      continue;
+    }
+    const runRequest = requests.find(row => row.method === "POST" && /^\/api\/sessions\/[^/]+\/runs$/.test(row.path));
+    assert.ok(runRequest, scenario.name+": actual Run request reached HTTP");
+    const targetId = runRequest.path.split("/")[3]!;
+    const saved = await jsonRequest<Session>(`${origin}/api/sessions/${targetId}`,{headers:authorization});
+    assert.equal(saved.body.approvalMode,scenario.expected,scenario.name);
+    const summary = scenario.summary ?? scenario.expected;
+    if (scenario.output === "jsonl") {
+      const meta = printed.flatMap(line => line.split("\n")).filter(Boolean).map(line => JSON.parse(line)).find(row => row.type === "meta");
+      assert.equal(meta.approvalMode,summary,scenario.name+": JSON metadata matches approval intent");
+    } else assert.match(printed.join("\n"),new RegExp(`approval=${summary} interactive=${scenario.expected !== "always_allow" || scenario.summary === "preserve_session"}`),scenario.name);
+    if (scenario.summary === "preserve_session") {
+      assert.ok(!requests.some(row => row.method === "PATCH"),scenario.name+": no implicit policy reset");
+    } else if (scenario.flags.includes("--project")) {
+      const created = requests.find(row => row.method === "POST" && row.path.endsWith("/sessions"));
+      assert.equal(created?.body?.approvalMode,scenario.expected,"explicit Project creation sends the CLI mode");
+    } else {
+      // The mode is stated by whichever write made the Session: the CLI's own
+      // POST when it adds one to the 项目 it already has, or a PATCH on the
+      // first Session a freshly created Project came with. Either way the Run
+      // never inherits the saved default.
+      const created = requests.find(row => row.method === "POST" && /^\/api\/projects\/[^/]+\/sessions$/.test(row.path));
+      if (created) {
+        assert.equal(created.body?.approvalMode, scenario.expected, scenario.name+": Session creation states the CLI mode");
+      } else {
+        const patched = requests.find(row => row.method === "PATCH");
+        assert.deepEqual(patched?.body,{approvalMode:scenario.expected},scenario.name+": separate intentional mode PATCH before Run");
+      }
+    }
+    console.log("CLI real HTTP matrix", JSON.stringify({scenario:scenario.name,tty:scenario.tty,storedMode:saved.body.approvalMode,reportedIntent:summary}));
+  }
+  const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`,{headers:authorization});
+  const project = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${projectId}/settings`,{headers:authorization});
+  assert.equal(global.body.overrides.defaultApprovalMode,"always_allow");
+  assert.equal(project.body.overrides.defaultApprovalMode,undefined);
+});
+
+test("the recent-sessions Project is reachable by name, absent from the project list, and protected", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `inbox-project-api-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+
+  const created = await jsonRequest<Project>(`${origin}/api/inbox`, { headers: authorization, method: "POST" });
+  assert.equal(created.response.status, 200);
+  assert.equal(created.body.kind, "inbox");
+  const again = await jsonRequest<Project>(`${origin}/api/inbox`, { headers: authorization, method: "POST" });
+  assert.equal(again.body.id, created.body.id);
+
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Visible" }),
+    headers: authorization,
+    method: "POST",
+  });
+  const listed = await jsonRequest<Project[]>(`${origin}/api/projects`, { headers: authorization });
+  assert.deepEqual(listed.body.map((entry) => entry.id), [project.body.project.id]);
+
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${created.body.id}/sessions`, {
+    body: JSON.stringify({ title: "Standalone" }),
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${created.body.id}/sessions`, { headers: authorization });
+  assert.deepEqual(sessions.body.map((entry) => entry.id), [session.body.id]);
+
+  const rename = await jsonRequest<ApiError>(`${origin}/api/projects/${created.body.id}`, {
+    body: JSON.stringify({ name: "Renamed" }),
+    headers: authorization,
+    method: "PATCH",
+  });
+  assert.equal(rename.response.status, 409);
+  const runners = await jsonRequest<Project>(`${origin}/api/projects/${created.body.id}`, {
+    body: JSON.stringify({ runnerIds: ["local"] }),
+    headers: authorization,
+    method: "PATCH",
+  });
+  assert.deepEqual(runners.body.runnerIds, ["local"]);
+  assert.equal((await fetch(`${origin}/api/projects/${created.body.id}/deletion-impact`, { headers: authorization })).status, 409);
+  assert.equal((await fetch(`${origin}/api/projects/${created.body.id}`, {
+    body: JSON.stringify({ confirmationId: created.body.id }),
+    headers: authorization,
+    method: "DELETE",
+  })).status, 409);
 });

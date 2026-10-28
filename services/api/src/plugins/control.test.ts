@@ -3,6 +3,7 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test, describe } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import type { RuntimeSettingsOverrides } from "@sciencediscovery/schema";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
@@ -14,12 +15,21 @@ import { handlePluginRequest } from "./http.js";
 import { createServer } from "node:http";
 import { VersionStore } from "@sciencediscovery/cas";
 
-async function fixture(t:TestContext) {
+async function fixture(
+  t:TestContext,
+  // A Project now starts with every installed skill on, so its effective
+  // settings carry skill ids and pinning a candidate needs the port that
+  // turns them into assets. The real one resolves the catalog; this default
+  // has nothing to resolve, which is enough for the candidate mechanics.
+  assets: (settings: RuntimeSettingsOverrides) => Promise<{settings: RuntimeSettingsOverrides; assets: unknown}>
+    = async settings=>({settings,assets:[]}),
+) {
   await mkdir(resolve(".tmp"),{recursive:true});
   const root=await mkdtemp(resolve(".tmp/plugin-control-")),store=new SessionStore(root);
   await store.load();
   t.after(async()=>{store.close();await rm(root,{recursive:true,force:true});});
   const project=await store.createProject("Plugins");
+  store.plugins.bindAssets(assets);
   return {store,project,root,control:store.plugins};
 }
 const signal=()=>new AbortController().signal;
@@ -214,9 +224,8 @@ test("candidate only replaces allowed names and refuses incomplete or cross-expe
   assert.equal(control.describe({projectId:project.id}).status.length,installedPlugins.length);
 });
 test("candidate CAS records preserve pinned assets and asset drift refuses preparation",async t=>{
-  const {project,control,root}=await fixture(t);
   let revision="asset-v1";
-  control.bindAssets(async settings=>({settings,assets:{revision}}));
+  const {project,control,root}=await fixture(t,async settings=>({settings,assets:{revision}}));
   const before=control.snapshot({projectId:project.id});
   const candidate=await control.create(project.id,before.revision,{plugins:{plan:{enabled:false}}});
   const versions=new VersionStore(root);

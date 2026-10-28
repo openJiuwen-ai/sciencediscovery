@@ -37,7 +37,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-Open the **`Open to sign in`** URL that `serve` prints. The browser stores the local service access token automatically, so there is nothing to copy. That token is distinct from a model API key, and the URL grants access to this machine's workspace — keep it private. The web interface is served at <http://127.0.0.1:4310>; the terminal window only runs the service.
+Open <http://127.0.0.1:4310>. When the browser has not connected yet, use the Connection page to paste the local service access token from `.sciencediscovery-data/secrets/auth-token`; this works even when the service runs in the background and its startup output is unavailable. The printed **`Open to sign in`** URL remains a convenient automatic sign-in shortcut. That token is distinct from a model API key and grants access to this machine's workspace — keep it private.
 
 For the prepackaged binary, Bubblewrap is the only system dependency. The
 [deployment guide](https://sciencediscovery.github.io/docs/getting-started/deployment.html) covers building a portable binary
@@ -72,16 +72,38 @@ workspace. For a step-by-step walkthrough, see the [Quick Start](https://science
 | **Sandboxed code execution** | The agent writes, debugs and runs Python, R and shell inside a fail-closed sandbox | [Sandbox execution](https://sciencediscovery.github.io/docs/developer-docs/sandbox-execution.html) |
 | **Task decomposition** | Planning and multi-agent orchestration distribute a task across sub-agents and a cross-domain skill library | [Subagent orchestration](https://sciencediscovery.github.io/docs/developer-docs/subagent-orchestration.html) · [Skills](https://sciencediscovery.github.io/docs/developer-docs/skill-progressive-disclosure.html) |
 | **End-to-end provenance** | Code, environment, logs and cited evidence are recorded per deliverable; the optional memory graph makes the chain navigable | [Review and provenance](https://sciencediscovery.github.io/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
+| **Scripted and batch runs** | `ScienceDiscovery run` sends a task to a running `serve` from a terminal or a job script and streams the result as text or JSONL | [Command line](#command-line) · [CLI reference](https://sciencediscovery.github.io/docs/reference/cli.html) |
+
+## Command line
+
+Besides the browser, a running `serve` accepts tasks from the terminal. Run `run` from the directory where `serve` runs, so it reads the same data directory and access token; if `serve` uses `--data-dir` or `--port`, pass the same options to `run`.
+
+```bash
+# In a terminal: the answer streams to stdout, and permission requests are asked here
+./ScienceDiscovery run "Explain the difference between a paired and an unpaired t-test in three sentences"
+
+# In a pipe: one JSON event per line; keep only the final answer
+./ScienceDiscovery run --auto-approve "Name three common normalization methods for RNA-seq read counts, one line each" \
+  | jq -r 'select(.type == "result") | .content'
+
+# Only the answer, written to a file
+./ScienceDiscovery run --auto-approve --output text "Explain what a p-value does and does not tell you, in one paragraph" > answer.md
+```
+
+On a terminal, `run` writes the answer to stdout, progress to stderr, and asks you to approve each permission request. When stdout is piped or redirected, it defaults to JSONL, errors included, and it cannot ask for approval, so it refuses to start unless you pass `--auto-approve`. That option approves the session's tool actions without asking, except direct host execution after a sandbox failure, which always needs explicit consent; use it only for tasks and data you would approve anyway. The [CLI reference](https://sciencediscovery.github.io/docs/reference/cli.html) describes every command, and `./ScienceDiscovery help` prints every option.
 
 ## Requirements
 
 | Path | System requirements |
 |---|---|
 | **Prepackaged binary** | Linux x86_64/aarch64 (Windows x64 via WSL 2), Bubblewrap |
-| **Local source mode** | Linux (including WSL 2) or macOS; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git |
+| **Local source mode** | Linux (including WSL 2) or macOS; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git, curl; Bubblewrap on Linux |
 | **Docker** | Linux containers on Linux, macOS, or Windows; Bubblewrap and unprivileged user namespaces |
 
 Managed scientific environments run on a pinned micromamba, so no system Python, R or conda is required.
+
+> [!WARNING]
+> ScienceDiscovery is not a multi-user production service. The adapter and the API listen on loopback by default; access uses one bearer token and there is no TLS termination. Exposing either interface elsewhere must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, the adapter, JiuwenSwarm, the PDF worker, STDIO MCP servers you configure, and outbound model/provider calls run outside that sandbox as trusted control-plane operations. When the sandbox is unavailable, running a command directly on the host is a recovery step that needs its own explicit approval and has none of the sandbox's isolation. See [Sandbox execution](https://sciencediscovery.github.io/docs/developer-docs/sandbox-execution.html) for the boundary.
 
 ## Documentation
 
@@ -89,7 +111,7 @@ Managed scientific environments run on a pinned micromamba, so no system Python,
 |---|---|
 | **Getting started** | [Quick start](https://sciencediscovery.github.io/docs/getting-started/quick-start.html) · [Deployment](https://sciencediscovery.github.io/docs/getting-started/deployment.html) |
 | **Advanced setup** | [Custom MCP](https://sciencediscovery.github.io/docs/advanced-setup/configure-custom-mcp.html) · [Network proxy](https://sciencediscovery.github.io/docs/advanced-setup/configure-network-proxy.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
-| **Reference** | [Configuration](https://sciencediscovery.github.io/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/docs/reference/rest-api.html) · [Built-in tools](https://sciencediscovery.github.io/docs/reference/builtin-tools.html) · [Runtime behavior](https://sciencediscovery.github.io/docs/reference/runtime-behavior.html) |
+| **Reference** | [CLI](https://sciencediscovery.github.io/docs/reference/cli.html) · [Configuration](https://sciencediscovery.github.io/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/docs/reference/rest-api.html) · [Built-in tools](https://sciencediscovery.github.io/docs/reference/builtin-tools.html) · [Runtime behavior](https://sciencediscovery.github.io/docs/reference/runtime-behavior.html) |
 | **Developer documentation** | [Architecture](https://sciencediscovery.github.io/docs/developer-docs/architecture.html) and the [developer index](https://sciencediscovery.github.io/docs/developer-docs/) |
 
 The complete English and Chinese indexes are in the [documentation site](https://sciencediscovery.github.io/docs/); development setup and test commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -109,3 +131,5 @@ Join the ScienceDiscovery community on Slack or Feishu to discuss your work and 
 [Apache License 2.0](LICENSE).
 
 This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
+
+[Model API compatibility, checks and costs](docs/en/model-api-compatibility.md)

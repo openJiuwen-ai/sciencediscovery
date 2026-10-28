@@ -16,6 +16,9 @@ from .research import IdeaTreeEngine, ResearchStore, node, now
 from .prompts import DEFAULTS, CRITERIA
 from .templates import INTENSITIES, TEMPLATES, apply_intensity, snapshot
 
+THINKING_ROLES = ('ideate', 'design', 'assess', 'aggregate', 'propagate')
+THINKING_EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+
 
 class Settings(BaseModel):
     templateId: str = 'scientific-hypothesis-general/v1'
@@ -37,11 +40,16 @@ class Settings(BaseModel):
     assessorStability: dict = Field(default_factory=dict)
     assessorSustainability: dict = Field(default_factory=dict)
     scoreDirection: str = 'maximize'
+    # Stage -> effort; a stage left out keeps the model profile's thinking. `assess` covers every assessor.
+    roleThinkingEfforts: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def weights(self):
         if self.templateId not in TEMPLATES or self.explorationIntensity not in INTENSITIES:
             raise ValueError('Unknown research template or exploration intensity')
+        for role, effort in self.roleThinkingEfforts.items():
+            if role not in THINKING_ROLES or effort not in THINKING_EFFORTS:
+                raise ValueError(f'Invalid thinking effort for stage {role}')
         weights = [c.get('weight', w) for c, w in zip([self.assessorActivity, self.assessorStability, self.assessorSustainability], [.35, .35, .30])]
         if any(isinstance(w, bool) or not isinstance(w, (float, int)) or not 0 <= w <= 1 for w in weights) or abs(sum(weights) - 1) > 1e-6:
             raise ValueError('Assessment weights must sum to 1')

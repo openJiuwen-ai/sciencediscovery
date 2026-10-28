@@ -18,12 +18,14 @@ import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
+  | "defaultApprovalMode"
   | "plugins"
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
   | "enabledSkillIds"
   | "modelId"
   | "reviewModelId"
+  | "reviewThinkingEffort"
   | "semanticReviewEnabled"
   | "skillSelectionMode"
   | "thinkingEffort"
@@ -42,6 +44,12 @@ export type SkillSelectionMode = typeof SKILL_SELECTION_MODES[number];
 
 export const DEFAULT_SKILL_SELECTION_MODE: SkillSelectionMode = "all";
 
+/**
+ * The connector selection a Session gets when no layer (Global, Project, Session) sets one: Web access on, every
+ * data source and custom MCP server off. A list set at any layer, even an empty one, replaces it whole.
+ */
+export const DEFAULT_ENABLED_CONNECTOR_IDS: readonly ConnectorId[] = ["web"];
+
 /** Runtime settings fields that only Project and Session layers may set. */
 export const SKILL_SELECTION_FIELDS: readonly RuntimeSettingsField[] = ["enabledSkillIds", "enabledSkillLibraries", "skillSelectionMode"];
 
@@ -50,6 +58,8 @@ export function isSkillSelectionMode(value: unknown): value is SkillSelectionMod
 }
 
 export interface RuntimeSettingsOverrides {
+  /** Global/Project default for new Sessions only; never changes existing Sessions. */
+  defaultApprovalMode?: import("./plan.js").ApprovalMode;
   /** Per-plugin overrides. Changes affect newly queued runs, never an active composition. */
   plugins?: Record<string, { enabled?: boolean; config?: Record<string, import("./mcp-result.js").JsonValue> }>;
   enabledConnectorIds?: ConnectorId[];
@@ -57,6 +67,11 @@ export interface RuntimeSettingsOverrides {
   enabledSkillIds?: string[];
   modelId?: string;
   reviewModelId?: string;
+  /** Thinking effort of the Reviewer Specialist's semantic (Deep) review,
+   *  independent of the conversation's. Unset keeps the review on the model
+   *  profile's own thinking setting; set, it turns thinking on at the nearest
+   *  stop the model accepts, and a model without an effort control ignores it. */
+  reviewThinkingEffort?: ModelThinkingEffort;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
   /** Per-scope thinking overrides. They sit on top of the selected model
@@ -67,6 +82,7 @@ export interface RuntimeSettingsOverrides {
 }
 
 export interface EffectiveRuntimeSettings {
+  defaultApprovalMode?: import("./plan.js").ApprovalMode;
   plugins?: RuntimeSettingsOverrides["plugins"];
   enabledConnectorIds: ConnectorId[];
   /** Versioned skill libraries searched at run creation/execution time. */
@@ -75,6 +91,7 @@ export interface EffectiveRuntimeSettings {
   enabledSkillIds: string[];
   modelId?: string;
   reviewModelId?: string;
+  reviewThinkingEffort?: ModelThinkingEffort;
   semanticReviewEnabled: boolean;
   skillSelectionMode: SkillSelectionMode;
   thinkingEffort?: ModelThinkingEffort;
@@ -135,11 +152,23 @@ export interface ReviewerSpecialistSettings {
   feedbackPolicy: ReviewerFeedbackPolicy;
 }
 
+/** Product default for the global Reviewer Specialist master switch (see #323 / #413). */
+export const DEFAULT_REVIEWER_SPECIALIST_SETTINGS: ReviewerSpecialistSettings = {
+  enabled: true,
+  feedbackPolicy: DEFAULT_REVIEWER_FEEDBACK_POLICY,
+};
+
 /** Reviewer behaviour that belongs to one Session, not the global Specialist switch. */
 export interface SessionReviewerSpecialistSettings {
   automaticReviewEnabled: boolean;
   level: ReviewerSpecialistLevel;
 }
+
+/** Product default for new Sessions: automatic review on at the Quick level. */
+export const DEFAULT_SESSION_REVIEWER_SPECIALIST_SETTINGS: SessionReviewerSpecialistSettings = {
+  automaticReviewEnabled: true,
+  level: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+};
 
 export type TimeoutKind =
   | "gateway_idle"
@@ -279,6 +308,19 @@ export interface IdeaTreeAssessorConfig {
   weight?: number;
 }
 
+/** Idea Tree stages that can think at their own effort; `assess` covers every assessor of the template. */
+export const IDEA_TREE_THINKING_ROLES = ["ideate", "design", "assess", "aggregate", "propagate"] as const;
+
+export type IdeaTreeThinkingRole = typeof IDEA_TREE_THINKING_ROLES[number];
+
+/**
+ * Thinking effort per Idea Tree stage. A stage left out keeps the model
+ * profile's own thinking setting; a set stage turns thinking on at the nearest
+ * stop the research model accepts, and a model without an effort control
+ * ignores it. Frozen into each research when it is created.
+ */
+export type IdeaTreeRoleThinkingEfforts = Partial<Record<IdeaTreeThinkingRole, ModelThinkingEffort>>;
+
 /**
  * Idea Tree 系统设置。存在于 System Settings 中，不在 Session 级别。
  * 用户输入 /idea-tree 命令触发 idea-tree 功能，参数从此设置注入。
@@ -312,6 +354,9 @@ export interface IdeaTreeSettings {
 
   /** PROPAGATE 阶段 insight 合成指令覆盖。只影响合成指令文本，不触碰 runtime 的 childDigest 校验与逐级传播队列 */
   propagateInsightSystemPrompt?: string;
+
+  /** Per-stage thinking effort; absent when no stage has its own. */
+  roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts;
 }
 
 export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
@@ -348,6 +393,7 @@ export interface IdeaTreeSettingsDetails {
   assessorSustainability: IdeaTreeAssessorConfig;
   aggregatorSystemPrompt?: string;
   propagateInsightSystemPrompt?: string;
+  roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts;
 }
 
 /** Idea Tree 设置写入 payload。每个字段可选，独立更新。空值（空字符串/undefined）即使用默认。 */
@@ -368,6 +414,8 @@ export interface UpdateIdeaTreeSettingsRequest {
   assessorSustainability?: IdeaTreeAssessorConfig;
   aggregatorSystemPrompt?: string | null;
   propagateInsightSystemPrompt?: string | null;
+  /** Replaces the whole per-stage map; `null` or `{}` returns every stage to inherit. */
+  roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts | null;
 }
 
 export interface RuntimeSessionRun {

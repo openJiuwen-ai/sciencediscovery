@@ -27,6 +27,8 @@ import {
 } from "./deferred-tools.js";
 import { ToolLoopGuard } from "./loop-guard.js";
 import { isRemoteContentTool, neutralizeUntrustedTags } from "./sanitize.js";
+import { retiredToolGuidance } from "./retired-tools.js";
+import type { McpError } from "@sciencediscovery/schema";
 import type { AgentTool } from "./types.js";
 
 export interface ToolSpec {
@@ -42,6 +44,7 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
   /** Run-scoped observation hook. It cannot alter the result returned to Runtime Core. */
+  onProgress?(call: RuntimeToolCall, chunk: string): void;
   onResult?(input: {
     call: RuntimeToolCall;
     content: string;
@@ -342,8 +345,14 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       details = result.details;
       isError = false;
     } else if (!this.tools.has(call.name)) {
-      content = `Unknown tool: ${call.name}`;
-      details = { ok: false, error: { code: "UNKNOWN_TOOL", message: content, retryable: false } };
+      const retired = retiredToolGuidance(call.name);
+      if (retired) {
+        content = retired;
+        details = { ok: false, error: { code: "RETIRED_TOOL", message: retired, retryable: true } };
+      } else {
+        content = `Unknown tool: ${call.name}`;
+        details = { ok: false, error: { code: "UNKNOWN_TOOL", message: content, retryable: false } };
+      }
       isError = true;
     } else if (!this.toolIsAvailable(call.name)) {
       content = `Error: Tool '${call.name}' is not available under the current run capability policy.`;
@@ -418,8 +427,12 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       };
     }
     const tool = this.tools.get(call.name)!;
+    let active = true;
     try {
-      const result = await tool.execute(call.id || randomUUID(), call.args as never, signal);
+      const result = await tool.execute(call.id || randomUUID(), call.args as never, signal, (chunk) => {
+        if (!active || signal.aborted || !chunk) return;
+        try { this.options.onProgress?.(call, isRemoteContentTool(call.name) ? neutralizeUntrustedTags(chunk) : chunk); } catch { /* Observers cannot fail tools. */ }
+      });
       const text = result.content.map((item) => item.text).join("\n");
       return {
         content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text,
@@ -430,16 +443,21 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const invocation = error && typeof error === "object" && "invocation" in error
-        ? (error as { invocation?: { attempts?: unknown[]; error?: { code?: string; retryAfterMs?: number; retryable?: boolean } } }).invocation
+        ? (error as { invocation?: { attempts?: unknown[]; error?: McpError } }).invocation
         : undefined;
       const details = { ok: false, error: {
         attempts: invocation?.attempts?.length ?? 1,
         code: invocation?.error?.code ?? "TOOL_EXECUTION_FAILED",
         message: message.slice(0, 1_000),
         ...(invocation?.error?.retryAfterMs !== undefined ? { retryAfterMs: invocation.error.retryAfterMs } : {}),
+        ...(invocation?.error?.sourceHealth ? { sourceHealth: invocation.error.sourceHealth } : {}),
+        ...(invocation?.error?.fallbackSourceIds ? { fallbackSourceIds: invocation.error.fallbackSourceIds } : {}),
+        ...(invocation?.error?.guidance ? { guidance: invocation.error.guidance } : {}),
         retryable: invocation?.error?.retryable ?? false,
       } };
       return { content: JSON.stringify(details), details, isError: true, selfBounded: true };
+    } finally {
+      active = false;
     }
   }
 }

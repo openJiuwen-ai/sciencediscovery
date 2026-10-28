@@ -33,12 +33,13 @@ for (const locale of ["en", "zh-CN"] as const) {
     const save = zh ? "保存" : "Save";
     const saveClose = zh ? "保存并关闭" : "Save and close";
     const rejected = zh ? "本地服务访问令牌被拒绝" : "Local service access token rejected";
+    const tokenLocation = zh ? "令牌保存在 <data-dir>/secrets/auth-token" : "The token is stored in <data-dir>/secrets/auth-token";
 
     /**
      * E2E-META
      * Purpose: A first-time user finds one clear local-token prompt, recovers from wrong credentials, and distinguishes model keys.
      * Steps:
-     *   1. Open a fresh browser and follow the startup-log guidance.
+     *   1. Open a fresh browser and read the local-token recovery guidance.
      *   2. Try a wrong token twice and see a single rejection without toasts.
      *   3. Save the correct token, refresh, and open model credentials.
      * Environment: Isolated stack at E2E_BASE_URL; empty browser storage except locale.
@@ -54,10 +55,10 @@ for (const locale of ["en", "zh-CN"] as const) {
     test(`首次连接可理解且错误令牌可恢复 ${locale}`, { tag: "@mocked" }, async ({ page, journey }) => {
       journey.scenario({ goal: "首次使用时按一处引导完成连接，并知道模型 Key 应填在哪里。", preconditions: ["独立本机栈", `界面语言 ${locale}`, "浏览器未保存令牌"] });
       const dialog = page.getByRole("dialog");
-      await journey.step("打开应用查看引导", "只有一处启动日志与保存说明，没有 Unauthorized 红字、Toast 或设置警示条。", async () => {
+      await journey.step("打开应用查看引导", "只有一处连接与保存说明，没有 Unauthorized 红字、Toast 或设置警示条。", async () => {
         await page.goto("/");
         await expect(dialog.getByLabel(tokenLabel, { exact: true })).toBeVisible();
-        await expect(dialog.getByRole("status")).toContainText("Open to sign in");
+        await expect(dialog.getByRole("status")).toContainText(tokenLocation);
         await expect(dialog.getByRole("status")).toContainText(zh ? "保存" : "Save");
         await expect(page.getByRole("alert")).toHaveCount(0);
         await expect(page.getByText("Unauthorized", { exact: false })).toHaveCount(0);
@@ -147,7 +148,14 @@ for (const locale of ["en", "zh-CN"] as const) {
         expect(unauthorized).toEqual([]);
       });
       await journey.step("打开无效令牌链接", "错误令牌只显示一处恢复提示，没有额外 Toast 或设置警示条。", async () => {
-        await page.goto(`${apiBaseUrl()}/#token=invalid-link-token`);
+        // Keep the pathname unchanged to explicitly exercise a same-document
+        // fragment navigation, even if URL synchronization selected a Session.
+        const mounted = `mounted-${Date.now()}`;
+        await page.evaluate(value => { (window as Window & { onboardingMount?: string }).onboardingMount = value; }, mounted);
+        const invalid = new URL(page.url());
+        invalid.hash = "token=invalid-link-token";
+        await page.goto(invalid.href);
+        expect(await page.evaluate(() => (window as Window & { onboardingMount?: string }).onboardingMount)).toBe(mounted);
         await expect(page.getByRole("alert")).toHaveCount(1);
         await expect(page.getByRole("alert")).toContainText(rejected);
         expect(new URL(page.url()).hash).toBe("");

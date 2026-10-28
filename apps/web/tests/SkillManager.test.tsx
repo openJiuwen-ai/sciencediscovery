@@ -142,6 +142,33 @@ test("renders a compact searchable Skill list with grouped create and import act
   assert.doesNotMatch(html, /Package hash/);
 });
 
+test("enables folder import only when the browser exposes directory selection", () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+  try {
+    for (const supported of [false, true]) {
+      Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: { createElement: () => supported ? { webkitdirectory: false } : {} },
+      });
+      const html = renderToStaticMarkup(createElement(SkillManager, {
+        client: {} as ApiClient,
+        onCatalogChange: () => undefined,
+        onError: () => undefined,
+        skills: [],
+      }));
+      const folderButton = html.match(/<button[^>]*><span class="skill-action-icon">□<\/span>.*?<\/button>/)?.[0];
+      assert.ok(folderButton);
+      assert.equal(folderButton.includes('disabled=""'), !supported);
+      assert.match(folderButton, supported ? /picker rejects folders, use ZIP or Git/ : /Folder selection is unavailable.*ZIP or Git/);
+      assert.match(html, /SKILL.md or ZIP/);
+      assert.match(html, /Git repository/);
+    }
+  } finally {
+    if (original) Object.defineProperty(globalThis, "document", original);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
+});
+
 test("opens the clicked Skill directly in the dedicated Explorer", async () => {
   const client = {
     listSkillReviewDrafts: async () => [],

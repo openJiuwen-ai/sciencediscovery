@@ -31,6 +31,18 @@ class JudgeRetryTests(unittest.TestCase):
     def run_judge(self, request):
         return judge_with_retries(self.body, request, json.loads, self.output, sleep=self.sleep)
 
+    def test_unknown_or_malformed_usage_does_not_block_scoring(self):
+        for index, usage in enumerate([None, [], 'malformed', {'completion_tokens': 'bad'}]):
+            with self.subTest(usage=usage):
+                raw = response()
+                raw['usage'] = usage
+                request = Mock(return_value=raw)
+                result, _ = judge_with_retries(self.body, request, json.loads,
+                                               Path(self.tmp.name) / f'usage-{index}', sleep=self.sleep)
+                self.assertEqual(result['score'], 77)
+                self.assertEqual(result['usage'], usage)
+                self.assertEqual(request.call_count, 1)
+
     def test_truncation_retries_same_evidence_and_stops_at_first_valid_score(self):
         request = Mock(side_effect=[response('', 'length'), response(), response('{"score":100}')])
         result, _ = self.run_judge(request)
@@ -69,6 +81,13 @@ class JudgeRetryTests(unittest.TestCase):
         self.run_judge(Mock(return_value=response()))
         with self.assertRaises(FileExistsError):
             self.run_judge(Mock(return_value=response()))
+
+    def test_suite_can_defer_retries_without_changing_default_judges(self):
+        request = Mock(side_effect=TimeoutError('temporary'))
+        with self.assertRaisesRegex(ValueError, 'after 1 attempt'):
+            judge_with_retries(self.body, request, json.loads, self.output, sleep=self.sleep, max_retries=0)
+        self.assertEqual(request.call_count, 1)
+        self.sleep.assert_not_called()
 
     def test_puct_score_contract_is_not_relaxed(self):
         dims = {key: {'rating': 3, 'reason': 'supported', 'evidence': 'result.py:1'} for key in puct.rubric}

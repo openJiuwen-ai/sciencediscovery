@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { setTimeout as runtimeDelay } from "node:timers/promises";
+import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
+import { createNativeAgent } from "../native-agent/index.js";
+import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
+import { codexAgentFactory } from "../specialist-runtime/agent.js";
+import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
 import { randomUUID } from "node:crypto";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
@@ -198,6 +204,7 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
+import { reviewCheckpointInput } from "../reviewer-specialist/required-deliverables.js";
 
 import {
   aggregateToolText,
@@ -276,21 +283,41 @@ function clonedDetailsEntry(details: unknown): { details?: unknown } {
   return cloned !== undefined ? { details: cloned } : {};
 }
 
+/** Small replay metadata; full text continues to live in tool streams. */
+function completedToolEvidence(text: string): Pick<ToolTrace, "preview" | "paperCount"> {
+  const lines = text.split("\n").map(line => line.length > 160 ? line.slice(0, 80) + "…" + line.slice(-77) : line);
+  const preview = (lines.length > 5 ? [...lines.slice(0, 2), "…", ...lines.slice(-2)] : lines).join("\n");
+  let paperCount: number | undefined;
+  try {
+    const result = JSON.parse(text);
+    if (result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
+      && result.toolId === "search" && Array.isArray(result.records)) paperCount = result.records.length;
+  } catch { /* Plain tool text is still useful bounded evidence. */ }
+  return { preview, ...(paperCount !== undefined ? { paperCount } : {}) };
+}
+
 export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = aggregateToolText(event.result)): ToolTrace {
   return {
     id: event.toolCallId,
     name: event.toolName,
     ...clonedDetailsEntry(event.result.details),
     ...(text !== undefined
-      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId) }
+      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId), ...completedToolEvidence(text) }
       : {}),
     status: event.isError ? "failed" : "completed",
   };
 }
 
+/** Bounded head/tail snapshot; full main-tool transcripts remain delta streams. */
+export function appendToolProgress(previous: string, chunk: string): string {
+  const text = previous + chunk;
+  return text.length <= 16384 ? text : text.slice(0, 8192) + "\n…\n" + text.slice(-8189);
+}
+
 export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningStep?: SubagentStep): SubagentStep {
   return {
     content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
+    ...(runningStep?.progress ? { progress: runningStep.progress } : {}),
     createdAt: runningStep?.createdAt ?? new Date().toISOString(),
     ...clonedDetailsEntry(event.result.details),
     id: event.toolCallId,
@@ -720,7 +747,17 @@ async function executeAgentRun(
         sessionId,
       }, ideaTreeExecutor)
     : [];
-  const leadExtraTools = [...ideaTreeTools, ...authorityTools];
+  const leadExtraTools = [
+    ...ideaTreeTools,
+    ...authorityTools,
+    createSessionTitleTool(store, sessionId, async (updated) => {
+      await emit({ session: updated, type: "session.updated" });
+    }),
+  ];
+  const workflowInstructions = [
+    ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
+    sessionTitleInstructions(session.title),
+  ].filter(Boolean).join("\n\n");
   let leaseHeartbeatQueue = Promise.resolve();
   let leaseHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const sessionSpecialist = store.getSpecialist(session.specialistId);
@@ -822,7 +859,7 @@ async function executeAgentRun(
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
         : {}),
       subagentOrchestration: { maxConcurrent: maxConcurrentSubagents },
-      workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
+      workflowInstructions,
     },
   );
   const skillLibraryRefs = body.skillLibraryRefs?.length ? structuredClone(body.skillLibraryRefs) : undefined;
@@ -1054,6 +1091,7 @@ async function executeAgentRun(
     const grant = decided.grantId ? store.getPermissionGrant(decided.grantId) : undefined;
     return grant && grant.scope !== "once" ? "allow_matching" : "allow_once";
   };
+  const externalSpecialistExecutions = new Set<string>();
   const permissionRuntime = createAgentPermissionRuntime(initialPermissionEpoch, {
     beginExternalWait: (executionId) => {
       const begin = executionId ? externalWaitByExecution.get(executionId) : undefined;
@@ -1067,9 +1105,13 @@ async function executeAgentRun(
     readEpoch: () => store.getSessionPermissionEpoch(sessionId),
     readAuthorization: (authorizationId) => store.getPermissionAuthorization(authorizationId),
     // With the JiuwenSwarm backend its permission engine decides before a tool runs; ScienceDiscovery records that.
-    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm
-      ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
-      : store.requestPermission(sessionId, action, resource, summary, context),
+    requestPermission: routeSpecialistPermissions(
+      (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code" && action !== "sandbox_network"
+        ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
+        : store.requestPermission(sessionId, action, resource, summary, context),
+      (action, resource, summary, context) => store.requestPermission(sessionId, action, resource, summary, context),
+      externalSpecialistExecutions,
+    ),
     waitForDecision: (permissionRequest, signal) =>
       waitForPermissionDecision(
         store,
@@ -1202,7 +1244,7 @@ async function executeAgentRun(
     },
   });
   const agentOptions: WorkspaceAgentOptions = {
-    workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
+    workflowInstructions,
     pluginSettings: settingsSnapshot.plugins,
     config: agentConfig,
     createSkill: async (input) => {
@@ -1213,11 +1255,12 @@ async function executeAgentRun(
     },
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
     ...(approvalsByJiuwenSwarm ? { requestApproval } : {}),
-    ...(leadExtraTools.length ? { extraTools: leadExtraTools } : {}),
+    extraTools: [...leadExtraTools, mainRuntimeConfigTool(store)],
     memoryGraphEnabled: memoryGraphSink.enabled,
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
+      rootRunId: runId,
       beginExternalWait: () => {
         if (!mainExecution) throw new Error("No main AgentRun is active");
         return mainExecution.beginExternalWait();
@@ -1245,6 +1288,7 @@ async function executeAgentRun(
       broker: mcpBroker,
       catalog: mcpCatalog,
       enabledSourceIds: settingsSnapshot.enabledConnectorIds,
+      reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary }),
       emitPermissionRequest: (permissionRequest) => {
         responseSink.emit({ request: permissionRequest, type: "permission.required" });
       },
@@ -1300,6 +1344,10 @@ async function executeAgentRun(
       });
       return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
+    // Do not expose graph-only tools when their backing service is disabled:
+    // a registered callback otherwise turns a normal tool call into a
+    // memory_graph_disabled error visible to the user.
+    ...(memoryGraphSink.enabled ? {
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1388,6 +1436,7 @@ async function executeAgentRun(
       }
       return result;
     },
+    } : {}),
     ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent)
       && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick") ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
@@ -1407,6 +1456,7 @@ async function executeAgentRun(
           broker: mcpBroker,
           catalog: mcpCatalog,
           enabledSourceIds: settingsSnapshot.enabledConnectorIds,
+          // Main-run setup already reports readiness for this same source selection.
           emitPermissionRequest: (permissionRequest) => {
             responseSink.emit({ request: permissionRequest, type: "permission.required" });
           },
@@ -1425,13 +1475,19 @@ async function executeAgentRun(
               modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
               runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
               skills: pluginEnabled(settingsSnapshot.plugins, "skill") ? skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]) : [],
-              workspace: { ...agentOptions, mcpTools: reviewerMcpTools.mcpTools },
+              workspace: { ...agentOptions, mcpTools: reviewerMcpTools.mcpTools, mcpReadiness: reviewerMcpTools.mcpReadiness },
             })
           : undefined;
         try {
           const result = await runReviewerCheckpoint({
-            artifactVersionIds: input.artifactVersionIds,
+            ...reviewCheckpointInput(store, {
+              artifactVersionIds: input.artifactVersionIds,
+              sessionId,
+              toolCallId: checkpointToolCallId,
+            }),
             cas: provenanceRecorder.cas,
+            // This checkpoint belongs to the main Agent's own run, so its id is used
+            // as-is; the per-version resolver still judges a merged batch per run.
             parentRunId: runId,
             reason: input.reason,
             reviewLevel: sessionReviewerSpecialistSettings.level,
@@ -1499,6 +1555,9 @@ async function executeAgentRun(
       }
       const subagentConfig = resolveSubagentConfig(input);
       const specialist = resolveSubagentSpecialist(store, session.specialistId, input);
+      const codexRuntime = input.specialistId?.trim() && specialist?.runtime && specialist.runtime.kind !== "native" ? specialist.runtime : undefined;
+      const effectiveCodexRuntime = continuation?.runtimeOptions ?? codexRuntime;
+      if (effectiveCodexRuntime?.timeoutSeconds) subagentConfig.timeoutSeconds = effectiveCodexRuntime.timeoutSeconds;
       const subagentInput: SubagentInput = specialist && input.specialistId?.trim() !== specialist.id
         ? { ...input, specialistId: specialist.id }
         : input;
@@ -1509,18 +1568,33 @@ async function executeAgentRun(
         parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
-          model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
+          model: codexRuntime
+            ? { id: codexRuntime.kind, model: codexRuntime.model ?? `${codexRuntime.kind} default`, name: codexRuntime.kind }
+            : { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
+        if (effectiveCodexRuntime && !subagent.runtimeOptions) {
+          subagent = await store.updateSubagent({ ...subagent, runtimeOptions: effectiveCodexRuntime });
+        }
         childId = subagent.id;
+        if (codexRuntime) externalSpecialistExecutions.add(childId);
         const childController = new AbortController();
         activeSubagentAbortControllers.set(childId, childController);
         // AgentRun deadlines pause while waiting on external systems. A task's
         // timeout_seconds is instead a wall-clock budget, including MCP calls,
         // approvals, and model/provider waits. Keep that hard deadline outside
         // AgentRun so an unhealthy dependency cannot strand the parent task.
-        const wallClockTimeoutSignal = AbortSignal.timeout(subagentConfig.timeoutSeconds * 1_000);
+        const timeoutController = new AbortController();
+        const deadlineStarted = Date.now();
+        let deadlineTimer: ReturnType<typeof setTimeout>;
+        const setDeadline = (seconds: number) => {
+          clearTimeout(deadlineTimer);
+          deadlineTimer = setTimeout(() => timeoutController.abort(new DOMException("Specialist task timeout", "TimeoutError")), Math.max(0, seconds * 1000 - (Date.now() - deadlineStarted)));
+          deadlineTimer.unref();
+        };
+        setDeadline(subagentConfig.timeoutSeconds);
+        const wallClockTimeoutSignal = timeoutController.signal;
         const childSignal = AbortSignal.any([parentSignal, childController.signal, wallClockTimeoutSignal]);
         await ideaTreeRuntime?.recordSubagent(subagent.id);
         await emit({ subagent, type: "subagent.updated" });
@@ -1604,10 +1678,30 @@ async function executeAgentRun(
           void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(liveMessageEvidence ? { evidence: liveMessageEvidence } : {}) });
           liveMessageEvidence = undefined;
         };
-        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence) => {
+        const progressBroadcastAt = new Map<string, number>();
+        const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence, transient = false) => {
           recordStep(step);
           finalizeMessageStep();
-          void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) });
+          const broadcast = (current: SubagentStep) => {
+            if (transient) progressBroadcastAt.set(step.id, Date.now());
+            void emit({ step: current, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) }, { transient });
+          };
+          if (!transient) {
+            clearTimeout(progressTimers.get(step.id));
+            progressTimers.delete(step.id);
+            broadcast(step);
+          } else {
+            const delay = 250 - (Date.now() - (progressBroadcastAt.get(step.id) ?? -Infinity));
+            if (delay <= 0) broadcast(step);
+            else if (!progressTimers.has(step.id)) {
+              progressTimers.set(step.id, setTimeout(() => {
+                progressTimers.delete(step.id);
+                const latest = steps.find(candidate => candidate.id === step.id);
+                if (latest?.status === "running") broadcast(latest);
+              }, delay));
+            }
+          }
           scheduleProgressFlush();
         };
         const publishMessageDelta = (
@@ -1717,6 +1811,7 @@ async function executeAgentRun(
             ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
+              rootRunId: runId,
               beginExternalWait: () => {
                 if (!subagentRunHandle) throw new Error("No subagent AgentRun is active");
                 return subagentRunHandle.beginExternalWait();
@@ -1742,12 +1837,14 @@ async function executeAgentRun(
               store,
               workspaceRoot: subagentWorkspaceRoot,
               parentSubagentId: subagent.id,
+              explicitHandoff: Boolean(codexRuntime),
             }),
             ...createMcpWorkspaceTools({
               artifactManager,
               broker: mcpBroker,
               catalog: mcpCatalog,
               enabledSourceIds: subagentConnectorIds,
+              reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary, agentId: subagent.id }),
               emitPermissionRequest: (permissionRequest) => {
                 responseSink.emit({ request: permissionRequest, type: "permission.required" });
               },
@@ -1928,6 +2025,13 @@ async function executeAgentRun(
               toolName: event.toolName,
             }, event.evidence);
           }
+          if (event.type === "tool_execution_progress") {
+            const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool" && step.status === "running");
+            if (runningStep) {
+              const progress = appendToolProgress(runningStep.progress ?? "", event.chunk);
+              publishStep({ ...runningStep, content: progress, progress }, event.evidence, true);
+            }
+          }
           if (event.type === "tool_execution_end") {
             activeMessageStep = undefined;
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
@@ -1947,6 +2051,69 @@ async function executeAgentRun(
         subagentRunHandle = runSubagentTask({
           bindings: {
             pluginSettings: settingsSnapshot.plugins,
+            ...(codexRuntime ? {
+              createAgent: codexAgentFactory({
+                model: codexRuntime.model,
+                runtime: effectiveCodexRuntime,
+                readRuntime: () => store.listSubagents(sessionId).find(child => child.id === subagent.id)?.runtimeOptions ?? effectiveCodexRuntime,
+                authorizeDirect: async () => { await childExecution.permission.requirePrivilege({
+                  action: "direct_code", executionId: subagent.id, signal: childSignal,
+                  resource: `specialist-runtime:${subagent.id}:${subagentWorkspaceRoot}`,
+                  summary: `Run ${codexRuntime.kind} directly on the API host in ${subagentWorkspaceRoot}. This removes the outer sandbox for this task; platform tools retain their own permissions.`,
+                }); },
+                configure: async runtime => {
+                  subagent = { ...subagent, runtimeOptions: runtime, timeoutSeconds: runtime.timeoutSeconds ?? subagent.timeoutSeconds };
+                  if (runtime.timeoutSeconds) { subagentConfig.timeoutSeconds = runtime.timeoutSeconds; setDeadline(runtime.timeoutSeconds); }
+                  await store.updateSubagent({ ...subagent, steps });
+                  await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                },
+                fallbackFactory: options => {
+                  const builtin = store.getSpecialist("builtin-code-engineer")!;
+                  const skills = scopeRuntimeSkills(skillCatalog.resolve(builtin.enabledSkillIds), "subagent");
+                  return createNativeAgent({ ...options, specialist: builtin,
+                    skills: [...(options.skills ?? []), ...skills],
+                  });
+                },
+                maxTurns: subagentConfig.maxTurns,
+                credential: async (runtimeSignal, needInput) => {
+                  let key = store.runtimeApiKey(sessionId, codexRuntime.kind);
+                  if (!key) {
+                    await needInput();
+                    while (!key) {
+                      await runtimeDelay(250, undefined, { signal: runtimeSignal });
+                      key = store.runtimeApiKey(sessionId, codexRuntime.kind);
+                    }
+                    subagent = { ...subagent, runtimeOptions: store.listSubagents(sessionId).find(child => child.id === subagent.id)?.runtimeOptions ?? effectiveCodexRuntime, runtimeInput: { ...subagent.runtimeInput!, state: "configured" } };
+                    await store.updateSubagent({ ...subagent, steps });
+                    await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                  }
+                  return key;
+                },
+                onRuntimeEvent: async event => {
+                  if (event.type === "need_input") {
+                    subagent = { ...subagent, runtimeInput: { id: randomUUID(), runtime: codexRuntime.kind, state: "pending" } };
+                    await store.updateSubagent({ ...subagent, steps });
+                    await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                  }
+                  if (event.type === "failure" || event.type === "sandbox_probe" || event.type === "fallback") {
+                    const diagnostics = subagent.runtimeDiagnostics ?? { fallbackCount: 0 };
+                    subagent.runtimeDiagnostics = { ...diagnostics,
+                      ...(event.type === "failure" ? { failureReason: event.reason } : {}),
+                      ...(event.type === "sandbox_probe" ? { sandboxProbe: { ok: event.ok, mode: event.mode } } : {}),
+                      ...(event.type === "fallback" ? { fallbackCount: diagnostics.fallbackCount + 1 } : {}),
+                    };
+                    await store.updateSubagent({ ...subagent, steps });
+                    await emit({ subagent: { ...subagent, steps }, type: "subagent.updated" });
+                  }
+                  if (event.type === "started") subagent.runtimeSessionId = event.runtimeSessionId;
+                  if (event.type === "fallback") {
+                    subagent.runtimeInput = undefined;
+                    publishStep({ id: randomUUID(), kind: "system", status: "completed",
+                      content: `${codexRuntime.kind} cannot run. Falling back to builtin-code-engineer.`, createdAt: new Date().toISOString() });
+                  }
+                },
+              }),
+            } : {}),
             abortSignal: childExecution.abortSignal,
             observer: observeSubagentEvent,
             recordEvent: async (event) => { finalizeMessageStep(); activeMessageStep = undefined; await emit(event); },
@@ -2016,12 +2183,17 @@ async function executeAgentRun(
           });
           subagent = {
             ...subagent,
+            ...(codexRuntime ? { runtimeDiagnostics: { ...subagent.runtimeDiagnostics, fallbackCount: subagent.runtimeDiagnostics?.fallbackCount ?? 0,
+              failureReason: failure.status === "timed_out" ? "timeout" as const : failure.status === "cancelled" ? "cancelled" as const : subagent.runtimeDiagnostics?.failureReason ?? "policy_or_task" as const } } : {}),
             error: failure.error,
             finishedAt: new Date().toISOString(),
             status: failure.status,
             steps,
           };
         } finally {
+          clearTimeout(deadlineTimer!);
+          for (const timer of progressTimers.values()) clearTimeout(timer);
+          progressTimers.clear();
           releaseParentWait?.();
         }
         externalWaitByExecution.delete(subagent.id);
@@ -2072,7 +2244,10 @@ async function executeAgentRun(
         });
         return subagent;
       } finally {
-        if (childId) activeSubagentAbortControllers.delete(childId);
+        if (childId) {
+          activeSubagentAbortControllers.delete(childId);
+          externalSpecialistExecutions.delete(childId);
+        }
         releaseSubagentSlot();
       }
     },
@@ -2144,6 +2319,9 @@ async function executeAgentRun(
       };
       traces.set(trace.id, trace);
       void publish({ trace, type: "tool.started" });
+    }
+    if (event.type === "tool_execution_progress") {
+      void publish({ chunk: event.chunk, toolCallId: event.toolCallId, type: "tool.output", progress: true });
     }
     if (event.type === "tool_execution_end") {
       const text = aggregateToolText(event.result);
@@ -2697,10 +2875,11 @@ async function refineFirstSessionTitle(
     apiToken,
     firstMessage: firstRun.prompt,
     model,
+    proxy: resolveProxyForUrl(store.resolveProxy(model.proxyPolicy), model.baseUrl),
   });
   let updatedSession = store.getSession(session.id);
   if (refined.title !== provisionalTitle) {
-    updatedSession = await store.compareAndSetSessionTitle(session.id, provisionalTitle, refined.title)
+    updatedSession = await store.compareAndSetSessionTitle(session.id, provisionalTitle, refined.title, "refinement")
       ?? store.getSession(session.id);
   }
   await store.appendModelInvocationUsage({

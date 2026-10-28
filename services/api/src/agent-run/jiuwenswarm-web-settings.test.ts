@@ -27,6 +27,9 @@ test("the web settings become JiuwenSwarm's free engines and paid-search keys, a
   assert.deepEqual(jiuwenSwarmWebConfig(settings, (provider) => keys[provider]), {
     free_search_ddg_enabled: "true",
     free_search_bing_enabled: "false",
+    deepseek_api_key: "",
+    deepseek_search_enabled: "false",
+    deepseek_fetch_enabled: "false",
     jina_api_key: "jina-key",
     bocha_api_key: "bocha-key",
     serper_api_key: "",

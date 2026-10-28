@@ -1,0 +1,87 @@
+--- a/jiuwenswarm/common/config.py
++++ b/jiuwenswarm/common/config.py
+@@ -972,6 +972,45 @@
+         data["permissions"] = {}
+     data["permissions"]["tools"] = normalized
+     dump_yaml_round_trip(CONFIG_YAML_PATH, data)
++
++
++def update_permissions_tools_in_config(tools: Any) -> dict[str, Any]:
++    """Merge a validated permission batch in one locked config transaction."""
++    normalized = _validate_tools_map(tools)
++
++    def mutate(data):
++        permissions = data.setdefault("permissions", {})
++        existing = permissions.get("tools")
++        merged = dict(existing) if isinstance(existing, dict) else {}
++        merged.update(normalized)
++        if merged == existing or not normalized:
++            return None
++        permissions["tools"] = merged
++        return data
++
++    data = update_config(mutate)
++    return {"tools": dict((data.get("permissions") or {}).get("tools") or {})}
++
++
++def delete_permissions_tools_in_config(tools: Any) -> dict[str, Any]:
++    """Remove only the named tools in one transaction; absent names are safe to retry."""
++    if not isinstance(tools, list) or any(not isinstance(name, str) or not name.strip() for name in tools):
++        raise ValueError("tools must be a list of non-empty tool names")
++    names = {name.strip() for name in tools}
++
++    def mutate(data):
++        permissions = data.get("permissions") or {}
++        existing = permissions.get("tools")
++        if not isinstance(existing, dict):
++            return None
++        retained = {key: value for key, value in existing.items() if str(key).strip() not in names}
++        if len(retained) == len(existing):
++            return None
++        permissions["tools"] = retained
++        return data
++
++    data = update_config(mutate)
++    return {"tools": dict((data.get("permissions") or {}).get("tools") or {})}
+ 
+ 
+ def update_permissions_tool_in_config(tool_name: str, level: Any) -> dict[str, Any]:
+--- a/jiuwenswarm/agents/harness/common/rails/permissions/permissions_config_rpc.py
++++ b/jiuwenswarm/agents/harness/common/rails/permissions/permissions_config_rpc.py
+@@ -61,12 +61,14 @@
+         delete_permissions_approval_override_in_config,
+         delete_permissions_rule_in_config,
+         delete_permissions_tool_in_config,
++        delete_permissions_tools_in_config,
+         get_permissions_approval_overrides,
+         get_permissions_rules,
+         get_permissions_tools,
+         replace_permissions_tools_in_config,
+         update_permissions_rule_in_config,
+         update_permissions_tool_in_config,
++        update_permissions_tools_in_config,
+     )
+ 
+     m = request.req_method
+@@ -87,6 +89,10 @@
+         if m == ReqMethod.PERMISSIONS_TOOLS_UPDATE:
+             if not isinstance(params, dict):
+                 return _err(request, "params must be object")
++            if "tools" in params:
++                if any(key in params for key in ("tool", "name", "level")):
++                    return _err(request, "use either tools or a single tool")
++                return _ok(request, update_permissions_tools_in_config(params["tools"]))
+             tool = str(params.get("tool") or params.get("name") or "").strip()
+             if not tool:
+                 return _err(request, "tool is required")
+@@ -98,6 +104,10 @@
+         if m == ReqMethod.PERMISSIONS_TOOLS_DELETE:
+             if not isinstance(params, dict):
+                 return _err(request, "params must be object")
++            if "tools" in params:
++                if any(key in params for key in ("tool", "name", "level")):
++                    return _err(request, "use either tools or a single tool")
++                return _ok(request, delete_permissions_tools_in_config(params["tools"]))
+             tool = str(params.get("tool") or params.get("name") or "").strip()
+             if not tool:
+                 return _err(request, "tool is required")

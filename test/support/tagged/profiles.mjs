@@ -25,12 +25,10 @@
 const hermetic = { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' };
 const L1 = [{ ...hermetic, tier: 'l1' }];
 const L2 = [...L1, { ...hermetic, tier: 'l2' }];
-const real = { category: 'e2e', os: 'linux', arch: 'amd64', npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] };
+const real = { category: 'e2e', os: 'linux', arch: ['amd64', 'arm64'], npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] };
 const L3 = [...L2, { ...real, tier: 'l3', judge: 'none' }];
 const L4 = [...L3, { ...real, tier: 'l4' }];
-// All existing eligible real cases start at L3/L4, so L5 currently selects the
-// same cases as L4. Keep its extension row for future release-only coverage.
-// Quarantined cases remain excluded until their prerequisites are repaired.
+// L5 adds the full public BiomniBench-DA corpus and its metrics gate.
 const L5 = [...L4, { ...real, tier: 'l5' }];
 
 const policies = {
@@ -62,7 +60,7 @@ export const profiles = Object.freeze(Object.fromEntries(entries.map(([name, rul
   selector: policySelector(rules),
   // Every rule in a profile names the same execution target today; a profile
   // that ever spans two would list both here.
-  targets: [...new Map(rules.map(r => [`${r.os}/${r.arch}`, { os: [r.os].flat()[0], arch: [r.arch].flat()[0] }])).values()],
+  targets: [...new Map(rules.map(r => [`${[r.os].flat()[0]}/${[r.arch].flat()[0]}`, { os: [r.os].flat()[0], arch: [r.arch].flat()[0] }])).values()],
 })])));
 
 /** What a command runs when no profile is named. */
@@ -91,6 +89,7 @@ export const slices = Object.freeze({
  */
 export const nodeSources = Object.freeze([
   '.ci/*.test.mjs',
+  'apps/desktop/tests/**/*.test.*',
   'apps/web/tests/**/*.test.*',
   'config/test/*.test.mjs',
   'packages/*/src/**/*.test.ts',
@@ -99,6 +98,7 @@ export const nodeSources = Object.freeze([
   'services/*/src/**/*.test.ts',
   'services/runner/scripts/*.test.mjs',
   'test/contract/*.test.mjs',
+  'test/api/*.test.ts',
   'test/helpers/*.unit.ts',
   'test/fixtures/*.test.mjs',
   'test/benchmarks/**/*.test.ts',

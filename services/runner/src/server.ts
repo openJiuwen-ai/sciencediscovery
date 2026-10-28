@@ -47,6 +47,9 @@ import {
   DEFAULT_EXECUTION_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_WORKSPACE_BYTES,
+  directExecutionCapability,
+  directExecutionWorkspace,
+  executeDirectShell,
   executePython,
   executeShell,
   executorSandboxKind,
@@ -64,7 +67,7 @@ import {
   verifyExecutionSignature,
 } from "./request-auth.js";
 import { resolveEgressInterpreter } from "./egress-bridge.js";
-import { EgressGatewayRegistry } from "./egress-gateway.js";
+import { assertUnixSocketPathFits, EgressGatewayRegistry } from "./egress-gateway.js";
 import { SECCOMP_BASELINE_VERSION } from "./seccomp.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { collectRunnerResources } from "./resources.js";
@@ -494,7 +497,7 @@ export function createRunnerServer(
           });
         }
         return await operation();
-      }, { kind: "legacy-execution", id: execution.executionId, onCommitted: (tree) => { workspaceSnapshot = tree; } }, signal), execution.permissionEpoch.sessionId);
+      }, { kind: "legacy-execution", id: execution.executionId, trackFiles: !execution.explicitHandoff, onCommitted: (tree) => { workspaceSnapshot = tree; } }, signal), execution.permissionEpoch.sessionId);
       if (result && typeof result === "object") Object.assign(result, { workspaceSnapshot });
       return result;
     } catch (error) {
@@ -550,7 +553,7 @@ export function createRunnerServer(
           platform: process.platform,
           runnerVersion: RUNNER_VERSION,
           sandbox: executorSandboxKind(config),
-          sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config)),
+          sandboxNetwork: await sandboxNetworkCapability(executorSandboxKind(config), config.dataDir),
           scientificEnvs: environmentStore?.capability ?? DISABLED_SCIENTIFIC_ENVS,
           seccompBaseline: executorSandboxKind(config) === "bubblewrap" ? SECCOMP_BASELINE_VERSION : null,
           status: "ok",
@@ -560,6 +563,15 @@ export function createRunnerServer(
       }
       if (!authorized(request, config.authToken)) {
         sendJson(response, 401, { error: "Unauthorized" } satisfies ApiError);
+        return;
+      }
+      if (url.pathname === "/direct-execution-capability" && request.method === "GET") {
+        const key = url.searchParams.get("runnerWorkspaceKey");
+        const root = url.searchParams.get("workspaceRoot");
+        if (key !== null && root !== null) throw new Error("Choose one direct workspace identity");
+        const workspace = key !== null ? await remoteWorkspaceRoot(config.dataDir, key) : root;
+        const scope = workspace !== null ? await directExecutionWorkspace(config, workspace, url.searchParams.get("cwd") ?? "") : {};
+        sendJson(response, 200, { ...await directExecutionCapability(), ...scope });
         return;
       }
       if (url.pathname === "/execution-capability" && ["GET", "POST"].includes(request.method ?? "")) {
@@ -955,7 +967,7 @@ export function createRunnerServer(
           return;
         }
       }
-      if (request.method === "POST" && url.pathname === "/shell-executions") {
+      if (request.method === "POST" && ["/shell-executions", "/direct-shell-executions"].includes(url.pathname)) {
         const body = await readBody(request);
         if (!verifyExecutionSignature(config.authToken, request.headers[EXECUTION_TIMESTAMP_HEADER] as string | undefined,
           body, request.headers[EXECUTION_SIGNATURE_HEADER] as string | undefined)) {
@@ -965,9 +977,13 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as ShellExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
+        const direct = url.pathname === "/direct-shell-executions";
+        if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
+        if (!direct) execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
         execution.maxOutputBytes ??= config.maxOutputBytes;
-        const accepted = managedExecutions.start(execution, (signal, log) => execution.environmentId
+        const accepted = managedExecutions.start(execution, (signal, log) => direct
+          ? executeDirectShell(executorConfig, execution, signal, log)
+          : execution.environmentId
           ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
               return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log);
@@ -987,6 +1003,7 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as ShellExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
+        if ("directAuthorization" in execution) throw new Error("Direct execution requires its dedicated endpoint");
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -1021,6 +1038,7 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as PythonExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
+        if ("directAuthorization" in execution) throw new Error("Direct execution requires its dedicated endpoint");
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -1067,7 +1085,19 @@ export function createRunnerServer(
  * the process-wide interpreter probe: no subprocess per request, and no data
  * directory writes. Staging the bridge script stays on the launch path.
  */
-async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt"): Promise<SandboxNetworkCapability> {
+async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt", dataDir: string): Promise<SandboxNetworkCapability> {
+  try {
+    // Every egress-enabled execution needs this exact socket layout. Check it
+    // before the interpreter probe so /health never advertises a mode whose
+    // first command would fail solely because the data directory is too deep.
+    assertUnixSocketPathFits(new EgressGatewayRegistry(dataDir).socketPath("capability"));
+  } catch (error) {
+    return {
+      available: false,
+      modes: ["none"],
+      unavailableReason: error instanceof Error ? error.message : "The sandbox egress socket path is unavailable",
+    };
+  }
   if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist", "open"] };
   try {
     await resolveEgressInterpreter();
@@ -1087,6 +1117,10 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const readiness = new RunnerReadiness(sandbox, sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath);
   const capability = await readiness.get();
   if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
+  // The operational log is a file. A missing sandbox executable is a setup
+  // step the operator must take, so it also goes to the terminal that started
+  // the Runner (source mode no longer blocks startup on it).
+  if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
   const environmentStore = new EnvironmentStore({
     allowedChannels: config.scientificAllowedChannels ?? ["conda-forge"],
     enabled: config.scientificEnvsEnabled === true,
@@ -1176,7 +1210,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const outputLabel = config.maxOutputBytes === 0
     ? "unlimited (no truncation)"
     : `${config.maxOutputBytes} bytes (truncate)`;
-  const sandboxNetwork = await sandboxNetworkCapability(sandbox);
+  const sandboxNetwork = await sandboxNetworkCapability(sandbox, config.dataDir);
   console.log(
     `Sandbox: ${sandbox} (${RUNNER_VERSION}); sandbox network access: default none`
     + `${sandboxNetwork.available ? ", domain-allowlist and open available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`

@@ -53,7 +53,7 @@ test("automatic audit is durable, non-blocking, and creates bounded feedback", a
   await store.load();
   const project = await store.createProject("Reviewer task");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
-  await store.updateReviewerSpecialistSettings({ enabled: true });
+  assert.equal(store.getReviewerSpecialistSettings().enabled, true);
   const registered = await store.createArtifactVersion({
     content: { hash: "a".repeat(64), size: 3 },
     kind: "markdown",
@@ -677,4 +677,40 @@ test("the Deep cooldown is applied once to the next automatic batch", async (con
   assert.ok(nextTask?.notBefore);
   assert.ok(new Date(nextTask.notBefore).getTime() - Date.now() >= 150, "cooldown belongs to the whole next Deep batch");
   await coordinator.cancelSession(session.id);
+});
+
+
+test("automatic review records a visible skipped checkpoint when globally disabled", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-disabled-${Date.now()}-${process.pid}`);
+  context.after(() => removeDataDir(dataDir));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  await store.updateReviewerSpecialistSettings({ enabled: false });
+  const project = await store.createProject("Disabled Reviewer");
+  const session = await store.createSession(project.id, "Report", {}, {}, { allowUnconfiguredModel: true });
+  const report = await store.createArtifactVersion({
+    content: { hash: "d".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
+  });
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { executions++; return []; } }, { quickBatchQuietMs: 0 });
+  const task = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id, contentHash: report.version.content.hash, mediaType: report.version.mediaType, sessionId: session.id,
+  });
+  assert.ok(task);
+  await waitFor(async () => (await store.getSessionDetail(session.id))?.messages
+    .some((message) => message.id === task.checkpointMessageId && message.reviewerCheckpoint?.status === "completed") ?? false);
+  const checkpoint = (await store.getSessionDetail(session.id))!.messages.find((message) => message.id === task.checkpointMessageId)!;
+  assert.equal(checkpoint.reviewerCheckpoint!.error, undefined);
+  assert.match(checkpoint.content, /Automatic review skipped: Reviewer Specialist is off/);
+  assert.equal(executions, 0);
+  const settled = (await store.listReviewerAuditTasks(session.id))[0];
+  assert.ok(settled);
+  assert.equal(settled.status, "superseded");
+  assert.equal(settled.errorSummary, checkpoint.content);
+  assert.deepEqual(await store.listReviewFeedback(session.id), []);
+  await store.updateSessionReviewerSpecialistSettings(session.id, { automaticReviewEnabled: false, level: "quick" });
+  assert.equal(await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id, contentHash: report.version.content.hash, mediaType: report.version.mediaType, sessionId: session.id,
+  }), undefined, "an explicit session opt-out does not schedule a review");
 });

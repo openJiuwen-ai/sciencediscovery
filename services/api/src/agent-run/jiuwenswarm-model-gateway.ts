@@ -26,6 +26,7 @@ import {
   type ModelTurn,
   type WireToolSpec,
 } from "@sciencediscovery/model";
+import { missingRequiredArguments } from "@sciencediscovery/tools";
 
 /**
  * The model, as JiuwenSwarm sees it: an OpenAI chat-completions endpoint on loopback.
@@ -50,7 +51,7 @@ export interface ModelGateway {
   restore<T extends Record<string, unknown>>(message: T): T;
   /** The last model turn served, for what the run's end has to say about it. */
   lastTurn(): { text: string; toolCalls: number; truncated: boolean; recoveryAttempts?: number } | undefined;
-  /** The last task turn whose tool calls were withheld because their arguments did not parse. */
+  /** The last task turn whose tool calls were withheld because their arguments could not be used. */
   lastFailure(): { requestId: string; tools: string[]; recoveryAttempts?: number } | undefined;
   /** Payload-free metadata for active requests; never includes prompts or arguments. */
   diagnostics(): Array<{ id: string; purpose: "task" | "auxiliary"; phase: string; elapsedMs: number;
@@ -65,6 +66,15 @@ interface ChatRequest {
   model?: string;
   messages?: Array<Record<string, unknown>>;
   stream?: boolean;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  thinking?: { type: string };
+  tool_choice?: unknown;
+  parallel_tool_calls?: boolean;
+  stream_options?: { include_usage?: boolean };
+  n?: number;
   tools?: Array<{ function?: { description?: string; name?: string; parameters?: unknown } }>;
 }
 
@@ -99,9 +109,10 @@ export function toModelRequest(body: ChatRequest, restore: ModelGateway["restore
     ...message,
     ...(Array.isArray(message.content) ? { content: textOf(message.content) } : {}),
   })) as HistoryMessage[];
-  const tools = (body.tools ?? []).flatMap((tool) => tool.function?.name
-    ? [{ name: tool.function.name, description: tool.function.description ?? "", parameters: tool.function.parameters ?? { type: "object" } }]
-    : []);
+  const tools = (body.tools ?? []).map((tool) => {
+    if (!tool.function?.name) throw new Error("Gateway requires named function tools");
+    return { name: tool.function.name, description: tool.function.description ?? "", parameters: tool.function.parameters ?? { type: "object" } };
+  });
   return { history, systemPrompt, tools };
 }
 
@@ -129,6 +140,8 @@ const WITHHELD_TOOLS = `${OUTPUT_LIMIT_MARKER} ${NOT_EXECUTED}`;
 const INVALID_TOOLS = `${INVALID_ARGUMENTS_MARKER} ${NOT_EXECUTED}`;
 // The boundary's feedback is "[<kind> recovery N/MAX; ...]"; MAX_RECOVERIES in patch 0007 is 2.
 const RECOVERY_PROMPT = /^\[(?:Output limit|Tool argument) recovery ([12])\/2;/;
+/** How many times the boundary asks the model to re-issue a withheld response. */
+const MAX_RECOVERY_ATTEMPTS = 2;
 const finishReason = (turn: ModelTurn) => turn.truncated ? "length" : turn.toolCalls.length ? "tool_calls" : "stop";
 /** Which recovery attempt a request is, from the feedback Swarm's recovery boundary appended last. */
 const recoveryAttemptOf = (body: ChatRequest) => {
@@ -138,9 +151,14 @@ const recoveryAttemptOf = (body: ChatRequest) => {
 };
 /** A parser message without the input excerpt V8 quotes in some of them ("Unexpected token 'x', ..."). */
 const parserMessage = (error = "") => error.replace(/, (?:\.\.\.)?"[\s\S]*"(?:\.\.\.)? is not valid JSON$/, " in JSON").slice(0, 200);
-/** Tool names and parser messages tell the model what to fix; the arguments are not repeated. */
-const invalidNotice = (calls: ModelTurn["toolCalls"]) => `${INVALID_TOOLS} Arguments that are not valid JSON: ${
-  calls.slice(0, 20).map((call) => `${call.name} (${parserMessage(call.argsParseError)})`).join("; ")}.`;
+/** One call that cannot run, and what the model has to put right. */
+interface WithheldCall {
+  call: ModelTurn["toolCalls"][number];
+  reason: string;
+}
+/** Tool names and the reason tell the model what to fix; the arguments are not repeated. */
+const invalidNotice = (withheld: readonly WithheldCall[]) => `${INVALID_TOOLS} ${
+  withheld.slice(0, 20).map((item) => `${item.call.name} (${item.reason})`).join("; ")}.`;
 
 /**
  * Text Swarm streamed for display, without the withheld-response notice. The notice is meant for the
@@ -175,6 +193,14 @@ export interface ModelGatewayLifecycle {
    * withheld response for a final answer, so with them unparseable arguments fail the request.
    */
   recoversWithheldCalls?: boolean;
+  /**
+   * The tools whose call must carry every one of these arguments, by tool name.
+   *
+   * A call that leaves one out can never run, so it is withheld whole and the
+   * model is asked to re-issue it, instead of the run showing a failed tool
+   * card for a call that was never executable.
+   */
+  requiredArguments?: Readonly<Record<string, readonly string[]>>;
 }
 
 // The pinned Swarm forked compressor retains tool schemas for prefix caching.
@@ -233,12 +259,29 @@ export async function startModelGateway(
       fail(400, "invalid JSON");
       return;
     }
-    // JiuwenSwarm probes a model for image input with a picture; a text-only client answers "no".
-    if ((body.messages ?? []).some(hasNonText)) {
-      fail(400, "images are not supported by this gateway");
+    let translated: ReturnType<typeof toModelRequest>;
+    let requestPolicy = policy;
+    let requestEndpoint = endpoint;
+    try {
+      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
+      if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
+      if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
+      if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
+      if (body.stream_options && body.stream_options.include_usage !== true) throw new Error("Gateway supports include_usage=true only");
+      if (body.messages.some(hasNonText)) throw new Error("images are not supported by this gateway");
+      const budget = body.max_completion_tokens ?? body.max_tokens ?? policy.maxTokens;
+      if (!Number.isInteger(budget) || budget <= 0 || budget > policy.maxTokens || (body.max_completion_tokens !== undefined && body.max_tokens !== undefined && body.max_tokens !== body.max_completion_tokens)) throw new Error("Requested token limit must be positive and within the configured gateway ceiling");
+      if (body.temperature !== undefined && !Number.isFinite(body.temperature)) throw new Error("Invalid gateway temperature");
+      if (body.top_p !== undefined && (!Number.isFinite(body.top_p) || body.top_p < 0 || body.top_p > 1)) throw new Error("top_p must be between zero and one");
+      if (body.thinking && !["enabled", "disabled"].includes(body.thinking.type)) throw new Error("Unsupported gateway thinking control");
+      requestPolicy = { ...policy, maxTokens: budget, ...(body.top_p === undefined ? {} : { topP: body.top_p }), ...(body.temperature === undefined ? {} : { temperature: body.temperature }), ...(body.thinking ? { thinking: body.thinking } : {}) };
+      requestEndpoint = { ...endpoint, ...(body.thinking ? { thinkingMode: body.thinking.type as "enabled" | "disabled" } : {}) };
+      translated = toModelRequest(body, restore);
+    } catch (error) {
+      fail(400, error instanceof Error ? error.message : "Invalid gateway request");
       return;
     }
-    const { history, systemPrompt, tools } = toModelRequest(body, restore);
+    const { history, systemPrompt, tools } = translated;
     const housekeeping = request.headers["x-sciencediscovery-model-purpose"] === "housekeeping";
     const auxiliary = housekeeping || isSwarmCompaction(body);
     // The legacy default-model route selects the latest active endpoint, not
@@ -255,20 +298,45 @@ export async function startModelGateway(
     // A call whose arguments do not parse is never executed. Truncated turns have their own recovery;
     // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
     // requests may come from instances without that boundary, still fail the request.
-    const invalidCalls = (turn: ModelTurn) => {
+    const missingArgumentsOf = (call: ModelTurn["toolCalls"][number]): string[] => {
+      const required = lifecycle?.requiredArguments?.[call.name];
+      return required?.length ? missingRequiredArguments(call.args, required) : [];
+    };
+    const invalidCalls = (turn: ModelTurn): WithheldCall[] => {
+      if (turn.streamDiagnostics?.unparseableSsePayloads && !turn.toolCalls.some(call => call.argsParseError)) throw new Error("Model stream contained malformed event payloads");
+      if (turn.completionObserved === false) throw new Error("Model stream ended without a completion event");
       if (turn.truncated) return [];
-      const invalid = turn.toolCalls.filter(call => call.argsParseError);
-      if (!invalid.length) return invalid;
+      const unparseable: WithheldCall[] = turn.toolCalls.filter(call => call.argsParseError)
+        .map((call) => ({ call, reason: parserMessage(call.argsParseError) }));
+      // A call that left out an argument the tool cannot run without can never
+      // succeed as it stands. It is withheld like an unparseable one, so the
+      // model re-issues it complete instead of the run showing a failed tool
+      // card for a call that was never executable.
+      const incomplete: WithheldCall[] = turn.toolCalls.filter(call => !call.argsParseError && missingArgumentsOf(call).length)
+        .map((call) => ({ call, reason: `missing required argument: ${missingArgumentsOf(call).join(", ")}` }));
+      if (!unparseable.length && !incomplete.length) return [];
       if (auxiliary) throw new Error("Model returned invalid tool arguments");
       const recovery = recoveryAttemptOf(body);
-      lastFailure = { requestId: id, tools: invalid.map(call => call.name).slice(0, 20),
+      // The last recovery attempt lets a call that only left out an argument
+      // through: the tool answers it with its own invalid-arguments result, and
+      // the run continues as it did before instead of ending on withheld calls.
+      if (!unparseable.length && (recovery ?? 0) >= MAX_RECOVERY_ATTEMPTS) return [];
+      if (lifecycle?.recoversWithheldCalls === false) {
+        // Without the boundary there is no way to ask the model to re-issue the
+        // call. Unparseable arguments fail the request; a call that only left
+        // out an argument goes to the tool, which rejects it by itself.
+        if (!unparseable.length) return [];
+        lastFailure = { requestId: id, tools: unparseable.map(item => item.call.name).slice(0, 20),
+          ...(recovery ? { recoveryAttempts: recovery } : {}) };
+        throw new Error("Model returned invalid tool arguments");
+      }
+      lastFailure = { requestId: id, tools: [...unparseable, ...incomplete].map(item => item.call.name).slice(0, 20),
         ...(recovery ? { recoveryAttempts: recovery } : {}) };
-      if (lifecycle?.recoversWithheldCalls === false) throw new Error("Model returned invalid tool arguments");
-      return invalid;
+      return [...unparseable, ...incomplete];
     };
     // Reuses the output-limit finish so any Swarm boundary that already holds back a cut response
     // treats this one the same; the marker tells the recovery which feedback to give.
-    const withheldNotice = (turn: ModelTurn, invalid: ModelTurn["toolCalls"]) =>
+    const withheldNotice = (turn: ModelTurn, invalid: readonly WithheldCall[]) =>
       `${textOf(turn.assistantMessage.content) ? "\n\n" : ""}${invalidNotice(invalid)}`;
     const streamStarted = Date.now();
     let upstreamChunks = 0, downstreamChunks = 0, toolArgumentChars = 0;
@@ -330,7 +398,7 @@ export async function startModelGateway(
         trace("start", true);
         await prepare();
         controller.signal.throwIfAborted();
-        const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
+        const turn = await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, {
           onProgress: () => { upstream(); trace("receive"); },
           onTextDelta: (delta) => writeDelta({ content: delta }),
           onThinkingDelta: (delta) => writeDelta({ reasoning_content: delta }),
@@ -366,7 +434,7 @@ export async function startModelGateway(
       }
       await prepare();
       controller.signal.throwIfAborted();
-      const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
+      const turn = await streamer(requestEndpoint, systemPrompt, history, tools, requestPolicy, controller.signal, {
         onProgress: upstream,
         onTextDelta: progress,
         onThinkingDelta: progress,
@@ -389,7 +457,8 @@ export async function startModelGateway(
     } catch (error) {
       trace(controller.signal.aborted ? "cancelled" : "error", true);
       const status = error instanceof ModelRequestError && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502;
-      const message = error instanceof Error ? error.message : String(error);
+      const original = error instanceof Error ? error.message : String(error);
+      const message = endpoint.apiToken ? original.split(endpoint.apiToken).join("[redacted]") : original;
       if (response.headersSent) {
         // Mid-stream: tell the client the way OpenAI does, then stop.
         response.write(`data: ${JSON.stringify({ error: { message, type: "model_gateway_error" } })}\n\n`);

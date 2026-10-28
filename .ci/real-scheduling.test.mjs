@@ -1,7 +1,10 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { gate, route } from './tier-policy.mjs';
@@ -89,9 +92,49 @@ test('both entry points reuse the same suite, profile, backend and inherited sec
     assert.match(jobs[name], /secrets: inherit/);
     assert.match(jobs[name], /profile: \$\{\{ needs.policy.outputs.profile \}\}/);
     assert.match(jobs[name], /backend: \$\{\{ needs.policy.outputs.backend \}\}/);
+    assert.match(jobs[name], /max-parallel: \$\{\{ fromJSON\(format\('\{0\}', inputs.max-parallel \|\| 2\)\) \}\}/);
   }
   assert.match(realWorkflow, /on:\n  workflow_call:/);
   assert.doesNotMatch(realWorkflow, /^  (push|schedule|workflow_dispatch|pull_request):/m);
+});
+
+test('real concurrency defaults to two and manual CI offers only 1, 2 or 4', () => {
+  const dispatch = workflow.split('  workflow_dispatch:\n')[1].split('  workflow_call:\n')[0];
+  assert.match(dispatch, /max-parallel:\n[^]*?type: choice\n\s+options: \['1', '2', '4'\]\n\s+default: '2'/);
+  for (const text of [workflow.split('  workflow_call:\n')[1].split('\njobs:\n')[0], realWorkflow]) {
+    assert.match(text, /max-parallel:\n\s+description: .*\n\s+type: number\n\s+default: 2\n/);
+  }
+  for (const name of ['nightly', 'release']) {
+    assert.doesNotMatch(readWorkflow(name), /max-parallel:/, `${name} keeps the reusable default`);
+  }
+});
+
+test('real plan rejects unsupported concurrency before any setup or worker runs', t => {
+  const steps = jobs['real-plan'].split('\n    steps:\n')[1];
+  assert.match(steps, /^      - name: Validate real worker concurrency\n/);
+  const validation = steps.split('      - uses: actions/checkout@v4')[0];
+  assert.match(validation, /CI_REAL_MAX_PARALLEL: \$\{\{ inputs.max-parallel \}\}/);
+  const script = validation.split('        run: |\n')[1].replace(/^          /gm, '');
+  const dir = mkdtempSync(join(tmpdir(), 'real-concurrency-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const [i, value] of ['1', '2', '4', '0', '-1', '3', '5', '100', '1.5', '', '1 2', '2\n4'].entries()) {
+    const output = join(dir, `output-${i}`);
+    const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {
+      env: { ...process.env, CI_REAL_MAX_PARALLEL: value, GITHUB_OUTPUT: output }, encoding: 'utf8',
+    });
+    assert.ifError(result.error);
+    if (['1', '2', '4'].includes(value)) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(output, 'utf8'), `max-parallel=${value}\n`);
+    } else {
+      assert.equal(result.status, 1, JSON.stringify(value));
+      assert.match(result.stdout, /::error::max-parallel must be 1, 2 or 4/);
+    }
+  }
+  assert.match(jobs['real-plan'], /max-parallel: \$\{\{ steps.concurrency.outputs.max-parallel \}\}/);
+  assert.match(jobs['real-e2e'], /max-parallel: \$\{\{ fromJSON\(needs.real-plan.outputs.max-parallel \|\| '2'\) \}\}/);
+  assert.doesNotMatch(jobs['real-e2e'], /max-parallel: .*inputs.max-parallel/);
+  assert.equal(runnable('real-e2e', { 'real-plan': { result: 'failure' } }), false);
 });
 
 test('real workers require their own plan and respect cancellation', () => {

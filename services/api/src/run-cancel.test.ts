@@ -16,7 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
-import { createServer as createHttpServer, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -86,6 +86,24 @@ function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
   };
 }
 
+// Swarm's skill-index and title calls have no tools; they are not Session turns.
+async function isSessionTurn(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  const body = JSON.parse(Buffer.concat(chunks).toString()) as { tools?: unknown[]; stream?: boolean };
+  if (body.tools?.length) return true;
+  if (body.stream) {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    writeSseEvent(response, { choices: [{ delta: { content: "{}" } }] });
+    writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "stop" }] });
+    response.end("data: [DONE]\n\n");
+  } else {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "{}" }, finish_reason: "stop" }] }));
+  }
+  return false;
+}
+
 /**
  * Reproduces a stuck run: the model endpoint accepts `POST /chat/completions`
  * and never answers, so the agent turn hangs and the SSE stream produces no
@@ -94,10 +112,10 @@ function testConfig(dataDir: string, runnerUrl: string): ServerConfig {
 function startHangingGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
   const openRuns: ServerResponse[] = [];
-  const server = createHttpServer((request, response) => {
+  const server = createHttpServer(async (request, response) => {
     if (request.url === "/chat/completions" && request.method === "POST") {
+      if (!await isSessionTurn(request, response)) return;
       runCount += 1;
-      request.resume();
       openRuns.push(response);
       return; // never respond
     }
@@ -116,6 +134,43 @@ function startHangingGateway(context: TestContext): Promise<{ origin: string; ru
   });
 }
 
+async function assertBackgroundRequestsIgnored(context: TestContext, startGateway: typeof startHangingGateway): Promise<void> {
+  const gateway = await startGateway(context);
+  const background = await fetch(`${gateway.origin}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "user", content: "Build the skill index" }] }),
+    signal: AbortSignal.timeout(1_000),
+  }).catch(() => undefined);
+  assert.equal(gateway.runCount(), 0, "a background request is not a Session run turn");
+  assert.ok(background?.ok, "housekeeping receives a response instead of hanging");
+
+  const turn = fetch(`${gateway.origin}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tools: [{ type: "function", function: { name: "run_shell" } }] }),
+    signal: AbortSignal.timeout(1_000),
+  }).catch(() => undefined);
+  await turn;
+  assert.equal(gateway.runCount(), 1, "a tool-enabled Session turn is still counted");
+  const streamedBackground = await fetch(`${gateway.origin}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tools: [], stream: true, messages: [{ role: "user", content: "Rebuild a subtree" }] }),
+    signal: AbortSignal.timeout(1_000),
+  });
+  assert.match(await streamedBackground.text(), /data: \[DONE\]/);
+  assert.equal(gateway.runCount(), 1, "background work after a Session turn is also excluded");
+}
+
+test("hanging gateway ignores background model requests", async (context) => {
+  await assertBackgroundRequestsIgnored(context, startHangingGateway);
+});
+
+test("permission gateway ignores background model requests", async (context) => {
+  await assertBackgroundRequestsIgnored(context, startBlockingPermissionGateway);
+});
+
 function writeSseEvent(response: ServerResponse, event: unknown): void {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
@@ -124,18 +179,17 @@ function writeSseEvent(response: ServerResponse, event: unknown): void {
  *  hits the permission gate and the run blocks awaiting the user's decision. */
 function startBlockingPermissionGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
-  const server = createHttpServer((request, response) => {
+  const server = createHttpServer(async (request, response) => {
     if (request.url === "/chat/completions" && request.method === "POST") {
+      if (!await isSessionTurn(request, response)) return;
       runCount += 1;
-      request.resume();
-      request.on("end", () => {
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        writeSseEvent(response, {
-          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
-        });
-        response.write("data: [DONE]\n\n");
-        response.end();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      writeSseEvent(response, {
+        choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
       });
+      writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "tool_calls" }] });
+      response.write("data: [DONE]\n\n");
+      response.end();
       return;
     }
     response.writeHead(404).end();
@@ -164,6 +218,7 @@ function startBlockingPermissionUsageGateway(context: TestContext): Promise<{ or
           choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
         });
         writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+        writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "tool_calls" }] });
         response.write("data: [DONE]\n\n");
         response.end();
       });
@@ -193,6 +248,7 @@ function startUsageGateway(context: TestContext): Promise<{ origin: string; runC
         response.writeHead(200, { "content-type": "text/event-stream" });
         writeSseEvent(response, { choices: [{ delta: { content: "Done" } }] });
         writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+        writeSseEvent(response, { choices: [{ delta: {}, finish_reason: "stop" }] });
         response.write("data: [DONE]\n\n");
         response.end();
       });
@@ -383,12 +439,11 @@ async function readUntilTerminal(response: Response): Promise<string[]> {
  * Give the hung gateway turn time to actually be in flight before stopping it.
  *
  * The built-in loop's in-process model call is what the 400-attempt (10s) default budget was sized
- * for. Under a real JiuwenSwarm + adapter (SCIENCE_AGENT_EXECUTOR=jiuwenswarm, scripts/with-jiuwenswarm.sh)
- * a single turn's round trip was measured at 5.0-5.4s in isolation, but CI's `ut:host` workload runs
- * `pnpm --recursive test` for the whole workspace against that one shared instance and adapter
- * (scripts/with-jiuwenswarm.sh's own doc comment: "a test runner's parallel files share them"), so real
- * runs contend for it — a 10s-bound wait was observed to miss by ~460ms under that load. 2400 attempts
- * (60s) gives real headroom without weakening what the assertion checks.
+ * for. Under a real JiuwenSwarm + adapter (a test declaring `swarm:required`, which alone gets
+ * SCIENCE_AGENT_EXECUTOR=jiuwenswarm) a single turn's round trip was measured at 5.0-5.4s in isolation, and
+ * a 10s-bound wait was observed to miss by ~460ms when the whole workspace once shared that instance. The
+ * declaring tests now take it one at a time, but the host is still busy with every other test file;
+ * 2400 attempts (60s) gives real headroom without weakening what the assertion checks.
  */
 async function waitForGatewayTurn(api: TestApi, expected: number): Promise<void> {
   const attempts = onJiuwenSwarm ? 2_400 : 400;
@@ -409,51 +464,69 @@ async function waitForRunStatus(api: TestApi, sessionId: string, runId: string, 
   return current!;
 }
 
-test("cancelling a queued run does not start it or append it to Session context", async (context) => {
+test("cancelling a queued run does not start it or append it to Session context", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "queued-cancel");
   const sessionId = await createSession(api, "Queued cancellation");
 
   const active = await createRun(api, sessionId, "Keep the gateway busy");
-  await waitForGatewayTurn(api, 1);
+  try {
+    await waitForGatewayTurn(api, 1);
 
-  const queued = await createRun(api, sessionId, "Do not write this queued prompt");
-  assert.equal(queued.status, "queued");
+    const queued = await createRun(api, sessionId, "Do not write this queued prompt");
+    assert.equal(queued.status, "queued");
 
-  const cancel = await cancelRunById(api, sessionId, queued.id);
-  assert.equal(cancel.status, 200);
-  assert.equal(((await cancel.json()) as SessionRun).status, "cancelled");
+    const cancel = await cancelRunById(api, sessionId, queued.id);
+    assert.equal(cancel.status, 200);
+    assert.equal(((await cancel.json()) as SessionRun).status, "cancelled");
 
-  await new Promise((wait) => setTimeout(wait, 150));
-  assert.equal(api.gatewayRunCount(), 1, "the cancelled queued run was never admitted to the gateway");
-  const detail = await getSession(api, sessionId);
-  assert.deepEqual(detail.messages.map((message) => message.content), ["Keep the gateway busy"]);
+    await new Promise((wait) => setTimeout(wait, 150));
+    assert.equal(api.gatewayRunCount(), 1, "the cancelled queued run was never admitted to the gateway");
+    const detail = await getSession(api, sessionId);
+    assert.deepEqual(detail.messages.map((message) => message.content), ["Keep the gateway busy"]);
 
-  assert.equal((await cancelRunById(api, sessionId, active.id)).status, 202);
-  await waitForRunStatus(api, sessionId, active.id, "cancelled");
+    assert.equal((await cancelRunById(api, sessionId, active.id)).status, 202);
+    await waitForRunStatus(api, sessionId, active.id, "cancelled");
+  } finally {
+    for (const run of (await listRuns(api, sessionId)).sort((a, b) => Number(b.status === "queued") - Number(a.status === "queued"))) {
+      if (["queued", "running", "blocked"].includes(run.status)) {
+        await cancelRunById(api, sessionId, run.id);
+        await waitForRunStatus(api, sessionId, run.id, "cancelled");
+      }
+    }
+  }
 });
 
-test("a blocked run holds its Session queue until the user decides permission", async (context) => {
+test("a blocked run holds its Session queue until the user decides permission", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "blocked-queue", startBlockingPermissionGateway);
   const sessionId = await createSession(api, "Blocked queue", { approvalMode: "ask_for_dangerous" });
 
   const blocked = await createRun(api, sessionId, "Run code and wait for approval");
-  await waitForGatewayTurn(api, 1);
-  await waitForRunStatus(api, sessionId, blocked.id, "blocked");
+  try {
+    await waitForGatewayTurn(api, 1);
+    await waitForRunStatus(api, sessionId, blocked.id, "blocked");
 
-  const queued = await createRun(api, sessionId, "This must not overtake the blocked run");
-  assert.equal(queued.status, "queued");
-  await new Promise((wait) => setTimeout(wait, 250));
-  assert.equal(api.gatewayRunCount(), 1, "queued work did not overtake a blocked run in the same Session");
-  const runs = await listRuns(api, sessionId);
-  assert.equal(runs.find((run) => run.id === blocked.id)?.status, "blocked");
-  assert.equal(runs.find((run) => run.id === queued.id)?.status, "queued");
+    const queued = await createRun(api, sessionId, "This must not overtake the blocked run");
+    assert.equal(queued.status, "queued");
+    await new Promise((wait) => setTimeout(wait, 250));
+    assert.equal(api.gatewayRunCount(), 1, "queued work did not overtake a blocked run in the same Session");
+    const runs = await listRuns(api, sessionId);
+    assert.equal(runs.find((run) => run.id === blocked.id)?.status, "blocked");
+    assert.equal(runs.find((run) => run.id === queued.id)?.status, "queued");
 
-  assert.equal((await cancelRunById(api, sessionId, queued.id)).status, 200);
-  assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
-  await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+    assert.equal((await cancelRunById(api, sessionId, queued.id)).status, 200);
+    assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
+    await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+  } finally {
+    for (const run of (await listRuns(api, sessionId)).sort((a, b) => Number(b.status === "queued") - Number(a.status === "queued"))) {
+      if (["queued", "running", "blocked"].includes(run.status)) {
+        await cancelRunById(api, sessionId, run.id);
+        await waitForRunStatus(api, sessionId, run.id, "cancelled");
+      }
+    }
+  }
 });
 
-test("GET session usage reports gateway token usage for a completed run", async (context) => {
+test("GET session usage reports gateway token usage for a completed run", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "usage-http", startUsageGateway);
   const sessionId = await createSession(api, "Usage HTTP");
 
@@ -469,7 +542,7 @@ test("GET session usage reports gateway token usage for a completed run", async 
   assert.equal(usage.totals.unreportedInvocationCount, 0);
 });
 
-test("cancelling a blocked run preserves reported model usage", async (context) => {
+test("cancelling a blocked run preserves reported model usage", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "blocked-cancel-usage", startBlockingPermissionUsageGateway);
   const sessionId = await createSession(api, "Blocked cancel usage", { approvalMode: "ask_for_dangerous" });
 
@@ -498,7 +571,7 @@ test("cancelling a blocked run preserves reported model usage", async (context) 
   }
 });
 
-test("stopping a stuck run ends the stream as cancelled and frees the Session", async (context) => {
+test("stopping a stuck run ends the stream as cancelled and frees the Session", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "run-cancel");
   const sessionId = await createSession(api, "Stuck session");
 
@@ -537,7 +610,7 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   assert.equal((await cancelRun(api, sessionId)).status, 200, "a repeated Stop after the queue drains is a safe no-op");
 });
 
-test("Reviewer stop has its own route and does not cancel an Agent run", async (context) => {
+test("Reviewer stop has its own route and does not cancel an Agent run", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "reviewer-stop-isolation");
   const sessionId = await createSession(api, "Reviewer isolation");
   const run = await startRun(api, sessionId, "Analyze the dataset");
@@ -553,7 +626,7 @@ test("Reviewer stop has its own route and does not cancel an Agent run", async (
   assert.ok((await streamed).includes("run.cancelled"));
 });
 
-test("a stuck Session does not block runs in another Session", async (context) => {
+test("a stuck Session does not block runs in another Session", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "run-isolation");
   const stuckSessionId = await createSession(api, "Session A");
   const otherSessionId = await createSession(api, "Session B");
@@ -576,7 +649,7 @@ test("a stuck Session does not block runs in another Session", async (context) =
   assert.ok((await stuckStream).includes("run.cancelled"));
 });
 
-test("cancelling a blocked run persists the approval's terminal state and the tool input in the replay", async (context) => {
+test("cancelling a blocked run persists the approval's terminal state and the tool input in the replay", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "blocked-cancel-replay", startBlockingPermissionGateway);
   const sessionId = await createSession(api, "Blocked cancel replay", { approvalMode: "ask_for_dangerous" });
 
@@ -621,7 +694,7 @@ test("cancelling a blocked run persists the approval's terminal state and the to
   assert.ok(resolved.sequence > events[requiredIndex]!.sequence);
 });
 
-test("run child stream endpoint serves empty streams and rejects invalid ids", async (context) => {
+test("run child stream endpoint serves empty streams and rejects invalid ids", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "stream-endpoint", startBlockingPermissionGateway);
   const sessionId = await createSession(api, "Stream endpoint", { approvalMode: "ask_for_dangerous" });
   const blocked = await createRun(api, sessionId, "Run code and wait for approval");

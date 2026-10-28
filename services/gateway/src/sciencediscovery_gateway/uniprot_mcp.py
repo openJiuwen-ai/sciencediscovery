@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from .http_errors import raise_for_status as _raise_for_status
 from .external_urls import external_url, format_external_url
 
 SERVER = FastMCP("uniprot")
@@ -38,17 +39,6 @@ ACCESSION = re.compile(r"^[A-Z0-9][A-Z0-9-]{4,19}$", re.IGNORECASE)
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _raise_for_status(response: httpx.Response) -> None:
-    """Readable status error that keeps the Retry-After hint for the retry loop."""
-    if response.status_code < 400:
-        return
-    message = f"HTTP {response.status_code} {response.reason_phrase} from {response.request.url.host}"
-    retry_after = response.headers.get("retry-after")
-    if retry_after:
-        message += f" (retry-after: {retry_after})"
-    raise RuntimeError(message)
 
 
 def _citation(accession: str, title: str) -> dict[str, Any]:
