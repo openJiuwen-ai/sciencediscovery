@@ -1,21 +1,16 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-# Run the existing cumulative CI policy through a separate manual entry point.
-# ci.yml keys concurrency on the caller's name and ref, so regular CI cannot
-# cancel this run. A newer manual validation at the same ref still replaces it.
+# Run every eligible L5 case without the cumulative L1-L4 gates.
+# Keep manual validation separate from regular CI cancellation. A newer
+# manual validation at the same ref still replaces the previous manual run.
 name: Manual validation
 
-run-name: "Manual validation · ${{ github.ref_name }} · ${{ inputs.profile }} · parallel=${{ inputs.max-parallel }}"
+run-name: "Manual validation · ${{ github.ref_name }} · L5 only · parallel=${{ inputs.max-parallel }}"
 
 on:
   workflow_dispatch:
     inputs:
-      profile:
-        description: "Cumulative validation profile (release includes L1-L5)"
-        type: choice
-        options: [pr, merge, daily, release]
-        default: release
       backend:
         description: "E2E execution backend"
         type: choice
@@ -27,15 +22,19 @@ on:
         options: ['1', '2', '4']
         default: '4'
 
+concurrency:
+  group: manual-validation-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   validate:
-    name: Validate
-    uses: ./.github/workflows/ci.yml
+    name: Validate L5 only
+    uses: ./.github/workflows/real-e2e.yml
     secrets: inherit
     with:
-      profile: ${{ inputs.profile }}
+      profile: l5-only
       backend: ${{ inputs.backend }}
       max-parallel: ${{ fromJSON(inputs.max-parallel) }}

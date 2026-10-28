@@ -1,14 +1,15 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-# One real suite, two caller dependency graphs: L3 waits for L2; L4/L5 do not.
+# One real suite: cumulative CI profiles and independent L5-only validation.
+# The L3 CI caller waits for L2; L4/L5 and manual validation do not.
 name: Real E2E
 
 on:
   workflow_call:
     inputs:
       profile:
-        description: "Routed real profile: merge, daily or release"
+        description: "Real profile: merge, daily, release or l5-only (L5 without L1-L4)"
         required: true
         type: string
       backend:
