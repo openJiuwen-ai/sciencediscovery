@@ -63,6 +63,14 @@ export function ComputeStatus({ readiness, error }: { readiness: Readiness; erro
   </div>;
 }
 
+// Direct host execution needs a reachable Runner, so only the notice for a
+// reachable Runner with an unusable sandbox mentions that approval path.
+const NOTICE_COPY = {
+  unknown: { title: "compute.unknownTitle", hint: "compute.unknownHint" },
+  runner: { title: "compute.runnerUnavailableTitle", hint: "compute.runnerRepairHint" },
+  sandbox: { title: "compute.unavailableTitle", hint: "compute.repairHint" },
+} as const;
+
 export function ComputeNotice({ readiness }: { readiness: Readiness }) {
   const { t } = useLocale();
   // Connection settings own token recovery. A rejected credential cannot
@@ -70,11 +78,12 @@ export function ComputeNotice({ readiness }: { readiness: Readiness }) {
   if (readiness.compute === "ready" || readiness.connection === "checking" || readiness.connection === "unauthorized") return null;
   const capability = readiness.value?.capability;
   const reason = readiness.error || readiness.value?.reason || capability?.detail || (capability ? t(`compute.reason.${capability.reason}`) : t("compute.reason.unknown"));
+  const copy = NOTICE_COPY[readiness.compute === "unknown" ? "unknown" : readiness.value?.connected === false ? "runner" : "sandbox"];
   return <section className="compute-notice" role="status" aria-label={t("compute.noticeLabel")}>
     <div>
-      <strong>{t(readiness.compute === "unavailable" ? "compute.unavailableTitle" : "compute.unknownTitle")}</strong>
+      <strong>{t(copy.title)}</strong>
       <p className="compute-notice-reason">{reason}</p>
-      <p>{t("compute.repairHint")}</p>
+      <p>{t(copy.hint)}</p>
       <small>{t("compute.scope")}</small>
     </div>
     <button className="secondary-button" type="button" disabled={readiness.checking} onClick={readiness.recheck}>

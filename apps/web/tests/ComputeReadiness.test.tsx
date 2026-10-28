@@ -120,8 +120,22 @@ test("the notice exposes the actual reason safely and labels both signals in Eng
       assert.doesNotMatch(html, /role="alert"/);
       assert.match(html, /bwrap: &lt;host&gt; denied/);
       assert.match(html, locale === "en" ? /API · Connected/ : /API · 已连接/);
-      assert.match(html, locale === "en" ? /Local compute · Unavailable/ : /本地计算 · 不可用/);
-      assert.match(html, locale === "en" ? /scientific environments and model availability/ : /科学环境和模型可用性/);
+      assert.match(html, locale === "en" ? /Local sandbox · Unavailable/ : /本地沙箱 · 不可用/);
+      assert.match(html, locale === "en" ? /The local sandbox is unavailable/ : /本地沙箱不可用/);
+      assert.match(html, locale === "en" ? /without sandbox isolation/ : /没有沙箱隔离/);
+      assert.match(html, locale === "en" ? /scientific environments, model availability and remote Runners/ : /科学环境、模型可用性和远程 Runner/);
+    }
+  } finally { await view.close(); }
+});
+
+test("an unreachable Runner is not offered the direct execution path", async () => {
+  const view = await harness({ getRunnerExecutionCapability: async () => ({ runnerId: "local", connected: false, reason: "Runner connection refused" }) });
+  try {
+    for (const locale of ["en", "zh-CN"] as const) {
+      const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale, children: createElement(ComputeNotice, { readiness: view.state() }) }));
+      assert.match(html, /Runner connection refused/);
+      assert.match(html, locale === "en" ? /The local Runner cannot be reached/ : /无法连接本地 Runner/);
+      assert.doesNotMatch(html, locale === "en" ? /sandbox isolation/ : /沙箱隔离/);
     }
   } finally { await view.close(); }
 });
