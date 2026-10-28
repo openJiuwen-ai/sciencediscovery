@@ -13,13 +13,13 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:macos", "os:windows", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
 
-import type { ScientificArtifact, Session } from "@sciencediscovery/schema";
+import type { ScientificArtifact, Session, SessionArtifactOutput } from "@sciencediscovery/schema";
 
-import { groupArtifactsBySession, upsertArtifactSession } from "../src/artifact-session-groups.js";
+import { artifactsForSession, groupArtifactsBySession, upsertArtifactSession } from "../src/artifact-session-groups.js";
 
 function session(id: string, title: string): Session {
   return {
@@ -55,6 +55,28 @@ function artifact(createdInSessionId = "session-1"): ScientificArtifact {
     updatedAt: "2026-08-01T00:00:00.000Z",
   };
 }
+
+test("the workspace catalog excludes sibling Session artifacts without changing the Project catalog", () => {
+  const own = artifact();
+  const sibling = { ...artifact("session-2"), id: "sibling" };
+  const catalog = [sibling, own];
+  assert.deepEqual(artifactsForSession(catalog, "session-1", []), [own]);
+  assert.deepEqual(artifactsForSession(catalog, "session-2", []), [sibling]);
+  assert.deepEqual(catalog, [sibling, own]);
+});
+
+test("a Session keeps artifacts it revised even when another Session created them", () => {
+  const shared = artifact("session-1");
+  const output = { artifact: shared, version: { sessionId: "session-2" } } as SessionArtifactOutput;
+  assert.deepEqual(artifactsForSession([shared], "session-2", [output]), [shared]);
+});
+
+test("stale output data from another Session cannot populate the current catalog", () => {
+  const other = artifact("session-1");
+  const output = { artifact: other, version: { sessionId: "session-2" } } as SessionArtifactOutput;
+  assert.deepEqual(artifactsForSession([other], "session-3", [output]), []);
+  assert.deepEqual(artifactsForSession([other], undefined, [output]), []);
+});
 
 test("artifact groups wait for the complete Session catalog before declaring deletion", () => {
   const pending = groupArtifactsBySession({

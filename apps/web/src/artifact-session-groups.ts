@@ -12,7 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ScientificArtifact, Session } from "@sciencediscovery/schema";
+import type { ScientificArtifact, Session, SessionArtifactOutput } from "@sciencediscovery/schema";
+
+export function artifactsForSession(
+  artifacts: readonly ScientificArtifact[],
+  sessionId: string | undefined,
+  outputs: readonly SessionArtifactOutput[],
+): ScientificArtifact[] {
+  if (!sessionId) return [];
+  const producedIds = new Set(outputs.filter((output) => output.version.sessionId === sessionId).map((output) => output.artifact.id));
+  return artifacts.filter((artifact) => artifact.createdInSessionId === sessionId || producedIds.has(artifact.id));
+}
 
 export interface ArtifactSessionGroup {
   id: string;

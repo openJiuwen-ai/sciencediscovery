@@ -63,6 +63,64 @@ test.describe("Read artifact and workspace source", { tag: ["@isolation:session"
   test.use({ locale: "en-US" });
   /**
    * E2E-META
+   * Purpose: Keep the workspace Artifact list scoped to the current Session while retaining Project data.
+   * Steps:
+   *   1. Upload an Artifact in Session A.
+   *   2. Open Session B in the same Project and verify A's Artifact is absent.
+   *   3. Upload B's Artifact, then switch and reload both Sessions.
+   * Environment: Isolated current-worktree API/Web at E2E_BASE_URL.
+   * Type: mocked
+   * LLM: none; no generation is requested.
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none
+   * Credentials: E2E_API_TOKEN for the isolated local stack.
+   * CostSideEffects: Temporary Project/Sessions/files removed in finally; no external cost.
+   */
+  test("workspace Artifacts follow the current Session rather than its siblings", { tag: "@mocked" }, async ({ page, journey }) => {
+    await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "en"));
+    journey.scenario({ goal: "Read only the active conversation's Artifact catalog.", preconditions: ["Isolated API/Web are running"] });
+    let fixture: JourneyFixture | undefined;
+    let secondId = "";
+    const catalog = page.locator("aside.workspace-panel .artifact-catalog-section");
+    const uploadOne = async (name: string) => page.locator("aside.workspace-panel label.drop-zone input[type=file]").setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from(name) });
+    try {
+      await journey.step("1. Upload an Artifact in Session A", "A's file appears in its workspace catalog.", async () => {
+        fixture = await createProjectAndSession(page, { projectName: `Session artifact scope ${Date.now()}`, sessionTitle: "Artifact session A" });
+        await openProjectSession(page, fixture);
+        await uploadOne("session-a.txt");
+        await expect(catalog).toContainText("session-a.txt");
+      });
+      await journey.step("2. Open an empty sibling Session", "A's Artifact does not populate B's workspace.", async () => {
+        const response = await page.request.post(`${apiBaseUrl()}/api/projects/${fixture!.project.id}/sessions`, { headers: authorizationHeader(), data: { title: "Artifact session B" } });
+        expect(response.ok()).toBeTruthy();
+        secondId = (await response.json()).id;
+        await page.goto(`/projects/${fixture!.project.id}/sessions/${secondId}`);
+        await expect(page.getByRole("heading", { name: "Artifact session B", exact: true })).toBeVisible();
+        await expect(catalog).toHaveCount(0);
+      });
+      await journey.step("3. Upload B's Artifact and reload", "B shows its own file and no sibling file.", async () => {
+        await uploadOne("session-b.txt");
+        await expect(catalog).toContainText("session-b.txt");
+        await expect(catalog).not.toContainText("session-a.txt");
+        await page.reload();
+        await expect(catalog).toContainText("session-b.txt");
+        await expect(catalog).not.toContainText("session-a.txt");
+      });
+      await journey.step("4. Return to A", "A still shows its file; both files remain in the Project catalog.", async () => {
+        await page.goto(`/projects/${fixture!.project.id}/sessions/${fixture!.session.id}`);
+        await expect(catalog).toContainText("session-a.txt");
+        await expect(catalog).not.toContainText("session-b.txt");
+        const response = await page.request.get(`${apiBaseUrl()}/api/projects/${fixture!.project.id}/artifacts`, { headers: authorizationHeader() });
+        expect(response.ok()).toBeTruthy();
+        expect((await response.json()).map((item: { name: string }) => item.name).sort()).toEqual(["session-a.txt", "session-b.txt"]);
+      });
+    } finally { if (fixture) await cleanupJourney(page, fixture); }
+  });
+
+  /**
+   * E2E-META
    * Purpose: Read highlighted, numbered artifact source and retain specialized previews, truncation and full downloads.
    * Steps:
    *   1. Upload source files and specialized-preview fixtures in an isolated session.
