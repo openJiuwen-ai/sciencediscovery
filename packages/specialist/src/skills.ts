@@ -562,7 +562,10 @@ export function validateSkillPackage(
   if (options.directoryName !== undefined && name !== options.directoryName) {
     throw validationError(`SKILL.md name ${name} must match package directory ${options.directoryName}`);
   }
-  const description = typeof parsed.frontmatter.description === "string" ? parsed.frontmatter.description : "";
+  const description = parsed.frontmatter.description;
+  if (typeof description !== "string" || !description.trim()) {
+    throw validationError("description must be a non-empty string");
+  }
   const metadata = normalizeMetadata(parsed.frontmatter.metadata);
   const diagnostics: SkillValidationDiagnostic[] = [];
   if (parsed.frontmatter["allowed-tools"] !== undefined) {
