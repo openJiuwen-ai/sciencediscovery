@@ -450,7 +450,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             ("invalid query syntax", {"x-cache": "Error from cloudfront"}, "request"),
             ("unknown refusal", {}, "unknown"),
         ]:
-            with self.subTest(scope=scope), self.assertRaises(RuntimeError) as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 _raise_for_status(httpx.Response(406, text=body, headers=headers, request=request))
             metadata = json.loads(str(caught.exception).split("SOURCE_HTTP_ERROR:", 1)[1])
             self.assertEqual(metadata["failureScope"], scope)

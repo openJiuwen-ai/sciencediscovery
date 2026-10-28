@@ -16,7 +16,8 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import type { McpCatalog, McpInvocation, McpInvokeResponse, McpToolResult, ResolvedRuntimeSettings } from "@sciencediscovery/schema";
 import { McpGovernanceBroker, McpInvocationError, type McpBrokerStore } from "./broker.js";
@@ -26,7 +27,7 @@ import { SourceHealth, SOURCE_HEALTH_POLICY } from "./source-health.js";
 import { ResourceRateLimiter } from "./resource-rate-limiter.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
-  const directory = await mkdtemp(resolve(".tmp/issue-208-health-"));
+  const directory = await mkdtemp(join(tmpdir(), "issue-208-health-"));
   const registry = createBuiltinMcpSourceRegistry();
   const invocations: McpInvocation[] = [];
   let calls = 0;
