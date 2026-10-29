@@ -31,6 +31,38 @@
           "A",
           "B",
           "B"
+        ],
+        "repeat_grade_official": "40865906295",
+        "da_13_3_official_scores": [
+          87,
+          64,
+          78
+        ],
+        "criterion_4_official_levels": [
+          "A",
+          "B",
+          "A"
+        ],
+        "criterion_5_official_levels": [
+          "A",
+          "B",
+          "B"
+        ],
+        "repeat_grade_local": "40874943681",
+        "da_13_3_local_scores": [
+          87,
+          87,
+          87
+        ],
+        "criterion_4_local_levels": [
+          "A",
+          "A",
+          "A"
+        ],
+        "criterion_5_local_levels": [
+          "A",
+          "A",
+          "A"
         ]
       }
     }
