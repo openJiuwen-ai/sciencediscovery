@@ -51,6 +51,10 @@ def task_inputs(root, task):
     # Fail on unsupported rubrics BEFORE making any paid generation calls.
     from judge import levels
     levels((directory / "tests/rubric.txt").read_text(encoding="utf-8"))
+    from rubrics import local_rubric_path
+    local = local_rubric_path(task['id'])
+    if local:
+        levels(local.read_text(encoding="utf-8"))
     return directory
 
 

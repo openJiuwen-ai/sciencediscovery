@@ -36,12 +36,25 @@ def local_rubric_path(case_id: str):
     variant = local_variant_for(case_id)
     if not variant:
         return None
+    official = [f['oid'] for task in json.loads(MANIFEST.read_text())['tasks'] if task['id'] == case_id
+                for f in task['files'] if f['path'] == 'tests/rubric.txt']
+    if official != [variant['source_official_rubric_oid']]:
+        raise ValueError('Local rubric official baseline mismatch')
     path = ROOT / variant['path']
+    if not path.resolve().is_relative_to(ROOT.resolve()):
+        raise ValueError('Local rubric path escapes registry')
     data = path.read_bytes()
     if (len(data) != variant['bytes'] or _blob_oid(data) != variant['git_blob_oid']
             or _sha256(data) != variant['sha256']):
         raise ValueError(f'Local rubric pin mismatch: {case_id}')
     return path
+
+
+def require_official(path, case_id):
+    identity = rubric_identity(path, case_id)
+    if identity['channel'] != 'official':
+        raise ValueError(f'Official rubric required: {case_id}')
+    return identity
 
 
 def rubric_identity(path, case_id=None):
@@ -55,6 +68,7 @@ def rubric_identity(path, case_id=None):
                 and variant.get('sha256') == digest):
             if case_id is not None and variant.get('case_id') != case_id:
                 raise ValueError(f'Local rubric case mismatch: {case_id}')
+            local_rubric_path(variant['case_id'])
             return {
                 'channel': 'local-variant',
                 'version': variant['version'],

@@ -48,11 +48,17 @@ def main():
     parser.add_argument("--answer", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--case", help="Require the selected task's official rubric pin")
+    parser.add_argument("--local-variant", action="store_true", help="Explicitly select a registered, non-gating local rubric")
     args = parser.parse_args()
     if Path(args.output).exists() or Path(args.output).with_suffix('.attempts').exists():
         raise FileExistsError('Use a new output path for each evaluation')
     rubric = Path(args.rubric).read_text()
     identity = rubric_identity(args.rubric, args.case)
+    if args.local_variant:
+        if not args.case or identity['channel'] != 'local-variant':
+            raise ValueError('A registered local rubric and --case are required')
+    elif args.case and identity['channel'] != 'official':
+        raise ValueError('Official rubric required; use --local-variant for local scoring')
     levels(rubric)
     body = {"model": os.environ["BIOMNI_JUDGE_MODEL"], "temperature": 0,
             "max_tokens": 65536, "response_format": {"type": "json_object"}, "messages": [

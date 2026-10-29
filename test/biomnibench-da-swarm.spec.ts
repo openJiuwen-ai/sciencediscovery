@@ -76,7 +76,7 @@ for (const sample of cases) {
     const workspaceBudget = positiveNumber("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 * 1024 ** 3);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     const preparationBudget = 1_800_000;
-    test.setTimeout(budget + evaluationBudget + 2 * preparationBudget + 360_000);
+    test.setTimeout(budget + 2 * evaluationBudget + 2 * preparationBudget + 360_000);
     expect(process.env.E2E_SWARM_TASK, "BLOCKED: isolated Swarm stack required").toBe("1");
     const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT", "E2E_BIOMNI_FIXTURE_ROOT", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN", "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY", "SCIENCE_TAG_PLAN");
     if ((process.env.E2E_BIOMNI_EVALUATION ?? "rubric") !== "rubric") throw new Error("L5 requires rubric scoring");
@@ -171,7 +171,7 @@ for (const sample of cases) {
           const localRegistry = JSON.parse(await readFile(join(scripts, "local-rubrics.json"), "utf8"));
           const variant = (localRegistry.variants || []).find((entry: { case_id?: string }) => entry.case_id === sample.id);
           if (variant?.path) {
-            await execute(python, [join(scripts, "judge.py"), "--case", sample.id, "--rubric", join(scripts, variant.path),
+            await execute(python, [join(scripts, "local_scoring.py"), "--case", sample.id,
               "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
               "--output", testInfo.outputPath("quality-scorecard.local.json")], { timeout: evaluationBudget });
             metrics.local_evaluation = {

@@ -15,6 +15,18 @@ def blob(data):
 
 
 class PrepareTests(unittest.TestCase):
+    def test_local_pin_is_checked_during_task_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = b'Criterion 1: Example\nLevels: A=100 B=50 C=0\n'
+            path = Path(directory) / 'da-13-3/tests/rubric.txt'
+            path.parent.mkdir(parents=True)
+            path.write_bytes(data)
+            task = {'id': 'da-13-3', 'files': [{'path': 'tests/rubric.txt', 'bytes': len(data), 'oid': blob(data)}]}
+            with patch('rubrics.local_rubric_path', side_effect=ValueError('Local rubric pin mismatch')) as local:
+                with self.assertRaisesRegex(ValueError, 'Local rubric pin mismatch'):
+                    prepare.task_inputs(directory, task)
+            local.assert_called_once_with('da-13-3')
+
     def test_download_uses_pinned_hub_inputs_and_verifies_them(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

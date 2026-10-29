@@ -10,7 +10,8 @@ import subprocess
 import sys
 import time
 import hashlib
-from rubrics import rubric_identity
+from rubrics import require_official
+from local_scoring import grade_local
 
 
 def completed_evidence(evidence_dir):
@@ -50,7 +51,7 @@ def rescore(evidence_dir, rubric, output, python=sys.executable, prior_evaluatio
     if not completed_evidence(evidence_dir):
         raise ValueError('Completed analysis evidence and measured generation usage are required')
     # Recovery feeds the release gate: an arbitrary/local rubric cannot replace it.
-    rubric_identity(rubric, metrics['case_id'])
+    require_official(rubric, metrics['case_id'])
     output.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     with (output / 'judge.log').open('w') as log:
@@ -88,6 +89,12 @@ def rescore(evidence_dir, rubric, output, python=sys.executable, prior_evaluatio
     recovered['judge_usage'] = dict(complete=report['all_evaluations_usage_complete'],
         unknown_attempts=usage['unknown_attempts'] + (previous['unknown_attempts'] if previous else 1),
         reported_attempts=usage['reported_attempts'], scope='final-evaluation-with-prior-accounting-check')
+    local = grade_local(metrics['case_id'], evidence_dir / 'trace.md', evidence_dir / 'answer.txt',
+                        output / 'quality-scorecard.local.json', python)
+    if local:
+        recovered['local_evaluation'] = report['local_evaluation'] = local
+    else:
+        recovered.pop('local_evaluation', None)
     (output / 'benchmark-metrics.json').write_text(json.dumps(recovered, indent=2))
     (output / 'evaluation-recovery.json').write_text(json.dumps(report, indent=2))
     # The scored result survives even when billing cannot be reconstructed.
@@ -103,6 +110,10 @@ def main():
     args = parser.parse_args()
     report = rescore(args.evidence, args.rubric, args.output, prior_evaluations=args.prior_evaluation)
     print(json.dumps({'case': report['case_id'], 'score': report['evaluation']['score'],
+                      'score_channel': 'official', 'official_score': report['evaluation']['score'],
+                      'local_variant_score': report.get('local_evaluation', {}).get('score'),
+                      'local_variant_status': report.get('local_evaluation', {}).get('status', 'unavailable'),
+                      'local_rubric_version': report.get('local_evaluation', {}).get('rubric', {}).get('version'),
                       'usage_complete': report['judge_usage']['complete'], 'full_e2e_rerun': False}))
     return 0 if report['judge_usage']['complete'] else 1
 
