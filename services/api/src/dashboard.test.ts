@@ -796,6 +796,93 @@ test("structure preview at exactly maxChars returns the whole source without tru
   assert.equal(payload.source, source);
 });
 
+// A cut inside a surrogate pair leaves invalid UTF-16 in the payload; every
+// truncating preview path must cut at a code point boundary instead.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const SPLIT_AT_LIMIT = `${"a".repeat(9)}\u{1F600}tail`;
+
+function assertCodePointCut(source: string): void {
+  assert.equal(LONE_SURROGATE.test(source), false, `source carries a lone surrogate: ${JSON.stringify(source)}`);
+  // Either the whole character is kept or it is dropped; never half of it.
+  assert.ok([`${"a".repeat(9)}`, `${"a".repeat(9)}\u{1F600}`].includes(source), `unexpected cut: ${JSON.stringify(source)}`);
+}
+
+test("markdown preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "markdown",
+    logicalName: "notes.md",
+    mediaType: "text/markdown",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "markdown-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("latex preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "latex",
+    logicalName: "paper.tex",
+    mediaType: "application/x-tex",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "latex-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("structure preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "structure",
+    logicalName: "protein.pdb",
+    mediaType: "chemical/x-pdb",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "structure-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("json-source preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "json",
+    logicalName: "notes.json",
+    mediaType: "application/json",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "json-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("an ascii markdown preview still cuts at exactly maxChars", async (context) => {
+  const fixture = await createFixture(context);
+  const ascii = "x".repeat(20);
+  const vid = await seedArtifact(fixture, {
+    content: ascii,
+    kind: "markdown",
+    logicalName: "plain.md",
+    mediaType: "text/markdown",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "markdown-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.source, "x".repeat(10));
+  assert.equal(payload.totalChars, 20);
+  assert.equal(payload.truncated, true);
+});
+
 test("figure preview surfaces the content URL without reading CAS bytes", async (context) => {
   const fixture = await createFixture(context);
   const vid = await seedArtifact(fixture, {
