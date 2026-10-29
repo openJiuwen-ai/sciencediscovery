@@ -52,6 +52,11 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
     async def lifespan(app: FastAPI):
         # No read timeout: SSE runs stay open for the whole agent run.
         timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=5.0)
+        # Node's default HTTP keep-alive idle timeout is 5 seconds. Retire
+        # pooled legacy sockets sooner so the next UI refresh opens a live
+        # connection instead of racing the server's idle close. Keep extra
+        # headroom for the parallel reads in a session refresh.
+        legacy_limits = httpx.Limits(max_connections=200, keepalive_expiry=2.0)
         # Bypass environment proxies only for the local service addresses.
         # Keep trust_env enabled for remote proxies and custom CA certificates.
         mounts = loopback_mounts(settings.legacy_url)
@@ -59,7 +64,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
             # These clients connect to local companion services. Do not let an
             # ambient HTTP(S)/SOCKS proxy intercept loopback traffic.
             httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
-                              follow_redirects=False, mounts=mounts) as legacy,
+                              follow_redirects=False, limits=legacy_limits, mounts=mounts) as legacy,
             httpx.AsyncClient(timeout=timeout, mounts=mounts) as bridge,
             # Model routes are external destinations and must retain proxy
             # support, including SOCKS configured through the environment.

@@ -18,9 +18,17 @@ import assert from "node:assert/strict";
 
 
 import { ApiClient, ApiRequestError } from "../src/api.js";
-import { isAuthFailure } from "../src/api/auth.js";
+import { isAuthFailure, isLegacyUnavailableError } from "../src/api/auth.js";
 
 const signal = new AbortController().signal;
+
+test("recognizes only the adapter's legacy-unavailable response", () => {
+  assert.equal(isLegacyUnavailableError(new ApiRequestError("legacy_unavailable", 502)), true);
+  assert.equal(isLegacyUnavailableError(new ApiRequestError("legacy_unavailable", 503)), false);
+  assert.equal(isLegacyUnavailableError(new ApiRequestError("other failure", 502)), false);
+  assert.equal(isLegacyUnavailableError(new Error("legacy_unavailable")), false);
+});
+
 const requests: Record<string, (client: ApiClient) => Promise<unknown>> = {
   projects: (client) => client.listProjects(),
   usageExport: (client) => client.exportModelUsageAnalytics("csv"),

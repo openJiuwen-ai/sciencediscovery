@@ -310,7 +310,22 @@ export function inferDomain(text: string): string {
   return "";
 }
 
+/** Lossless archive of stored graph rows, independent of the bounded UI view. */
+export interface MemoryGraphSnapshot {
+  nodes: Array<{ id: string; labels: string[]; properties: Record<string, unknown> }>;
+  edges: Array<{ source: string; target: string; type: string; properties: Record<string, unknown> }>;
+}
+
 export class MemoryGraphClient {
+  private readonly snapshotRevisions = new Map<string, number>();
+  /** Successful graph writes invalidate export metadata without exporting the graph to poll it. */
+  snapshotRevision(sessionIds: string[]): number[] { return sessionIds.map((id) => this.snapshotRevisions.get(id) ?? 0); }
+  private recordSnapshotChange(body: unknown): void {
+    if (!body || typeof body !== "object") return;
+    const value = body as { session_id?: unknown; session_ids?: unknown };
+    const sessions = Array.isArray(value.session_ids) ? value.session_ids : [value.session_id];
+    for (const id of sessions) if (typeof id === "string") this.snapshotRevisions.set(id, (this.snapshotRevisions.get(id) ?? 0) + 1);
+  }
   private readonly baseUrl: string;
   private readonly token: string | undefined;
 
@@ -324,6 +339,39 @@ export class MemoryGraphClient {
   async pushBackend(backend: "local" | "neo4j"): Promise<void> {
     mgLog.info("pushing backend selection to memory-graph: %s", backend);
     await this.post("/internal/backend", { backend });
+  }
+
+  async exportSnapshot(sessionIds: string[]): Promise<MemoryGraphSnapshot> {
+    const response = await fetch(`${this.baseUrl}/internal/research-package/export`, {
+      method: "POST", headers: this.initHeaders(true), body: JSON.stringify({ session_ids: sessionIds }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`Memory graph snapshot export failed: ${response.status}`);
+    return await response.json() as MemoryGraphSnapshot;
+  }
+
+  async importSnapshot(sessionIds: string[], snapshot: MemoryGraphSnapshot): Promise<void> {
+    await this.packageSnapshotRequest("import", sessionIds, snapshot);
+  }
+
+  async validateSnapshot(sessionIds: string[], snapshot: MemoryGraphSnapshot): Promise<void> {
+    await this.packageSnapshotRequest("validate", sessionIds, snapshot);
+  }
+
+  async discardSnapshot(sessionIds: string[]): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/internal/research-package/discard`, {
+      method: "POST", headers: this.initHeaders(true), body: JSON.stringify({ session_ids: sessionIds }), signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`Memory graph snapshot discard failed: ${response.status}`);
+    this.recordSnapshotChange({ session_ids: sessionIds });
+  }
+
+  private async packageSnapshotRequest(operation: "import" | "validate", sessionIds: string[], snapshot: MemoryGraphSnapshot): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/internal/research-package/${operation}`, {
+      method: "POST", headers: this.initHeaders(true), body: JSON.stringify({ session_ids: sessionIds, ...snapshot }), signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`Memory graph snapshot ${operation} failed: ${response.status}`);
+    if (operation === "import") this.recordSnapshotChange({ session_ids: sessionIds });
   }
 
   /** `/health` with the backend the sidecar is actually running, so the API can
@@ -1043,6 +1091,7 @@ export class MemoryGraphClient {
       mgLog.warn("postJsonWithBody %s not ok: HTTP %s code=%s", path, response.status, code);
       throw { status: "error", code, message, ...(instruction ? { instruction } : {}) } as DeclareError;
     }
+    this.recordSnapshotChange(body);
     return respBody;
   }
 
@@ -1188,6 +1237,7 @@ export class MemoryGraphClient {
       mgLog.warn("post %s not ok: memory-graph returned HTTP %s", path, response.status);
       throw new Error(`memory-graph ${path} failed: ${response.status}`);
     }
+    this.recordSnapshotChange(body);
   }
 
   private initHeaders(json = false): Record<string, string> {

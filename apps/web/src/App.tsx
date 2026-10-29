@@ -13,6 +13,10 @@
 // limitations under the License.
 
 import { ErrorDiagnosticActions, ErrorDiagnosticClient } from "./ErrorDiagnosticActions.js";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
+import { ContinueResearchButton } from "./research-package/ContinueResearchButton.js";
+import { ResearchContinuationContext, ResearchContinuationStatus, useResearchContinuationTasks } from "./research-package/ResearchContinuationTasks.js";
+import { markResearchCopyCreated, ResearchCopyNotice } from "./research-package/ResearchCopyNotice.js";
 import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useMcpReadiness } from "./composer/useMcpReadiness.js";
@@ -114,7 +118,7 @@ import {
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
 
-import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
+import { ApiClient, ApiRequestError, isAbortError, isLegacyUnavailableError } from "./api.js";
 import { sessionDisplayTitle } from "./session-title.js";
 import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { settleLoads, startupLoads, systemSettingsLoads, workspaceCapabilitiesFromQuota } from "./settings-loads.js";
@@ -163,6 +167,7 @@ import {
 } from "./icons.js";
 import { CopyButton } from "./CopyButton.js";
 import { ProjectDescriptionEditor } from "./ProjectDescriptionEditor.js";
+import { ConversationBranchBoundary, ForkMessageButton, messageAnchorId } from "./session/ConversationBranch.js";
 import { findMarkdownFigureArtifact, KIND_TO_LABEL, MarkdownRenderer } from "./Markdown.js";
 import {
   DeletionDialog,
@@ -187,6 +192,9 @@ import {
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
 import { PluginWebHost } from "./plugins/host.js";
+import { ResearchPackageDialogs, type ResearchPackageDialogTarget } from "./research-package/ResearchPackageActions.js";
+import { ResearchPackagePreviewMonitor } from "./research-package/ResearchPackagePreviewMonitor.js";
+import { ResearchPackageExportMonitor } from "./research-package/ResearchPackageExportTasks.js";
 import type { PluginComposition } from "./api/plugins.js";
 import { duplicateModelProfileId } from "./modelLabels.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
@@ -209,6 +217,7 @@ import { ArtifactModal } from "./ScientificArtifacts.js";
 import { SourcePreview } from "./SourcePreview.js";
 import { readPreviewText } from "./source-preview.js";
 import { WorkspaceFileProvenanceModal } from "./WorkspaceFileProvenanceModal.js";
+import { WorkspaceFilePreviewModal } from "./WorkspaceFilePreviewModal.js";
 import {
   artifactArchiveBlob,
   artifactArchiveLimitError,
@@ -485,7 +494,7 @@ export function ArtifactTreeList({
   selectedArtifactIds,
 }: {
   entries: readonly ArtifactTreeEntry[];
-  lifecycleActions?: boolean;
+  lifecycleActions?: boolean | ((artifact: ScientificArtifact) => boolean);
   onOpen: (artifact: ScientificArtifact) => void;
   onSelectionChange?: (artifacts: readonly ScientificArtifact[], selected: boolean) => void;
   selectedArtifactIds?: ReadonlySet<string>;
@@ -526,7 +535,7 @@ export function ArtifactTreeList({
       <span aria-hidden="true" className="artifact-tree-selection-control"><span>{selection.ids.has(entry.artifact.id) ? "✓" : ""}</span></span>
       <TreeFileIcon kind={artifactTreeIconKind(entry.artifact)} />
       <span className="artifact-tree-label">{entry.name}</span>
-    </button> : lifecycleActions ? <div className="artifact-tree-file-row">
+    </button> : (typeof lifecycleActions === "function" ? lifecycleActions(entry.artifact) : lifecycleActions) ? <div className="artifact-tree-file-row">
       <button
         aria-label={t("app.openItemAria", { name: entry.artifact.name })}
         className="artifact-tree-file"
@@ -1215,6 +1224,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string>();
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string>();
+  const [researchPackageDialog, setResearchPackageDialog] = useState<ResearchPackageDialogTarget>();
+  const [researchPackageImportAllowed, setResearchPackageImportAllowed] = useState(false);
   const [sessionFilterOpen, setSessionFilterOpen] = useState(false);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
@@ -1226,6 +1237,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [projectCreationOpen, setProjectCreationOpen] = useState(false);
   const [sessionCreationPending, setSessionCreationPending] = useState(false);
   const [workspaceDocument, setWorkspaceDocument] = useState<{ content: string; path: string; file: Blob; markdown: boolean }>();
+  const [workspacePreview, setWorkspacePreview] = useState<{ sessionId: string; path: string; openedFromSessionId?: string }>();
+  const workspaceOpenController = useRef<AbortController | undefined>(undefined);
+  const closeWorkspacePreview = useCallback(() => setWorkspacePreview(undefined), []);
   const [workspaceTable, setWorkspaceTable] = useState<{
     content: string;
     fileName: string;
@@ -1274,6 +1288,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     return clampWorkspaceWidth(stored > 0 ? stored : DEFAULT_WORKSPACE_WIDTH, maxWidth);
   });
   const messagesViewport = useRef<HTMLDivElement>(null);
+  const branchReturnTarget = useRef<{ sessionId: string; messageId: string } | undefined>(undefined);
   const composerTextarea = useRef<HTMLTextAreaElement>(null);
   const focusComposerSessionId = useRef<string | undefined>(undefined);
   const workspacePanel = useRef<HTMLElement>(null);
@@ -1287,6 +1302,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const sessionCreationInFlight = useRef(false);
   const globalSearchRequestId = useRef(0);
   const activeProjectIdRef = useRef<string | undefined>(undefined);
+  const sessionListStateRef = useRef(sessionListState);
+  sessionListStateRef.current = sessionListState;
   // Project/Session requested by the URL but not yet validated against the
   // loaded lists; consumed by the list-load effects below.
   const pendingSelectionRef = useRef<{ projectId?: string; sessionId?: string } | null>(
@@ -1953,6 +1970,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     let cancelled = false;
     if (!activeProjectId) {
       setSessions([]);
+      setResearchPackageImportAllowed(false);
       setArtifacts([]);
       setArtifactOutputs([]);
       setArtifactSessions([]);
@@ -1967,6 +1985,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return () => { cancelled = true; };
     }
     setSessionsLoaded(false);
+    setResearchPackageImportAllowed(false);
     setArtifacts([]);
     setArtifactOutputs([]);
     setArtifactSessions([]);
@@ -1974,14 +1993,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     void Promise.all([
       client.listSessions(activeProjectId, sessionListState),
       client.listSessions(activeProjectId, "all"),
-      client.listProjectArtifacts(activeProjectId),
       client.getProjectSettings(activeProjectId),
-    ]).then(([items, allSessions, projectArtifacts, settings]) => {
+    ]).then(async ([items, allSessions, settings]) => {
       if (cancelled) return;
       setSessions(items);
       setArtifactSessions(allSessions);
       setArtifactSessionCatalogProjectId(activeProjectId);
-      setArtifacts(projectArtifacts);
       setProjectSettings(settings);
       // A Session named by the URL wins over the "first item" default, but
       // only once the list of the Project it was paired with has loaded.
@@ -1999,6 +2016,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         const target = findResourceTarget("session", pendingSettings.id ?? nextSessionId ?? "", [], items);
         if (target) void openScopedSettings(target);
       }
+      // Filtering may keep the same active Session, so its effect will not rerun.
+      const scopedArtifacts = nextSessionId ? await client.listArtifacts(nextSessionId) : [];
+      if (!cancelled && activeSessionIdRef.current === nextSessionId) setArtifacts(scopedArtifacts);
     }).catch((reason: Error) => {
       if (!cancelled) setError(reason);
     }).finally(() => {
@@ -2010,7 +2030,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function refreshSession(sessionId = activeSessionId): Promise<void> {
     if (!sessionId) {
       setSession(undefined);
+      setResearchPackageImportAllowed(false);
       setFiles([]);
+      setArtifacts([]);
       setPermissionEpoch(undefined);
       setPermissionRequests([]);
       setSessionUsage(undefined);
@@ -2032,7 +2054,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems, researchPackageImportEligibility] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -2051,6 +2073,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
+      client.canImportResearchPackage(sessionId).catch(() => ({ canImport: false })),
     ]);
     const activeRun = selectSessionReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
@@ -2082,7 +2105,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           return [runId, []] as const; // subagents recorded before child streams existed
         }
       })));
-    const projectArtifacts = await client.listProjectArtifacts(detail.projectId);
+    const sessionArtifacts = await client.listArtifacts(sessionId);
     const eventsByRun = Object.fromEntries(terminalEvents);
     const childEventsByRun: Record<string, SessionRunEvent[]> = {};
     for (const [runId, records] of childStreamEvents) {
@@ -2094,9 +2117,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       refreshSummaryRevision,
       latestSessionSummaries.current.get(sessionId),
     );
+    latestSessionSummaries.current.set(sessionId, {
+      revision: latestSessionSummaries.current.get(sessionId)?.revision ?? 0,
+      summary: sessionSummaryFrom(refreshedDetail),
+    });
     setSession(refreshedDetail);
+    setResearchPackageImportAllowed(researchPackageImportEligibility.canImport);
     setFiles(workspaceFiles);
-    setArtifacts(projectArtifacts);
+    setArtifacts(sessionArtifacts);
     setPermissionEpoch(epoch);
     setPermissionRequests(permissionRequestItems);
     setPermissionGrants(permissionGrantItems);
@@ -2211,12 +2239,18 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     const visibleSessionId = activeSessionId;
+    if (branchReturnTarget.current && branchReturnTarget.current.sessionId !== visibleSessionId) branchReturnTarget.current = undefined;
+    setResearchPackageImportAllowed(false);
+    setFiles([]);
+    setArtifacts([]);
     // The timeline is not reset here: switching Sessions only changes which
     // buffer is rendered, so a run left streaming in the background still has
     // its steps on screen when the user returns to it.
-    setIsFollowingOutput(true);
+    setIsFollowingOutput(branchReturnTarget.current?.sessionId !== visibleSessionId);
     setWorkspaceDocument(undefined);
     setWorkspaceTable(undefined);
+    setWorkspacePreview(undefined);
+    workspaceOpenController.current?.abort();
     void refreshSession(visibleSessionId).catch((reason: Error) => {
       if (shouldApplySessionScopedUpdate(visibleSessionId, activeSessionIdRef.current)) setError(reason);
     });
@@ -2261,10 +2295,24 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }, [workspaceDocument]);
 
   useEffect(() => {
-    if (!isFollowingOutput) return;
+    if (!isFollowingOutput || branchReturnTarget.current) return;
     const messageContainer = messagesViewport.current;
     messageContainer?.scrollTo({ top: messageContainer.scrollHeight });
   }, [artifactReviews, downloadCandidates, downloadJobs, downloadPlans, files, isFollowingOutput, replayTimelines, runTimeline, session?.messages]);
+
+  useEffect(() => {
+    const target = branchReturnTarget.current;
+    if (!target || session?.id !== target.sessionId || activeSessionId !== target.sessionId || !replayTimelines[target.sessionId]) return;
+    const anchor = document.getElementById(messageAnchorId(target.messageId));
+    if (!anchor) return;
+    const frame = requestAnimationFrame(() => {
+      setIsFollowingOutput(false);
+      anchor.scrollIntoView({ block: "center" });
+      anchor.focus({ preventScroll: true });
+      branchReturnTarget.current = undefined;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeSessionId, replayTimelines, session]);
 
   useEffect(() => {
     const textarea = composerTextarea.current;
@@ -2741,7 +2789,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   async function updateSessionSettings(changes: UpdateSessionRequest): Promise<void> {
     const approvalOnly = Object.keys(changes).every((key) => key === "approvalMode");
-    if (!activeSessionId || (isRunning && !approvalOnly) || session?.archivedAt) return;
+    if (!activeSessionId || (isRunning && !approvalOnly) || session?.archivedAt || isEvidenceSessionReadOnly(session)) return;
     try {
       const updated = await client.updateSession(activeSessionId, changes);
       syncSessionSummary(updated);
@@ -2858,7 +2906,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     level: ReviewerSpecialistLevel;
   }): Promise<void> {
     const targetSessionId = activeSessionId;
-    if (!targetSessionId || session?.archivedAt) return;
+    if (!targetSessionId || session?.archivedAt || isEvidenceSessionReadOnly(session)) return;
     setReviewerSessionSettingsBusy(true);
     try {
       const updated = await client.updateSessionReviewerSpecialistSettings(targetSessionId, next);
@@ -2888,7 +2936,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       || manualReviewerBusyBySession[targetSessionId]
       || reviewerCheckpointRunning
       || !reviewerSpecialistSettings?.enabled
-      || session?.archivedAt) return;
+      || session?.archivedAt || isEvidenceSessionReadOnly(session)) return;
     const messageId = crypto.randomUUID();
     const toolCallId = `manual-review:${messageId}`;
     const optimisticMessage: ChatMessage = {
@@ -2962,7 +3010,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function decideRemoteJob(job: RemoteJob, decision: PermissionDecision): Promise<void> {
-    if (!activeSessionId || session?.archivedAt) return;
+    if (!activeSessionId || session?.archivedAt || isEvidenceSessionReadOnly(session)) return;
     try {
       const updated = await client.decideRemoteJob(activeSessionId, job.id, { decision, expectedVersion: job.version });
       const jobs = await client.listRemoteJobs(activeSessionId);
@@ -2976,7 +3024,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function refreshRemoteJob(job: RemoteJob): Promise<void> {
-    if (!activeSessionId || isRunning || session?.archivedAt) return;
+    if (!activeSessionId || isRunning || session?.archivedAt || isEvidenceSessionReadOnly(session)) return;
     try {
       const updated = await client.refreshRemoteJob(activeSessionId, job.id);
       setRemoteJobs((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate));
@@ -2985,6 +3033,58 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     } catch (reason) {
       setError(reason instanceof Error ? reason : t("error.refreshRemoteJob"));
     }
+  }
+
+  const continuationTasks = useResearchContinuationTasks(client, (task, canAutoOpen) => {
+    const operation = task.operation!;
+    if (canAutoOpen() && activeSessionIdRef.current === task.sourceSessionId) {
+      void openResearchContinuation(operation.sessionIds!, operation.entrySessionId!, {
+        canOpen: () => canAutoOpen() && activeSessionIdRef.current === task.sourceSessionId,
+        onOpened: () => continuationTasks.manager.dismiss(task.requestId),
+      }).catch(reportError);
+    } else {
+      const projectId = activeProjectIdRef.current;
+      if (projectId) void Promise.all([client.listSessions(projectId, sessionListState), client.listSessions(projectId, "all")]).then(([items, all]) => {
+        if (activeProjectIdRef.current !== projectId || sessionListStateRef.current !== sessionListState) return;
+        setSessions(items); setArtifactSessions(all); setArtifactSessionCatalogProjectId(projectId);
+      }).catch(reportError);
+    }
+  }, JSON.stringify([activeProjectId, activeSessionId, workspaceView, sessionListState]));
+
+  async function openResearchContinuation(sessionIds: string[], entrySessionId: string, automatic?: { canOpen: () => boolean; onOpened: () => void }): Promise<void> {
+    const created = await client.getSession(entrySessionId);
+    const [items, allItems] = await Promise.all([client.listSessions(created.projectId, "active"), client.listSessions(created.projectId, "all")]);
+    if (automatic && !automatic.canOpen()) return;
+    setActiveProjectId(created.projectId);
+    setSessionListState("active");
+    setSessions(items);
+    setArtifactSessions(allItems);
+    setArtifactSessionCatalogProjectId(created.projectId);
+    setWorkspaceView("session");
+    setOpenSubagentId(undefined);
+    // Start the 10-second deadline only once the new Session actually renders.
+    if (!created.conversationBranch) markResearchCopyCreated(entrySessionId);
+    setActiveSessionId(entrySessionId);
+    setResearchPackageDialog(undefined);
+    setMessage("");
+    automatic?.onOpened();
+  }
+
+  async function returnToBranchSource(): Promise<void> {
+    const branch = session?.conversationBranch;
+    if (!branch) return;
+    let source: Awaited<ReturnType<typeof client.getSession>>;
+    try { source = await client.getSession(branch.sourceSessionId); }
+    catch { throw new Error(t("branch.sourceUnavailable")); }
+    if (!source.messages.some((message) => message.id === branch.sourceMessageId)) throw new Error(t("branch.sourceUnavailable"));
+    const [items, allItems] = await Promise.all([client.listSessions(source.projectId, source.archivedAt ? "all" : "active"), client.listSessions(source.projectId, "all")]);
+    branchReturnTarget.current = { sessionId: source.id, messageId: branch.sourceMessageId };
+    setIsFollowingOutput(false);
+    setActiveProjectId(source.projectId);
+    setSessionListState(source.archivedAt ? "all" : "active");
+    setSessions(items); setArtifactSessions(allItems); setArtifactSessionCatalogProjectId(source.projectId);
+    setWorkspaceView("session"); setOpenSubagentId(undefined); setMessage("");
+    setActiveSessionId(source.id);
   }
 
   async function refreshVisibleSessions(preferredSessionId = activeSessionId): Promise<void> {
@@ -3167,7 +3267,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function upload(fileList: FileList | File[]): Promise<void> {
-    if (!activeSessionId || session?.archivedAt) return;
+    if (!activeSessionId || session?.archivedAt || isEvidenceSessionReadOnly(session)) return;
     const filesToUpload = [...fileList];
     if (!filesToUpload.length) return;
     const maxFileBytes = workspaceCapabilities?.maxFileBytes ?? 1_073_741_824;
@@ -3213,37 +3313,57 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
-    const file = await client.readFile(targetSessionId, path);
-    // Preserve the specialized table reader before trying generic UTF-8 text.
-    if (opensInCsvViewer(path, file.type)) {
-      const entry = targetSessionId === activeSessionId
-        ? files.find((item) => item.path === path)
-        : undefined;
-      setWorkspaceTable({
-        content: await file.text(),
-        fileName: path.split("/").at(-1) || path,
-        source: {
-          kind: "workspace",
-          modifiedAt: entry?.modifiedAt,
-          openedAt: new Date().toISOString(),
-          path,
-          revisionId: entry?.provenance?.revisionId,
-          sessionId: targetSessionId,
-          size: file.size,
-        },
-      });
+    workspaceOpenController.current?.abort();
+    setWorkspaceDocument(undefined);
+    setWorkspaceTable(undefined);
+    setWorkspacePreview(undefined);
+    const markdown = /\.(md|markdown)$/i.test(path);
+    const browserPreview = /\.(?:html?|pdb|cif|mmcif|sdf|mol|mol2|xyz)$/i.test(path);
+    if (!markdown && !opensInCsvViewer(path) && !browserPreview) {
+      setWorkspacePreview({ sessionId: targetSessionId, path, openedFromSessionId: activeSessionId });
       return;
     }
-    const text = await readPreviewText(file, path);
-    // HTML and molecular files retain their existing browser/specialized path.
-    if (text !== undefined && !/\.(?:html?|pdb|cif|mmcif|sdf|mol|mol2|xyz)$/i.test(path)) {
-      const markdown = /\.(md|markdown)$/i.test(path);
-      setWorkspaceDocument({ content: markdown ? await file.text() : text, path, file, markdown });
-      return;
+    const controller = new AbortController();
+    workspaceOpenController.current = controller;
+    try {
+      const file = await client.readFile(targetSessionId, path, controller.signal);
+      if (controller.signal.aborted || activeSessionIdRef.current !== activeSessionId) return;
+      // Preserve the specialized table reader before trying generic UTF-8 text.
+      if (opensInCsvViewer(path, file.type)) {
+        const entry = targetSessionId === activeSessionId ? files.find((item) => item.path === path) : undefined;
+        setWorkspaceTable({
+          content: await file.text(),
+          fileName: path.split("/").at(-1) || path,
+          source: {
+            kind: "workspace",
+            modifiedAt: entry?.modifiedAt,
+            openedAt: new Date().toISOString(),
+            path,
+            revisionId: entry?.provenance?.revisionId,
+            sessionId: targetSessionId,
+            size: file.size,
+          },
+        });
+        return;
+      }
+      // HTML and molecular files retain their existing browser/specialized path.
+      if (browserPreview) {
+        const url = URL.createObjectURL(file);
+        window.open(url, "_blank", "noopener,noreferrer");
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        return;
+      }
+      const text = markdown ? await file.text() : await readPreviewText(file, path);
+      if (controller.signal.aborted || activeSessionIdRef.current !== activeSessionId) return;
+      if (text !== undefined) {
+        setWorkspaceDocument({ content: text, path, file, markdown });
+        return;
+      }
+      // Images and binary / unsupported encodings use the safe preview modal.
+      setWorkspacePreview({ sessionId: targetSessionId, path, openedFromSessionId: activeSessionId });
+    } catch (reason) {
+      if (!controller.signal.aborted) throw reason;
     }
-    const url = URL.createObjectURL(file);
-    window.open(url, "_blank", "noopener,noreferrer");
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
 
@@ -3291,7 +3411,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setSessionRuns(nextRuns);
     }
     if (streamEvent.type === "session.updated") {
-      syncSessionSummary(streamEvent.session);
+      // Replayed evidence is historical; live session configuration and locks
+      // come from the current session response, never from an archived event.
+      const current = latestSessionSummaries.current.get(sessionId)?.summary;
+      if (!current?.researchSnapshot || streamEvent.session.researchSnapshot?.operationId === current.researchSnapshot.operationId) syncSessionSummary(streamEvent.session);
     }
     const routing = routeRunStreamEvent(streamEvent, {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
@@ -3440,7 +3563,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       ),
       controller.signal,
     ).then(async () => {
-      if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) await refreshSession(sessionId);
+      if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
+      try {
+        await refreshSession(sessionId);
+      } catch (reason) {
+        // The event stream already delivered its terminal state. A failed
+        // best-effort refresh must not turn that completed run into an error.
+        if (!isAbortError(reason) && !isLegacyUnavailableError(reason)
+          && shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) {
+          setError(reason instanceof Error ? reason : t("error.resumeRunEvents"));
+        }
+      }
     }).catch((reason) => {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) {
         setError(reason instanceof Error ? reason : t("error.resumeRunEvents"));
@@ -3456,7 +3589,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function submitMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (evolveCommandBlocked) return;
-    if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
+    if (!activeSessionId || !session || !message.trim() || session.archivedAt || isEvidenceSessionReadOnly(session)) return;
     if (message.trim() === "/web-usage") {
       try {
         const usage = await client.getWebUsage();
@@ -3561,7 +3694,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         try {
           await refreshSession(submittedSessionId);
         } catch (refreshReason) {
-          if (!isAbortError(refreshReason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+          // The message stream completed successfully. Keep the reply and its
+          // terminal run state; a transient legacy refresh failure is not a
+          // failure of the run itself.
+          if (!isAbortError(refreshReason) && !isLegacyUnavailableError(refreshReason)
+            && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
             setError(refreshReason instanceof Error ? refreshReason : t("error.runFailed"));
           }
         }
@@ -3976,7 +4113,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         ? t("composer.modelPicker.thinkingOff")
         : t("settings.thinkingMode.auto");
   useEffect(() => {
-    if (!session || !activeModel || isRunning || session.archivedAt) return;
+    if (!session || !activeModel || isRunning || session.archivedAt || isEvidenceSessionReadOnly(session)) return;
     const changes = normalizeSessionThinking(
       activeModel,
       modelProviders,
@@ -3999,7 +4136,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     // This effect deliberately follows persisted Session/model facts; the
     // update callbacks themselves are stable App operations, not triggers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModel, client, isRunning, modelProviders, session?.archivedAt, session?.id, session?.modelId, session?.thinkingEffort, session?.thinkingMode]);
+  }, [activeModel, client, isRunning, modelProviders, session?.archivedAt, session?.researchSnapshot, session?.id, session?.modelId, session?.thinkingEffort, session?.thinkingMode]);
   useEffect(() => {
     if (!showConfig) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -4059,6 +4196,21 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     : [];
   const replayedRunIds = new Set(Object.keys(sessionReplayTimelines).filter((runId) => runId !== activeTimelineRunId));
   const conversationBlocks = buildConversationBlocks(displayedMessages, sessionRuns, replayedRunIds);
+  const formalReply = (message: ChatMessage) => message.role === "assistant" && (!message.kind || message.kind === "message")
+    && Boolean(message.content.trim()) && !sessionRuns.some((run) => run.assistantMessageId === message.id && run.status !== "completed");
+  const renderBranchBoundary = (messageId: string) => session?.conversationBranch?.inheritedMessageId === messageId
+    ? <ConversationBranchBoundary key={`${session.id}:${messageId}`} branch={session.conversationBranch} onReturn={returnToBranchSource} /> : null;
+  const renderReplayReplyActions = (runId: string | undefined) => {
+    if (!session || !runId) return null;
+    const run = sessionRuns.find((item) => item.id === runId);
+    const message = session.messages.find((item) => item.id === run?.assistantMessageId);
+    if (!message || !formalReply(message) || run?.status !== "completed") return null;
+    return <div id={messageAnchorId(message.id)} tabIndex={-1} className="replayed-reply-actions">
+      <div className="message-actions"><CopyButton getText={() => message.content} label={t("app.copyMessage")} /><ForkMessageButton key={message.id} client={client} sessionId={session.id} messageId={message.id}
+        disabled={isRunning || sessionEvidenceLocked} onCreated={openResearchContinuation} /></div>
+      {renderBranchBoundary(message.id)}
+    </div>;
+  };
   const timelinePermissionRequestIds = collectTimelinePermissionRequestIds([
     ...runTimeline,
     ...Object.values(sessionReplayTimelines).flatMap((timeline) => timeline.entries),
@@ -4115,7 +4267,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   function renderConversationOutputs(outputs: readonly SessionArtifactOutput[] = []): ReactNode {
     return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion} />;
   }
+  const sessionEvidenceLocked = isEvidenceSessionReadOnly(session);
   const sessionArchived = Boolean(session?.archivedAt);
+  const sessionReadOnly = sessionArchived || sessionEvidenceLocked;
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
   const artifactGroups = groupArtifactsBySession({
     artifacts,
@@ -4154,7 +4308,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     message,
     modelsAvailable: models.length > 0,
     runningSessionIds,
-    sessionArchived,
+    sessionArchived: sessionReadOnly,
     stoppingSessionIds,
   });
   const automaticReviewComposer = automaticReviewComposerState({
@@ -4248,14 +4402,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const summaryRun = skillSummaryRun(sessionRuns, sourceRun);
     const finished = summaryRun && isTerminalRunStatus(summaryRun.status);
     const busy = skillEvolutionSourceRunIds.has(sourceRun.id) || Boolean(summaryRun && !finished);
-    if ((missingLibrary || sessionArchived || !session.modelId) && !busy && !summaryRun) return null;
+    if ((missingLibrary || sessionReadOnly || !session.modelId) && !busy && !summaryRun) return null;
     return <ProcessRecord key={sourceRun.id} active={!finished || busy} failed={Boolean(finished && summaryRun.status !== "completed")}
       label={summaryRun ? t("record.skillFinished", { status: summaryRun.status === "completed" ? t("subagent.status.completed") : summaryRun.status === "failed" ? t("subagent.status.failed") : summaryRun.status }) : t("app.summarizeAsSkill")}>
       <section aria-label={t("app.skillEvolutionAria")} className="skill-evolution-card" data-source-run-id={sourceRun.id}>
       <header><span><SparkleIcon size={16} /></span><div><strong>{t("app.summarizeAsSkill")}</strong><small>{t("app.skillLibraryDefault", { id: SELF_EVOLUTION_LIBRARY_ID })}</small></div></header>
       <button
         className="secondary-button"
-        disabled={busy || sessionArchived || !session.modelId || missingLibrary}
+        disabled={busy || sessionReadOnly || !session.modelId || missingLibrary}
         onClick={() => void summarizeRunAsSkill(sourceRun)}
         title={missingLibrary ? t("app.skillEvolutionNeedLibrary") : t("app.skillEvolutionQueueTooltip")}
         type="button"
@@ -4292,7 +4446,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   return (
-    <ErrorDiagnosticClient.Provider value={client}><RuntimeConfigClient.Provider value={client}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
+    <ErrorDiagnosticClient.Provider value={client}><RuntimeConfigClient.Provider value={client}><ResearchContinuationContext.Provider value={continuationTasks}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
       <button
         aria-controls="app-sidebar"
@@ -4451,7 +4605,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     </div> : <button
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
                       onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setSidebarDrawerOpen(false); setOpenSessionMenuId(undefined); }}
-                      onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
+                      onDoubleClick={() => { if (!item.archivedAt && !isEvidenceSessionReadOnly(item)) beginInlineRename(target, "sidebar"); }}
                       title={item.archivedAt ? `${sessionTitle(item)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item) })}
                       type="button"
                     >
@@ -4459,10 +4613,15 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
+                      evidenceLocked={isEvidenceSessionReadOnly(item)}
                       busy={runningSessionIds.has(item.id) || lifecycleBusy}
                       label={label}
                       onArchive={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("archive", item.id); }}
                       onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item) }); }}
+                      onExportConversation={() => { setOpenSessionMenuId(undefined); if (activeProjectId) setResearchPackageDialog({ projectId: activeProjectId, sessionId: item.id, kind: "conversation" }); }}
+                      onExportResearchPackage={() => { setOpenSessionMenuId(undefined); if (activeProjectId) setResearchPackageDialog({ projectId: activeProjectId, sessionId: item.id, kind: "package" }); }}
+                      onImportResearchPackage={() => { setOpenSessionMenuId(undefined); if (activeProjectId) setResearchPackageDialog({ projectId: activeProjectId, sessionId: item.id, kind: "import" }); }}
+                      canImportResearchPackage={item.id === activeSessionId && researchPackageImportAllowed}
                       onRename={() => { setOpenSessionMenuId(undefined); beginInlineRename(target, "sidebar"); }}
                       onRestore={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("restore", item.id); }}
                       onSettings={() => { setOpenSessionMenuId(undefined); void openScopedSettings({ id: item.id, kind: "session", label: item.title }); }}
@@ -4529,6 +4688,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           <>
         {sessionArchived ? <div className="archived-banner"><strong>{t("app.archivedBannerTitle")}</strong><span>{t("app.archivedBannerBody")}</span></div> : null}
 
+        {session?.id === activeSessionId && !session?.conversationBranch && session?.researchSnapshot?.role === "research_copy" && session.researchSnapshot.state === "ready"
+          ? <ResearchCopyNotice key={session.id} sessionId={session.id} /> : null}
+
         <div className={workspaceCollapsed ? "content-grid workspace-collapsed" : "content-grid"} style={workspaceCollapsed ? undefined : { gridTemplateColumns: `minmax(0, 1fr) ${workspaceWidth}px` }}>
           <section className="conversation">
             <div className="session-bar">
@@ -4556,7 +4718,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   size={inlineRenameInputColumns(renameDraft)}
                   value={renameDraft}
                 /> : session ? (
-                  <h1 className="session-bar-session">{!session.archivedAt ? (
+                  <h1 className="session-bar-session">{!sessionReadOnly ? (
                     <button
                       className="session-bar-session-title"
                       onClick={() => {
@@ -4655,7 +4817,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
                         <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                       ) : (
-                        <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
+                        <article id={messageAnchorId(block.message.id)} tabIndex={-1} className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
                           <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
                           <div><span className="message-meta"><span className="message-role">{block.message.role === "user" ? t("app.roleResearcher") : block.message.kind === "review_notice" ? t("app.roleReviewerNotice") : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MessageTime value={block.message.createdAt} /></span><MarkdownRenderer
                             className="message-content"
@@ -4667,7 +4829,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                             workspaceSessionId={block.message.role === "assistant" ? session.id : undefined}
                           /></div>
                           <RunUsageInline run={messageUsageByMessageId.get(block.message.id)} />
-                          {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label={t("app.copyMessage")} /> : null}
+                          <div className="message-actions">
+                            {block.message.role === "user" || block.message.role === "assistant" && block.message.kind !== "review_notice"
+                              ? <CopyButton getText={() => block.message.content} label={t(block.message.role === "user" ? "branch.copyUser" : "app.copyMessage")} /> : null}
+                            {formalReply(block.message) ? <ForkMessageButton client={client} sessionId={session.id} messageId={block.message.id}
+                              disabled={isRunning || sessionEvidenceLocked} onCreated={openResearchContinuation} /> : null}
+                          </div>
                         </article>
                       )}
                       {block.message.kind !== "wake_notice" && block.message.runtimeNotice
@@ -4675,6 +4842,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
                       {renderConversationOutputs(artifactOutputAnchors.byMessage.get(block.message.id))}
+                      {renderBranchBoundary(block.message.id)}
                     </Fragment>
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
@@ -4690,6 +4858,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
                             renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
                           {renderConversationOutputs(artifactOutputAnchors.byReplayTimeline.get(block.runId))}
+                          {renderReplayReplyActions(block.runId)}
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4731,6 +4900,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
                       {renderConversationOutputs(artifactOutputAnchors.activeTimeline)}
+                      {!isRunning ? renderReplayReplyActions(activeTimelineRunId) : null}
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
@@ -4774,7 +4944,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
                   {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={t("app.removeAnnotation", { name: annotation.artifactLogicalName, note: annotation.note })} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
-                  <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
+                  {sessionEvidenceLocked ? <div className="research-snapshot-composer" aria-label="导入证据快照">
+                    <strong>导入证据快照 · 只读</strong>
+                    <ContinueResearchButton client={client} disabled={!session.researchSnapshot?.continuationAvailable || session.researchSnapshot.state !== "ready"} key={session.id} onCreated={openResearchContinuation} sessionId={session.id} />
+                    <p>{session.researchSnapshot?.state === "failed" ? "导入未完整完成，现有内容保持锁定。请检查服务后重新导入到新会话。" : session.researchSnapshot?.state === "importing" ? "正在恢复研究记录，请等待导入完成。" : "会话、产物、溯源和科学记忆保留为导入时的状态。继续研究将在独立新会话中进行。"}</p>
+                    {(session.researchSnapshot?.sessionIds.length ?? 0) > 1 ? <p>将复制全部 {session.researchSnapshot?.sessionIds.length} 个关联会话。</p> : null}
+                    {session.researchSnapshot?.historyLimited ? <p>此快照的研究历史经过精简，继续研究仅复制包内已有内容，不包含被省略的历史版本、完整思考和事件流。</p> : null}
+                    {session.researchSnapshot?.state === "ready" && !session.researchSnapshot.continuationAvailable ? <p>此证据包缺少创建研究副本所需的数据，仍可查看和下载已有内容。</p> : null}
+                  </div> : <textarea ref={composerTextarea} disabled={sessionReadOnly} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
                     if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
@@ -4782,9 +4959,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                     if (composerTrigger) return;
                     event.preventDefault();
-                    if (!message.trim() || sessionArchived || !activeModel) return;
+                    if (!message.trim() || sessionReadOnly || !activeModel) return;
                     event.currentTarget.form?.requestSubmit();
-                  }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
+                  }} placeholder={sessionReadOnly ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />}
                   {composerRunAction.noModelReason ? <ComposerNoModelNotice
                     onOpenModelSettings={() => openSystemSettings("models", { wizard: true })}
                     reason={composerRunAction.noModelReason}
@@ -4799,7 +4976,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
                       controls={activeThinkingControls}
-                      disabled={isRunning || sessionArchived}
+                      disabled={isRunning || sessionReadOnly}
                       models={models}
                       onOpenSettings={() => openSystemSettings("models", { wizard: true })}
                       onSelect={(modelId) => void updateConversationModel(modelId)}
@@ -4813,7 +4990,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <div className="orchestration-controls">
                       <ConnectorPicker
                         connectors={connectors}
-                        disabled={isRunning || sessionArchived}
+                        disabled={isRunning || sessionReadOnly}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
                         specialistIds={specialists.find(item => item.id === session.specialistId)?.connectorIds ?? []}
@@ -4823,10 +5000,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         refreshing={mcpReadiness.refreshing}
                         refreshError={mcpReadiness.error}
                       />
-                      <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
+                      <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionReadOnly} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
                     <ApprovalModeToggle
-                      disabled={sessionArchived}
+                      disabled={sessionReadOnly}
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
@@ -4834,7 +5011,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       aria-checked={automaticReviewComposer.switchChecked}
                       aria-label={t("reviewer.automaticReview")}
                       className="automatic-review-toggle"
-                      disabled={sessionArchived || reviewerSessionSettingsBusy || !automaticReviewComposer.capabilityKnown}
+                      disabled={sessionReadOnly || reviewerSessionSettingsBusy || !automaticReviewComposer.capabilityKnown}
                       onClick={() => {
                         if (!automaticReviewComposer.capabilityKnown) return;
                         if (automaticReviewComposer.capabilityEnabled) {
@@ -4900,7 +5077,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               </div>
             </div>
 <WorkspaceFolder key={`files:${activeSessionId}`} name="files" label={t("record.files")}>
-            {activeSessionId && !sessionArchived ? (
+            {activeSessionId && !sessionReadOnly ? (
               <label className={dragActive ? "drop-zone active" : "drop-zone"} onDragEnter={() => setDragActive(true)} onDragLeave={() => setDragActive(false)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                 event.preventDefault();
                 setDragActive(false);
@@ -4916,7 +5093,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <strong>{t("app.dropFiles")}</strong>
                 <small>{t("app.dropHint", { size: formatByteLimit(workspaceCapabilities?.maxFileBytes ?? 1_073_741_824) })}</small>
               </label>
-            ) : <p className="muted">{sessionArchived ? t("app.archivedWorkspace") : t("app.createSessionWorkspace")}</p>}
+            ) : <p className="muted">{sessionEvidenceLocked ? "导入工作区为只读，可查看和下载已有文件。" : sessionReadOnly ? t("app.archivedWorkspace") : t("app.createSessionWorkspace")}</p>}
 
             {artifacts.length > 0 ? <details className="workspace-fold artifact-catalog-section">
               <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.artifacts")}</strong><span className="fold-meta">{artifacts.length}</span></summary>
@@ -4962,7 +5139,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <div className="file-list">
                       <ArtifactTreeList
                         entries={buildArtifactTree(group.items)}
-                        lifecycleActions
+                        lifecycleActions={(artifact) => !sessionEvidenceLocked && !isEvidenceSessionReadOnly(artifactSessions.find((item) => item.id === artifact.createdInSessionId))}
                         onOpen={openArtifact}
                         onSelectionChange={artifactSelectionMode ? changeArtifactSelection : undefined}
                         selectedArtifactIds={artifactSelectionMode ? selectedArtifactIds : undefined}
@@ -5032,7 +5209,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             {session && reviewerSpecialistSettings?.enabled ? <details className="workspace-fold"><summary>{t("specialist.reviewerName")}</summary><ReviewerControlCard
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning || reviewerAuditRunning}
               configBusy={reviewerSessionSettingsBusy}
-              disabled={sessionArchived}
+              disabled={sessionReadOnly}
               automaticReviewEnabled={session.reviewerAutomaticReviewEnabled}
               level={session.reviewerSpecialistLevel}
               onAutomaticReviewChange={(automaticReviewEnabled) => void updateSessionReviewerSpecialistSettings({
@@ -5070,9 +5247,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         </div>
           </>
         )}
+      <ResearchContinuationStatus tasks={continuationTasks.tasks} onDismiss={(id) => continuationTasks.manager.dismiss(id)} onRetry={(id) => { continuationTasks.manager.start(id); }} />
       </main>
 
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
+      <ResearchPackageExportMonitor client={client} onToast={pushToast} />
 
       {workspaceDocument ? (
         <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorkspaceDocument(undefined); }}>
@@ -5149,6 +5328,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           run={openEvolveRun}
         />
       ) : null}
+
+      {workspacePreview && workspacePreview.openedFromSessionId === activeSessionId ? <WorkspaceFilePreviewModal
+        key={`${workspacePreview.sessionId}:${workspacePreview.path}`}
+        client={client}
+        sessionId={workspacePreview.sessionId}
+        path={workspacePreview.path}
+        onClose={closeWorkspacePreview}
+      /> : null}
 
       {workspaceFileProvenanceTarget && workspaceFileProvenanceTarget.sessionId === activeSessionId ? <WorkspaceFileProvenanceModal
         error={workspaceFileProvenanceTarget.error}
@@ -5408,7 +5595,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 /> : null}
                 {scopedSettingsSession && scopedSettingsSessionProject ? <SessionRemoteSettings
                   client={client}
-                  disabled={session?.id === settingsTarget.id && sessionArchived}
+                  disabled={session?.id === settingsTarget.id && sessionReadOnly}
                   onError={reportScopedSettingsError}
                   onSessionChange={syncSessionSummary}
                   project={scopedSettingsSessionProject}
@@ -5417,7 +5604,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               </>}
               connectors={connectors}
               details={scopedSettings}
-              disabled={settingsTarget.kind === "session" && session?.id === settingsTarget.id && sessionArchived}
+              disabled={settingsTarget.kind === "session" && session?.id === settingsTarget.id && sessionReadOnly}
               key={resourceTargetKey(settingsTarget)}
               models={models}
               onSave={saveScopedSettings}
@@ -5439,9 +5626,29 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         onChangeConfirmation={setDeletionConfirmation}
         onConfirm={() => void confirmDeletion()}
       /> : null}
+      <ResearchPackagePreviewMonitor client={client} projectId={session?.projectId} sessionId={session?.id} revision={session?.updatedAt} />
+      <ResearchPackageDialogs
+        client={client}
+        key={researchPackageDialog ? `${researchPackageDialog.kind}:${researchPackageDialog.sessionId}` : "closed"}
+        onClose={() => setResearchPackageDialog(undefined)}
+        onExportQueued={(filename) => pushToast("info", "证据包已加入后台导出", `${filename} 完成后会自动下载。`)}
+        onContinued={openResearchContinuation}
+        onImported={async (importedSessionIds) => {
+          const projectId = researchPackageDialog?.projectId;
+          if (!projectId) return;
+          const [items, allItems] = await Promise.all([client.listSessions(projectId, sessionListState), client.listSessions(projectId, "all")]);
+          if (activeProjectIdRef.current !== projectId) return;
+          setSessions(items);
+          setArtifactSessions(allItems);
+          setArtifactSessionCatalogProjectId(projectId);
+          const currentSessionId = activeSessionIdRef.current;
+          if (currentSessionId && importedSessionIds.includes(currentSessionId)) await refreshSession(currentSessionId);
+        }}
+        target={researchPackageDialog}
+      />
 
     </div>
-    </PluginWebHost></RuntimeConfigClient.Provider></ErrorDiagnosticClient.Provider>
+    </PluginWebHost></ResearchContinuationContext.Provider></RuntimeConfigClient.Provider></ErrorDiagnosticClient.Provider>
   );
 }
 

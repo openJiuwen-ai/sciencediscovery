@@ -13,4 +13,5 @@
 // limitations under the License.
 
 export { ApiClient, ApiRequestError, isAbortError } from "./api/client.js";
+export { isLegacyUnavailableError } from "./api/auth.js";
 export type { ChatMessage } from "@sciencediscovery/schema";

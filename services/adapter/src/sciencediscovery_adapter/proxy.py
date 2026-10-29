@@ -21,6 +21,7 @@ not.
 
 from __future__ import annotations
 
+import asyncio
 import httpx
 import logging
 import time
@@ -80,15 +81,31 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     has_body = request.method not in ("GET", "HEAD")
     request_id = uuid.uuid4().hex
     started = time.monotonic()
-    upstream_request = client.build_request(
-        request.method,
-        httpx.URL(path=request.url.path, query=request.url.query.encode()) if request.url.query
-        else httpx.URL(path=request.url.path),
-        headers=forwardable(request.headers, drop=frozenset({"content-length"})),
-        content=request.stream() if has_body else None,
+    upstream_url = (
+        httpx.URL(path=request.url.path, query=request.url.query.encode())
+        if request.url.query else httpx.URL(path=request.url.path)
     )
+    safe_to_retry = request.method in {"GET", "HEAD"}
     try:
-        upstream = await client.send(upstream_request, stream=True)
+        # A brief transport error can happen when the upstream closes an idle
+        # keep-alive socket at the same time the pool attempts to reuse it.
+        # Retry only idempotent reads, and only once before response headers;
+        # never replay a write or a partially streamed response.
+        attempts = 2 if safe_to_retry else 1
+        for attempt in range(attempts):
+            upstream_request = client.build_request(
+                request.method,
+                upstream_url,
+                headers=forwardable(request.headers, drop=frozenset({"content-length"})),
+                content=request.stream() if has_body else None,
+            )
+            try:
+                upstream = await client.send(upstream_request, stream=True)
+                break
+            except httpx.TransportError:
+                if attempt + 1 == attempts:
+                    raise
+                await asyncio.sleep(0.05)
     except httpx.HTTPError as error:
         _log_failure(error, request_id=request_id, request=request, started=started, phase="headers")
         return JSONResponse(

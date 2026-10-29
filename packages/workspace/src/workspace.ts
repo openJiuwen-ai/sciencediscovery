@@ -601,15 +601,15 @@ function summarizeSpecialistsForTaskTool(
 
 const MAX_WORKSPACE_SCAN_FILES = 500;
 
-export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<WorkspaceScanResult> {
+export async function scanWorkspaceWithStatus(workspaceRoot: string, limit = MAX_WORKSPACE_SCAN_FILES): Promise<WorkspaceScanResult> {
   await mkdir(workspaceRoot, { recursive: true });
   const files: WorkspaceFileInfo[] = [];
 
   async function visit(directory: string): Promise<void> {
-    if (files.length > MAX_WORKSPACE_SCAN_FILES) return;
+    if (files.length > limit) return;
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (files.length > MAX_WORKSPACE_SCAN_FILES) break;
+      if (files.length > limit) break;
       const fullPath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
@@ -628,8 +628,8 @@ export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<Wo
 
   await visit(resolve(workspaceRoot));
   return {
-    files: files.slice(0, MAX_WORKSPACE_SCAN_FILES),
-    truncated: files.length > MAX_WORKSPACE_SCAN_FILES,
+    files: files.slice(0, limit),
+    truncated: files.length > limit,
   };
 }
 
