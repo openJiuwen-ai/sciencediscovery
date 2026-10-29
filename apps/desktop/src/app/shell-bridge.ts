@@ -18,7 +18,8 @@
  * The Electron shell (sd-shell) watches the cluster after the UI loads and
  * pushes state over the preload bridge:
  *
- *   window.sdShell.onJiuwenState(cb) — subscription push
+ *   window.sdShell.onJiuwenState(cb) — subscription push; returns an
+ *                                      unsubscribe function
  *   window.sdShell.getJiuwenState()  — one-shot pull (race guard: the first
  *                                      push can race listener setup)
  *
@@ -46,7 +47,7 @@ export interface JiuwenReadiness {
 }
 
 interface SdShellJiuwen {
-  onJiuwenState?: (cb: (state: JiuwenReadiness) => void) => void;
+  onJiuwenState?: (cb: (state: JiuwenReadiness) => void) => () => void;
   getJiuwenState?: () => Promise<JiuwenReadiness | null>;
   /** Takeover marker: the shell already ran its data-directory wizard
    *  and the startup flow before loading this SPA (constant true from the
@@ -113,7 +114,8 @@ export function useJiuwenReadiness(): { hasShell: boolean; state: JiuwenReadines
     if (!shell?.onJiuwenState) return;
     let cancelled = false;
     let received = false;
-    shell.onJiuwenState((next) => {
+    const unsubscribe = shell.onJiuwenState((next) => {
+      if (cancelled) return;
       received = true;
       setState(next);
     });
@@ -138,6 +140,7 @@ export function useJiuwenReadiness(): { hasShell: boolean; state: JiuwenReadines
     }, POLL_AFTER_MS);
     return () => {
       cancelled = true;
+      unsubscribe();
       clearTimeout(timer);
     };
     // The preload installs window.sdShell before any app code runs, so its

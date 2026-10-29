@@ -104,13 +104,13 @@ interface ModelComboProps {
 /**
  * The 模型名称 field: one input that both carries a hand-typed value and
  * offers the fetched listing through a dropdown of our own. It replaced a
- * native <datalist>, whose two traits could not be fixed in place: it filters
- * the suggestions by the input's current value, so after picking GLM-5.2 the
- * dropdown only ever offered GLM-5.2 again (users could not switch models),
- * and its picker indicator sits low in the box. Opening this dropdown always
+ * hand-typed input with a parallel native <select> that appeared once the
+ * listing arrived: the two read as overlapping pickers for the same value,
+ * and the select could not carry a hand-typed model the listing did not
+ * name, so switching between them was a trap. Opening this dropdown always
  * shows the whole listing (typing filters only while typing), the caret is
- * centered by our own CSS, and with no listing fetched it degrades to a plain
- * input for gateways without a /models endpoint.
+ * centered by our own CSS, and with no listing fetched it degrades to a
+ * plain input for gateways without a /models endpoint.
  */
 function ModelComboBox({
   disabled,
@@ -170,6 +170,15 @@ function ModelComboBox({
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape" && open) {
+      // Close only the dropdown here; the surrounding dialog (settings modal,
+      // wizard step) must not see this Escape — including when the active
+      // filter has emptied the menu.
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+      return;
+    }
     if (!open || options.length === 0) {
       if (event.key === "ArrowDown" && listing.length > 0) {
         event.preventDefault();
@@ -191,12 +200,6 @@ function ModelComboBox({
       } else {
         closeMenu();
       }
-    } else if (event.key === "Escape") {
-      // Close only the dropdown here; the surrounding dialog (settings modal,
-      // wizard step) must not see this Escape.
-      event.preventDefault();
-      event.stopPropagation();
-      closeMenu();
     }
   };
 
@@ -226,6 +229,7 @@ function ModelComboBox({
           className="field-combo-toggle"
           disabled={disabled}
           onClick={() => (open ? closeMenu() : openMenu())}
+          onMouseDown={(event) => event.preventDefault()}
           type="button"
         >
           <span aria-hidden="true" className="field-combo-caret" />
@@ -579,12 +583,10 @@ export function ModelForm({
 
       <div className="field">
         <span className="field-label">{TEXT.wizard.provider.model}</span>
-        {/* This field used to render a select BESIDE the hand-typed input once
-         * the listing arrived, which read as two overlapping pickers for the
-         * same value. The native datalist that replaced it filtered its own
-         * suggestions by the input's value, so after one pick the dropdown
-         * could not offer anything else — see ModelComboBox for what took
-         * over. */}
+        {/* This field used to render a hand-typed input with a parallel
+         * native <select> that appeared once the listing arrived, which read
+         * as two overlapping pickers for the same value — see ModelComboBox
+         * for what took over. */}
         <div className="field-row is-action">
           <ModelComboBox
             disabled={busy !== ""}

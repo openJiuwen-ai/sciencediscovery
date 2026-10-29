@@ -406,7 +406,6 @@ export const ZH = {
       fetch: "刷新列表",
       fetching: "正在刷新…",
       empty: "这个服务商没有返回任何模型，请确认基础 URL 与密钥。",
-      selectPlaceholder: "从清单里选择",
       preset: "服务商类型",
       tokenOptional: "本地服务，可不填",
     },

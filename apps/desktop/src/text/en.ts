@@ -380,7 +380,6 @@ export const EN: Text = {
       fetch: "Refresh list",
       fetching: "Refreshing…",
       empty: "The provider returned no models. Check the base URL and the key.",
-      selectPlaceholder: "Choose from the list",
       preset: "Provider type",
       tokenOptional: "Local service; optional",
     },
