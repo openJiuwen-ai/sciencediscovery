@@ -1,124 +1,100 @@
 <div align="center">
 
+<img src="docs/images/logo.png" width="120" alt="ScienceDiscovery app icon">
+
 # ScienceDiscovery
 
-**The one-stop AI research workspace, built for scientists.**
+**The all-in-one AI research workspace built for science.** · [Visit the official website →](https://sciencediscovery.github.io/index.html)
 
-Literature review, hypothesis, code, experiments and tuning — in one environment, with every step on the record.
+Read the literature, form hypotheses, write and run code, conduct experiments, and tune parameters — all in one place. Every step leaves a record, and every result is traceable.
 
+[![Release](https://img.shields.io/badge/Release-0.3.0-1f6feb?style=flat-square)](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/v0.3.0)
 [![License](https://img.shields.io/badge/License-Apache%202.0-1f6feb?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-0.2.0-1f6feb?style=flat-square)](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/0.2.0)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20binary%20%7C%20macOS%20source-6e7781?style=flat-square)](#requirements)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-6e7781?style=flat-square)](#requirements)
 [![Docs](https://img.shields.io/badge/Docs-EN%20%7C%20ZH-6e7781?style=flat-square)](https://sciencediscovery.github.io/docs/)
 
-[Download](#installation) · [Quick start](https://sciencediscovery.github.io/docs/getting-started/quick-start.html) · [Documentation](https://sciencediscovery.github.io/docs/) · [Contributing](CONTRIBUTING.md) · [中文](README_zh.md)
+English · [简体中文](README_zh.md)
 
-<img src="docs/images/task.gif" width="920" alt="The ScienceDiscovery workspace: project and session navigation, the composer, and the artifact, reviewer and provenance panels" />
+[Download](#quick-start) · [Product tour](#product-tour) · [Documentation](https://sciencediscovery.github.io/docs/) · [Contributing](CONTRIBUTING.md) · [Get slides](https://github.com/ScienceDiscovery/sciencediscovery.github.io/blob/main/site/src/media/ScienceDiscovery-Slides.pdf)
+
+<a href="https://github.com/ScienceDiscovery/sciencediscovery.github.io/blob/main/site/src/media/demo.gif"><img src="https://raw.githubusercontent.com/ScienceDiscovery/sciencediscovery.github.io/main/site/src/media/demo.gif" width="720" alt="ScienceDiscovery product demo: scientific MCP, protein 3D viewer, artifact evolution and provenance"></a>
 
 </div>
 
-## Overview
+## Why ScienceDiscovery
 
-ScienceDiscovery is a locally run research workspace, built on
-[JiuwenSwarm](https://gitcode.com/openJiuwen/jiuwenswarm): an agent reads the literature,
-writes and runs code inside a sandbox, and records the origin of every result. Everything
-executes on your own machine, against your own files, with your own model keys.
+ScienceDiscovery runs locally: the agent reads the literature, writes and runs code, and delivers reports, tables, and figures, while the workspace keeps every result together with the evidence behind it.
 
-## Installation
+- **Scientific MCP: one place for your scattered research tools.** Papers and data are retrieved and downloaded through Scientific MCP — no code to write, no API keys to wire up, no hopping between a dozen websites. Say what you need and the files land in your workspace.
+- **Protein 3D structures, one click away.** Drop a PDB file into the workspace and the artifact preview opens an interactive 3D structure: rotate, zoom, a sequence panel, and protein, pocket and ligand atoms colored automatically by layer (the built-in Mol* viewer).
+- **Self-evolving artifacts (RSI): auto-tune with fewer tokens.** Hand over something measurable — a program, a parameter table, even a prompt — and it generates variants, scores each one, validates the winner on held-out data and returns the best version. Every variant keeps its code, score and run record, so you can roll back.
+- **Result provenance: trace any result back to its source.** Runs, artifacts and claims all carry their version and provenance: open a claim and see which run, which dataset and which code produced it, along with the inputs and outputs from that moment.
+- **A research environment that runs locally.** ScienceDiscovery runs locally against your own files, and model keys stay on your machine. Python, R, and shell run inside a sandbox, scientific environments are provisioned and pinned for you, and long analyses keep running in the background. Connect a preset provider or any compatible endpoint — requests go only to the provider you configure.
 
-The prepackaged binary is the shortest path to a first run. On the
-[Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases), download
-the `ScienceDiscovery-<version>-linux-x86_64` asset for x86_64 or the
-`ScienceDiscovery-<version>-linux-aarch64` asset for arm64. Rename the downloaded
-file to `ScienceDiscovery`, then run:
+## Product Tour
 
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
-```
+### 1. Flexible MCP selection: plug in what you need
 
-Open <http://127.0.0.1:4310>. When the browser has not connected yet, use the Connection page to paste the local service access token from `.sciencediscovery-data/secrets/auth-token`; this works even when the service runs in the background and its startup output is unavailable. The printed **`Open to sign in`** URL remains a convenient automatic sign-in shortcut. That token is distinct from a model API key and grants access to this machine's workspace — keep it private.
+Enable scientific MCP connectors on demand in System settings — PubMed, arXiv, Europe PMC, PDB, UniProt, Reactome and more — or add your own MCP servers. Tools join the same session, with permissions and governance applied.
 
-For the prepackaged binary, Bubblewrap is the only system dependency. The
-[deployment guide](https://sciencediscovery.github.io/docs/getting-started/deployment.html) covers building a portable binary
-from source, local source mode for development, and Docker for advanced container
-operations. It also has [first-run help](https://sciencediscovery.github.io/docs/getting-started/deployment.html#first-run-troubleshooting-for-binary-and-local-mode)
-for the binary and local modes. Every deployment path uses JiuwenSwarm by default; the deployment
-guide covers the deployment-specific operations.
+![Scientific MCP settings: enabling PubMed, bioRxiv, PDB, UniProt and other research connectors](docs/images/connector-en.png)
 
-## Configure a model
+### 2. View protein 3D structures in place
 
-ScienceDiscovery does not bundle a model; you connect your own API. Open **System configuration** at
-the bottom of the left sidebar, then open **Model registry**. Select a preset provider or add one
-manually, enter its details and API key, then select **Save & connect**. This registers the provider's
-models and tests the first one. When it is the first model in the system, it also becomes the default
-task model. If you already have models, select one from **Global default task model** at the top of
-Model registry.
+Drop a PDB file into the workspace and the artifact preview opens an interactive 3D structure: rotate, zoom, a sequence panel, with protein, pocket and ligand atoms colored automatically by layer.
 
-Field definitions, and which of them an environment variable can set instead, are in the [configuration reference](https://sciencediscovery.github.io/docs/reference/configuration.html).
+![The protein 3D structure viewer showing 1ATP with sequence and structure panels](docs/images/readme/tour-protein.jpg)
 
-## First task
+### 3. Self-evolving artifacts: auto-tune and keep the trail
 
-Create a Project and a Session, drop a CSV or a PDF into the workspace, and describe the analysis
-you want. A permission card appears before the first code execution; once approved, inspect tool calls
-and their results in the timeline. Generated files that the task declares as **Artifacts** appear in the
-workspace. For a step-by-step walkthrough, see the [Quick Start](https://sciencediscovery.github.io/docs/getting-started/quick-start.html).
+Hand over something measurable — a program, a parameter table, even a prompt — and it generates variants, scores each one, validates the winner on held-out data and returns the best version; every variant keeps its code, score and run record, so you can roll back.
 
-## Capabilities
+![The Evolve run panel: score curve, candidate stream and search tree](docs/images/evolve/live-panel-en.png)
 
-| Capability | Description | Reference |
-|---|---|---|
-| **Literature and data access** | Built-in connectors reach paper and data repositories; PDFs are parsed into citable evidence | [Literature research](https://sciencediscovery.github.io/docs/domains/literature-research.html) · [Custom MCP servers](https://sciencediscovery.github.io/docs/advanced-setup/configure-custom-mcp.html) |
-| **Sandboxed code execution** | The agent writes, debugs and runs Python, R and shell inside a fail-closed sandbox | [Sandbox execution](https://sciencediscovery.github.io/docs/developer-docs/sandbox-execution.html) |
-| **Task decomposition** | Planning and multi-agent orchestration distribute a task across sub-agents and a cross-domain skill library | [Subagent orchestration](https://sciencediscovery.github.io/docs/developer-docs/subagent-orchestration.html) · [Skills](https://sciencediscovery.github.io/docs/developer-docs/skill-progressive-disclosure.html) |
-| **End-to-end provenance** | Code, environment, logs and cited evidence are recorded per deliverable; the optional memory graph makes the chain navigable | [Review and provenance](https://sciencediscovery.github.io/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
-| **Scripted and batch runs** | `ScienceDiscovery run` sends a task to a running `serve` from a terminal or a job script and streams the result as text or JSONL | [Command line](#command-line) · [CLI reference](https://sciencediscovery.github.io/docs/reference/cli.html) |
+### 4. Trace every artifact: click to inspect
 
-## Command line
+Runs, artifacts and claims all carry their version and provenance: open the artifact's Provenance tab to see which run, dataset and code produced the result, along with the inputs and outputs from that run.
 
-Besides the browser, a running `serve` accepts tasks from the terminal. Run `run` from the directory where `serve` runs, so it reads the same data directory and access token; if `serve` uses `--data-dir` or `--port`, pass the same options to `run`.
+![The artifact Provenance view showing version history, preview and provenance tabs](docs/images/evidence1.jpg)
 
-```bash
-# In a terminal: the answer streams to stdout, and permission requests are asked here
-./ScienceDiscovery run "Explain the difference between a paired and an unpaired t-test in three sentences"
+## Evaluation Results
 
-# In a pipe: one JSON event per line; keep only the final answer
-./ScienceDiscovery run --auto-approve "Name three common normalization methods for RNA-seq read counts, one line each" \
-  | jq -r 'select(.type == "result") | .content'
+**BiomniBench-DA — 77.4 with GLM-5.2 (August 2026).** In this biomedical data-analysis benchmark, ScienceDiscovery scored 77.4. In the same media-reported comparison, Claude Code with Opus 4.7 scored 73.3 — the configuration the report labels as the previous industry SOTA — and Claude Code with GLM-5.2 scored 69.
 
-# Only the answer, written to a file
-./ScienceDiscovery run --auto-approve --output text "Explain what a p-value does and does not tell you, in one paragraph" > answer.md
-```
+| Configuration | BiomniBench-DA score |
+| --- | --- |
+| ScienceDiscovery + GLM-5.2 | **77.4** |
+| Claude Code + Opus 4.7 (labelled the previous industry SOTA in the report) | 73.3 |
+| Claude Code + GLM-5.2 | 69 |
 
-On a terminal, `run` writes the answer to stdout, progress to stderr, and asks you to approve each permission request. When stdout is piped or redirected, it defaults to JSONL, errors included, and it cannot ask for approval, so it refuses to start unless you pass `--auto-approve`. That option approves the session's tool actions without asking, except direct host execution after a sandbox failure, which always needs explicit consent; use it only for tasks and data you would approve anyway. The [CLI reference](https://sciencediscovery.github.io/docs/reference/cli.html) describes every command, and `./ScienceDiscovery help` prints every option.
+![BiomniBench-DA comparison: ScienceDiscovery with GLM-5.2 scores 77.4, Claude Code with Opus 4.7 scores 73.3, and Claude Code with GLM-5.2 scores 69](docs/images/readme/benchmark-biomnibench-da.png)
+
+The chart and scores come from the [published report](https://mp.weixin.qq.com/s/XSaX6oyok9qqZmwBUiQCFg) (Machine Heart, 2026-08-16).
+
+## Quick Start
+
+ScienceDiscovery is available for Windows and Linux. Download the Windows installer `ScienceDiscovery-<version>-win-x64-setup.exe`, or the Linux executable `ScienceDiscovery-<version>-linux-x86_64` (x86_64) / `ScienceDiscovery-<version>-linux-aarch64` (arm64), from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases). See the [official installation guide](https://sciencediscovery.github.io/docs/getting-started/deployment.html) for detailed installation and startup steps.
+
+### Connect a model
+
+ScienceDiscovery does not bundle a model; you connect your own model API. On Linux, open **System configuration** at the bottom of the left sidebar, choose **Model registry**, select a preset provider or add one manually, enter its details and API key, then choose **Save & connect**. The first model also becomes the default task model; change it later under **Global default task model**. Protocol support and connection-check costs are documented in [Model API compatibility](docs/en/model-api-compatibility.md).
+
+### Run your first task
+
+Create a Project and a Session, drop a CSV or a PDF into the workspace, and describe the analysis you want. Approve the first execution when the permission card appears, follow tool calls and their results in the timeline, and open the files the task declares as **Artifacts** from the workspace panel.
 
 ## Requirements
 
 | Path | System requirements |
-|---|---|
-| **Prepackaged binary** | Linux x86_64/aarch64 (Windows x64 via WSL 2), Bubblewrap |
-| **Local source mode** | Linux (including WSL 2) or macOS; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git, curl; Bubblewrap on Linux |
-| **Docker** | Linux containers on Linux, macOS, or Windows; Bubblewrap and unprivileged user namespaces |
+| --- | --- |
+| **Windows desktop app** | Windows 10 or later on x64; about 5 GB of free disk space; no Node.js, Python, or WSL required |
+| **Linux binary** | glibc-based Linux x86_64 or aarch64, including WSL 2; Bubblewrap 0.6+ with unprivileged user namespaces; no system Python, R, or conda required |
 
-Managed scientific environments run on a pinned micromamba, so no system Python, R or conda is required.
+Managed scientific environments run on a pinned micromamba, so Python and R dependencies are prepared for you.
 
-> [!WARNING]
-> ScienceDiscovery is not a multi-user production service. The adapter and the API listen on loopback by default; access uses one bearer token and there is no TLS termination. Exposing either interface elsewhere must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, the adapter, JiuwenSwarm, the PDF worker, STDIO MCP servers you configure, and outbound model/provider calls run outside that sandbox as trusted control-plane operations. When the sandbox is unavailable, running a command directly on the host is a recovery step that needs its own explicit approval and has none of the sandbox's isolation. See [Sandbox execution](https://sciencediscovery.github.io/docs/developer-docs/sandbox-execution.html) for the boundary.
+## Community
 
-## Documentation
-
-| Section | Guides |
-|---|---|
-| **Getting started** | [Quick start](https://sciencediscovery.github.io/docs/getting-started/quick-start.html) · [Deployment](https://sciencediscovery.github.io/docs/getting-started/deployment.html) |
-| **Advanced setup** | [Custom MCP](https://sciencediscovery.github.io/docs/advanced-setup/configure-custom-mcp.html) · [Network proxy](https://sciencediscovery.github.io/docs/advanced-setup/configure-network-proxy.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
-| **Reference** | [CLI](https://sciencediscovery.github.io/docs/reference/cli.html) · [Configuration](https://sciencediscovery.github.io/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/docs/reference/rest-api.html) · [Built-in tools](https://sciencediscovery.github.io/docs/reference/builtin-tools.html) · [Runtime behavior](https://sciencediscovery.github.io/docs/reference/runtime-behavior.html) |
-| **Developer documentation** | [Architecture](https://sciencediscovery.github.io/docs/developer-docs/architecture.html) and the [developer index](https://sciencediscovery.github.io/docs/developer-docs/) |
-
-The complete English and Chinese indexes are in the [documentation site](https://sciencediscovery.github.io/docs/); development setup and test commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Join the community
-
-Join the ScienceDiscovery community on Slack or Feishu to discuss your work and share feedback.
+Join the ScienceDiscovery community on Slack or Feishu to ask questions, share results, and shape the roadmap.
 
 | [Slack][slack-invite] | Feishu |
 | :---: | :---: |
@@ -126,10 +102,10 @@ Join the ScienceDiscovery community on Slack or Feishu to discuss your work and 
 
 [slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
 
+Bug reports and feature ideas are welcome on [GitHub Issues](https://github.com/openJiuwen-ai/sciencediscovery/issues), and contributions are described in [CONTRIBUTING.md](CONTRIBUTING.md). If ScienceDiscovery helps your work, a star on the repository helps more researchers find it.
+
 ## License
 
-[Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE). ScienceDiscovery is open source and self-hosted.
 
 This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
-
-[Model API compatibility, checks and costs](docs/en/model-api-compatibility.md)
