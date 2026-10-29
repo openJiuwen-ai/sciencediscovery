@@ -579,7 +579,7 @@ export async function waitForRunChainTerminal(
 }
 
 /** Stop wake admission first, then cancel and verify all work in this isolated E2E Session. */
-export async function cancelActiveSessionRuns(page: Page, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
+export async function cancelActiveSessionRuns(page: Pick<Page, "request">, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
   const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
   const request = <T>(path: string, method: "GET" | "POST" = "GET", timeoutMs = 5_000) =>
     apiJson<T>(page, path, { method, timeoutMs: Math.min(5_000, timeoutMs) });
@@ -977,10 +977,21 @@ export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promi
   const api = await request.newContext();
   try {
     const client = { request: api };
+    // A blocked/repairing run still owns project resources. Stop and verify the
+    // session first so project deletion cannot race the run scheduler and yield
+    // a transient 409 during teardown.
+    await cancelActiveSessionRuns(client, fixture.session.id).catch((error) => {
+      console.warn(`[journey-cleanup] session shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     await apiJson(client, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
       data: { confirmationId: fixture.project.id },
       method: "DELETE",
-    }).catch(() => undefined);
+    }).catch(async (error) => {
+      // A fixture may have been removed by a failed setup path; preserve that
+      // benign case while exposing real teardown conflicts to the test runner.
+      if (error instanceof Error && /-> 404:/.test(error.message)) return;
+      throw error;
+    });
     if (fixture.model) await deleteJourneyModel(client, fixture.model).catch(() => undefined);
   } finally { await api.dispose(); }
 }

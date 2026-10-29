@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License.
 
 import { createHash, randomUUID } from "node:crypto";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 
 import type {
   ArtifactReviewRun,
@@ -92,6 +93,7 @@ export class ReviewerAuditCoordinator {
     mediaType: string;
     sessionId: string;
   }): Promise<ReviewerAuditTask | undefined> {
+    if (isEvidenceSessionReadOnly(this.store.getSession(input.sessionId))) return undefined;
     const version = this.store.getArtifactVersion(input.sessionId, input.artifactVersionId);
     const artifact = version ? this.store.getArtifact(input.sessionId, version.artifactId) : undefined;
     // An upload is valuable provenance and graph input, but it is not a
@@ -140,6 +142,7 @@ export class ReviewerAuditCoordinator {
   async resume(): Promise<void> {
     for (const project of this.store.listProjects()) {
       for (const session of this.store.listSessions(project.id, "all")) {
+        if (isEvidenceSessionReadOnly(session)) continue;
         const tasks = await this.store.listReviewerAuditTasks(session.id);
         for (const task of tasks.filter((item) => item.status === "skipped" && item.checkpointPublishedAt)) {
           await this.settleSkippedCheckpoint(task);

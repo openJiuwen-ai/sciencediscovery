@@ -124,11 +124,43 @@ import type { NativeAgentOptions } from "./native-agent/index.js";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
 import { SessionStore } from "./store.js";
+import { EvolutionStore } from "./evolution/store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
+
+test("closing an API during startup waits for evolution initialization", async () => {
+  const root = resolve(process.cwd(), ".tmp", `startup-close-${randomUUID()}`);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const initializeStarted = new Promise<void>((resolveStarted) => { started = resolveStarted; });
+  const originalInitialize = EvolutionStore.prototype.initialize;
+  let server: ReturnType<typeof createProductionApiServer> | undefined;
+  let closing: Promise<void> | undefined;
+  EvolutionStore.prototype.initialize = async function (): Promise<void> {
+    started();
+    await gate;
+    await originalInitialize.call(this);
+  };
+  try {
+    server = createProductionApiServer(testConfig(root));
+    await initializeStarted;
+    let closed = false;
+    closing = closeApiServer(server).then(() => { closed = true; });
+    await new Promise((done) => setTimeout(done, 20));
+    assert.equal(closed, false);
+    release();
+    await closing;
+  } finally {
+    release();
+    EvolutionStore.prototype.initialize = originalInitialize;
+    if (server) await (closing ?? closeApiServer(server));
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 /**
  * Agent turns run on JiuwenSwarm (behind a real adapter) in the tests that declare `swarm:required`: the shared
@@ -982,10 +1014,8 @@ test("updating SSH credentials immediately probes with the newly stored username
   const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(async () => {
-    await new Promise<void>((resolveClose) => {
-      server.close(() => resolveClose());
-      server.closeAllConnections();
-    });
+    // Drain asynchronous API cleanup before removing the stores it still owns.
+    await closeApiServer(server);
     await rm(tempRoot, { force: true, recursive: true });
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -8011,13 +8041,7 @@ test("closing the server closes the MCP transport it connected at startup", asyn
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 
   assert.equal(closed, 0, "the transport must stay open while the server is serving");
-  await new Promise<void>((resolveClose) => {
-    server.close(() => resolveClose());
-    server.closeAllConnections();
-  });
-  // The listener's close callback and the teardown both run on `close`; give
-  // the asynchronous one a turn before reading the count.
-  await new Promise((settled) => setImmediate(settled));
+  await closeApiServer(server);
 
   assert.equal(closed, 1);
 });

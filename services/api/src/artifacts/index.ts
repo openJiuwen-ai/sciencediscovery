@@ -84,7 +84,9 @@ const inflightWorkspaceListings = new WeakMap<
 >();
 const MAX_SHARED_LISTING_AGE_MS = 1_000;
 
-export function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
+export function listWorkspaceFiles(store: SessionStore, sessionId: string, complete = false): Promise<WorkspaceFile[]> {
+  // Complete export scans must never reuse a bounded UI listing.
+  if (complete) return readWorkspaceFiles(store, sessionId, true);
   let bySession = inflightWorkspaceListings.get(store);
   if (!bySession) {
     bySession = new Map();
@@ -101,9 +103,9 @@ export function listWorkspaceFiles(store: SessionStore, sessionId: string): Prom
   return entry.listing;
 }
 
-async function readWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
+async function readWorkspaceFiles(store: SessionStore, sessionId: string, complete = false): Promise<WorkspaceFile[]> {
   const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
-  const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId));
+  const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId), complete ? Number.POSITIVE_INFINITY : undefined);
   const provenance = await store.reconcileWorkspaceFiles(
     sessionId,
     scan.files,
