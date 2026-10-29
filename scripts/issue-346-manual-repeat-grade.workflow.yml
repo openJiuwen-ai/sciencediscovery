@@ -1,0 +1,77 @@
+# Copyright (C) 2026 Huawei Technologies Co., Ltd
+# SPDX-License-Identifier: Apache-2.0
+#
+# Temporary / diagnostic: offline repeat-grade for issue #346 using Manual
+# validation new traces (run 40819738668). Uses nightly-ci-ds judge secrets.
+# Does NOT rerun research. Safe to delete after measurement is archived.
+name: Issue 346 Manual repeat grade
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "Judge repeats per saved answer (>=3)"
+        type: choice
+        options: ['3', '4', '5']
+        default: '3'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: issue-346-manual-repeat-grade
+  cancel-in-progress: true
+
+jobs:
+  repeat-grade:
+    name: Offline repeat grade (Manual traces)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: nightly-ci-ds
+    env:
+      BIOMNI_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      BIOMNI_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CI_ALLOW_REAL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Prepare biomni rubrics (no research generation)
+        run: |
+          set -euo pipefail
+          runtime="${GITHUB_WORKSPACE}/.ci-runtime/issue-346"
+          mkdir -p "$runtime"
+          uv venv --python 3.14 "$runtime/benchmark-venv"
+          python="$runtime/benchmark-venv/bin/python"
+          uv pip install --python "$python" --only-binary :all: -r .ci/research-requirements.txt
+          "$python" test/benchmarks/biomnibench-da/prepare.py download \
+            --root "$runtime/biomnibench-da" --case da-13-3
+          "$python" test/benchmarks/biomnibench-da/prepare.py download \
+            --root "$runtime/biomnibench-da" --case da-14-1
+          echo "BIOMNI_PYTHON=$python" >> "$GITHUB_ENV"
+          echo "BIOMNI_DATA_ROOT=$runtime/biomnibench-da" >> "$GITHUB_ENV"
+      - name: Repeat-grade Manual answers
+        run: |
+          set -euo pipefail
+          out="${GITHUB_WORKSPACE}/.ci-results/issue-346-manual-repeat-grade"
+          mkdir -p "$(dirname "$out")"
+          "$BIOMNI_PYTHON" scripts/manual_repeat_grade.py \
+            --inputs test/benchmarks/biomnibench-da/fixtures/issue-346-manual-40819738668/inputs.json \
+            --data-root "$BIOMNI_DATA_ROOT" \
+            --repeats "${{ inputs.repeats }}" \
+            --output "$out"
+          echo "==== repeat-grade.md ===="
+          cat "$out/repeat-grade.md"
+      - name: Upload repeat-grade report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-346-manual-repeat-grade
+          path: .ci-results/issue-346-manual-repeat-grade
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
