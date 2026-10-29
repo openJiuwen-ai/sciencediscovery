@@ -10,6 +10,8 @@ import re
 import urllib.request
 import sys
 
+from rubrics import rubric_identity
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from judge_retry import judge_with_retries, REQUEST_TIMEOUT_SECONDS
 
@@ -45,8 +47,12 @@ def main():
     parser.add_argument("--trace", required=True)
     parser.add_argument("--answer", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--case", help="Require the selected task's official rubric pin")
     args = parser.parse_args()
+    if Path(args.output).exists() or Path(args.output).with_suffix('.attempts').exists():
+        raise FileExistsError('Use a new output path for each evaluation')
     rubric = Path(args.rubric).read_text()
+    identity = rubric_identity(args.rubric, args.case)
     levels(rubric)
     body = {"model": os.environ["BIOMNI_JUDGE_MODEL"], "temperature": 0,
             "max_tokens": 65536, "response_format": {"type": "json_object"}, "messages": [
@@ -60,11 +66,12 @@ def main():
     result, raw = judge_with_retries(body, request, lambda content: score_response(json.loads(content), rubric),
                                     Path(args.output).with_suffix(".attempts"),
                                     max_retries=int(os.environ.get("BIOMNI_JUDGE_MAX_RETRIES", "3")))
-    raw_path = Path(args.output).with_name("judge-response.json")
+    raw_path = Path(args.output).with_suffix(".attempts") / "judge-response.json"
     with raw_path.open("w") as stream:
         os.chmod(raw_path, 0o600)
         json.dump(raw, stream, ensure_ascii=False, indent=2)
-    result.update(adapter="local-openai-compatible-rubric-v1")
+    result.update(adapter="local-openai-compatible-rubric-v1", rubric=identity,
+                  gating=identity['channel'] == 'official')
     Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -74,6 +81,7 @@ if __name__ == "__main__":
     except Exception as exc:
         if "--output" in sys.argv:
             output = Path(sys.argv[sys.argv.index("--output") + 1])
-            output.write_text(json.dumps({"status": "error", "score": None, "gating": False,
-                                          "error_type": type(exc).__name__, "error": str(exc)}, indent=2))
+            if not output.exists():
+                output.write_text(json.dumps({"status": "error", "score": None, "gating": False,
+                                              "error_type": type(exc).__name__, "error": str(exc)}, indent=2))
         raise

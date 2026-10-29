@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import hashlib
+from rubrics import rubric_identity
 
 
 def completed_evidence(evidence_dir):
@@ -48,11 +49,13 @@ def rescore(evidence_dir, rubric, output, python=sys.executable, prior_evaluatio
     evidence = json.loads((evidence_dir / 'research-evidence.json').read_text())
     if not completed_evidence(evidence_dir):
         raise ValueError('Completed analysis evidence and measured generation usage are required')
+    # Recovery feeds the release gate: an arbitrary/local rubric cannot replace it.
+    rubric_identity(rubric, metrics['case_id'])
     output.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     with (output / 'judge.log').open('w') as log:
         result = subprocess.run([python, str(Path(__file__).with_name('judge.py')),
-                    '--rubric', str(rubric), '--trace', str(evidence_dir / 'trace.md'),
+                    '--rubric', str(rubric), '--case', metrics['case_id'], '--trace', str(evidence_dir / 'trace.md'),
                     '--answer', str(evidence_dir / 'answer.txt'), '--output', str(output / 'quality-scorecard.json')],
                     stdout=log, stderr=subprocess.STDOUT, timeout=3900)
     if result.returncode:

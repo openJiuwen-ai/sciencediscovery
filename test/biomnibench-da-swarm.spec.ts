@@ -155,7 +155,7 @@ for (const sample of cases) {
       await journey.step("Score and validate the evidence", "Require a valid original-rubric score and complete generator/judge usage before publishing metrics.", async () => {
         const judgeStart = performance.now();
         metrics.evaluation = { status: "running", gating: true };
-        await execute(python, [join(scripts, "judge.py"), "--rubric", join(task, "tests/rubric.txt"),
+        await execute(python, [join(scripts, "judge.py"), "--case", sample.id, "--rubric", join(task, "tests/rubric.txt"),
           "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
           "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: evaluationBudget });
         metrics.evaluation = { ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8")), gating: true };
