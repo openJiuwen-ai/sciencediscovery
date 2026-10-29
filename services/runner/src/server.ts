@@ -23,6 +23,8 @@ import { fileURLToPath } from "node:url";
 import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
+// [windows-desktop] Owner-only (0600) semantics go through the platform facade (win32: icacls). See #477.
+import { restrictToOwner } from "./platform/index.js";
 import { RunnerReadiness } from "./readiness.js";
 
 import type {
@@ -745,6 +747,8 @@ export function createRunnerServer(
           const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
           try {
             await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+            // [windows-desktop] 0600 has no POSIX semantics on NTFS; route through the platform facade. See #477.
+            await restrictToOwner(temporary);
             if (conflict === "overwrite") await rename(temporary, file);
             else {
               try { await link(temporary, file); }
@@ -1225,6 +1229,15 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     logger.info("service_started", { host: config.host, port });
     console.log(`ScienceDiscovery runner listening on http://${config.host}:${port}`);
   }
+  // Heartbeat. The runner is a single event loop; a field incident
+  // (2026-10-19) left it listening but never answering — alive on the port,
+  // frozen inside — and nothing in its log showed when it stopped making
+  // progress. A periodic line timestamps the freeze for exactly that case.
+  const startedAt = Date.now();
+  const heartbeat = setInterval(() => {
+    logger.info("runner_heartbeat", { uptimeMs: Date.now() - startedAt });
+  }, 60_000);
+  heartbeat.unref();
   const workspaceLabel = config.maxWorkspaceBytes === 0
     ? "unlimited"
     : `${config.maxWorkspaceBytes} bytes`;

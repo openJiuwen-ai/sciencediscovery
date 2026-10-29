@@ -58,6 +58,10 @@ import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import { buildSeatbeltProfile, canonicalPath, seatbeltPwdShim, seatbeltWorkspaceMapping } from "./seatbelt.js";
+// [windows-desktop] Windows has no SIGKILL/process-group semantics; child
+// termination goes through the platform facade (posix: child.kill passthrough,
+// win32: taskkill /T /F). See #482.
+import { terminateTree } from "./platform/index.js";
 import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { RUNNER_VERSION } from "./version.js";
@@ -1037,7 +1041,9 @@ const sandboxProcessGroups = new WeakSet<ChildProcessWithoutNullStreams>();
 
 /** Kill the namespace init as well as the monitor, including during bwrap setup. */
 export function killSandboxProcess(child: ChildProcessWithoutNullStreams): boolean {
-  if (!sandboxProcessGroups.has(child) || !child.pid) return child.kill("SIGKILL");
+  // [windows-desktop] The non-sandbox path also goes through the platform facade:
+  // posix unchanged (SIGKILL on the single child), win32 taskkill /T covers the whole tree. See #482.
+  if (!sandboxProcessGroups.has(child) || !child.pid) return terminateTree(child);
   try {
     process.kill(-child.pid, "SIGKILL");
     return true;
