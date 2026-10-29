@@ -1,5 +1,10 @@
 node_modules/
 dist/
 release/
+# The root .gitignore prunes any "build/" directory; win_desktop/build is
+# our electron-builder resources dir and must be tracked (only its
+# generated subdirectories stay ignored).
+!build/
 build/release*/
 build/resources/
+build/.deploy-tmp/
