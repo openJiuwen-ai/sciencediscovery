@@ -231,6 +231,16 @@ test("normalizers reduce each vendor payload to its documented shape", async () 
   );
 });
 
+test("document truncation never ends in half a surrogate pair", async () => {
+  const { renderExaContents, renderTavilyExtract } = await import("./fetch.js");
+  const cut = `${"x".repeat(4_095)}😀`;
+  // Both normalizers cap the body at 4_096 UTF-16 units; an emoji straddling
+  // that boundary must be dropped whole, not left as a lone high surrogate.
+  assert.equal(renderTavilyExtract({ results: [{ raw_content: cut, title: "Doc" }] }), `# Doc\n\n${"x".repeat(4_095)}`);
+  assert.equal(renderExaContents({ results: [{ text: cut, title: "Doc" }] }), `# Doc\n\n${"x".repeat(4_095)}`);
+  assert.doesNotMatch(renderTavilyExtract({ results: [{ raw_content: cut, title: "Doc" }] }), /[\ud800-\udbff](?![\udc00-\udfff])/u);
+});
+
 test("keyed providers authenticate the way their vendor SDK did", async () => {
   // Tavily moved from `api_key` in the body to a bearer header in the SDK this
   // path replaced; Exa and Brave use their own header names. Getting this wrong
