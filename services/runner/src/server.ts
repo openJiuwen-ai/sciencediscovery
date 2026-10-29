@@ -986,14 +986,14 @@ export function createRunnerServer(
         if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
         if (!direct) execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
         execution.maxOutputBytes ??= config.maxOutputBytes;
-        const accepted = managedExecutions.submit(execution, (signal, log) => direct
+        const accepted = managedExecutions.submit(execution, (signal, log, expectedEnvironmentRevisionId) => direct
           ? executeDirectShell(executorConfig, execution, signal, log)
           : execution.environmentId
           ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
-              return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log);
+              return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log, expectedEnvironmentRevisionId);
             }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log));
+          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log, expectedEnvironmentRevisionId));
         sendJson(response, accepted.accepted ? 202 : 200, accepted.execution);
         return;
       }

@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import type { ExecutionRecovery, RecoveryContext } from "./recovery.js";
 import type { ShellExecutionResult } from "./environment.js";
 
 export interface ExecutionOwner { sessionId: string; agentId: string }
@@ -43,6 +44,8 @@ export interface ManagedExecution extends ExecutionOwner {
   id: string;
   state: "queued" | "running" | "completed" | "failed" | "cancelled" | "unknown";
   queuedAt: string;
+  recovery?: ExecutionRecovery;
+  recoveryContext?: RecoveryContext;
   startedAt?: string;
   finishedAt?: string;
   result?: ShellExecutionResult;
@@ -90,6 +93,8 @@ export interface AgentShellExecution extends ExecutionOwner {
   turnId: string;
   state: ManagedExecution["state"];
   queuedAt: string;
+  recovery?: ExecutionRecovery;
+  recoveryContext?: RecoveryContext;
   startedAt?: string;
   finishedAt?: string;
   accepted: boolean;

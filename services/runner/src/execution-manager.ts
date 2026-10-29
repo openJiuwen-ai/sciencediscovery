@@ -7,11 +7,13 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { ensureWorkspaceBaseline, poisonWorkspace, RefStore, snapshotWorkspace, VersionStore, withWorkspaceLease, withWorkspaceAdmission, type AgentStateRef } from "@sciencediscovery/cas";
+import { assertRecoveryContext, recoveryRelativePath, unknownRecovery } from "@sciencediscovery/schema";
+import { collectExecutionRecovery, validateExecutionRecovery } from "./execution-recovery.js";
 import type { ExecutionLogPage, ExecutionOwner, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 
 export type ExecutionLogSink = (stream: "stdout" | "stderr", chunk: Buffer) => void;
 /** Resolving or rejecting must join every launched child, including cancellation. */
-type Operation = (signal: AbortSignal, log: ExecutionLogSink) => Promise<ShellExecutionResult>;
+type Operation = (signal: AbortSignal, log: ExecutionLogSink, expectedEnvironmentRevisionId?: string) => Promise<ShellExecutionResult>;
 const terminal = (state: ManagedExecution["state"]) => state !== "queued" && state !== "running";
 
 export class ExecutionManagerError extends Error {
@@ -63,6 +65,7 @@ export class ExecutionManager {
   private recoveryPending = false;
   private readonly recoveringIds = new Set<string>();
   private recovery: Promise<void> = Promise.resolve();
+  private readonly recoveryStoreId: string;
 
   constructor(dataDir: string, private readonly onQuarantine?: (detail: ExecutionQuarantineDiagnostic) => void) {
     const root = resolve(dataDir, "runner-executions");
@@ -102,8 +105,11 @@ export class ExecutionManager {
         CREATE TABLE IF NOT EXISTS logs (execution TEXT NOT NULL, cursor INTEGER NOT NULL, stream TEXT NOT NULL, text TEXT NOT NULL,
           PRIMARY KEY(execution, cursor));
         CREATE TABLE IF NOT EXISTS execution_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS execution_publications (id TEXT PRIMARY KEY, record TEXT NOT NULL);`);
+        CREATE TABLE IF NOT EXISTS execution_publications (id TEXT PRIMARY KEY, record TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS recovery_store (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), id TEXT NOT NULL);`);
       this.db.exec("BEGIN IMMEDIATE");
+      this.db.prepare("INSERT OR IGNORE INTO recovery_store VALUES (1, ?)").run(randomUUID());
+      this.recoveryStoreId = String(this.db.prepare("SELECT id FROM recovery_store WHERE singleton = 1").get()!.id);
       const records = this.db.prepare("SELECT id, session, agent, record FROM executions").all();
       const identity = this.db.prepare("SELECT value FROM execution_metadata WHERE key = 'runnerInstanceId'").get();
       // Never replace missing identity metadata if receipts already depended on it.
@@ -178,6 +184,8 @@ export class ExecutionManager {
     if (!/^[A-Za-z0-9_:.-]{1,160}$/.test(request.executionId)) throw new Error("Invalid Execution ID");
     // Bind the deferred admission and the digest to one immutable request snapshot.
     request = structuredClone(request);
+    if (request.recoveryContext) assertRecoveryContext(request.recoveryContext);
+    if (request.recoveryMetadataPath !== undefined && !recoveryRelativePath(request.recoveryMetadataPath)) throw new Error("UNSAFE_RECOVERY_PATH");
     const owner = { agentId: request.agentId, sessionId: request.permissionEpoch.sessionId };
     const requestDigest = digest(request);
     const key = request.workspaceRoot; // already canonicalized by the authenticated endpoint
@@ -186,6 +194,7 @@ export class ExecutionManager {
     const acceptedAt = new Date().toISOString();
     const execution: ManagedExecution = { ...owner, id: request.executionId, state: "queued", queuedAt: acceptedAt,
       workspaceKey: key, npuDevices: [...npuDevices],
+      ...(request.recoveryContext ? { recoveryContext: request.recoveryContext } : {}),
       receipt: { ...this.identity, revision: 1, requestDigest, acceptedAt } };
     // Duplicate lookup and insert share the transaction. No operation is scheduled until COMMIT.
     this.db.exec("BEGIN IMMEDIATE");
@@ -236,11 +245,20 @@ export class ExecutionManager {
       try {
         if (this.failedWorkspaces.has(key)) throw new Error("Workspace version commit failed; repair storage before restarting the Runner");
         if (controller.signal.aborted) throw new Error("Execution cancelled before start");
+        const expectedEnvironmentRevisionId = request.recoveryContext
+          ? await validateExecutionRecovery(this.versions, this.recoveryStoreId, request,
+              this.get(request.recoveryContext.parentExecutionId, owner)) : undefined;
+        if (request.recoveryContext && this.db.prepare("SELECT record FROM executions").all()
+          .some(row => (JSON.parse(String(row.record)) as ManagedExecution).state === "unknown")) {
+          // Older records have no reliable workspace binding. A restarted Runner
+          // may still have an orphan writer, so do not guess which workspace is safe.
+          throw new Error("RUNNER_EXECUTIONS_UNCONFIRMED: resolve unknown executions before controlled continuation");
+        }
         execution.state = "running";
         execution.startedAt = new Date().toISOString();
         this.save(execution);
         changed = true;
-        execution.result = await operation(controller.signal, log);
+        execution.result = await operation(controller.signal, log, expectedEnvironmentRevisionId);
         execution.state = controller.signal.aborted ? "cancelled" : execution.result.exitCode === 0 && !execution.result.networkDeniedHosts?.length ? "completed" : "failed";
       } catch (error) {
         execution.state = controller.signal.aborted ? "cancelled" : "failed";
@@ -262,16 +280,20 @@ export class ExecutionManager {
           const stdout = await this.versions.put("agent-state", readLog("stdout") || execution.result?.stdout || "");
           const stderr = await this.versions.put("agent-state", readLog("stderr") || execution.result?.stderr || execution.error || "");
           const code = await this.versions.put("agent-state", request.code);
+          const collected = await collectExecutionRecovery(this.versions, this.recoveryStoreId, request, execution);
           const version = await this.versions.putRecord("WorkspaceExecution", {
             executionId: execution.id, ...owner, ...(workspace ? { workspace } : {}), code, stdout, stderr,
             environmentRevisionId: execution.result?.environmentRevisionId ?? null,
             state: execution.state,
+            ...(collected.ref ? { recoveryManifest: collected.ref } : {}),
+            ...(request.recoveryContext ? { recoveryContext: request.recoveryContext } : {}),
           });
           const refs = await RefStore.open(this.versions);
           try {
             const name = `workspaces/${createHash("sha256").update(key).digest("hex")}/head`;
             const completed = structuredClone(execution);
             completed.version = version;
+            completed.recovery = collected.recovery;
             completed.finishedAt = new Date().toISOString();
             completed.evidence!.workspaceVersionDigest = version.digest;
             if (completed.result) {
@@ -349,7 +371,8 @@ export class ExecutionManager {
     const row = this.db.prepare("SELECT record FROM executions WHERE id = ? AND session = ? AND agent = ?")
       .get(id, owner.sessionId, owner.agentId);
     if (!row) throw new ExecutionManagerError("EXECUTION_NOT_FOUND", "Execution not found for this Agent", 404);
-    return JSON.parse(String(row.record)) as ManagedExecution;
+    const execution = JSON.parse(String(row.record)) as ManagedExecution;
+    return { ...execution, recovery: execution.recovery ?? unknownRecovery() };
   }
 
   logs(id: string, owner: ExecutionOwner, cursor = 0): ExecutionLogPage {
