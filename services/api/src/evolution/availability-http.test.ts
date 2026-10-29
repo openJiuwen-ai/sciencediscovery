@@ -40,9 +40,10 @@ test("public status/init require API auth; uninitialized Tasks/API paths refuse 
     const status = await fetch(`${origin}/api/evolve/status`, { headers });
     assert.deepEqual(await status.json(), { state: "not_initialized", canInitialize: false });
     assert.deepEqual(await (await fetch(`${origin}/api/evolve/init`, { headers, method: "POST" })).json(), { state: "not_initialized", canInitialize: false });
-    assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 200);
+    // Idea Tree is independent and reports its own unavailable service.
+    assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 503);
     const before = sidecarRequests;
-    for (const path of ["/api/evolve/runs", "/api/evolve/runs/fake/stop", "/api/sessions/fake/idea-tree/research", "/api/sessions/fake/idea-tree/graph"]) {
+    for (const path of ["/api/evolve/runs", "/api/evolve/runs/fake/stop"]) {
       const response = await fetch(origin + path, { headers });
       assert.equal(response.status, 503); assert.match(await response.text(), /not initialized/);
     }

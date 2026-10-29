@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 import { BUNDLED_SKILL_IDS, SkillCatalog } from "@sciencediscovery/specialist";
 import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
-import { ideaTreeRepositoryForSession } from "./idea-tree/python-client.js";
+import { IdeaTreeServiceClient } from "@sciencediscovery/idea-tree";
 import { createIdeaTreeAuthorityRegistry } from "@sciencediscovery/idea-tree";
 
 import { createQueuedRun, createSkillEvolutionRun, DEFAULT_SELF_EVOLUTION_LIBRARY_ID, SKILL_EVOLUTION_PROMPT_MARKER } from "./runs/index.js";
@@ -415,7 +415,7 @@ test("queued runs pin enabled skill library heads to immutable version refs", as
       skillSelectionMode: "selected",
     });
     const session = await store.createSession(project.id, "Queued library session");
-    const persistence = ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id });
+    const persistence = new IdeaTreeServiceClient({ url: "http://127.0.0.1:1" }).repository({ projectId: project.id, sessionId: session.id });
 
     const run = await createQueuedRun(
       store,
@@ -466,7 +466,7 @@ test("run-level skill self-evolution queues a guided proposal run", async () => 
     });
     const session = await store.createSession(project.id, "Self-evolution session");
     const authorities = createIdeaTreeAuthorityRegistry();
-    const persistence = ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id });
+    const persistence = new IdeaTreeServiceClient({ url: "http://127.0.0.1:1" }).repository({ projectId: project.id, sessionId: session.id });
     const source = await createQueuedRun(
       store,
       skillCatalog,

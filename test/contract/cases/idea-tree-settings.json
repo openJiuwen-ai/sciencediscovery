@@ -1,0 +1,18 @@
+{
+  "domain": "idea-tree",
+  "cases": [{
+    "id": "idea-tree-settings-noop",
+    "description": "The independent service accepts a no-op partial settings update without resetting existing values.",
+    "steps": [{
+      "name": "read current research settings",
+      "request": {"method": "GET", "path": "/api/settings/idea-tree"},
+      "expectStatus": 200,
+      "covers": ["GET /api/settings/idea-tree"]
+    }, {
+      "name": "preserve settings on an empty update",
+      "request": {"method": "PUT", "path": "/api/settings/idea-tree", "body": {}},
+      "expectStatus": 200,
+      "covers": ["PUT /api/settings/idea-tree"]
+    }]
+  }]
+}
