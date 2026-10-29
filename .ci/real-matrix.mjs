@@ -1,9 +1,26 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { validatePlan } from '../test/support/tagged/plan.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
 import { dataset } from './biomni-gate.mjs';
+
+// Issue #346 temporary Manual offline repeat-grade lane (branch-local flag).
+if (existsSync('.ci/issue-346-manual-repeat-grade.flag')) {
+  const matrix = {
+    include: [
+      {
+        shard: 'issue-346-manual-repeat-grade',
+        timeout: 120,
+        biomni_case: 'da-13-3',
+      },
+    ],
+  };
+  appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(matrix)}\n`);
+  console.log('issue-346-manual-repeat-grade: 1 isolated offline judge worker (no research rerun)');
+  process.exit(0);
+}
+
 const plan = validatePlan(JSON.parse(readFileSync(process.argv[2], 'utf8')));
 if (['release', 'l5'].includes(plan.profile)) {
   const selected = plan.entries.map(biomniCase).filter(Boolean).sort();
