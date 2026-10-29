@@ -246,6 +246,8 @@ cmd_env() {
   # Chats use the gateway's /tui route; management calls (mcp.*, models.*) the web channel's /ws.
   echo "export JIUWENSWARM_GATEWAY_URL=ws://127.0.0.1:$gateway/tui"
   echo "export JIUWENSWARM_MGMT_URL=ws://127.0.0.1:$web/ws"
+  # The adapter reports verified source/patch evidence without importing upstream code.
+  printf 'export JIUWENSWARM_SRC=%q\n' "$jw_src"
 }
 
 case "${1:-}" in

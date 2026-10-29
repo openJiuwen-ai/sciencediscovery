@@ -304,3 +304,24 @@ test("a ready catalog with no tools is diagnosed, while ready tools omit the rec
   assert.match(JSON.stringify(decision), /No retrieval needed/);
   assert.deepEqual((decision as {omittedTools: unknown[]}).omittedTools, [{sourceId: "arxiv", tools: []}]);
 });
+
+test("Jiuwen configuration admits only the approved ready source into the existing governed dispatcher", async () => {
+  const { options, catalog } = fixture();
+  await catalog.refresh(); options.enabledSourceIds = []; options.configurationActivation = true;
+  const invocations: Array<Parameters<McpWorkspaceToolOptions["broker"]["invoke"]>[0]> = [];
+  options.broker = { invoke: async (input: Parameters<McpWorkspaceToolOptions["broker"]["invoke"]>[0]) => {
+    invocations.push(input); return { result: {}, invocation: { id: "approved-source" } };
+  } } as unknown as McpWorkspaceToolOptions["broker"];
+  const tools = createMcpWorkspaceTools(options);
+  assert.deepEqual(tools.mcpTools, []);
+  await assert.rejects(tools.mcpReadiness!.invoke("pubmed", "search", {}, undefined, "before-approval"), /not a recovered/);
+  const descriptors = tools.activateConfigurationSource("pubmed");
+  assert.ok(descriptors.some(tool => tool.toolId === "search"));
+  const discovery = await tools.mcpReadiness!.decide("check", "Approved connector", []);
+  assert.match(JSON.stringify(discovery), /recoveredTools.*pubmed/);
+  await tools.mcpReadiness!.invoke("pubmed", "search", { query: "offline" }, undefined, "original-run-call");
+  assert.deepEqual(invocations[0]!.allowedSourceIds, ["pubmed"]);
+  assert.equal(typeof invocations[0]!.authorize, "function");
+  await assert.rejects(tools.mcpReadiness!.invoke("arxiv", "search", {}, undefined, "unapproved"), /not a recovered/);
+  assert.throws(() => tools.activateConfigurationSource("foreign"), /not ready/);
+});

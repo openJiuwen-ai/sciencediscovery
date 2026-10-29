@@ -146,3 +146,7 @@ export interface ConfigurationVerificationAttempt {
   finishedAt?: string;
   code?: string;
 }
+
+/** The live executor owns activation; the shared waiter only retains this typed binding. */
+export type ConfigurationLiveActivation = (record: ConfigurationRecord, receipt: ConfigurationApplyReceipt)
+  => Promise<import("./runtime-bridge.js").ConfigurationActivationEvidence>;

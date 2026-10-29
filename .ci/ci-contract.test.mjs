@@ -62,6 +62,7 @@ test "$1" = --prefix
 cd "$2"
 node -e 'const fs = require("node:fs"), path = require("node:path");
 fs.writeFileSync(process.env.PROBE_BROWSER, JSON.stringify({
+  startup: process.env.E2E_STARTUP_COMMAND,
   cwd: process.cwd(), data: process.env.SCIENCE_DISCOVERY_DATA_DIR,
   reports: process.env.E2E_JOURNEY_REPORTS, output: process.env.E2E_OUTPUT_DIR,
   marker: fs.existsSync(path.resolve(process.env.SCIENCE_DISCOVERY_DATA_DIR, "started.txt"))
@@ -72,7 +73,7 @@ fs.writeFileSync(process.env.PROBE_BROWSER, JSON.stringify({
       env: {
         ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`,
         CI_E2E_BACKEND: "legacy", CI_E2E_FIXTURE: "standard", CI_E2E_PREPARED: "1", CI_E2E_PREPARE_ONLY: "0",
-        CI_E2E_BROWSERS_DIR: "", CI_E2E_STACK_TIMEOUT_SECONDS: "5",
+        E2E_STARTUP_COMMAND: "", CI_E2E_BROWSERS_DIR: "", CI_E2E_STACK_TIMEOUT_SECONDS: "5",
         CI_RUNTIME_DIR: runtime, CI_RESULTS_DIR: ".tmp/results with spaces",
         PROBE_STACK: join(root, "stack-data.txt"), PROBE_BROWSER: join(root, "browser-data.json"),
       },
@@ -80,6 +81,7 @@ fs.writeFileSync(process.env.PROBE_BROWSER, JSON.stringify({
     });
     assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`);
     const browser = JSON.parse(await readFile(join(root, "browser-data.json"), "utf8"));
+    assert.equal(browser.startup, "./scripts/start-stack.sh --mode local --no-jiuwenswarm --no-node-build");
     assert.equal(browser.cwd, join(root, ".e2e"));
     assert.ok(isAbsolute(browser.data), "Playwright must not receive a relative data directory");
     assert.equal(browser.data, resolve(root, runtime, "data"));

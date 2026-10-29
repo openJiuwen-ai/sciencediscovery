@@ -611,6 +611,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
           this.options.runTimeoutMs ?? 0,
           tools.has("task") ? subagentCapableParentRunTimeoutMs() : 0,
         ) / 1000) } : {}),
+        ...(tools.has("configuration") ? { configurationWaitTimeoutSeconds: 24 * 60 * 60 + 60 } : {}),
         tools: [...tools.values()].map((tool) => ({
           name: tool.name, description: this.describe(tool), inputSchema: tool.parameters, approval: approvalFor(tool.name),
         })),

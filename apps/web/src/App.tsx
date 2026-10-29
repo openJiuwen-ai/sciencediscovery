@@ -38,6 +38,8 @@ import type {
   ComposerReference,
   ConnectorId,
   ConnectorManifest,
+  ConnectorConfigurationRequest,
+  ConfigurationRequestView,
   CreateProxyServerRequest,
   DeletionImpact,
   ExecutionRun,
@@ -231,6 +233,11 @@ import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type Web
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
 import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
+
+import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
+import { ConversationalConnectorReceipt } from "./configuration/ConversationalConnectorReceipt.js";
+import { connectorConfigurationPresentation, genericConfigurationPresentation, isConfigurationProposalTrace, mergeConfigurationRequests, shouldPollConfigurationRequest } from "./configuration/presentation.js";
+import { ConfigurationRequestCard, isConfigurationRequestView } from "./configuration/ConfigurationRequestCard.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
@@ -293,6 +300,7 @@ import {
   ComposerNoModelNotice,
   ComposerRunButton,
   resolveComposerRunAction,
+  shouldShowModelConfigurationCard,
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
@@ -1153,6 +1161,21 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
+  const latestMessageRef = useRef(message);
+  latestMessageRef.current = message;
+  const configurationPreflightPendingRef = useRef(false);
+  const pendingModelConfiguration = useRef<{ requestId: string; sessionId: string; content: string } | undefined>(undefined);
+  const modelConfigurationEntry = useRef<{ sessionId: string; key: string; busy: boolean } | undefined>(undefined);
+  const [connectorConfigurationRequests, setConnectorConfigurationRequests] = useState<ConnectorConfigurationRequest[]>([]);
+  const [configurationRequests, setConfigurationRequests] = useState<ConfigurationRequestView[]>([]);
+  const [configurationReceipt, setConfigurationReceipt] = useState<{
+    sessionId: string;
+    modelName: string;
+    globalDefault: boolean;
+    continuation: "not_requested" | "submitting" | "submitted" | "failed" | "waiting_configuration";
+  }>();
+  const scheduledConfigurationSubmission = useRef<string | undefined>(undefined);
+  const pendingConfigurationContinuation = useRef<{ sessionId: string; modelId: string; content: string } | undefined>(undefined);
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
 
 
@@ -1426,6 +1449,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    pendingModelConfiguration.current = undefined;
+    modelConfigurationEntry.current = undefined;
+    scheduledConfigurationSubmission.current = undefined;
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -2007,12 +2036,80 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     return () => { cancelled = true; };
   }, [activeProjectId, client, projectsLoaded, sessionListState]);
 
+  function receiveConfigurationRequests(items: Array<ConnectorConfigurationRequest | ConfigurationRequestView>) {
+    setConnectorConfigurationRequests(items.filter((item): item is ConnectorConfigurationRequest => !isConfigurationRequestView(item)));
+    setConfigurationRequests(current => mergeConfigurationRequests(current.filter(item => item.sessionId === activeSessionIdRef.current), items.filter(isConfigurationRequestView)));
+
+  }
+  function receiveConfigurationRequest(request: ConfigurationRequestView) {
+    if (!shouldApplySessionScopedUpdate(request.sessionId, activeSessionIdRef.current)) return;
+    setConfigurationRequests((items) => {
+      const previous = items.find((item) => item.id === request.id);
+      if (previous && (previous.revision > request.revision || (previous.revision === request.revision && previous.stateVersion > request.stateVersion))) return items;
+      return [request, ...items.filter((item) => item.id !== request.id)];
+    });
+    if (request.state === "applied" || request.state === "dismissed") void refreshSession(request.sessionId).catch(() => undefined);
+    if (request.state === "applied" && request.capabilityId.startsWith("model.")) {
+      void Promise.all([client.listModels(), client.listProviders(), client.getGlobalSettings()]).then(([modelItems, registry, settings]) => {
+        setModels(modelItems);
+        setModelProviders(registry.providers);
+        setGlobalSettings(settings);
+      }).catch(() => undefined);
+    }
+  }
+  useEffect(() => {
+    const pending = pendingModelConfiguration.current;
+    if (!pending || pending.sessionId !== activeSessionId) return;
+    const request = configurationRequests.find(item => item.id === pending.requestId);
+    if (!request || request.state !== "applied") return;
+    pendingModelConfiguration.current = undefined;
+    void Promise.all([client.getSession(request.sessionId), client.listModels()]).then(([updated, modelItems]) => {
+      if (!shouldApplySessionScopedUpdate(request.sessionId, activeSessionIdRef.current)) return;
+      const model = modelItems.find(item => item.id === updated.modelId);
+      if (!model || updated.archivedAt || latestMessageRef.current.trim() !== pending.content) return;
+      pendingConfigurationContinuation.current = { sessionId: request.sessionId, modelId: model.id, content: pending.content };
+      setConfigurationReceipt({ sessionId: request.sessionId, modelName: model.name, globalDefault: request.scope.kind === "global", continuation: "submitting" });
+      setModels(modelItems);
+      syncSessionSummary(updated);
+    }).catch(() => setError(t("error.updateSession")));
+  }, [activeSessionId, configurationRequests]);
+  const pendingAutoConfigurationIds = [...connectorConfigurationRequests
+    .filter((request) => request.sessionId === activeSessionId && request.state === "awaiting_confirmation" && request.autoApplyAt)
+    .map((request) => request.id), ...configurationRequests.filter((request) => request.sessionId === activeSessionId
+      && shouldPollConfigurationRequest(request)).map((request) => request.id)].join(",");
+  useEffect(() => {
+    if (!activeSessionId || !pendingAutoConfigurationIds) return;
+    let cancelled = false;
+    let busy = false;
+    const automaticIds = new Set(configurationRequests.filter((request) => request.sessionId === activeSessionId
+      && request.state === "awaiting_confirmation" && request.autoApplyAt).map((request) => request.id));
+    const poll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const { items } = await client.listConfigurationRequests(activeSessionId);
+        if (cancelled || !shouldApplySessionScopedUpdate(activeSessionId, activeSessionIdRef.current)) return;
+        receiveConfigurationRequests(items);
+        const watched = new Set(pendingAutoConfigurationIds.split(","));
+        if (items.some((item) => (!isConfigurationRequestView(item) && watched.has(item.id) && item.state !== "awaiting_confirmation")
+          || (isConfigurationRequestView(item) && automaticIds.has(item.id) && (item.state !== "awaiting_confirmation" || !item.autoApplyAt)))) {
+          await refreshSession(activeSessionId);
+        }
+      } catch { /* The next poll or normal Session refresh will reconcile the card. */ }
+      finally { busy = false; }
+    };
+    const timer = setInterval(() => { void poll(); }, 2_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [activeSessionId, client, pendingAutoConfigurationIds]);
+
   async function refreshSession(sessionId = activeSessionId): Promise<void> {
     if (!sessionId) {
       setSession(undefined);
       setFiles([]);
       setPermissionEpoch(undefined);
       setPermissionRequests([]);
+      setConnectorConfigurationRequests([]);
+      setConfigurationRequests([]);
       setSessionUsage(undefined);
       setSessionRuns([]);
       setArtifactOutputs([]);
@@ -2032,7 +2129,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems, connectorConfigurationResult] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -2051,6 +2148,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
+      client.listConfigurationRequests(sessionId),
     ]);
     const activeRun = selectSessionReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
@@ -2099,6 +2197,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setArtifacts(projectArtifacts);
     setPermissionEpoch(epoch);
     setPermissionRequests(permissionRequestItems);
+    receiveConfigurationRequests(connectorConfigurationResult.items);
     setPermissionGrants(permissionGrantItems);
     setSessionUsage(usageSummary);
     setExecutionRuns(executionRunItems);
@@ -2740,12 +2839,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function updateSessionSettings(changes: UpdateSessionRequest): Promise<void> {
-    const approvalOnly = Object.keys(changes).every((key) => key === "approvalMode");
-    if (!activeSessionId || (isRunning && !approvalOnly) || session?.archivedAt) return;
+    const policyOnly = Object.keys(changes).every((key) => key === "approvalMode" || key === "autoApplyLowRiskConfiguration");
+    if (!activeSessionId || (isRunning && !policyOnly) || session?.archivedAt) return;
     try {
       const updated = await client.updateSession(activeSessionId, changes);
       syncSessionSummary(updated);
-      if (approvalOnly) {
+      if (changes.approvalMode !== undefined) {
         const [requests, grants, jobs] = await Promise.all([
           client.listPermissionRequests(activeSessionId),
           client.listPermissionGrants(),
@@ -2770,6 +2869,34 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       ...normalizeSessionThinking(nextModel, modelProviders, currentMode, currentEffort),
     };
     await updateSessionSettings(changes);
+  }
+
+  async function openModelConfiguration(capabilityId: "model.select" | "model.connect" | "model.repair_credential" = models.length ? "model.select" : "model.connect", continueDraft = true): Promise<void> {
+    if (!session || session.archivedAt || isRunning) return;
+    const existing = configurationRequests.find(item => item.sessionId === session.id && item.capabilityId.startsWith("model.") && !["applied", "dismissed", "cancelled", "expired"].includes(item.state));
+    if (existing) { if (continueDraft && message.trim()) pendingModelConfiguration.current = { requestId: existing.id, sessionId: session.id, content: message.trim() }; document.getElementById(`configuration-request-${existing.id}`)?.scrollIntoView({ block: "nearest" }); return; }
+    let entry = modelConfigurationEntry.current;
+    if (!entry || entry.sessionId !== session.id) entry = modelConfigurationEntry.current = { sessionId: session.id, key: crypto.randomUUID(), busy: false };
+    if (entry.busy) return;
+    entry.busy = true;
+    try {
+      const modelId = session.modelId ?? models[0]?.id;
+      const request = await client.createConfigurationRequest(session.id, { protocolVersion: 3, capabilityId, values: capabilityId !== "model.connect" && modelId ? { modelId } : {} }, entry.key);
+      if (session.id !== activeSessionIdRef.current) return;
+      if (continueDraft && message.trim()) pendingModelConfiguration.current = { requestId: request.id, sessionId: session.id, content: message.trim() };
+      receiveConfigurationRequest(request);
+      modelConfigurationEntry.current = undefined;
+      requestAnimationFrame(() => document.getElementById(`configuration-request-${request.id}`)?.scrollIntoView({ block: "nearest" }));
+    } catch (reason) { setError(reason instanceof Error ? reason : t("error.updateSession")); }
+    finally { entry.busy = false; }
+  }
+
+  async function decideConversationalConnector(request: ConnectorConfigurationRequest, decision: "apply" | "dismiss"): Promise<void> {
+    if (!activeSessionId || activeSessionId !== request.sessionId || session?.archivedAt) {
+      throw new Error(t("configuration.card.stale"));
+    }
+    await client.decideConnectorConfiguration(request.sessionId, request.id, decision);
+    await refreshSession(request.sessionId);
   }
 
   function reconcilePermissionSnapshots(
@@ -3293,6 +3420,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (streamEvent.type === "session.updated") {
       syncSessionSummary(streamEvent.session);
     }
+    if ((streamEvent.type === "tool.completed" && isConfigurationProposalTrace(streamEvent.trace))
+      || streamEvent.type === "run.status") {
+      void client.listConfigurationRequests(sessionId).then(({ items }) => {
+        if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) receiveConfigurationRequests(items);
+      }).catch(() => undefined);
+    }
     const routing = routeRunStreamEvent(streamEvent, {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
       sessionTitle,
@@ -3454,9 +3587,21 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function submitMessage(event: FormEvent): Promise<void> {
+    scheduledConfigurationSubmission.current = undefined;
+    if (configurationPreflightPendingRef.current) { event.preventDefault(); return; }
+    const targetSession = activeSessionId;
+    try { await submitMessageWithConfigurationReceipt(event); }
+    finally {
+      setConfigurationReceipt(current => current && current.sessionId === targetSession && current.continuation === "submitting"
+        ? { ...current, continuation: "failed" } : current);
+    }
+  }
+
+  async function submitMessageWithConfigurationReceipt(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (evolveCommandBlocked) return;
     if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
+    if (configurationPreflightPendingRef.current) return;
     if (message.trim() === "/web-usage") {
       try {
         const usage = await client.getWebUsage();
@@ -3478,16 +3623,50 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       }
       return;
     }
-    const submittedSessionId = activeSessionId;
     const selectedModel = models.find((item) => item.id === session.modelId);
     if (!selectedModel) {
-      setError(t("error.noTaskModelAssigned"));
+      await openModelConfiguration();
       return;
     }
-    if (!selectedModel.hasApiToken) {
+    const selectedProvider = modelProviders.find((provider) => provider.id === selectedModel.providerId);
+    if (!selectedModel.hasApiToken && !selectedProvider?.tokenOptional && (selectedProvider?.hasApiToken ?? true)) {
       setError(t("error.modelTokenRequired", { model: selectedModel.name }));
       return;
     }
+    const submittedSessionId = activeSessionId;
+    const requestedContent = message.trim();
+    configurationPreflightPendingRef.current = true;
+    try {
+      const preflight = await client.preflightConnectorConfiguration(submittedSessionId, requestedContent);
+      if (!shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) return;
+      if (preflight.status === "proposal") {
+        setConfigurationReceipt(current => current?.sessionId === submittedSessionId && current.continuation === "submitting" ? { ...current, continuation: "waiting_configuration" } : current);
+        if (isConfigurationRequestView(preflight.request)) receiveConfigurationRequest(preflight.request);
+        else setConnectorConfigurationRequests((current) => [preflight.request as ConnectorConfigurationRequest, ...current.filter((item) => item.id !== preflight.request.id)]);
+        setMessage((current) => current.trim() === requestedContent ? "" : current);
+        setError(undefined);
+        requestAnimationFrame(scrollToLatest);
+        return;
+      }
+      if (preflight.status === "already_enabled") {
+        pushToast("success", t("configuration.connector.title"), t("configuration.connector.alreadyEnabled", { name: preflight.connectorName }));
+        setMessage((current) => current.trim() === requestedContent ? "" : current);
+        setError(undefined);
+        return;
+      }
+      if (preflight.status === "unavailable") {
+        setError(t("configuration.connector.unavailable", { name: preflight.connectorName }));
+        return;
+      }
+    } catch (reason) {
+      if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+        setError(reason instanceof Error ? reason : t("error.runFailed"));
+      }
+      return;
+    } finally {
+      configurationPreflightPendingRef.current = false;
+    }
+    if (latestMessageRef.current.trim() !== requestedContent) return;
     const content = message.trim();
     const autoNameFirstMessage = session.title === UNTITLED_SESSION_TITLE
       && !session.messages.some((item) => item.role === "user");
@@ -3541,8 +3720,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       } : current);
     }
 
+    let streamRunId: string | undefined;
+    const onRunAccepted = (runId: string) => {
+      streamRunId = runId;
+      if (!queuedBehindActiveRun) runAbortControllers.current.set(submittedSessionId, controller);
+      setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+        ? { ...current, continuation: "submitted" } : current);
+    };
     try {
-      let streamRunId: string | undefined;
       await client.streamMessage(submittedSessionId, {
         annotationIds: annotations.map((annotation) => annotation.id),
         content,
@@ -3550,13 +3735,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       }, (streamEvent: RunStreamEvent, sequence?: number) => {
         if (streamEvent.type === "run.queued" || streamEvent.type === "run.status") {
           streamRunId = streamEvent.run.id;
+          setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+            ? { ...current, continuation: "submitted" } : current);
         }
         if (streamEvent.type === "run.started") {
           runAbortControllers.current.set(submittedSessionId, controller);
           streamRunId = streamEvent.runId;
+          setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+            ? { ...current, continuation: "submitted" } : current);
         }
         applySessionRunEvent(submittedSessionId, runSessionTitle, streamRunId, streamEvent, sequence);
-      }, controller.signal);
+      }, controller.signal, onRunAccepted);
       if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
         try {
           await refreshSession(submittedSessionId);
@@ -3568,15 +3757,19 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       }
     } catch (reason) {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+        setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+          ? { ...current, continuation: "failed" } : current);
         setError(reason instanceof Error ? reason : t("error.runFailed"));
-        setMessage(savedContent);
-        setComposerReferences(savedReferences);
-        setPendingAnnotations(savedAnnotations);
-        setSession((current) => current ? {
-          ...current,
-          messages: current.messages.filter((item) => item.role !== "user" || item.id !== optimisticMessageId),
-        } : current);
-        if (autoNameFirstMessage) {
+        if (!streamRunId) {
+          setMessage(savedContent);
+          setComposerReferences(savedReferences);
+          setPendingAnnotations(savedAnnotations);
+          setSession((current) => current ? {
+            ...current,
+            messages: current.messages.filter((item) => item.role !== "user" || item.id !== optimisticMessageId),
+          } : current);
+        }
+        if (autoNameFirstMessage || streamRunId) {
           void refreshSession(submittedSessionId).catch(() => undefined);
         }
       }
@@ -3958,6 +4151,34 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     ? projects.find((project) => project.id === scopedSettingsSession.projectId)
     : undefined;
   const activeModel = models.find((item) => item.id === session?.modelId);
+  useEffect(() => {
+    const pending = pendingConfigurationContinuation.current;
+    if (!pending) return;
+    if (session?.id !== pending.sessionId) {
+      pendingConfigurationContinuation.current = undefined;
+      setConfigurationReceipt((current) => current?.sessionId === pending.sessionId
+        ? { ...current, continuation: "failed" } : current);
+      return;
+    }
+    if (session.modelId !== pending.modelId || !models.some((model) => model.id === pending.modelId)) return;
+    pendingConfigurationContinuation.current = undefined;
+    if (message.trim() !== pending.content) {
+      setConfigurationReceipt((current) => current?.sessionId === pending.sessionId
+        ? { ...current, continuation: "failed" } : current);
+      return;
+    }
+    // Wait until React has committed the model-bound composer before using its
+    // normal submit path. The draft never becomes a synthetic chat message.
+    const ticket = crypto.randomUUID();
+    scheduledConfigurationSubmission.current = ticket;
+    requestAnimationFrame(() => {
+      if (scheduledConfigurationSubmission.current !== ticket) return;
+      scheduledConfigurationSubmission.current = undefined;
+      if (activeSessionIdRef.current === pending.sessionId && latestMessageRef.current.trim() === pending.content)
+        composerTextarea.current?.form?.requestSubmit();
+      else setConfigurationReceipt(current => current?.sessionId === pending.sessionId ? { ...current, continuation: "failed" } : current);
+    });
+  }, [message, models, session?.id, session?.modelId]);
   const activeThinkingControls = modelThinkingControls(activeModel, modelProviders);
   const requestedThinkingMode = session?.thinkingMode ?? activeModel?.thinkingMode ?? "auto";
   const requestedThinkingEffort = session?.thinkingEffort ?? activeModel?.thinkingEffort ?? "high";
@@ -4162,6 +4383,33 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     reviewerSettings: reviewerSpecialistSettings,
     sessionAutomaticReviewEnabled: session?.reviewerAutomaticReviewEnabled ?? false,
   });
+  const showModelConfigurationCard = configurationRequests.some(item => item.sessionId === session?.id && item.capabilityId.startsWith("model.") && !["applied", "dismissed", "cancelled", "expired"].includes(item.state));
+  const { continuationByNoticeId, visibleRequests: visibleConnectorConfigurationRequests } = connectorConfigurationPresentation(
+    connectorConfigurationRequests, sessionRuns, session?.messages ?? [], session?.id,
+  );
+  const connectorConfigurationRequestById = new Map(connectorConfigurationRequests.map((request) => [request.id, request]));
+  const { byNoticeId: genericConfigurationByNoticeId, suppressedNoticeIds: suppressedConfigurationNoticeIds, visibleRequests: visibleConfigurationRequests } = genericConfigurationPresentation(
+    configurationRequests, session?.messages ?? [], continuationByNoticeId, session?.id,
+  );
+  function renderConfigurationRequest(request: ConfigurationRequestView) {
+    return <ConfigurationRequestCard
+      key={request.id}
+      request={request}
+      readOnly={sessionArchived}
+      onStopTask={request.runId ? async () => { await client.cancelRun(request.sessionId, request.runId!); await refreshSession(request.sessionId); } : undefined}
+      runActive={sessionRuns.some((run) => run.id === request.runId && run.status !== "blocked" && isActiveRunStatus(run.status))}
+      onUpdate={receiveConfigurationRequest}
+      onUnavailable={() => setConfigurationRequests((items) => items.filter((item) => item.id !== request.id))}
+      actions={{
+        consent: (input, key) => client.consentConfigurationEndpoint(request.sessionId, request.id, input, key),
+        preview: (input, key) => client.previewConfigurationRequest(request.sessionId, request.id, input, key),
+        credential: (input, key) => client.submitConfigurationCredential(request.sessionId, request.id, input, key),
+        decide: (input, key) => client.decideConfigurationRequest(request.sessionId, request.id, input, key),
+        query: () => client.getConfigurationRequest(request.sessionId, request.id),
+        continue: (key) => client.continueConfigurationRequest(request.sessionId, request.id, key),
+        reversal: (key) => client.reverseConfigurationRequest(request.sessionId, request.id, key),
+      }} />;
+  }
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
@@ -4648,10 +4896,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           checkpointContent={block.message.content}
                           checkpointError={block.message.reviewerCheckpoint.error}
                           checkpointProgress={block.message.reviewerCheckpoint.progress}
+                          checkpointSkipReason={block.message.reviewerCheckpoint.skipReason}
                           checkpointStatus={block.message.reviewerCheckpoint.status}
                           reviewLevel={session.reviewerSpecialistLevel}
                           reviews={artifactReviews}
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
+                        />
+                      ) : block.message.kind === "configuration_notice" ? (
+                        suppressedConfigurationNoticeIds.has(block.message.id) ? null : genericConfigurationByNoticeId.has(block.message.id)
+                          ? renderConfigurationRequest(genericConfigurationByNoticeId.get(block.message.id)!) : block.message.configurationRequestId ? null : <ConversationalConnectorReceipt
+                          connectorName={continuationByNoticeId.get(block.message.id)?.connectorName}
+                          request={connectorConfigurationRequestById.get(continuationByNoticeId.get(block.message.id)?.requestId ?? "")}
                         />
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
                         <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
@@ -4671,7 +4926,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label={t("app.copyMessage")} /> : null}
                         </article>
                       )}
-                      {block.message.kind !== "wake_notice" && block.message.runtimeNotice
+                      {block.message.kind !== "wake_notice" && block.message.kind !== "configuration_notice" && block.message.runtimeNotice
                         ? <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
@@ -4766,6 +5021,19 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {renderConversationOutputs()}
                   {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
+                  {visibleConnectorConfigurationRequests.map((connectorConfigurationRequest) => <ConversationalConnectorCard
+                    key={connectorConfigurationRequest.id}
+                    request={connectorConfigurationRequest}
+                    runActive={sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId
+                      && run.status !== "blocked" && isActiveRunStatus(run.status))}
+                    onDecision={(decision) => decideConversationalConnector(connectorConfigurationRequest, decision)} />)}
+                  {visibleConfigurationRequests.map(renderConfigurationRequest)}
+                  {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
+                    <strong>{t(configurationReceipt.globalDefault ? "configuration.card.savedGlobal" : "configuration.card.saved")}: {configurationReceipt.modelName}</strong>
+                    <span> · {t(configurationReceipt.continuation === "not_requested" ? "configuration.card.notSubmitted"
+                      : configurationReceipt.continuation === "submitting" ? "configuration.card.submitting"
+                        : configurationReceipt.continuation === "submitted" ? "configuration.card.submitted" : configurationReceipt.continuation === "waiting_configuration" ? "configuration.card.waitingConfiguration" : "configuration.card.continuationFailed")}</span>
+                  </div> : null}
                   {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
@@ -4783,11 +5051,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                     if (composerTrigger) return;
                     event.preventDefault();
-                    if (!message.trim() || sessionArchived || !activeModel) return;
+                    if (!message.trim() || sessionArchived) return;
                     event.currentTarget.form?.requestSubmit();
                   }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
-                  {composerRunAction.noModelReason ? <ComposerNoModelNotice
-                    onOpenModelSettings={() => openSystemSettings("models", { wizard: true })}
+                  {composerRunAction.noModelReason && !showModelConfigurationCard ? <ComposerNoModelNotice
+                    onOpenConfiguration={() => void openModelConfiguration()}
                     reason={composerRunAction.noModelReason}
                   /> : null}
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
@@ -4853,6 +5121,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     >
                       {t("reviewer.automaticReview")}: {t(automaticReviewComposer.labelOn ? "common.on" : "common.off")}
                     </button>
+                    {(connectorConfigurationRequests.some(request => request.sessionId === session.id && request.state === "awaiting_confirmation")
+                      || configurationRequests.some(request => request.sessionId === session.id && request.protocolVersion !== 3 && request.state === "awaiting_confirmation")) ? <label className="composer-auto-config-policy" title={t("configuration.autoPolicyDetail")}>
+                      <input checked={session.autoApplyLowRiskConfiguration === true} disabled={sessionArchived}
+                        onChange={(event) => void updateSessionSettings({ autoApplyLowRiskConfiguration: event.target.checked })}
+                        type="checkbox" />
+                      <span>{t("configuration.autoPolicy")}</span>
+                    </label> : null}
                     <ComposerRunButton action={{ ...composerRunAction, runDisabled: composerRunAction.runDisabled || evolveCommandBlocked }} onStop={() => void stopRun()} />
                   </div>
                 </form>
@@ -5468,6 +5743,7 @@ export {
   recordSessionTimelineEvent,
   requestRunStop,
   resolveComposerRunAction,
+  shouldShowModelConfigurationCard,
   routeRunStreamEvent,
   runsRequiringEventReplay,
   selectSessionReplayRun,

@@ -14,9 +14,11 @@
 
 import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./error-diagnostics.js";
 import { randomUUID } from "node:crypto";
+import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
+import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
 import { handlePluginRequest } from "../plugins/http.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -273,10 +275,12 @@ import {
   createNotificationRun,
   emptyMatch,
   emptyTrace,
+  ensureConfigurationContinuation,
   getActiveSessionRun,
   publishApprovalModeChange,
   scheduleSessionRuns,
   sessionHasActiveRun,
+  sessionHasActiveRunExceptConfigurationWait,
   streamAgentRun,
   streamStoredRunEvents,
 } from "../runs/index.js";
@@ -284,6 +288,12 @@ import { syncScientificEnvironmentCatalog } from "../scientific-environment-cata
 import { NotificationDispatcher } from "../notification-dispatch.js";
 import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "../runner-management.js";
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
+import { modelDestination } from "../configuration/model-destination.js";
+import { configurationConnectorReadinessReason } from "../configuration/connector-directory.js";
+import { configurationFramework } from "../configuration/framework.js";
+import { handleConfigurationHttp } from "../configuration/http.js";
+import { prepareNativeConnectorActivation } from "../configuration/native-activation.js";
+import { digest as configurationDigest } from "../configuration/validation.js";
 import {
   createPlatformServices,
   initializePlatformServices,
@@ -376,10 +386,63 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  const conversationalConfiguration = () => {
+    store.setConfigurationConnectorRevisionSource((ids?: readonly string[]) => {
+      const selected = mcpRegistry.listManifests().filter(manifest => !ids || ids.includes(manifest.id));
+      const servers = new Set(selected.map(manifest => manifest.transport.mcpServerId));
+      const selectedTools = new Map<string, Set<string>>();
+      for (const manifest of selected) {
+        const names = selectedTools.get(manifest.transport.mcpServerId) ?? new Set<string>();
+        for (const tool of Object.values(manifest.tools)) names.add(tool.mcpToolName ?? tool.id);
+        selectedTools.set(manifest.transport.mcpServerId, names);
+      }
+      return configurationDigest({
+      transportRevision: platform.customMcpServers.configurationRevision(ids ? [...servers] : undefined),
+      manifests: selected.map(manifest => ({ id: manifest.id, version: manifest.version,
+        schemaVersion: manifest.schemaVersion, transport: manifest.transport, tools: manifest.tools,
+        governance: manifest.governance, prompt: manifest.prompt })).sort((a, b) => a.id.localeCompare(b.id)),
+      tools: mcpCatalog.getCatalog()?.servers.filter(server => servers.has(server.id)).map(server => ({ id: server.id,
+        tools: server.tools.filter(tool => selectedTools.get(server.id)?.has(tool.name)).sort((a, b) => a.name.localeCompare(b.name)) })).sort((a, b) => a.id.localeCompare(b.id)) ?? [],
+    });
+    });
+    return configurationFramework(store, {
+    nativeExecutor: !jiuwenSwarmConfigFromEnv(),
+    jiuwenLiveWait: Boolean(jiuwenSwarmConfigFromEnv()),
+    connectors: () => mcpRegistry.listManifests().map(manifest => {
+      const status = mcpCatalog.getStatus(manifest.id);
+      return { id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id,
+        ready: status.status === "ready", readiness: status.status,
+        readinessReason: configurationConnectorReadinessReason(status), sameRunSupported: manifest.id !== "web" };
+    }),
+    connector: (sessionId, connectorId) => {
+      const manifest = mcpRegistry.listManifests().find(item => item.id === connectorId);
+      if (!manifest && connectorId !== "web") return undefined;
+      const settings = store.getSessionSettings(sessionId).effective;
+      return { name: manifest ? mcpConnectorManifest(manifest).displayName ?? connectorId : "Web",
+        ready: (connectorId === "web" || mcpCatalog.getStatus(connectorId).status === "ready")
+          && filterEnabledMcpSources([connectorId], settings.plugins).includes(connectorId) };
+    },
+    activate: (record, receipt) => prepareNativeConnectorActivation({ store, record, receipt, registry: mcpRegistry, catalog: mcpCatalog }),
+    resume: async (sessionId, requestId) => {
+      if (jiuwenSwarmConfigFromEnv()) throw new Error("Jiuwen configuration resumes only its live tool call");
+      const continuation = await ensureConfigurationContinuation(store, sessionId, requestId);
+      if (continuation?.status === "queued") scheduleSessionRuns(
+        store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+        artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+        ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+        config, memoryGraphClient, evolveRuntimeFactory,
+      );
+      return continuation;
+    },
+    });
+  };
   const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
     run: async (task, signal) => {
       const session = store.getSession(task.sessionId);
       if (!session) throw new Error("Session not found");
+      const sourceRun = task.sourceRunId ? await store.getSessionRun(task.sessionId, task.sourceRunId) : undefined;
+      if (task.sourceRunId && !sourceRun) throw new Error("The source Run is no longer available");
+      if (!store.getReviewerSpecialistSettings().enabled) return { skipped: true, skipReason: "specialist_disabled" };
       const versions = task.artifactVersionIds
         .map((versionId) => store.getArtifactVersion(task.sessionId, versionId))
         .filter((version): version is NonNullable<typeof version> => {
@@ -394,7 +457,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const runnableTask = { ...task, artifactVersionIds: versions.map((version) => version.id) };
       let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
       if (task.reviewLevel === "deep") {
-        const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
+        const runtimeSettings = sourceRun?.settingsSnapshot ?? store.resolveRuntimeSettings(task.sessionId).effective;
         // Reviewer Specialist is an internal quality role of this Session,
         // not a separately configured Agent. Deep review therefore reuses
         // the Session's effective main-Agent model and credentials.
@@ -624,8 +687,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // would constrain them against an empty catalog.
   const ready = modelCatalog.load()
     .then(() => skillLibraryCatalog.load())
+    .then(() => store.setConfigurationSkillLibrarySource(() => skillLibraryCatalog.list()))
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => conversationalConfiguration().service.recoverPendingVerifications())
     .then(() => store.plugins.bindAssets(async (settings) => {
       const refs = await skillLibraryCatalog.resolveEnabledRefs(settings.enabledSkillLibraries);
       const skills = skillCatalog.resolve(settings.enabledSkillIds ?? []).map(({id,hash,revision,version}) => ({id,hash,revision:revision ?? null,version}));
@@ -1327,7 +1392,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const legacyCancelRunMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/run\/cancel$/);
       if (legacyCancelRunMatch && request.method === "POST") {
-        await cancelCurrentSessionRun(response, store, decodeURIComponent(legacyCancelRunMatch[1]!), true);
+        const sessionId = decodeURIComponent(legacyCancelRunMatch[1]!);
+        await cancelCurrentSessionRun(response, store, sessionId, true);
+        scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+          artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+          ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+          config, memoryGraphClient, evolveRuntimeFactory);
         return;
       }
       const teardownKernelMatch = url.pathname.match(/^\/api\/runtime-status\/kernels\/([^/]+)\/teardown$/);
@@ -1990,14 +2060,33 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const modelConnectivityMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/test$/);
       if (modelConnectivityMatch && request.method === "POST") {
         const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
-        const profile = store.getModel(modelId);
-        if (!profile) return sendError(response, 404, "Model not found");
-        const consent = await readJson<{ consent?: boolean; compatibility?: boolean }>(request);
+        const savedProfile = store.getModel(modelId);
+        if (!savedProfile) return sendError(response, 404, "Model not found");
+        // Store edits mutate the saved object. Keep the approved revision frozen
+        // for every dispatch, including later compatibility-matrix requests.
+        const profile = { ...savedProfile };
+        let consent: { consent?: boolean; compatibility?: boolean; expectedDestination?: unknown };
+        try {
+          consent = await readJson<typeof consent>(request);
+        } catch (error) {
+          if (error instanceof Error && error.message === "Request body must be valid JSON") return sendError(response, 400, "Model checks require JSON consent. Refresh the page and confirm the model check before retrying.");
+          throw error;
+        }
+        if (!consent || typeof consent !== "object" || Array.isArray(consent)) return sendError(response, 400, "Model checks require JSON consent");
         if (consent.consent !== true) return sendError(response, 400, "Explicit consent is required: model checks may consume paid tokens");
+        const frozenDestination = modelDestination(profile).endpointTarget;
+        const destinationMatches = matchesManualModelDestination(profile, consent.expectedDestination);
+        if (consent.expectedDestination !== undefined && !destinationMatches) return sendError(response, 409, "The model destination or revision changed. Reopen the model settings before testing again.");
         const tested = await modelConnectivityTests.run(`${modelId}:${profile.updatedAt}:${consent.compatibility === true}`, () => testModelConnectivity({
           compatibility: consent.compatibility === true,
+          allowMissingToken: store.modelAllowsMissingToken(profile),
+
           apiToken: store.getModelApiToken(modelId),
           profile,
+          beforeDispatch: () => {
+            const current = store.getModel(modelId);
+            if (!current || current.updatedAt !== profile.updatedAt || modelDestination(current).endpointTarget !== frozenDestination) throw new Error("MODEL_DESTINATION_CHANGED");
+          },
           resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
         }));
         sendJson(response, 200, tested);
@@ -2136,6 +2225,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 201, await store.materializeProviderModel(providerId, modelId, {
           ...(body.facts !== undefined ? { facts: body.facts } : {}),
           ...(label !== undefined ? { label } : {}),
+          ...(body.setGlobalDefault === false ? { setGlobalDefault: false } : {}),
           ...(vision !== undefined ? { vision } : {}),
         }));
         return;
@@ -2286,6 +2376,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           settingsOverrides,
           {
             approvalMode: body.approvalMode,
+            autoApplyLowRiskConfiguration: body.autoApplyLowRiskConfiguration,
             reviewCriteria: body.reviewCriteria,
             reviewMode: body.reviewMode,
             remoteRunnerHostIds: body.remoteRunnerHostIds,
@@ -2431,6 +2522,84 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
 
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+      if (await handleConfigurationHttp({ request, response, url, store, framework: conversationalConfiguration(),
+        hasActiveRun: (sessionId, requestId) => requestId
+          ? sessionHasActiveRunExceptConfigurationWait(store, sessionId, requestId)
+          : sessionHasActiveRun(store, sessionId) })) return;
+      const connectorConfigurationPreflightMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration\/preflight$/);
+      if (connectorConfigurationPreflightMatch && request.method === "POST") {
+        const sessionId = connectorConfigurationPreflightMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const body = await readJson<{ content?: unknown }>(request);
+        if (!body || typeof body.content !== "string") return sendError(response, 400, "Content is required");
+        const target = explicitConnectorEnableTarget(body.content, mcpRegistry.listManifests().map((manifest) => ({
+          id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id,
+        })));
+        if (!target) return sendJson(response, 200, { status: "not_applicable" });
+        store.assertSessionWritable(sessionId);
+        const settings = store.getSessionSettings(sessionId).effective;
+        if (settings.enabledConnectorIds.includes(target.id)) {
+          return sendJson(response, 200, { status: "already_enabled", connectorName: target.name });
+        }
+        if (mcpCatalog.getStatus(target.id).status !== "ready"
+          || !filterEnabledMcpSources([target.id], settings.plugins).includes(target.id)) {
+          return sendJson(response, 200, { status: "unavailable", connectorName: target.name });
+        }
+        const proposal = await conversationalConfiguration().propose(sessionId, { protocolVersion: 3,
+          capabilityId: "connector.enable", values: { connectorId: target.id },
+          reason: "USER_REQUESTED_CONNECTOR" });
+        sendJson(response, 200, { status: "proposal", request: proposal });
+        return;
+      }
+      const connectorConfigurationListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests$/);
+      if (connectorConfigurationListMatch && request.method === "GET") {
+        const sessionId = connectorConfigurationListMatch[1]!;
+        const proposals = store.listConnectorConfigurationRequests(sessionId);
+        const items = (await Promise.all(proposals.map(async (proposal) => {
+          if (proposal.state !== "awaiting_confirmation" || proposal.runId.startsWith("user-request:")) return proposal;
+          const source = await store.getSessionRun(sessionId, proposal.runId);
+          const ready = (source?.status === "blocked" && source.configurationWait && source.configurationCheckpoint?.requestId === proposal.id)
+            || source?.status === "interrupted" || source?.status === "completed";
+          return ready ? proposal : undefined;
+        }))).filter((proposal): proposal is (typeof proposals)[number] => Boolean(proposal));
+        sendJson(response, 200, { items });
+        return;
+      }
+      const connectorConfigurationDecisionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests\/([^/]+)\/decision$/);
+      if (connectorConfigurationDecisionMatch && request.method === "POST") {
+        const body = await readJson<{ decision?: "apply" | "dismiss" }>(request);
+        if (body.decision !== "apply" && body.decision !== "dismiss") return sendError(response, 400, "Invalid configuration decision");
+        const sessionId = connectorConfigurationDecisionMatch[1]!;
+        const existingRequest = store.getConnectorConfigurationRequest(sessionId, connectorConfigurationDecisionMatch[2]!);
+        if (existingRequest?.state === "awaiting_confirmation"
+          && await sessionHasActiveRunExceptConfigurationWait(store, sessionId, existingRequest.id)) {
+          return sendError(response, 409, "Wait for the current run to finish before applying configuration");
+        }
+        const decided = await store.decideConnectorConfiguration({
+          sessionId, requestId: connectorConfigurationDecisionMatch[2]!, decision: body.decision,
+          assertReady: (connectorId) => {
+            const settings = store.getSessionSettings(sessionId).effective;
+            if (connectorId !== "web" && (!mcpRegistry.has(connectorId)
+              || mcpCatalog.getStatus(connectorId).status !== "ready")) {
+              throw new SessionStoreHttpError("Connector is not ready", 409);
+            }
+            if (!filterEnabledMcpSources([connectorId], settings.plugins).includes(connectorId)) {
+              throw new SessionStoreHttpError("MCP is disabled for this Session", 409);
+            }
+          },
+        });
+        if ((decided.state === "applied" || decided.state === "dismissed") && !decided.runId.startsWith("user-request:")) {
+          const continuation = await ensureConfigurationContinuation(store, sessionId, decided.id);
+          if (continuation?.status === "queued") scheduleSessionRuns(
+            store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+            artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+            ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+            config, memoryGraphClient, evolveRuntimeFactory,
+          );
+        }
+        sendJson(response, 200, store.getConnectorConfigurationRequest(sessionId, decided.id) ?? decided);
+        return;
+      }
       if (sessionMatch && request.method === "GET") {
         const session = await store.getSessionDetail(sessionMatch[1]!);
         if (!session) return sendError(response, 404, "Session not found");
@@ -3047,9 +3216,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const runId = sessionRunCancelMatch[2]!;
         if (runId === "current") {
           await cancelCurrentSessionRun(response, store, sessionId);
+          scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+            artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+            ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+            config, memoryGraphClient, evolveRuntimeFactory);
           return;
         }
         await cancelSessionRun(response, store, sessionId, runId);
+        scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+          artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+          ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+          config, memoryGraphClient, evolveRuntimeFactory);
         return;
       }
 
@@ -3608,7 +3785,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const cancelRunMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/current\/cancel$/);
       if (cancelRunMatch && request.method === "POST") {
-        await cancelCurrentSessionRun(response, store, cancelRunMatch[1]!);
+        const sessionId = cancelRunMatch[1]!;
+        await cancelCurrentSessionRun(response, store, sessionId);
+        scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+          artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+          ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+          config, memoryGraphClient, evolveRuntimeFactory);
         return;
       }
 
@@ -3742,6 +3924,79 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     notificationTimer.unref();
   }).catch(() => undefined); // normal startup error handling owns ready failures
   server.once("close", () => { notificationClosed = true; clearInterval(notificationTimer); dispatcher.close(); });
+  let configurationTimer: ReturnType<typeof setInterval> | undefined;
+  let configurationClosed = false;
+  let configurationBusy = false;
+  const processConfigurationTimers = async () => {
+    if (configurationClosed || configurationBusy) return;
+    configurationBusy = true;
+    try {
+      await conversationalConfiguration().tick();
+      for (const pending of store.listDueConnectorConfigurationRequests(new Date().toISOString(), 100)) {
+        const session = store.getSession(pending.sessionId);
+        if (!session || session.archivedAt || !session.autoApplyLowRiskConfiguration) {
+          store.withdrawConnectorAutoApply(pending.sessionId, pending.id);
+          continue;
+        }
+        if (pending.state !== "awaiting_confirmation" || !pending.autoApplyAt
+          || Date.parse(pending.autoApplyAt) > Date.now() || !session.autoApplyLowRiskConfiguration) continue;
+        if (await sessionHasActiveRunExceptConfigurationWait(store, session.id, pending.id)) {
+          store.deferConnectorConfigurationAutoApply(pending.id, new Date(Date.now() + 5_000).toISOString());
+          continue;
+        }
+        try {
+          const framework = conversationalConfiguration();
+          const generic = framework.repository.get(pending.id, session.id);
+          if (generic) {
+            // A V2 companion is never approved by the legacy writer: use its exact preview.
+            if (generic.view.state === "awaiting_confirmation" && generic.view.autoApplyAt
+              && Date.parse(generic.view.autoApplyAt) <= Date.now() && generic.view.previewDigest) {
+              await framework.decide(session.id, pending.id, { decision: "apply", revision: generic.view.revision,
+                previewDigest: generic.view.previewDigest }, `auto:${pending.id}:${generic.view.revision}`, "auto");
+            } else if (generic.view.state === "awaiting_confirmation" && generic.view.autoApplyAt && Date.parse(generic.view.autoApplyAt) > Date.now()) {
+              store.deferConnectorConfigurationAutoApply(pending.id, generic.view.autoApplyAt);
+            } else {
+              store.withdrawConnectorAutoApply(session.id, pending.id);
+            }
+            continue;
+          }
+          const decided = await store.decideConnectorConfiguration({
+            sessionId: session.id, requestId: pending.id, decision: "apply", source: "auto",
+            assertReady: (connectorId) => {
+              const settings = store.getSessionSettings(session.id).effective;
+              if ((connectorId !== "web" && (!mcpRegistry.has(connectorId)
+                || mcpCatalog.getStatus(connectorId).status !== "ready"))
+                || !filterEnabledMcpSources([connectorId], settings.plugins).includes(connectorId)) {
+                throw new SessionStoreHttpError("Connector is not ready", 409);
+              }
+            },
+          });
+          if (decided.state !== "applied") continue;
+          const continuation = await ensureConfigurationContinuation(store, session.id, decided.id);
+          if (continuation?.status === "queued") scheduleSessionRuns(
+            store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+            artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+            ideaTreeAuthorities, ideaTreeRepository(session.id), memoryGraphSink, session.id,
+            config, memoryGraphClient, evolveRuntimeFactory,
+          );
+        } catch (error) {
+          store.withdrawConnectorAutoApply(session.id, pending.id);
+          apiLog.warn("configuration_auto_apply_failed", {
+            requestId: pending.id, sessionId: session.id, errorMessage: shortErrorMessage(error),
+          });
+        }
+      }
+    } finally { configurationBusy = false; }
+  };
+  void ready.then(() => {
+    if (configurationClosed) return;
+    configurationTimer = setInterval(() => {
+      void processConfigurationTimers().catch((error) => apiLog.warn("configuration_timer_failed", { errorMessage: shortErrorMessage(error) }));
+    }, 1_000);
+    configurationTimer.unref();
+    void processConfigurationTimers().catch((error) => apiLog.warn("configuration_timer_failed", { errorMessage: shortErrorMessage(error) }));
+  }).catch(() => undefined);
+  server.once("close", () => { configurationClosed = true; clearInterval(configurationTimer); });
   server.on("close", () => {
     store.close();
   });

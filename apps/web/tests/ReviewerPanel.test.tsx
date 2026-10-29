@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ArtifactReviewRun } from "@sciencediscovery/schema";
+import type { ArtifactReviewRun, ReviewerSkipReason } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -422,6 +422,67 @@ for (const reason of [
     assert.doesNotMatch(html, /Review failed|Review passed|process-record failed/);
   });
 }
+
+for (const locale of ["en", "zh-CN"] as const) {
+  const title = locale === "en" ? "Review skipped" : "审查已跳过";
+  const reasons: Array<{ reason?: ReviewerSkipReason; text: string }> = locale === "en" ? [
+    { reason: "specialist_disabled", text: "Automatic review was skipped because Reviewer Specialist is off in System configuration → Specialists. No review result was produced." },
+    { reason: "automatic_review_disabled", text: "Automatic review was skipped because it is turned off for this session. No review result was produced." },
+    { text: "This review was skipped. No review result was produced." },
+  ] : [
+    { reason: "specialist_disabled", text: "自动审查已跳过：Reviewer Specialist 已在系统配置 → 专家中关闭。未产生审查结果。" },
+    { reason: "automatic_review_disabled", text: "自动审查已跳过：此会话已关闭自动审查。未产生审查结果。" },
+    { text: "本次审查已跳过，未产生审查结果。" },
+  ];
+  for (const { reason, text } of reasons) {
+    test(`ReviewerPanel renders explicit ${reason ?? "unspecified"} skip neutrally in ${locale}`, () => {
+      const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale },
+        createElement(ReviewerPanel, {
+          checkpointContent: "Legacy content must not decide an explicit outcome",
+          checkpointError: "Legacy error must not turn a skip into failure",
+          checkpointSkipReason: reason,
+          checkpointStatus: "skipped",
+          // An unrelated successful review must not inflate this skipped task.
+          reviews: [review({ completeness: deliveredComplete })],
+          toolCallId: "automatic-review:skipped-task",
+        })));
+
+      assert.match(html, /class="reviewer-specialist-panel process-record"/);
+      assert.ok(html.includes(` · ${title}</strong>`));
+      assert.ok(html.includes(`<small>${text}</small>`), "collapsed heading retains the reason");
+      assert.ok(html.includes(`<p>${text}</p>`), "expanded body retains the complete reason");
+      assert.doesNotMatch(html, /Legacy content|Legacy error|Review failed|Review completed|Review passed|1 passed|审查已完成|审查通过|process-record failed|reviewer-progress-card/);
+      assert.doesNotMatch(html, /<details[^>]*\sopen(?:=|\s|>)/, "skipped work is terminal and collapsed");
+    });
+  }
+
+  for (const checkpointStatus of ["completed", "failed"] as const) {
+    test(`ReviewerPanel preserves legacy ${checkpointStatus} skip history in ${locale}`, () => {
+      const reason = "Automatic review skipped: automatic review was turned off for this session.";
+      const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale },
+        createElement(ReviewerPanel, {
+          ...(checkpointStatus === "completed" ? { checkpointContent: reason } : { checkpointError: reason }),
+          checkpointStatus,
+          reviews: [],
+          toolCallId: "automatic-review:legacy-skipped-task",
+        })));
+      assert.ok(html.includes(`<p>${reason}</p>`));
+      assert.match(html, /class="reviewer-specialist-panel process-record"/);
+      assert.doesNotMatch(html, /Review failed|Review passed|审查通过|process-record failed/);
+    });
+  }
+}
+
+test("ReviewerPanel uses the explicit skipped outcome without requiring an automatic tool ID", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    checkpointSkipReason: "specialist_disabled",
+    checkpointStatus: "skipped",
+    reviews: [],
+    toolCallId: "manual-review:disabled-before-execution",
+  }));
+  assert.match(html, /Reviewer Specialist · Review skipped/);
+  assert.doesNotMatch(html, /Review failed|Review completed|Review passed|process-record failed/);
+});
 
 test("ReviewerPanel keeps an outdated review out of the revision count", () => {
   const finding = {

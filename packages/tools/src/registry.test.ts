@@ -41,6 +41,83 @@ test("state commits are awaited and fail closed while observers remain isolated"
   await assert.rejects(make(true).execute({ id: "two", name: "echo", args: {} }, new AbortController().signal), /state commit failed/);
 });
 
+function failureGuidanceRegistry(note?: string) {
+  return new ToolRegistry([
+    {
+      name: "echo", label: "echo", description: "echo", parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text" as const, text: "ok" }] }; },
+    },
+    {
+      name: "broken", label: "broken", description: "broken", parameters: Type.Object({}),
+      async execute(_id, args: Record<string, unknown>) {
+        if (args.throw) throw new Error("execution failed");
+        return { isError: args.ok !== true, content: [{ type: "text" as const, text: args.ok ? "recovered" : "failed" }] };
+      },
+    },
+    {
+      name: "configuration", label: "configuration", description: "configuration", parameters: Type.Object({}),
+      async execute() { return { isError: true, content: [{ type: "text" as const, text: "unavailable" }] }; },
+    },
+  ], { createResultMessage: resultMessage, errorGuidance: note });
+}
+
+test("CFG-R17: two failures prompt reflection once; unrelated success does not clear the streak", async () => {
+  const note = "Reassess the task and consider configuration(search); other repairs remain valid.";
+  const registry = failureGuidanceRegistry(note);
+  const signal = new AbortController().signal;
+  assert.equal((await registry.execute({ id: "ok", name: "echo", args: {} }, signal)).content, "ok");
+  assert.equal((await registry.execute({ id: "bad1", name: "broken", args: {} }, signal)).content, "failed");
+  assert.equal((await registry.execute({ id: "read", name: "echo", args: {} }, signal)).content, "ok");
+  assert.equal((await registry.execute({ id: "cfg", name: "configuration", args: {} }, signal)).content, "unavailable");
+  assert.equal((await registry.execute({ id: "bad2", name: "broken", args: {} }, signal)).content, `failed\n${note}`);
+  assert.equal((await registry.execute({ id: "bad3", name: "broken", args: {} }, signal)).content, "failed");
+});
+
+test("CFG-R17: recovery resets only that tool's failure streak", async () => {
+  const registry = failureGuidanceRegistry("reflection");
+  const signal = new AbortController().signal;
+  await registry.execute({ id: "one", name: "broken", args: {} }, signal);
+  assert.equal((await registry.execute({ id: "recovered", name: "broken", args: { ok: true } }, signal)).content, "recovered");
+  assert.equal((await registry.execute({ id: "two", name: "broken", args: {} }, signal)).content, "failed");
+  assert.match((await registry.execute({ id: "three", name: "broken", args: { throw: true } }, signal)).content, /execution failed.*\nreflection/u);
+});
+
+test("CFG-R17: no guidance without configuration support or for configuration errors", async () => {
+  const signal = new AbortController().signal;
+  for (const note of [undefined, "reflection"]) {
+    const registry = failureGuidanceRegistry(note);
+    for (let i = 0; i < 3; i++) assert.equal((await registry.execute({ id: `cfg${i}`, name: "configuration", args: {} }, signal)).content, "unavailable");
+    if (!note) for (let i = 0; i < 3; i++) assert.equal((await registry.execute({ id: `bad${i}`, name: "broken", args: {} }, signal)).content, "failed");
+  }
+});
+
+test("CFG-R17: concurrent failures emit one reminder and new registries do not inherit state", async () => {
+  const registry = failureGuidanceRegistry("reflection");
+  const signal = new AbortController().signal;
+  const results = await Promise.all([0, 1, 2].map(i => registry.execute({ id: `parallel${i}`, name: "broken", args: { value: i } }, signal)));
+  assert.equal(results.filter(result => result.content.includes("reflection")).length, 1);
+  assert.equal((await failureGuidanceRegistry("reflection").execute({ id: "fresh", name: "broken", args: {} }, signal)).content, "failed");
+});
+
+test("CFG-R17: cancellation does not count or emit a configuration reminder", async () => {
+  const registry = failureGuidanceRegistry("reflection");
+  const aborted = new AbortController(); aborted.abort();
+  for (let i = 0; i < 2; i++) assert.equal((await registry.execute({ id: `cancelled${i}`, name: "broken", args: {} }, aborted.signal)).content, "failed");
+  assert.equal((await registry.execute({ id: "first", name: "broken", args: {} }, new AbortController().signal)).content, "failed");
+});
+
+test("CFG-R17: unknown tool failures do not consume the reminder and augmented results stay bounded", async () => {
+  const store = new ToolOutputStore();
+  const registry = new ToolRegistry([{
+    name: "broken", label: "Broken", description: "Broken", parameters: Type.Object({}),
+    async execute() { return { isError: true, bounded: true, content: [{ type: "text" as const, text: "x".repeat(60) }] }; },
+  }], { createResultMessage: resultMessage, errorGuidance: "r".repeat(80), outputGuard: new ToolOutputGuard({ sink: store, maxBytes: 100 }) });
+  const signal = new AbortController().signal;
+  for (let i = 0; i < 2; i++) assert.ok(!(await registry.execute({ id: `unknown${i}`, name: `unknown${i}`, args: {} }, signal)).content.includes("r".repeat(80)));
+  assert.equal((await registry.execute({ id: "first", name: "broken", args: {} }, signal)).content, "x".repeat(60));
+  assert.match((await registry.execute({ id: "second", name: "broken", args: {} }, signal)).content, /\[bounded tool output\]/u);
+});
+
 test("executes tools and creates the canonical result message", async () => {
   const registry = new ToolRegistry([{
     name: "echo", label: "echo", description: "echo", parameters: Type.Object({ value: Type.String() }),

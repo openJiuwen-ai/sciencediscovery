@@ -9,6 +9,7 @@ import type {
   ArtifactReviewRun,
   ReviewerAuditTask,
   ReviewerFeedbackPolicy,
+  ReviewerSkipReason,
   ReviewerSpecialistLevel,
   ReviewFeedback,
   SessionReviewerSpecialistSettings,
@@ -26,9 +27,9 @@ const DEEP_BATCH_QUIET_MS = 2 * 60_000;
 const QUICK_BATCH_QUIET_MS = 60_000;
 const AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS = 15_000;
 const READ_ONLY_FEEDBACK_POLICY: ReviewerFeedbackPolicy = "record";
-const TERMINAL = new Set<ReviewerAuditTask["status"]>(["cancelled", "completed", "failed", "superseded"]);
+const TERMINAL = new Set<ReviewerAuditTask["status"]>(["cancelled", "completed", "failed", "skipped", "superseded"]);
 
-export type ReviewerAuditExecutionResult = ArtifactReviewRun[] | { skipped: true };
+export type ReviewerAuditExecutionResult = ArtifactReviewRun[] | { skipped: true; skipReason?: ReviewerSkipReason };
 
 export interface ReviewerAuditExecution {
   run(task: ReviewerAuditTask, signal: AbortSignal): Promise<ReviewerAuditExecutionResult>;
@@ -140,6 +141,9 @@ export class ReviewerAuditCoordinator {
     for (const project of this.store.listProjects()) {
       for (const session of this.store.listSessions(project.id, "all")) {
         const tasks = await this.store.listReviewerAuditTasks(session.id);
+        for (const task of tasks.filter((item) => item.status === "skipped" && item.checkpointPublishedAt)) {
+          await this.settleSkippedCheckpoint(task);
+        }
         for (const task of tasks.filter((item) => item.status === "running")) {
           await this.store.updateReviewerAuditTask(session.id, task.id, {
             errorSummary: "Reviewer service restarted; audit re-queued safely.",
@@ -185,6 +189,10 @@ export class ReviewerAuditCoordinator {
       message.kind === "reviewer_checkpoint" && message.reviewerCheckpoint?.status === "running") ?? [];
     for (const checkpoint of runningCheckpoints) {
       const task = tasks.find((item) => item.checkpointMessageId === checkpoint.id);
+      if (task?.status === "skipped") {
+        await this.settleSkippedCheckpoint(task);
+        continue;
+      }
       const error = task?.status === "failed" && task.errorSummary
         ? task.errorSummary
         : activeTaskIds.has(task?.id ?? "")
@@ -301,6 +309,25 @@ export class ReviewerAuditCoordinator {
     });
   }
 
+  private async settleSkippedCheckpoint(task: ReviewerAuditTask): Promise<void> {
+    const content = task.skipReason === "specialist_disabled"
+      ? "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists."
+      : task.skipReason === "automatic_review_disabled"
+        ? "Automatic review skipped: automatic review was turned off for this session."
+        : "Automatic review skipped: no review was performed.";
+    await this.store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+      content, skipReason: task.skipReason, status: "skipped",
+    });
+  }
+
+  private async skipTask(task: ReviewerAuditTask, skipReason: ReviewerSkipReason): Promise<void> {
+    await this.publishCheckpoint(task);
+    const settled = await this.store.updateReviewerAuditTask(task.sessionId, task.id, {
+      finishedAt: new Date().toISOString(), skipReason, status: "skipped",
+    });
+    if (settled.status === "skipped") await this.settleSkippedCheckpoint(settled);
+  }
+
   private scheduleAt(sessionId: string, dueAt: number): void {
     if (this.draining.has(sessionId)) {
       const pending = this.pendingWakeAt.get(sessionId);
@@ -367,20 +394,19 @@ export class ReviewerAuditCoordinator {
         if (task.origin === "artifact_registered") {
           const sessionSettings = await this.automaticTaskSettings(task);
           if (!this.store.getReviewerSpecialistSettings().enabled || !sessionSettings?.automaticReviewEnabled) {
-            const reason = task.sourceRunId && !sessionSettings
-              ? "The source Run is no longer available"
-              : !this.store.getReviewerSpecialistSettings().enabled
-                ? "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists."
-                : "Automatic review skipped: automatic review was turned off for this session.";
-            await this.publishCheckpoint(task);
-            await this.store.updateReviewerAuditTask(sessionId, task.id, {
-              errorSummary: reason,
-              finishedAt: new Date().toISOString(),
-              status: task.sourceRunId && !sessionSettings ? "failed" : "superseded",
-            });
-            await this.store.updateReviewerCheckpointMessage(sessionId, task.checkpointMessageId, {
-              content: reason, ...(task.sourceRunId && !sessionSettings ? { error: reason } : {}), status: task.sourceRunId && !sessionSettings ? "failed" : "completed",
-            });
+            if (task.sourceRunId && !sessionSettings) {
+              const error = "The source Run is no longer available";
+              await this.publishCheckpoint(task);
+              await this.store.updateReviewerAuditTask(sessionId, task.id, {
+                errorSummary: error, finishedAt: new Date().toISOString(), status: "failed",
+              });
+              await this.store.updateReviewerCheckpointMessage(sessionId, task.checkpointMessageId, {
+                content: error, error, status: "failed",
+              });
+            } else {
+              await this.skipTask(task, !this.store.getReviewerSpecialistSettings().enabled
+                ? "specialist_disabled" : "automatic_review_disabled");
+            }
             continue;
           }
           // Quick is a bounded local CAS check over an immutable Artifact, so
@@ -419,19 +445,22 @@ export class ReviewerAuditCoordinator {
           const automaticSettings = running.origin === "artifact_registered" ? await this.automaticTaskSettings(running) : undefined;
           if (!this.store.getReviewerSpecialistSettings().enabled || running.origin === "artifact_registered" && !automaticSettings?.automaticReviewEnabled) {
             const missingSource = running.origin === "artifact_registered" && Boolean(running.sourceRunId) && !automaticSettings;
-            const errorSummary = missingSource ? "The source Run is no longer available" : !this.store.getReviewerSpecialistSettings().enabled
-              ? "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists."
-              : "Automatic review skipped: automatic review was turned off for this session.";
-            await this.store.updateReviewerAuditTask(sessionId, running.id, { errorSummary, finishedAt: new Date().toISOString(), status: missingSource ? "failed" : "superseded" });
-            await this.store.updateReviewerCheckpointMessage(sessionId, running.checkpointMessageId, { content: errorSummary, ...(missingSource ? { error: errorSummary } : {}), status: missingSource ? "failed" : "completed" });
+            if (missingSource) throw new Error("The source Run is no longer available");
+            await this.skipTask(running, !this.store.getReviewerSpecialistSettings().enabled
+              ? "specialist_disabled" : "automatic_review_disabled");
             continue;
           }
           controller = new AbortController();
           this.active.set(task.id, controller);
           const outcome = await this.execution.run({ ...running, checkpointPublishedAt: published.checkpointPublishedAt }, controller.signal);
           const settled = await this.store.listReviewerAuditTasks(sessionId);
-          if (settled.find((item) => item.id === task.id)?.status === "cancelled") continue;
+          const current = settled.find((item) => item.id === task.id);
+          if (!current || TERMINAL.has(current.status)) continue;
           if (!Array.isArray(outcome)) {
+            if (outcome.skipReason) {
+              await this.skipTask(running, outcome.skipReason);
+              continue;
+            }
             // A queued automatic Artifact can be replaced/deleted between
             // debounce and admission. This is normal lifecycle churn, not a
             // failed review, so remove the transient card and do not create

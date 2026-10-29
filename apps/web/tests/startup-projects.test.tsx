@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
 import { createElement } from "react";
@@ -77,6 +77,14 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+async function waitForMounted(check: () => boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!check()) {
+    assert.ok(Date.now() < deadline, `Mounted App did not become ready: ${description}`);
+    await act(async () => { await new Promise<void>((resolve) => setImmediate(resolve)); });
+  }
+}
+
 function startupBody(path: string): unknown {
   const url = path.split("?")[0] ?? path;
   if (url === "/api/projects") return [{ id: "project-1", name: "Alpha Project" }];
@@ -85,6 +93,7 @@ function startupBody(path: string): unknown {
   if (url === "/api/model-catalog") return {};
   if (url === "/api/mcp/proxy-policies") return { policies: {} };
   if (url === "/api/search") return { results: [], hasMore: false, total: 0 };
+  if (/^\/api\/sessions\/[^/]+\/configuration-requests$/.test(url)) return { items: [] };
   if (url.endsWith("/settings")) return { overrides: {}, effective: {} };
   return [];
 }
@@ -103,9 +112,7 @@ test("a hung memory settings read does not keep the project sidebar or the addre
     await act(async () => {
       renderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(App, { initialToken: "test-token" })));
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
+    await waitForMounted(() => browser.location.pathname === "/projects/project-1", "project navigation despite the hung memory read");
 
     const projects = renderer!.root.findByProps({ id: "projects-panel-content" });
     assert.match(extractText(projects), /Alpha Project/);
@@ -131,7 +138,9 @@ test("mounted Session composer refreshes effective MCP status on terminal events
   const manifest = {id: "pubmed", displayName: "PubMed", publisher: "NCBI", termsUrl: "https://example.test/policy"};
   let status = "unavailable", reads = 0, fail = false;
   let onEvent!: (event: RunStreamEvent, sequence?: number) => void;
+  const subscriptions: Array<{ sessionId: string; runId: string }> = [];
   context.mock.method(ApiClient.prototype, "subscribeRunEvents", async (_session, _run, _after, listener, signal) => {
+    subscriptions.push({ sessionId: _session, runId: _run });
     onEvent = listener;
     await new Promise<void>(resolve => signal?.addEventListener("abort", () => resolve(), {once: true}));
   });
@@ -161,6 +170,9 @@ test("mounted Session composer refreshes effective MCP status on terminal events
   let view!: ReactTestRenderer;
   try {
     await act(async () => {view = create(createElement(LocaleProvider, {initialLocale: "en"}, createElement(App, {initialToken: "test-token"})));});
+    await waitForMounted(() => typeof onEvent === "function", "the current Session's active Run event subscription");
+    assert.equal(typeof onEvent, "function", "Session hydration must finish and install its run listener before events are emitted");
+    assert.deepEqual(subscriptions, [{ sessionId: session.id, runId: run.id }]);
     const picker = () => view.root.findByType(ConnectorPicker);
     assert.deepEqual(picker().props.specialistIds, ["arxiv"]);
     assert.equal(picker().props.sourceStatuses.pubmed.status, "unavailable");

@@ -143,6 +143,50 @@ function toolBatchTurn(calls: Array<{ args: Record<string, unknown>; id: string;
   };
 }
 
+for (const querySettings of [false, true]) {
+  test(`CFG-R17: repeated failures reach the next model turn without forcing configuration (query=${querySettings})`, async () => {
+    let queries = 0;
+    const turns: Array<(call: StreamerCall) => ModelTurn> = [
+      call => {
+        assert.ok(!call.systemPrompt.includes("Repeated tool failures:"));
+        return toolTurn("lookup_fixture", { attempt: 1 }, "lookup-one");
+      },
+      call => {
+        assert.ok(!JSON.stringify(call.history).includes("Repeated tool failures:"));
+        return toolTurn("list_files", { path: "." }, "inspect-files");
+      },
+      () => toolTurn("lookup_fixture", { attempt: 2 }, "lookup-two"),
+      call => {
+        const history = JSON.stringify(call.history);
+        assert.equal(history.split("Repeated tool failures:").length - 1, 1);
+        assert.match(history, /reassess the original task and the actual errors/u);
+        assert.match(history, /other repairs remain valid/u);
+        assert.equal(queries, 0, "the host must not search or propose on the model's behalf");
+        return querySettings ? toolTurn("configuration", { action: "search", query: "network proxy" }, "lookup-settings")
+          : textTurn("I will use another repair without changing settings.");
+      },
+    ];
+    if (querySettings) turns.push(() => textTurn("No applicable setting; use another repair."));
+    const { calls, streamer } = scriptStreamer(turns);
+    const restore = setModelTurnStreamerForTest(streamer);
+    try {
+      const agent = createNativeAgent({ ...workspace(), extraTools: [
+        { name: "lookup_fixture", label: "Lookup", description: "Lookup", parameters: Type.Object({ attempt: Type.Number() }),
+          async execute() { return { isError: true, content: [{ type: "text", text: "Lookup failed; cause unclassified." }] }; } },
+        { name: "configuration", label: "Configuration", description: "Query available settings", parameters: Type.Object({ action: Type.String(), query: Type.String() }),
+          async execute(_id, args: { action: string; query: string }) {
+            queries++; assert.equal(args.action, "search"); assert.equal(args.query, "network proxy");
+            return { content: [{ type: "text", text: JSON.stringify({ items: [] }) }] };
+          } },
+      ] } as NativeAgentOptions);
+      const result = await agent.execute("Complete the original research task.");
+      assert.equal(queries, querySettings ? 1 : 0);
+      assert.equal(calls.length, querySettings ? 5 : 4, "reflection uses the existing next model invocation");
+      assert.ok(result.finalMessages.some(message => message.role === "assistant"));
+    } finally { restore(); }
+  });
+}
+
 test("max parallel tool call configuration defaults and validates", () => {
   assert.equal(configuredMaxParallelToolCalls(""), 10);
   assert.equal(configuredMaxParallelToolCalls("3"), 3);

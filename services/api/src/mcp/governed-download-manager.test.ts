@@ -37,7 +37,10 @@ function unusedTransport(): McpTransportClient {
 
 
 async function waitForCompleted(store: SessionStore, sessionId: string, jobId: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Durable job commits can be delayed by concurrent package validation. Return
+  // as soon as a terminal state is persisted; the ceiling is not a fixed sleep.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     const job = (await store.listArtifactJobs(sessionId)).find((item) => item.id === jobId);
     if (job && ["completed", "failed"].includes(job.state)) return job;
     await new Promise((resolveWait) => setTimeout(resolveWait, 10));

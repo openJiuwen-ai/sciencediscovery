@@ -54,7 +54,8 @@ export function thinkingChoices(model: ModelProfile | undefined): { modes: Model
 }
 /** P1 reuses formal runtime/reviewer settings; no active run or model is hot-swapped. */
 export function createP1ConfigurationAdapters(store: SessionStore, nativeExecutor: () => boolean = () => true): ConfigurationAdapter[] {
-  const assertBackend = () => { if (!nativeExecutor()) throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "These scoped settings require the verified Native executor", 409); };
+  // Both executors consume frozen thinking/review settings on newly queued runs.
+  const assertBackend = () => { if (!nativeExecutor()) throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "No configuration interaction adapter is installed", 409); };
   const ids = ["skill.select", "thinking.configure", "review.configure"] as const;
   return ids.map((id): ConfigurationAdapter => ({
     id, version: 1, schemaVersion: 1, scopes: id === "skill.select" ? ["session", "project"] : ["session"], persistence: "local_transaction",

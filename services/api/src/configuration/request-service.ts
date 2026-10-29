@@ -270,7 +270,9 @@ export class ConfigurationRequestService {
       let credentialHandle = input.credentialHandle ?? (target === record.target ? record.credentialHandle : undefined);
       if (input.credentialHandle && target !== record.target) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Credentials must be provided again after changing the target", 400);
       if (credentialHandle && this.host.resolvePreviewCredential) credentialHandle = this.host.resolvePreviewCredential({ sessionId, requestId: id, revision: record.view.revision, target: String(record.plan.data?.credentialTarget ?? record.target), credentialHandle, explicit: input.credentialHandle !== undefined });
-      let plan = this.plan(adapter, normalized, snapshot, scope, credentialHandle);
+      // Refusal remains available if the target disappeared while this task waited.
+      // Only the server-owned dismissal choice may skip rebuilding an applying plan.
+      let plan = selected?.kind === "dismiss" ? record.plan : this.plan(adapter, normalized, snapshot, scope, credentialHandle);
       if (selected) plan = choosePlan(plan, selected);
       this.host.onPreviewRevision?.({ sessionId, requestId: id, fromRevision: record.view.revision, toRevision: record.view.revision + 1, oldTarget: record.target, newTarget: target, ...(credentialHandle ? { credentialHandle } : {}) });
       record.input = normalized; record.target = target; record.plan = plan; record.resourceVersions = snapshot.resourceVersions; record.adapterVersion = adapter.version; record.schemaVersion = adapter.schemaVersion;

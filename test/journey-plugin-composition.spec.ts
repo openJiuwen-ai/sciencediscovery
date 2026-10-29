@@ -192,8 +192,17 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
       await expect(modal.locator("pre.artifact-source-preview")).toContainText("Plugin preview remains readable");
     });
   } finally {
-    if(otherProjectId) await page.request.delete(apiBaseUrl()+"/api/projects/"+otherProjectId,{headers:authorizationHeader()});
-    await cleanupJourney(page,fixture).catch(()=>undefined);await stub.stop();
+    try {
+      if(otherProjectId) {
+        const deleted=await page.request.delete(apiBaseUrl()+"/api/projects/"+otherProjectId,{
+          headers:authorizationHeader(),data:{confirmationId:otherProjectId},
+        });
+        expect(deleted.ok(), "Delete only the independently owned project").toBeTruthy();
+      }
+    } finally {
+      try { await cleanupJourney(page,fixture); }
+      finally { await stub.stop(); }
+    }
   }
 });
 

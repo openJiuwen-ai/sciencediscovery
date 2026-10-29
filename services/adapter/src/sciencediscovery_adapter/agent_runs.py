@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 
 from . import gateway
 from .config import Settings
+from .configuration_capabilities import configuration_capabilities
 from .diagnostics import emit as trace_boundary
 from .events import RunEventMapper
 from .llm_proxy import DEFAULT_ALIAS, LlmRoute, LlmRoutes
@@ -110,6 +111,8 @@ class AgentRunRequest(BaseModel):
     hiddenJiuwenSwarmTools: list[str] = Field(default_factory=list, max_length=100)
     # Longest a single tool call may take, in seconds; the run's own timeout, when the caller has one.
     toolTimeoutSeconds: int | None = Field(default=None, gt=0)
+    # Only configuration(propose) is a bounded human wait; ordinary calls keep their deadline.
+    configurationWaitTimeoutSeconds: int | None = Field(default=None, gt=0, le=86460)
 
 
 # JiuwenSwarm's own tools that act on the host, outside ScienceDiscovery's sandbox and Runner (the API's
@@ -190,17 +193,33 @@ def describe_approval(request: dict[str, Any], route: LlmRoute | None) -> None:
     request["toolName"] = shown
 
 
-def bridge_caller(bridge: Bridge, client: httpx.AsyncClient, skill_directories: dict[str, str] | None = None):
+def bridge_caller(
+    bridge: Bridge, client: httpx.AsyncClient, skill_directories: dict[str, str] | None = None,
+    *, timeout_s: float | None = None, configuration_wait_timeout_s: float | None = None,
+    trace_context: dict[str, Any] | None = None,
+):
+    """Bind domain deadlines to this run's HTTP bridge, not the generic MCP protocol."""
     async def call(name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
-        if skill_directories and name == "run_shell" and isinstance(arguments.get("command"), str):
-            arguments = {**arguments, "command": sandbox_skill_paths(arguments["command"], skill_directories)}
-        response = await client.post(
-            bridge.url, json={"name": name, "arguments": arguments},
-            headers={"authorization": f"Bearer {bridge.token}"} if bridge.token else {},
-        )
-        response.raise_for_status()
-        body = response.json()
-        return str(body.get("text", "")), bool(body.get("isError", False))
+        deadline = (configuration_wait_timeout_s if name == "configuration"
+                    and arguments.get("action") == "propose" and configuration_wait_timeout_s
+                    else timeout_s)
+        try:
+            # A total call deadline, rather than HTTP read inactivity: a slow
+            # response cannot prolong an ordinary tool by streaming bytes.
+            async with asyncio.timeout(deadline):
+                if skill_directories and name == "run_shell" and isinstance(arguments.get("command"), str):
+                    arguments = {**arguments, "command": sandbox_skill_paths(arguments["command"], skill_directories)}
+                response = await client.post(
+                    bridge.url, json={"name": name, "arguments": arguments},
+                    headers={"authorization": f"Bearer {bridge.token}"} if bridge.token else {},
+                )
+                response.raise_for_status()
+                body = response.json()
+                return str(body.get("text", "")), bool(body.get("isError", False))
+        except TimeoutError:
+            trace_boundary("tool.bridge.timeout", **(trace_context or {}), tool=name, timeout_s=deadline)
+            return (f"Tool execution timed out after {deadline}s; "
+                    "execution outcome may be incomplete; inspect state before retrying"), True
     return call
 
 
@@ -458,14 +477,21 @@ class AgentRunner:
                 # JiuwenSwarm validates strictly; the model still sees the originals (see LlmRoute).
                 token = self.registry.add(Toolset(
                     tools=[{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools],
-                    call=bridge_caller(request.bridge, self.client(), self.skills.directories),
-                    timeout_s=request.toolTimeoutSeconds or self.settings.tool_timeout_s,
+                    call=bridge_caller(
+                        request.bridge, self.client(), self.skills.directories,
+                        timeout_s=request.toolTimeoutSeconds or self.settings.tool_timeout_s,
+                        configuration_wait_timeout_s=request.configurationWaitTimeoutSeconds,
+                        trace_context=trace_context,
+                    ),
+                    # Generic transport ceiling; the bridge enforces each domain deadline.
+                    timeout_s=max(request.toolTimeoutSeconds or self.settings.tool_timeout_s,
+                                  request.configurationWaitTimeoutSeconds or 0),
                     trace_context=trace_context,
                 ))
                 trace_boundary("run.tools.bound", **trace_context, run_tag=token, tool_count=len(request.tools))
                 # Before the model route: the server's name is in every tool name the model and JiuwenSwarm use.
                 tools = [{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools]
-                name = await self.ensure_shared_tools(tools, request.toolTimeoutSeconds or self.settings.tool_timeout_s)
+                name = await self.ensure_shared_tools(tools, max(request.toolTimeoutSeconds or self.settings.tool_timeout_s, request.configurationWaitTimeoutSeconds or 0))
                 trace_boundary("run.tools.registered", **trace_context)
                 server_held = True
                 mapper.mcp_prefixes = (f"mcp_{name}_",)
@@ -587,6 +613,13 @@ async def stream_with_keepalive(source: AsyncGenerator[str, None], interval: flo
 
 def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/agent/configuration/capabilities")
+    async def describe_configuration_capabilities(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        accepted = {f"Bearer {token}" for token in (settings.agent_token, settings.api_token) if token}
+        if accepted and authorization not in accepted:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return configuration_capabilities()
 
     @router.post("/agent/runs")
     async def create_run(body: AgentRunRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:

@@ -13,10 +13,12 @@
 # limitations under the License.
 
 import asyncio
+import json
 import httpx
 import pytest
 from fastapi import FastAPI
 
+from sciencediscovery_adapter.agent_runs import Bridge, bridge_caller
 from sciencediscovery_adapter.mcp_server import RUN_ARG, Toolset, ToolsetRegistry, mcp_router
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
@@ -233,3 +235,66 @@ async def test_a_required_empty_list_dropped_upstream_is_restored_before_the_cal
                                     "inputSchema": {"type": "object", "required": ["plan"], "properties": {"plan": {"type": "array"}}}})
     await rpc(client, registry, "tools/call", call_of(tag, "update_plan"))
     assert calls[-1] == ("update_plan", {"plan": []})
+
+
+async def test_configuration_human_wait_outlasts_ordinary_deadline_without_extending_other_tools(setup):
+    client, _, _, registry = setup
+    config_tool = {"name": "configuration", "description": "Configuration", "inputSchema": {"type": "object"}}
+
+    async def call(name, arguments):
+        await asyncio.sleep(.08)
+        return "human decision returned to original tool", False
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        text, error = await call(payload["name"], payload["arguments"])
+        return httpx.Response(200, json={"text": text, "isError": error})
+
+    async with client, httpx.AsyncClient(transport=httpx.MockTransport(handler)) as bridge:
+        bound = bridge_caller(Bridge(url="http://bridge.test/call"), bridge,
+                              timeout_s=.02, configuration_wait_timeout_s=1)
+        tag = registry.add(Toolset(tools=[*TOOLS, config_tool], call=bound, timeout_s=1))
+        proposed = (await rpc(client, registry, "tools/call", call_of(tag, "configuration", action="propose"))).json()["result"]
+        assert proposed["isError"] is False
+        assert "original tool" in proposed["content"][0]["text"]
+        ordinary = (await rpc(client, registry, "tools/call", call_of(tag, "run_shell", command="test"))).json()["result"]
+        assert ordinary["isError"] is True
+        search = (await rpc(client, registry, "tools/call", call_of(tag, "configuration", action="search"))).json()["result"]
+        assert search["isError"] is True
+
+
+async def test_cancelled_configuration_human_wait_releases_only_its_original_request(setup):
+    client, _, _, registry = setup
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+    config_tool = {"name": "configuration", "description": "Configuration", "inputSchema": {"type": "object"}}
+
+    async def call(name, arguments):
+        if arguments.get("action") != "propose":
+            return "still usable", False
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        text, error = await call(payload["name"], payload["arguments"])
+        return httpx.Response(200, json={"text": text, "isError": error})
+
+    async with client, httpx.AsyncClient(transport=httpx.MockTransport(handler)) as bridge:
+        bound = bridge_caller(Bridge(url="http://bridge.test/call"), bridge,
+                              timeout_s=.01, configuration_wait_timeout_s=60)
+        tag = registry.add(Toolset(tools=[config_tool], call=bound, timeout_s=60))
+        pending = asyncio.create_task(client.post(f"/mcp/{registry.token}", headers={"x-sci-mcp-connection": "config"},
+            json={"jsonrpc": "2.0", "id": 42, "method": "tools/call",
+                  "params": call_of(tag, "configuration", action="propose")}))
+        await asyncio.wait_for(entered.wait(), 1)
+        await client.post(f"/mcp/{registry.token}", headers={"x-sci-mcp-connection": "config"},
+            json={"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 42}})
+        await asyncio.wait_for(cancelled.wait(), 1)
+        assert (await pending).json()["error"]["code"] == -32800
+        again = await client.post(f"/mcp/{registry.token}", headers={"x-sci-mcp-connection": "config"},
+            json={"jsonrpc": "2.0", "id": 42, "method": "tools/call",
+                  "params": call_of(tag, "configuration", action="search")})
+        assert again.json()["result"]["content"][0]["text"] == "still usable"

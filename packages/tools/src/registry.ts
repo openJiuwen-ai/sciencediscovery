@@ -40,6 +40,12 @@ export interface ToolSpec {
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   batchPolicies?: readonly ToolBatchPolicy[];
   createResultMessage(call: RuntimeToolCall, content: string, output?: ToolOutputRecord): TMessage;
+  /**
+   * One run-segment reminder after the same registered tool fails twice without
+   * succeeding. Other tools do not clear its streak. No cause is inferred;
+   * configuration calls and aborted executions do not trigger the reminder.
+   */
+  errorGuidance?: string;
   /** Optional run-scoped capability policy supplied by the application composition. */
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
@@ -229,6 +235,8 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   private readonly deferredState: DeferredToolState | undefined;
   private readonly loopGuard: ToolLoopGuard;
   private nextExecutionSequence = 0;
+  private readonly failureStreaks = new Map<string, number>();
+  private errorGuidanceShown = false;
 
   constructor(tools: Iterable<AgentTool>, private readonly options: ToolRegistryOptions<TMessage>) {
     const ordered = [...tools].map((tool) => Object.freeze({ ...tool }));
@@ -364,6 +372,22 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       isError = true;
     } else {
       ({ content, details, isError, selfBounded } = await this.executeRegistered(call, signal));
+    }
+    if (this.options.errorGuidance && !this.errorGuidanceShown && !signal.aborted
+      && call.name !== "configuration" && this.tools.has(call.name)) {
+      if (!isError) this.failureStreaks.delete(call.name);
+      else {
+        const failures = (this.failureStreaks.get(call.name) ?? 0) + 1;
+        this.failureStreaks.set(call.name, failures);
+        if (failures >= 2) {
+          content = `${content}\n${this.options.errorGuidance}`;
+          this.errorGuidanceShown = true;
+          this.failureStreaks.clear();
+          // A thrown error can mark its original payload self-bounded. Adding
+          // application guidance must still pass through the output guard.
+          selfBounded = false;
+        }
+      }
     }
     const boundedDetails = details === undefined ? undefined : sanitizeToolDetails(details);
     if (this.options.recordResult) await this.options.recordResult({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });

@@ -386,6 +386,9 @@ export interface ReviewCheckpointResult {
   reviews: ArtifactReviewRun[];
 }
 
+/** A capability opt-out is not an executed review or a replaced artifact. */
+export type ReviewerSkipReason = "specialist_disabled" | "automatic_review_disabled";
+
 /** A durable, independently cancellable Reviewer Specialist work item. */
 export interface ReviewerAuditTask {
   /** Exact artifact producing root Run. Automatic reviews use its frozen preferences; no timestamp inference. */
@@ -409,7 +412,8 @@ export interface ReviewerAuditTask {
   reviewLevel: ReviewerSpecialistLevel;
   sessionId: string;
   startedAt?: string;
-  status: "cancelled" | "completed" | "failed" | "queued" | "running" | "superseded";
+  skipReason?: ReviewerSkipReason;
+  status: "cancelled" | "completed" | "failed" | "queued" | "running" | "skipped" | "superseded";
   supersededBy?: string;
   toolCallId: string;
 }

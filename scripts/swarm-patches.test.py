@@ -52,5 +52,6 @@ class SwarmPatchesTest(unittest.TestCase):
                 swarm_patches.process("apply", root, "workswarm0.2.6", patch_dir)
 
 
+
 if __name__ == "__main__":
     unittest.main()

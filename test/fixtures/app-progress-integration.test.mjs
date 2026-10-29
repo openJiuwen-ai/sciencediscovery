@@ -191,6 +191,7 @@ async function mountRecordedApp(context, fixture) {
     searchWorkbench: { results: [] },
     listSpecialists: [],
     listPermissionGrants: [],
+    listConfigurationRequests: { items: [] },
     listSessions: [session],
     listProjectArtifacts: [],
     getProjectSettings: void 0,

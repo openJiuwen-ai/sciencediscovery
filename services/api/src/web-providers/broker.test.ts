@@ -290,13 +290,32 @@ test("fetch requests host permission and never switch provider", async (contextT
 function recordingSink(): {
   sink: { observeToolCall: (payload: unknown) => void };
   emissions: unknown[];
+  waitForEmissions: (count: number) => Promise<void>;
 } {
   const emissions: unknown[] = [];
+  const listeners = new Set<() => void>();
   return {
     emissions,
+    waitForEmissions(count) {
+      if (emissions.length >= count) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          listeners.delete(onEmission);
+          reject(new Error(`Timed out waiting for ${count} memory-graph emissions; received ${emissions.length}`));
+        }, 30_000);
+        const onEmission = () => {
+          if (emissions.length < count) return;
+          clearTimeout(timeout);
+          listeners.delete(onEmission);
+          resolve();
+        };
+        listeners.add(onEmission);
+      });
+    },
     sink: {
       observeToolCall(payload) {
         emissions.push(payload);
+        for (const listener of listeners) listener();
       },
     },
   };
@@ -392,7 +411,7 @@ test("successful web_fetch mirrors a WebPage with contentHash to the memory grap
   const root = resolve(process.cwd(), ".tmp", `web-broker-pr9-fetch-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   contextTest.after(() => rm(root, { force: true, recursive: true }));
-  const { sink, emissions } = recordingSink();
+  const { sink, emissions, waitForEmissions } = recordingSink();
   const body = "BRCA1 is a tumor suppressor gene on chromosome 17.";
   const expectedHash = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
   const broker = new WebBroker(root, store({ fetchProvider: "jina" }), gateway([], {
@@ -401,12 +420,9 @@ test("successful web_fetch mirrors a WebPage with contentHash to the memory grap
 
   const first = await broker.fetch("https://en.wikipedia.org/wiki/BRCA1", context, permission([]));
   assert.equal((first as { invocation: { status: string } }).invocation.status, "succeeded");
-  // Fire-and-forget — wait for the async mirror task to drain. The mirror
-  // awaits a CAS write before calling the sink, so we wait on setTimeout
-  // ticks rather than just setImmediate.
-  for (let i = 0; i < 100 && emissions.length === 0; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  // The asynchronous mirror awaits a CAS write; observe its actual sink event
+  // rather than assuming it finishes within a short polling window under load.
+  await waitForEmissions(1);
   assert.equal(emissions.length, 1, "fetch success must emit one observeToolCall");
   const emission = emissions[0] as {
     taskId: string;
@@ -436,9 +452,7 @@ test("successful web_fetch mirrors a WebPage with contentHash to the memory grap
   // a no-op so the blob still resolves.
   const second = await broker.fetch("https://en.wikipedia.org/wiki/BRCA1", { ...context, toolCallId: "call-2" }, permission([]));
   assert.equal((second as { invocation: { cacheHit: boolean } }).invocation.cacheHit, true);
-  for (let i = 0; i < 100 && emissions.length < 2; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await waitForEmissions(2);
   assert.equal(emissions.length, 2);
   const cachedProduct = (emissions[1] as { products: Array<{ contentHash?: string }> }).products[0]!;
   assert.equal(cachedProduct.contentHash, expectedHash);

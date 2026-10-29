@@ -1000,3 +1000,71 @@ async def test_boundary_failed_start_releases_private_routes_and_toolsets(harnes
     assert not runner.routes._routes
     assert not runner.registry._sets
     assert not runner.pending_approvals
+
+
+async def test_configuration_bridge_deadline_does_not_reconfigure_global_sdk_transport(harness, monkeypatch):
+    import sciencediscovery_adapter.agent_runs as module
+
+    app, runner, rpcs = harness
+    bindings, ceilings = [], []
+    original_bridge, original_add = module.bridge_caller, runner.registry.add
+
+    def bind(*args, **kwargs):
+        bindings.append(kwargs)
+        return original_bridge(*args, **kwargs)
+
+    def add(toolset):
+        ceilings.append(toolset.timeout_s)
+        return original_add(toolset)
+
+    monkeypatch.setattr(module, "bridge_caller", bind)
+    monkeypatch.setattr(runner.registry, "add", add)
+    FakeRun.fixture = "jw_chat_mcp_direct.raw"
+    await post(app, {
+        "sessionId": "s1", "prompt": "configure", "tools": [{"name": "configuration"}],
+        "bridge": {"url": "http://legacy.test/bridge"},
+        "toolTimeoutSeconds": 2, "configurationWaitTimeoutSeconds": 86460,
+    })
+    assert ceilings == [86460]
+    assert len(bindings) == 1
+    assert bindings[0]["timeout_s"] == 2
+    assert bindings[0]["configuration_wait_timeout_s"] == 86460
+    assert next(p for _, method, p in rpcs if method == "mcp.register_custom")["timeout_s"] == 3600
+    assert not runner.registry._sets
+
+
+async def test_registered_run_bridge_keeps_ordinary_and_query_deadlines(harness):
+    app, runner, _ = harness
+    results = {}
+
+    async def handler(request):
+        await asyncio.sleep(1.05)
+        return httpx.Response(200, json={"text": "decision returned", "isError": False})
+
+    class DeadlineRun(FakeRun):
+        def __aiter__(self):
+            async def frames():
+                toolset, = runner.registry._sets.values()
+                assert toolset.timeout_s == 3
+                for key, name, arguments in [
+                    ("propose", "configuration", {"action": "propose"}),
+                    ("query", "configuration", {"action": "search"}),
+                    ("ordinary", "run_shell", {}),
+                ]:
+                    results[key] = await toolset.call(name, arguments)
+                for frame in self.frames:
+                    yield frame
+            return frames()
+
+    runner.chat_run = DeadlineRun
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        runner.client = lambda: client
+        await post(app, {"sessionId": "s1", "prompt": "configure",
+                         "tools": [{"name": "configuration"}, {"name": "run_shell"}],
+                         "bridge": {"url": "http://legacy.test/bridge"},
+                         "toolTimeoutSeconds": 1, "configurationWaitTimeoutSeconds": 3})
+    assert results["propose"] == ("decision returned", False)
+    for key in ("query", "ordinary"):
+        assert results[key][1] is True
+        assert "timed out after 1s" in results[key][0]
+    assert not runner.registry._sets

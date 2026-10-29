@@ -26,7 +26,7 @@ import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./mod
 import type { IdeaTreePhase, IdeaTreeRunSettingsSnapshot } from "./idea-tree.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, PlanSnapshot } from "./plan.js";
-import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
+import type { ArtifactReviewRun, PromptSkillLibraryRef, ReviewerSkipReason } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
 import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SessionReviewerSpecialistSettings, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
@@ -182,7 +182,8 @@ export interface ChatMessage {
       running?: string;
       total: number;
     };
-    status: "completed" | "failed" | "running";
+    skipReason?: ReviewerSkipReason;
+    status: "completed" | "failed" | "running" | "skipped";
     toolCallId: string;
   };
   role: "assistant" | "user";

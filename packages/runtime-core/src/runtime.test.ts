@@ -22,6 +22,31 @@ import { AgentLoop, ExternalWaitController, RuntimeBuilder, reduceRunState, type
 interface Input { history: RuntimeMessage[] }
 interface Usage { tokens: number }
 
+test("configuration suspension happens after a committed tool batch without completing the task", async () => {
+  const order: string[] = [];
+  let modelCalls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 3,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { modelCalls += 1; return {
+      assistantMessage: { role: "assistant", tool_calls: [{ id: "request", name: "propose_connector_enable" }] },
+      toolCalls: [{ id: "request", name: "propose_connector_enable", args: { connectorId: "pubmed" } }],
+    }; } },
+    toolDispatcher: { async execute() { order.push("tool"); return {
+      content: "pending", isError: false, message: { role: "tool", tool_call_id: "request", content: "pending" },
+    }; } },
+    turnLifecycle: { async beforeTurn() {}, async afterAssembly() {}, async afterTurn() { order.push("commit"); } },
+    suspendAfterTurn: () => { order.push("suspend"); return true; },
+    eventSink: (event) => { if (event.type === "completed") order.push("completed"); },
+  });
+  const result = await loop.run([{ role: "user", content: "Search PubMed" }], new AbortController().signal, () => {});
+  assert.equal(result.suspended, true);
+  assert.equal(modelCalls, 1);
+  assert.deepEqual(order, ["tool", "commit", "suspend"]);
+  assert.equal(result.history.at(-1)?.role, "tool");
+  assert.equal(loop.snapshot().phase, "suspended");
+});
+
 test("durable lifecycle is awaited and a failed commit cannot emit completion", async () => {
   const order: string[] = [];
   const loop = new AgentLoop<RuntimeMessage, Input, never>({

@@ -62,6 +62,8 @@ export interface McpWorkspaceToolOptions {
   broker: McpGovernanceBroker;
   catalog: McpSourceCatalog;
   enabledSourceIds: readonly string[];
+  /** Main Jiuwen run: admit only a separately approved configuration delta. */
+  configurationActivation?: boolean;
   reportReadiness?(summary: string): void;
   emitPermissionRequest(request: PermissionRequest): void;
   pauseExternalWait(): () => void;
@@ -100,8 +102,22 @@ function unprefixedWorkspacePath(path: string | undefined, prefix: string | unde
   return path.startsWith(`${cleanedPrefix}/`) ? path.slice(cleanedPrefix.length + 1) : path;
 }
 
-export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWorkspaceTools {
+/** Frozen descriptors share the same ready-source filter as executable tools. */
+export function describeMcpWorkspaceTools(options: Pick<McpWorkspaceToolOptions, "registry" | "catalog" | "enabledSourceIds">) {
+  const enabled = new Set(options.enabledSourceIds);
+  return options.registry.list().filter(adapter => enabled.has(adapter.manifest.id)).flatMap(adapter =>
+    Object.values(adapter.manifest.tools).filter(tool => options.catalog.getStatus(adapter.manifest.id).availableTools.includes(tool.id)).map(tool => ({
+      description: [tool.description, tool.promptFragment, adapter.manifest.prompt.summary, adapter.manifest.prompt.citationPolicy, ...adapter.manifest.prompt.caveats].filter(Boolean).join(" "),
+      displayName: `${adapter.manifest.displayName}: ${tool.displayName}`,
+      inputSchema: structuredClone(tool.inputSchema), routing: structuredClone(tool.routing), parallelSafe: tool.idempotent && (tool.kind === "lookup" || tool.kind === "search"),
+      name: `mcp__${adapter.manifest.id.replace(/[^A-Za-z0-9_-]/g, "_")}__${tool.id.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+      sourceId: adapter.manifest.id, toolId: tool.id,
+    })));
+}
+
+export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWorkspaceTools & { activateConfigurationSource(sourceId: string): ReturnType<typeof describeMcpWorkspaceTools> } {
   const enabledSourceIds = new Set(options.enabledSourceIds);
+  const configurationSources = new Set<string>();
   const statuses = () => options.registry.list()
     .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
     .map((adapter) => options.catalog.getStatus(adapter.manifest.id));
@@ -109,19 +125,8 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
   const guidance = "Inspect MCP settings and /api/mcp/sources. Repair or enable the configured server, then reload the catalog via POST /api/mcp/sources/reload. Host changes require user authorization; sandbox scripts cannot repair control-plane MCP.";
   const diagnostics = () => ({ sources: statuses(), guidance,
     omittedTools: unhealthy().map(status => ({ sourceId: status.sourceId, tools: status.missingTools })) });
-  const buildTools = (): NonNullable<WorkspaceAgentOptions["mcpTools"]> => options.registry.list()
-    .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
-    .flatMap((adapter) => {
-      return Object.values(adapter.manifest.tools)
-        .map((tool) => ({
-          description: [
-            tool.description,
-            tool.promptFragment,
-            adapter.manifest.prompt.summary,
-            adapter.manifest.prompt.citationPolicy,
-            ...adapter.manifest.prompt.caveats,
-          ].filter(Boolean).join(" "),
-          displayName: `${adapter.manifest.displayName}: ${tool.displayName}`,
+  const buildTools = (): NonNullable<WorkspaceAgentOptions["mcpTools"]> => describeMcpWorkspaceTools({ ...options, enabledSourceIds: [...enabledSourceIds] })
+    .map(tool => ({ ...tool,
           execute: async (toolCallId: string, input: JsonValue, signal?: AbortSignal, onProgress?: (chunk: string) => void) => {
             const response = await options.broker.invoke({
               onProgress,
@@ -143,10 +148,10 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
               projectId: options.projectId,
               sessionId: options.sessionId,
               signal,
-              sourceId: adapter.manifest.id,
+              sourceId: tool.sourceId,
               ...(options.suppressMemoryGraphMirror ? { suppressMemoryGraphMirror: true } : {}),
               toolCallId,
-              toolId: tool.id,
+              toolId: tool.toolId,
               turnId: options.turnId,
               parentSubagentId: options.parentSubagentId,
             });
@@ -155,14 +160,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
               invocationId: response.invocation.id,
             };
           },
-          inputSchema: tool.inputSchema,
-          name: `mcp__${adapter.manifest.id.replace(/[^A-Za-z0-9_-]/g, "_")}__${tool.id.replace(/[^A-Za-z0-9_-]/g, "_")}`,
-          parallelSafe: tool.idempotent && (tool.kind === "lookup" || tool.kind === "search"),
-          routing: tool.routing,
-          sourceId: adapter.manifest.id,
-          toolId: tool.id,
-        }));
-    });
+    }));
 
   const initiallyUnhealthy = new Set(unhealthy().map(status => status.sourceId));
   const formatReadiness = (status: ReturnType<McpSourceCatalog["getStatus"]>) =>
@@ -174,11 +172,19 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
   // Custom servers can have no manifest tools at setup. Rebuild from discovery
   // after repair, but never expand beyond the initially affected source selection
   // or expose an already mounted tool through the recovery entry point.
-  const recoveredTools = () => buildTools().filter(tool => initiallyUnhealthy.has(tool.sourceId)
-    && !mcpTools.some(mounted => mounted.sourceId === tool.sourceId && mounted.toolId === tool.toolId)
+  const recoveredTools = () => buildTools().filter(tool => initiallyUnhealthy.has(tool.sourceId) || configurationSources.has(tool.sourceId))
+    .filter(tool => !mcpTools.some(mounted => mounted.sourceId === tool.sourceId && mounted.toolId === tool.toolId)
     && options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId));
   return {
-    ...(unhealthy().length ? { mcpReadiness: {
+    activateConfigurationSource: sourceId => {
+      if (!options.configurationActivation || !options.registry.list().some(item => item.manifest.id === sourceId)
+        || options.catalog.getStatus(sourceId).status !== "ready") throw new Error("Connector is not ready for this live run");
+      const descriptors = describeMcpWorkspaceTools({ ...options, enabledSourceIds: [sourceId] });
+      if (!descriptors.length) throw new Error("Connector has no available tools");
+      enabledSourceIds.add(sourceId); configurationSources.add(sourceId);
+      return descriptors;
+    },
+    ...(unhealthy().length || options.configurationActivation ? { mcpReadiness: {
       summary: JSON.stringify(diagnostics()),
       decide: async (action, reason, sourceIds, signal, toolCallId) => {
         signal?.throwIfAborted();

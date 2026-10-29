@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { reviewUnverifiedDelivery } from "@sciencediscovery/schema";
-import type { ArtifactReviewRun } from "@sciencediscovery/schema";
+import type { ArtifactReviewRun, ReviewerSkipReason } from "@sciencediscovery/schema";
 import React, { useEffect, useRef, useState } from "react";
 
 import { useLocale, type MessageKey } from "./i18n/index.js";
@@ -274,7 +274,7 @@ function ReviewProgress({ progress }: { progress: ReviewerProgress }) {
 
 function batchSummary(
   reviews: ArtifactReviewRun[],
-  status: "completed" | "failed" | "running" | undefined,
+  status: "completed" | "failed" | "running" | "skipped" | undefined,
   progress: ReviewerProgress | undefined,
   t: Translate,
 ): string {
@@ -285,6 +285,7 @@ function batchSummary(
       : t("reviewer.reviewingCount", { count: "…" });
   }
   if (status === "failed") return t("reviewer.statusFailed");
+  if (status === "skipped") return t("reviewer.skipped");
   if (!reviews.length) return t("reviewer.builtInSpecialist");
   // A review that could not verify delivery is not a pass, so it gets its own
   // count instead of inflating "passed". The verdict comes from the same function
@@ -323,6 +324,7 @@ export function ReviewerPanel({
   checkpointContent,
   checkpointError,
   checkpointProgress,
+  checkpointSkipReason,
   checkpointStatus,
   reviewLevel,
   reviews,
@@ -331,20 +333,29 @@ export function ReviewerPanel({
   checkpointContent?: string;
   checkpointError?: string;
   checkpointProgress?: ReviewerProgress;
-  checkpointStatus?: "completed" | "failed" | "running";
+  checkpointSkipReason?: ReviewerSkipReason;
+  checkpointStatus?: "completed" | "failed" | "running" | "skipped";
   reviewLevel?: "quick" | "smart" | "deep";
   reviews: ArtifactReviewRun[];
   toolCallId: string;
 }) {
   const { t } = useLocale();
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
-  // Current opt-outs complete neutrally; keep older failed checkpoints readable.
-  const skipReason = checkpointStatus === "completed" ? checkpointContent : checkpointError;
-  const automaticSkip = !scopedReviews.length
+  // Explicit skip outcomes are not successful reviews. Retain legacy opt-outs
+  // stored as completed/content or failed/error without changing real verdicts.
+  const explicitSkip = checkpointStatus === "skipped";
+  const legacyReason = checkpointStatus === "completed" ? checkpointContent : checkpointError;
+  const legacySkip = !scopedReviews.length
     && toolCallId.startsWith("automatic-review:")
     && (checkpointStatus === "failed" || checkpointStatus === "completed")
-    && skipReason?.startsWith("Automatic review skipped:");
-  const summary = automaticSkip ? skipReason : batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
+    && legacyReason?.startsWith("Automatic review skipped:");
+  const skipped = explicitSkip || legacySkip;
+  const skipReason = explicitSkip
+    ? t(checkpointSkipReason === "specialist_disabled" ? "reviewer.skipSpecialistDisabled"
+      : checkpointSkipReason === "automatic_review_disabled" ? "reviewer.skipAutomaticReviewDisabled"
+        : "reviewer.skipUnspecified")
+    : legacyReason;
+  const summary = explicitSkip ? t("reviewer.skipped") : legacySkip ? skipReason : batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
   const userExpanded = useRef<boolean | undefined>(undefined);
   useEffect(() => { userExpanded.current = undefined; setExpanded(checkpointStatus === "running"); }, [toolCallId]);
@@ -352,16 +363,16 @@ export function ReviewerPanel({
   if (!scopedReviews.length && !checkpointStatus) return null;
   // Automatic work is non-intrusive. A stale/deleted Artifact from an older
   // task must never leave a red failure card in the research conversation.
-  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running" && !automaticSkip) return null;
+  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running" && !skipped) return null;
   // Older versions could create checkpoints for code/data Artifacts. The API
   // now omits those records; suppress their empty completed shell as well so a
   // researcher only sees report-quality review activity.
-  if (!scopedReviews.length && checkpointStatus === "completed" && !automaticSkip) return null;
+  if (!scopedReviews.length && checkpointStatus === "completed" && !skipped) return null;
   return (
     <details
       aria-label={t("reviewer.panelAria")}
       aria-live="polite"
-      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${(checkpointStatus === "failed" && !automaticSkip) || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
+      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${(checkpointStatus === "failed" && !skipped) || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
       onToggle={(event) => { if (event.currentTarget.open !== expanded) { userExpanded.current = event.currentTarget.open; setExpanded(event.currentTarget.open); } }}
       open={expanded}
     >
@@ -369,7 +380,7 @@ export function ReviewerPanel({
         <ReviewerSpecialistAvatar />
         <span>
           <strong>{t("specialist.reviewerName")}{checkpointStatus !== "running" ? ` · ${summary}` : ""}</strong>
-          <small>{summary}</small>
+          <small>{explicitSkip ? skipReason : summary}</small>
         </span>
         {checkpointStatus === "running" ? <span className="reviewer-panel-live-status"><span className="reviewer-rainbow-dot" />{t("reviewer.reviewing")}</span> : null}
         <em>{t("reviewer.readOnly")}</em>
@@ -379,7 +390,7 @@ export function ReviewerPanel({
         {checkpointStatus === "running" && scopedReviews.length > 0 && checkpointProgress
           ? <ReviewProgress progress={checkpointProgress} />
           : null}
-        {automaticSkip ? <p>{skipReason}</p> : checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
+        {skipped ? <p>{skipReason}</p> : checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
           ? <CheckpointOnlyReview error={checkpointError} progress={checkpointProgress} reviewLevel={reviewLevel} status={checkpointStatus} />
           : null}
         {scopedReviews.map((review) => <CompletedReview key={review.id} review={review} />)}

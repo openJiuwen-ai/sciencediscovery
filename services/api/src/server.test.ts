@@ -217,11 +217,24 @@ function rootSseGolden(stream: string): string[] {
 
 function subagentSseGoldens(stream: string): string[][] {
   const lanes = new Map<string, string[]>();
+  const previousSnapshots = new Map<string, SubagentStep>();
   for (const event of parseSseEvents(stream)) {
     if (!event.type.startsWith("subagent.")) continue;
     const id = event.subagentId ?? event.subagent?.id;
     assert.ok(id, `subagent SSE event ${event.type} must carry an id`);
     const lane = lanes.get(id) ?? [];
+    const step = event.type === "subagent.step" ? event.step as SubagentStep | undefined : undefined;
+    const previous = previousSnapshots.get(id);
+    if (step && ["assistant", "thinking"].includes(step.kind)) {
+      previousSnapshots.set(id, step);
+      // Live message snapshots are transient, timing-dependent broadcasts.
+      // Collapse only adjacent monotonic updates of the same message; preserve
+      // distinct IDs, tool states and every update/usage ordering milestone.
+      if (previous?.id === step.id && previous.kind === step.kind && previous.status === step.status) {
+        assert.ok(step.content.startsWith(previous.content), "A streamed message snapshot must retain its previous content");
+        continue;
+      }
+    } else previousSnapshots.delete(id);
     lane.push(event.type);
     lanes.set(id, lane);
   }
@@ -2406,6 +2419,8 @@ test("runtime-status Kernel teardown is authenticated and proxied to the Runner"
 test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `timeout-runtime-status-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
+  const detachedReleasePath = resolve(tempRoot, "release-detached-shell");
+  context.after(() => writeFile(detachedReleasePath, "release").catch(() => undefined));
   context.after(() => removeTestRoot(tempRoot));
 
   const runner = createRunnerServer({
@@ -2472,7 +2487,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
         // Foreground timeout ends only the wait. The detached Shell must finish
         // normally and retain its result, rather than produce runner_exec.
         const code = gatewayMode === "tool-timeout"
-          ? "import time\ntime.sleep(2)"
+          ? `from pathlib import Path\nimport time\nrelease = Path(${JSON.stringify(detachedReleasePath)})\ndeadline = time.monotonic() + 60\nwhile not release.exists():\n    if time.monotonic() >= deadline:\n        raise RuntimeError('Detached Shell fixture gate was not released')\n    time.sleep(0.01)`
           : "print('A paper title says: Python execution timed out after 25 ms')";
         send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
@@ -2630,6 +2645,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.equal(activity.body.executions.length, 1);
   const executionId = activity.body.executions[0]!.id;
   assert.ok(["queued", "running"].includes(activity.body.executions[0]!.state));
+  await writeFile(detachedReleasePath, "release");
   const deadline = Date.now() + 10000;
   while (activity.body.executions[0]?.state !== "completed" && Date.now() < deadline) {
     await new Promise((done) => setTimeout(done, 25));
@@ -4306,8 +4322,8 @@ test("API runs one observable subagent through task and keeps nested task denied
     "assistant.response.settled",
     "run.completed",
   ]);
-  // Two model deltas, one streamed step: message deltas are coalesced into a
-  // single step event instead of one cumulative snapshot per token.
+  // Two model deltas form one logical step; a live subscriber may also see
+  // monotonic transient snapshots before that same step is persisted.
   assert.deepEqual(subagentSseGoldens(stream), [[
     "subagent.updated",
     "subagent.updated",
@@ -4327,10 +4343,13 @@ test("API runs one observable subagent through task and keeps nested task denied
     const event = rawEvent as { step?: SubagentStep; type: string };
     return event.type === "subagent.step" && event.step?.kind === "assistant" ? [event.step] : [];
   });
-  assert.deepEqual(
-    streamedAssistantSteps.map((step) => step.content),
-    ["Subagent inspected the workspace and returned a concise result."],
-  );
+  assert.equal(new Set(streamedAssistantSteps.map((step) => step.id)).size, 1);
+  for (let index = 1; index < streamedAssistantSteps.length; index++) {
+    assert.ok(streamedAssistantSteps[index]!.content.startsWith(streamedAssistantSteps[index - 1]!.content),
+      "Snapshots of the assistant step must retain all previously streamed text");
+  }
+  assert.equal(streamedAssistantSteps.at(-1)?.content,
+    "Subagent inspected the workspace and returned a concise result.");
   const eventTypes = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
     return data ? [(JSON.parse(data) as { type: string }).type] : [];
@@ -4361,6 +4380,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.equal(subagents.body[0]?.handoff?.manifestPath, `subagents/${subagents.body[0]?.id}/handoff.json`);
   const assistantSteps = subagents.body[0]?.steps.filter((step) => step.kind === "assistant") ?? [];
   assert.equal(assistantSteps.length, 1);
+  assert.equal(assistantSteps[0]?.id, streamedAssistantSteps[0]?.id);
   assert.equal(assistantSteps[0]?.content, "Subagent inspected the workspace and returned a concise result.");
   // The run stream stores one record per logical step. The snapshots streamed
   // while a message is still arriving are broadcast to live subscribers and
@@ -5659,14 +5679,32 @@ test("manual concurrent actions keep independent live waiters and resume indepen
   );
   assert.equal(firstDecision.response.status, 200);
 
-  let executions: ExecutionRun[] = [];
-  for (let attempt = 0; attempt < 40 && executions.length < 1; attempt += 1) {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
-    executions = (await jsonRequest<ExecutionRun[]>(
-      `${origin}/api/sessions/${session.body.id}/execution-runs`,
-      { headers: authorization },
-    )).body;
+  let firstActionCompleted = false;
+  let firstActionWaitError: unknown;
+  const firstActionDeadline = Date.now() + 60_000;
+  try {
+    while (!firstActionCompleted) {
+      const remaining = firstActionDeadline - Date.now();
+      if (remaining <= 0) throw new Error("The first permitted action did not complete while its sibling remained undecided");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const chunk = await Promise.race([reader.read(), new Promise<never>((_done, reject) => {
+        timer = setTimeout(() => reject(new Error("Timed out waiting for the first permitted action event")), remaining);
+      })]).finally(() => { if (timer) clearTimeout(timer); });
+      assert.equal(chunk.done, false, "The run must remain live while the second action is undecided");
+      stream += decoder.decode(chunk.value, { stream: true });
+      const completed = stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2));
+      firstActionCompleted = parseSseEvents(completed).some(event => event.type === "subagent.step"
+        && (event.step as SubagentStep | undefined)?.kind === "tool"
+        && (event.step as SubagentStep | undefined)?.status === "completed");
+    }
+  } catch (error) {
+    // Resolve the second waiter below even on failure, so teardown never leaves
+    // a live permission wait or a stream whose fixture directory was removed.
+    firstActionWaitError = error;
   }
+  let executions = (await jsonRequest<ExecutionRun[]>(
+    `${origin}/api/sessions/${session.body.id}/execution-runs`, { headers: authorization },
+  )).body;
   const stillPending = await jsonRequest<PermissionRequest[]>(
     `${origin}/api/permission-requests?sessionId=${encodeURIComponent(session.body.id)}`,
     { headers: authorization },
@@ -5695,6 +5733,8 @@ test("manual concurrent actions keep independent live waiters and resume indepen
   assert.equal(secondDecision.body.grant, undefined);
   assert.equal(firstDecision.body.resolvedRequests.length, 1);
   assert.equal(secondDecision.body.resolvedRequests.length, 1);
+  assert.equal(firstActionWaitError, undefined);
+  assert.equal(firstActionCompleted, true, "The first action must emit completion before the second permission is resolved");
   assert.equal(firstActionExecutionCount, 1, "the allowed action should run without waiting for the other decision");
   assert.equal(secondActionState, "pending", "the live sibling remains independently decidable");
   assert.match(stream, /"type":"run.completed"/);
@@ -5842,10 +5882,29 @@ test("always-allow executes subagent code without permission requests or grants"
     const event = rawEvent as { step?: SubagentStep; type: string };
     return event.type === "subagent.step" && event.step?.kind === "tool" ? [event.step] : [];
   });
-  assert.deepEqual(streamedToolSteps.map((step) => step.status), ["running", "completed"]);
+  // CFG-R12: upstream streams transient output snapshots for the same tool.
+  // Validate one logical execution and monotonic progress, rather than a
+  // timing-dependent number of live broadcasts.
+  assert.ok(streamedToolSteps.length >= 2);
+  assert.equal(new Set(streamedToolSteps.map((step) => step.id)).size, 1);
+  assert.equal(new Set(streamedToolSteps.map((step) => step.toolCallId)).size, 1);
+  assert.ok(streamedToolSteps[0]?.toolCallId);
+  assert.equal(streamedToolSteps[0]?.status, "running");
+  assert.ok(streamedToolSteps.slice(0, -1).every((step) => step.status === "running"));
+  assert.equal(streamedToolSteps.filter((step) => step.status === "completed").length, 1);
+  const completedToolStep = streamedToolSteps.at(-1)!;
+  assert.equal(completedToolStep.status, "completed");
+  let previousProgress = "";
+  for (const snapshot of streamedToolSteps.slice(1, -1)) {
+    assert.ok(snapshot.progress, "An intermediate running snapshot must carry tool output progress");
+    assert.equal(snapshot.content, snapshot.progress);
+    assert.ok(snapshot.progress.startsWith(previousProgress), "Tool progress must retain previously streamed output");
+    previousProgress = snapshot.progress;
+  }
   assert.ok(streamedToolSteps.every((step) => step.input === pythonCommand(subagentPythonCode)));
   assert.equal(streamedToolSteps[0]?.content, pythonCommand(subagentPythonCode));
-  assert.ok((streamedToolSteps[1]?.content.length ?? 0) > 400);
+  assert.ok(completedToolStep.content.length > 400);
+  assert.match(completedToolStep.content, /x{650}/);
 
   const permissions = await jsonRequest<PermissionRequest[]>(
     `${origin}/api/permission-requests?sessionId=${encodeURIComponent(session.body.id)}`,
@@ -5874,7 +5933,11 @@ test("always-allow executes subagent code without permission requests or grants"
     `${origin}/api/sessions/${session.body.id}/subagents`,
     { headers: authorization },
   );
-  const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
+  const toolSteps = subagents.body[0]?.steps.filter((step) => step.kind === "tool") ?? [];
+  assert.equal(toolSteps.length, 1);
+  const toolStep = toolSteps[0];
+  assert.equal(toolStep?.id, completedToolStep.id);
+  assert.equal(toolStep?.toolCallId, completedToolStep.toolCallId);
   assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
   assert.equal(toolStep?.status, "completed");
   assert.ok((toolStep?.content.length ?? 0) > 400);
@@ -6051,6 +6114,8 @@ test("API runs two task calls concurrently with independent persisted records", 
   assert.ok(subagents.body.every((subagent) => subagent.status === "completed"));
   assert.ok(subagents.body.every((subagent) =>
     subagent.steps.filter((step) => step.kind === "assistant").length === 1));
+  assert.ok(subagents.body.every(subagent => subagent.steps.find(step => step.kind === "assistant")?.content
+    === "Subagent inspected the workspace and returned a concise result."));
 
   const updatedIds = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
@@ -6537,6 +6602,86 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   // impact.sessionIds mirrors the pre-deletion snapshot (both of projectB's
   // sessions); order-independent.
   assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
+});
+
+test("CFG-R14 manual HTTP preserves the manual flow and checks a supplied destination snapshot", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `manual-http-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  let dispatched = 0;
+  let tunnels = 0;
+  let duringProbe: (() => Promise<void>) | undefined;
+  // An owned loopback proxy terminates this reserved fake public hostname.
+  // No DNS lookup or connection to any external destination can occur.
+  const target = createHttpServer(async (request, response) => {
+    dispatched++;
+    assert.equal(request.url, "/v1/chat/completions");
+    assert.equal(request.headers.authorization, "Bearer synthetic-manual-test-key");
+    for await (const _chunk of request) { /* drain synthetic input */ }
+    await duringProbe?.();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  });
+  const sockets = new Set<import("node:stream").Duplex>();
+  const proxy = createHttpServer((request, response) => {
+    assert.equal(request.url, "http://manual-gateway.invalid:8080/v1/chat/completions");
+    request.url = "/v1/chat/completions";
+    target.emit("request", request, response);
+  });
+  proxy.on("connect", (request, socket, head) => {
+    tunnels++;
+    assert.equal(request.url, "manual-gateway.invalid:8080");
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head.length) socket.unshift(head);
+    target.emit("connection", socket);
+    socket.resume();
+  });
+  await new Promise<void>(done => proxy.listen(0, "127.0.0.1", done));
+  context.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(done => proxy.close(() => done())); });
+  const { origin } = await startTestApi(context, tempRoot);
+  const proxyRecord = await jsonRequest<ProxySettingsDetails["servers"][number]>(`${origin}/api/proxy/servers`, {
+    method: "POST", headers: authorization, body: JSON.stringify({ kind: "custom_url", name: "Owned manual fixture", url: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}` }),
+  });
+  assert.equal(proxyRecord.response.status, 201);
+  const created = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    method: "POST", headers: authorization,
+    body: JSON.stringify({ name: "Manual fixture", model: "fixture", baseUrl: "http://manual-gateway.invalid:8080/v1", apiToken: "synthetic-manual-test-key", proxyPolicy: `proxy:${proxyRecord.body.id}` }),
+  });
+  assert.equal(created.response.status, 201);
+  const endpoint = `${origin}/api/models/${created.body.id}/test`;
+  const post = (body: unknown) => jsonRequest<ApiError>(endpoint, { method: "POST", headers: authorization, body: JSON.stringify(body) });
+  const legacy = await jsonRequest<ApiError>(endpoint, { method: "POST", headers: authorization });
+  assert.equal(legacy.response.status, 400);
+  assert.match(JSON.stringify(legacy.body), /Refresh the page/);
+  assert.equal((await post({ consent: false })).response.status, 400);
+  const expectedDestination = { baseUrl: created.body.baseUrl, profileUpdatedAt: created.body.updatedAt };
+  assert.equal((await post({ consent: true, expectedDestination: { ...expectedDestination, baseUrl: "http://other.invalid" } })).response.status, 409);
+  assert.equal((await post({ consent: true, expectedDestination: { ...expectedDestination, profileUpdatedAt: "old" } })).response.status, 409);
+  assert.equal((await post({ consent: false, expectedDestination })).response.status, 400);
+  assert.equal(dispatched, 0, "No wire request before paid consent and a matching supplied destination");
+  assert.equal(tunnels, 0);
+  const tested = await post({ consent: true, expectedDestination });
+  assert.equal(tested.response.status, 200);
+  assert.equal((tested.body as unknown as ModelConnectivityTestResult).ok, true, JSON.stringify(tested.body));
+  assert.equal(dispatched, 1);
+  assert.equal((await post({ consent: true })).response.status, 200, "Existing manual clients need no additional HTTP acknowledgement");
+  assert.equal(dispatched, 2, "A separate manual click performs its own paid-consented check");
+  assert.doesNotMatch(JSON.stringify(tested.body), /synthetic-manual-test-key/);
+  const changedInput = { name: "Revised fixture", baseUrl: created.body.baseUrl, model: created.body.model, apiProtocol: created.body.apiProtocol, apiVariant: created.body.apiVariant };
+  const updated = await jsonRequest<ModelProfile>(`${origin}/api/models/${created.body.id}`, { method: "PUT", headers: authorization, body: JSON.stringify(changedInput) });
+  assert.equal(updated.response.status, 200);
+  assert.notEqual(updated.body.updatedAt, created.body.updatedAt);
+  assert.equal((await post({ consent: true, expectedDestination })).response.status, 409);
+  assert.equal(dispatched, 2, "A stale target snapshot cannot dispatch after editing");
+  duringProbe = async () => {
+    const changed = await jsonRequest(`${origin}/api/models/${created.body.id}`, { method: "PUT", headers: authorization, body: JSON.stringify({ ...changedInput, name: "Changed during matrix" }) });
+    assert.equal(changed.response.status, 200);
+  };
+  const matrix = await post({ consent: true, compatibility: true, expectedDestination: { baseUrl: updated.body.baseUrl, profileUpdatedAt: updated.body.updatedAt } });
+  assert.equal(matrix.response.status, 200);
+  assert.equal(dispatched, 3, "A profile edit during basic check blocks every later matrix dispatch");
 });
 
 test("model connectivity endpoint uses the encrypted saved credential", async (context) => {

@@ -18,7 +18,7 @@ diff --git a/jiuwenswarm/server/runtime/mcp/sci_http_client.py b/jiuwenswarm/ser
 new file mode 100644
 --- /dev/null
 +++ b/jiuwenswarm/server/runtime/mcp/sci_http_client.py
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,275 @@
 +# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 +# Licensed under the Apache License, Version 2.0 (the "License");
 +# you may not use this file except in compliance with the License.
@@ -211,6 +211,20 @@ new file mode 100644
 +                ))
 +                session = await stack.enter_async_context(PlatformClientSession(read, write))
 +                await asyncio.wait_for(session.initialize(), limit)
++
++                # Seed the tool-output-schema cache once per connection: the SDK
++                # validates each successful call against it and would otherwise
++                # issue one tools/list per call (a herd under concurrency). A
++                # seeding failure only falls back to that previous behaviour.
++                try:
++                    await asyncio.wait_for(session.list_tools(), min(limit, 10.0))
++                except BaseException as error:  # noqa: BLE001 - SDK groups may escape Exception
++                    from jiuwenswarm.server.runtime.mcp.exc_group import reraise_as_exception
++
++                    try:
++                        reraise_as_exception(error)
++                    except Exception as normalised:
++                        logger.warning("platform_mcp_initial_list_tools_failed: %s", normalised)
 +                self._session = session
 +                self._is_disconnected = False
 +                logger.info("platform_mcp_connect_ready")

@@ -77,6 +77,8 @@ export interface ConfigurationRequestView {
   selectedOptionId?: string;
   choiceReceipt?: ConfigurationChoiceReceipt;
   needKey?: string;
+  /** Transient server evidence: the original Jiuwen tool is currently waiting for this card. */
+  liveWait?: boolean;
   id: string;
   sessionId: string;
   projectId: string;

@@ -763,3 +763,15 @@ test("CFG-R09 run-bound waiting cards reconcile until Stop is durably observed",
   assert.equal(mergeConfigurationRequests(current, [waiting])[0]!.state, "cancelled");
   assert.equal(shouldPollConfigurationRequest({ ...waiting, runId: undefined }), false);
 });
+
+test("Jiuwen live-wait card is actionable while its original run remains running; ordinary running cards stay fenced", async () => {
+  for (const liveWait of [false, true]) {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, {
+      request: request({ liveWait }), actions: actions(), onUpdate: () => undefined, runActive: true,
+    }))); });
+    assert.equal(button(renderer, "Confirm this change").props.disabled, !liveWait);
+    assert.equal(button(renderer, "Decline").props.disabled, !liveWait);
+    await act(async () => renderer.unmount());
+  }
+});

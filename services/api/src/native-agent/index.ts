@@ -92,6 +92,7 @@ import { composeRuntime } from "../bootstrap/runtime.js";
 import { runLog } from "../logging.js";
 import { AgentVersionRecorder, jsonValue, type AgentVersioningOptions } from "./versioning.js";
 import { createRuntimePluginScope } from "../plugins/runtime.js";
+import { projectConfigurationHistory } from "../configuration/model-context.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
@@ -139,10 +140,12 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;
   planStore?: PlanStore;
+  suspendAfterTurn?: () => boolean | Promise<boolean>;
 }
 
 export interface NativeAgentRunResult {
   finalMessages: AgentHistoryMessage[];
+  suspended?: boolean;
 }
 
 export interface NativeAgentHandle extends Agent {
@@ -273,6 +276,9 @@ export function createToolRegistry(
   hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
+  const errorGuidance = executionTools.some((tool) => tool.name === "configuration")
+    ? "Repeated tool failures: reassess the original task and the actual errors before retrying. If a setting change could help, consider configuration(search) using a query based on your own analysis; other repairs remain valid. This reminder does not diagnose the cause or authorize any setting change."
+    : undefined;
   // Retained per Session, not per AgentRun: a bounded result stays in the
   // replayed history of later runs, so its ref has to keep resolving for as
   // long as that history does. Session deletion removes this directory.
@@ -299,6 +305,7 @@ export function createToolRegistry(
     },
     recordResult: hooks.recordResult,
     onProgress: hooks.onProgress,
+    ...(errorGuidance ? { errorGuidance } : {}),
     outputGuard: new ToolOutputGuard({
       maxBytes: toolOutputSettings.maxBytes,
       maxLines: toolOutputSettings.maxLines,
@@ -669,7 +676,7 @@ class NativeAgent implements NativeAgentHandle {
               this.inputStateTurn = input.turn;
             }
             await this.versionRecorder?.captureInputState(this.inputState, input.turn, [...input.history]);
-            return contextAssembler.assemble(input);
+            return contextAssembler.assemble({ ...input, history: projectConfigurationHistory(input.history) });
           },
         },
         modelClient: {
@@ -686,6 +693,7 @@ class NativeAgent implements NativeAgentHandle {
           if (event.type === "model_usage") reportedModelUsage = true;
         },
         turnLifecycle: this.versionRecorder,
+        suspendAfterTurn: this.options.suspendAfterTurn,
         waitController: this.waitController,
       });
       const result = await loop.run(this.history, controller.signal, markProgress)
@@ -694,7 +702,8 @@ class NativeAgent implements NativeAgentHandle {
       const usage = result.usage;
       if (!reportedModelUsage) this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
       if (usage) this.emit({ type: "usage", usage });
-      return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
+      return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")),
+        ...(result.suspended ? { suspended: true } : {}) };
     } finally {
       await this.versionRecorder?.flushEvents().catch((error: unknown) => console.error("Trajectory event flush failed", error instanceof Error ? error.message : "unknown error"));
       this.versionRecorder?.close();

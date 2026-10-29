@@ -2,7 +2,7 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { ArtifactReviewRun } from "@sciencediscovery/schema";
+import type { ArtifactReviewRun, ReviewerSkipReason } from "@sciencediscovery/schema";
 import { expect } from "@playwright/test";
 
 import { test } from "./helpers/e2e.ts";
@@ -11,7 +11,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession } from "./h
 // Static suite metadata is inherited by each framework-expanded journey.
 test.describe("journey-reviewer-result-matrix.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
-type Case = { checkpoint: "completed" | "failed"; toolCallId: string; review?: ArtifactReviewRun };
+type Case = { checkpoint: "completed" | "failed" | "skipped"; toolCallId: string; review?: ArtifactReviewRun; skipReason?: ReviewerSkipReason };
 
 function review(toolCallId: string, overrides: Partial<ArtifactReviewRun> = {}): ArtifactReviewRun {
   return {
@@ -29,6 +29,7 @@ function review(toolCallId: string, overrides: Partial<ArtifactReviewRun> = {}):
  *   1. Open an isolated Session containing a controlled matrix of read-only review records.
  *   2. Inspect Quick pass, warning and critical outcomes.
  *   3. Inspect Deep contradiction, inconclusive downgrade and failed checkpoint outcomes.
+ *   4. Distinguish skipped capability opt-outs from actual review outcomes, including after refresh.
  * Environment: Isolated local API/Runner; browser routes only the read-only Session and Artifact-review responses to deterministic fixtures.
  * Type: mocked
  * LLM: none
@@ -56,19 +57,21 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
     { checkpoint: "completed", toolCallId: "deep-contradiction", review: review("deep-contradiction", { findings: [{ code: "COMPUTATION_EVIDENCE_VALUE_MISMATCH", evidenceRefs: [], id: "mismatch", message: "锁定 Evidence 与报告数值不一致。", severity: "critical", status: "open" }], reviewLevel: "deep", sourceAssessments: [{ assessment: { assessment: "CONTRADICTED", claimId: "claim", locatorIds: ["locator"], policyVersion: "1", rationale: "锁定数值不一致。" }, claim: { artifactVersionId: "version-deep-contradiction", citationKeys: [], id: "claim", kind: "computation", requiredEvidenceLevel: "E4", text: "Response was 42%." }, locators: [], snapshots: [] }] }) },
     { checkpoint: "completed", toolCallId: "deep-inconclusive", review: review("deep-inconclusive", { reviewLevel: "deep", smartDetail: { code: "SMART_CITATION_INCONCLUSIVE", message: "Paper Reader timeout" }, smartStatus: "inconclusive" }) },
     { checkpoint: "failed", toolCallId: "deep-failed" },
+    { checkpoint: "skipped", toolCallId: "automatic-review:global-off", skipReason: "specialist_disabled" },
+    { checkpoint: "skipped", toolCallId: "automatic-review:session-off", skipReason: "automatic_review_disabled" },
   ];
   const sessionPath = `**/api/sessions/${fixture.session.id}`;
   await page.route(sessionPath, async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const response = await route.fetch();
     const detail = await response.json() as { messages: unknown[] };
-    await route.fulfill({ response, json: { ...detail, messages: [...detail.messages, ...cases.map((item) => ({ content: "Reviewer Specialist review", createdAt: "2026-09-16T00:00:00.000Z", id: `checkpoint-${item.toolCallId}`, kind: "reviewer_checkpoint", reviewerCheckpoint: { ...(item.checkpoint === "failed" ? { error: "来源核验未完成" } : {}), status: item.checkpoint, toolCallId: item.toolCallId }, role: "assistant" }))] } });
+    await route.fulfill({ response, json: { ...detail, messages: [...detail.messages, ...cases.map((item) => ({ content: "Reviewer Specialist review", createdAt: "2026-09-16T00:00:00.000Z", id: `checkpoint-${item.toolCallId}`, kind: "reviewer_checkpoint", reviewerCheckpoint: { ...(item.checkpoint === "failed" ? { error: "来源核验未完成" } : {}), status: item.checkpoint, skipReason: item.skipReason, toolCallId: item.toolCallId }, role: "assistant" }))] } });
   });
   await page.route(`**/api/sessions/${fixture.session.id}/artifact-reviews`, (route) => route.fulfill({ json: cases.flatMap((item) => item.review ? [{ ...item.review, sessionId: fixture.session.id }] : []) }));
   try {
-    await journey.step("进入带有审核记录的会话", "时间线显示六条只读 Reviewer Specialist 审核记录。", async () => {
+    await journey.step("进入带有审核记录的会话", "时间线显示六条只读审核记录和两条未执行的中性跳过记录。", async () => {
       await openProjectSession(page, fixture);
-      await expect(page.locator(".reviewer-specialist-panel")).toHaveCount(6);
+      await expect(page.locator(".reviewer-specialist-panel")).toHaveCount(8);
     });
     await journey.step("核对 Quick 的通过与告警", "仅检查引用格式的 Quick 项会说明结论支撑未检查；没有交付结论时必须显示未验证而不是通过；缺引用标识符显示告警。", async () => {
       const quickPass = page.locator(".reviewer-specialist-panel").filter({ hasText: "quick-pass.md" });
@@ -85,6 +88,21 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
       await expect(all.filter({ hasText: "deep-contradiction.md" })).toContainText("Computation contradiction");
       await expect(all.filter({ hasText: "deep-inconclusive.md" })).not.toContainText("Paper Reader timeout");
       await expect(all.filter({ hasText: "Review incomplete" })).toContainText("Review failed");
+    });
+    await journey.step("区分未执行与审查结果", "两个关闭原因均显示中性已跳过，不声称通过、完成或失败；刷新后保持一致。", async () => {
+      const skipped = page.locator(".reviewer-specialist-panel").filter({ hasText: "Review skipped" });
+      await expect(skipped).toHaveCount(2);
+      for (let index = 0; index < 2; index++) {
+        await expect(skipped.nth(index)).not.toHaveClass(/failed|running/);
+        await expect(skipped.nth(index)).not.toContainText(/review passed|Review completed|Review failed/);
+        await skipped.nth(index).locator("summary").click();
+        await expect(skipped.nth(index).locator(".reviewer-specialist-results")).toContainText("No review result was produced.");
+      }
+      await expect(skipped.filter({ hasText: "off in System configuration" })).toHaveCount(1);
+      await expect(skipped.filter({ hasText: "turned off for this session" })).toHaveCount(1);
+      await page.reload();
+      await expect(skipped).toHaveCount(2);
+      await expect(skipped.first().locator("strong").first()).toContainText("Review skipped");
     });
   } finally { await cleanupJourney(page, fixture); }
 });

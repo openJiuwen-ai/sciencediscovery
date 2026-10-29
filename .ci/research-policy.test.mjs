@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { profiles, slices } from '../test/support/tagged/profiles.mjs';
 import { compileSelector, normalizeTags } from '../test/support/tagged/tags.mjs';
@@ -101,3 +103,12 @@ test('no job-level env uses the runner context, which GitHub provides only to st
     assert.doesNotMatch(env, /\$\{\{[^}]*\brunner\./, `${name}: jobs.<job_id>.env`);
   }
 });
+
+for (const script of ['core-wheel.test.py', 'swarm-patches.test.py']) {
+  test(`upstream core and Swarm compatibility regression: ${script}`, () => {
+    const result = spawnSync(process.env.PYTHON ?? 'python3', [`scripts/${script}`], {
+      cwd: fileURLToPath(new URL('../', import.meta.url)), encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(result.status, 0, `${result.error ?? ''}\n${result.stdout}\n${result.stderr}`);
+  });
+}

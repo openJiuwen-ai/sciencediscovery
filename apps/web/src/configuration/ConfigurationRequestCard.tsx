@@ -31,7 +31,7 @@ export function isConfigurationRequestView(request: object): request is Configur
 
 /** The form is driven exclusively by the server's registered schema. Secrets and
  * credential handles are component-local, never written into timeline snapshots. */
-export function ConfigurationRequestCard({ request, actions, runActive = false, readOnly = false, onUpdate, onUnavailable, onStopTask }: {
+export function ConfigurationRequestCard({ request, actions, runActive: sourceRunActive = false, readOnly = false, onUpdate, onUnavailable, onStopTask }: {
   request: ConfigurationRequestView;
   actions: ConfigurationRequestActions;
   runActive?: boolean;
@@ -40,6 +40,7 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
   onUnavailable?: () => void;
   onStopTask?: () => Promise<void>;
 }) {
+  const runActive = sourceRunActive && request.liveWait !== true;
   const { locale } = useLocale();
   const m = configurationMessages(locale);
   const id = useId();
@@ -316,7 +317,7 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
     catch { if (mounted.current) setError(m.requestFailed); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
-  const expiredTaskControls = request.state === "expired" && request.runId ? <div className="configuration-expired-task" role="status"><p>{taskStopped || request.resumption.state === "suppressed" ? m.stopped : m.expiredTask}</p>{onStopTask && !taskStopped && request.resumption.state !== "suppressed" ? <button type="button" className="secondary-button" disabled={busy || readOnly} onClick={() => void stopExpiredTask()}>{m.stopTask}</button> : null}</div> : null;
+  const expiredTaskControls = request.state === "expired" && request.runId && !["started", "completed"].includes(request.resumption.state) ? <div className="configuration-expired-task" role="status"><p>{taskStopped || request.resumption.state === "suppressed" ? m.stopped : m.expiredTask}</p>{onStopTask && !taskStopped && request.resumption.state !== "suppressed" ? <button type="button" className="secondary-button" disabled={busy || readOnly} onClick={() => void stopExpiredTask()}>{m.stopTask}</button> : null}</div> : null;
   const secondaryActions = <>
     {hasAction("query") || refreshRequired || error ? <button className="secondary-button" disabled={busy} type="button" onClick={() => void perform(async () => {
       const next = await actions.query();

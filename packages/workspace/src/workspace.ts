@@ -1401,7 +1401,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const callParameters = Type.Object({ sourceId: Type.String(), toolId: Type.String(), input: Type.Unknown() });
     const recovered: AgentTool<typeof callParameters> = {
       name: "mcp_recovered_call", label: "Call repaired MCP tool", parameters: callParameters,
-      description: "Invoke a formerly omitted tool only after mcp_readiness reports it recovered. Use the reported inputSchema. Restricted to this run's original effective selection and normal MCP governance; does not repair or grant permission.",
+      description: "Invoke a formerly omitted tool only after mcp_readiness reports it recovered. Use the reported inputSchema. Restricted to this run's effective selection, including explicitly approved configuration additions, and normal MCP governance; does not repair or grant permission.",
       execute: async (id, params, signal) => {
         const value = await options.mcpReadiness!.invoke(params.sourceId, params.toolId, params.input as JsonValue, signal, id);
         return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };

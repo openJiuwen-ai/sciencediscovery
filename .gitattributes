@@ -3,3 +3,5 @@
 *.patch text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+# CFG-R12: this fixture is executed directly by its env shebang in Linux.
+test/api/fixtures-specialist-runtime.cjs text eol=lf

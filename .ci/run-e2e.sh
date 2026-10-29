@@ -358,6 +358,9 @@ for busy_port in "${busy_ports[@]}"; do
   fi
 done
 
+# Give journey provenance checks the exact invocation used by this launcher.
+printf -v E2E_STARTUP_COMMAND '%q ' ./scripts/start-stack.sh "${stack_arguments[@]}"
+export E2E_STARTUP_COMMAND="${E2E_STARTUP_COMMAND% }"
 setsid ./scripts/start-stack.sh "${stack_arguments[@]}" > "$stack_log" 2>&1 &
 stack_pid=$!
 

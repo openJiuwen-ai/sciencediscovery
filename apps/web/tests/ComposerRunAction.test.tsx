@@ -21,7 +21,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionRun } from "@sciencediscovery/schema";
 
-import { ComposerNoModelNotice, ComposerRunButton, QueuedRunsPanel, queuedCancelToast, resolveComposerRunAction } from "../src/App.js";
+import { ComposerNoModelNotice, ComposerRunButton, QueuedRunsPanel, queuedCancelToast, resolveComposerRunAction, shouldShowModelConfigurationCard } from "../src/App.js";
 
 const baseInput = {
   activeSessionId: "session-b",
@@ -77,9 +77,11 @@ test("a Stop already in flight disables only the Stop action", () => {
   );
 });
 
-test("Run stays disabled without input, without a model, or on an archived Session", () => {
+test("a draft can request configuration when its Session has no model", () => {
   assert.equal(resolveComposerRunAction({ ...baseInput, message: "  " }).runDisabled, true);
-  assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false }).runDisabled, true);
+  assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false, message: "  " }).runLabel, "Run analysis");
+  assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false }).runDisabled, false);
+  assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false }).runLabel, "Configure and continue");
   assert.equal(resolveComposerRunAction({ ...baseInput, sessionArchived: true }).runDisabled, true);
   assert.equal(resolveComposerRunAction({ ...baseInput, activeSessionId: undefined }).runDisabled, true);
   assert.equal(resolveComposerRunAction(baseInput).runDisabled, false);
@@ -95,21 +97,24 @@ test("distinguishes missing system models from a missing Session model", () => {
   assert.equal(resolveComposerRunAction(baseInput).noModelReason, null);
 });
 
-test("renders visible and actionable notices for both missing-model states", () => {
-  const noSystemModels = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
-    onOpenModelSettings: () => undefined,
-    reason: "no-system-models",
-  }));
-  assert.match(noSystemModels, /id="composer-no-model-notice"/);
-  assert.match(noSystemModels, /No models are configured\./);
-  assert.match(noSystemModels, /Open Model registry/);
+test("the configuration card appears only after a draft is submitted for this Session", () => {
+  assert.equal(shouldShowModelConfigurationCard("session-b", undefined, "no-session-model", false, false), false);
+  assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", "no-session-model", false, false), true);
+  assert.equal(shouldShowModelConfigurationCard("session-b", "session-a", "no-session-model", false, false), false);
+  assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", null, false, false), false);
+  assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", "no-session-model", true, false), false);
+  assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", "no-session-model", false, true), false);
+});
 
-  const noSessionModel = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
-    onOpenModelSettings: () => undefined,
-    reason: "no-session-model",
-  }));
-  assert.match(noSessionModel, /No Task model is selected\./);
-  assert.match(noSessionModel, /Choose one below before running\./);
+test("a missing-model notice keeps the manual configuration entry available", () => {
+  for (const reason of ["no-session-model", "no-system-models"] as const) {
+    const notice = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
+      onOpenConfiguration: () => undefined,
+      reason,
+    }));
+    assert.match(notice, /Configure in conversation<\/button>/);
+    assert.match(notice, /Ask a question or configure one here\./);
+  }
 });
 
 test("renders Stop as a non-submit control and Add to queue as the submit control", () => {
@@ -138,19 +143,20 @@ test("renders Stop as a non-submit control and Add to queue as the submit contro
   assert.match(run, / Run analysis<\/button>/);
 });
 
-test("associates a disabled Run button with the visible missing-model notice", () => {
+test("a missing-model draft offers configuration without a duplicate notice", () => {
   const run = renderToStaticMarkup(createElement(ComposerRunButton, {
     action: {
       noModelReason: "no-system-models",
-      runDisabled: true,
-      runLabel: "Run analysis",
+      runDisabled: false,
+      runLabel: "Configure and continue",
       stopDisabled: false,
       stopVisible: false,
     },
     onStop: () => undefined,
   }));
-  assert.match(run, /aria-describedby="composer-no-model-notice"/);
-  assert.match(run, /title="Run unavailable: no models are configured\./);
+  assert.match(run, /Configure and continue<\/button>/);
+  assert.doesNotMatch(run, /composer-no-model-notice/);
+  assert.doesNotMatch(run, /disabled/);
 });
 
 function queuedRun(id: string): SessionRun {

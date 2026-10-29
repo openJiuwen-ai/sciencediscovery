@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License.
 
 import { expect } from "@playwright/test";
+import type { ArtifactReviewRun, ReviewFeedback, ReviewerAuditTask, SessionDetail } from "@sciencediscovery/schema";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
@@ -20,7 +21,8 @@ test.describe("journey-reviewer-auto-audit.spec", { tag: ["@isolation:global", "
  *   2. Deliver a Markdown report and wait for the main run to finish.
  *   3. Observe the independent automatic audit complete and expose its read-only result.
  *   4. Run a manual review and verify a disabled global capability is explained beside the composer.
- *   5. Deliver another report with the capability off and observe a neutral skip reason in the conversation.
+ *   5. Disable automatic review for one successful main run and prove it consumes prior feedback without scheduling an audit.
+ *   6. Deliver another report with the global capability off; capture feedback while queued and verify skip/reload never changes it.
  * Environment: Isolated API/Runner with its own ports and data directory.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub only.
@@ -42,6 +44,10 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
     { arguments: { path: "results/report.md" }, tool: "declare_artifact" },
     { text: "The report is ready." },
   ], [
+    { arguments: { command: "printf '# Control report\\n\\nA result with automatic review disabled.\\n' > results/control-report.md" }, tool: "run_shell" },
+    { arguments: { path: "results/control-report.md" }, tool: "declare_artifact" },
+    { text: "The control report is ready without automatic review." },
+  ], [
     { arguments: { command: "printf '# Second report\\n\\nAnother result.\\n' > results/second-report.md" }, tool: "run_shell" },
     { arguments: { path: "results/second-report.md" }, tool: "declare_artifact" },
     { text: "The second report is ready." },
@@ -55,6 +61,14 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
   const originalReviewer = await (await page.request.get(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
     headers: authorizationHeader(),
   })).json() as { enabled: boolean };
+  const readRecords = async <T,>(resource: string): Promise<T[]> => {
+    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/${resource}`, {
+      headers: authorizationHeader(),
+    });
+    expect(response.ok()).toBeTruthy();
+    return await response.json() as T[];
+  };
+  let feedbackAfterNonAuditRun: ReviewFeedback[] = [];
   try {
     // Other global-isolation journeys can change this shared test catalog.
     // Fresh-install defaults are asserted by the store and coordinator tests.
@@ -127,6 +141,33 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
         return tasks.some((task) => task.origin === "manual" && task.status === "completed");
       }).toBe(true);
     });
+    await journey.step("主任务消费反馈与自动审核无关", "关闭会话自动审核后的成功主任务不创建审查任务，但正常消费已有反馈；其他字段不变。", async () => {
+      const reviewsBefore = await readRecords<ArtifactReviewRun>("artifact-reviews");
+      const tasksBefore = await readRecords<ReviewerAuditTask>("reviewer-audit-tasks");
+      const feedbackBefore = await readRecords<ReviewFeedback>("review-feedback");
+      expect(feedbackBefore.length).toBeGreaterThan(0);
+      expect(feedbackBefore.every(item => item.status === "ready")).toBe(true);
+      const disabled = await page.request.put(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/reviewer-specialist/settings`, {
+        data: { automaticReviewEnabled: false, level: "quick" }, headers: authorizationHeader(),
+      });
+      expect(disabled.ok()).toBeTruthy();
+      const run = await sendUserMessage(page, fixture.session.id, "Deliver a control report with automatic review turned off.");
+      expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
+      const tasksAfter = await readRecords<ReviewerAuditTask>("reviewer-audit-tasks");
+      expect(tasksAfter.some(task => task.sourceRunId === run.id)).toBe(false);
+      expect(tasksAfter).toEqual(tasksBefore);
+      expect(await readRecords<ArtifactReviewRun>("artifact-reviews")).toEqual(reviewsBefore);
+      feedbackAfterNonAuditRun = await readRecords<ReviewFeedback>("review-feedback");
+      expect(feedbackAfterNonAuditRun.every(item => item.status === "consumed" && Boolean(item.consumedAt))).toBe(true);
+      // Successful MAIN completion consumes ready feedback even when no audit
+      // exists. Preserve every other field instead of checking only record IDs.
+      const withoutConsumption = ({ status: _status, consumedAt: _consumedAt, ...record }: ReviewFeedback) => record;
+      expect(feedbackAfterNonAuditRun.map(withoutConsumption)).toEqual(feedbackBefore.map(withoutConsumption));
+      const enabled = await page.request.put(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/reviewer-specialist/settings`, {
+        data: { automaticReviewEnabled: true, level: "quick" }, headers: authorizationHeader(),
+      });
+      expect(enabled.ok()).toBeTruthy();
+    });
     await journey.step("系统关闭时显示原因", "输入框旁明确说明自动审核不可用。", async () => {
       const response = await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
         data: { enabled: false }, headers: authorizationHeader(),
@@ -137,22 +178,54 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
       await expect(page.locator(".composer-footer").getByRole("switch", { name: "Automatic review", exact: true })).not.toBeChecked();
     });
     await journey.step("查看未执行审核的原因", "系统能力关闭后交付的报告显示中性跳过记录，刷新后仍可见。", async () => {
+      const reviewsBefore = await readRecords<ArtifactReviewRun>("artifact-reviews");
+      expect(await readRecords<ReviewFeedback>("review-feedback")).toEqual(feedbackAfterNonAuditRun);
       const run = await sendUserMessage(page, fixture.session.id, "Deliver another Markdown report.");
       expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
-      const reason = "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.";
+      let skipped: ReviewerAuditTask | undefined;
+      // Establish the causal boundary after MAIN completion, before the real
+      // automatic quiet window expires. Skip must not mutate these full records.
+      await expect.poll(async () => {
+        skipped = (await readRecords<ReviewerAuditTask>("reviewer-audit-tasks")).find(task => task.sourceRunId === run.id);
+        return skipped?.status;
+      }).toBe("queued");
+      const feedbackBeforeSkip = await readRecords<ReviewFeedback>("review-feedback");
+      expect(feedbackBeforeSkip).toEqual(feedbackAfterNonAuditRun);
+      await expect.poll(async () => {
+        const tasks = await readRecords("reviewer-audit-tasks") as ReviewerAuditTask[];
+        skipped = tasks.find(task => task.sourceRunId === run.id);
+        return skipped?.status;
+      }, { timeout: 90_000 }).toBe("skipped");
+      expect(skipped).toMatchObject({ skipReason: "specialist_disabled" });
+      expect(skipped!.reviewIds).toBeUndefined();
+      expect(skipped!.errorSummary).toBeUndefined();
+      expect(skipped!.supersededBy).toBeUndefined();
+      const detailResponse = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers: authorizationHeader() });
+      expect(detailResponse.ok()).toBeTruthy();
+      const detail = await detailResponse.json() as SessionDetail;
+      expect(detail.messages.find(message => message.id === skipped!.checkpointMessageId)?.reviewerCheckpoint)
+        .toMatchObject({ status: "skipped", skipReason: "specialist_disabled" });
+      expect(await readRecords("artifact-reviews")).toEqual(reviewsBefore);
+      expect(await readRecords<ReviewFeedback>("review-feedback")).toEqual(feedbackBeforeSkip);
+      const reason = "Automatic review was skipped because Reviewer Specialist is off in System configuration → Specialists. No review result was produced.";
       const skipPanel = page.locator(".reviewer-specialist-panel").filter({ hasText: reason });
-      // Collapsed process records hide the subtitle; the visible heading
-      // carries the skip reason, and expansion exposes the full body.
+      // The visible neutral heading is independent of the structured reason;
+      // expansion exposes the full explanation without implying an audit ran.
       const skipHeading = skipPanel.locator(".reviewer-specialist-panel-heading strong");
-      await expect(skipHeading).toContainText(reason, { timeout: 90_000 });
+      await expect(skipHeading).toContainText("Review skipped", { timeout: 90_000 });
       await expect(skipHeading).toBeVisible();
       await expect(skipPanel).not.toHaveClass(/failed/);
       await page.reload();
       await expect(skipHeading).toBeVisible();
-      await expect(skipHeading).toContainText(reason);
-      await expect(skipPanel).not.toHaveClass(/failed/);
+      await expect(skipHeading).toContainText("Review skipped");
+      await expect(skipPanel).not.toHaveClass(/failed|running/);
+      await expect(skipPanel).not.toContainText(/review passed|Review completed|Review failed/);
+      expect(await readRecords("artifact-reviews")).toEqual(reviewsBefore);
+      expect(await readRecords<ReviewFeedback>("review-feedback")).toEqual(feedbackBeforeSkip);
       await skipPanel.locator("summary").click();
-      await expect(skipPanel.locator(".reviewer-specialist-results").getByText(reason, { exact: true })).toBeVisible();
+      const explanation = skipPanel.locator(".reviewer-specialist-results").getByText(reason, { exact: true });
+      await explanation.evaluate(node => node.scrollIntoView({ block: "center" }));
+      await expect(explanation).toBeVisible();
     });
   } finally {
     await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {

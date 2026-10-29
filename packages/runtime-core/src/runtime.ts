@@ -110,6 +110,7 @@ export type AgentLoopPhase =
   | "calling_model"
   | "executing_tools"
   | "waiting_external"
+  | "suspended"
   | "completed"
   | "cancelled"
   | "failed";
@@ -125,15 +126,16 @@ export interface RunTransition {
   turn: number;
 }
 
-const TERMINAL_PHASES: ReadonlySet<AgentLoopPhase> = new Set(["completed", "cancelled", "failed"]);
+const TERMINAL_PHASES: ReadonlySet<AgentLoopPhase> = new Set(["suspended", "completed", "cancelled", "failed"]);
 
 const phaseSet = (...phases: AgentLoopPhase[]): ReadonlySet<AgentLoopPhase> => new Set(phases);
 const NEXT_PHASES: Readonly<Record<AgentLoopPhase, ReadonlySet<AgentLoopPhase>>> = Object.freeze({
   idle: phaseSet("assembling_context", "cancelled", "failed"),
   assembling_context: phaseSet("calling_model", "waiting_external", "cancelled", "failed"),
   calling_model: phaseSet("assembling_context", "executing_tools", "waiting_external", "completed", "cancelled", "failed"),
-  executing_tools: phaseSet("assembling_context", "waiting_external", "completed", "cancelled", "failed"),
+  executing_tools: phaseSet("assembling_context", "waiting_external", "suspended", "completed", "cancelled", "failed"),
   waiting_external: phaseSet("assembling_context", "calling_model", "executing_tools", "cancelled", "failed"),
+  suspended: phaseSet(),
   completed: phaseSet(),
   cancelled: phaseSet(),
   failed: phaseSet(),
@@ -233,10 +235,13 @@ export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, 
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController?: ExternalWaitController;
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  /** Called only after the tool batch and its durable Step have committed. */
+  suspendAfterTurn?: (input: { turn: number; history: TMessage[] }) => boolean | Promise<boolean>;
 }
 
 export interface AgentLoopResult<TMessage extends RuntimeMessage, TUsage> {
   history: TMessage[];
+  suspended?: boolean;
   turns: number;
   usage?: TUsage;
 }
@@ -357,6 +362,12 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         this.raiseForAbort(signal);
         if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results });
         this.raiseForAbort(signal);
+        if (await this.options.suspendAfterTurn?.({ turn, history: structuredClone(this.state.history) })) {
+          this.raiseForAbort(signal);
+          this.transition("suspended", turn);
+          return { history: structuredClone(this.state.history), turns: turn + 1,
+            suspended: true, ...(usage !== undefined ? { usage } : {}) };
+        }
       }
 
       // Preserve the historical safety-net behavior: a bounded run returns
@@ -424,6 +435,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private toolDispatcher?: ToolDispatcher<TMessage>;
   private waitController?: ExternalWaitController;
   private turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  private suspendAfterTurn?: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"];
 
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
   withEventSink(value: RunEventSink<TUsage>): this { this.eventSink = value; return this; }
@@ -433,6 +445,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withToolDispatcher(value: ToolDispatcher<TMessage>): this { this.toolDispatcher = value; return this; }
   withWaitController(value: ExternalWaitController): this { this.waitController = value; return this; }
   withTurnLifecycle(value: TurnLifecycle<TMessage, TModelInput, TUsage> | undefined): this { this.turnLifecycle = value; return this; }
+  withSuspendAfterTurn(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"]): this { this.suspendAfterTurn = value; return this; }
 
   build(): AgentLoop<TMessage, TModelInput, TUsage> {
     const missing = [
@@ -451,6 +464,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
       ...(this.eventSink ? { eventSink: this.eventSink } : {}),
       ...(this.waitController ? { waitController: this.waitController } : {}),
       ...(this.turnLifecycle ? { turnLifecycle: this.turnLifecycle } : {}),
+      ...(this.suspendAfterTurn ? { suspendAfterTurn: this.suspendAfterTurn } : {}),
     });
   }
 }

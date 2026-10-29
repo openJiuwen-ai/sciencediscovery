@@ -41,6 +41,7 @@ export interface AgentRunBindings {
   planStore?: PlanStore;
   runIdleTimeoutMs?: number;
   readVersioningAuthorities?: () => Promise<unknown>;
+  suspendAfterTurn?: () => boolean | Promise<boolean>;
   workspace: WorkspaceAgentOptions;
 }
 
@@ -93,6 +94,7 @@ export function createAgentRun(
       : {}),
     runTimeoutMs: profile.budget.runTimeoutMs,
     ...(input.runContract ? { runContract: input.runContract } : {}),
+    ...(bindings.suspendAfterTurn ? { suspendAfterTurn: bindings.suspendAfterTurn } : {}),
     sessionId: profile.gatewayThreadId,
     toolPolicy: {
       ...(profile.toolPolicy.allowedToolNames
@@ -125,6 +127,7 @@ export function createAgentRun(
           finalMessages: result.finalMessages,
           purpose: input.purpose,
           requestExecutionId: input.requestExecutionId,
+          ...(result.suspended ? { suspended: true } : {}),
         };
       } finally {
         bindings.abortSignal?.removeEventListener("abort", abort);

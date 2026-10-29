@@ -27,6 +27,16 @@ and transport bugs; research business logic remains in ScienceDiscovery.
   Release builds still need their normal boot/tool smoke checks: hash verification
   is not a substitute for exercising the installed runtime and its dependencies.
 
+The pinned `openjiuwen` dependency remains the ordinary upstream package.
+ScienceDiscovery keeps the original configuration tool call waiting in its
+application layer; setup and packaging do not replace or patch the core wheel.
+Ready MCP connectors can become available in the same task through
+`mcp_readiness` and `mcp_recovered_call`; their execution authorization remains
+independent of configuration approval. Model, thinking and review settings are
+reported as `next_run`, not hot-swapped into an existing task. A process or
+transport disconnect does not promise durable core recovery: an obsolete
+configuration card cannot replay the original tool call.
+
 For `workswarm0.2.6`:
 
 - Platform runs pass a private `run_model` connection to the session adapter.

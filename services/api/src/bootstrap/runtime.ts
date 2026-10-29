@@ -4,6 +4,7 @@
 import {
   RuntimeBuilder,
   type AgentLoop,
+  type AgentLoopOptions,
   type ContextAssembler,
   type ExternalWaitController,
   type ModelClient,
@@ -22,6 +23,7 @@ export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController: ExternalWaitController;
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  suspendAfterTurn?: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"];
 }
 
 /** API composition root: adapters are registered here, not looked up by the core. */
@@ -35,6 +37,7 @@ export function composeRuntime<TMessage extends RuntimeMessage, TModelInput, TUs
     .withEventSink(composition.eventSink)
     .withWaitController(composition.waitController)
     .withTurnLifecycle(composition.turnLifecycle)
+    .withSuspendAfterTurn(composition.suspendAfterTurn)
     .withMaxModelTurns(composition.maxModelTurns)
     .withMaxParallelToolCalls(composition.maxParallelToolCalls)
     .build();

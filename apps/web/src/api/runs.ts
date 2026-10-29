@@ -56,6 +56,25 @@ function usageAnalyticsQuery(filters: UsageAnalyticsQueryFilters): string {
   return query ? `?${query}` : "";
 }
 
+function runStreamFinished(event: RunStreamEvent): boolean {
+  return ["run.completed", "run.failed", "run.cancelled"].includes(event.type)
+    || event.type === "run.status" && ["completed", "failed", "cancelled", "interrupted"].includes(event.status);
+}
+
+function canRetryRunStream(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted || error instanceof Error && error.name === "AbortError") return false;
+  return !(error instanceof ApiRequestError) || error.status >= 500 || [408, 429].includes(error.status);
+}
+
+function waitForRunStreamRetry(attempt: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(signal?.reason ?? new DOMException("Aborted", "AbortError")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, Math.min(250 * 2 ** attempt, 4000));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 export class RunsApiClient extends SessionsApiClient {
   getAgentActivity(sessionId: string): Promise<AgentActivity> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity`);
@@ -120,8 +139,8 @@ export class RunsApiClient extends SessionsApiClient {
     return await response.blob();
   }
 
-  listRuns(sessionId: string): Promise<SessionRun[]> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs`);
+  listRuns(sessionId: string, signal?: AbortSignal): Promise<SessionRun[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, signal ? { signal } : {});
   }
 
   createRun(sessionId: string, body: SendMessageRequest): Promise<SessionRun> {
@@ -163,6 +182,48 @@ export class RunsApiClient extends SessionsApiClient {
     onEvent: (event: RunStreamEvent, sequence?: number) => void,
     signal?: AbortSignal,
   ): Promise<void> {
+    let cursor = after;
+    let terminal = false;
+    let failures = 0;
+    while (!terminal) {
+      signal?.throwIfAborted();
+      const previous = cursor;
+      let failure: unknown = new Error(translateActive("error.resumeRunEvents"));
+      try {
+        await this.subscribeRunEventsOnce(sessionId, runId, cursor, (event, sequence) => {
+          if (sequence !== undefined && sequence <= cursor) return;
+          onEvent(event, sequence);
+          if (sequence !== undefined) cursor = Math.max(cursor, sequence);
+          terminal ||= runStreamFinished(event);
+        }, signal);
+      } catch (error) {
+        if (terminal) return;
+        if (!canRetryRunStream(error, signal)) throw error;
+        failure = error;
+      }
+      if (terminal) return;
+      signal?.throwIfAborted();
+      // A normal EOF is only final when the persisted run is actually terminal.
+      // Reconnect the accepted run, never submit the user's message again.
+      try {
+        const run = (await this.listRuns(sessionId, signal)).find(item => item.id === runId);
+        if (run && ["completed", "failed", "cancelled", "interrupted"].includes(run.status)) return;
+      } catch (error) {
+        if (!canRetryRunStream(error, signal)) throw error;
+      }
+      failures = cursor > previous ? 0 : failures + 1;
+      if (failures >= 5) throw failure;
+      await waitForRunStreamRetry(failures, signal);
+    }
+  }
+
+  private async subscribeRunEventsOnce(
+    sessionId: string,
+    runId: string,
+    after: number,
+    onEvent: (event: RunStreamEvent, sequence?: number) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
       headers: {
         accept: "text/event-stream",
@@ -180,7 +241,7 @@ export class RunsApiClient extends SessionsApiClient {
     const decoder = new TextDecoder();
     let buffer = "";
     let sequence = after;
-    while (true) {
+    try { while (true) {
       const { done, value } = await reader.read();
       buffer += decoder.decode(value, { stream: !done });
       const frames = buffer.split("\n\n");
@@ -206,7 +267,7 @@ export class RunsApiClient extends SessionsApiClient {
         }
       }
       if (done) break;
-    }
+    } } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
 
   cancelCurrentRun(sessionId: string): Promise<CancelRunResult> {
@@ -220,6 +281,34 @@ export class RunsApiClient extends SessionsApiClient {
     body: SendMessageRequest,
     onEvent: (event: RunStreamEvent, sequence?: number) => void,
     signal?: AbortSignal,
+    onAccepted?: (runId: string) => void,
+  ): Promise<void> {
+    let runId: string | undefined;
+    let cursor = 0;
+    let terminal = false;
+    try {
+      await this.streamMessageOnce(sessionId, body, (event, sequence) => {
+        if (event.type === "run.queued" || event.type === "run.status") runId = event.run.id;
+        else if (event.type === "run.started") runId = event.runId;
+        onEvent(event, sequence);
+        if (sequence !== undefined) cursor = Math.max(cursor, sequence);
+        terminal ||= runStreamFinished(event);
+      }, signal, acceptedRunId => { runId = acceptedRunId; onAccepted?.(acceptedRunId); });
+    } catch (error) {
+      if (terminal) return;
+      if (!runId || !canRetryRunStream(error, signal)) throw error;
+    }
+    if (terminal) return;
+    if (!runId) throw new Error(translateActive("error.streamNoBody"));
+    await this.subscribeRunEvents(sessionId, runId, cursor, onEvent, signal);
+  }
+
+  private async streamMessageOnce(
+    sessionId: string,
+    body: SendMessageRequest,
+    onEvent: (event: RunStreamEvent, sequence?: number) => void,
+    signal?: AbortSignal,
+    onAccepted?: (runId: string) => void,
   ): Promise<void> {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       body: JSON.stringify(body),
@@ -235,6 +324,10 @@ export class RunsApiClient extends SessionsApiClient {
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
       throw new ApiRequestError(error.error || translateActive("error.runFailedStatus", { status: response.status }), response.status);
     }
+    // The server commits the run before flushing these headers. Remember its
+    // identity even if the first SSE frame is partial or never arrives.
+    const acceptedRunId = response.headers.get("x-sciencediscovery-run-id");
+    if (acceptedRunId) onAccepted?.(acceptedRunId);
     if (!response.body) throw new Error(translateActive("error.streamNoBody"));
 
     const reader = response.body.getReader();

@@ -356,12 +356,18 @@ async function createSession(api: TestApi, title: string, overrides: Partial<Pic
   return (await response.json() as Session).id;
 }
 
-function startRun(api: TestApi, sessionId: string, content: string): Promise<Response> {
-  return fetch(`${api.origin}/api/sessions/${sessionId}/messages`, {
+async function startRun(api: TestApi, sessionId: string, content: string): Promise<Response> {
+  const response = await fetch(`${api.origin}/api/sessions/${sessionId}/messages`, {
     body: JSON.stringify({ content }),
     headers: jsonHeaders,
     method: "POST",
   });
+  if (response.ok) {
+    const acceptedRunId = response.headers.get("x-sciencediscovery-run-id");
+    assert.ok(acceptedRunId, "An accepted POST exposes its durable run before any SSE frame is read");
+    assert.ok((await listRuns(api, sessionId)).some(run => run.id === acceptedRunId));
+  }
+  return response;
 }
 
 async function createRun(api: TestApi, sessionId: string, content: string): Promise<SessionRun> {

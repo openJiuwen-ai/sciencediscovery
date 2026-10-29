@@ -673,10 +673,23 @@ test("the Deep cooldown is applied once to the next automatic batch", async (con
   const firstTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: session.id });
   assert.ok(firstTask);
   await waitFor(async () => (await store.listReviewerAuditTasks(session.id)).find((task) => task.id === firstTask.id)?.status === "completed");
-  const nextTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
-  assert.ok(nextTask?.notBefore);
-  assert.ok(new Date(nextTask.notBefore).getTime() - Date.now() >= 150, "cooldown belongs to the whole next Deep batch");
-  await coordinator.cancelSession(session.id);
+  const completed = (await store.listReviewerAuditTasks(session.id)).find((task) => task.id === firstTask.id);
+  assert.ok(completed?.finishedAt);
+  const completedAt = new Date(completed.finishedAt).getTime();
+  // The cooldown is anchored to persisted completion, not how quickly this
+  // machine can enqueue/write the next task. Freeze only Date so slow I/O
+  // cannot exhaust a 200 ms cooldown before its deadline is asserted.
+  context.mock.timers.enable({ apis: ["Date"], now: completedAt + 1 });
+  try {
+    const nextTask = await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: session.id });
+    assert.ok(nextTask?.notBefore);
+    assert.equal(new Date(nextTask.notBefore).getTime(), completedAt + 200,
+      "cooldown is applied exactly once from the preceding Deep completion");
+    assert.equal((await store.listReviewerAuditTasks(session.id)).find((task) => task.id === nextTask.id)?.status, "queued");
+  } finally {
+    try { await coordinator.cancelSession(session.id); }
+    finally { context.mock.timers.reset(); }
+  }
 });
 
 
@@ -699,15 +712,18 @@ test("automatic review records a visible skipped checkpoint when globally disabl
   });
   assert.ok(task);
   await waitFor(async () => (await store.getSessionDetail(session.id))?.messages
-    .some((message) => message.id === task.checkpointMessageId && message.reviewerCheckpoint?.status === "completed") ?? false);
+    .some((message) => message.id === task.checkpointMessageId && message.reviewerCheckpoint?.status === "skipped") ?? false);
   const checkpoint = (await store.getSessionDetail(session.id))!.messages.find((message) => message.id === task.checkpointMessageId)!;
   assert.equal(checkpoint.reviewerCheckpoint!.error, undefined);
   assert.match(checkpoint.content, /Automatic review skipped: Reviewer Specialist is off/);
   assert.equal(executions, 0);
   const settled = (await store.listReviewerAuditTasks(session.id))[0];
   assert.ok(settled);
-  assert.equal(settled.status, "superseded");
-  assert.equal(settled.errorSummary, checkpoint.content);
+  assert.equal(settled.status, "skipped");
+  assert.equal(settled.skipReason, "specialist_disabled");
+  assert.equal(checkpoint.reviewerCheckpoint!.skipReason, "specialist_disabled");
+  assert.equal(settled.errorSummary, undefined);
+  assert.deepEqual(await store.listArtifactReviews(session.id), []);
   assert.deepEqual(await store.listReviewFeedback(session.id), []);
   await store.updateSessionReviewerSpecialistSettings(session.id, { automaticReviewEnabled: false, level: "quick" });
   assert.equal(await coordinator.enqueueArtifactVersion({

@@ -45,12 +45,34 @@ export type ComposerNoModelReason = "no-session-model" | "no-system-models";
 export interface ComposerRunAction {
   noModelReason: ComposerNoModelReason | null;
   runDisabled: boolean;
-  runLabel: "Add to queue" | "Run analysis";
+  runLabel: "Add to queue" | "Run analysis" | "Configure and continue";
   stopDisabled: boolean;
   stopVisible: boolean;
 }
 
-const COMPOSER_NO_MODEL_NOTICE_ID = "composer-no-model-notice";
+export function ComposerNoModelNotice({
+  onOpenConfiguration,
+  reason,
+}: {
+  onOpenConfiguration: () => void;
+  reason: ComposerNoModelReason;
+}) {
+  const { t } = useLocale();
+  return <div className="composer-model-notice" role="status">
+    <span>{t(reason === "no-system-models" ? "composer.noModels" : "composer.noTaskModel")}</span>
+    <button onClick={onOpenConfiguration} type="button">{t("configuration.card.open")}</button>
+  </div>;
+}
+
+export function shouldShowModelConfigurationCard(
+  sessionId: string | undefined,
+  requestedSessionId: string | undefined,
+  noModelReason: ComposerNoModelReason | null,
+  sessionArchived: boolean,
+  isRunning: boolean,
+): boolean {
+  return Boolean(sessionId && requestedSessionId === sessionId && noModelReason && !sessionArchived && !isRunning);
+}
 
 /**
  * The composer button acts on the Session that is on screen. A run belonging to
@@ -68,33 +90,11 @@ export function resolveComposerRunAction(input: ComposerRunActionInput): Compose
     : null;
   return {
     noModelReason,
-    runDisabled: !sessionId || !input.message.trim() || input.sessionArchived || !input.hasModel,
-    runLabel: agentRunActive ? "Add to queue" : "Run analysis",
+    runDisabled: !sessionId || !input.message.trim() || input.sessionArchived,
+    runLabel: agentRunActive ? "Add to queue" : noModelReason && input.message.trim() ? "Configure and continue" : "Run analysis",
     stopDisabled: Boolean(sessionId && input.stoppingSessionIds.has(sessionId)),
     stopVisible,
   };
-}
-
-export function ComposerNoModelNotice({
-  onOpenModelSettings,
-  reason,
-}: {
-  onOpenModelSettings: () => void;
-  reason: ComposerNoModelReason;
-}) {
-  const { t } = useLocale();
-  return (
-    <div className="composer-model-notice" id={COMPOSER_NO_MODEL_NOTICE_ID} role="status">
-      {reason === "no-system-models" ? (
-        <>
-          <span>{t("composer.noModels")}</span>
-          <button onClick={onOpenModelSettings} type="button">{t("composer.openModels")}</button>
-        </>
-      ) : (
-        <span>{t("composer.noTaskModel")}</span>
-      )}
-    </div>
-  );
 }
 
 export function ComposerRunButton({
@@ -119,13 +119,12 @@ export function ComposerRunButton({
         </button>
       ) : null}
       <button
-        aria-describedby={action.noModelReason ? COMPOSER_NO_MODEL_NOTICE_ID : undefined}
         className="send-button"
         disabled={action.runDisabled}
-        title={action.noModelReason ? (action.noModelReason === "no-system-models" ? t("composer.runNoModels") : t("composer.runNoTaskModel")) : undefined}
         type="submit"
       >
-        <SendIcon size={15} /> {action.runLabel === "Add to queue" ? t("composer.queue") : t("composer.run")}
+        <SendIcon size={15} /> {action.runLabel === "Add to queue" ? t("composer.queue")
+          : action.runLabel === "Configure and continue" ? t("composer.configureContinue") : t("composer.run")}
       </button>
     </div>
   );
