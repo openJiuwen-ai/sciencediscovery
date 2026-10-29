@@ -213,9 +213,27 @@ test("web_fetch judges IPv4-mapped and IPv4-compatible IPv6 literals by their em
   for (const address of ["2606:4700:4700::1111", "2001:4860:4860::8888"]) {
     assert.equal(isBlockedAddress(address), false, address);
   }
+  // Reverse direction for the mapped/compatible forms: a public embedded IPv4 must stay public.
+  assert.equal(isBlockedAddress("::ffff:808:808"), false);
+  assert.equal(isBlockedAddress("::808:808"), false);
+  assert.equal(
+    await assertPublicUrl("http://[::ffff:8.8.8.8]/"),
+    "http://[::ffff:8.8.8.8]/",
+  );
+  // The embedded IPv4 is judged by ipv4Blocked itself, so its whole range table applies.
+  assert.equal(isBlockedAddress("::ffff:6440:1"), true, "CGNAT 100.64.0.1");
+  assert.equal(isBlockedAddress("::ffff:c612:1"), true, "benchmark 198.18.0.1");
   assert.equal(
     await assertPublicUrl("https://[2606:4700:4700::1111]/x"),
     "https://[2606:4700:4700::1111]/x",
+  );
+});
+
+test("web_fetch applies the same judgement to resolved addresses, not only literals", async () => {
+  // The DNS path runs the same predicate, so a mapped literal returned by a resolver must reject.
+  await assert.rejects(
+    assertPublicUrl("http://example.com/", async () => ["::ffff:7f00:1"]),
+    PublicUrlError,
   );
 });
 
