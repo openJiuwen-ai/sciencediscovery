@@ -552,7 +552,10 @@ for (const name of VENV_NAMES) {
     // every Python sidecar died with ModuleNotFoundError on the installed
     // machine while the build machine looked healthy. A mispointed editable
     // is always a broken payload — fail the build instead of shipping it.
-    if (!text.startsWith(repo)) {
+    // A directory boundary must follow the repo prefix: `repo` is also a
+    // prefix of `repo-something-else`, and that sibling path would silently
+    // slice into a wrong tail (e.g. `-something-else\...`) instead of failing.
+    if (!text.startsWith(repo) || !/^[\\/]/.test(text.slice(repo.length))) {
       fail(`${name}/${e.name} points outside the repo (${text}) — the venv's editable install is stale; reinstall the editable packages from this repo before assembling`);
     }
     const tail = text.slice(repo.length).replace(/^[\\/]+/, "").replace(/\//g, "\\");
