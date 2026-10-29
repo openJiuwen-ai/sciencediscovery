@@ -1,0 +1,4 @@
+# Presence of this file on branch ci/346-local-repeat-grade makes Manual
+# validation (nightly-ci-ds) run offline LOCAL-VARIANT repeat-grade for issue #346
+# (da-13-3 local-rubric-v1 ×3 + da-14-1 official ×3) instead of the full L5 matrix.
+# Temporary diagnostic; remove after measurement.

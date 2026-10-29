@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
-"""Offline repeat-grade for Yi-authorized Manual #346 inputs (2 answers × N repeats)."""
+"""Offline repeat-grade for Yi-authorized Manual #346 inputs (2 answers × N repeats).
+
+Supports official or registered local-variant rubrics. For #346 local-rubric-v1
+measurement, da-13-3 uses --local-variant; da-14-1 stays official (no local pin).
+"""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +17,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-JUDGE = Path(__file__).resolve().parents[1] / "test/benchmarks/biomnibench-da/judge.py"
+ROOT = Path(__file__).resolve().parents[1]
+JUDGE = ROOT / "test/benchmarks/biomnibench-da/judge.py"
+sys.path.insert(0, str(JUDGE.parent))
+from rubrics import local_rubric_path, local_variant_for, rubric_identity  # noqa: E402
 
 
 def summarize(cards: list[dict]) -> dict:
@@ -49,19 +56,23 @@ def summarize(cards: list[dict]) -> dict:
 
 
 def render(report: dict) -> str:
+    channel = report.get("rubric_channel", "mixed")
     lines = [
-        "# Offline official-rubric repeat grading (Manual new traces)",
+        f"# Offline {channel} repeat grading (Manual new traces)",
         "",
         f"Status: {report['status']}; judge: {report['model']}; temperature: 0.",
         "Source: Manual validation run 40819738668 (research-9=da-13-3, research-12=da-14-1).",
         "Not the original eight historical pairs. No research rerun.",
+        f"Mode: {report.get('mode')}; da-13-3 channel={report.get('da_13_3_channel')}; "
+        f"da-14-1 channel={report.get('da_14_1_channel')}.",
         "",
-        "| Answer | Case | Scored / planned | Scores | Range |",
-        "|---|---|---|---|---|",
+        "| Answer | Case | Channel | Scored / planned | Scores | Range |",
+        "|---|---|---|---|---|---|",
     ]
     for row in report["answers"]:
         lines.append(
-            f"| {row['id']} | {row['case_id']} | {row['scored']} / {row['planned']} | "
+            f"| {row['id']} | {row['case_id']} | {row.get('rubric_channel')} | "
+            f"{row['scored']} / {row['planned']} | "
             f"{row['scores']} | {row['score_range']} |"
         )
     lines += [
@@ -79,12 +90,37 @@ def render(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def resolve_rubric(case_id: str, data_root: Path, prefer_local: bool) -> tuple[Path, dict, bool]:
+    """Return (rubric_path, identity, use_local_flag)."""
+    if prefer_local:
+        variant = local_variant_for(case_id)
+        if not variant:
+            raise SystemExit(f"No local rubric registered for {case_id}")
+        path = local_rubric_path(case_id)
+        identity = rubric_identity(path, case_id)
+        if identity["channel"] != "local-variant":
+            raise SystemExit(f"Expected local-variant identity for {case_id}")
+        return path, identity, True
+    path = (data_root / case_id / "tests/rubric.txt").resolve()
+    if not path.is_file():
+        raise SystemExit(f"Missing official rubric: {path}")
+    identity = rubric_identity(path, case_id)
+    if identity["channel"] != "official":
+        raise SystemExit(f"Expected official rubric for {case_id}, got {identity}")
+    return path, identity, False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--local-for",
+        default="da-13-3",
+        help="Comma-separated case_ids to grade with registered local-variant (default: da-13-3)",
+    )
     args = parser.parse_args()
     if args.repeats < 3:
         raise SystemExit("--repeats must be >= 3")
@@ -93,6 +129,7 @@ def main() -> int:
             raise SystemExit(f"Missing {name}")
     if not JUDGE.is_file():
         raise SystemExit(f"Missing judge.py at {JUDGE}")
+    local_cases = {c.strip() for c in args.local_for.split(",") if c.strip()}
     manifest = json.loads(args.inputs.read_text())
     rows = manifest["answers"]
     if len(rows) != 2 or {r["case_id"] for r in rows} != {"da-13-3", "da-14-1"}:
@@ -101,27 +138,33 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=False)
     report = {
         "status": "running",
-        "mode": "manual-offline-repeat-grade",
+        "mode": "manual-offline-local-repeat-grade",
         "full_e2e_rerun": False,
         "source_run": manifest.get("source_run"),
         "note": manifest.get("note"),
         "temperature": 0,
         "model": os.environ["BIOMNI_JUDGE_MODEL"],
         "repeats": args.repeats,
+        "local_for": sorted(local_cases),
+        "da_13_3_channel": "local-variant" if "da-13-3" in local_cases else "official",
+        "da_14_1_channel": "local-variant" if "da-14-1" in local_cases else "official",
+        "rubric_channel": "local-variant+official",
         "answers": [],
     }
     base = args.inputs.resolve().parent
     for row in rows:
         evidence = (base / row["evidence"]).resolve()
-        rubric = (args.data_root.resolve() / row["case_id"] / "tests/rubric.txt").resolve()
-        if not rubric.is_file():
-            raise SystemExit(f"Missing rubric: {rubric}")
+        prefer_local = row["case_id"] in local_cases
+        rubric_path, identity, use_local = resolve_rubric(
+            row["case_id"], args.data_root.resolve(), prefer_local
+        )
         files = {name: (evidence / name).read_bytes() for name in ("trace.md", "answer.txt")}
         if any(not content.strip() for content in files.values()):
             raise SystemExit(f"Empty saved input: {row['id']}")
         root = out / row["id"]
         root.mkdir()
-        (root / "rubric.txt").write_bytes(rubric.read_bytes())
+        (root / "rubric.txt").write_bytes(rubric_path.read_bytes())
+        (root / "rubric-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
         for name, content in files.items():
             (root / name).write_bytes(content)
         cards: list[dict] = []
@@ -130,21 +173,28 @@ def main() -> int:
             attempt.mkdir()
             scorecard = attempt / "quality-scorecard.json"
             log_path = attempt / "judge.log"
+            cmd = [
+                sys.executable,
+                str(JUDGE),
+            ]
+            if use_local:
+                cmd.append("--local-variant")
+            cmd += [
+                "--case",
+                row["case_id"],
+                "--rubric",
+                str(root / "rubric.txt"),
+                "--trace",
+                str(root / "trace.md"),
+                "--answer",
+                str(root / "answer.txt"),
+                "--output",
+                str(scorecard),
+            ]
             with log_path.open("w") as log:
                 try:
                     proc = subprocess.run(
-                        [
-                            sys.executable,
-                            str(JUDGE),
-                            "--rubric",
-                            str(root / "rubric.txt"),
-                            "--trace",
-                            str(root / "trace.md"),
-                            "--answer",
-                            str(root / "answer.txt"),
-                            "--output",
-                            str(scorecard),
-                        ],
+                        cmd,
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         timeout=3900,
@@ -167,6 +217,8 @@ def main() -> int:
             {
                 "id": row["id"],
                 "case_id": row["case_id"],
+                "rubric_channel": identity["channel"],
+                "rubric": identity,
                 "source_artifact": row.get("source_artifact"),
                 "baseline_scorecard_score": row.get("baseline_scorecard_score"),
                 "artifact_sha256": {
@@ -179,7 +231,8 @@ def main() -> int:
     report["status"] = "complete" if all(r["failed"] == 0 for r in report["answers"]) else "incomplete"
     (out / "repeat-grade.json").write_text(json.dumps(report, indent=2) + "\n")
     (out / "repeat-grade.md").write_text(render(report))
-    print(json.dumps({"status": report["status"], "answers": len(report["answers"]), "repeats": args.repeats}))
+    print(json.dumps({"status": report["status"], "answers": len(report["answers"]), "repeats": args.repeats,
+                      "local_for": sorted(local_cases)}))
     return 0 if report["status"] == "complete" else 1
 
 
