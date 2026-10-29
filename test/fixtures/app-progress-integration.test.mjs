@@ -30,13 +30,14 @@ const { App } = await load("../../apps/web/src/App.tsx");
 const { LocaleProvider } = await load("../../apps/web/src/i18n/index.ts");
 const { TOKEN_STORAGE_KEY } = await load("../../apps/web/src/browser-storage.ts");
 const { ApiClient } = await load("../../apps/web/src/api.ts");
+const { ApiRequestError } = await load("../../apps/web/src/api/auth.ts");
 const { RunTimeline, reduceRunTimeline } = await load("../../apps/web/src/RunTimeline.tsx");
 const { SessionStore } = await load("../../services/api/src/store.ts");
 const { buildCompletedToolTrace, publishRunEvent } = await load("../../services/api/src/runs/index.ts");
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-function browserFixture(context, autoRestore = true) {
+function browserFixture(context, autoRestore = true, initialToken = "old") {
   let url = new URL("http://localhost/");
-  const values = /* @__PURE__ */ new Map([[TOKEN_STORAGE_KEY, "old"], ["sciencediscovery.workspace-collapsed", "1"]]);
+  const values = /* @__PURE__ */ new Map([[TOKEN_STORAGE_KEY, initialToken], ["sciencediscovery.workspace-collapsed", "1"]]);
   const storage = { getItem: (k) => values.get(k) ?? null, setItem: (k, v) => {
     values.set(k, v);
   }, removeItem: (k) => {
@@ -165,8 +166,8 @@ async function recordedSession(context) {
   const completed = await store.updateSessionRun(session.id, run.id, { status: "completed", userMessageId: message.id });
   return { store, project, session, run: completed };
 }
-async function mountRecordedApp(context, fixture) {
-  const { restore } = browserFixture(context, false);
+async function mountRecordedApp(context, fixture, options = {}) {
+  const { win, restore } = browserFixture(context, false, options.initialToken ?? "old");
   const { store, project, session, run } = fixture;
   context.mock.method(globalThis, "fetch", () => new Promise(() => {
   }));
@@ -194,14 +195,23 @@ async function mountRecordedApp(context, fixture) {
     listConfigurationRequests: { items: [] },
     listSessions: [session],
     listProjectArtifacts: [],
+    listArtifacts: [],
     getProjectSettings: void 0,
     getSession: await store.getSessionDetail(session.id),
     getPermissionEpoch: void 0,
     getSessionUsage: void 0,
     listRuns: [run]
   };
+  // App refreshes this capability while loading the selected session. Keep the
+  // fixture deterministic; an unresolved real request prevents timeline
+  // hydration from ever rendering the stored run.
+  fixed.canImportResearchPackage = { canImport: false };
   for (const name of ["listFiles", "listPermissionRequests", "listExecutionRuns", "listArtifactDerivations", "listPromptManifests", "listArtifactReviews", "listReviewerAuditTasks", "listMcpInvocations", "listClaims", "listEvidenceLinks", "listSubagents", "listRemoteJobs", "listArtifactOutputs", "listMcpArtifactCandidates", "listMcpArtifactJobs", "listMcpArtifactPlans"]) fixed[name] = [];
-  for (const [name, value] of Object.entries(fixed)) context.mock.method(ApiClient.prototype, name, async () => value);
+  for (const [name, value] of Object.entries(fixed)) {
+    if (name === "listProjects" && options.listProjects) continue;
+    context.mock.method(ApiClient.prototype, name, async () => value);
+  }
+  if (options.listProjects) context.mock.method(ApiClient.prototype, "listProjects", options.listProjects);
   context.mock.method(ApiClient.prototype, "listRunEvents", async () => store.listSessionRunEvents(session.id, run.id));
   const streams = context.mock.method(ApiClient.prototype, "listRunStreamEvents", async (_sessionId, _runId, stream) => store.listRunStreamEvents(session.id, run.id, stream));
   let renderer;
@@ -221,8 +231,30 @@ async function mountRecordedApp(context, fixture) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
   }
-  return { renderer, streams };
+  return { renderer, streams, win };
 }
+test("mounted App keeps a replacement-token rejection after a cold-start empty-token 401", async (context) => {
+  const fixture = await recordedSession(context);
+  let releaseEmpty;
+  const empty401 = new Promise((resolve) => { releaseEmpty = resolve; });
+  const listProjects = function () {
+    if (this.token === "") return empty401.then(() => { this.reportAuthStatus?.(401); throw new ApiRequestError("Unauthorized", 401); });
+    if (this.token === "wrong-token") { this.reportAuthStatus?.(401); return Promise.reject(new ApiRequestError("Unauthorized", 401)); }
+    return Promise.resolve([fixture.project]);
+  };
+  const { win, renderer } = await mountRecordedApp(context, fixture, { initialToken: "", listProjects });
+  await act(async () => {
+    win.location.href = "http://localhost/#token=wrong-token";
+    win.dispatchEvent(new Event("hashchange"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.ok(JSON.stringify(renderer.toJSON()).includes("Local service access token rejected"));
+  await act(async () => {
+    releaseEmpty();
+    await Promise.resolve();
+  });
+  assert.ok(JSON.stringify(renderer.toJSON()).includes("Local service access token rejected"), "the late cold-start failure must not clear the replacement-token notice");
+});
 test("mounted App loads canonical full transcripts for empty, progress-only, result-only and mixed streams", async (context) => {
   const fixture = await recordedSession(context);
   const { store, session, run } = fixture;

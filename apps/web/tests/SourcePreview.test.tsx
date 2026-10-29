@@ -70,6 +70,13 @@ test("oversized previews stop at the character cap and explain full-file downloa
   assert.ok(html.includes("x".repeat(SOURCE_PREVIEW_LIMIT)));
 });
 
+test("workspace previews can render the API-bounded text without a second character cap", () => {
+  const suffix = "VISIBLE_SUFFIX";
+  const html = renderToStaticMarkup(createElement(SourcePreview, { clip: false, source: "x".repeat(SOURCE_PREVIEW_LIMIT) + suffix }));
+  assert.match(html, new RegExp(suffix));
+  assert.doesNotMatch(html, /Preview truncated at 100,000 characters/);
+});
+
 test("unknown names and empty UTF-8 files are readable without a catalog kind", async () => {
   assert.equal(await readPreviewText(new Blob(["未知格式\nhello"]), "output.unknown"), "未知格式\nhello");
   assert.equal(await readPreviewText(new Blob([]), "empty.txt"), "");

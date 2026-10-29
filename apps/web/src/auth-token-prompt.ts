@@ -26,6 +26,12 @@ export interface AuthTokenPromptGate {
   shouldPrompt(token: string): boolean;
 }
 
+/** Empty credentials are the normal cold-start state. A 401 for that state
+ * must not replace a rejection already shown for a token the user just tried. */
+export function shouldShowTokenRejected(token: string): boolean {
+  return token.length > 0;
+}
+
 export function createAuthTokenPromptGate(): AuthTokenPromptGate {
   let promptedToken: string | undefined;
   return {

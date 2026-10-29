@@ -120,7 +120,8 @@ async function fixture(context: TestContext) {
   }
   const values: ConfigurationValues = { name: "Isolated fixture provider", baseUrl: `${providerOrigin}/v1`, model: "fixture-model",
     apiProtocol: "openai-chat-completions", apiVariant: DEFAULT_MODEL_API_VARIANT["openai-chat-completions"] };
-  return { root, origin, providerOrigin, project, session, sibling, probes, values, call, ok, path, proposal, preview, withCredential, decision };
+  const closeApi = () => closeApiServer(api!);
+  return { root, origin, providerOrigin, project, session, sibling, probes, values, call, ok, path, proposal, preview, withCredential, decision, closeApi };
 }
 
 async function assertNoPlaintext(root: string, forbidden: string[]) {
@@ -195,6 +196,8 @@ test("CFG HTTP: first connection is preview-only until confirmation, applies onc
   const mismatch = await f.call(f.path(ready, "decision"), { revision: ready.revision, previewDigest: ready.previewDigest, decision: "dismiss" }, "POST", key);
   assert.equal(mismatch.status, 409);
   assert.equal(mismatch.body.code, "IDEMPOTENCY_MISMATCH");
+  // Finish background export writes before inspecting the persisted files.
+  await f.closeApi();
   await assertNoPlaintext(f.root, ["good-first-credential"]);
 });
 
@@ -249,6 +252,7 @@ test("CFG HTTP: failed isolated repair preserves a shared provider credential; s
   assert.equal(f.probes.at(-1)?.authorization, "Bearer good-original-credential", "Sibling model keeps the shared provider credential");
   const list = await f.call(f.path());
   assert.doesNotMatch(list.text, /good-original-credential|good-replacement-credential|bad-credential|credentialHandle|ciphertext/);
+  await f.closeApi();
   await assertNoPlaintext(f.root, ["good-original-credential", "good-replacement-credential", "bad-credential-must-remain-isolated"]);
 });
 
