@@ -883,6 +883,31 @@ test("an ascii markdown preview still cuts at exactly maxChars", async (context)
   assert.equal(payload.truncated, true);
 });
 
+// The budget is counted in UTF-16 units, so maxChars 1 or 2 cannot hold a first
+// character that is a surrogate pair. These are the only budgets where the cut
+// removes a whole unit instead of measuring a boundary, and they are the first
+// thing a simplification of `splitsPair` would break: `charCodeAt(maxChars) >=
+// 0xdc00` would leave half a pair or read out of bounds here while every
+// existing case (all maxChars = 10) stayed green. maxChars = 0 never reaches
+// the cut (parsePositiveInt requires > 0), so 1 is the degenerate boundary.
+for (const [maxChars, expected] of [["1", ""], ["2", "😀"]] as const) {
+  test(`a markdown preview with maxChars=${maxChars} drops a straddling emoji whole`, async (context) => {
+    const fixture = await createFixture(context);
+    const vid = await seedArtifact(fixture, {
+      content: "😀abcdef",
+      kind: "markdown",
+      logicalName: "emoji.md",
+      mediaType: "text/markdown",
+    });
+    const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, maxChars);
+    if (payload.mode !== "markdown-source") assert.fail(`unexpected mode: ${payload.mode}`);
+    assert.equal(payload.source, expected);
+    assert.equal(payload.source.length, expected.length, "a surviving emoji keeps both of its units");
+    assert.equal(payload.totalChars, 8);
+    assert.equal(payload.truncated, true);
+  });
+}
+
 test("figure preview surfaces the content URL without reading CAS bytes", async (context) => {
   const fixture = await createFixture(context);
   const vid = await seedArtifact(fixture, {
