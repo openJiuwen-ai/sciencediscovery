@@ -149,18 +149,21 @@
 
 ; Fast-delete helper: try cmd `rd /s /q` first (avoids robocopy/PowerShell
 ; overhead for normal paths). If it fails (long paths, locked files, read-only),
-; fall back to the PowerShell long-path helper, then robocopy.
+; fall back to the PowerShell long-path helper, then robocopy. The helper and
+; the robocopy mirror source are staged inside $PLUGINSDIR — the uninstaller's
+; own unpredictable temp directory — so a same-user process cannot pre-plant
+; either one in the shared %TEMP% root.
 !macro DeleteFastThenHelper target
   nsExec::ExecToLog 'cmd /c rd /s /q "${target}"'
   Pop $R0
   ${If} $R0 != 0
-    ${If} ${FileExists} "$TEMP\sd-uninstall_helper.ps1"
-      nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$TEMP\sd-uninstall_helper.ps1" "${target}"'
+    ${If} ${FileExists} "$PLUGINSDIR\sd-uninstall-helper.ps1"
+      nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\sd-uninstall-helper.ps1" "${target}"'
     ${Else}
-      CreateDirectory "$TEMP\sd-clean-empty"
-      nsExec::ExecToLog 'robocopy "$TEMP\sd-clean-empty" "${target}" /MIR /NFL /NDL /NJH /NJS /NP'
+      CreateDirectory "$PLUGINSDIR\sd-clean-empty"
+      nsExec::ExecToLog 'robocopy "$PLUGINSDIR\sd-clean-empty" "${target}" /MIR /NFL /NDL /NJH /NJS /NP'
       RMDir /r "${target}"
-      RMDir "$TEMP\sd-clean-empty"
+      RMDir "$PLUGINSDIR\sd-clean-empty"
     ${EndIf}
   ${EndIf}
 !macroend
@@ -179,10 +182,11 @@
   ; completely (the running uninstaller exe stays locked; electron-builder's
   ; self-delete tail takes care of that one file).
   ${If} ${FileExists} "$INSTDIR"
-    ; Stage the helper in %TEMP% before the install dir (and any helper file
-    ; inside it) is deleted.
+    ; Stage the helper in the uninstaller's $PLUGINSDIR (an unpredictable
+    ; per-run temp directory) before the install dir — and any helper file
+    ; inside it — is deleted.
     ${If} ${FileExists} "$INSTDIR\resources\uninstall_helper.ps1"
-      CopyFiles "$INSTDIR\resources\uninstall_helper.ps1" "$TEMP\sd-uninstall_helper.ps1"
+      CopyFiles "$INSTDIR\resources\uninstall_helper.ps1" "$PLUGINSDIR\sd-uninstall-helper.ps1"
     ${EndIf}
     !insertmacro DeleteFastThenHelper "$INSTDIR"
   ${EndIf}

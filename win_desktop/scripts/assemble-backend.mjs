@@ -173,6 +173,15 @@ await mkdir(out, { recursive: true });
 const deployDir = join(shellRoot, "build", ".deploy-tmp");
 await rm(deployDir, { recursive: true, force: true });
 say(`deploying prod closure (pnpm deploy --legacy) into ${deployDir}`);
+// corepack only ships as a .cmd shim on Windows, which a shell-less
+// execFileSync cannot run (Node deliberately refuses to spawn .cmd files
+// without a shell). The command stays a fixed string and the one
+// interpolated value — deployDir, derived from this script's own location —
+// is validated against shell metacharacters, so nothing user-controlled
+// can ever reach the command line.
+if (/[&^%"<>|]/.test(deployDir)) {
+  fail(`deploy path contains shell metacharacters, refusing to build a command line from it: ${deployDir}`);
+}
 try {
   execFileSync(
     "corepack pnpm --filter=@sciencediscovery/api deploy --prod --legacy "
@@ -650,7 +659,7 @@ await cp(join(data, "scientific-envs", "bin", "micromamba.exe"),
 
 let repoCommit = "unknown";
 try {
-  repoCommit = execFileSync("git rev-parse HEAD", { cwd: repo, shell: true, encoding: "utf8" }).trim();
+  repoCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
 } catch { /* not a git checkout — keep "unknown" */ }
 
 const pieces = {};

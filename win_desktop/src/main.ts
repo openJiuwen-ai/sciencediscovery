@@ -1141,7 +1141,10 @@ function createWindow(): void {
       preload: join(distDir, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // preload needs DOM storage + contextBridge; no node beyond that
+      // The sandboxed preload keeps full access to contextBridge/ipcRenderer
+      // and the DOM storage it needs; it imports nothing else, so the
+      // renderer runs with zero Node reach of any kind.
+      sandbox: true,
     },
   });
   // Renderer console errors → shell.log. An e2e run caught a renderer crash
