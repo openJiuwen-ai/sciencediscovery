@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { test as base, type BrowserContext, type TestInfo } from "@playwright/test";
+import { test as base, expect, type BrowserContext, type TestInfo } from "@playwright/test";
 
 import { createJourneyReporter, type JourneyReporter } from "./journey-report.ts";
 
@@ -99,6 +99,39 @@ export function requireRealEnv(testInfo: TestInfo, ...names: string[]): Record<s
 export function allowRealEnvException(testInfo: TestInfo, reason: string): void {
   if (!reason.trim()) throw new Error("A real environment gate exception requires a reason");
   testInfo.annotations.push({ type: "real-env-gate-exception", description: reason });
+}
+
+/** How the stack runs agent turns, as its `/health` reports it. */
+export interface AgentStack {
+  executor: "jiuwenswarm" | "native";
+  subagents: "task" | "jiuwenswarm";
+}
+
+/**
+ * Journeys whose sub-agents are delegated through the platform `task` tool need a stack that does that, and the
+ * journeys that test JiuwenSwarm itself need that executor too. The stack says which it is in `/health`; a
+ * mismatch, or a stack that does not say, is BLOCKED with what it reported. Nothing here is declared by the
+ * person running the suite.
+ */
+export async function requireAgentStack(
+  requirement: { executor?: AgentStack["executor"] } = {},
+  apiOrigin = process.env.E2E_API_URL ?? process.env.E2E_BASE_URL ?? "http://127.0.0.1:4310",
+): Promise<AgentStack> {
+  let agent: Partial<AgentStack> | undefined;
+  let detail = "";
+  try {
+    const response = await fetch(new URL("/health", apiOrigin), { signal: AbortSignal.timeout(10_000) });
+    if (response.ok) agent = ((await response.json()) as { agent?: Partial<AgentStack> }).agent;
+    else detail = ` (HTTP ${response.status})`;
+  } catch (error) {
+    detail = ` (${error instanceof Error ? error.message : String(error)})`;
+  }
+  const reported = `the stack at ${apiOrigin} reports executor=${agent?.executor ?? "unknown"}, subagents=${agent?.subagents ?? "unknown"}${detail}`;
+  expect(agent?.subagents, `BLOCKED: requires sub-agents delegated through the platform task tool; ${reported}`).toBe("task");
+  if (requirement.executor) {
+    expect(agent?.executor, `BLOCKED: requires the ${requirement.executor} executor; ${reported}`).toBe(requirement.executor);
+  }
+  return agent as AgentStack;
 }
 
 /**

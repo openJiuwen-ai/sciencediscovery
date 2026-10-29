@@ -6,7 +6,7 @@ import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { deliveryFailureMessage, requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { evaluateTeam } from "./helpers/research-team.ts";
 import { expect } from "@playwright/test";
-import { test, allowRealEnvException, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
+import { test, allowRealEnvException, requireAgentStack, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
@@ -57,7 +57,7 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
   const budget = positiveNumber("E2E_TEAM_RUN_TIMEOUT_MS", 3_600_000);
   const judgeBudget = positiveNumber("E2E_TEAM_EVAL_TIMEOUT_MS", 900_000);
   test.setTimeout(budget + judgeBudget + 240_000);
-  expect(process.env.E2E_SWARM_TASK !== "1", "Requires isolated Swarm platform-task stack").toBe(false);
+  await requireAgentStack();
   await requireRealStack(info);
   const modelId = process.env.E2E_LLM_MODEL_ID;
   if (modelId) allowRealEnvException(info, "Use the existing isolated real model; credentials remain server-side.");

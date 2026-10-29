@@ -72,7 +72,7 @@ in `../../../jiuwen_swarm/README.md` (from the repository root, see
 `jiuwen_swarm/README.md`). Then run from the repository root:
 
 ```bash
-E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- deepresearchbench-swarm.spec.ts
+E2E_RESEARCH=1 npm --prefix .e2e run test:real -- deepresearchbench-swarm.spec.ts
 ```
 
 These real cases are excluded from default test collection unless
