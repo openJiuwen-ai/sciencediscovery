@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ScienceDiscovery — 本地服务访问令牌</title>
+<style>
+  body { font-family: system-ui, "Segoe UI", sans-serif; margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; background: #f5f6f8; }
+  .card { background: #fff; border: 1px solid #e2e4e9; border-radius: 10px; padding: 28px 32px; width: 460px; box-shadow: 0 4px 18px rgba(20, 24, 40, .08); }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  p { font-size: 13px; color: #5a6072; line-height: 1.6; margin: 0 0 16px; }
+  input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid #c9cdd8; border-radius: 6px; font-size: 14px; }
+  button { margin-top: 14px; width: 100%; padding: 9px 0; border: 0; border-radius: 6px; background: #2f54eb; color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { background: #aab3d0; cursor: default; }
+  #msg { font-size: 12px; margin-top: 10px; min-height: 16px; }
+  .err { color: #c03546; } .ok { color: #1f9254; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>需要本地服务访问令牌</h1>
+    <p> ScienceDiscovery 后端拒绝了当前令牌（401）。请把启动日志中的
+      <code>Local service access token</code> 粘贴到下方，壳会保存并重新连接。</p>
+    <input id="token" placeholder="粘贴本地服务访问令牌" autocomplete="off" />
+    <button id="save">保存并重新连接</button>
+    <div id="msg"></div>
+  </div>
+  <script>
+    const input = document.getElementById("token");
+    const btn = document.getElementById("save");
+    const msg = document.getElementById("msg");
+    const api = (window.sdShell && window.sdShell.saveToken) || null;
+    btn.addEventListener("click", async () => {
+      const token = input.value.trim();
+      if (!token) { msg.className = "err"; msg.textContent = "令牌不能为空。"; return; }
+      btn.disabled = true;
+      try {
+        if (!api) throw new Error("preload bridge missing");
+        const saved = await api(token);
+        msg.className = "ok";
+        msg.textContent = saved ? "已保存，正在重新连接…" : "已接受，正在重新连接…";
+      } catch (e) {
+        msg.className = "err"; msg.textContent = String(e && e.message || e); btn.disabled = false;
+      }
+    });
+    input.addEventListener("keydown", e => { if (e.key === "Enter") btn.click(); });
+    input.focus();
+  </script>
+</body>
+</html>

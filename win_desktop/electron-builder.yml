@@ -1,0 +1,47 @@
+# Packaging config (electron-builder): NSIS-only, per-user install without
+# UAC, an assisted first-run wizard, frozen artifact name, and the page flow
+# license → directory → progress → finish. The backend payload tree rides
+# extraResources as plain files (no physical split), so unchanged big pieces
+# keep their blockmap blocks and differential updates never re-download them.
+appId: cn.sciencediscovery.desktop
+productName: ScienceDiscovery
+copyright: Apache-2.0
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the shell code goes into the asar; the backend payload is plain files
+# under resources/ (staged by scripts/assemble-backend.mjs).
+files:
+  - dist/**
+  - package.json
+
+extraResources:
+  - from: build/resources
+    to: .
+  - from: build/extra
+    to: resources
+
+asarUnpack: []
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ScienceDiscovery
+  artifactName: ScienceDiscovery-${version}-win-x64-setup.${ext}
+  # Installer presentation tweaks (progress bar behavior) live in
+  # build/installer.nsh.
+  include: build/installer.nsh
