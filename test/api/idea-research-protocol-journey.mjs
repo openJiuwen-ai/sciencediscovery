@@ -15,7 +15,7 @@
 /** Actual public research entry -> authenticated Python sidecar -> run-pinned proxy -> native provider.
  * Run: node test/api/idea-research-protocol-journey.mjs
  * Exported runner also accepts responseFormat: 'json' to verify JSON replies to streamed requests.
- * Requires built API and the repository's locked services/evolve/.venv (UT preparation supplies it).
+ * Requires built API and the repository's locked services/idea-tree/.venv (UT preparation supplies it).
  * Isolated API + real research sidecar only; no Runner, SDK, full stack, research content or paid calls.
  * Steps: start isolated services/auth controls; register each native model without probes; create research;
  * observe completed/scored persisted graph with unknown usage; verify token isolation and manual-only resume.
@@ -24,12 +24,12 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolve(repoRoot, 'services/evolve/.venv/bin/python'), responseFormat = 'sse' } = {}) {
+export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolve(repoRoot, 'services/idea-tree/.venv/bin/python'), responseFormat = 'sse' } = {}) {
   assert.ok(['sse', 'json'].includes(responseFormat));
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', cwd: repoRoot }).trim();
   const root = resolve(repoRoot, '.tmp', `idea-research-protocol-${randomUUID()}`);
@@ -86,17 +86,24 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
   let api;
   try {
     await step('1. Start owned API and real research sidecar', 'Healthy isolated services, internal/public auth enforced, no model requests', async () => {
-      sidecarOrigin = await start(pythonExecutable, ['-m', 'uvicorn', 'sciencediscovery_evolve.server:app', '--host', '127.0.0.1', '--port', '0'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'sidecar'), SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, PYTHONPATH: resolve(repoRoot, 'services/evolve/src') }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'sidecar');
+      sidecarOrigin = await start(pythonExecutable, ['-m', 'uvicorn', 'sciencediscovery_idea_tree.server:app', '--host', '127.0.0.1', '--port', '0'], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'sidecar'), SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_IDEA_TREE_DATA_DIR: resolve(root, 'sidecar'), PYTHONPATH: resolve(repoRoot, 'services/idea-tree/src') }, /Uvicorn running on (http:\/\/127\.0\.0\.1:\d+)/, 'sidecar');
       const portReservation = createServer();
       await new Promise(r => portReservation.listen(0, '127.0.0.1', r));
       const apiPort = portReservation.address().port;
       await new Promise(r => portReservation.close(r));
-      origin = await start(process.execPath, [resolve(repoRoot, 'services/api/dist/server.js')], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'api'), SCIENCE_AGENT_AUTH_TOKEN: secret, SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_PORT: String(apiPort), SCIENCE_AGENT_EVOLVE_URL: sidecarOrigin, SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_SAMPLE_SESSION: '0' }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
+      origin = await start(process.execPath, [resolve(repoRoot, 'services/api/dist/server.js')], { SCIENCE_AGENT_DATA_DIR: resolve(root, 'api'), SCIENCE_AGENT_AUTH_TOKEN: secret, SCIENCE_AGENT_HOST: '127.0.0.1', SCIENCE_AGENT_PORT: String(apiPort), SCIENCE_AGENT_IDEA_TREE_URL: sidecarOrigin, SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN: internal, SCIENCE_AGENT_RUNNER_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_MEMORY_GRAPH_URL: 'http://127.0.0.1:1', SCIENCE_AGENT_SAMPLE_SESSION: '0' }, /listening on (http:\/\/127\.0\.0\.1:\d+)/, 'api');
       api = async (path, body, method = body ? 'POST' : 'GET') => { const r = await fetch(origin + path, { method, headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000) }); const text = await r.text(); assert.ok(!text.includes(providerKey) && !text.includes(internal)); return { status: r.status, body: JSON.parse(text) }; };
       assert.equal((await fetch(origin + '/api/models')).status, 401);
       assert.equal((await fetch(sidecarOrigin + '/idea-tree/research/command', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
       assert.deepEqual((await api('/api/models')).body, []); assert.equal(requests.length, 0);
       return 'Fresh model registry; public/internal unauthorized requests refused';
+    });
+    await step('2. Read and preserve Idea Tree settings', 'GET and no-op PUT return the same service-owned settings', async () => {
+      const before = await api('/api/settings/idea-tree');
+      const after = await api('/api/settings/idea-tree', {}, 'PUT');
+      assert.equal(before.status, 200); assert.equal(after.status, 200);
+      assert.deepEqual(after.body, before.body);
+      return 'Settings survive an empty update';
     });
     for (const apiProtocol of ['openai-chat-completions', 'openai-responses', 'anthropic-messages']) {
       let session, research;
@@ -107,6 +114,7 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
         // runs the same journey once for each family.
         const project = await api('/api/projects', { name: `Synthetic research ${apiProtocol}` });
         session = (await api(`/api/projects/${project.body.id}/sessions`, { title: 'Synthetic native research', modelId: model.body.id })).body;
+        const graph = await api(`/api/sessions/${session.id}/idea-tree/graph`); assert.equal(graph.status, 200); assert.deepEqual(graph.body, { graph: null, hasIdeaTreeRun: false, treeIds: [] });
         assert.equal(requests.length, before); return 'Saved explicit protocol and token; zero probes';
       });
       await step(`3. Create and complete public ${apiProtocol} research`, 'Real Python stages finish with scored persisted graph and unknown billing', async () => {
@@ -123,6 +131,22 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
         const candidate = view.graph.nodes.find(n => n.kind === 'candidate'); assert.ok(candidate); assert.equal(candidate.score, 8); assert.equal(candidate.cycleComplete, true);
         assert.ok(requests.length - before >= 6); assert.ok(requests.slice(before).every(r => r.protocol === apiProtocol && r.model === `synthetic-${apiProtocol}` && r.stream === true));
         const persisted = await api(`/api/sessions/${session.id}/idea-tree/research`); assert.equal(persisted.body.items[0].research.status, 'completed');
+        const stream = await fetch(`${origin}/api/sessions/${session.id}/idea-tree/research/${research.id}/events`, {
+          headers: { authorization: `Bearer ${secret}`, accept: 'text/event-stream' }, signal: AbortSignal.timeout(10000),
+        });
+        assert.equal(stream.status, 200); assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+        const frames = (await stream.text()).split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+        const snapshot = frames.at(-1); assert.ok(snapshot);
+        const detail = await api(`/api/sessions/${session.id}`);
+        const messages = detail.body.messages.slice(-2);
+        const trace = {
+          researchEvent: { status: snapshot.research.status, candidateScored: snapshot.graph.nodes.some(n => n.kind === 'candidate' && n.score === 8) },
+          chatMessages: messages.map(m => m.role),
+        };
+        const golden = JSON.parse(await readFile(resolve(repoRoot, 'test/contract/fixtures/idea-tree-public-events.json'), 'utf8'));
+        assert.deepEqual(trace, golden);
+        assert.match(messages[0].content, /^\/idea-tree Synthetic bounded hypothesis comparison/);
+        assert.ok(messages[1].content.includes(research.id));
         const usage = await api(`/api/sessions/${session.id}/usage`); assert.equal(usage.status, 200); assert.ok(JSON.stringify(usage.body).includes('provider-not-reported')); assert.ok(!JSON.stringify(usage.body).includes('"costUsd":0'));
         return `Completed with scored persisted candidate; ${requests.length - before} streamed requests with ${responseFormat} responses; usage/cost unknown`;
       });

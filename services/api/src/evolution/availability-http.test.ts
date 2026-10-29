@@ -47,7 +47,7 @@ test("public status/init require API auth; uninitialized Tasks/API paths refuse 
     });
     const backends: unknown[] = [null, "bwrap", "seatbelt", "direct"];
     const status = await fetch(`${origin}/api/evolve/status`, { headers });
-    const statusBody = await status.json() as {
+const statusBody = await status.json() as {
       canInitialize?: unknown; sandbox?: unknown; state?: unknown;
     };
     assert.deepEqual(availability(statusBody), { state: "not_initialized", canInitialize: false });
@@ -57,9 +57,10 @@ test("public status/init require API auth; uninitialized Tasks/API paths refuse 
       canInitialize?: unknown; state?: unknown;
     };
     assert.deepEqual(availability(initBody), { state: "not_initialized", canInitialize: false });
-    assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 200);
+    // Idea Tree is independent and reports its own unavailable service.
+    assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 503);
     const before = sidecarRequests;
-    for (const path of ["/api/evolve/runs", "/api/evolve/runs/fake/stop", "/api/sessions/fake/idea-tree/research", "/api/sessions/fake/idea-tree/graph"]) {
+    for (const path of ["/api/evolve/runs", "/api/evolve/runs/fake/stop"]) {
       const response = await fetch(origin + path, { headers });
       assert.equal(response.status, 503); assert.match(await response.text(), /not initialized/);
     }

@@ -78,7 +78,7 @@ const OUTAGE_PROBE_REPEATS=2;
  * set of product roots. Each start is logged with whether it could be measured.
  */
 const coverageRequirement='coverage>=7.6,<8';
-const pythonRoots=['services/adapter/src','services/evolve/src','services/gateway/src','services/memory-graph/src','services/paper','services/runner/workloads','skills'];
+const pythonRoots=['services/adapter/src','services/evolve/src','services/idea-tree/src','services/gateway/src','services/memory-graph/src','services/paper','services/runner/workloads','skills'];
 const coverageHook=join(root,'test/support/tagged/python/coverage-hook');
 function coverageSetup(outputDir,coverageDir){
   const data=join(coverageDir,'python-data'),rc=join(outputDir,'coverage.rc');
@@ -225,7 +225,7 @@ export async function main(args=process.argv.slice(2)) {
     const steps=[['pnpm',['install','--frozen-lockfile']],...(!light?[['pnpm',['build']]]:[])];
     // A step may carry environment overrides as a third element; they merge
     // over the run-wide `env`.
-    if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','adapter'].includes(project)?['--extra','test']:[])],{UV_PROJECT_ENVIRONMENT:pythonVenv(project)}]);
+    if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','idea-tree','adapter'].includes(project)?['--extra','test']:[])],{UV_PROJECT_ENVIRONMENT:pythonVenv(project)}]);
     // Into the project's own environment, after the locked sync, so the tests
     // run on exactly the interpreter and packages they run on without it.
     if(needUT&&coverage)for(const project of pythonProjects)steps.push(['uv',['pip','install','--python',python(project),coverageRequirement]]);

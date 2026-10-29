@@ -209,6 +209,7 @@ if [[ "$group" == real ]]; then export E2E_BIOMNI_FIXTURE_ROOT="$SCIENCE_DISCOVE
 # still wins, which is how two runs share one machine.
 export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4410}"
 export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4411}"
+export SCIENCE_AGENT_IDEA_TREE_PORT="${SCIENCE_AGENT_IDEA_TREE_PORT:-4414}"
 export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774}"
 # Moving a service is only half of it: the API dials each sidecar by URL, and
 # Runner and memory-graph still have defaults in API configuration. Derive
@@ -216,6 +217,7 @@ export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
 # Evolve is started by the source launcher on its owned socket. Do not invent
 # an operator URL here: that explicitly opts out of owned service startup.
+export SCIENCE_AGENT_IDEA_TREE_URL="http://127.0.0.1:${SCIENCE_AGENT_IDEA_TREE_PORT}"
 export SCIENCE_AGENT_MEMORY_GRAPH_URL="http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
@@ -347,13 +349,13 @@ if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
 # journeys reach whoever already owns the address, and the run reports a wall of
 # 401s that reads like a broken token. Say it here instead, while the port is
 # still the answer.
-busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
+busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_IDEA_TREE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
 if [[ "$backend" == jiuwenswarm ]]; then
   busy_ports+=("${SCIENCE_AGENT_LEGACY_PORT:-$((SCIENCE_AGENT_PORT + 100))}")
 fi
 for busy_port in "${busy_ports[@]}"; do
   if ss -ltn "sport = :$busy_port" 2>/dev/null | grep -q LISTEN; then
-    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner and memory-graph ports. Evolve uses a launcher-owned ephemeral port.\n' \
+    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner, Idea Tree and memory-graph ports. Evolve uses a launcher-owned ephemeral port.\n' \
       "$busy_port" | tee -a "$test_log" >&2
     exit 2
   fi

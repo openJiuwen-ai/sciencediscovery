@@ -124,6 +124,7 @@ export interface ServerConfig {
      *  Absent means false; the loader always writes it. */
     unisolated?: boolean;
   };
+  ideaTree?: { url: string; internalToken: string };
 }
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -276,6 +277,10 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       url: env.SCIENCE_AGENT_EVOLVE_URL?.trim().replace(/\/$/, "") || "",
       internalToken: env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN?.trim() || "",
       unisolated: parseBooleanFlag(env.SCIENCE_AGENT_EVOLVE_UNISOLATED, false),
+    },
+    ideaTree: {
+      url: env.SCIENCE_AGENT_IDEA_TREE_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4314",
+      internalToken: env.SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN?.trim() || "sciencediscovery-idea-tree-local",
     },
   };
 }

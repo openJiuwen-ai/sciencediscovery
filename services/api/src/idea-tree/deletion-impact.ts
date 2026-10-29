@@ -20,6 +20,7 @@ import type { SessionStore } from "../store.js";
 export async function ideaTreeSkillDeletionReferences(
   store: SessionStore,
   skillId: string,
+  persistedReferences?: (sessionId: string, skillId: string) => Promise<boolean>,
 ): Promise<SkillDeletionReference[]> {
   const references: SkillDeletionReference[] = [];
   for (const project of store.listProjects()) {
@@ -27,7 +28,7 @@ export async function ideaTreeSkillDeletionReferences(
       const queuedOrHistorical = (await store.listSessionRuns(session.id)).some(
         (run) => run.settingsSnapshot.ideaTreeExecutor?.workflowSkill.id === skillId,
       );
-      if (queuedOrHistorical) {
+      if (queuedOrHistorical || await persistedReferences?.(session.id, skillId)) {
         references.push({ id: session.id, label: `${session.title} (Idea Tree workflow)`, scope: "session" });
       }
     }

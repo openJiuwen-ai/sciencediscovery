@@ -3,9 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
-from sciencediscovery_evolve.vendor.idea_tree.idea_tree import IdeaTreeError
-from sciencediscovery_evolve.vendor.idea_tree.idea_tree_service import IdeaTreeStore
-from sciencediscovery_evolve.tree import Tree
+from sciencediscovery_idea_tree.idea_tree import IdeaTreeError
+from sciencediscovery_idea_tree.idea_tree_service import IdeaTreeStore
+from sciencediscovery_idea_tree.tree import Tree
 
 EXECUTOR = dict(kind="workflow_skill", key="idea-tree-team", fingerprint="sha256:" + "a"*64,
     workflowSkill=dict(id="idea-tree-team"), resultAuthority=dict(key="idea-tree-result", version="1"),
@@ -127,7 +127,7 @@ def test_explicit_budgets_override_settings_and_persist(api, budgets):
 
 
 def test_lease_comparison_handles_microseconds_at_millisecond_boundary(api, monkeypatch):
-    from sciencediscovery_evolve.vendor.idea_tree import idea_tree, idea_tree_service
+    from sciencediscovery_idea_tree import idea_tree, idea_tree_service
     tree = create(api)
     request = leaf(api, tree)
     path = api.root / "project/session/state.json"

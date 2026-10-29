@@ -15,89 +15,78 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { EvolveAvailability } from "./availability.js";
+import { IdeaTreeServiceClient } from "@sciencediscovery/idea-tree";
 import { RunTokenRegistry } from "./llm-proxy.js";
-import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
 import { createIdeaResearchClient } from "../idea-tree/research.js";
 import type { SessionStore } from "../store.js";
 
-test("uninitialized Idea Tree and research paths refuse before transport or model credential access", async () => {
-  const original = globalThis.fetch; let calls = 0;
-  globalThis.fetch = async () => { calls++; throw new Error("Unexpected request"); };
-  const availability = new EvolveAvailability({ url: "", internalToken: "" });
-  const store = { getSession: () => { throw new Error("must refuse before session/model access"); } } as unknown as SessionStore;
-  const research = createIdeaResearchClient({ url: "", apiOrigin: "http://synthetic.invalid", store, tokens: new RunTokenRegistry() });
-  try {
-    const tree = ideaTreeRepositoryForSession({ url: "", connection: () => availability.connection() }, { projectId: "p", sessionId: "s" });
-    await assert.rejects(tree.readTree("synthetic"), /not initialized/);
-    const emptyTree = ideaTreeRepositoryForSession({ url: "" }, { projectId: "p", sessionId: "s" });
-    await assert.rejects(emptyTree.readGraph("synthetic"), /not initialized/);
-    await assert.rejects(research.command("s", "create", { content: "synthetic" }), /not initialized/);
-    await assert.rejects(research.events("s", "r", new AbortController().signal), /not initialized/);
-    await research.cleanup("p", "s");
-    assert.equal(calls, 0);
-  } finally { research.close(); globalThis.fetch = original; }
-});
-test("Idea Tree resolves the current owned connection instead of a stale constructor endpoint", async () => {
-  const original = globalThis.fetch; const urls: string[] = []; let endpoint = "http://owned-one.invalid";
+test("independent Idea Tree repository and research use scoped service transport", async () => {
+  const original = globalThis.fetch; const paths: string[] = [];
   globalThis.fetch = async (url, init) => {
-    urls.push(String(url)); assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-owned");
-    const body = JSON.parse(String(init?.body)); assert.equal(body.projectId, "p"); assert.equal(body.sessionId, "s");
-    return Response.json({ result: { id: "tree" } });
+    const path = new URL(String(url)).pathname; paths.push(path);
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-owned");
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    if (path === "/idea-tree/command") {
+      assert.equal(body.projectId, "p"); assert.equal(body.sessionId, "s");
+      assert.equal(body.operation, "readTree"); assert.deepEqual(body.params, { treeId: "tree" });
+      return Response.json({ result: { id: "tree" } });
+    }
+    if (path === "/mcp/scopes") { assert.equal(body.projectId, "p"); assert.equal(body.sessionId, "s"); return Response.json({ token: "scope" }); }
+    if (path === "/mcp/scope" && init?.method === "POST") return Response.json({ result: { content: [{ text: JSON.stringify({ research: { id: "r", status: "paused" }, graph: { nodes: [] } }) }] } });
+    if (path === "/mcp/scope" && init?.method === "DELETE") return new Response(null, { status: 204 });
+    if (path === "/idea-tree/research/events") return new Response("data: {}\n\n");
+    if (path === "/idea-tree/research/command") { assert.equal(body.operation, "delete"); return Response.json({}); }
+    throw new Error(`Unexpected request ${path}`);
   };
-  try {
-    const tree = ideaTreeRepositoryForSession({ url: "http://stale.invalid", connection: async () => ({ url: endpoint, internalToken: "synthetic-owned" }) }, { projectId: "p", sessionId: "s" });
-    assert.deepEqual(await tree.readTree("tree"), { id: "tree" });
-    endpoint = "http://owned-two.invalid"; await tree.readGraph("tree");
-    assert.deepEqual(urls, ["http://owned-one.invalid/idea-tree/command", "http://owned-two.invalid/idea-tree/command"]);
-  } finally { globalThis.fetch = original; }
-});
-test("research command, event and cleanup transport use the resolved owned connection", async () => {
-  const original = globalThis.fetch; const urls: string[] = [];
+  const service = new IdeaTreeServiceClient({ url: "http://idea-tree.invalid", token: "synthetic-owned" });
   const store = { getSession: () => ({ id: "s", projectId: "p" }) } as unknown as SessionStore;
-  globalThis.fetch = async (url, init) => {
-    urls.push(String(url)); assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-owned");
-    assert.equal(JSON.parse(String(init?.body)).sessionId, "s");
-    return Response.json({ research: { id: "r", status: "paused" }, graph: { nodes: [] } });
-  };
-  const research = createIdeaResearchClient({ url: "http://stale.invalid", connection: async () => ({ url: "http://owned.invalid", internalToken: "synthetic-owned" }),
-    apiOrigin: "http://synthetic.invalid", store, tokens: new RunTokenRegistry() });
+  const research = createIdeaResearchClient({ service, apiOrigin: "http://synthetic.invalid", store, tokens: new RunTokenRegistry() });
   try {
+    assert.deepEqual(await service.repository({ projectId: "p", sessionId: "s" }).readTree("tree"), { id: "tree" });
     assert.equal((await research.command("s", "get", { researchId: "r" })).research.id, "r");
-    const body = await research.events("s", "r", new AbortController().signal); await body.cancel();
+    const stream = await research.events("s", "r", new AbortController().signal); await stream.cancel();
     await research.cleanup("p", "s");
-    assert.equal(urls.length, 3); assert(urls.every(url => url.startsWith("http://owned.invalid/")));
+    assert.deepEqual(paths, ["/idea-tree/command", "/mcp/scopes", "/mcp/scope", "/mcp/scope", "/idea-tree/research/events", "/idea-tree/research/command"]);
   } finally { research.close(); globalThis.fetch = original; }
 });
 
-test("explicit operator Idea Tree/research HTTP calls omit absent bearer and retain configured bearer", async () => {
+
+test("unavailable independent service fails without accessing model credentials", async () => {
+  const original = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("service unavailable"); };
+  const store = {
+    getSession: () => ({ id: "s", projectId: "p" }),
+    getModelApiToken: () => { throw new Error("must not access model credentials"); },
+  } as unknown as SessionStore;
+  const service = new IdeaTreeServiceClient({ url: "http://unavailable.invalid" });
+  const research = createIdeaResearchClient({ service, apiOrigin: "http://synthetic.invalid", store, tokens: new RunTokenRegistry() });
+  try {
+    await assert.rejects(service.repository({ projectId: "p", sessionId: "s" }).readGraph("tree"), /service is unavailable/);
+    await assert.rejects(research.command("s", "get", { researchId: "r" }), /service is unavailable/);
+    await assert.rejects(research.events("s", "r", new AbortController().signal), /service is unavailable/);
+    assert.equal(calls, 3);
+  } finally { research.close(); globalThis.fetch = original; }
+});
+
+test("service transport sends a bearer only when configured", async () => {
   const { createServer } = await import("node:http");
-  const requests: { path: string; authorization: string | undefined; body: Record<string, unknown> }[] = [];
+  const requests: { authorization: string | undefined; body: Record<string, unknown> }[] = [];
   const server = createServer(async (request, response) => {
     let text = ""; for await (const chunk of request) text += chunk;
-    requests.push({ path: request.url!, authorization: request.headers.authorization, body: JSON.parse(text) });
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(request.url === "/idea-tree/command" ? { result: null } : { research: { id: "r", status: "paused" }, graph: { nodes: [] } }));
+    requests.push({ authorization: request.headers.authorization, body: JSON.parse(text) });
+    response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ result: null }));
   });
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
   try {
     const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    const store = { getSession: () => ({ id: "s", projectId: "p" }) } as unknown as SessionStore;
-    for (const token of [undefined, "synthetic-operator-only"]) {
-      const tree = ideaTreeRepositoryForSession({ url, token }, { projectId: "p", sessionId: "s" });
-      assert.equal(await tree.readTree("tree"), null);
-      const research = createIdeaResearchClient({ url, token, apiOrigin: "http://unused.invalid", store, tokens: new RunTokenRegistry() });
-      try {
-        assert.equal((await research.command("s", "get", { researchId: "r" })).research.id, "r");
-        const stream = await research.events("s", "r", new AbortController().signal); await stream.cancel();
-        await research.cleanup("p", "s");
-      } finally { research.close(); }
+    for (const token of [undefined, "synthetic-token"]) {
+      const service = new IdeaTreeServiceClient({ url, token });
+      assert.equal(await service.repository({ projectId: "p", sessionId: "s" }).readTree("tree"), null);
     }
-    assert.equal(requests.length, 8);
-    for (const [index, request] of requests.entries()) {
-      assert.equal(request.authorization, index < 4 ? undefined : "Bearer synthetic-operator-only");
-      assert.equal(request.body.projectId, "p"); assert.equal(request.body.sessionId, "s"); assert.equal(request.body.llm, undefined);
+    assert.deepEqual(requests.map(request => request.authorization), [undefined, "Bearer synthetic-token"]);
+    for (const request of requests) {
+      assert.equal(request.body.projectId, "p"); assert.equal(request.body.sessionId, "s");
+      assert.equal(request.body.llm, undefined);
     }
-    assert.deepEqual(requests.slice(0, 4).map(request => request.path), ["/idea-tree/command", "/idea-tree/research/command", "/idea-tree/research/events", "/idea-tree/research/command"]);
   } finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
 });

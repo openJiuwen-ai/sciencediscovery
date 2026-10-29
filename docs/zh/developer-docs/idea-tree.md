@@ -1,6 +1,6 @@
 # Idea Tree 自主研究引擎
 
-Idea Tree 在现有 evolve Python 服务内运行，使用一个 ASGI worker。API 负责会话鉴权、模型代理和用量记录；Python 负责研究循环；Web 原有树面板负责启动、观察和控制。聊天 Agent 不执行树工作流，不创建执行计划，也不派发 Subagent。
+Idea Tree 在独立的 Python 服务内运行，使用一个 ASGI worker。API 负责会话鉴权、模型代理和用量记录；Python 负责研究循环；Web 原有树面板负责启动、观察和控制。聊天 Agent 不执行树工作流，不创建执行计划，也不派发 Subagent。
 
 ## 使用
 
@@ -14,14 +14,14 @@ Idea Tree 在现有 evolve Python 服务内运行，使用一个 ASGI worker。A
 
 ## 代码与状态
 
-- `vendor/idea_tree/research.py`：构思、设计、独立评估、聚合、逐层传播；保存每个已完成阶段，恢复时只执行尚未完成的阶段。
-- `vendor/idea_tree/research_tree.py`：复用根目录 `tree.py` 的节点/祖先查询。
-- `vendor/idea_tree/prompts.py`：角色指令与评分标准。
-- `vendor/idea_tree/research_service.py`：创建、查询、暂停、继续、结束；进程内保证每个会话只运行一项研究。
+- `services/idea-tree/src/sciencediscovery_idea_tree/research.py`：构思、设计、独立评估、聚合、逐层传播；保存每个已完成阶段，恢复时只执行尚未完成的阶段。
+- `services/idea-tree/src/sciencediscovery_idea_tree/research_tree.py`：复用服务包中 `tree.py` 的节点/祖先查询。
+- `services/idea-tree/src/sciencediscovery_idea_tree/prompts.py`：角色指令与评分标准。
+- `services/idea-tree/src/sciencediscovery_idea_tree/research_service.py`：创建、查询、暂停、继续、结束；进程内保证每个会话只运行一项研究。
 - `services/api/src/idea-tree/research.ts`：研究 HTTP 客户端和临时模型代理凭证。
 - `apps/web/src/IdeaResearchPanel.tsx`：已有树面板中的研究控制。
 
-唯一持久状态位于 Python 服务的 `$SCIENCE_AGENT_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json`，原子替换保存。文件包含材料、预算、节点、阶段结果和用量，不含模型密钥。新路径不使用外部 revision、租约、childDigest、SHA 校验或结果句柄。旧树继续通过旧读取接口查看，写操作返回只读错误；不自动迁移旧执行状态。
+研究状态位于 Python 服务的 `$SCIENCE_AGENT_IDEA_TREE_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json`，原子替换保存。文件包含材料、预算、节点、阶段结果和用量，不含模型密钥。新路径不使用外部 revision、租约、childDigest、SHA 校验或结果句柄。旧树继续通过旧读取接口查看，写操作返回只读错误；首次启动时复制旧记录。
 
 公共入口为 `POST /api/sessions/:sessionId/idea-tree/research`，`operation` 支持 create/get/list/pause/continue/end/defaults。GET 同一路径列出研究。直接向聊天消息 API 发送 Idea Tree 命令会得到引导到研究入口的 409，不会悄悄启动 Lead。
 

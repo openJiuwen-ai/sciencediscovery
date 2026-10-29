@@ -32,8 +32,7 @@ For PUCT/OpenEvolve, everything needed to replay, resume or audit a run
 lives in the API's ``events.ndjson``; this process only holds the stop flags of
 searches currently in flight.
 
-Idea Tree uses a separate autonomous lifecycle router and persists its stages
-in idea-research/. Run this service with one ASGI worker.
+Idea Tree runs in the independent sciencediscovery-idea-tree service.
 """
 
 from __future__ import annotations
@@ -59,13 +58,7 @@ from .vendor.puct.sandbox import SandboxCapability, detect_local_capability
 
 log = get_logger("server")
 
-from .vendor.idea_tree.idea_tree_service import router as idea_tree_router
-
-from .vendor.idea_tree.research_service import router as idea_research_router
-
 app = FastAPI(title="sciencediscovery-evolve")
-app.include_router(idea_tree_router)
-app.include_router(idea_research_router)
 
 #: Engines by name; the request's ``engine`` field selects, so an operator can
 #: pin the stub for a reproduction without touching the API.

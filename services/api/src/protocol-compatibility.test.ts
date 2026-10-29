@@ -117,7 +117,7 @@ for (const responseKind of ['invalid-shape', 'truncated-hidden-reasoning', 'tran
   await new Promise<void>(r => proxy.listen(0, '127.0.0.1', r));
   try {
     const script = responseKind === 'truncated-idea-stage'
-      ? `import asyncio,tempfile; from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore,node,now
+      ? `import asyncio,tempfile; from pathlib import Path; from sciencediscovery_idea_tree.research import IdeaTreeEngine,ResearchStore,node,now
 async def run():
  with tempfile.TemporaryDirectory() as folder:
   state=dict(id='r',projectId='p',sessionId='s',objective='Synthetic',materials='',modelId='m',settings=dict(maxTokensPerCall=8,maxTokens=100000),status='paused',phase='design',round=0,tokens=0,usageKnown=True,currentNodeId=None,nodes=[node('ROOT',None,'Goal','direction',0)],createdAt=now(),updatedAt=now())
@@ -129,11 +129,11 @@ async def run():
 asyncio.run(run())`
       : responseKind === 'truncated-hidden-reasoning'
       ? "from sciencediscovery_evolve.completion import completion_for; usage=[]; failures=[]; result=completion_for(sys.argv[1],sys.argv[2],max_tokens=8,timeout=2,on_usage=usage.append)('synthetic',on_failure=failures.append); assert result == ''; assert failures == []; assert len(usage)==1 and usage[0].total==14 and usage[0].completion==8 and usage[0].capped"
-      : "from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (responseKind === 'invalid-shape'
+      : "from pathlib import Path; from sciencediscovery_idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (responseKind === 'invalid-shape'
         ? "\ntry: engine.transport('synthetic',{},64)\nexcept RuntimeError as error: assert 'Model HTTP 422' in str(error) and 'Invalid Chat completion response' in str(error)\nelse: raise AssertionError('Malformed provider response was accepted')"
         : "assert engine.transport('synthetic',{},64) == ('OK',None)");
     await promisify(execFile)('python3', ['-c', 'import sys; '+script, `http://127.0.0.1:${(proxy.address() as AddressInfo).port}/internal/evolve-llm/synthetic/v1/chat/completions`, token], {
-      timeout: 5000, env: { ...process.env, PYTHONPATH: fileURLToPath(new URL('../../evolve/src/', import.meta.url)) },
+      timeout: 5000, env: { ...process.env, PYTHONPATH: [fileURLToPath(new URL('../../evolve/src/', import.meta.url)), fileURLToPath(new URL('../../idea-tree/src/', import.meta.url))].join(':') },
     });
     assert.equal(upstreamCalls, responseKind === 'transient-provider-error' ? 2 : 1);
     if (responseKind === 'invalid-shape') assert.equal(spend.length, 0, 'No reported counts or zero cost may be invented for a rejected body');
@@ -167,10 +167,12 @@ for (const kind of ['server', 'server-type', 'server-exhausted', 'client', 'unkn
   try {
     const success = kind === 'server' || kind === 'server-type';
     const status = kind === 'client' ? 400 : kind === 'unknown' ? 422 : 502;
-    const script = "from pathlib import Path; from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (success
+    const script = "from pathlib import Path; from sciencediscovery_idea_tree.research import IdeaTreeEngine,ResearchStore; engine=IdeaTreeEngine({},ResearchStore(Path('.tmp')),dict(url=sys.argv[1],token=sys.argv[2])); " + (success
       ? "assert engine.transport('synthetic',{},64) == ('OK',None)"
       : `\ntry: engine.transport('synthetic',{},64)\nexcept RuntimeError as error: assert 'Model HTTP ${status}' in str(error) and 'original native cause' in str(error)\nelse: raise AssertionError('Provider error accepted')`);
-    await promisify(execFile)('python3', ['-c', 'import sys; '+script, `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`, token], { timeout: 5000, env: { ...process.env, PYTHONPATH: fileURLToPath(new URL('../../evolve/src/', import.meta.url)) } });
+    const address = proxy.address();
+    assert.ok(address && typeof address !== 'string');
+    await promisify(execFile)('python3', ['-c', 'import sys; '+script, `http://127.0.0.1:${address.port}`, token], { timeout: 5000, env: { ...process.env, PYTHONPATH: [fileURLToPath(new URL('../../evolve/src/', import.meta.url)), fileURLToPath(new URL('../../idea-tree/src/', import.meta.url))].join(':') } });
     assert.equal(calls, kind.startsWith('server') ? 2 : 1);
     assert.ok(spend.every(u => u.usageStatus === 'provider-not-reported'));
   } finally {
