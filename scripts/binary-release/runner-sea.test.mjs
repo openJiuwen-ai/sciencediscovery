@@ -51,12 +51,20 @@ test("standalone Runner SEA starts and authenticates with no Node in PATH", {
     let health;
     for (let attempt = 0; attempt < 100; attempt++) {
       if (child.exitCode !== null) assert.fail(output.replaceAll(token, "[redacted]"));
-      try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) { health = await r.json(); break; } } catch {}
+      try {
+        // Public /health is liveness-only; details require the runner token.
+        const r = await fetch(`http://127.0.0.1:${port}/health`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (r.ok) { health = await r.json(); break; }
+      } catch {}
       await new Promise(done => setTimeout(done, 100));
     }
     assert.equal(health?.status, "ok", output.replaceAll(token, "[redacted]"));
     assert.equal(health.sandbox, "bubblewrap");
     assert.equal(health.runnerVersion, RUNNER_VERSION);
+    const publicHealth = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.deepEqual(publicHealth, { status: "ok" });
     assert.equal((await fetch(`http://127.0.0.1:${port}/status`)).status, 401);
     assert.equal((await fetch(`http://127.0.0.1:${port}/status`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
     const client = new RunnerClient(`http://127.0.0.1:${port}`, token);

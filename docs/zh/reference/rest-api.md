@@ -33,7 +33,13 @@
 curl -fsS http://127.0.0.1:4310/health
 ```
 
-成功响应为 `200`，字段包括：
+未携带有效 bearer token 时，`/health` 和 `/api/health` 返回 HTTP `200`，仅包含 `{"service":"sciencediscovery-api","status":"ok"}`；Runner 仅返回 `{"status":"ok"}`。公开响应只表示进程存活，不探测依赖。
+
+携带有效 token 时，API 返回以下部署详情：
+
+```bash
+curl -fsS -H "authorization: Bearer $TOKEN" http://127.0.0.1:4310/health
+```
 
 ```json
 {

@@ -333,14 +333,15 @@ test("the transport has no bare SSH or SLURM job execution methods", () => {
 });
 
 /** A runner that answers `/health` to anyone and `/status` only to one token. */
-async function startFakeRunner(options: { platform: string; token: string; version: string }): Promise<{
+async function startFakeRunner(options: { platform: string; token: string; version: string; publicLivenessOnly?: boolean }): Promise<{
   close: () => Promise<void>;
   port: number;
 }> {
   const server = createServer((request, response) => {
     if (request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ platform: options.platform, runnerVersion: options.version, status: "ok" }));
+      response.end(JSON.stringify(options.publicLivenessOnly && request.headers.authorization !== `Bearer ${options.token}`
+        ? { status: "ok" } : { platform: options.platform, runnerVersion: options.version, status: "ok" }));
       return;
     }
     if (request.headers.authorization !== `Bearer ${options.token}`) {
@@ -564,6 +565,20 @@ test("a self-deployed runner is reachable by address only with the token it was 
   assert.ok(recorded.events.some((entry) => entry.event === "remote_runner_connection_closed"
     && entry.fields.reason === "requested"));
   assert.doesNotMatch(JSON.stringify(recorded.events), /correct-token|wrong-token/);
+});
+
+test("a Runner with public liveness still authenticates direct connections", async (context) => {
+  const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1", publicLivenessOnly: true });
+  context.after(() => runner.close());
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport: new FakeTransport([]) });
+  assert.equal((await client.reachability(directRemoteHost(runner.port))).state, "online");
+  const refused = await client.connectRunner(directRemoteHost(runner.port), { token: "wrong-token" });
+  assert.equal(refused.state, "error");
+  assert.match(refused.error ?? "", /rejected this token/);
+  const connected = await client.connectRunner(directRemoteHost(runner.port), { token: "correct-token" });
+  assert.equal(connected.state, "ready");
+  assert.equal(connected.remoteVersion, "runner-v1");
+  await client.disconnectRunner("host-direct");
 });
 
 test("a self-deployed runner that is not on Linux is refused", async (context) => {

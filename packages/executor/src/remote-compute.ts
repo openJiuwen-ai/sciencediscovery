@@ -678,8 +678,8 @@ export class RemoteComputeClient {
   /**
    * Connect to a runner the user started on another machine. The token is the
    * whole access control here, so it is checked against an authenticated
-   * endpoint before the connection counts as ready: `/health` is deliberately
-   * unauthenticated and would accept any token.
+   * endpoint before the connection counts as ready: older Runners return
+   * health details without validating the token.
    */
   private async connectDirectRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions): Promise<RemoteRunnerStatus> {
     if (!host.endpoint) throw new Error("This runner has no address; re-register it with an IP address and port");
@@ -690,12 +690,12 @@ export class RemoteComputeClient {
       throw new Error(`Could not reach the runner at ${host.endpoint!.host}:${host.endpoint!.port}: ${error instanceof Error ? error.message : "connection failed"}`);
     });
     this.logConnect(host.id, `The runner answered (version ${health.runnerVersion}); checking the token…`);
-    if (health.platform !== "linux") {
-      throw new Error(`Remote runners must run on Linux; ${host.alias} reports ${health.platform}`);
-    }
     await client.status().catch(() => {
       throw new Error("The runner rejected this token. Re-register the machine with the token it was started with.");
     });
+    if (health.platform !== "linux") {
+      throw new Error(`Remote runners must run on Linux; ${host.alias} reports ${health.platform}`);
+    }
     this.logConnect(host.id, "Token accepted; the runner is ready.");
     const status: RemoteRunnerStatus = {
       // Learned from the machine's own answers during the health check above.

@@ -497,6 +497,28 @@ async function startTestApi(
   return { origin };
 }
 
+test("API health exposes details only with a valid token on both routes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `api-health-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  for (const path of ["/health", "/api/health"]) {
+    for (const headers of [undefined, { authorization: "Bearer wrong-token" }]) {
+      const response = await fetch(`${origin}${path}`, { headers });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { service: "sciencediscovery-api", status: "ok" });
+    }
+    const response = await fetch(`${origin}${path}`, { headers: authorization });
+    assert.equal(response.status, 200);
+    const health = await response.json() as { runner: RunnerHealth; workspace: unknown; sandboxNetwork: unknown; memoryGraph: string };
+    assert.equal(health.runner.platform, process.platform);
+    assert.equal(health.runner.executionTimeoutMs, 60_000);
+    assert.ok(health.workspace);
+    assert.ok(health.sandboxNetwork);
+    assert.equal(typeof health.memoryGraph, "string");
+  }
+});
+
 test("closing the API server drains active connections before closing the MCP transport", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -3983,7 +4005,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
     name: "Tool test model",
   });
 
-  const health = await jsonRequest<{ runner: RunnerHealth; status: string }>(`${origin}/health`);
+  const health = await jsonRequest<{ runner: RunnerHealth; status: string }>(`${origin}/health`, { headers: authorization });
   assert.equal(health.response.status, 200);
   assert.equal(health.body.status, "ok");
   assert.equal(health.body.runner.seccompBaseline, "multiarch-v1-profile-aware");

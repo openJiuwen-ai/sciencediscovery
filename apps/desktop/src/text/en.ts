@@ -362,6 +362,7 @@ export const EN: Text = {
         model: "Default task model (optional; can be configured later in settings)",
       },
       notChecked: "Not checked",
+      runnerNeedsToken: "Not checked (token required)",
       retry: "Check again",
       retryBoot: "Try again",
       logs: "Open the logs folder",

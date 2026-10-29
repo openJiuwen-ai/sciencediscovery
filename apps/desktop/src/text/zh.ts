@@ -388,6 +388,7 @@ export const ZH = {
         model: "默认任务模型（可选，可稍后在设置中配置）",
       },
       notChecked: "未检查",
+      runnerNeedsToken: "未检查（需要令牌）",
       retry: "重新检查",
       retryBoot: "重试",
       logs: "打开日志文件夹",

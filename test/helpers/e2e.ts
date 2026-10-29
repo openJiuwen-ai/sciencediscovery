@@ -15,6 +15,7 @@
 import { test as base, type BrowserContext, type TestInfo } from "@playwright/test";
 
 import { createJourneyReporter, type JourneyReporter } from "./journey-report.ts";
+import { authorizationHeader } from "../e2e-auth.ts";
 
 export type { JourneyReporter } from "./journey-report.ts";
 
@@ -115,7 +116,7 @@ export async function requireRealStack(
 ): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(new URL("/health", apiOrigin), { signal: AbortSignal.timeout(3_000) });
+    response = await fetch(new URL("/health", apiOrigin), { headers: authorizationHeader(), signal: AbortSignal.timeout(3_000) });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const reason = `BLOCKED: ScienceDiscovery stack is unavailable at configured E2E API origin (${detail})`;

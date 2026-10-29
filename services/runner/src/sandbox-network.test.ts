@@ -179,7 +179,7 @@ test("runner health reports the sandbox network capability without touching the 
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", () => listening()));
   try {
     const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const health = await (await fetch(`${origin}/health`)).json() as RunnerHealth;
+    const health = await (await fetch(`${origin}/health`, { headers: { authorization: "Bearer runner-test-token" } })).json() as RunnerHealth;
     assert.ok(health.sandboxNetwork.modes.includes("none"));
     assert.equal(health.networkPolicy, "none");
     await assert.rejects(access(join(directory, "runner-runtime", "egress-bridge.py")));

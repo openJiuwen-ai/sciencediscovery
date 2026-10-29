@@ -539,6 +539,10 @@ export function createRunnerServer(
     try {
       const url = new URL(request.url ?? "/", "http://runner.local");
       if (request.method === "GET" && url.pathname === "/health") {
+        if (!authorized(request, config.authToken)) {
+          sendJson(response, 200, { status: "ok" });
+          return;
+        }
         sendJson(response, 200, {
           execution: await readiness.get(),
           cgroupDelegated: false,

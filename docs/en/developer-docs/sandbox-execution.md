@@ -28,7 +28,7 @@ Runner is a rootless executor. Ordinary Agent execution uses `run_shell`, includ
 
 Installation, building and starting the workbench do not require a usable local sandbox. Source/Docker startup and the binary launcher keep API/UI running if the local Runner is unavailable. Agent turns without code execution may continue; a missing local Runner does not select or validate remote execution on its behalf.
 
-Each Runner probes its own executable and sandbox profile. `GET /health` includes `execution` with `instanceId`, `checkedAt`, dependency availability, sandbox usability, readiness and a diagnostic reason. Authenticated `GET /execution-capability` reads the cached report; `POST` refreshes it after repair, including the shared sandbox profile cache. API exposes these operations at `/api/runners/{runnerId}/execution-capability`. Older Runners without this endpoint have unknown readiness and must be upgraded, not assumed safe.
+Each Runner probes its own executable and sandbox profile. Authenticated `GET /health` includes `execution` with `instanceId`, `checkedAt`, dependency availability, sandbox usability, readiness and a diagnostic reason. Authenticated `GET /execution-capability` reads the cached report; `POST` refreshes it after repair, including the shared sandbox profile cache. API exposes these operations at `/api/runners/{runnerId}/execution-capability`. Older Runners without this endpoint have unknown readiness and must be upgraded, not assumed safe.
 
 Runner settings show readiness and a **Recheck** button. The Agent can call `check_runner(runner_id?)` to refresh the same target-side capability report without using a sandbox. This tool is diagnostic only: it does not execute code or request user input. An unavailable pre-dispatch execution returns `RUNNER_UNAVAILABLE`, `dispatched: false`, an `operationId`, diagnostics and repair suggestions. The call is finished, not queued. The Agent chooses to continue other work, explain the blocker and finish, or explicitly call `wait_for_runner(operation_id)`.
 
@@ -191,7 +191,7 @@ The exception is “allowlisted host model job,” not “host shell for the Age
 ### Inspect or modify quotas
 
 ```bash
-curl -s http://127.0.0.1:4310/health | jq '.workspace, .runner.maxWorkspaceBytes, .runner.maxFileBytes, .runner.maxOutputBytes'
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:4310/health | jq '.workspace, .runner.maxWorkspaceBytes, .runner.maxFileBytes, .runner.maxOutputBytes'
 curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:4310/api/quota-settings
 ```
 

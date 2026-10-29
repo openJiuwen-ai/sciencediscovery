@@ -701,21 +701,30 @@ jobs:
       - name: Start the stack
         run: |
           cp .env.docker.example .env
+          # Fixed token so the deployment-contract step can fetch authenticated
+          # health details (public /health is liveness-only after the health
+          # visibility change). Empty SCIENCE_AGENT_AUTH_TOKEN would generate a
+          # one-off token only in the container log.
+          SD_AUTH_TOKEN="$(openssl rand -hex 24)"
           sed -i \
             -e "s/^SCIENCE_AGENT_UID=.*/SCIENCE_AGENT_UID=$(id -u)/" \
             -e "s/^SCIENCE_AGENT_GID=.*/SCIENCE_AGENT_GID=$(id -g)/" \
             -e "s/^SCIENCE_AGENT_PUBLISH_PORT=.*/SCIENCE_AGENT_PUBLISH_PORT=${SD_PORT}/" \
+            -e "s/^SCIENCE_AGENT_AUTH_TOKEN=.*/SCIENCE_AGENT_AUTH_TOKEN=${SD_AUTH_TOKEN}/" \
             .env
+          echo "SD_AUTH_TOKEN=${SD_AUTH_TOKEN}" >> "$GITHUB_ENV"
           mkdir -p data
           docker compose up -d
 
       - name: Wait for the control API
         run: |
+          # Liveness can stay unauthenticated; detail fields need the bearer.
           for _ in $(seq 1 60); do
             curl -fsS "http://127.0.0.1:${SD_PORT}/health" >/dev/null 2>&1 && break
             sleep 5
           done
-          curl -fsS "http://127.0.0.1:${SD_PORT}/health" > "${RUNNER_TEMP}/health.json"
+          curl -fsS -H "Authorization: Bearer ${SD_AUTH_TOKEN}" \
+            "http://127.0.0.1:${SD_PORT}/health" > "${RUNNER_TEMP}/health.json"
           jq . "${RUNNER_TEMP}/health.json"
 
       # Each check below guards a property the deployment depends on and that a

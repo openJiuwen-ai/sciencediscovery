@@ -809,6 +809,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       await ready;
       const url = new URL(request.url ?? "/", "http://localhost");
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/api/health")) {
+        if (!isAuthorized(request, config.authToken)) {
+          sendJson(response, 200, { service: "sciencediscovery-api", status: "ok" });
+          return;
+        }
         const runner = await runnerClient.health().catch(() => undefined);
         // Toggle off → disabled (the System Settings switch is off). Toggle on
         // but sidecar/Neo4j down → degraded. The client always exists now.

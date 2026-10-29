@@ -136,6 +136,9 @@ interface BootView {
   model: ItemState;
   waited: number;
   message?: string;
+  /** True only when the browser health probe saw no `runner` field (public
+   *  liveness body). Other skip reasons keep the neutral "not checked" tip. */
+  runnerNeedsToken?: boolean;
 }
 const INITIAL_BOOT: BootView = {
   phase: "starting",
@@ -155,6 +158,9 @@ interface ProbeResult {
   /** `null` means the item was not checked at all (no runner base, or no
    *  bridge in a plain browser), which the list shows as "–", never "✗". */
   runner: boolean | null;
+  /** Browser path only: public health omitted `runner`, so the tip should say
+   *  a token is required rather than the neutral "not checked". */
+  runnerNeedsToken?: boolean;
   model: boolean;
   ok: boolean;
 }
@@ -327,9 +333,13 @@ export function SetupWizard({
           getHealth(client),
           getSettings(client).catch(() => undefined),
         ]);
+        // Public health has no `runner`; treat that as unchecked (needs token),
+        // not failed. With a token the client already sends, map readiness.
+        const runnerMissing = health.runner === undefined;
         return {
           api: true,
-          runner: health.runner?.execution?.ready === true ? true : null,
+          runner: runnerMissing ? null : health.runner?.execution?.ready === true,
+          runnerNeedsToken: runnerMissing,
           model: Boolean(settings?.effective?.modelId),
           ok: true,
         };
@@ -352,6 +362,7 @@ export function SetupWizard({
             message: undefined,
             api: "ok",
             runner: result.runner === null ? "skip" : "ok",
+            runnerNeedsToken: Boolean(result.runnerNeedsToken),
             model: result.model ? "ok" : "skip",
           }));
           return;
@@ -364,6 +375,7 @@ export function SetupWizard({
             message: TEXT.wizard.boot.timeoutSub,
             api: result.api ? "ok" : "fail",
             runner: result.runner === null ? "skip" : result.runner ? "ok" : "fail",
+            runnerNeedsToken: Boolean(result.runnerNeedsToken),
             model: result.model ? "ok" : "skip",
           }));
           return;
@@ -373,6 +385,7 @@ export function SetupWizard({
         emit({
           api: result.api ? "ok" : "pending",
           runner: result.runner === null ? "skip" : result.runner ? "ok" : "pending",
+          runnerNeedsToken: Boolean(result.runnerNeedsToken),
           model: result.model ? "ok" : "skip",
         });
         timer = setTimeout(() => void iterate(), SELF_CHECK_POLL_MS);
@@ -579,7 +592,13 @@ export function SetupWizard({
                         <li key={key}>
                           <span
                             className={["boot-dot", dotClass(state)].filter(Boolean).join(" ")}
-                            title={state === "skip" ? TEXT.wizard.boot.notChecked : undefined}
+                            title={
+                              state !== "skip"
+                                ? undefined
+                                : key === "runner" && boot.runnerNeedsToken
+                                  ? TEXT.wizard.boot.runnerNeedsToken
+                                  : TEXT.wizard.boot.notChecked
+                            }
                           >
                             {dotGlyph(state)}
                           </span>

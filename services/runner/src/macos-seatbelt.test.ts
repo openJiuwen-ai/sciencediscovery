@@ -200,7 +200,7 @@ test("macOS runner starts healthy and reports the real sandbox capabilities", as
   try {
     const address = server.address();
     assert.ok(address && typeof address !== "string");
-    const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+    const response = await fetch(`http://127.0.0.1:${address.port}/health`, { headers: { authorization: "Bearer macos-runner-test" } });
     assert.equal(response.status, 200);
     const health = await response.json() as Record<string, unknown>;
     assert.equal(health.sandbox, "seatbelt");
