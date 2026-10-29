@@ -51,7 +51,8 @@ test("explicit direct shell and Python work with missing sandbox and retain outp
   assert.equal(result.networkPolicy, "host");
   assert.deepEqual(result.directAuthorization, request.directAuthorization);
   // Node forwards its coverage directory into explicit spawn environments in CI.
-  const expectedKeys = ["HOME", "LANG", "PATH"];
+  const expectedKeys = ["HOME", "LANG", "PATH", "PYTHONUNBUFFERED"];
+  assert.equal(result.environmentVariables.PYTHONUNBUFFERED, "1");
   if (process.env.NODE_V8_COVERAGE) {
     expectedKeys.push("NODE_V8_COVERAGE");
     assert.equal(result.environmentVariables.NODE_V8_COVERAGE, process.env.NODE_V8_COVERAGE);
