@@ -14,18 +14,22 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import type { ConnectorManifest } from "@sciencediscovery/schema";
-import { requestsResearchNetwork, selectedResearchHosts } from "../src/composer/SandboxNetworkPreflight.js";
+import { requestedResearchHosts, selectedResearchHosts } from "../src/composer/SandboxNetworkPreflight.js";
 
 const connectors = [
-  { id: "pubmed", networkHosts: ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov"] },
+  { id: "pubmed", displayName: "PubMed", networkHosts: ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov"] },
+  { id: "europe-pmc", displayName: "Europe PMC", networkHosts: ["www.ebi.ac.uk"] },
   { id: "web", networkHosts: [] },
 ] as ConnectorManifest[];
 
-test("preflights enabled research connector hosts and explicit literature requests", () => {
-  assert.deepEqual(selectedResearchHosts(connectors, ["pubmed"]), ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov"]);
-  assert.equal(requestsResearchNetwork("research CRISPR", selectedResearchHosts(connectors, ["pubmed"])), true);
-  assert.equal(requestsResearchNetwork("search PubMed for CRISPR", []), true);
-  assert.equal(requestsResearchNetwork("", selectedResearchHosts(connectors, ["pubmed"])), false);
-  assert.equal(requestsResearchNetwork("thanks", selectedResearchHosts(connectors, ["pubmed"])), false);
-  assert.equal(requestsResearchNetwork("summarize the uploaded CSV", []), false);
+test("warns only for explicitly named known sources, including disabled connectors", () => {
+  const pubmedHosts = ["eutils.ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov"];
+  assert.deepEqual(selectedResearchHosts(connectors, ["pubmed"]), pubmedHosts);
+  assert.deepEqual(requestedResearchHosts("search PubMed for CRISPR", connectors), pubmedHosts);
+  assert.deepEqual(requestedResearchHosts("visit pubmed.ncbi.nlm.nih.gov", connectors), pubmedHosts);
+  assert.deepEqual(requestedResearchHosts("搜索PubMed文献", connectors), pubmedHosts);
+  assert.deepEqual(requestedResearchHosts("search EuropePMC", connectors), ["www.ebi.ac.uk"]);
+  assert.deepEqual(requestedResearchHosts("research CRISPR and write a paper outline from the CSV", connectors), []);
+  assert.deepEqual(requestedResearchHosts("pubmedology", connectors), []);
+  assert.deepEqual(requestedResearchHosts("", connectors), []);
 });

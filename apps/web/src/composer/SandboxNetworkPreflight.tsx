@@ -25,12 +25,18 @@ export function selectedResearchHosts(
     .flatMap((connector) => connector.networkHosts))].sort();
 }
 
-/** Explicit source requests need a warning even before the source is selected. */
-export function requestsResearchNetwork(prompt: string, hosts: readonly string[]): boolean {
-  if (!prompt.trim()) return false;
-  const namesResearchSource = /\b(arxiv|biorxiv|medrxiv|pubmed|ncbi|europe\s*pmc|uniprot)\b/i.test(prompt);
-  const requestsLiteratureWork = /\b(literature|paper|papers|publication|publications|research|citation|citations)\b/i.test(prompt);
-  return namesResearchSource || (hosts.length > 0 && requestsLiteratureWork);
+/** Find the hosts of known sources explicitly named in the request, including disabled connectors. */
+export function requestedResearchHosts(prompt: string, connectors: readonly ConnectorManifest[]): string[] {
+  const matches = (value: string) => {
+    const parts = value.trim().split(/[\s-]+/).filter(Boolean);
+    if (!parts.length) return false;
+    const pattern = parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s-]*");
+    return new RegExp(`(?<![a-z0-9])${pattern}(?![a-z0-9])`, "i").test(prompt);
+  };
+  return [...new Set(connectors
+    .filter((connector) => connector.networkHosts.length > 0
+      && [connector.id, connector.displayName ?? "", ...connector.networkHosts].some(matches))
+    .flatMap((connector) => connector.networkHosts))].sort();
 }
 
 export function SandboxNetworkPreflight({

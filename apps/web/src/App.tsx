@@ -296,7 +296,7 @@ import {
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
-import { requestsResearchNetwork, SandboxNetworkPreflight, selectedResearchHosts } from "./composer/SandboxNetworkPreflight.js";
+import { requestedResearchHosts, SandboxNetworkPreflight, selectedResearchHosts } from "./composer/SandboxNetworkPreflight.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -3496,7 +3496,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const researchHosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
     const preflightKey = `${sandboxNetworkSettings?.mode ?? "unknown"}:${researchHosts.join(",")}`;
     if (sandboxNetworkSettings?.mode === "none" && networkPreflightApprovals[session.id] !== preflightKey
-      && requestsResearchNetwork(content, researchHosts)) {
+      && requestedResearchHosts(content, connectors).length > 0) {
       return;
     }
     const autoNameFirstMessage = session.title === UNTITLED_SESSION_TITLE
@@ -4807,8 +4807,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     const hosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
                     const key = `${sandboxNetworkSettings?.mode ?? "unknown"}:${hosts.join(",")}`;
                     return sandboxNetworkSettings?.mode === "none" && networkPreflightApprovals[session.id] !== key
-                      && requestsResearchNetwork(message, hosts) ? <SandboxNetworkPreflight
-                      hosts={hosts}
+                      && requestedResearchHosts(message, connectors).length > 0 ? <SandboxNetworkPreflight
+                      hosts={requestedResearchHosts(message, connectors)}
                       onConfigure={() => openSystemSettings("sandbox-network")}
                       onContinue={() => setNetworkPreflightApprovals((current) => ({ ...current, [session.id]: key }))}
                     /> : null;
