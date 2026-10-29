@@ -127,9 +127,15 @@ function scan(source: string): SourceToken[] {
       const triple = source.startsWith(character.repeat(3), index);
       if (triple) {
         const delimiter = character.repeat(3);
+        // A delimiter is escaped only by an odd run of backslashes: the first
+        // one of a pair escapes the second, so `"""a\\"""` still closes here.
+        const escaped = (position: number): boolean => {
+          let run = 0;
+          while (position - run > 0 && source[position - run - 1] === "\\") run += 1;
+          return run % 2 === 1;
+        };
         let end = source.indexOf(delimiter, index + 3);
-        // An escaped delimiter is part of the string, not its end.
-        while (end > 0 && source[end - 1] === "\\") end = source.indexOf(delimiter, end + 1);
+        while (end > 0 && escaped(end)) end = source.indexOf(delimiter, end + 1);
         const stop = end < 0 ? source.length : end + 3;
         tokens.push({ kind: "string", text: opening + source.slice(index, stop) });
         index = stop;
