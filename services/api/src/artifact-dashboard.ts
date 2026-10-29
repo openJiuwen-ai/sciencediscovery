@@ -472,10 +472,26 @@ function restoreBigIntegers(text: string, placeholders: Map<string, string>): st
   return restored;
 }
 
-/** Apply the char budget to one text form of a JSON document. */
+/**
+ * Apply the char budget to one text form of a JSON document.
+ *
+ * The budget is counted in UTF-16 code units (that is what `totalChars` reports),
+ * but the cut itself must not land inside a surrogate pair: a preview ending on an
+ * unpaired high surrogate is invalid UTF-16 and renders as a replacement glyph in
+ * every consumer that does not patch it. A character that would straddle the cut
+ * is dropped whole, so the result is never longer than the budget.
+ */
+function truncateAtCodePoint(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const last = text.charCodeAt(maxChars - 1);
+  const next = text.charCodeAt(maxChars);
+  const splitsPair = last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+  return text.slice(0, splitsPair ? maxChars - 1 : maxChars);
+}
+
 function jsonSourceOf(text: string, maxChars: number): ArtifactJsonSource {
   const truncated = text.length > maxChars;
-  return { source: truncated ? text.slice(0, maxChars) : text, totalChars: text.length, truncated };
+  return { source: truncated ? truncateAtCodePoint(text, maxChars) : text, totalChars: text.length, truncated };
 }
 
 /**
@@ -636,7 +652,7 @@ export async function buildArtifactVersionPreview(
         version,
         kind,
         mode: "markdown-source",
-        source: truncated ? source.slice(0, maxChars) : source,
+        source: truncated ? truncateAtCodePoint(source, maxChars) : source,
         totalChars: source.length,
         truncated,
       };
@@ -648,7 +664,7 @@ export async function buildArtifactVersionPreview(
         version,
         kind,
         mode: "latex-source",
-        source: truncated ? source.slice(0, maxChars) : source,
+        source: truncated ? truncateAtCodePoint(source, maxChars) : source,
         totalChars: source.length,
         truncated,
       };
@@ -694,7 +710,7 @@ export async function buildArtifactVersionPreview(
         version,
         kind,
         mode: "structure-source",
-        source: charTruncated ? source.slice(0, maxChars) : source,
+        source: charTruncated ? truncateAtCodePoint(source, maxChars) : source,
         atomCount,
         totalChars: source.length,
         truncated: charTruncated,
