@@ -22,8 +22,8 @@ async function findSkillRoots(root: URL): Promise<URL[]> {
 test("repository Skills ship every linked reference as a readable nonempty file", async () => {
   for (const root of await findSkillRoots(new URL("../../../", import.meta.url))) {
     const markdown = await readFile(new URL("SKILL.md", root), "utf8");
-    for (const [, path] of markdown.matchAll(/\[[^\]]*\]\((references\/[^)#]+)(?:#[^)]*)?\)/gu)) {
-      const reference = await readFile(new URL(path!, root), "utf8");
+    for (const [, path = ""] of markdown.matchAll(/\[[^\]]*\]\((references\/[^)#]+)(?:#[^)]*)?\)/gu)) {
+      const reference = await readFile(new URL(path, root), "utf8");
       assert.ok(reference.trim(), `${root.pathname}${path} must not be empty`);
     }
   }
