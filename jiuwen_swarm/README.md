@@ -332,6 +332,21 @@ tail with an explicit `clipped` flag. This is the model client's assembled respo
 not a raw upstream SSE capture; it does not by itself prove whether a provider or
 stream assembler caused malformed JSON. Logging failures do not change task behavior.
 
+Every streamed task request also writes one `[model-sse-summary]` line with the
+gateway request ID, the provider request ID when present, endpoint host and model
+alias, HTTP status, retries and their failure classes, wire timestamps, SSE record
+and parse-error counts, `finish_reason`, whether text or a tool call was
+produced, and whether the provider streamed reasoning (`hasReasoning`). A request
+that ends in an error carries its classification on that same line. The line has
+no prompts, answers, arguments, headers or credentials, and
+is what real E2E keeps in `stack.log`. A task turn that completed with no
+non-whitespace text and no tool call is rejected: `502` before a response starts,
+or a `model_gateway_error` event when reasoning already reached the client.
+`hasReasoning: true` marks a model that spent its budget thinking and is
+classified `reasoning_only`; a relay that sent nothing at all is
+`empty_completion`. Both still fail the request. The message keeps the request IDs and framing summary. Housekeeping and compaction
+are exempt because an empty auxiliary response is not a final answer.
+
 Set `SCIENCE_AGENT_TRACE_MODEL_STREAM=1` on the Node API process to enable
 `[model-stream]` diagnostics (restart required). They record a request ID and
 model alias, upstream transport-chunk count, downstream delta count, tool

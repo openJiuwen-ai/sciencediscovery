@@ -32,6 +32,7 @@ case "${1:-}" in
     race_unit
     ;;
   contract)
+    export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
     export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-${CI_RUNTIME_DIR:-$PWD/.test-runs}/swarm-contract}"
     [[ "$JIUWENSWARM_HOME" == /* ]] || export JIUWENSWARM_HOME="$PWD/$JIUWENSWARM_HOME"
     bash scripts/jiuwenswarm.sh setup

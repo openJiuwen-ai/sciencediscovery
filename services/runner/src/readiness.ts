@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { detectSandboxCapability, detectSeatbeltCapability, sandboxUnusableMessage, procFallbackMessage, disableUsernsOmittedMessage, missingSandboxExecutableMessage } from "@sciencediscovery/sandbox-capability";
-import type { RunnerExecutionCapability } from "@sciencediscovery/schema";
+import type { RunnerExecutionCapability, SandboxKind } from "@sciencediscovery/schema";
 
 const execute = promisify(execFile);
 const requiredOptions = ["--cap-drop", "--die-with-parent", "--new-session", "--seccomp", "--unshare-all", "--unshare-user"];
@@ -15,7 +15,7 @@ export class RunnerReadiness {
   private readonly instanceId = randomUUID();
   private cached?: RunnerExecutionCapability;
   private pending?: Promise<RunnerExecutionCapability>;
-  constructor(private readonly sandbox: "bubblewrap" | "seatbelt", private readonly executable: string) {}
+  constructor(private readonly sandbox: SandboxKind, private readonly executable: string) {}
 
   async get(refresh = false): Promise<RunnerExecutionCapability> {
     if (this.pending) return this.pending;
@@ -25,6 +25,17 @@ export class RunnerReadiness {
   }
 
   private async probe(): Promise<RunnerExecutionCapability> {
+    if (this.sandbox === "none") {
+      // [windows-desktop] direct execution has no sandbox dependency to
+      // probe. ready=true so runs proceed; sandboxUsable stays false so the
+      // UI/API can still surface that isolation is absent (F6 tightens
+      // permissions to compensate).
+      return {
+        instanceId: this.instanceId, checkedAt: new Date().toISOString(), sandbox: "none",
+        dependencyAvailable: true, sandboxUsable: false, ready: true, reason: "ready",
+        detail: "unsandboxed direct execution",
+      };
+    }
     const report: RunnerExecutionCapability = {
       instanceId: this.instanceId, checkedAt: new Date().toISOString(), sandbox: this.sandbox,
       dependencyAvailable: false, sandboxUsable: false, ready: false, reason: "dependency-unavailable",

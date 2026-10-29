@@ -1,4 +1,4 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+﻿// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ import { Supervisor, type ServiceDefinition } from "./supervisor.js";
 
 export interface ServeSettings {
   bwrapPath: string;
-  sandboxProvider?: "auto" | "bubblewrap" | "seatbelt";
+  sandboxProvider?: "auto" | "bubblewrap" | "seatbelt" | "none";
   seatbeltPath?: string;
   dataDir: string;
   host: string;

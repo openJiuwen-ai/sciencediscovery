@@ -36,6 +36,7 @@ repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ $# -gt 0 ]] || { echo "Usage: scripts/with-jiuwenswarm.sh <command> [arguments...]" >&2; exit 2; }
 
 export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-test}"
+export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
 state_dir="${CI_RUNTIME_DIR:-$repository_root/.sciencediscovery-data}/with-jiuwenswarm"
 mkdir -p "$state_dir"
 # Canonicalize: a relative CI_RUNTIME_DIR (CONTRIBUTING.md's own local-repro example passes one)

@@ -78,7 +78,7 @@ class SuiteTests(unittest.TestCase):
                 attempts.mkdir()
                 (attempts / 'attempts.json').write_text('[{"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}]')
                 return type('Result', (), {'returncode': 0})()
-            with patch.object(rescore.subprocess, 'run', side_effect=judge) as run:
+            with patch.object(rescore, 'require_official'), patch.object(rescore.subprocess, 'run', side_effect=judge) as run:
                 report = rescore.rescore(evidence, Path(root) / 'rubric', output)
             self.assertEqual(run.call_count, 1)
             self.assertEqual(report['evaluation']['score'], 90)
@@ -91,7 +91,7 @@ class SuiteTests(unittest.TestCase):
             failed = Path(root) / 'failed-evaluation'
             failed.mkdir()
             output = Path(root) / 'third-evaluation'
-            with patch.object(rescore.subprocess, 'run', side_effect=judge):
+            with patch.object(rescore, 'require_official'), patch.object(rescore.subprocess, 'run', side_effect=judge):
                 report = rescore.rescore(evidence, Path(root) / 'rubric', output, prior_evaluations=[failed])
             self.assertFalse(report['all_evaluations_usage_complete'])
 

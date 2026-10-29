@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { ProviderModelClient } from "./runtime-client.js";
-import { ModelRequestError, type ModelTurn } from "./client.js";
+import { ModelRequestError, modelWireDiagnosticsOf, type ModelTurn } from "./client.js";
 const endpoint = { baseUrl: "http://127.0.0.1:1", model: "synthetic" };
 const policy = { maxTokens: 16, maxRetries: 0, requestTimeoutMs: 1000 };
 const observer = { onProgress: () => undefined, onTextDelta: () => undefined, onThinkingDelta: () => undefined };
@@ -26,6 +26,14 @@ const input = { systemPrompt: "synthetic", history: [{ role: "user", content: "s
 for (const failure of ["incomplete", "malformed"] as const) test(`runtime rejects ${failure} stream evidence`, async () => {
   const client = new ProviderModelClient(endpoint, policy, async () => ({ assistantMessage: { role: "assistant", content: "partial" }, toolCalls: [], ...(failure === "incomplete" ? { completionObserved: false } : { streamDiagnostics: { protocol: "openai-responses", unparseableSsePayloads: 1 } }) }));
   await assert.rejects(client.invoke(input, new AbortController().signal, observer), /Model stream/);
+});
+test("runtime rejects a completed terminal turn with no text and no tool call", async () => {
+  const empty: ModelTurn = { assistantMessage: { role: "assistant", content: "  \n" }, toolCalls: [], completionObserved: true };
+  const client = new ProviderModelClient(endpoint, policy, async () => empty);
+  await assert.rejects(client.invoke(input, new AbortController().signal, observer), /empty terminal turn/);
+  // An explicit output-limit finish keeps the existing truncation recovery path.
+  const truncated = new ProviderModelClient(endpoint, policy, async () => ({ ...empty, truncated: true }));
+  assert.equal((await truncated.invoke(input, new AbortController().signal, observer)).truncated, true);
 });
 test("runtime preserves original errors and unavailable usage without failing successful completion", async () => {
   const failure = new ModelRequestError("original provider error", 429);
@@ -35,6 +43,30 @@ test("runtime preserves original errors and unavailable usage without failing su
   const turn: ModelTurn = { assistantMessage: { role: "assistant", content: "OK" }, toolCalls: [], completionObserved: true };
   const good = new ProviderModelClient(endpoint, policy, async () => turn);
   assert.equal((await good.invoke(input, new AbortController().signal, observer)).usage, undefined);
+});
+
+test("runtime rejects an empty terminal turn and its diagnostics carry the classification", async () => {
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) {}
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    // The real transport reports its wire record on the success path; the record
+    // this client hands to the run must say why the request failed.
+    const client = new ProviderModelClient({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: "synthetic", proxy: { mode: "direct" } }, policy);
+    const failure = await client.invoke(input, AbortSignal.timeout(2000), observer)
+      .then(() => assert.fail("an empty terminal turn was accepted"), error => error);
+    assert.match(String(failure.message), /empty terminal turn/);
+    const diagnostics = modelWireDiagnosticsOf(failure);
+    assert.equal(diagnostics?.error?.classification, "empty_completion");
+    assert.equal(diagnostics?.hasText, false);
+    assert.equal(diagnostics?.finishReason, "stop");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 for (const terminal of ["missing-native-stop", "native-end-turn"] as const) test(`Messages HTTP stream with ${terminal} retains strict runtime completion`, async () => {

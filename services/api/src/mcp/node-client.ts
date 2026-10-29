@@ -410,9 +410,13 @@ export class McpNodeClient {
     for (const id of this.sessions.keys()) {
       if (!config.servers[id]?.enabled) await this.closeSession(id, "disabled_or_removed");
     }
-    const servers: McpCatalogServer[] = [];
-    for (const [serverId, server] of Object.entries(config.servers).sort(([a], [b]) => a.localeCompare(b))) {
-      if (!server.enabled) continue;
+    // connect to every enabled server concurrently — stdio spawns take
+    // 1-2s each, and a serial loop made startup pay their sum. Per-server
+    // failure semantics are unchanged: warn, drop the session, keep the rest.
+    const entries = Object.entries(config.servers).sort(([a], [b]) => a.localeCompare(b));
+    const collected: Array<McpCatalogServer | undefined> = await Promise.all(
+      entries.map(async ([serverId, server]): Promise<McpCatalogServer | undefined> => {
+        if (!server.enabled) return undefined;
       let tools: McpCatalogTool[] = [];
       let error: string | undefined;
       try {
@@ -430,15 +434,18 @@ export class McpNodeClient {
         // contributing; drop its session so the next catalog reconnects.
         await this.closeSession(serverId, "catalog_failed");
       }
-      servers.push({
+      return {
         ...(error ? { error } : {}),
         ...(server.description ? { description: server.description } : {}),
         enabled: true,
         id: serverId,
         tools,
         transport: server.transport,
-      });
-    }
+      };
+    }));
+    const servers: McpCatalogServer[] = collected.filter(
+      (server): server is McpCatalogServer => server !== undefined,
+    );
     const revision = createHash("sha256").update(JSON.stringify(servers)).digest("hex");
     this.logger.info("mcp_catalog_loaded", {
       durationMs: Date.now() - started,

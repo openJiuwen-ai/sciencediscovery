@@ -28,7 +28,6 @@ import {
   SKILL_SELECTION_FIELDS,
   type ConnectorId,
   type FreeSearchEngine,
-  type IdeaTreeAssessorConfig,
   type IdeaTreeRoleThinkingEfforts,
   type IdeaTreeSettings,
   type IdeaTreeThinkingRole,
@@ -512,33 +511,6 @@ function boundedInteger(
   return numeric;
 }
 
-/** Normalize one Assessor config overlay. Empty strings become undefined so
- *  the workflow skill's built-in defaults are used. The scoringCriteria, when
- *  provided, is a free-form text describing the scoring rubric. */
-function normalizeAssessor(
-  input: unknown,
-  fallback: IdeaTreeAssessorConfig,
-): IdeaTreeAssessorConfig {
-  if (input === undefined || input === null) return structuredClone(fallback);
-  if (!isRecord(input)) throw new Error("Assessor config must be an object");
-  const systemPrompt = hasOwn(input, "systemPrompt")
-    ? optionalString(input.systemPrompt)
-    : fallback.systemPrompt;
-  const scoringCriteria = hasOwn(input, "scoringCriteria")
-    ? optionalString(input.scoringCriteria)
-    : fallback.scoringCriteria;
-  const weight = hasOwn(input, "weight")
-    ? (typeof input.weight === "number" && Number.isFinite(input.weight)
-      ? input.weight
-      : (() => { throw new Error("Assessor weight must be a finite number"); })())
-    : fallback.weight;
-  return {
-    ...(systemPrompt ? { systemPrompt } : {}),
-    ...(scoringCriteria ? { scoringCriteria } : {}),
-    ...(weight !== undefined ? { weight } : {}),
-  };
-}
-
 /** Per-stage efforts in canonical stage order. A `null` stage inherits. On
  *  write an unknown stage or level is rejected; on load it is dropped. */
 function normalizeRoleThinkingEfforts(input: unknown, strict: boolean): IdeaTreeRoleThinkingEfforts | undefined {
@@ -564,42 +536,36 @@ function normalizeRoleThinkingEfforts(input: unknown, strict: boolean): IdeaTree
  *
  * - Empty strings become undefined so the product defaults (or the workflow
  *   skill's built-in values) are used.
- * - Numeric fields are range-validated: maxDepth [1,20], maxNodes [1,10000],
- *   maxSearchRounds [1,10000]. Omitted fields retain the current value.
- * - Weight validation: if all three assessor weights are provided, they must
- *   sum to 1.0 within a 0.001 tolerance. Partial weights are kept as-is so
- *   the caller can update one without re-specifying the others; the sum is
- *   only enforced when all three are present.
+ * - Numeric fields are range-validated and omitted fields retain the current
+ *   value. Template and exploration intensity own research budgets and
+ *   assessor definitions, so callers cannot configure them here.
  */
 export function normalizeIdeaTreeSettings(
   input: UpdateIdeaTreeSettingsRequest,
   current: IdeaTreeSettings,
 ): IdeaTreeSettings {
+  const retiredField = [
+    "maxRounds",
+    "candidatesPerRound",
+    "maxSearchRounds",
+    "assessorActivity",
+    "assessorStability",
+    "assessorSustainability",
+  ].find((field) => hasOwn(input, field));
+  if (retiredField) throw new Error(`${retiredField} is configured by the selected template and exploration intensity`);
   const templateId = input.templateId ?? current.templateId;
   const explorationIntensity = input.explorationIntensity ?? current.explorationIntensity;
-  const maxRounds = boundedInteger(input.maxRounds, "maxRounds", 1, 100, current.maxRounds ?? 3);
-  const candidatesPerRound = boundedInteger(input.candidatesPerRound, "candidatesPerRound", 1, 20, current.candidatesPerRound ?? 3);
   const maxTokensPerCall = boundedInteger(input.maxTokensPerCall, "maxTokensPerCall", 256, 32768, current.maxTokensPerCall ?? 32768);
   const maxTokens = input.maxTokens === null ? null : input.maxTokens === undefined ? current.maxTokens ?? null
     : boundedInteger(input.maxTokens, "maxTokens", 1, Number.MAX_SAFE_INTEGER, 1);
   const maxDepth = boundedInteger(input.maxDepth, "maxDepth", 1, 20, current.maxDepth);
   const maxNodes = boundedInteger(input.maxNodes, "maxNodes", 2, 10_000, current.maxNodes);
-  const maxSearchRounds = boundedInteger(
-    input.maxSearchRounds,
-    "maxSearchRounds",
-    1,
-    10_000,
-    current.maxSearchRounds,
-  );
   const scoreDirection = input.scoreDirection === "maximize" || input.scoreDirection === "minimize"
     ? input.scoreDirection
     : current.scoreDirection;
   const designSystemPrompt = hasOwn(input, "designSystemPrompt")
     ? optionalString(input.designSystemPrompt)
     : current.designSystemPrompt;
-  const assessorActivity = normalizeAssessor(input.assessorActivity, current.assessorActivity);
-  const assessorStability = normalizeAssessor(input.assessorStability, current.assessorStability);
-  const assessorSustainability = normalizeAssessor(input.assessorSustainability, current.assessorSustainability);
   const aggregatorSystemPrompt = hasOwn(input, "aggregatorSystemPrompt")
     ? optionalString(input.aggregatorSystemPrompt)
     : current.aggregatorSystemPrompt;
@@ -609,35 +575,14 @@ export function normalizeIdeaTreeSettings(
   const roleThinkingEfforts = hasOwn(input, "roleThinkingEfforts")
     ? normalizeRoleThinkingEfforts(input.roleThinkingEfforts, true)
     : current.roleThinkingEfforts;
-  // Weight validation: enforce the 1.0 sum only when all three weights are
-  // explicitly provided in this update. Partial updates keep the current
-  // values for the un-touched assessors, so the sum is only meaningful when
-  // the caller is re-balancing the whole tier at once.
-  const providedWeights = [
-    input.assessorActivity?.weight,
-    input.assessorStability?.weight,
-    input.assessorSustainability?.weight,
-  ].filter((value) => typeof value === "number");
-  if (providedWeights.length === 3) {
-    const sum = (input.assessorActivity!.weight as number)
-      + (input.assessorStability!.weight as number)
-      + (input.assessorSustainability!.weight as number);
-    if (Math.abs(sum - 1) > 0.001) {
-      throw new Error(`Assessor weights must sum to 1.0 (got ${sum})`);
-    }
-  }
   return {
     templateId,
     explorationIntensity,
-    maxRounds, candidatesPerRound, maxTokens, maxTokensPerCall,
+    maxTokens, maxTokensPerCall,
     maxDepth,
     maxNodes,
-    maxSearchRounds,
     scoreDirection,
     ...(designSystemPrompt ? { designSystemPrompt } : {}),
-    assessorActivity,
-    assessorStability,
-    assessorSustainability,
     ...(aggregatorSystemPrompt ? { aggregatorSystemPrompt } : {}),
     ...(propagateInsightSystemPrompt ? { propagateInsightSystemPrompt } : {}),
     ...(roleThinkingEfforts ? { roleThinkingEfforts: structuredClone(roleThinkingEfforts) } : {}),
@@ -659,27 +604,16 @@ export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
     explorationIntensity: value.explorationIntensity === "quick" || value.explorationIntensity === "deep"
       ? value.explorationIntensity
       : DEFAULT_IDEA_TREE_SETTINGS.explorationIntensity,
-    maxRounds: typeof value.maxRounds === "number" ? value.maxRounds : 3,
-    candidatesPerRound: typeof value.candidatesPerRound === "number" ? value.candidatesPerRound : 3,
     maxTokens: typeof value.maxTokens === "number" ? value.maxTokens : null,
     maxTokensPerCall: typeof value.maxTokensPerCall === "number" ? value.maxTokensPerCall : 32768,
     maxDepth: typeof value.maxDepth === "number" ? value.maxDepth : DEFAULT_IDEA_TREE_SETTINGS.maxDepth,
     maxNodes: typeof value.maxNodes === "number" ? value.maxNodes : DEFAULT_IDEA_TREE_SETTINGS.maxNodes,
-    maxSearchRounds: typeof value.maxSearchRounds === "number"
-      ? value.maxSearchRounds
-      : DEFAULT_IDEA_TREE_SETTINGS.maxSearchRounds,
     scoreDirection: value.scoreDirection === "maximize" || value.scoreDirection === "minimize"
       ? value.scoreDirection
       : DEFAULT_IDEA_TREE_SETTINGS.scoreDirection,
     ...(typeof value.designSystemPrompt === "string" && value.designSystemPrompt.trim()
       ? { designSystemPrompt: value.designSystemPrompt.trim() }
       : {}),
-    assessorActivity: normalizeAssessor(value.assessorActivity, DEFAULT_IDEA_TREE_SETTINGS.assessorActivity),
-    assessorStability: normalizeAssessor(value.assessorStability, DEFAULT_IDEA_TREE_SETTINGS.assessorStability),
-    assessorSustainability: normalizeAssessor(
-      value.assessorSustainability,
-      DEFAULT_IDEA_TREE_SETTINGS.assessorSustainability,
-    ),
     ...(typeof value.aggregatorSystemPrompt === "string" && value.aggregatorSystemPrompt.trim()
       ? { aggregatorSystemPrompt: value.aggregatorSystemPrompt.trim() }
       : {}),

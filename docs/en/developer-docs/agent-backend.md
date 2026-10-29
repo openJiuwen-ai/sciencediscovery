@@ -103,6 +103,43 @@ Product semantics include provider/protocol variants, thinking controls, proxy p
 
 JiuwenSwarm does not intentionally bypass these product semantics: its model requests are routed through the ScienceDiscovery per-run model gateway/proxy path.
 
+### Model wire diagnostics
+
+Every streamed model request emits one `[model-sse-summary]` JSON line. The
+record carries the local request ID, the provider request ID when the response
+headers expose one, scheme-and-host endpoint identity, model alias, HTTP status,
+retry count and per-attempt failure classes, dispatch/headers/first-byte/first-
+SSE-record/completion timestamps, transport and SSE record counts, parse-error
+count, `finish_reason`, truncation, whether any text or tool call was
+assembled, and whether the provider streamed reasoning text (`hasReasoning`). It
+never contains prompts, response text, tool arguments, request headers or
+credentials. `onWireDiagnostics` carries the same record in-process;
+the native loop and the JiuwenSwarm gateway log it, so the real-E2E
+`stack.log` keeps per-request evidence.
+
+A request that ends in an error carries its `error.classification` on that same
+line, including an empty completion: the gateway holds the record until the
+outcome is known, so a 502 never leaves an unclassified success line behind.
+
+A completed task turn with no non-whitespace text and no tool call is an error,
+not a final answer, even when the provider reports `finish_reason=stop`. The
+runtime client and the gateway both enforce this rule, so an alternate streamer
+cannot silently deliver an empty result. The two shapes that would otherwise
+look identical are separate classifications as well as separate `hasReasoning`
+values: a reasoning model that spent its whole budget thinking and answered
+nothing is `reasoning_only` (`hasReasoning: true`), and a relay that returned an
+empty `stop` is `empty_completion` (`hasReasoning: false`). Both still fail the
+request; only the recorded class differs. A turn cut at the output limit
+keeps the existing truncation recovery path. The error message preserves the
+wire summary (request IDs, status, record counts, finish reason, reasoning
+presence) and no payload.
+
+For a controlled relay/direct comparison, use
+`node scripts/model-endpoint-compare.mjs --model <alias> --a-base-url … --b-base-url … --prompt-file …`;
+both endpoints receive one identical request body, requests are interleaved,
+credentials come from token environment variables, and the report contains only
+per-request latency, error and token aggregates.
+
 ## 6. Tool dispatch
 
 Native executor executes the ScienceDiscovery tool table after model tool calls.

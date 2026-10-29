@@ -482,6 +482,7 @@ export function ProviderRow({
             {addedProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
           </select>
           <ModelConnectivityButton
+            baseUrl={testProfile.baseUrl}
             modelId={testProfile.id}
             modelName={testProfile.name}
             profileVersion={testProfile.updatedAt}
@@ -940,7 +941,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           onRefresh={(providerId) => void loadModels(providerId, true)}
           onToggle={toggleRow}
           provider={provider}
-          testModel={(modelId, compatibility) => client.testModel(modelId, compatibility)}
+          testModel={(modelId, compatibility, expectedDestination) => client.testModel(modelId, compatibility, expectedDestination)}
         />)}
       </div> : <p className="muted">{t("providers.configured.empty")}</p>}
     </section>

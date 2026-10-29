@@ -23,6 +23,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
+  CREATED_AT,
   TOKEN,
   TOKEN_STORAGE_KEY,
   installMockApi,
@@ -280,6 +281,110 @@ test.describe("读取失败", () => {
     await expect(panel.locator(".doc-body")).toContainText("综述的正文");
     await expect(panel.locator(".doc-tab-label")).toHaveCount(1);
     expect(calls(mock, `/api/sessions/${SESSION}/artifact-versions/artifact-1-v1/content`)).toHaveLength(2);
+  });
+});
+
+test.describe("子代理的运行记录", () => {
+  const RUN = "run-1";
+  const CHILD = "child-1";
+  const DESCRIPTION = "排序候选结构";
+  const ANSWER = "前三个结构的排名是稳定的。";
+
+  /**
+   * A Session whose one finished run delegated a child.
+   *
+   * The two halves of the record are where the product keeps them: the run's
+   * log holds the snapshot that names the task and its status, and the catalog
+   * holds the steps — a run stream deliberately keeps a child without them,
+   * which is what the panel's own read of `.../subagents` is for. The snapshot
+   * still carries an empty `steps` array, as the server's does.
+   */
+  function recorded(): MockOptions {
+    const snapshot = {
+      createdAt: CREATED_AT,
+      id: CHILD,
+      input: { description: DESCRIPTION, prompt: "按能量排序。", subagentType: "general-purpose" },
+      maxTurns: 12,
+      parentTurnId: "turn-1",
+      sessionId: SESSION,
+      status: "completed",
+      steps: [],
+      timeoutSeconds: 600,
+      turnCount: 3,
+    };
+    const answer = "我把候选结构交给了一个子任务。";
+    const run = {
+      assistantMessageId: "message-assistant",
+      createdAt: CREATED_AT,
+      finishedAt: CREATED_AT,
+      id: RUN,
+      prompt: "分析晶体结构",
+      queueOrder: 0,
+      sessionId: SESSION,
+      status: "completed",
+      userMessageId: "message-user",
+    };
+    return {
+      runsBySession: {
+        [SESSION]: [{
+          // The tail is the run's own ending, and it is what makes the replay a
+          // finished one: without it the folded line would read as still going.
+          events: [
+            { model: { name: "Qwen Max" }, runId: RUN, settings: {}, type: "run.started" },
+            { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+            { delta: answer, responseId: "response-1", turn: 1, type: "assistant.delta" },
+            { subagent: snapshot, type: "subagent.updated" },
+            {
+              files: [],
+              message: { content: answer, createdAt: CREATED_AT, id: "message-assistant", role: "assistant" },
+              type: "run.completed",
+            },
+            { run, status: "completed", type: "run.status" },
+          ],
+          run,
+        }],
+      },
+      sessions: [makeSession({
+        messages: [
+          { content: "分析晶体结构", createdAt: CREATED_AT, id: "message-user", role: "user" },
+          { content: "存下来的回答。", createdAt: CREATED_AT, id: "message-assistant", role: "assistant" },
+        ],
+      })],
+      subagentsBySession: {
+        [SESSION]: [{
+          ...snapshot,
+          steps: [
+            { content: "先看三组候选结构。", createdAt: CREATED_AT, id: "step-1", kind: "assistant", status: "completed" },
+            { content: ANSWER, createdAt: CREATED_AT, id: "step-2", kind: "assistant", status: "completed" },
+          ],
+        }],
+      },
+    };
+  }
+
+  test("the line opens its record, a second press keeps it, and the panel's own control closes it", async ({ page }) => {
+    await installMockApi(page, recorded());
+    await page.goto("/");
+    // The child's line is part of the run's own fold, where it was delegated.
+    await page.locator(".run-fold summary").click();
+    const line = page.getByRole("button", { name: `Subagent ${DESCRIPTION}` });
+    await line.click();
+
+    const panel = page.locator(".workspace-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel.locator(".subagent-output")).toContainText(ANSWER);
+    // A record is a mode of the panel, not a third tab beside the groups.
+    await expect(panel.getByRole("tab")).toHaveCount(0);
+
+    // The line is a row the reader chose to read. Pressing it again asks for the
+    // same thing; taking the record away would read as a misread, not a choice.
+    await line.click();
+    await expect(panel.locator(".subagent-output")).toContainText(ANSWER);
+    await expect(panel.getByRole("tab")).toHaveCount(0);
+
+    await panel.getByRole("button", { name: "返回产物和文件" }).click();
+    await expect(panel.getByRole("tab", { name: "产物" })).toBeVisible();
+    await expect(panel.locator(".subagent-detail")).toHaveCount(0);
   });
 });
 

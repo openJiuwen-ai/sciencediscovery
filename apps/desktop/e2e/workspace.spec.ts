@@ -118,6 +118,9 @@ test("a dropped file with path segments uploads only its basename", async ({ pag
   await test.step("1. Open the conversation workspace", async () => {
     await page.goto("/");
     await expect(page.getByRole("button", { name: "上传文件" })).toBeVisible();
+    // See the first test: the resumed Session takes the tray with it when it
+    // opens, so the drop has to wait for that to have happened.
+    await expect(page.locator(".side-row.is-active .side-session-name")).toHaveCount(1);
   });
   await test.step("2. Drop a file whose name contains parent path segments", async () => {
     const dragged = await transfer(page, "../outside.csv");
@@ -125,7 +128,15 @@ test("a dropped file with path segments uploads only its basename", async ({ pag
     await page.dispatchEvent("body", "drop", { dataTransfer: dragged });
   });
   await test.step("3. Confirm the uploaded workspace path is a basename", async () => {
-    await expect(page.getByText("已上传 outside.csv", { exact: false })).toBeVisible();
+    // The card is the receipt, as it is for every other upload. It has to read
+    // as stored: the answer names the file by the segment the request sent, and
+    // a card that did not match that name would say 上传失败 about bytes that are
+    // already in the workspace.
+    const card = page.locator(".attach-card");
+    await expect(card).toHaveCount(1);
+    await expect(card).toHaveClass(/is-uploaded/u);
+    await expect(card.locator(".attach-name")).toHaveText("../outside.csv");
+    await expect(card.locator(".attach-meta")).toHaveText("CSV 8B");
     expect(mock.state.files.map((file) => (file as { path: string }).path)).toEqual(["outside.csv"]);
   });
 });

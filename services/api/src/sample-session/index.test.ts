@@ -101,6 +101,29 @@ test("an install with no conversation of its own opens on the sample Session", a
     assert.equal((await cas.read(output.version.content.hash)).length, output.version.content.size);
   }
 
+  // The five children the recorded run delegated. Their execution is readable
+  // only through the catalog, and the stream a replay reads keeps snapshots
+  // without steps, so the sample has to arrive with the rows a live child
+  // would have written — otherwise every delegation in it opens on "no
+  // execution recorded", which is a panel that says the sample did nothing.
+  const children = store.listSubagents(session.id);
+  assert.deepEqual(
+    children.map((child) => child.status).toSorted(),
+    ["completed", "completed", "completed", "completed", "timed_out"],
+  );
+  assert.ok(children.every((child) => child.sessionId === session.id), "every row belongs to this install's Session");
+  for (const child of children) {
+    assert.ok(child.steps.length > 0, `${child.input.description} kept the steps it recorded`);
+  }
+  const draft = children.find((child) => child.input.description === "Draft trace and answer");
+  assert.ok(draft);
+  const spoken = draft.steps.filter((step) => step.kind === "assistant" && step.content.trim() !== "");
+  assert.ok(spoken.length > 0, "a completed child still has the answer the panel shows as its 输出");
+  // A step is re-emitted as it changes; the catalog holds one row per step,
+  // in the order it was first recorded.
+  const ids = draft.steps.map((step) => step.id);
+  assert.equal(new Set(ids).size, ids.length);
+
   assert.ok((await stat(resolve(root, SAMPLE_SESSION_MARKER))).isFile());
 });
 

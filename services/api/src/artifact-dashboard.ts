@@ -217,7 +217,6 @@ const DEFAULT_MAX_CHARS = 100_000;
 const DEFAULT_MAX_CELLS = 200;
 const FIGURE_TRUNCATION_BYTES = 5 * 1024 * 1024;
 const IFRAME_TRUNCATION_BYTES = 2 * 1024 * 1024;
-const STRUCTURE_ATOM_TRUNCATION = 8_000;
 
 const DATASET_TEXT_SUFFIXES = [".csv", ".tsv", ".json"] as const;
 type DatasetTextSubtype = (typeof DATASET_TEXT_SUFFIXES)[number];
@@ -243,8 +242,87 @@ async function readCasText(recorder: ProvenanceRecorder, hash: string): Promise<
   }
 }
 
-function splitDelimited(source: string, delimiter: RegExp): string[][] {
-  return source.split(/\r?\n/).filter((line) => line.length > 0).map((line) => line.split(delimiter));
+/**
+ * Split delimited text into records the way a spreadsheet writes them (RFC 4180):
+ * a delimiter or newline inside a quoted field is data, and a doubled quote
+ * inside a quoted field is one quote. A quote only opens a field at its start,
+ * so an apostrophe mid-cell is left alone. Blank lines stay out, as before.
+ *
+ * A field is kept as spans of the source and only joined when the field ends,
+ * so an ordinary run costs one `slice` instead of one concatenation per
+ * character. A file whose only cell opens a quote and never closes it is one
+ * field over the whole file: built character by character that is quadratic
+ * string garbage on a preview request, and it stays linear here.
+ */
+function splitDelimited(source: string, delimiter: string): string[][] {
+  const records: string[][] = [];
+  let record: string[] = [];
+  // Completed spans of the field being read; `spanStart` opens the one still
+  // pending. Only an escaped quote (`""`) closes a span before the field ends.
+  let parts: string[] = [];
+  let spanStart = 0;
+  let quoted = false;
+  let touched = false;
+
+  const pushSpan = (end: number) => {
+    if (end > spanStart) parts.push(source.slice(spanStart, end));
+  };
+  const endField = (end: number) => {
+    pushSpan(end);
+    record.push(parts.length === 1 ? parts[0] ?? "" : parts.join(""));
+    parts = [];
+  };
+  const endRecord = (end: number) => {
+    if (touched) {
+      endField(end);
+      records.push(record);
+    }
+    record = [];
+    parts = [];
+    touched = false;
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source.charAt(index);
+    if (quoted) {
+      if (char === '"' && source.charAt(index + 1) === '"') {
+        pushSpan(index);
+        parts.push('"');
+        index += 1;
+        spanStart = index + 1;
+      } else if (char === '"') {
+        pushSpan(index);
+        quoted = false;
+        spanStart = index + 1;
+      }
+      touched = true;
+      continue;
+    }
+    if (char === '"' && parts.length === 0 && spanStart === index) {
+      quoted = true;
+      touched = true;
+      spanStart = index + 1;
+      continue;
+    }
+    if (char === delimiter) {
+      endField(index);
+      spanStart = index + 1;
+      touched = true;
+      continue;
+    }
+    if (char === "\n" || char === "\r") {
+      const terminator = index;
+      if (char === "\r" && source.charAt(index + 1) === "\n") index += 1;
+      endRecord(terminator);
+      spanStart = index + 1;
+      continue;
+    }
+    touched = true;
+  }
+  if (touched || record.length > 0) {
+    endField(source.length);
+    records.push(record);
+  }
+  return records;
 }
 
 function datasetSubtypeFor(name: string): DatasetTextSubtype | undefined {
@@ -257,7 +335,7 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   rows: string[][];
   totalRows: number;
 } {
-  const delimiter = subtype === ".csv" ? /,/ : /\t/;
+  const delimiter = subtype === ".csv" ? "," : "\t";
   const lines = splitDelimited(source, delimiter);
   if (!lines.length) return { columns: [], rows: [], totalRows: 0 };
   return {
@@ -278,7 +356,10 @@ function jsonRecordArray(parsed: unknown): Record<string, unknown>[] | undefined
   const records = parsed.filter(
     (entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null && !Array.isArray(entry),
   );
-  return records.length === parsed.length ? records : undefined;
+  if (records.length !== parsed.length) return undefined;
+  // Keys are the row/column mapping: an array of empty objects would become a table with no
+  // columns, so it must fall through to the JSON view like any other unmappable shape.
+  return records.some((record) => Object.keys(record).length > 0) ? records : undefined;
 }
 
 function recordArrayTable(records: Record<string, unknown>[], maxRows: number): {
@@ -370,16 +451,17 @@ function countStructureAtoms(source: string): number {
   return count;
 }
 
-function parseNotebook(source: string, maxCells: number): { cells: NotebookCell[]; totalCells: number } {
+function parseNotebook(source: string, maxCells: number): { cells: NotebookCell[]; totalCells: number; truncated: boolean } {
   let parsed: { cells?: unknown };
   try {
     parsed = JSON.parse(source) as { cells?: unknown };
   } catch {
-    return { cells: [], totalCells: 0 };
+    return { cells: [], totalCells: 0, truncated: false };
   }
   const rawCells = Array.isArray(parsed.cells) ? parsed.cells : [];
   const totalCells = rawCells.length;
-  const cells = rawCells.slice(0, maxCells).map<NotebookCell | undefined>((cell) => {
+  // Unsupported cells must not consume the preview budget, so map and filter first.
+  const supported = rawCells.map<NotebookCell | undefined>((cell) => {
     if (!cell || typeof cell !== "object") return undefined;
     const entry = cell as { cell_type?: unknown; source?: unknown; execution_count?: unknown };
     const cellType = entry.cell_type;
@@ -399,7 +481,8 @@ function parseNotebook(source: string, maxCells: number): { cells: NotebookCell[
       ...(executionCount !== undefined ? { execution_count: executionCount } : {}),
     };
   }).filter((cell): cell is NotebookCell => cell !== undefined);
-  return { cells, totalCells };
+  // totalCells describes the document; truncated only means a supported cell is hidden.
+  return { cells: supported.slice(0, maxCells), totalCells, truncated: supported.length > maxCells };
 }
 
 export async function buildArtifactVersionPreview(
@@ -497,7 +580,9 @@ export async function buildArtifactVersionPreview(
       const source = await readCasText(recorder, version.content.hash);
       const atomCount = countStructureAtoms(source);
       const charTruncated = source.length > maxChars;
-      const atomTruncated = atomCount > STRUCTURE_ATOM_TRUNCATION;
+      // Only bytes actually removed make the preview truncated. The atom budget limits what the
+      // structure viewer highlights (`ScientificArtifacts.tsx` slices atoms itself), not what this
+      // payload returns, so folding it into `truncated` claimed a cut that never happened.
       return {
         version,
         kind,
@@ -505,7 +590,7 @@ export async function buildArtifactVersionPreview(
         source: charTruncated ? source.slice(0, maxChars) : source,
         atomCount,
         totalChars: source.length,
-        truncated: charTruncated || atomTruncated,
+        truncated: charTruncated,
       };
     }
     case "report": {
@@ -534,14 +619,14 @@ export async function buildArtifactVersionPreview(
     }
     case "notebook": {
       const source = await readCasText(recorder, version.content.hash);
-      const { cells, totalCells } = parseNotebook(source, maxCells);
+      const { cells, totalCells, truncated } = parseNotebook(source, maxCells);
       return {
         version,
         kind,
         mode: "notebook-cells",
         cells,
         totalCells,
-        truncated: totalCells > maxCells,
+        truncated,
         editable: false,
       };
     }

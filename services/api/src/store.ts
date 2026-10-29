@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { ConfigurationCapabilityId, ConfigurationValues, SkillLibrary } from "@sciencediscovery/schema";
 import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationSnapshot } from "./configuration/types.js";
-import type { SkillLibrary } from "@sciencediscovery/schema";
-import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
@@ -26,7 +26,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
 import { PluginControl } from "./plugins/control.js";
-import { type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
+import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -1244,6 +1244,7 @@ export class SessionStore {
   }
 
   close(): void {
+    this.shellExecutionStore?.close();
     this.executionBlocks.close();
     this.database?.close();
     this.database = undefined;
@@ -2448,8 +2449,7 @@ export class SessionStore {
 
   /** Persist an Idea Tree settings update. Each field is independent — only
    *  the keys present in the payload move. The normalizer validates numeric
-   *  ranges and the assessor weight sum (enforced only when all three weights
-   *  are provided together). */
+   *  ranges and rejects template-owned fields. */
   async updateIdeaTreeSettings(input: UpdateIdeaTreeSettingsRequest): Promise<IdeaTreeSettings> {
     const next = normalizeIdeaTreeSettings(input, this.catalog.ideaTreeSettings);
     this.catalog.ideaTreeSettings = next;
@@ -2596,6 +2596,84 @@ export class SessionStore {
   listProjects(): Project[] {
     return this.catalog.projects.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
+
+  /** Runtime proof deliberately excludes unrelated settings, catalogs and model defaults. */
+  configurationRuntimeVersions(connectorIds: readonly string[], plugins?: RuntimeSettingsOverrides["plugins"], sessionId?: string): Record<string, string> {
+    const ids = [...new Set(connectorIds)].sort();
+    const hash = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
+    return { connectors: hash(ids.map(id => [id, this.connectorIds.has(id)])),
+      connectorCatalog: this.configurationConnectorRevisionSource?.(ids) ?? "not_attached",
+      policies: hash(ids.map(id => [id, this.mcpProxyPolicy(id), this.resolveProxy(this.mcpProxyPolicy(id))])),
+      plugins: hash([filterEnabledMcpSources(ids, plugins), sessionId ? filterEnabledMcpSources(ids, this.getSessionSettings(sessionId).effective.plugins) : null]) };
+  }
+
+  /** Finite domain operations, callable only from the configuration transaction. */
+  applyConfigurationDomainSync(sessionId: string, capabilityId: ConfigurationCapabilityId, values: ConfigurationValues, apiToken?: string): { modelId?: string } {
+    const database = this.getConfigurationDatabase();
+    if (!database.isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    if (capabilityId === "connector.enable") {
+      const connectorId = String(values.connectorId);
+      const current = this.getSessionSettings(sessionId).effective.enabledConnectorIds;
+      const restored = values.restoreInheritance === true ? this.getProjectSettings(session.projectId).effective.enabledConnectorIds
+        : typeof values.restoreConnectorIds === "string" ? JSON.parse(values.restoreConnectorIds) as string[] : [...new Set([...current, connectorId])];
+      if (!Array.isArray(restored) || restored.length > 200 || restored.some(id => typeof id !== "string" || !id || id.length > 100)) throw new Error("Invalid connector restoration");
+      for (const id of restored) {
+        if (!current.includes(id) && !this.connectorIds.has(id)) throw new Error("Connector is not installed");
+      }
+      if (values.restoreInheritance === true) delete session.settingsOverrides.enabledConnectorIds;
+      else if (typeof values.restoreConnectorIds === "string") {
+        session.settingsOverrides.enabledConnectorIds = JSON.parse(values.restoreConnectorIds) as string[];
+      } else session.settingsOverrides.enabledConnectorIds = [...new Set([...current, connectorId])];
+    } else if (capabilityId === "model.select") {
+      if (values.restoreInheritance === true) delete session.settingsOverrides.modelId;
+      else {
+        const modelId = String(values.modelId);
+        if (!this.getModel(modelId)) throw new Error("Model is no longer available");
+        session.settingsOverrides.modelId = modelId;
+      }
+    } else if (capabilityId === "model.connect") {
+      const normalized = validateLiveProvider({ name: String(values.name), baseUrl: String(values.baseUrl),
+        apiProtocol: values.apiProtocol as ModelProvider["apiProtocol"], apiVariant: values.apiVariant as ModelProvider["apiVariant"] });
+      const now = new Date().toISOString();
+      const existingProvider = this.catalog.providers.find(item => item.baseUrl.replace(/\/+$/, "") === normalized.baseUrl.replace(/\/+$/, "")
+        && item.apiProtocol === normalized.apiProtocol && item.apiVariant === normalized.apiVariant);
+      const provider: ModelProvider = existingProvider ?? { ...normalized, id: randomUUID(), hasApiToken: Boolean(apiToken),
+        tokenOptional: values.tokenOptional === true, proxyPolicy: "inherit", createdAt: now, updatedAt: now };
+      const validated = validateLiveModel({ name: provider.name, model: String(values.model), baseUrl: provider.baseUrl,
+        apiProtocol: provider.apiProtocol, apiVariant: provider.apiVariant });
+      const profile: ModelProfile = { ...validated, id: randomUUID(), providerId: provider.id,
+        hasApiToken: Boolean(apiToken), proxyPolicy: "inherit", createdAt: now, updatedAt: now };
+      const first = this.catalog.models.length === 0;
+      if (apiToken) {
+        if (existingProvider) this.setModelApiToken(profile.id, apiToken);
+        else this.setProviderApiToken(provider.id, apiToken);
+      }
+      if (!existingProvider) this.catalog.providers.push(provider);
+      this.catalog.models.push(profile);
+      if (first) {
+        this.catalog.globalSettings = this.normalizeSettings({ ...this.catalog.globalSettings, modelId: profile.id });
+        this.syncSessionCompatibilityForProject();
+      } else session.settingsOverrides.modelId = profile.id;
+      session.updatedAt = now;
+      this.syncSessionCompatibility(session);
+      return { modelId: profile.id };
+    } else if (capabilityId === "model.repair_credential") {
+      const profile = this.getModel(String(values.modelId));
+      if (!profile || !apiToken) throw new Error("Model and replacement credential are required");
+      // An isolated profile override avoids modifying a shared provider's other models.
+      this.setModelApiToken(profile.id, apiToken);
+      profile.hasApiToken = true;
+      profile.updatedAt = new Date().toISOString();
+      return { modelId: profile.id };
+    } else throw new Error("Unsupported configuration capability");
+    session.updatedAt = new Date().toISOString();
+    session.settingsOverrides = this.normalizeSettings(session.settingsOverrides);
+    this.syncSessionCompatibility(session);
+    return typeof values.modelId === "string" ? { modelId: values.modelId } : {};
+  }
+
+
 
   listModels(): ModelProfile[] {
     return this.catalog.models.toSorted((left, right) => left.name.localeCompare(right.name));
@@ -3421,6 +3499,26 @@ export class SessionStore {
     return structuredClone(subagent);
   }
 
+  /**
+   * Put children a Session already ran into the catalog.
+   *
+   * A Session that arrives as a recording — the seeded sample is one — replays
+   * the run it has on disk, and a run stream keeps its `subagent.updated`
+   * snapshots without their steps. The catalog is the one place a finished
+   * child's execution is readable, and only a live child writes it, so a
+   * Session restored from a recording has to bring its rows along or every
+   * child opens on nothing. A row that is already here is left alone.
+   */
+  async restoreSubagents(subagents: Subagent[]): Promise<void> {
+    let added = false;
+    for (const subagent of subagents) {
+      if (this.catalog.subagents.some((candidate) => candidate.id === subagent.id)) continue;
+      this.catalog.subagents.push(structuredClone(subagent));
+      added = true;
+    }
+    if (added) await this.saveCatalog();
+  }
+
   async updateSubagentBrief(
     sessionId: string,
     subagentId: string,
@@ -3629,6 +3727,26 @@ export class SessionStore {
         }
       } finally { refs.close(); }
       for (const { input, path } of prepared) {
+        // Finalization can be retried after a later writer has already advanced
+        // this path. Reuse the original execution revision without moving the
+        // current pointer backwards or minting another output revision.
+        const prior = input.mode === "write" && input.executionRunId
+          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.sessionId === sessionId
+            && candidate.path === path && candidate.executionRunId === input.executionRunId)
+          : undefined;
+        if (prior) {
+          if (prior.contentHash !== input.contentHash || prior.size !== input.size
+            || prior.origin !== input.origin || prior.runId !== input.runId
+            || prior.toolCallId !== input.toolCallId || prior.toolName !== input.toolName
+            || prior.subagentId !== input.subagentId) {
+            throw new Error("EXECUTION_RESULT_CONFLICT: Workspace execution output changed");
+          }
+          // A prior save may have failed after mutating the in-memory catalog.
+          // Reflush it before acknowledging an idempotent recovery commit.
+          catalogChanged = true;
+          revisions.push(structuredClone(prior));
+          continue;
+        }
         const parent = input.parentRevisionId
           ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === input.parentRevisionId)
           : undefined;
@@ -5593,6 +5711,20 @@ export class SessionStore {
   async appendExecutionRun(run: ExecutionRun): Promise<void> {
     this.assertSessionWritable(run.sessionId);
     await this.mutateArray<ExecutionRun, void>(this.executionRunsPath(run.sessionId), (runs) => {
+      const existing = runs.findLast((candidate) => candidate.id === run.id && candidate.status !== "unconfirmed")
+        ?? runs.findLast((candidate) => candidate.id === run.id);
+      if (existing) {
+        if (canonicalize(JSON.parse(JSON.stringify(existing))) === canonicalize(JSON.parse(JSON.stringify(run)))) return;
+        // Observation history is append-only. Only the same authorized command
+        // may advance from an unconfirmed observation to a settled outcome.
+        const identity = ["sessionId", "turnId", "tool", "toolCallId", "runnerId", "permissionEpochId"] as const;
+        if (existing.status !== "unconfirmed" || run.status === "unconfirmed"
+          || existing.code.hash !== run.code.hash
+          || identity.some(key => existing[key] !== run[key])) {
+          throw Object.assign(new Error("EXECUTION_RESULT_CONFLICT: execution already has different provenance"),
+            { code: "EXECUTION_RESULT_CONFLICT" });
+        }
+      }
       runs.push(run);
     });
   }
@@ -5667,9 +5799,18 @@ export class SessionStore {
 
   async appendArtifactDerivations(sessionId: string, additions: ArtifactDerivation[]): Promise<void> {
     this.assertSessionWritable(sessionId);
-    const derivations = await this.listArtifactDerivations(sessionId);
-    derivations.push(...additions);
-    await this.writeArray(this.artifactDerivationsPath(sessionId), derivations);
+    await this.mutateArray<ArtifactDerivation, void>(this.artifactDerivationsPath(sessionId), (derivations) => {
+      for (const addition of additions) {
+        const existing = derivations.find((candidate) => candidate.id === addition.id);
+        if (existing) {
+          if (canonicalize(JSON.parse(JSON.stringify(existing))) !== canonicalize(JSON.parse(JSON.stringify(addition)))) {
+            throw new Error("EXECUTION_RESULT_CONFLICT: output derivation already has different content");
+          }
+          continue;
+        }
+        derivations.push(addition);
+      }
+    });
   }
 
   async listPromptManifests(sessionId: string): Promise<PromptManifest[]> {

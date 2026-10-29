@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { uploadFileName } from "../api/sessions.js";
+
 /**
  * The files waiting in the composer, and the decisions about them that do not
  * need a browser: what kind of file each one is, how its size reads, how many
@@ -201,6 +203,11 @@ export interface UploadAnswer {
  * does not mention is a failure — the request succeeded, so the file is not
  * where the user expects it, and a card that stayed in 上传中 would say the app
  * is still waiting for something that is never coming.
+ *
+ * The name compared is the one the request sent, not the one the browser held:
+ * a file whose name carries path segments travels under its last segment, and
+ * the answer can only name it that way. Matching the card's own `file.name`
+ * left every such upload looking refused while its bytes were safely stored.
  */
 export function mergeUpload(
   attachments: readonly Attachment[],
@@ -217,8 +224,9 @@ export function mergeUpload(
   for (const id of sent) {
     const card = attachments.find((item) => item.id === id);
     if (card === undefined) continue;
-    const entry = pending.get(card.name)?.shift();
-    const error = entry?.status === "failed" ? entry.error ?? answer.errors.find((item) => item.name === card.name)?.error : undefined;
+    const name = uploadFileName(card.name) ?? card.name;
+    const entry = pending.get(name)?.shift();
+    const error = entry?.status === "failed" ? entry.error ?? answer.errors.find((item) => item.name === name)?.error : undefined;
     resolved.set(id, entry === undefined || entry.status === "failed"
       ? { error, status: "failed" }
       : { path: entry.path, status: "uploaded" });

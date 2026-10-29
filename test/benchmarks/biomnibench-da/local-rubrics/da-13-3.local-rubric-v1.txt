@@ -1,0 +1,73 @@
+RUBRIC: Body Composition-Protein Associations in Feminizing GAHT
+
+LOCAL VARIANT RUBRIC (non-gating): da-13-3 local-rubric-v1 for ScienceDiscovery #346.
+Official upstream rubric blob OID b54c2480ba3da6f95a64fa2a49bd8aa9bdd76082 remains the sole gating/release channel.
+This file clarifies Criteria 4 and 5 only; Criteria 1-3 and 6 keep the official intent and point values.
+Measurement basis: Manual run 40819738668 + repeat-grade 40865906295 (da-13-3 scores 87/64/78; #4 A/B/A, #5 A/B/B).
+
+
+Total Points: 100/100
+
+Notes: This rubric evaluates correlation analysis between proteomic changes and body composition changes (percent fat and breast volume) during feminizing GAHT. Excellence requires correct data parsing, appropriate significance filtering using adjusted p-values, proper ranking by absolute effect size for each phenotype, biological interpretation of association directions and top proteins (especially adipokines like leptin), and contextualization within the broader study framework showing body composition drives proteomic remodeling.
+
+CRITERIA (6):
+
+Criterion 1: Data Parsing and Preparation
+
+    Description: Assesses correct loading and preparation of protein-body composition association data.
+    Levels: A=15 B=8 C=0
+      [A]: Correctly reads association table (e.g., Supplementary Table 4: 41591_2025_4023_MOESM2_ESM(Supplementary Table 4).csv), skips descriptor lines appropriately (e.g., skiprows=3 or equivalent to reach proper header row), identifies and uses correct header row for column names (protein_id, estimate_Percent_Fat, adj.p.value_Percent_Fat, estimate_Breast_Volume, adj.p.value_Breast_Volume), converts numeric columns to appropriate data types (float for estimates and p-values), and verifies data structure to ensure accurate downstream analysis.
+
+      [B]: Parses table with minor issues such as misreading some column names, extra descriptor lines included, or data type conversion problems affecting a small subset of proteins, but these issues do not fundamentally prevent analysis of the majority of proteins.
+
+      [C]: Fails to parse table correctly, uses wrong file, misidentifies all column names, or data structure is so corrupted that valid analysis cannot be performed.
+
+Criterion 2: Significance Filtering by Adjusted P-Value
+
+    Description: Evaluates proper application of adjusted p-value threshold to identify significant associations.
+    Levels: A=15 B=7 C=0
+      [A]: Applies adjusted p-value threshold (adj p < 0.05) to identify proteins significantly associated with percent body fat changes, applies same threshold separately to identify proteins significantly associated with breast volume changes, performs filtering for both phenotypes independently (same protein can be significant for one or both), reports number of significant proteins for each phenotype (expected scale: tens for percent fat, hundreds for breast volume), and documents filtering criteria clearly.
+
+      [B]: Attempts significance filtering with issues such as using incorrect threshold (e.g., unadjusted p-value instead of adjusted, or wrong cutoff like p < 0.01), applies filter to only one phenotype instead of both, or filtering logic is unclear but still identifies substantial set of significant associations.
+
+      [C]: Does not perform any significance filtering, uses arbitrary non-statistical criteria, or filtering is so incorrect that significant proteins are excluded while non-significant are retained.
+
+Criterion 3: Ranking of Associations by Effect Size
+
+    Description: Assesses proper ranking of significant proteins by absolute effect size for each phenotype.
+    Levels: A=25 B=12 C=0
+      [A]: For each phenotype separately, ranks significant proteins by absolute value of their effect size estimates (|estimate_Percent_Fat| and |estimate_Breast_Volume|) to identify strongest associations regardless of direction, reports top associated proteins for percent fat (e.g., top 10 including proteins like LEP/leptin, MAPK4, DEFB4A, CA6, MUC1) with their estimates and adjusted p-values, reports top associated proteins for breast volume (e.g., top 10 including SPINT3, INSL3, ATP5F1D, KMT5B, EDDM3B, CXCL13) with their estimates and adjusted p-values, and clearly indicates direction (positive or negative estimate) for each top protein showing whether protein levels increase or decrease with body composition changes.
+
+      [B]: Lists significant proteins with partial ranking such as not using absolute values correctly (ranks only by signed estimate missing strong negative associations), does not rank separately for both phenotypes, omits some top proteins or their effect sizes, or direction of association (positive/negative) is unclear or missing for some proteins.
+
+      [C]: Does not rank proteins by effect size, misidentifies leading associations entirely (lists proteins that are not significant or not in top ranks), or ranking methodology is fundamentally incorrect.
+
+Criterion 4: Biological Interpretation of Associations and Protein Functions
+
+    Description: Evaluates depth and accuracy of biological interpretation of association patterns and protein roles. Local clarification (local-rubric-v1 for #346): do not mark B solely because the answer omits the official adipose-deposition overlap slogan when an equally substantive, evidence-grounded alternative is present.
+    Levels: A=27 B=13 C=0
+      [A]: Interprets meaning of positive and negative effect size estimates in biological context (positive estimate means protein levels increase as body fat or breast volume increases; negative estimate means protein levels decrease); discusses biological roles of leading associated proteins with emphasis on leptin (LEP) as a well-known adipokine secreted by adipose tissue that increases with fat accumulation, validating the adiposity signal; notes overlap between percent-fat and breast-volume associated proteins when both phenotype lists are discussed (e.g. LEP, CA6, DEFB4A, MUC1). For explaining shared/overlapping proteins, accept either (i) the study-frame adipose-deposition account (breast development during GAHT involves adipose tissue deposition, so adiposity markers correlate with both phenotypes) OR (ii) another coherent account grounded in the answer/trace such as shared treatment exposure, time-on-therapy collinearity, or common GAHT drivers—provided the overlap is actually explained rather than left unremarked. Do not require one specific mechanistic checklist phrase when the substance above is present.
+
+      [B]: Provides some biological interpretation but misses key substance: does not explain effect-direction meaning, gives only shallow protein-function discussion (e.g. names leptin without adipokine/fat context), fails to note phenotype overlap when both phenotypes' top proteins are listed, or offers no coherent account of shared associations. Prefer B only for missing substance, not for choosing a valid alternative narrative over the official adipose-deposition checklist.
+
+      [C]: Does not interpret associations biologically, draws incorrect conclusions (e.g., reverses meaning of positive vs negative estimates), or interpretation contradicts the data findings.
+
+Criterion 5: Contextualization Within Study Framework
+
+    Description: Assesses placement of findings within broader study context and acknowledgment of analysis scope. Local clarification (local-rubric-v1 for #346): do not mark B solely for omitting the exact "body composition is the major driver" framing when the answer still situates results in GAHT proteome remodeling with treatment/hormones and states correlation≠causation or limitations.
+    Levels: A=18 B=9 C=0
+      [A]: Places findings in the broader GAHT / plasma-proteome-remodeling study frame. Accept either (i) the official framing that body-composition changes (adiposity and breast development) are major drivers of proteome remodeling and act together with hormone-level changes, OR (ii) an equally careful framing that body-composition variables are entangled with treatment exposure / time / plasma-volume changes and that correlation does not imply body composition directly causes protein changes—while still relating adipokine/metabolic responses to fat and breast-volume signals where relevant. Mentions limitations or confounding (observational associations, treatment collinearity, haemodilution, etc.). Do not downgrade to B only because the answer emphasizes correlation≠causation or treatment-exposure readout instead of the "major drivers" checklist phrase, when the contextual substance above is present.
+
+      [B]: Mentions study context with limited detail: acknowledges body composition or GAHT only superficially, omits both the driver framing and any careful non-causal / collinearity discussion, or provides no limitations. Prefer B for thin context, not for rejecting a careful alternative to the official driver slogan.
+
+      [C]: Provides no contextualization, misrepresents study conclusions (e.g., claims body composition has no association with the proteome when data shows otherwise), or context provided is irrelevant to the analysis.
+
+Criterion 6: Source Reliability
+
+    Description: Evaluates whether the agent grounds its values, identifiers, and biological / clinical interpretations in identifiable sources, the provided data files, named public databases, or real peer-reviewed references, rather than asserting facts from memory without source.
+    Levels: A=0 B=-5 C=-10
+      [A]: Numerical results are traceable to the provided data files or to a documented transformation. Identifiers (gene / protein / sample / pathway names) come from named sources (HGNC, UniProt, MSigDB, KEGG, the dataset's own feature index). Statistical method names match what was actually run. Biological / clinical interpretations are supported by real, identifiable references (author + year + DOI / PubMed) rather than free-floating assertions.
+
+      [B]: Most numerical results and identifiers are traceable, but some interpretive claims are asserted without source attribution or cite only vague phrases like "studies show".
+
+      [C]: Reports values, identifiers, or biological claims with no clear source. Hallucinated content (made-up identifiers, fabricated statistics, invented citations) mixed with computed results.

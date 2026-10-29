@@ -18,10 +18,11 @@ import assert from "node:assert/strict";
 
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { GlobalModelUsageSummary, ModelInvocationUsage, ModelUsageAnalyticsSummary, ModelUsageBucket } from "@sciencediscovery/schema";
 
-import { filterGlobalUsageSummary, InvocationTable, latestUsageChartScrollLeft, RunUsageInline, UsagePage } from "../src/UsagePage.js";
+import { filterGlobalUsageSummary, InvocationTable, latestUsageChartScrollLeft, RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "../src/UsagePage.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { formatCompactTokenValue, usageBreakdownLabel, usageInlineLabel, usageInOutLabel } from "../src/usageFormat.js";
 
@@ -425,4 +426,159 @@ test("USG-012 usage page renders model drilldown, chart and inline/table usage",
   assert.match(table, /Cache read/);
   assert.match(table, /Cache write/);
   assert.match(table, /task/);
+});
+
+test("USG-030 a date preset keeps the freshest usage when the browser date is behind the reporting zone", async (t) => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  // 2026-10-29T17:00Z is already 2026-10-30 01:00 in Asia/Shanghai, the zone the
+  // page buckets invocations by, while a browser west of UTC+7 still reads 2026-10-29.
+  // The invocation below is ten minutes old, so it belongs to the reporting day.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-29T17:00:00.000Z") });
+  const recent: ModelInvocationUsage = {
+    attemptIndex: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    costUsd: null,
+    finishedAt: "2026-10-29T16:59:30.000Z",
+    id: "usage-recent",
+    inputTokens: 10,
+    invocationId: "invocation-recent",
+    invocationKind: "task",
+    model: "deepseek-v4-pro",
+    modelProfileId: "model-c",
+    modelProfileName: "DeepSeek V4 Pro",
+    outputTokens: 5,
+    runId: "run-recent",
+    sessionId: "session-recent",
+    startedAt: "2026-10-29T16:50:00.000Z",
+    totalTokens: 15,
+    usageStatus: "reported",
+  };
+  const summary: GlobalModelUsageSummary = {
+    byModel: [{
+      bucket: bucket({ key: "model-c", label: "DeepSeek V4 Pro" }),
+      model: "deepseek-v4-pro",
+      modelProfileId: "model-c",
+      modelProfileName: "DeepSeek V4 Pro",
+      projects: [{
+        bucket: bucket({ key: "project-a", label: "Alpha" }),
+        projectId: "project-a",
+        projectName: "Alpha",
+        sessions: [{
+          bucket: bucket({ key: "session-a", label: "Session A" }),
+          runs: [{ bucket: bucket({ key: "run-recent", label: "run-recent" }), invocations: [recent], runId: "run-recent" }],
+          sessionId: "session-recent",
+          sessionTitle: "Session A",
+        }],
+      }],
+    }],
+    totals: bucket({ key: "global", label: "All models" }),
+  };
+  const analytics: ModelUsageAnalyticsSummary = {
+    dailyByModel: [],
+    exchangeRates: [],
+    filters: { timeZone: "Asia/Shanghai" },
+    generatedAt: "2026-10-29T17:00:00.000Z",
+    overview: { cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCosts: [], inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+  };
+  let next: UsageAnalyticsUiFilters = {};
+  let view: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      view = create(React.createElement(UsagePage, {
+        analytics,
+        filters: {},
+        onExport: () => undefined,
+        onFiltersChange: (filters) => { next = filters; },
+        onOpenSession: () => undefined,
+        summary,
+      }));
+    });
+    const preset = view!.root.findAllByType("button").find((node) => node.children.join("") === "Last 7 days");
+    assert.ok(preset, "the Last 7 days preset is rendered");
+    await act(async () => { preset!.props.onClick(); });
+
+    assert.deepEqual(next, { from: "2026-10-24", to: "2026-10-30" });
+    const kept = filterGlobalUsageSummary(summary, next, "Asia/Shanghai");
+    assert.equal(kept.totals.invocationCount, 1);
+    assert.equal(kept.byModel[0]?.projects[0]?.sessions[0]?.runs[0]?.invocations[0]?.invocationId, "invocation-recent");
+  } finally {
+    if (view) await act(async () => { view!.unmount(); });
+    t.mock.timers.reset();
+  }
+});
+
+test("USG-031 a date preset follows the reporting zone when analytics has not loaded", async (t) => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  // The filter bar renders as soon as the usage summary is there, but analytics
+  // (and with it filters.timeZone) can still be loading or failed. A preset must
+  // then use the same reporting-zone default the filter buckets by, not the
+  // browser's calendar day, or the preset drops the freshest invocations.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-29T17:00:00.000Z") });
+  const recent: ModelInvocationUsage = {
+    attemptIndex: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    costUsd: null,
+    finishedAt: "2026-10-29T16:59:30.000Z",
+    id: "usage-recent",
+    inputTokens: 10,
+    invocationId: "invocation-recent",
+    invocationKind: "task",
+    model: "deepseek-v4-pro",
+    modelProfileId: "model-c",
+    modelProfileName: "DeepSeek V4 Pro",
+    outputTokens: 5,
+    runId: "run-recent",
+    sessionId: "session-recent",
+    startedAt: "2026-10-29T16:50:00.000Z",
+    totalTokens: 15,
+    usageStatus: "reported",
+  };
+  const summary: GlobalModelUsageSummary = {
+    byModel: [{
+      bucket: bucket({ key: "model-c", label: "DeepSeek V4 Pro" }),
+      model: "deepseek-v4-pro",
+      modelProfileId: "model-c",
+      modelProfileName: "DeepSeek V4 Pro",
+      projects: [{
+        bucket: bucket({ key: "project-a", label: "Alpha" }),
+        projectId: "project-a",
+        projectName: "Alpha",
+        sessions: [{
+          bucket: bucket({ key: "session-a", label: "Session A" }),
+          runs: [{ bucket: bucket({ key: "run-recent", label: "run-recent" }), invocations: [recent], runId: "run-recent" }],
+          sessionId: "session-recent",
+          sessionTitle: "Session A",
+        }],
+      }],
+    }],
+    totals: bucket({ key: "global", label: "All models" }),
+  };
+  let next: UsageAnalyticsUiFilters = {};
+  let view: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      view = create(React.createElement(UsagePage, {
+        analytics: undefined,
+        filters: {},
+        onExport: () => undefined,
+        onFiltersChange: (filters) => { next = filters; },
+        onOpenSession: () => undefined,
+        summary,
+      }));
+    });
+    const preset = view!.root.findAllByType("button").find((node) => node.children.join("") === "Last 7 days");
+    assert.ok(preset, "the Last 7 days preset is rendered while analytics is loading");
+    await act(async () => { preset!.props.onClick(); });
+
+    assert.deepEqual(next, { from: "2026-10-24", to: "2026-10-30" });
+    // Same buckets as the filter, which also has no analytics zone to work with.
+    const kept = filterGlobalUsageSummary(summary, next);
+    assert.equal(kept.totals.invocationCount, 1);
+    assert.equal(kept.byModel[0]?.projects[0]?.sessions[0]?.runs[0]?.invocations[0]?.invocationId, "invocation-recent");
+  } finally {
+    if (view) await act(async () => { view!.unmount(); });
+    t.mock.timers.reset();
+  }
 });

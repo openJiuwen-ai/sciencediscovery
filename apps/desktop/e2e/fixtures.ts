@@ -81,6 +81,18 @@ export interface ModelRecord {
  *  fields that page prints and leaves the rest to the component's defaults. */
 export type JsonRecord = Record<string, any>;
 
+/** One run a Session already took: the row `GET .../runs` lists, and the event
+ *  bodies its log holds in the order the server wrote them.
+ *
+ *  The `run` row is what makes the app replay the log at all — it is listed,
+ *  found terminal, and then read back whole with `?after=0`. The wrapper fields
+ *  a `SessionRunEvent` also carries (`runId`, `sessionId`, `sequence`) are the
+ *  fixture's to add, because the order of `events` already says the sequence. */
+export interface ReplayRecord {
+  events: JsonRecord[];
+  run: JsonRecord;
+}
+
 export interface MockOptions {
   /** Fail the health probe, for the offline screen. */
   healthStatus?: number;
@@ -98,6 +110,15 @@ export interface MockOptions {
    *  id. A version with no entry reads as empty. */
   artifactContents?: Record<string, string>;
   files?: unknown[];
+  /** The runs each Session already took, keyed by Session id. A Session with no
+   *  entry has taken none, which is the fresh workspace every other spec opens
+   *  on. The transcript is rebuilt from these alone — the stored messages stay
+   *  as they were listed. */
+  runsBySession?: Record<string, ReplayRecord[]>;
+  /** The catalog behind `GET .../subagents`, keyed by Session id. It is the only
+   *  place a replayed child's steps live, so a spec that opens one needs both
+   *  the snapshot in the run's log and the row here. */
+  subagentsBySession?: Record<string, JsonRecord[]>;
   /** The bytes behind `GET .../file?path=`, keyed by workspace path. A path
    *  with no entry reads as the fixture's small CSV. A string is served as
    *  `text/plain`; `FileContent` carries bytes of its own type. */
@@ -637,10 +658,27 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       }
 
       const runs = /^\/api\/sessions\/([^/]+)\/runs$/.exec(path);
-      if (runs && method === "GET") return json(route, 200, []);
+      if (runs && method === "GET") {
+        return json(route, 200, (options.runsBySession?.[runs[1]!] ?? []).map((entry) => entry.run));
+      }
+
+      const runEvents = /^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/events$/.exec(path);
+      if (runEvents && method === "GET") {
+        const [sessionId, runId] = [runEvents[1]!, runEvents[2]!];
+        const entry = (options.runsBySession?.[sessionId] ?? []).find((candidate) => candidate.run.id === runId);
+        return json(route, 200, (entry?.events ?? []).map((event, index) => ({
+          createdAt: String(entry?.run.createdAt ?? CREATED_AT),
+          event,
+          runId,
+          sequence: index + 1,
+          sessionId,
+        })));
+      }
 
       const subagents = /^\/api\/sessions\/([^/]+)\/subagents$/.exec(path);
-      if (subagents && method === "GET") return json(route, 200, []);
+      if (subagents && method === "GET") {
+        return json(route, 200, options.subagentsBySession?.[subagents[1]!] ?? []);
+      }
 
       const artifacts = /^\/api\/sessions\/([^/]+)\/artifacts$/.exec(path);
       if (artifacts && method === "GET") return json(route, 200, []);

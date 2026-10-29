@@ -24,6 +24,8 @@ export interface CasObjectRef {
 }
 
 export interface ExecutionRun {
+  /** Canonical immutable shell context/result digest; rejects conflicting recovery commits. */
+  resultDigest?: string;
   /** Historical runs recorded the accelerator device used, if any. */
   accelerator?: Record<string, unknown> | null;
   /** Historical runs may still record direct-v2 / systemd modes from older runners. */
@@ -64,7 +66,7 @@ export interface ExecutionRun {
   /** Historical runs recorded the compute resource profile they ran under. */
   resourceProfile?: Record<string, unknown>;
   runnerVersion: string;
-  sandbox: SandboxKind | "none";
+  sandbox: SandboxKind | "none" | "unavailable";
   directAuthorization?: import("./environment.js").DirectExecutionAuthorization;
   sessionId: string;
   startedAt: string;

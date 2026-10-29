@@ -361,6 +361,7 @@ test("sedimentable variable policy filters reserved, blocked, and malformed keys
     "bad-name": "no",
     PATH: "/usr/bin",
     PYTHONSTARTUP: "/tmp/s.py",
+    PYTHONUNBUFFERED: "0",
     SAFE_TOKEN: "123",
   });
   assert.deepEqual(variables, { FOO: "ok", SAFE_TOKEN: "123" });

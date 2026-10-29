@@ -396,6 +396,7 @@ test("committed non-zero exit still records failed", async (context) => {
   const result = await recorder.executeShell({
     agentId: "main",
     code: "false",
+    executionId: "exec-failed",
     permissionEpoch: permissionEpoch as any,
     runnerClient: { health: async () => ({ sandbox: "bubblewrap" }) } as any,
     sessionId: "session-1",

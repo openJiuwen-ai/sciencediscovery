@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ExecutionRouter } from "@sciencediscovery/execution-router";
 import { createIdeaResearchClient } from "../idea-tree/research.js";
 import { resolve } from "node:path";
 
@@ -48,7 +49,7 @@ import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
-import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
+import { publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
 import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
@@ -146,6 +147,44 @@ export function createPlatformServices(
   }, config.memoryGraph.neo4jPassword, config.memoryGraph.available !== false);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
   const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  // Execution router: registry + capability probing (reuses the runner's
+  // /execution-capability and /health, no new wire format). Providers B/C are
+  // stubs at this stage; refresh re-probes via POST /api/execution-provider.
+  const executionRouter = new ExecutionRouter({
+    sources: {
+      runnerCapability: () => runnerClient.executionCapability(),
+      runnerHealth: () => runnerClient.health(),
+    },
+    probe: { log: (message) => apiLog.warn("execution_router_probe", { message }) },
+    onProviderDowngrade: async (event) => {
+      // Provider downgrade hook (B/C -> A): every always_allow session is
+      // forced down to ask_for_dangerous (reusing setApprovalMode's
+      // Permission Epoch semantics).
+      let forced = 0;
+      for (const project of store.listProjects()) {
+        for (const session of store.listSessions(project.id, "all")) {
+          if (session.approvalMode !== "always_allow") continue;
+          const modeChange = await store.setApprovalMode(
+            session.id,
+            "ask_for_dangerous",
+            "Execution provider lost its sandbox; approval mode was tightened",
+          );
+          await publishApprovalModeChange(store, session.id, {
+            approvalMode: modeChange.session.approvalMode,
+            permissionEpochId: modeChange.permissionEpoch.id,
+            previousApprovalMode: "always_allow",
+          });
+          forced += 1;
+        }
+      }
+      event.forcedSessions = forced;
+      apiLog.warn("execution_provider_downgraded", {
+        forcedSessions: forced,
+        from: event.from.provider,
+        to: event.to.provider,
+      });
+    },
+  });
   const evolveAvailability = new EvolveAvailability(config.evolve);
   const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 
@@ -449,6 +488,7 @@ export function createPlatformServices(
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    executionRouter,
     ideaResearch,
     ideaTreeAuthorities,
     ideaTreeRepository,
@@ -562,6 +602,17 @@ export async function initializePlatformServices(
   await mcpCatalog.refresh().catch((error) => {
     apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });
     console.warn("MCP catalog was unavailable during API startup:", error);
+  });
+  store.shellExecutions.configureRecovery({
+    runner: (execution) => {
+      try {
+        store.assertSessionWritable(execution.sessionId);
+        store.assertSessionAllowsRunner(execution.sessionId, execution.runnerId);
+      } catch { throw Object.assign(new Error("Execution observation is no longer authorized"), { statusCode: 403 }); }
+      return execution.runnerId === "local" ? runnerClient : remoteCompute.runnerClient(execution.runnerId);
+    },
+    finalize: (context, result, runner, status) => provenanceRecorder.commitExistingShellExecutionResult(context, result, runner, status),
+    finalizeFailure: (context, failure) => provenanceRecorder.commitExistingShellExecutionFailure(context, failure),
   });
   await initializeComponent("artifact_recovery", () => artifactManager.resumeInterrupted());
   await initializeComponent("run_recovery", () => recoverSessionRuns(store, memoryGraphClient));

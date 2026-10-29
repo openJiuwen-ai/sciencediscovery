@@ -261,6 +261,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # concurrent worktrees. Only the pinned installation may be shared.
   export JIUWENSWARM_HOME="$(absolute_from_repository "${JIUWENSWARM_HOME:-$runtime_root/jiuwenswarm}")"
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"
+  export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
   # Install the pinned release when missing and create this layer's instance. A
   # prepared workspace is one whose host installed the Node dependencies and the
   # pinned Chromium — the shared runner does that before it freezes the plan —

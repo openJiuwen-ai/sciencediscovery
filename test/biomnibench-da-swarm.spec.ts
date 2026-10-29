@@ -76,7 +76,7 @@ for (const sample of cases) {
     const workspaceBudget = positiveNumber("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 * 1024 ** 3);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     const preparationBudget = 1_800_000;
-    test.setTimeout(budget + evaluationBudget + 2 * preparationBudget + 360_000);
+    test.setTimeout(budget + 2 * evaluationBudget + 2 * preparationBudget + 360_000);
     expect(process.env.E2E_SWARM_TASK, "BLOCKED: isolated Swarm stack required").toBe("1");
     const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT", "E2E_BIOMNI_FIXTURE_ROOT", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN", "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY", "SCIENCE_TAG_PLAN");
     if ((process.env.E2E_BIOMNI_EVALUATION ?? "rubric") !== "rubric") throw new Error("L5 requires rubric scoring");
@@ -155,7 +155,7 @@ for (const sample of cases) {
       await journey.step("Score and validate the evidence", "Require a valid original-rubric score and complete generator/judge usage before publishing metrics.", async () => {
         const judgeStart = performance.now();
         metrics.evaluation = { status: "running", gating: true };
-        await execute(python, [join(scripts, "judge.py"), "--rubric", join(task, "tests/rubric.txt"),
+        await execute(python, [join(scripts, "judge.py"), "--case", sample.id, "--rubric", join(task, "tests/rubric.txt"),
           "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
           "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: evaluationBudget });
         metrics.evaluation = { ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8")), gating: true };
@@ -166,6 +166,25 @@ for (const sample of cases) {
           judge_tokens: tokens.total, judge_input_tokens: tokens.input, judge_output_tokens: tokens.output,
           total_tokens: metrics.measurements.generation_tokens + tokens.total });
         if (!tokens.complete) throw new Error("UNREPORTED_JUDGE_TOKENS");
+        // Optional non-gating local clarified rubric (#346). Failures here must not sink the official gate.
+        try {
+          const localRegistry = JSON.parse(await readFile(join(scripts, "local-rubrics.json"), "utf8"));
+          const variant = (localRegistry.variants || []).find((entry: { case_id?: string }) => entry.case_id === sample.id);
+          if (variant?.path) {
+            await execute(python, [join(scripts, "local_scoring.py"), "--case", sample.id,
+              "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
+              "--output", testInfo.outputPath("quality-scorecard.local.json")], { timeout: evaluationBudget });
+            metrics.local_evaluation = {
+              ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.local.json"), "utf8")),
+              gating: false,
+            };
+          }
+        } catch (localError) {
+          metrics.local_evaluation = {
+            status: "error", score: null, gating: false,
+            error: localError instanceof Error ? localError.message : String(localError),
+          };
+        }
         validateMetrics(metrics, entry, plan);
         completed = true;
       });

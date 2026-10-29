@@ -66,6 +66,61 @@ not a claim that an unknown-cost request was free. Missing usage remains an
 accounting failure for the resource baseline; independent scoring never turns
 the original failed E2E into a pass. Neither driver approves a baseline.
 
+### Offline repeat grading (no research generation)
+
+For the eight historical DA-13-3 / DA-14-1 answers, create an input manifest
+with exactly four entries per case. Paths are relative to that manifest:
+
+```json
+{"answers":[{"id":"a1-research-1-r1","case_id":"da-13-3","evidence":"saved/a1-research-1-r1"}]}
+```
+
+The example shows one entry; supply all eight. Each directory must contain the
+original nonempty `trace.md` and `answer.txt`. Provide the unchanged official
+rubrics under `<data-root>/<case>/tests/rubric.txt`. Configure
+`BIOMNI_JUDGE_BASE_URL`, `BIOMNI_JUDGE_MODEL`, and `BIOMNI_JUDGE_API_KEY` in the
+process environment. "Offline" means scoring saved answers without research;
+the existing `judge.py` still calls that configured provider and incurs cost.
+
+```bash
+python test/benchmarks/biomnibench-da/repeat_grade.py \
+  --inputs /path/to/eight-answers.json --data-root /path/to/verified-dataset \
+  --repeats 3 --output /path/to/new-repeat-grade-directory
+```
+
+The runner verifies official rubric pins before calls, snapshots the exact
+input bytes, records their SHA256 hashes, and invokes `judge.py` at temperature
+0 three times per answer. Each evaluation has a separate directory, including
+all bounded recovery attempts; existing outputs cannot be overwritten. The
+JSON and Markdown reports retain every score and criterion level, count changes
+between adjacent successful repeats and disagreements over all successful
+pairs, and disclose failures. Failed repeats are not treated as zero scores or
+as stable grades. These diagnostics never replace the formal L5 figures.
+
+The historical pairs remain unrecovered. Maintainer-authorized Manual answers
+and their completed three-repeat measurement are recorded in
+[issue-346-measurement.md](issue-346-measurement.md). That measurement motivates
+the registered DA-13-3 local variant; it does not reconstruct the missing eight
+answers. DA-14-1's 21-column naming remains deferred.
+
+`rescore.py` now produces both channels for saved DA-13-3 evidence: official
+`quality-scorecard.json` and separately pinned `quality-scorecard.local.json`.
+The swarm/CI journey uses the same local evaluator after official grading.
+Official recovery rejects a local rubric supplied as its `--rubric` argument.
+For local-only diagnostics, explicitly opt in:
+
+```bash
+python test/benchmarks/biomnibench-da/judge.py --case da-13-3 --local-variant \
+  --rubric test/benchmarks/biomnibench-da/local-rubrics/da-13-3.local-rubric-v1.txt \
+  --trace /path/to/trace.md --answer /path/to/answer.txt --output /new/local-score.json
+```
+
+Local provider failures remain informational and retain rubric provenance.
+Local token usage and retry records stay in the local scorecard/attempt ledger;
+official scores, token totals and judge duration exclude local evaluation.
+Both registered input hashes are checked during task preflight. No reduction
+in local judge variance is claimed until that variant is repeat-graded in CI.
+
 ## Pinned inputs and preparation
 
 [manifest.json](manifest.json) fixes dataset revision
@@ -77,10 +132,13 @@ when shared files are counted once per task; the largest single file is about
 
 The CI matrix comes from the frozen test plan. Each Biomni worker downloads
 only its own task, using `HF_TOKEN` with approved access to the gated dataset.
-An unauthenticated download is not sufficient. No task data, reference
-trajectories, rubric answers or credentials are committed here. Benchmark
-artifacts are CC-BY-4.0; underlying datasets retain their source terms. Retain
-attribution to Phylo and the source publications when distributing results.
+An unauthenticated download is not sufficient. Source task data and credentials
+are not committed here. The authorized Manual answer/trace fixtures and the
+separate local rubric are evaluation artifacts, kept outside the Agent's inputs.
+The local rubric is adapted from Phylo's pinned BiomniBench-DA DA-13-3 rubric
+(CC-BY-4.0); criteria 4 and 5 are locally clarified, with unchanged weights.
+Underlying datasets retain their source terms. Retain attribution to Phylo and
+the source publications when distributing results.
 
 [prepare.py](prepare.py) checks sizes and streams checksums without loading
 large files into RAM. For LFS files it hashes the content with SHA256,
@@ -110,6 +168,14 @@ same structured reference schema accepted by the Composer and validated by the
 API. The persisted Run must contain the resolved reference, and its effective
 settings snapshot must include the Skill ID.
 
+This fidelity boundary applies to the **official baseline**. Any local clarified
+rubric/checklist must be a separate file with its own version and pin; it must
+never edit the upstream task or rubric in place or be appended to the official
+research prompt. A local-variant score is for regression tracking only.
+Registered pins live in [local-rubrics.json](local-rubrics.json); DA-13-3 uses
+`local-rubric-v1` for criteria 4 and 5. Criteria 1–3 and 6 remain verbatim;
+criterion 6 needs more samples before any rewrite. See the measurement note.
+
 Each task appends this parameter block before the platform delivery appendix:
 
 ```text
@@ -136,7 +202,8 @@ including using its available scientific tools.
 
 | Metric | Definition |
 | --- | --- |
-| Score | Original rubric, every criterion scored and summed by the local adapter, bounded to 0–100 |
+| Official score | Original pinned rubric, every criterion scored and summed by the local adapter, bounded to 0–100; the only score used in gates and release figures |
+| Local-variant score | Separately identified clarified rubric, informational only; `da-13-3` registers `local-rubric-v1` (criteria 4/5 clarifications for #346); unavailable/`—` for cases without a registry pin |
 | Tool calls | Unique tool-call IDs per Agent run, including main and subagent streams; failed attempts count |
 | Tool rounds | Distinct `(agentId, agentRunId, turn)` containing a tool call; parallel calls in one turn count as one round |
 | Memory | Peak sampled sum of RSS for this isolated local worker and descendants, sampled every second during generation |
@@ -171,6 +238,18 @@ Gemini verifier implementation or a leaderboard-equivalent result. Unsupported
 rubric syntax fails before generation. The Judge keeps its existing four-attempt
 maximum, uses the same evidence each time and accepts the first valid result.
 The legacy numerical verifier is available for diagnostics only.
+
+Here, **official** identifies the unchanged upstream rubric channel, not the
+upstream Gemini implementation. New scorecards record the rubric channel,
+version, Git blob OID and SHA256. Unregistered rubric files are diagnostic and
+non-gating; official recovery requires the selected task's pinned rubric.
+Historical schema-2 metrics without explicit rubric provenance remain readable.
+
+Published JSON preserves `evaluation` and `measurements.score` as official;
+`local_evaluation` is a separate non-gating output with its rubric identity.
+CI summaries label both columns; `—` means no local score is available. Local
+scores never enter the official mean, baseline comparison or quality threshold.
+An explicitly local or diagnostic rubric in the official field fails the gate.
 
 ## Temporary A3 aggregate gate
 

@@ -739,8 +739,16 @@ test("managed provisioner selects pinned Linux and macOS releases", async (conte
   assert.equal(macX64.packageArch, "osx-64");
   assert.equal(macX64.sha256, "b2bd613791c0a524883d7cb66505d630bf15badd1f492bc93ba78550a3a1a94b");
 
+  // [windows-desktop] win32 is a supported managed platform .
+  const winX64 = managedMicromambaRelease("x64", "win32");
+  assert.equal(winX64.filename, "micromamba-win-64");
+  assert.equal(winX64.packageArch, "win-64");
+  assert.equal(winX64.url, "https://github.com/mamba-org/micromamba-releases/releases/download/2.8.1-0/micromamba-win-64");
+  assert.equal(winX64.sha256, "8a51f88ec02600488ea20c3acd93fbd4da6c0f03fc499aa53fd234c6749b94b0");
+
   assert.throws(() => managedMicromambaRelease("riscv64", "linux"), /unavailable for architecture riscv64/);
-  assert.throws(() => managedMicromambaRelease("x64", "win32"), /unavailable for platform win32/);
+  assert.throws(() => managedMicromambaRelease("arm64", "win32"), /unavailable for architecture arm64/);
+  assert.throws(() => managedMicromambaRelease("x64", "freebsd"), /unavailable for platform freebsd/);
 
   const requestedUrls: string[] = [];
   await assert.rejects(

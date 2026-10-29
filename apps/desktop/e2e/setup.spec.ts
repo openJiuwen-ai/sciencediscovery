@@ -65,9 +65,19 @@ test("a workspace with no model cannot be used until the wizard's test passes", 
   await expect(finish).toBeVisible();
   expect(mock.state.models.map((entry) => entry.model)).toEqual(["demo-model"]);
 
+  // 测试 already saved this profile and got the provider's answer, so the click
+  // that continues has nothing left to verify: it writes the default onto that
+  // record. Asking again would put the reader through the same wait twice, with
+  // the same 连接成功 line at the end of it.
+  const connectivityTests = () => mock.calls.filter(
+    (call) => call.method === "POST" && /\/api\/models\/[^/]+\/test$/u.test(call.path),
+  );
+  expect(connectivityTests()).toHaveLength(1);
+
   await finish.click();
 
   await expect(page.locator(".app-shell")).toBeVisible();
+  expect(connectivityTests()).toHaveLength(1);
   await expect(page.getByText("科研会话", { exact: true })).toBeVisible();
   await expect(page.getByText("ScienceDiscovery", { exact: true })).toBeVisible();
   // The new profile became the default, so the composer names it rather than

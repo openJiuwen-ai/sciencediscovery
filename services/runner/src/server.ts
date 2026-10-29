@@ -23,6 +23,8 @@ import { fileURLToPath } from "node:url";
 import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
+// [windows-desktop] Owner-only (0600) semantics go through the platform facade (win32: icacls). See #477.
+import { restrictToOwner } from "./platform/index.js";
 import { RunnerReadiness } from "./readiness.js";
 
 import type {
@@ -36,6 +38,7 @@ import type {
   RunnerRuntimeStatus,
   RemoteWorkspaceFile,
   RemoteWorkspaceSnapshot,
+  SandboxKind,
   SandboxNetworkCapability,
   ScientificEnvsCapability,
   SetupScientificEnvironmentsRequest,
@@ -76,7 +79,7 @@ import { KernelManager } from "./kernel-manager.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
 import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
-import { ExecutionManager } from "./execution-manager.js";
+import { ExecutionManager, ExecutionManagerError } from "./execution-manager.js";
 import { committedWorkspaceSnapshot, publishWorkspaceFile, RefStore, streamSnapshotFile, VersionStore, withWorkspaceMutation,
   workspaceSnapshotFiles, type AgentStateRef, type SnapshotFile } from "@sciencediscovery/cas";
 import { HostNpuJobBroker } from "./npu-broker.js";
@@ -304,7 +307,7 @@ async function resolveExecutionWorkspace(
     execution.workspaceRoot = await remoteWorkspaceRoot(config.dataDir, execution.runnerWorkspaceKey);
     delete execution.readOnlyWorkspaceRoot;
   }
-  execution.workspaceRoot = await validatedWorkspace(config.dataDir, execution.workspaceRoot);
+  execution.workspaceRoot = await validatedWorkspace(config.dataDir, execution.workspaceRoot, config.extraWorkspaceRoots);
 }
 
 function currentExecutionUser(): string {
@@ -348,18 +351,28 @@ export function loadRunnerConfig(env: NodeJS.ProcessEnv = process.env, cwd = rep
     return value;
   };
   const requestedProvider = env.SCIENCE_AGENT_SANDBOX_PROVIDER?.trim() || "auto";
-  if (!["auto", "bubblewrap", "seatbelt"].includes(requestedProvider)) {
-    throw new Error("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt");
+  if (!["auto", "bubblewrap", "seatbelt", "none"].includes(requestedProvider)) {
+    throw new Error("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, seatbelt, or none");
   }
+  // [windows-desktop] Windows resolves to the direct-execution
+  // provider; the WSL sandbox (Provider B) stays an optional plugin.
   const sandboxProvider = requestedProvider === "auto"
-    ? (process.platform === "darwin" ? "seatbelt" : "bubblewrap")
-    : requestedProvider as "bubblewrap" | "seatbelt";
+    ? (process.platform === "darwin" ? "seatbelt" : process.platform === "win32" ? "none" : "bubblewrap")
+    : requestedProvider as "bubblewrap" | "seatbelt" | "none";
   return {
     authToken: env.SCIENCE_AGENT_RUNNER_TOKEN?.trim() || "sciencediscovery-runner-local",
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
     sandboxProvider,
     seatbeltPath: env.SCIENCE_AGENT_SEATBELT_PATH?.trim() || "/usr/bin/sandbox-exec",
     dataDir: resolve(cwd, env.SCIENCE_AGENT_DATA_DIR?.trim() || ".sciencediscovery-data"),
+    // [windows-desktop] `;`-separated operator-authorized workspace roots
+    // (direct-execution whitelist extension). Relative entries resolve against
+    // the runner cwd, exactly like SCIENCE_AGENT_DATA_DIR.
+    ...((() => {
+      const roots = (env.SCIENCE_RUNNER_EXTRA_WORKSPACE_ROOTS?.trim() || "")
+        .split(";").map((entry) => entry.trim()).filter(Boolean).map((entry) => resolve(cwd, entry));
+      return roots.length ? { extraWorkspaceRoots: roots } : {};
+    })()),
     execTimeoutMs,
     maxOutputBytes: parseByteQuota("SCIENCE_AGENT_MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
     maxWorkspaceBytes: parseByteQuota("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", DEFAULT_MAX_WORKSPACE_BYTES),
@@ -451,7 +464,9 @@ export function createRunnerServer(
   });
   const executorConfig: RunnerConfig = { ...config, npuDeviceProbe: probeRequestedNpuDevices };
   const executionQueues = new KeyedTaskQueue();
-  const managedExecutions = new ExecutionManager(config.dataDir);
+  const managedExecutions = new ExecutionManager(config.dataDir, detail => {
+    logger.warn("execution_resources_quarantined", { ...detail });
+  });
   const workspaceVersions = new VersionStore(config.dataDir);
   const seenExecutions = new Map<string, number>();
   const activeExecutions = new Map<string, RunnerExecutionStatus>();
@@ -543,6 +558,8 @@ export function createRunnerServer(
           cgroupMode: RESOURCE_LIMIT_MODE,
           cgroupRoot: "",
           executionAuth: "bearer+hmac-sha256",
+          ...managedExecutions.identity,
+          capabilities: { executionRecoveryVersion: 1 },
           executionUser,
           executionTimeoutMs: config.execTimeoutMs,
           maxFileBytes: MAX_RUNNER_FILE_BYTES,
@@ -741,6 +758,8 @@ export function createRunnerServer(
           const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
           try {
             await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+            // [windows-desktop] 0600 has no POSIX semantics on NTFS; route through the platform facade. See #477.
+            await restrictToOwner(temporary);
             if (conflict === "overwrite") await rename(temporary, file);
             else {
               try { await link(temporary, file); }
@@ -922,7 +941,7 @@ export function createRunnerServer(
         const environmentId = decodeURIComponent(installMatch[1]!);
         const workspaceRoot = input.runnerWorkspaceKey
           ? await validatedWorkspace(config.dataDir, await remoteWorkspaceRoot(config.dataDir, input.runnerWorkspaceKey))
-          : input.workspaceRoot ? await validatedWorkspace(config.dataDir, input.workspaceRoot) : undefined;
+          : input.workspaceRoot ? await validatedWorkspace(config.dataDir, input.workspaceRoot, config.extraWorkspaceRoots) : undefined;
         const previousRevisionId = environmentStore.list().find((environment) => environment.id === environmentId)?.currentRevisionId;
         const revision = await environmentStore.install(
           environmentId,
@@ -982,15 +1001,15 @@ export function createRunnerServer(
         if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
         if (!direct) execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
         execution.maxOutputBytes ??= config.maxOutputBytes;
-        const accepted = managedExecutions.start(execution, (signal, log) => direct
+        const accepted = managedExecutions.submit(execution, (signal, log) => direct
           ? executeDirectShell(executorConfig, execution, signal, log)
           : execution.environmentId
           ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
-              return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log);
+              return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log, environmentStore);
             }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log));
-        sendJson(response, 202, accepted);
+          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log, environmentStore));
+        sendJson(response, accepted.accepted ? 202 : 200, accepted.execution);
         return;
       }
       if (request.method === "POST" && url.pathname === "/execute-shell") {
@@ -1004,6 +1023,7 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as ShellExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
+        managedExecutions.assertResourcesAvailable(execution);
         if ("directAuthorization" in execution) throw new Error("Direct execution requires its dedicated endpoint");
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
@@ -1022,9 +1042,9 @@ export function createRunnerServer(
           () => execution.environmentId
             ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
                 if (signal.aborted) throw new Error("Runner execution aborted before start");
-                return executeShell(executorConfig, execution, signal, undefined, gateways, runtime);
+                return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, undefined, environmentStore);
               }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-            : executeShell(executorConfig, execution, signal, undefined, gateways),
+            : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, undefined, environmentStore),
         )));
         return;
       }
@@ -1039,6 +1059,7 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as PythonExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
+        managedExecutions.assertResourcesAvailable(execution);
         if ("directAuthorization" in execution) throw new Error("Direct execution requires its dedicated endpoint");
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
@@ -1066,7 +1087,10 @@ export function createRunnerServer(
         path: (request.url ?? "/").split("?", 1)[0] || "/",
       });
       if (response.headersSent) response.destroy();
-      else sendJson(response, 400, { error: error instanceof Error ? error.message : "Runner request failed" } satisfies ApiError);
+      else sendJson(response, error instanceof ExecutionManagerError ? error.statusCode : 400, {
+        error: error instanceof Error ? error.message : "Runner request failed",
+        ...(error instanceof ExecutionManagerError ? { code: error.code } : {}),
+      } satisfies ApiError);
     }
   });
   server.once("close", () => {
@@ -1087,7 +1111,7 @@ export function createRunnerServer(
  * directory writes. Staging the bridge script stays on the launch path.
  */
 async function sandboxNetworkCapability(
-  sandbox: "bubblewrap" | "seatbelt",
+  sandbox: SandboxKind,
   gateways: Pick<EgressGatewayRegistry, "socketPath">,
 ): Promise<SandboxNetworkCapability> {
   try {
@@ -1102,7 +1126,10 @@ async function sandboxNetworkCapability(
       unavailableReason: error instanceof Error ? error.message : "The sandbox egress socket path is unavailable",
     };
   }
-  if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist", "open"] };
+  // [windows-desktop] "none" (Windows direct execution) filters through the
+  // same runner-owned TCP gateway as Seatbelt (env-injected proxy), so every
+  // mode stays available.
+  if (sandbox !== "bubblewrap") return { available: true, modes: ["none", "domain-allowlist", "open"] };
   try {
     await resolveEgressInterpreter();
     return { available: true, modes: ["none", "domain-allowlist", "open"] };
@@ -1216,6 +1243,15 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     logger.info("service_started", { host: config.host, port });
     console.log(`ScienceDiscovery runner listening on http://${config.host}:${port}`);
   }
+  // F10.6p: heartbeat. The runner is a single event loop; a field incident
+  // (2026-10-19) left it listening but never answering — alive on the port,
+  // frozen inside — and nothing in its log showed when it stopped making
+  // progress. A periodic line timestamps the freeze for exactly that case.
+  const startedAt = Date.now();
+  const heartbeat = setInterval(() => {
+    logger.info("runner_heartbeat", { uptimeMs: Date.now() - startedAt });
+  }, 60_000);
+  heartbeat.unref();
   const workspaceLabel = config.maxWorkspaceBytes === 0
     ? "unlimited"
     : `${config.maxWorkspaceBytes} bytes`;

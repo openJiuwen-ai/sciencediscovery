@@ -266,6 +266,21 @@ export function setProjectRunnerIds(
  * each file actually landed on — the path, not the name, is what the caller
  * has to report, since that is the only one that is true.
  */
+/**
+ * The name a file travels under, or nothing when it has none worth sending.
+ *
+ * Only the last segment may go: a directory selection, and a drop a page
+ * crafted, both hand over names like `../outside.csv`, and the route stores the
+ * part under the name it is given. This is also the string the answer echoes
+ * back as `originalName`, so the composer's cards are matched against it rather
+ * than against the file the browser held — see `mergeUpload`. Kept here, beside
+ * the request that names the part, so the two cannot disagree.
+ */
+export function uploadFileName(name: string): string | undefined {
+  const base = name.split(/[/\\]/u).at(-1);
+  return base === undefined || base === "" || base === "." || base === ".." ? undefined : base;
+}
+
 export function uploadWorkspaceFiles(
   client: ApiClient,
   sessionId: string,
@@ -274,8 +289,8 @@ export function uploadWorkspaceFiles(
 ): Promise<WorkspaceUploadResult> {
   const body = new FormData();
   for (const file of files) {
-    const name = file.name.split(/[/\\]/u).at(-1);
-    if (!name || name === "." || name === "..") throw new Error("Choose a file with a valid name.");
+    const name = uploadFileName(file.name);
+    if (name === undefined) throw new Error("Choose a file with a valid name.");
     body.append("files", file, name);
   }
   return client.request<WorkspaceUploadResult>(

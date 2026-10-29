@@ -161,6 +161,19 @@ export function setModelTurnStreamerForTest(streamer: ModelTurnStreamer): () => 
   };
 }
 
+/** One `[model-sse-summary]` line per model request, with no prompt or answer text. */
+function withWireSummary(streamer: ModelTurnStreamer, purpose: string): ModelTurnStreamer {
+  return (endpoint, systemPrompt, history, tools, policy, signal, callbacks = {}) => streamer(
+    endpoint, systemPrompt, history, tools, policy, signal, {
+      ...callbacks,
+      onWireDiagnostics: (diagnostics) => {
+        try { console.info(`[model-sse-summary] ${JSON.stringify({ ...diagnostics, purpose })}`); } catch { /* logging must not change the request */ }
+        callbacks.onWireDiagnostics?.(diagnostics);
+      },
+    },
+  );
+}
+
 type Listener = (event: AgentEvent) => void;
 type WireMessage = AgentHistoryMessage;
 
@@ -521,7 +534,7 @@ class NativeAgent implements NativeAgentHandle {
         }, this.history);
       }
       const compactor = new HistoryCompactor<WireMessage>(async (prompt, signal, onProgress) => {
-        const summaryTurn = await modelTurnStreamer(
+        const summaryTurn = await withWireSummary(modelTurnStreamer, "compaction")(
           this.endpoint,
           "You compact conversation history into dense, factual summaries.",
           [{ role: "user", content: prompt }],
@@ -623,7 +636,7 @@ class NativeAgent implements NativeAgentHandle {
           systemPrompt: this.systemPrompt,
           tools: () => this.inputState!.read<{ specs: ReturnType<ToolRegistry<WireMessage>["visibleSpecs"]> }>("tools").specs,
         });
-      const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
+      const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, withWireSummary(modelTurnStreamer, "task"));
       let reportedModelUsage = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,

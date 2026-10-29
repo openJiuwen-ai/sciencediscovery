@@ -18,7 +18,15 @@ import { dirname, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import { CasStore } from "@sciencediscovery/cas";
-import type { ArtifactOrigin, ArtifactOriginMeta, Project, ScientificArtifactKind } from "@sciencediscovery/schema";
+import type {
+  ArtifactOrigin,
+  ArtifactOriginMeta,
+  Project,
+  RunStreamEvent,
+  ScientificArtifactKind,
+  Subagent,
+  SubagentStep,
+} from "@sciencediscovery/schema";
 
 import { apiLog } from "../logging.js";
 import type { SessionStore } from "../store.js";
@@ -105,6 +113,68 @@ export function fillSampleSession(
 }
 
 /**
+ * The children the recorded run delegated, with the execution the catalog is
+ * the only place to read.
+ *
+ * The parent's stream carries a `subagent.updated` snapshot whenever a child
+ * changes and no steps at all — the steps travel on the child's own substream.
+ * A live child writes both into the catalog, so a Session that arrives as a
+ * recording opens every delegation on "no execution recorded" unless the seed
+ * puts those rows back. They are rebuilt from the same two sources: the child's
+ * last snapshot, and the steps its substream recorded, merged by step id
+ * because a step is re-emitted as it changes.
+ *
+ * A child the recording left `running` is left out. The catalog closes such a
+ * row on load as interrupted by a restart, and this install has no attempt of
+ * its own to continue it.
+ */
+function recordedSubagents(
+  sample: SampleSession,
+  ids: { dataDir: string; projectId: string; sessionId: string },
+): Subagent[] {
+  const files = new Map<string, string>();
+  for (const [path, text] of Object.entries(sample.files)) {
+    files.set(fillSampleSession(path, ids), fillSampleSession(text, ids));
+  }
+  const streams = new Map<string, string>();
+  const snapshots = new Map<string, Subagent>();
+  for (const [path, text] of files) {
+    const child = /\/subagent-([^/]+)\.jsonl$/.exec(path);
+    if (child) streams.set(child[1]!, text);
+    if (!path.endsWith("/main.jsonl")) continue;
+    for (const event of parseStream(text)) {
+      if (event.type === "subagent.updated") snapshots.set(event.subagent.id, event.subagent);
+    }
+  }
+  const children: Subagent[] = [];
+  for (const [id, snapshot] of snapshots) {
+    if (snapshot.status === "running") continue;
+    const steps = new Map<string, SubagentStep>();
+    for (const event of parseStream(streams.get(id) ?? "")) {
+      if (event.type === "subagent.step") steps.set(event.step.id, event.step);
+    }
+    children.push({ ...snapshot, steps: [...steps.values()] });
+  }
+  return children;
+}
+
+/** One stream's events. A recording is data, not code, so a line this build
+ *  cannot read is skipped rather than allowed to take the sample with it. */
+function parseStream(text: string): RunStreamEvent[] {
+  const events: RunStreamEvent[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const record = JSON.parse(line) as { event?: RunStreamEvent };
+      if (record.event !== undefined) events.push(record.event);
+    } catch {
+      continue;
+    }
+  }
+  return events;
+}
+
+/**
  * Seed the sample Session, if this install should have one.
  *
  * Returns whether anything was written. Never throws: a sample that cannot be
@@ -142,6 +212,7 @@ export async function seedSampleSession(store: SessionStore): Promise<boolean> {
     for (const [path, base64] of Object.entries(sample.encoded)) {
       await writeSample(store.dataDir, path, ids, Buffer.from(base64, "base64"));
     }
+    await store.restoreSubagents(recordedSubagents(sample, ids));
     await writeMarker(store.dataDir, `${session.id}\n`);
     apiLog.info("sample_session_seeded", { projectId: project.id, sessionId: session.id });
     return true;

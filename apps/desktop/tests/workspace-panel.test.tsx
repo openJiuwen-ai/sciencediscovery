@@ -47,6 +47,7 @@ function render(tabs: TabState, over: Partial<Parameters<typeof WorkspacePanel>[
       actions={actions}
       activeGroup="files"
       files={[]}
+      onCloseDetail={() => {}}
       onCollapse={() => {}}
       onSelectGroup={() => {}}
       outputs={[]}
@@ -93,6 +94,35 @@ test("a fresh panel offers two group tabs and opens on 工作区", () => {
   // collapse control is left; the expand affordance is gone.
   assert.doesNotMatch(markup, /aria-label="放大面板"/);
   assert.match(markup, /aria-label="收起面板"/);
+  // Nothing is open in the detail mode, so there is nothing to go back from.
+  assert.doesNotMatch(markup, /返回产物和文件/);
+});
+
+test("a child's record carries its own way back to the panel's groups", () => {
+  const child: Subagent = {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "child-1",
+    input: { description: "Rank the candidates", prompt: "Rank them.", subagentType: "general-purpose" },
+    maxTurns: 12,
+    parentTurnId: "run-1",
+    sessionId: "session-1",
+    status: "completed",
+    steps: [{
+      content: "The top three are stable.",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "step-1",
+      kind: "assistant",
+      status: "completed",
+    }],
+    timeoutSeconds: 600,
+    turnCount: 3,
+  };
+  const markup = render(initialTabState(), { subagent: child });
+  // The record replaces the groups, so the way back cannot be a tab: it is a
+  // control of its own in the header the reader is looking at.
+  assert.equal(count(markup, 'role="tab"'), 0);
+  assert.match(markup, /aria-label="返回产物和文件"/);
+  assert.match(markup, /The top three are stable\./);
 });
 
 test("工作区 lists every file and folder of the workspace", () => {

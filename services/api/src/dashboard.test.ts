@@ -224,6 +224,31 @@ test("notebook preview truncates to maxCells", async (context) => {
   assert.equal(payload.truncated, true);
 });
 
+test("notebook preview fills maxCells with valid cells after skipping unsupported cell types", async (context) => {
+  const fixture = await createFixture(context);
+  const ipynb = JSON.stringify({
+    cells: [
+      { cell_type: "heading", source: "# not a supported cell" },
+      { cell_type: "code", source: "print(1)", execution_count: 1 },
+      { cell_type: "code", source: "print(2)", execution_count: 2 },
+    ],
+  });
+  const vid = await seedArtifact(fixture, {
+    content: ipynb,
+    kind: "notebook",
+    logicalName: "analysis.ipynb",
+    mediaType: "application/x-ipynb+json",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, undefined, undefined, "2",
+  );
+  if (payload.mode !== "notebook-cells") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.totalCells, 3);
+  assert.equal(payload.cells.length, 2, "unsupported cells must not consume the maxCells budget");
+  assert.deepEqual(payload.cells.map((cell) => cell.cell_type), ["code", "code"]);
+  assert.equal(payload.truncated, false, "dropping an unsupported cell is not truncation");
+});
+
 test("markdown preview truncates to maxChars", async (context) => {
   const fixture = await createFixture(context);
   const big = "a".repeat(10_000);
@@ -261,6 +286,49 @@ test("dataset preview parses csv tables and truncates rows", async (context) => 
   assert.equal(payload.totalRows, 5);
   assert.equal(payload.rows.length, 2);
   assert.equal(payload.truncated, true);
+});
+
+test("dataset preview parses quoted csv cells", async (context) => {
+  const fixture = await createFixture(context);
+  // RFC 4180: a comma inside quotes and a doubled quote are data, not syntax.
+  const csv = 'name,note\nAlice,"hello, world"\nBob,"say ""hi"""';
+  const vid = await seedArtifact(fixture, {
+    content: csv,
+    kind: "dataset",
+    logicalName: "table.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "10",
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.deepEqual(payload.columns, ["name", "note"]);
+  assert.equal(payload.totalRows, 2);
+  assert.deepEqual(payload.rows[0], ["Alice", "hello, world"]);
+  assert.deepEqual(payload.rows[1], ["Bob", 'say "hi"']);
+});
+
+test("dataset preview keeps an unclosed quote as one field", async (context) => {
+  const fixture = await createFixture(context);
+  // One opening quote and no closing one makes the entire file a single cell.
+  // The content stays small so this test pins the parsed result, not its cost:
+  // such a file must still preview as one honest column and no rows.
+  const body = `${"x".repeat(64 * 1024)},tail\n`;
+  const vid = await seedArtifact(fixture, {
+    content: `"${body}`,
+    kind: "dataset",
+    logicalName: "unclosed.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "10",
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.columns.length, 1);
+  assert.equal(payload.columns[0], body);
+  assert.equal(payload.rows.length, 0);
+  assert.equal(payload.totalRows, 0);
+  assert.equal(payload.truncated, false);
 });
 
 test("json preview keeps the dataset table for record arrays", async (context) => {
@@ -350,6 +418,42 @@ test("json preview returns formatted JSON for a plain object instead of an empty
   // Re-indented, so the payload is readable rather than a single line.
   assert.match(payload.source, /^\{\n {2}"name": "af3",/);
   assert.equal(payload.totalChars, payload.source.length);
+});
+
+test("a json artifact of empty objects renders as JSON text, not an empty grid", async (context) => {
+  const fixture = await createFixture(context);
+  for (const [name, records] of [
+    ["empty-two.json", [{}, {}]],
+    ["empty-one.json", [{}]],
+  ] as const) {
+    const vid = await seedArtifact(fixture, {
+      content: JSON.stringify(records),
+      kind: "json",
+      logicalName: name,
+      mediaType: "application/json",
+    });
+    const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid);
+    if (payload.mode !== "json-source") assert.fail(`${name}: unexpected mode ${payload.mode}`);
+    assert.equal(payload.parsed, true);
+    assert.equal(payload.source, JSON.stringify(records, null, 2));
+    assert.equal(payload.totalChars, payload.source.length);
+    assert.equal(payload.truncated, false);
+  }
+});
+
+test("json preview keeps the table when record arrays carry keys", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: JSON.stringify([{ a: 1 }, { a: 2 }]),
+    kind: "json",
+    logicalName: "rows.json",
+    mediaType: "application/json",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid);
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.deepEqual(payload.columns, ["a"]);
+  assert.deepEqual(payload.rows, [["1"], ["2"]]);
+  assert.equal(payload.totalRows, 2);
 });
 
 test("json preview returns json-source for arrays that are not record arrays", async (context) => {
@@ -489,6 +593,61 @@ test("structure preview counts atoms in the .structure.json atom bag", async (co
   const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid);
   if (payload.mode !== "structure-source") assert.fail(`unexpected mode: ${payload.mode}`);
   assert.equal(payload.atomCount, 2);
+});
+
+test("structure preview does not claim truncation when the whole source is returned", async (context) => {
+  const fixture = await createFixture(context);
+  const pdb = Array.from({ length: 9_000 }, (_, index) => `ATOM  ${String(index + 1).padStart(5)}  C   ALA A   1`).join("\n");
+  const vid = await seedArtifact(fixture, {
+    content: pdb,
+    kind: "structure",
+    logicalName: "many.pdb",
+    mediaType: "chemical/x-pdb",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "1000000",
+  );
+  if (payload.mode !== "structure-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.atomCount, 9_000);
+  assert.equal(payload.source.length, pdb.length);
+  assert.equal(payload.truncated, false);
+});
+
+test("structure preview reports truncation when maxChars cuts the source", async (context) => {
+  const fixture = await createFixture(context);
+  const pdb = Array.from({ length: 200 }, (_, index) => `ATOM  ${String(index + 1).padStart(5)}  C   ALA A   1`).join("\n");
+  const vid = await seedArtifact(fixture, {
+    content: pdb,
+    kind: "structure",
+    logicalName: "long.pdb",
+    mediaType: "chemical/x-pdb",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "400",
+  );
+  if (payload.mode !== "structure-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.truncated, true);
+  assert.equal(payload.source.length, 400);
+  assert.equal(payload.totalChars, pdb.length);
+  assert.equal(payload.source, pdb.slice(0, 400));
+});
+
+test("structure preview at exactly maxChars returns the whole source without truncation", async (context) => {
+  const fixture = await createFixture(context);
+  const source = `HEADER ${"X".repeat(93)}`;
+  assert.equal(source.length, 100);
+  const vid = await seedArtifact(fixture, {
+    content: source,
+    kind: "structure",
+    logicalName: "boundary.pdb",
+    mediaType: "chemical/x-pdb",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "100",
+  );
+  if (payload.mode !== "structure-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.truncated, false);
+  assert.equal(payload.source, source);
 });
 
 test("figure preview surfaces the content URL without reading CAS bytes", async (context) => {

@@ -18,10 +18,10 @@ for (const selection of [undefined, "relative runtime", "/tmp/explicit runtime"]
       mkdirSync(bin, { recursive: true });
       const trace = join(temporary, "trace");
       writeFileSync(join(bin, "jiuwenswarm-start"), `#!/usr/bin/env bash
-printf '%s\\n' "$HOME" "$JIUWENSWARM_HOME" "$JIUWENSWARM_DATA_DIR" "$*" >> "$TRACE"
+printf '%s\\n' "$HOME" "$JIUWENSWARM_HOME" "$JIUWENSWARM_DATA_DIR" "$*" >> '${trace}'
 printf 'Status: stopped\\n  gateway: 20001\\n  web: 20000\\n'
 `, { mode: 0o755 });
-      const env = { ...process.env, JIUWENSWARM_SRC: join(temporary, "src"), TRACE: trace };
+      const env = { ...process.env, SCIENCE_AGENT_JIUWENSWARM_OVERRIDES: "1", JIUWENSWARM_SRC: join(temporary, "src"), TRACE: trace };
       delete env.JIUWENSWARM_HOME;
       delete env.JIUWENSWARM_INSTANCE;
       if (selection !== undefined) env.JIUWENSWARM_HOME = selection;
@@ -31,7 +31,7 @@ printf 'Status: stopped\\n  gateway: 20001\\n  web: 20000\\n'
       execFileSync("bash", ["scripts/jiuwenswarm.sh", "stop"], { cwd: repo, env });
       const lines = readFileSync(trace, "utf8").trimEnd().split("\n");
       for (let index = 0; index < lines.length; index += 4) {
-        assert.equal(lines[index], process.env.HOME);
+        assert.equal(lines[index], root);
         assert.equal(lines[index + 1], root);
         assert.equal(lines[index + 2], join(root, ".jiuwenswarm"));
         assert.match(lines[index + 3], /^(--status|--stop) sciencediscovery$/);
@@ -55,12 +55,22 @@ esac
     const stack = readFileSync(join(repo, "scripts/start-stack.sh"), "utf8");
     const block = stack.slice(stack.indexOf("    # Where the JiuwenSwarm instance listens;"), stack.indexOf('    local gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"'));
     const env = { ...process.env, TRACE: join(temporary, "trace"), TEST_PORT: "20001", SCRIPT_DIR: temporary };
-    delete env.JIUWENSWARM_GATEWAY_URL;
-    delete env.JIUWENSWARM_MGMT_URL;
+    env.JIUWENSWARM_GATEWAY_URL = "ws://foreign:1/tui";
+    env.JIUWENSWARM_MGMT_URL = "ws://foreign:2/ws";
     execFileSync("bash", ["-ec", `script_dir="$SCRIPT_DIR"; use_jiuwenswarm=1; ${block}`], { env });
     assert.deepEqual(readFileSync(env.TRACE, "utf8").trim().split("\n"), ["start", "env"]);
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 });
+
+for (const optIn of [false, true]) {
+  test(`inherited Swarm controls require explicit override opt-in (${optIn})`, () => {
+    const env = { ...process.env, SCIENCE_AGENT_JIUWENSWARM_OVERRIDES: optIn ? "1" : "0",
+      JIUWENSWARM_HOME: "/standalone", JIUWENSWARM_DATA_DIR: "/foreign-data", JIUWENSWARM_UNKNOWN: "foreign" };
+    const output = execFileSync("bash", ["-ec", 'source scripts/swarm-env.sh; configure_swarm_environment; printf "%s|%s|%s" "${JIUWENSWARM_HOME:-}" "${JIUWENSWARM_DATA_DIR:-}" "${JIUWENSWARM_UNKNOWN:-}"'],
+      { cwd: repo, env, encoding: "utf8" });
+    assert.equal(output, optIn ? "/standalone||" : "||");
+  });
+}
 
 for (const explicit of [false, true]) {
   test(`Docker keeps its persisted runtime namespace (override=${explicit})`, () => {

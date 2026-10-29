@@ -1,0 +1,267 @@
+{
+  "status": "complete",
+  "mode": "manual-offline-local-repeat-grade",
+  "full_e2e_rerun": false,
+  "source_run": "https://github.com/openJiuwen-ai/sciencediscovery/actions/runs/40819738668",
+  "note": "Manual validation NEW traces (not original 8 historical pairs). Authorized by Yi for #346 relaxed measurement.",
+  "temperature": 0,
+  "model": "deepseek-flash",
+  "repeats": 3,
+  "local_for": [
+    "da-13-3"
+  ],
+  "da_13_3_channel": "local-variant",
+  "da_14_1_channel": "official",
+  "rubric_channel": "local-variant+official",
+  "answers": [
+    {
+      "id": "da-13-3-manual-40819738668",
+      "case_id": "da-13-3",
+      "rubric_channel": "local-variant",
+      "rubric": {
+        "channel": "local-variant",
+        "version": "local-rubric-v1",
+        "git_blob_oid": "8ec40ac9c4842a8bc6ba4856776923478eec4ce0",
+        "sha256": "6655cc2ba7194eaca947de80b0a1b62f03b328271a9d4ccbabf79735bfdc7871",
+        "case_id": "da-13-3",
+        "clarifies_criteria": [
+          "4",
+          "5"
+        ]
+      },
+      "source_artifact": "real-e2e-evidence-research-9",
+      "baseline_scorecard_score": 87,
+      "artifact_sha256": {
+        "trace.md": "b03c5e10cd86f52942889ad3813dbb3d0507b285e554511b6ee6d80847936466",
+        "answer.txt": "a35248b5463586c52ddcbb701f4c024ef66106dbe8d1d5c1d34a53fa1469ea6a"
+      },
+      "planned": 3,
+      "scored": 3,
+      "failed": 0,
+      "scores": [
+        87,
+        87,
+        87
+      ],
+      "score_range": [
+        87,
+        87
+      ],
+      "criteria": {
+        "1": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "2": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "3": {
+          "levels": [
+            "B",
+            "B",
+            "B"
+          ],
+          "counts": {
+            "B": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "4": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "5": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "6": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        }
+      }
+    },
+    {
+      "id": "da-14-1-manual-40819738668",
+      "case_id": "da-14-1",
+      "rubric_channel": "official",
+      "rubric": {
+        "channel": "official",
+        "version": "upstream-e1c8ca5e11a620087bc48d97888eb69176a1f235",
+        "git_blob_oid": "003bdfb90af0d3b13df50aeb137c51c4bf7d3ea3",
+        "sha256": "4c39ff21be17b59e26e546ccd690009feaef6e7d4fcd6da48da55be40f0d5c38"
+      },
+      "source_artifact": "real-e2e-evidence-research-12",
+      "baseline_scorecard_score": 100,
+      "artifact_sha256": {
+        "trace.md": "dd0f6a1c1b65fbd9f2e19ee650987d06fa86a19fa5a545e85cfc98dea2ec5a5e",
+        "answer.txt": "083f1877e1c1de30c0474dc66ca714b5b0bdc990babef973207a18f8fdafe41f"
+      },
+      "planned": 3,
+      "scored": 3,
+      "failed": 0,
+      "scores": [
+        100,
+        100,
+        100
+      ],
+      "score_range": [
+        100,
+        100
+      ],
+      "criteria": {
+        "1": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "2": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "3": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "4": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "5": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "6": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        },
+        "7": {
+          "levels": [
+            "A",
+            "A",
+            "A"
+          ],
+          "counts": {
+            "A": 3
+          },
+          "adjacent_changes": 0,
+          "adjacent_comparisons": 2,
+          "pair_disagreements": 0,
+          "pair_comparisons": 3
+        }
+      }
+    }
+  ]
+}

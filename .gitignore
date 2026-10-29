@@ -93,3 +93,4 @@ data-*/
 # Frozen test plans and execution evidence
 .test-runs/
 .ci-results/
+.b5merge/

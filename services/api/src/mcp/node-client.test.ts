@@ -337,6 +337,51 @@ test("unknown server rejects with a 404-tagged error", async () => {
   }
 });
 
+/**  fixture: three real stdio echo servers under one config. */
+function multiServerFixture(logger?: OperationalLogger): { client: McpNodeClient; dir: string } {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-node-multi-"));
+  const mcpServers: Record<string, unknown> = {};
+  for (const id of ["alpha", "beta", "gamma"]) {
+    const serverPath = join(dir, `${id}-server.mjs`);
+    writeFileSync(serverPath, ECHO_SERVER_SOURCE);
+    mcpServers[id] = {
+      args: [serverPath], command: process.execPath, description: `Echo ${id}`,
+      enabled: true, env: {}, type: "stdio",
+    };
+  }
+  const configPath = join(dir, "extensions_config.json");
+  writeFileSync(configPath, JSON.stringify({ mcpServers }));
+  const client = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, logger);
+  return { client, dir };
+}
+
+test("catalog connects stdio servers concurrently, not as a serial sum", async () => {
+  const recorded = recordingLogger();
+  const { client, dir } = multiServerFixture(recorded.logger);
+  try {
+    const catalog = await client.catalog();
+    assert.equal(catalog.servers.length, 3);
+    for (const server of catalog.servers) {
+      assert.equal(server.error, undefined, `${server.id} should be healthy`);
+      assert.equal(server.id, server.id.toLowerCase());
+    }
+    const loaded = recorded.events.find((entry) => entry.event === "mcp_catalog_loaded");
+    assert(loaded);
+    const connectSum = recorded.events
+      .filter((entry) => entry.event === "mcp_connection_succeeded")
+      .reduce((sum, entry) => sum + Number(entry.fields.durationMs ?? 0), 0);
+    const total = Number(loaded.fields.durationMs);
+    assert.ok(connectSum > 0, "connections should take measurable time");
+    assert.ok(
+      total < connectSum,
+      `parallel catalog took ${total}ms; a serial loop would cost ~${connectSum}ms`,
+    );
+  } finally {
+    await client.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("extensions config parses env placeholders, aliases, and routing overrides", () => {
   const dir = mkdtempSync(join(tmpdir(), "ext-config-"));
   const path = join(dir, "extensions_config.json");

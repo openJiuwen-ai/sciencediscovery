@@ -11,7 +11,8 @@ const built = (name: string) => new URL(`dist/${name}`, new URL("..", new URL(".
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, open, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { CasStore, sha256 } from "./index.js";
@@ -288,4 +289,88 @@ test("unchanged workspace snapshots reuse verified bytes but mutations and CAS t
   if (entry.type !== "file") throw new Error("file expected");
   await writeFile(store.objectPath(entry.content), "tampered!!!");
   await assert.rejects(snapshotWorkspace(store, workspace), /integrity/);
+}));
+
+test("a same-size in-place rewrite never reuses stale workspace bytes", async () => fixture(async (store, root) => {
+  const path = resolve(root, "same-size");
+  for (let i = 0; i < 50; i++) {
+    const before = `aaaaaaaaa${i % 10}`;
+    const after = `bbbbbbbbb${i % 10}`;
+    await writeFile(path, before);
+    const file = await open(path, "r+");
+    try {
+      const first = await store.putWorkspaceFile(Buffer.from(path), file);
+      assert.equal((await store.readData(first)).toString(), before);
+      await file.write(Buffer.from(after), 0, after.length, 0); // same size, in place, one tick
+      const second = await store.putWorkspaceFile(Buffer.from(path), file);
+      assert.equal((await store.readData(second)).toString(), after, `stale reuse on iteration ${i}`);
+    } finally { await file.close(); }
+  }
+}));
+
+test("unchanged workspace bytes are still reused without republishing", async (t) => fixture(async (store, root) => {
+  const path = resolve(root, "reused");
+  await writeFile(path, "unchanged-bytes");
+  const writes = t.mock.method(store, "putStream");
+  const file = await open(path, "r+");
+  try {
+    const first = await store.putWorkspaceFile(Buffer.from(path), file);
+    const second = await store.putWorkspaceFile(Buffer.from(path), file);
+    assert.equal(writes.mock.callCount(), 1, "unchanged bytes must not be streamed and republished");
+    assert.deepEqual(second, first);
+  } finally { await file.close(); }
+}));
+
+test("a cache hit does not re-read the stored object on every call", async (t) => fixture(async (store, root) => {
+  const path = resolve(root, "verify-once");
+  await writeFile(path, "one object verification per store instance");
+  const verifications = t.mock.method(store, "verifyRef");
+  const file = await open(path, "r+");
+  try {
+    const first = await store.putWorkspaceFile(Buffer.from(path), file);
+    const second = await store.putWorkspaceFile(Buffer.from(path), file);
+    const third = await store.putWorkspaceFile(Buffer.from(path), file);
+    assert.deepEqual([second, third], [first, first]);
+    assert.equal(verifications.mock.callCount(), 1, "the stored object is verified once per store instance, not once per cache hit");
+    // The source file is still re-hashed on every hit: a same-size in-place rewrite must still republish.
+    const rewritten = "one object verification per store instancE";
+    await file.write(Buffer.from(rewritten), 0, rewritten.length, 0);
+    const fourth = await store.putWorkspaceFile(Buffer.from(path), file);
+    assert.notEqual(fourth.digest, first.digest, "cached object verification must not become the reuse criterion");
+  } finally { await file.close(); }
+}));
+
+test("a cache hit republishes a stored object that disappeared after its first verification", async () => fixture(async (store, root) => {
+  const path = resolve(root, "missing-object");
+  const body = "the object is removed while the store keeps its admission";
+  await writeFile(path, body);
+  const file = await open(path, "r+");
+  try {
+    const first = await store.putWorkspaceFile(Buffer.from(path), file);
+    const second = await store.putWorkspaceFile(Buffer.from(path), file); // admitted after this hit
+    assert.deepEqual(second, first);
+    await rm(store.objectPath(second));
+    assert.equal(existsSync(store.objectPath(second)), false);
+    // Losing the object revokes the admission, never the integrity check: reads still fail closed.
+    await assert.rejects(store.readData(second), { code: "ENOENT" });
+    const third = await store.putWorkspaceFile(Buffer.from(path), file);
+    assert.deepEqual(third, first);
+    assert.equal(existsSync(store.objectPath(third)), true, "a cache hit must republish a vanished object instead of reusing a dangling ref");
+    assert.equal((await store.readData(third)).toString(), body);
+  } finally { await file.close(); }
+}));
+
+test("a ref commit re-verifies an admitted object that disappeared instead of trusting the admission", async () => fixture(async (store) => {
+  const leaf = await store.put("data", "file");
+  const root = await store.putRecord("Root", { leaf });
+  const refs = await RefStore.open(store);
+  try {
+    await refs.commit(store, "agent/first", null, root); // admits root and its whole closure
+    await rm(store.objectPath(root));
+    // Admission is existence evidence for this instance only; once the object is gone, the next
+    // commit must verify it again and be rejected instead of returning an empty closure.
+    await assert.rejects(store.validateClosureForCommit(root), { code: "ENOENT" });
+    await assert.rejects(refs.commit(store, "agent/second", null, root), { code: "ENOENT" });
+    assert.equal(refs.head("agent/second"), null);
+  } finally { refs.close(); }
 }));

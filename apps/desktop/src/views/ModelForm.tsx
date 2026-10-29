@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import type { ApiClient } from "../api/client.js";
 import {
@@ -91,6 +91,181 @@ const CUSTOM_DISCOVERY: Record<string, NonNullable<CreateModelProviderRequest["m
 
 const CUSTOM = "__custom__";
 
+interface ModelComboProps {
+  /** The field's inline trailing action (the wizard's 刷新列表), rendered inside
+   *  the combobox so the input itself stays as wide as every other field. */
+  action?: ReactNode;
+  /** The busy channel of the surrounding ModelForm ("fetch"/"test"/"save"). */
+  disabled: boolean;
+  invalidate: () => void;
+  listing: ProviderModelEntry[];
+  onModelChange: (next: string) => void;
+  placeholder: string;
+  value: string;
+}
+
+/**
+ * The 模型名称 field: one input that both carries a hand-typed value and
+ * offers the fetched listing through a dropdown of our own. It replaced a
+ * hand-typed input with a parallel native <select> that appeared once the
+ * listing arrived: the two read as overlapping pickers for the same value,
+ * and the select could not carry a hand-typed model the listing did not
+ * name, so switching between them was a trap. Opening this dropdown always
+ * shows the whole listing (typing filters only while typing), the caret is
+ * centered by our own CSS, and with no listing fetched it degrades to a
+ * plain input for gateways without a /models endpoint.
+ */
+function ModelComboBox({
+  action,
+  disabled,
+  invalidate,
+  listing,
+  onModelChange,
+  placeholder,
+  value,
+}: ModelComboProps) {
+  const [open, setOpen] = useState(false);
+  /** What the dropdown filters on. Reset on every open, so the freshly opened
+   * menu lists everything regardless of what the input already holds; only
+   * typing after the open narrows it. */
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const menuRef = useRef<HTMLUListElement | null>(null);
+
+  const needle = query.trim().toLowerCase();
+  const options = open
+    ? needle === ""
+      ? listing
+      : listing.filter(
+          (entry) =>
+            entry.id.toLowerCase().includes(needle) ||
+            (entry.displayName ?? "").toLowerCase().includes(needle),
+        )
+    : [];
+
+  useEffect(() => {
+    if (!open || activeIndex < 0 || !menuRef.current) return;
+    menuRef.current.children[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+
+  const applyChoice = (id: string) => {
+    onModelChange(id);
+    invalidate();
+    setOpen(false);
+    setQuery("");
+    setActiveIndex(-1);
+  };
+
+  const closeMenu = () => {
+    setOpen(false);
+    setQuery("");
+    setActiveIndex(-1);
+  };
+
+  const openMenu = () => {
+    setQuery("");
+    setActiveIndex(-1);
+    setOpen(true);
+    // Selecting the current value lets a keystroke replace it at once, while
+    // the dropdown itself still shows the unfiltered listing (see `query`).
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape" && open) {
+      // Close only the dropdown here; the surrounding dialog (settings modal,
+      // wizard step) must not see this Escape — including when the active
+      // filter has emptied the menu.
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+      return;
+    }
+    if (!open || options.length === 0) {
+      if (event.key === "ArrowDown" && listing.length > 0) {
+        event.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(index + 1, options.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter") {
+      const entry = activeIndex >= 0 ? options[activeIndex] : undefined;
+      if (entry) {
+        event.preventDefault();
+        applyChoice(entry.id);
+      } else {
+        closeMenu();
+      }
+    }
+  };
+
+  return (
+    <span className="field-combo">
+      <input
+        aria-autocomplete="list"
+        aria-expanded={open}
+        className="field-input"
+        disabled={disabled}
+        onBlur={closeMenu}
+        onChange={(event) => {
+          onModelChange(event.target.value);
+          setQuery(event.target.value);
+          invalidate();
+        }}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        ref={inputRef}
+        role="combobox"
+        spellCheck={false}
+        value={value}
+      />
+      {action ?? null}
+      {listing.length > 0 ? (
+        <button
+          aria-expanded={open}
+          className="field-combo-toggle"
+          disabled={disabled}
+          onClick={() => (open ? closeMenu() : openMenu())}
+          onMouseDown={(event) => event.preventDefault()}
+          type="button"
+        >
+          <span aria-hidden="true" className="field-combo-caret" />
+        </button>
+      ) : null}
+      {open && options.length > 0 ? (
+        <ul className="field-combo-menu" ref={menuRef} role="listbox">
+          {options.map((entry, index) => (
+            <li
+              aria-selected={index === activeIndex}
+              className={`field-combo-option${index === activeIndex ? " is-active" : ""}${
+                entry.id === value ? " is-current" : ""
+              }`}
+              key={entry.id}
+              onClick={() => applyChoice(entry.id)}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              role="option"
+            >
+              <span className="field-combo-option-id">{entry.id}</span>
+              {entry.displayName && entry.displayName !== entry.id ? (
+                <small className="field-combo-option-name">{entry.displayName}</small>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </span>
+  );
+}
+
 function failureMessage(test: ModelConnectivityTestResult): string {
   if (test.message.trim() !== "") return test.message;
   return TEXT.wizard.testCategories[test.category] ?? TEXT.errors.generic;
@@ -138,6 +313,18 @@ export function ModelForm({
   const [busy, setBusy] = useState<"" | "fetch" | "submit" | "test">("");
   const [verdict, setVerdict] = useState<Verdict>();
   const [testPassed, setTestPassed] = useState(false);
+  /**
+   * What a passing test left behind: the profile as it was saved, and the
+   * latency it answered in.
+   *
+   * 测试 saves before it tests, so a pass means this exact configuration is
+   * already in the catalog and already verified. The action that follows — the
+   * wizard's 开始使用, settings' 保存 — can write the default onto that record
+   * instead of saving and asking the provider the same question again, which
+   * the reader sees as the same wait twice. Any edit clears it, together with
+   * `testPassed`: both describe this form's contents, not the wizard's history.
+   */
+  const [verified, setVerified] = useState<(ModelFormResult & { latencyMs: number }) | undefined>();
 
   const tokenOptional = preset?.tokenOptional === true;
   const keyMissing = !tokenOptional && apiKey.trim() === "";
@@ -147,6 +334,7 @@ export function ModelForm({
   const invalidate = () => {
     setVerdict(undefined);
     setTestPassed(false);
+    setVerified(undefined);
   };
 
   const choosePreset = (id: string) => {
@@ -259,50 +447,67 @@ export function ModelForm({
     setBusy("test");
     setVerdict({ kind: "testing", message: TEXT.wizard.testing });
     try {
-      const { profile } = await persist();
-      const test = await testModel(client, profile.id);
+      const saved = await persist();
+      const test = await testModel(client, saved.profile.id);
       setVerdict(
         test.ok
           ? { kind: "ok", message: TEXT.wizard.testOk(test.latencyMs) }
           : { kind: "fail", message: failureMessage(test) },
       );
       setTestPassed(test.ok);
+      setVerified(test.ok ? { ...saved, latencyMs: test.latencyMs } : undefined);
     } catch (reason) {
       setVerdict({
         kind: "fail",
         message: reason instanceof Error ? reason.message : TEXT.errors.generic,
       });
       setTestPassed(false);
+      setVerified(undefined);
     } finally {
       setBusy("");
     }
   };
 
-  /** 保存: create, verify, and point the global default at the new profile. */
+  /**
+   * 保存 / 开始使用: point the global default at the new profile.
+   *
+   * A test that already passed saved this configuration and got an answer from
+   * the provider, so this click has nothing left to verify: it writes the
+   * default onto the record the test left. Asking again would show the same
+   * spinner and the same "connected" line a second time, which reads as the
+   * app testing twice. Without a pass — the reader went straight to 保存, or
+   * edited the form after testing — the save and the test happen here instead,
+   * exactly as before.
+   */
   const submit = async () => {
     if (refuseIncomplete()) return;
+    const passed = testPassed ? verified : undefined;
     setBusy("submit");
-    setVerdict({ kind: "testing", message: TEXT.wizard.testing });
+    if (passed === undefined) setVerdict({ kind: "testing", message: TEXT.wizard.testing });
     try {
-      const { profile, providerId } = await persist();
-      const test = await testModel(client, profile.id);
-      if (!test.ok) {
-        // Saved but unusable. It stays in the list: the fix is correcting this
-        // form (which will now find and update that record), not starting over.
-        setVerdict({ kind: "fail", message: failureMessage(test) });
-        setTestPassed(false);
-        return;
+      let result = passed;
+      if (result === undefined) {
+        const saved = await persist();
+        const test = await testModel(client, saved.profile.id);
+        if (!test.ok) {
+          // Saved but unusable. It stays in the list: the fix is correcting this
+          // form (which will now find and update that record), not starting over.
+          setVerdict({ kind: "fail", message: failureMessage(test) });
+          setTestPassed(false);
+          return;
+        }
+        result = { ...saved, latencyMs: test.latencyMs };
+        setVerdict({ kind: "ok", message: TEXT.wizard.testOk(test.latencyMs) });
       }
 
-      const settings = await setGlobalModel(client, profile.id);
-      if (settings.overrides.modelId !== profile.id) {
+      const settings = await setGlobalModel(client, result.profile.id);
+      if (settings.overrides.modelId !== result.profile.id) {
         // The write came back without the selection, which means the server did
         // not accept the id. Saying "saved" here would be a lie.
-        setVerdict({ kind: "fail", message: TEXT.wizard.saveFailed(providerName(profile.name)) });
+        setVerdict({ kind: "fail", message: TEXT.wizard.saveFailed(providerName(result.profile.name)) });
         return;
       }
-      setVerdict({ kind: "ok", message: TEXT.wizard.testOk(test.latencyMs) });
-      await onConfigured({ profile, providerId });
+      await onConfigured({ profile: result.profile, providerId: result.providerId });
     } catch (reason) {
       setVerdict({
         kind: "fail",
@@ -413,44 +618,29 @@ export function ModelForm({
 
       <div className="field">
         <span className="field-label">{TEXT.wizard.provider.model}</span>
-        {listing.length > 0 ? (
-          <select
-            className="field-select"
+        {/* This field used to render a hand-typed input with a parallel
+         * native <select> that appeared once the listing arrived, which read
+         * as two overlapping pickers for the same value — see ModelComboBox
+         * for what took over. */}
+        <div className="field-row">
+          <ModelComboBox
+            action={
+              <button
+                className="field-combo-refresh"
+                disabled={busy !== "" || baseUrl.trim() === ""}
+                onClick={() => void fetchListing()}
+                type="button"
+              >
+                {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
+              </button>
+            }
             disabled={busy !== ""}
-            onChange={(event) => {
-              setModelName(event.target.value);
-              invalidate();
-            }}
-            value={listing.some((entry) => entry.id === modelName) ? modelName : ""}
-          >
-            <option value="">{TEXT.wizard.provider.selectPlaceholder}</option>
-            {listing.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.displayName ?? entry.id}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <div className="field-row is-action">
-          <input
-            className="field-input"
-            disabled={busy !== ""}
-            onChange={(event) => {
-              setModelName(event.target.value);
-              invalidate();
-            }}
+            invalidate={invalidate}
+            listing={listing}
+            onModelChange={setModelName}
             placeholder={TEXT.wizard.provider.modelPlaceholder}
-            spellCheck={false}
             value={modelName}
           />
-          <button
-            className="secondary-button"
-            disabled={busy !== "" || baseUrl.trim() === ""}
-            onClick={() => void fetchListing()}
-            type="button"
-          >
-            {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
-          </button>
         </div>
       </div>
 

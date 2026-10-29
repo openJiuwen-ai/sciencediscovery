@@ -1,4 +1,4 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+﻿// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -111,7 +111,7 @@ export const RESTRICTED_USERNS_HINT = SANDBOX_UNUSABLE_HINT;
 
 export interface PreflightOptions {
   bwrapPath: string;
-  sandboxProvider?: "auto" | SandboxProvider;
+  sandboxProvider?: "auto" | SandboxProvider | "none";
   seatbeltPath?: string;
   platform?: NodeJS.Platform;
   dataDir: string;
@@ -124,7 +124,9 @@ export interface PreflightResult {
   /** Absolute bubblewrap path, or undefined when the check was skipped. */
   bwrapPath?: string;
   seatbeltPath?: string;
-  sandboxProvider: SandboxProvider;
+  // [windows-desktop] F4.3: "none" = Windows direct execution, no sandbox to
+  // probe. Launcher-local type; the sandbox-capability package stays frozen.
+  sandboxProvider: SandboxProvider | "none";
   sandboxUsable: boolean;
   /**
    * Whether sandboxed executions will carry `--disable-userns`. False is a
@@ -148,8 +150,20 @@ export async function runPreflight(options: PreflightOptions): Promise<Preflight
   }
 
   const provider = options.sandboxProvider === "auto"
-    ? ((options.platform ?? process.platform) === "darwin" ? "seatbelt" : "bubblewrap")
+    ? ((options.platform ?? process.platform) === "darwin" ? "seatbelt"
+      : (options.platform ?? process.platform) === "win32" ? "none" : "bubblewrap")
     : options.sandboxProvider ?? "bubblewrap";
+  if (provider === "none") {
+    // [windows-desktop] F4.3: direct execution has no sandbox dependency;
+    // preflight is a no-op beyond the data-directory writability check above.
+    return {
+      disableUserns: false,
+      procFallback: false,
+      procMode: "new",
+      sandboxProvider: "none",
+      sandboxUsable: false,
+    };
+  }
   if (provider === "seatbelt") {
     if ((options.platform ?? process.platform) !== "darwin") {
       throw new Error("Seatbelt sandbox is available only on macOS");

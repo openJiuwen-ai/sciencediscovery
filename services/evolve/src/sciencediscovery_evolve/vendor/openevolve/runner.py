@@ -35,7 +35,15 @@ import io
 import json
 import math
 import random
-import resource
+# `resource` is a Unix-only stdlib module; Windows has no counterpart.
+# set_resource_limits() below already treats every refused limit as
+# "unavailable" (see its docstring), so with resource = None every getattr()
+# simply misses and all limits report unavailable — the graceful path the
+# Darwin RLIMIT_AS case already exercises.
+try:
+    import resource
+except ImportError:
+    resource = None
 import time
 from typing import List
 

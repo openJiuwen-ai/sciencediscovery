@@ -87,6 +87,139 @@ export interface ModelTurn {
   truncated?: boolean;
   /** Provider terminal evidence; false means a disconnected or malformed stream. */
   completionObserved?: boolean;
+  /** Privacy-safe per-request wire evidence. Absent when the transport was not observed. */
+  wireDiagnostics?: ModelWireDiagnostics;
+}
+
+/** How a model request failed, at the boundary where the failure was observed. */
+export type ModelWireErrorClass =
+  | "aborted"
+  | "empty_completion"
+  | "invalid_response"
+  | "network"
+  | "parse"
+  | "provider_http"
+  /**
+   * The turn produced hidden reasoning and then nothing: no text and no tool
+   * call. It is not the same failure as a relay that sent nothing at all, so the
+   * classification itself names which shape happened. Both still fail the run.
+   */
+  | "reasoning_only"
+  | "timeout"
+  | "unknown";
+
+/**
+ * Per-request evidence of the wire, not of the research result.
+ *
+ * This record deliberately carries no prompt, response text, tool arguments,
+ * headers or credentials. It is what lets a reader tell an upstream empty or
+ * failed completion from a local SSE/assembly defect, and separate model/API
+ * latency from agent work. Timings are wall-clock ISO strings plus millisecond
+ * offsets within the turn, so a log line is self-contained and comparable
+ * across machines.
+ */
+export interface ModelWireDiagnostics {
+  requestId: string;
+  /** Scheme and host only; never credentials, query strings or request paths. */
+  endpoint: string;
+  protocol: ModelApiProtocol;
+  model: string;
+  attempts: number;
+  retries: number;
+  httpStatus?: number;
+  /** Provider request ID from the response headers when it is present and safe. */
+  upstreamRequestId?: string;
+  startedAt: string;
+  dispatchedAt?: string;
+  headersAt?: string;
+  firstByteAt?: string;
+  firstRecordAt?: string;
+  completedAt: string;
+  elapsedMs: number;
+  timeToHeadersMs?: number;
+  timeToFirstByteMs?: number;
+  timeToFirstRecordMs?: number;
+  transportChunks: number;
+  bytes: number;
+  sseRecords: number;
+  sseParseErrors: number;
+  hasText: boolean;
+  hasToolCalls: boolean;
+  /**
+   * The provider streamed reasoning text for this request. Without it a turn
+   * that spent its whole budget thinking and a relay that sent an empty `stop`
+   * look identical (`hasText: false, finishReason: "stop"`), and they are not
+   * the same failure. Only a boolean: how much was thought is not needed to
+   * attribute the request and the text itself is never recorded.
+   */
+  hasReasoning: boolean;
+  finishReason?: string;
+  truncated: boolean;
+  /** Classification of each attempt that was retried before the final one. */
+  retryErrors: ModelWireErrorClass[];
+  error?: { classification: ModelWireErrorClass; httpStatus?: number };
+}
+
+/** A completed assistant turn with no visible answer and no tool call. */
+export class EmptyModelTurnError extends Error {
+  constructor(readonly diagnostics?: ModelWireDiagnostics) {
+    super(`Model returned an empty terminal turn (no text and no tool call)${wireSummary(diagnostics)}`);
+    this.name = "EmptyModelTurnError";
+  }
+}
+
+function wireSummary(diagnostics: ModelWireDiagnostics | undefined): string {
+  if (!diagnostics) return "";
+  const parts = [
+    `requestId=${diagnostics.requestId}`,
+    `endpoint=${diagnostics.endpoint}`,
+    `model=${diagnostics.model.slice(0, 100)}`,
+    `httpStatus=${diagnostics.httpStatus ?? "unknown"}`,
+    ...(diagnostics.upstreamRequestId ? [`upstreamRequestId=${diagnostics.upstreamRequestId}`] : []),
+    `sseRecords=${diagnostics.sseRecords}`,
+    `sseParseErrors=${diagnostics.sseParseErrors}`,
+    `finishReason=${diagnostics.finishReason ?? "unknown"}`,
+    `hasReasoning=${diagnostics.hasReasoning}`,
+    `retries=${diagnostics.retries}`,
+  ];
+  return ` [${parts.join(" ")}]`;
+}
+
+/** A non-truncated assistant turn that cannot advance the run. */
+export function isEmptyTerminalTurn(turn: Pick<ModelTurn, "assistantMessage" | "toolCalls" | "truncated">): boolean {
+  if (turn.truncated) return false;
+  if (turn.toolCalls.length) return false;
+  return !contentText(turn.assistantMessage.content).trim();
+}
+
+const wireDiagnosticsByError = new WeakMap<object, ModelWireDiagnostics>();
+
+/** Diagnostics for a model request that failed; absent when it never reached the wire. */
+export function modelWireDiagnosticsOf(error: unknown): ModelWireDiagnostics | undefined {
+  return typeof error === "object" && error !== null ? wireDiagnosticsByError.get(error) : undefined;
+}
+
+/** Classify a model failure for diagnostics and CI summaries. */
+export function classifyModelWireError(error: unknown): ModelWireErrorClass {
+  if (error instanceof EmptyModelTurnError) {
+    // A record that already names the shape wins; otherwise the record's own
+    // reasoning evidence decides, so the transport and the gateway fallback
+    // never disagree about which empty shape failed.
+    return error.diagnostics?.error?.classification
+      ?? (error.diagnostics?.hasReasoning ? "reasoning_only" : "empty_completion");
+  }
+  if (error instanceof ModelRequestError) return "provider_http";
+  const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  if (/TIMEOUT|TIMEDOUT/i.test(code)) return "timeout";
+  if (code.startsWith("UND_ERR_") || /^(?:ECONN|EHOST|ENET|EAI_|EPIPE)/.test(code)) return "network";
+  const name = typeof error === "object" && error !== null && "name" in error ? String(error.name) : "";
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (name === "AbortError" || name === "TimeoutError" || /\baborted\b/i.test(message)) return "aborted";
+  if (/timed? ?out/i.test(message)) return "timeout";
+  if (/malformed|unparseable|JSON/i.test(message)) return "parse";
+  if (/model endpoint is unavailable|fetch failed|socket|connection/i.test(message)) return "network";
+  if (/model stream|model returned|chat completion|completion omitted|changed an already streamed/i.test(message)) return "invalid_response";
+  return "unknown";
 }
 
 export interface ModelStreamCallbacks {
@@ -95,6 +228,15 @@ export interface ModelStreamCallbacks {
   onThinkingDelta?: (delta: string) => void;
   /** Tool identity is sent once; arguments are append-only JSON fragments. */
   onToolCallDelta?: (delta: { index: number; id?: string; name?: string; arguments: string }) => void;
+  /** Called once per request, including failures. Never receives payload text. */
+  onWireDiagnostics?: (diagnostics: ModelWireDiagnostics) => void;
+  /**
+   * Treat a finished turn with no text and no tool call as a model failure for
+   * this request. The one reported record then carries the classification of
+   * the shape — `reasoning_only` or `empty_completion` — so a reader never sees
+   * an unclassified success record for a request that failed.
+   */
+  rejectEmptyTerminalTurn?: boolean;
 }
 
 /** Adapt protocol-specific cumulative buffers without replaying arguments. */
@@ -212,10 +354,151 @@ function parseToolCallArgs(rawArguments: string): { args: Record<string, unknown
   }
 }
 
-async function* sseData(body: AsyncIterable<Uint8Array>, onProgress?: () => void): AsyncGenerator<string> {
+/** Scheme and host of an endpoint, never its credentials or query string. */
+export function modelEndpointIdentity(endpoint: ModelEndpoint): string {
+  try { return new URL(endpoint.baseUrl).origin; } catch { return "invalid"; }
+}
+
+const UPSTREAM_REQUEST_ID_HEADERS = ["x-request-id", "request-id", "openai-request-id", "x-oneapi-request-id", "x-amzn-requestid"] as const;
+
+function upstreamRequestIdOf(headers: Record<string, string | string[] | undefined>): string | undefined {
+  for (const key of UPSTREAM_REQUEST_ID_HEADERS) {
+    const raw = headers[key];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    // Provider IDs are opaque; retain only a bounded, log-safe token.
+    if (typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value)) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Collects one request's wire evidence in memory. It never holds payload text:
+ * only counts, timings, booleans and an already-bounded provider request ID.
+ */
+class ModelWireRecorder {
+  readonly requestId = `model-${randomUUID()}`;
+  private readonly startedMs = Date.now();
+  private readonly endpoint: string;
+  private readonly model: string;
+  private dispatchedMs?: number;
+  private headersMs?: number;
+  private firstByteMs?: number;
+  private firstRecordMs?: number;
+  private attempts = 0;
+  private readonly retryErrors: ModelWireErrorClass[] = [];
+  private httpStatus?: number;
+  private upstreamRequestId?: string;
+  private bytes = 0;
+  private transportChunks = 0;
+  private sseRecords = 0;
+  private sseParseErrors = 0;
+  private textSeen = false;
+  private reasoningSeen = false;
+  private toolSeen = false;
+  private finish?: string;
+  private truncated = false;
+
+  constructor(
+    endpoint: ModelEndpoint,
+    private readonly protocol: ModelApiProtocol,
+  ) {
+    this.endpoint = modelEndpointIdentity(endpoint);
+    this.model = endpoint.model.slice(0, 200);
+  }
+
+  dispatch(): void {
+    this.attempts += 1;
+    this.dispatchedMs = Date.now();
+  }
+
+  headers(status: number, headers: Record<string, string | string[] | undefined>): void {
+    this.headersMs = Date.now();
+    this.httpStatus = status;
+    this.upstreamRequestId = upstreamRequestIdOf(headers);
+  }
+
+  byte(size: number): void {
+    if (this.firstByteMs === undefined) this.firstByteMs = Date.now();
+    this.transportChunks += 1;
+    this.bytes += size;
+  }
+
+  record(): void {
+    if (this.firstRecordMs === undefined) this.firstRecordMs = Date.now();
+    this.sseRecords += 1;
+  }
+
+  parseError(): void { this.sseParseErrors += 1; }
+
+  text(delta: string): void { if (delta.trim()) this.textSeen = true; }
+
+  reasoning(delta: string): void { if (delta.trim()) this.reasoningSeen = true; }
+
+  tool(delta: { id?: string; name?: string }): void { if (delta.id || delta.name) this.toolSeen = true; }
+
+  finishReason(reason: string): void {
+    this.finish = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(reason) ? reason : "unknown";
+  }
+
+  markTruncated(): void { this.truncated = true; }
+
+  final(parts: { hasText: boolean; hasToolCalls: boolean; truncated?: boolean; hasReasoning?: boolean }): void {
+    this.textSeen ||= parts.hasText;
+    this.toolSeen ||= parts.hasToolCalls;
+    this.reasoningSeen ||= Boolean(parts.hasReasoning);
+    this.truncated ||= Boolean(parts.truncated);
+  }
+
+  retry(errorClass: ModelWireErrorClass): void { this.retryErrors.push(errorClass); }
+
+  /** Whether the provider streamed reasoning text for this request. */
+  reasoningObserved(): boolean { return this.reasoningSeen; }
+
+  report(errorClass?: ModelWireErrorClass): ModelWireDiagnostics {
+    const completedMs = Date.now();
+    const dispatched = this.dispatchedMs ?? this.startedMs;
+    const iso = (ms: number) => new Date(ms).toISOString();
+    return {
+      requestId: this.requestId,
+      endpoint: this.endpoint,
+      protocol: this.protocol,
+      model: this.model,
+      attempts: Math.max(1, this.attempts),
+      retries: this.retryErrors.length,
+      ...(this.httpStatus === undefined ? {} : { httpStatus: this.httpStatus }),
+      ...(this.upstreamRequestId === undefined ? {} : { upstreamRequestId: this.upstreamRequestId }),
+      startedAt: iso(this.startedMs),
+      ...(this.dispatchedMs === undefined ? {} : { dispatchedAt: iso(this.dispatchedMs) }),
+      ...(this.headersMs === undefined ? {} : { headersAt: iso(this.headersMs) }),
+      ...(this.firstByteMs === undefined ? {} : { firstByteAt: iso(this.firstByteMs) }),
+      ...(this.firstRecordMs === undefined ? {} : { firstRecordAt: iso(this.firstRecordMs) }),
+      completedAt: iso(completedMs),
+      elapsedMs: completedMs - this.startedMs,
+      ...(this.headersMs === undefined ? {} : { timeToHeadersMs: this.headersMs - dispatched }),
+      ...(this.firstByteMs === undefined ? {} : { timeToFirstByteMs: this.firstByteMs - dispatched }),
+      ...(this.firstRecordMs === undefined ? {} : { timeToFirstRecordMs: this.firstRecordMs - dispatched }),
+      transportChunks: this.transportChunks,
+      bytes: this.bytes,
+      sseRecords: this.sseRecords,
+      sseParseErrors: this.sseParseErrors,
+      hasText: this.textSeen,
+      hasToolCalls: this.toolSeen,
+      hasReasoning: this.reasoningSeen,
+      ...(this.finish === undefined ? {} : { finishReason: this.finish }),
+      truncated: this.truncated,
+      retryErrors: [...this.retryErrors],
+      ...(errorClass === undefined ? {} : {
+        error: { classification: errorClass, ...(errorClass === "provider_http" && this.httpStatus !== undefined ? { httpStatus: this.httpStatus } : {}) },
+      }),
+    };
+  }
+}
+
+async function* sseData(body: AsyncIterable<Uint8Array>, recorder: ModelWireRecorder, onProgress?: () => void): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of body) {
+    recorder.byte(chunk.byteLength);
     onProgress?.();
     buffer += decoder.decode(chunk, { stream: true });
     let newline = buffer.indexOf("\n");
@@ -224,13 +507,13 @@ async function* sseData(body: AsyncIterable<Uint8Array>, onProgress?: () => void
       buffer = buffer.slice(newline + 1);
       if (line.startsWith("data:")) {
         const payload = line.slice(5).trim();
-        if (payload && payload !== "[DONE]") yield payload;
+        if (payload && payload !== "[DONE]") { recorder.record(); yield payload; }
       }
       newline = buffer.indexOf("\n");
     }
   }
   const last = buffer.trim();
-  if (last.startsWith("data:") && last.slice(5).trim() !== "[DONE]") yield last.slice(5).trim();
+  if (last.startsWith("data:") && last.slice(5).trim() !== "[DONE]") { recorder.record(); yield last.slice(5).trim(); }
 }
 
 interface RequestOptions {
@@ -244,7 +527,7 @@ interface RequestOptions {
 
 /** POST with a bounded retry budget for pre-stream failures (connect errors,
  *  429, 5xx). Once the stream starts flowing, errors surface to the caller. */
-async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncIterable<Uint8Array> }> {
+async function requestWithRetry(options: RequestOptions, recorder: ModelWireRecorder): Promise<{ body: AsyncIterable<Uint8Array> }> {
   const dispatcher = proxyDispatcher(options.proxy);
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= options.policy.maxRetries; attempt += 1) {
@@ -253,6 +536,7 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
     let responseBody: AsyncIterable<Uint8Array> & { dump(): Promise<void> };
     let retryAfterMs: number | undefined;
     try {
+      recorder.dispatch();
       const response = await request(options.url, {
         method: "POST",
         headers: options.headers,
@@ -264,6 +548,7 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
       });
       statusCode = response.statusCode;
       responseBody = response.body;
+      recorder.headers(statusCode, response.headers as Record<string, string | string[] | undefined>);
       const retryAfter = response.headers["retry-after"];
       if (typeof retryAfter === "string" && Number.isFinite(Number(retryAfter))) {
         retryAfterMs = Number(retryAfter) * 1_000;
@@ -272,6 +557,7 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
       if (options.signal.aborted) { await dispatcher?.close(); throw new Error("aborted"); }
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < options.policy.maxRetries) {
+        recorder.retry(classifyModelWireError(error));
         await backoff(attempt, undefined, options.signal);
         continue;
       }
@@ -293,6 +579,7 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
     );
     if ((statusCode === 429 || statusCode >= 500) && attempt < options.policy.maxRetries) {
       lastError = failure;
+      recorder.retry("provider_http");
       await backoff(attempt, retryAfterMs, options.signal);
       continue;
     }
@@ -512,12 +799,13 @@ async function streamOpenAiTurn(
   policy: ModelClientPolicy,
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks,
+  recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
   const { body } = await requestWithRetry({
     ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
     policy, proxy: endpoint.proxy, signal,
-  });
+  }, recorder);
 
   let text = "";
   let deepseekReasoning = "";
@@ -531,23 +819,28 @@ async function streamOpenAiTurn(
   const buffersInlineThinking = variant === "minimax" || variant === "ollama";
 
   const streamDiagnostics = { protocol: "openai-chat-completions" as const, unparseableSsePayloads: 0, toolCallDeltasWithoutIndex: 0 };
-  for await (const payload of sseData(body, callbacks.onProgress)) {
+  for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
     let chunk: Record<string, unknown>;
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>;
     } catch {
       streamDiagnostics.unparseableSsePayloads += 1;
+      recorder.parseError();
       continue;
     }
     if (chunk.error) throw new Error(`Chat API error: ${streamErrorDetail(chunk.error, endpoint)}`);
     const chunkUsage = normalizeUsage(chunk.usage, "openai-chat-completions");
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
-    if (choices.length && isRecord(choices[0]) && typeof choices[0].finish_reason === "string") completionObserved = true;
+    if (choices.length && isRecord(choices[0]) && typeof choices[0].finish_reason === "string") {
+      completionObserved = true;
+      recorder.finishReason(choices[0].finish_reason);
+    }
     // Read before the `delta` guard below: the chunk that carries
     // `finish_reason` is the closing one, and it has no delta.
     if (choices.length && isRecord(choices[0]) && choices[0].finish_reason === "length") {
       truncated = true;
+      recorder.markTruncated();
     }
     const delta = choices.length && isRecord(choices[0]) && isRecord(choices[0].delta)
       ? choices[0].delta
@@ -636,6 +929,12 @@ async function streamOpenAiTurn(
     ...(variant === "qwen" && qwenReasoning !== undefined ? { reasoning: qwenReasoning } : {}),
     ...(variant === "minimax" && minimaxReasoning.length ? { reasoning_details: minimaxReasoning } : {}),
   };
+  recorder.final({
+    hasText: Boolean(text.trim()),
+    hasToolCalls: toolCalls.length > 0,
+    truncated,
+    hasReasoning: Boolean(deepseekReasoning.trim() || reasoningText(qwenReasoning) || reasoningText(minimaxReasoning)),
+  });
   return { assistantMessage, toolCalls, streamDiagnostics, completionObserved, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
 }
 
@@ -699,11 +998,12 @@ async function streamResponsesTurn(
   policy: ModelClientPolicy,
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks,
+  recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const { body } = await requestWithRetry({
     ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
     policy, proxy: endpoint.proxy, signal,
-  });
+  }, recorder);
 
   let text = "";
   let usage: AgentModelUsage | undefined;
@@ -713,12 +1013,13 @@ async function streamResponsesTurn(
   const partialItems = new Map<number, Record<string, unknown>>();
   const emitTool = toolDeltaEmitter(callbacks);
   const streamDiagnostics = { protocol: "openai-responses" as const, unparseableSsePayloads: 0 };
-  for await (const payload of sseData(body, callbacks.onProgress)) {
+  for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
       streamDiagnostics.unparseableSsePayloads += 1;
+      recorder.parseError();
       continue;
     }
     if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
@@ -726,6 +1027,9 @@ async function streamResponsesTurn(
       callbacks.onTextDelta?.(event.delta);
     } else if ((event.type === "response.reasoning_text.delta" || event.type === "response.reasoning_summary_text.delta")
       && typeof event.delta === "string") {
+      // Delta-only providers never send `output_item.done`, so the record has to
+      // learn about the thinking here as well.
+      recorder.reasoning(event.delta);
       callbacks.onThinkingDelta?.(event.delta);
     } else if (event.type === "response.output_item.added" && isRecord(event.item)) {
       const index = typeof event.output_index === "number" ? event.output_index : partialItems.size;
@@ -741,12 +1045,18 @@ async function streamResponsesTurn(
     } else if (event.type === "response.output_item.done" && isRecord(event.item)) {
       const index = typeof event.output_index === "number" ? event.output_index : items.size;
       items.set(index, structuredClone(event.item));
+      // A provider may complete a reasoning item without streaming its deltas;
+      // the record still has to say the budget went to thinking.
+      if (event.item.type === "reasoning") recorder.reasoning(reasoningText(event.item.summary ?? event.item.content));
       if (event.item.type === "function_call") emitTool(index, event.item.call_id, event.item.name,
         typeof event.item.arguments === "string" ? event.item.arguments : "{}");
     } else if ((event.type === "response.completed" || event.type === "response.incomplete") && isRecord(event.response)) {
       completionObserved = true;
       usage = normalizeUsage(event.response.usage, "openai-responses") ?? usage;
       truncated = event.type === "response.incomplete";
+      // Responses reports a completed/incomplete status, not a finish reason.
+      recorder.finishReason(truncated ? "length" : "stop");
+      if (truncated) recorder.markTruncated();
     } else if (event.type === "error") {
       throw new Error(`Responses API error: ${streamErrorDetail(event.message ?? "unknown", endpoint)}`);
     } else if (event.type === "response.failed") {
@@ -774,6 +1084,13 @@ async function streamResponsesTurn(
   const toolCalls = wireToolCalls.filter((call) => call.function.name).map((call): NormalizedToolCall => {
     const parsed = parseToolCallArgs(call.function.arguments);
     return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
+  });
+  recorder.final({
+    hasText: Boolean(text.trim()),
+    hasToolCalls: toolCalls.length > 0,
+    truncated,
+    hasReasoning: responseItems.some((item) => item.type === "reasoning"
+      && Boolean(reasoningText(item.summary ?? item.content).trim())),
   });
   return {
     assistantMessage: {
@@ -861,11 +1178,12 @@ async function streamAnthropicTurn(
   policy: ModelClientPolicy,
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks,
+  recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const { body } = await requestWithRetry({
     ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
     policy, proxy: endpoint.proxy, signal,
-  });
+  }, recorder);
 
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
@@ -878,12 +1196,13 @@ async function streamAnthropicTurn(
   const toolErrors = new Map<string, string>();
   const emitTool = toolDeltaEmitter(callbacks);
   const streamDiagnostics = { protocol: "anthropic-messages" as const, unparseableSsePayloads: 0 };
-  for await (const payload of sseData(body, callbacks.onProgress)) {
+  for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
       streamDiagnostics.unparseableSsePayloads += 1;
+      recorder.parseError();
       continue;
     }
     if (event.type === "error") throw new Error(`Messages API error: ${streamErrorDetail(event.error, endpoint)}`);
@@ -894,7 +1213,10 @@ async function streamAnthropicTurn(
     } else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
       blocks.set(event.index, structuredClone(event.content_block));
       if (event.content_block.type === "text" && typeof event.content_block.text === "string" && event.content_block.text) callbacks.onTextDelta?.(event.content_block.text);
-      if (event.content_block.type === "thinking" && typeof event.content_block.thinking === "string" && event.content_block.thinking) callbacks.onThinkingDelta?.(event.content_block.thinking);
+      if (event.content_block.type === "thinking" && typeof event.content_block.thinking === "string" && event.content_block.thinking) {
+        recorder.reasoning(event.content_block.thinking);
+        callbacks.onThinkingDelta?.(event.content_block.thinking);
+      }
       if (event.content_block.type === "tool_use") {
         toolJson.set(event.index, "");
         emitTool(event.index, event.content_block.id, event.content_block.name, "");
@@ -907,6 +1229,7 @@ async function streamAnthropicTurn(
         callbacks.onTextDelta?.(event.delta.text);
       } else if (event.delta.type === "thinking_delta" && typeof event.delta.thinking === "string") {
         block.thinking = `${typeof block.thinking === "string" ? block.thinking : ""}${event.delta.thinking}`;
+        recorder.reasoning(event.delta.thinking);
         callbacks.onThinkingDelta?.(event.delta.thinking);
       } else if (event.delta.type === "signature_delta" && typeof event.delta.signature === "string") {
         block.signature = `${typeof block.signature === "string" ? block.signature : ""}${event.delta.signature}`;
@@ -928,9 +1251,15 @@ async function streamAnthropicTurn(
       if (isRecord(event.usage)) {
         outputTokens = numberField(event.usage, ["output_tokens"]) ?? outputTokens;
       }
-      if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") completionObserved = true;
+      if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") {
+        completionObserved = true;
+        recorder.finishReason(event.delta.stop_reason);
+      }
       // Anthropic's equivalent of `finish_reason: "length"`.
-      if (isRecord(event.delta) && event.delta.stop_reason === "max_tokens") truncated = true;
+      if (isRecord(event.delta) && event.delta.stop_reason === "max_tokens") {
+        truncated = true;
+        recorder.markTruncated();
+      }
     }
   }
 
@@ -949,6 +1278,13 @@ async function streamAnthropicTurn(
   const toolCalls = wireToolCalls.map((call): NormalizedToolCall => {
     const parsed = parseToolCallArgs(call.function.arguments);
     return { args: parsed.args, id: call.id, name: call.function.name, ...(toolErrors.get(call.id) || parsed.error ? { argsParseError: toolErrors.get(call.id) ?? parsed.error } : {}) };
+  });
+  recorder.final({
+    hasText: Boolean(text.trim()),
+    hasToolCalls: toolCalls.length > 0,
+    truncated,
+    hasReasoning: anthropicContent.some((block) => block.type === "thinking"
+      && typeof block.thinking === "string" && Boolean(block.thinking.trim())),
   });
   return {
     assistantMessage: {
@@ -1042,12 +1378,51 @@ export async function streamModelTurn(
   signal: AbortSignal,
   callbacks: ModelStreamCallbacks = {},
 ): Promise<ModelTurn> {
-  switch (endpointProtocol(endpoint)) {
-    case "anthropic-messages":
-      return streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
-    case "openai-responses":
-      return streamResponsesTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
-    default:
-      return streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
+  const protocol = endpointProtocol(endpoint);
+  const recorder = new ModelWireRecorder(endpoint, protocol);
+  const observed: ModelStreamCallbacks = {
+    ...callbacks,
+    onTextDelta: (delta) => { recorder.text(delta); callbacks.onTextDelta?.(delta); },
+    onThinkingDelta: (delta) => { recorder.reasoning(delta); callbacks.onThinkingDelta?.(delta); },
+    onToolCallDelta: (delta) => { recorder.tool(delta); callbacks.onToolCallDelta?.(delta); },
+  };
+  const emit = (errorClass?: ModelWireErrorClass): ModelWireDiagnostics => {
+    const diagnostics = recorder.report(errorClass);
+    try { callbacks.onWireDiagnostics?.(diagnostics); } catch { /* diagnostics never change a model request */ }
+    return diagnostics;
+  };
+  let turn: ModelTurn;
+  try {
+    switch (protocol) {
+      case "anthropic-messages":
+        turn = await streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, observed, recorder);
+        break;
+      case "openai-responses":
+        turn = await streamResponsesTurn(endpoint, systemPrompt, history, tools, policy, signal, observed, recorder);
+        break;
+      default:
+        turn = await streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, observed, recorder);
+        break;
+    }
+  } catch (error) {
+    const diagnostics = emit(classifyModelWireError(error));
+    if (typeof error === "object" && error !== null) wireDiagnosticsByError.set(error, diagnostics);
+    throw error;
   }
+  // The transport's own success path is not always a served request: a caller
+  // that rejects an empty terminal turn reports the classification on this one
+  // record instead of printing an unclassified success first and throwing after.
+  // The shape decides the class: thought was streamed and no answer followed is
+  // `reasoning_only`; nothing at all is `empty_completion`. The rejection below
+  // is the same either way.
+  const empty = callbacks.rejectEmptyTerminalTurn === true && isEmptyTerminalTurn(turn);
+  const emptyClass: ModelWireErrorClass = recorder.reasoningObserved() ? "reasoning_only" : "empty_completion";
+  const diagnostics = emit(empty ? emptyClass : undefined);
+  turn.wireDiagnostics = diagnostics;
+  if (empty) {
+    const error = new EmptyModelTurnError(diagnostics);
+    wireDiagnosticsByError.set(error, diagnostics);
+    throw error;
+  }
+  return turn;
 }

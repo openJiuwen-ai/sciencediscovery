@@ -175,13 +175,25 @@ test("a failed sync or a damaged remote tree fails preparation instead of preten
   const remote = await startRemoteRunner(context);
   const selected = bundle(SELECTED);
 
+  // Remote integrity diagnostics are deliberately not trusted as display text.
+  // Keep the hard refusal and HTTP classification without leaking Runner paths.
+  const rejectsUntrustedIntegrity = (error: unknown): boolean => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "Remote Skill preparation failed: Runner request failed (400)");
+    assert.equal((error.cause as Error & { statusCode?: number }).statusCode, 400);
+    assert.doesNotMatch(error.message, /selected|SKILL\.md|check\.sh|tampered/);
+    return true;
+  };
   // Bytes that do not add up to the manifest never become a mountable tree.
   const tampered = bundle(SELECTED);
   tampered.skills[0]!.files[0]!.content = Buffer.from("tampered").toString("base64");
   await assert.rejects(
     remote.client.prepareSkillPackages(skillBundleManifest(selected), async () => tampered),
-    /Remote Skill preparation failed.*integrity/s,
+    rejectsUntrustedIntegrity,
   );
+  assert.deepEqual(await readdir(resolve(remote.dataDir, "projects", ".skill-packages")), [],
+    "a rejected upload must not publish any mountable snapshot");
+  await assert.rejects(readdir(resolve(remote.dataDir, ".skill-package-staging")), { code: "ENOENT" });
 
   // A Runner that cannot be reached fails the execution rather than letting it
   // run with no Skills mounted.
@@ -200,6 +212,6 @@ test("a failed sync or a damaged remote tree fails preparation instead of preten
   await writeFile(script, "echo tampered\n");
   await assert.rejects(
     remote.client.prepareSkillPackages(skillBundleManifest(selected), async () => selected),
-    /Remote Skill preparation failed.*integrity/s,
+    rejectsUntrustedIntegrity,
   );
 });

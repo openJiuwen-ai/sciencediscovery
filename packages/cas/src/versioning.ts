@@ -7,6 +7,10 @@ import { link, lstat, mkdir, open, readdir, readFile, readlink, rm, type FileHan
 import { dirname, resolve, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+// [windows-desktop] Windows cannot fsync a directory handle (EPERM), so
+// directory durability goes through the platform facade (posix: fsync, win32: no-op).
+import { syncDirectory } from "./platform/index.js";
+
 export type Pool = "data" | "agent-state";
 export interface ObjectRef<P extends Pool = Pool> {
   pool: P;
@@ -47,13 +51,6 @@ export function assertRef(ref: ObjectRef, pool?: Pool): void {
   if (!ref || (ref.pool !== "data" && ref.pool !== "agent-state") || (pool && ref.pool !== pool)
     || !/^sha256:[a-f0-9]{64}$/.test(ref.digest) || !Number.isSafeInteger(ref.size) || ref.size < 0
     || typeof ref.mediaType !== "string" || !ref.mediaType) throw new Error("Invalid or cross-pool reference");
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  // Windows FlushFileBuffers requires a writable handle, including for a directory.
-  const access = process.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY;
-  const handle = await open(path, access | constants.O_DIRECTORY);
-  try { await handle.sync(); } finally { await handle.close(); }
 }
 
 /** Publish without replacing existing bytes, including under concurrent writers. */
@@ -100,31 +97,68 @@ export class VersionStore {
    * a record together with their whole dependency closure. CAS objects are
    * never rewritten or deleted, so ref commits stop at admitted objects instead
    * of rehashing history. Trust boundary: nothing outside this store changes an
-   * object after this process verified it. Reads, full audits and new instances
-   * still rehash; file metadata is never taken as evidence.
+   * object after this process verified it. Admission says only that this instance
+   * saw those bytes; existence is re-checked on every admitted read, and reads,
+   * full audits and new instances still rehash. File metadata is never taken as
+   * evidence of content.
    */
   private readonly admitted = new Map<string, boolean>();
   /** Bumped when admission is revoked, so an in-flight validation cannot re-admit a stale closure. */
   private admissionGeneration = 0;
-  private readonly workspaceFiles = new Map<string, { source: ObjectIdentity; object: ObjectIdentity; ref: DataRef }>();
+  /** Refs whose bytes this store hashed; reuse still re-derives the source digest on every call. */
+  private readonly workspaceFiles = new Map<string, { source: ObjectIdentity; ref: DataRef }>();
   constructor(readonly dataDir: string) {}
 
-  /** Reuse only bytes already hashed by this store, while both file identities remain unchanged. */
+  /**
+   * Reuse only bytes this store has already hashed, after re-deriving the digest of the
+   * current bytes and re-verifying the stored object. Metadata narrows the work but is
+   * never evidence: a same-size in-place rewrite keeps every stat field of its tick.
+   * The source bytes are re-hashed on every call; the stored object is verified once per
+   * store instance, because it is content-addressed and this process writes it once.
+   */
   async putWorkspaceFile(path: Buffer, file: FileHandle): Promise<DataRef> {
     const key = path.toString("base64");
     const before = await file.stat({ bigint: true });
     const cached = this.workspaceFiles.get(key);
     if (cached && this.sameIdentity(before, cached.source)) {
-      let object: ObjectIdentity | undefined;
-      try { object = await this.objectIdentity(cached.ref); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (object && this.sameIdentity(object, cached.object)) return cached.ref;
+      const source = await this.unchangedWorkspaceBytes(file, before, cached.ref);
+      if (source) { this.workspaceFiles.set(key, { source, ref: cached.ref }); return cached.ref; }
     }
     const ref = await this.putStream("data", file.createReadStream({ autoClose: false, start: 0 }));
     const after = await file.stat({ bigint: true });
     if (!this.sameIdentity(before, after)) throw new Error("Workspace changed during snapshot");
-    this.workspaceFiles.set(key, { source: after, object: await this.objectIdentity(ref), ref });
+    this.workspaceFiles.set(key, { source: after, ref });
     return ref;
+  }
+
+  /**
+   * The post-read identity when the handle still holds exactly the cached bytes and the
+   * stored object still verifies; undefined means the bytes must be republished. An object
+   * this instance already verified is admitted instead of read a second time.
+   */
+  private async unchangedWorkspaceBytes(file: FileHandle, before: ObjectIdentity, ref: DataRef): Promise<ObjectIdentity | undefined> {
+    const digest = createHash("sha256"); let size = 0;
+    for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) {
+      const bytes = chunk as Buffer; digest.update(bytes); size += bytes.length;
+    }
+    if (size !== ref.size || digest.digest("hex") !== ref.digest.slice(7)) return undefined;
+    const key = admissionKey(ref);
+    if (this.admitted.has(key)) {
+      // An object can disappear under a live process (restore, cleanup of the same dataDir, disk
+      // fault), and admission covers the bytes, not their continued presence. Re-checking existence
+      // keeps the republish path self-healing for a cost that is noise next to the source re-hash.
+      await this.dropIfVanished(ref);
+      if (!this.admitted.has(key)) return undefined;
+    } else {
+      try { await this.verifyRef(ref); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return undefined;
+      }
+      this.admitted.set(key, false); // verified here as a non-record; `checked` revokes it on any integrity failure
+    }
+    const after = await file.stat({ bigint: true });
+    if (!this.sameIdentity(before, after)) throw new Error("Workspace changed during snapshot");
+    return after;
   }
 
   poolRoot(pool: Pool): string { return resolve(this.dataDir, "versioning", pool); }
@@ -223,6 +257,19 @@ export class VersionStore {
     }
   }
 
+  /**
+   * Admission is existence evidence, not content evidence, and the guard is one-directional — a hit
+   * proves only that a regular file is still there, never that its bytes are the ones verified. A
+   * missing object, or one replaced by a directory or a symlink, revokes every admission so the caller
+   * falls back to its own read or verify path, which fails closed on bytes that are not there.
+   */
+  private async dropIfVanished(ref: ObjectRef): Promise<void> {
+    try { if ((await lstat(this.objectPath(ref))).isFile()) return; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    this.admitted.clear();
+    this.admissionGeneration++;
+  }
+
   async putRecord<T>(kind: string, value: T, dependencies: ObjectRef[] = []): Promise<AgentStateRef> {
     for (const ref of dependencies) assertRef(ref);
     // Dependencies embedded in values cannot silently escape closure validation.
@@ -263,12 +310,6 @@ export class VersionStore {
     return record;
   }
 
-  private async objectIdentity(ref: ObjectRef): Promise<ObjectIdentity> {
-    const info = await lstat(this.objectPath(ref), { bigint: true });
-    if (!info.isFile() || info.size !== BigInt(ref.size)) throw new Error("Object integrity failure");
-    return { dev: info.dev, ino: info.ino, size: info.size, mtimeNs: info.mtimeNs, ctimeNs: info.ctimeNs };
-  }
-
   private sameIdentity(left: ObjectIdentity, right: ObjectIdentity): boolean {
     return left.dev === right.dev && left.ino === right.ino && left.size === right.size
       && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
@@ -289,6 +330,10 @@ export class VersionStore {
       if (visited.has(key)) continue;
       visited.add(key);
       const asRecord = ref.mediaType === RECORD_MEDIA_TYPE;
+      // Both admitted readers re-check existence first: an admission covers bytes this instance
+      // verified, not their continued presence, so a vanished object must be verified (and fail) instead
+      // of being skipped as an already-checked closure.
+      if (trustAdmitted && this.admitted.has(admissionKey(ref))) await this.dropIfVanished(ref);
       const known = this.admitted.get(admissionKey(ref));
       // An admitted record already had its closure verified, so stop here.
       if (trustAdmitted && (known === true || (known === false && !asRecord))) continue;

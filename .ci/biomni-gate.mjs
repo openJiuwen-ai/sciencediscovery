@@ -13,6 +13,7 @@ export const manifestHash = createHash('sha256').update(manifestBytes).digest('h
 const resourceKeys = ['tool_calls', 'tool_rounds', 'peak_rss_bytes', 'e2e_ms', 'generation_tokens', 'judge_tokens', 'total_tokens'];
 const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 const pick = (doc, keys) => Object.fromEntries(keys.filter(k => doc?.[k] !== undefined).map(k => [k, doc[k]]));
+const rubricProjection = doc => pick(doc, ['channel', 'version', 'git_blob_oid', 'sha256']);
 
 export function percentile(values, fraction) {
   const sorted = [...values].sort((a, b) => a - b), position = (sorted.length - 1) * fraction;
@@ -60,11 +61,25 @@ export function projectMetrics(doc) {
   out.identity.machine = pick(doc.identity?.machine, ['os', 'arch', 'kernel', 'cpu', 'cores', 'memory_bytes', 'node']);
   out.measurements = pick(doc.measurements, ['score', ...resourceKeys, 'memory_samples', 'memory_interval_ms', 'memory_scope', 'judge_ms', 'generation_input_tokens', 'generation_output_tokens', 'judge_input_tokens', 'judge_output_tokens']);
   out.evaluation = pick(doc.evaluation, ['status', 'score', 'gating']);
+  if (doc.evaluation?.rubric) out.evaluation.rubric = rubricProjection(doc.evaluation.rubric);
+  // Informational only. Never put a local score into measurements.score.
+  if (doc.local_evaluation) {
+    out.local_evaluation = { ...pick(doc.local_evaluation, ['status', 'score']), gating: false,
+      rubric: rubricProjection(doc.local_evaluation.rubric) };
+  }
   if (doc.judge_usage) out.judge_usage = pick(doc.judge_usage, ['complete', 'unknown_attempts', 'reported_attempts', 'scope']);
   return out;
 }
 
 export function validateMetrics(doc, entry, plan) {
+  const rubric = doc?.evaluation?.rubric;
+  // Historical schema-2 evidence predates explicit provenance. New scorecards
+  // carry it; reject a diagnostic or local variant in the official gate field.
+  if (rubric) {
+    const pin = dataset.tasks.find(t => t.id === biomniCase(entry))?.files.find(f => f.path === 'tests/rubric.txt');
+    if (rubric.channel !== 'official' || rubric.version !== `upstream-${dataset.revision}`
+        || rubric.git_blob_oid !== pin?.oid) throw new Error('OFFICIAL_RUBRIC_REQUIRED');
+  }
   if (doc?.judge_usage?.complete === false) throw new Error('UNREPORTED_JUDGE_TOKENS');
   if (doc?.schema_version !== 2 || doc.benchmark !== 'biomnibench-da' || doc.case_id !== biomniCase(entry)
       || doc.key !== entry.key || doc.revision !== plan.revision || doc.integration_status !== 'passed') throw new Error('METRIC_IDENTITY_OR_DELIVERY');
@@ -97,7 +112,8 @@ export function evaluateSuite(plan, documents, policy, baseline) {
   for (const entry of expected) {
     const matches = documents.filter(doc => doc.case_id === biomniCase(entry));
     const state = { case_id: biomniCase(entry), status: 'incomplete', delivery: matches[0]?.integration_status ?? 'missing',
-      evaluation: matches[0]?.evaluation?.status ?? 'missing', measurements: matches.length === 1 ? projectMetrics(matches[0]).measurements : {}, reason: null };
+      evaluation: matches[0]?.evaluation?.status ?? 'missing', measurements: matches.length === 1 ? projectMetrics(matches[0]).measurements : {},
+      local_evaluation: matches.length === 1 ? projectMetrics(matches[0]).local_evaluation : undefined, reason: null };
     caseStatuses.push(state);
     if (matches.length !== 1) { state.reason = 'MISSING_OR_DUPLICATE_METRICS'; problems.push(`${biomniCase(entry)}: ${state.reason}`); continue; }
     try { results.push(validateMetrics(matches[0], entry, plan)); state.status = 'completed'; }
@@ -135,9 +151,11 @@ export function renderSuite(report) {
   const limits = report.thresholds.map(m => `| ${m.metric} | ${format(m.actual)} | ${format(m.baseline)} | ${format(m.warning)} | ${format(m.block)} | ${m.status} |`).join('\n');
   const rows = report.case_statuses.map(c => {
     const m = c.measurements, value = (key, scale = 1) => Number.isFinite(m[key]) ? (m[key] / scale).toFixed(2) : '—';
-    return `| ${c.case_id} | ${c.status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${value('total_tokens')} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
+    const local = c.local_evaluation;
+    const localScore = local?.status === 'scored' && Number.isFinite(local.score) ? format(local.score) : '—';
+    return `| ${c.case_id} | ${c.status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${localScore} | ${value('total_tokens')} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
   });
-  return `### Biomni public-50: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}.\n\n| Metric (time in ms) | Actual | Baseline | Warning | Block | Status |\n|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Score | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
+  return `### Biomni public-50: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}. Gates and release figures use official scores only. Local-variant scores are informational; — means unavailable.\n\n| Metric (time in ms) | Actual | Baseline | Warning | Block | Status |\n|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Official score | Local-variant score (non-gating) | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
 }
 
 export function collectSuite(plan, root, policy, baseline) {

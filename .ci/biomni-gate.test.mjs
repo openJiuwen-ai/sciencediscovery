@@ -11,7 +11,7 @@ import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 import { profiles } from '../test/support/tagged/profiles.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
-import { dataset, manifestHash, evaluateSuite, projectMetrics, validateMetrics } from './biomni-gate.mjs';
+import { dataset, manifestHash, evaluateSuite, projectMetrics, validateMetrics, renderSuite } from './biomni-gate.mjs';
 import { generationTokens, judgeTokens, toolMetrics, settled, selectedProcesses, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64', 'arch:arm64'] });
 const catalog = dataset.tasks.map(t => ({ id: `playwright:test/biomnibench-da-swarm.spec.ts::BiomniBench-${t.id}%20analysis`,
@@ -87,6 +87,31 @@ test('score projection drops prompt, credential and judge narrative fields', () 
   const doc = documents()[0]; doc.prompt = 'secret'; doc.identity.provider = { token: 'secret' };
   doc.evaluation.criteria = { reason: 'secret' }; doc.measurements.raw = 'secret';
   assert.doesNotMatch(JSON.stringify(projectMetrics(doc)), /secret|criteria|provider/);
+});
+
+test('official and local scores stay separate through publication and gating', () => {
+  const docs = documents();
+  const task = dataset.tasks.find(t => t.id === docs[0].case_id);
+  docs[0].evaluation.rubric = { channel: 'official', version: `upstream-${dataset.revision}`,
+    git_blob_oid: task.files.find(f => f.path === 'tests/rubric.txt').oid, sha256: 'a'.repeat(64) };
+  docs[0].local_evaluation = { status: 'scored', score: 100, gating: true,
+    rubric: { channel: 'local-variant', version: 'local-rubric-v1', git_blob_oid: 'b'.repeat(40), sha256: 'c'.repeat(64), secret: 'secret' },
+    criteria: { reason: 'secret' }, provider: { token: 'secret' } };
+  const result = evaluateSuite(plan, docs, policy);
+  assert.equal(result.summary.mean_score, 80);
+  assert.equal(result.cases[0].local_evaluation.score, 100);
+  assert.equal(result.cases[0].local_evaluation.gating, false);
+  assert.doesNotMatch(JSON.stringify(projectMetrics(docs[0])), /secret|criteria|provider/);
+  assert.match(renderSuite(result), /Official score \| Local-variant score \(non-gating\)/);
+  assert.match(renderSuite(result), /80\.00 \| 100/);
+  const before = result.status;
+  docs[0].local_evaluation = { status: 'error', score: null };
+  assert.equal(evaluateSuite(plan, docs, policy).status, before);
+  docs[0].evaluation.rubric.channel = 'local-variant';
+  assert.match(evaluateSuite(plan, docs, policy).problems.join(), /OFFICIAL_RUBRIC_REQUIRED/);
+  docs[0].evaluation.rubric.channel = 'official';
+  docs[0].evaluation.rubric.git_blob_oid = '0'.repeat(40);
+  assert.match(evaluateSuite(plan, docs, policy).problems.join(), /OFFICIAL_RUBRIC_REQUIRED/);
 });
 
 test('tokens include all invocation attempts and judge retries without double counting totals', () => {

@@ -151,7 +151,7 @@ scripts/jiuwenswarm.sh setup
 
 源码模式现在也默认使用 JiuwenSwarm。需要旧版 Node 原生循环时，使用 `./scripts/start-stack.sh --mode local --no-jiuwenswarm`，或在 `.env` 中设置 `SCIENCE_AGENT_EXECUTOR=native`。行为差异和当前后端检查方法见 [Agent 后端](../reference/agent-backends.md)。
 
-JiuwenSwarm 本地运行数据默认保存到 `$HOME/.sciencediscovery/jiuwenswarm`，与独立安装隔离；旧数据不会自动迁移或修改。显式设置 `JIUWENSWARM_HOME` 可选择其他运行目录。Docker 保留 `/data/.home` 持久化目录。旧用户兼容方式、目录和端口说明见[运行数据与旧安装](../../en/getting-started/deployment.md#jiuwenswarm-runtime-data-and-existing-installations)。
+JiuwenSwarm 本地运行数据默认保存到 `$HOME/.sciencediscovery/jiuwenswarm`，与独立安装隔离；旧数据不会自动迁移或修改。只有显式设置 `SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1` 才启用 `JIUWENSWARM_HOME` 等目录、安装和实例覆盖变量；自定义运行目录必须由 SD 独占，已有 registry/workspace 但没有 SD 归属标记的目录会被拒绝。Docker 保留 `/app/data/.home` 持久化目录。目录、端口和兼容说明见[运行数据与旧安装](../../en/getting-started/deployment.md#jiuwenswarm-runtime-data-and-existing-installations)。
 
 第一次启动会安装依赖并构建项目，需要联网。
 

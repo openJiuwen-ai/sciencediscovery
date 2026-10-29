@@ -27,6 +27,7 @@ import { listSubagents } from "./api/sessions.js";
 import type { Subagent } from "./api/types.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
+import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
 import { useFileDrop } from "./app/use-file-drop.js";
 import { useLanguage } from "./app/use-language.js";
@@ -116,6 +117,14 @@ export function App({ initialToken }: Props) {
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
   const resize = usePanelWidth();
+
+  // The shell (when present) pushes JiuwenSwarm cluster readiness.
+  // "shell present, no verdict yet" is NOT ready — the composer stays gated
+  // with an explanatory banner until the cluster actually reports reachable
+  // (a `?? true` default here would let messages hit semantic-errors while
+  // the cluster is still booting). Browser dev (no shell) is never gated.
+  const { hasShell: jwHasShell, state: jiuwenState } = useJiuwenReadiness();
+  const jwReady = jwReadyFromBridge(jwHasShell, jiuwenState);
 
   useEffect(() => {
     writeStoredFlag(localStorage, RIGHT_PANEL_STORAGE_KEY, workspaceOpen);
@@ -260,27 +269,31 @@ export function App({ initialToken }: Props) {
     setSubagentCatalog([]);
   }, [state.sessionId]);
 
-  // The line that opens a child is also the way out: pressing the open line
-  // again returns the panel to its groups. The panel has no back arrow of its
-  // own, so the toggle is the only way back.
+  // Pressing a line opens the child it belongs to, and pressing the same line
+  // again keeps it open: the reader pressed a row to read it, and a row that
+  // took the record away on a second press would look like a misread rather
+  // than a decision. The panel draws its own way back.
   const openSubagentDetails = useCallback((id: string) => {
-    setOpenSubagentId((current) => (current === id ? undefined : id));
+    setOpenSubagentId(id);
     setOpenTool(undefined);
     setWorkspaceOpen(true);
   }, []);
 
   /**
-   * The same gesture for a tool's input or result: the block opens it, and a
-   * second press on the same block closes it. Pressing another block swaps the
-   * panel's content, because the panel is where the reader is already looking.
+   * The same gesture for a tool's input or result: the block opens it, and
+   * pressing another block swaps the panel's content, because the panel is
+   * where the reader is already looking.
    */
   const openToolDetails = useCallback((detail: ToolDetail) => {
-    setOpenTool((current) =>
-      current !== undefined && current.toolId === detail.toolId && current.id === detail.id
-        ? undefined
-        : detail);
+    setOpenTool(detail);
     setOpenSubagentId(undefined);
     setWorkspaceOpen(true);
+  }, []);
+
+  /** Back from a child's record or a tool's text to the panel's own groups. */
+  const closePanelDetail = useCallback(() => {
+    setOpenSubagentId(undefined);
+    setOpenTool(undefined);
   }, []);
 
   /**
@@ -378,6 +391,7 @@ export function App({ initialToken }: Props) {
       <>
         <SetupWizard
           client={client}
+          initialStep={wizardIntroHandled() ? "model" : "workspace"}
           onConfigured={() => actions.finishSetup()}
           onProvidersChanged={actions.refreshCatalog}
           presets={state.presets}
@@ -437,6 +451,7 @@ export function App({ initialToken }: Props) {
     attachLimit,
     attachments: state.attachments,
     client,
+    jwBlocked: jwReady ? undefined : TEXT.composer.jwBlocked,
     models: state.models,
     onApprovalMode: (mode) => void actions.setApprovalMode(mode),
     onClearAttachments: actions.clearAttachments,
@@ -544,6 +559,7 @@ export function App({ initialToken }: Props) {
           actions={actions}
           activeGroup={panelGroup}
           files={state.panelFiles}
+          onCloseDetail={closePanelDetail}
           onCollapse={collapsePanel}
           onSelectGroup={setPanelGroup}
           outputs={state.outputs}
@@ -594,6 +610,22 @@ export function App({ initialToken }: Props) {
       ) : null}
 
       <Toasts onDismiss={actions.dismissToast} toasts={state.toasts} />
+
+      {/* Rendered whenever chat is gated — including the "shell
+          present but no verdict yet" case, so a disabled composer is always
+          explained. Right-bottom overlay, out of the layout's way. */}
+      {!jwReady ? (
+        <div className="jw-banner" role="status">
+          <span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" />
+          <div className="jw-banner-body">
+            <strong>{TEXT.jiuwen.starting}</strong>
+            <span>
+              {jiuwenState?.message ?? TEXT.jiuwen.preparing}
+              {jiuwenState?.elapsed !== undefined ? ` (${jiuwenState.elapsed}s)` : ""}
+            </span>
+          </div>
+        </div>
+      ) : null}
 
       {state.confirm ? (
         <ConfirmDialog onDismiss={actions.dismissConfirm} request={state.confirm} />

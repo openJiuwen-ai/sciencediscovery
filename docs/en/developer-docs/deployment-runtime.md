@@ -72,6 +72,30 @@ After an application upgrade, reconnecting adds a new file instead of overwritin
 
 Active Runner binaries are always preserved. Files outside the naming convention are untouched. Cleanup failure is logged but does not break an established connection.
 
+## Execution recovery and quarantine after restart
+
+A lost connection is not evidence that a command failed. Keep the original Execution ID and use `execution_status` / `execution_logs` to inspect that execution; do not submit the command again to discover its outcome.
+
+Runner startup distinguishes two situations:
+
+- **Interrupted result publication with durable evidence:** a publication journal may contain the original identity, process-termination evidence, immutable result and workspace version. Runner validates that evidence and its CAS closure before completing publication, without executing the command again. Observation can temporarily return `EXECUTION_RECOVERY_PENDING` (503). A readable terminal result does not itself prove that a remaining workspace write fence has been cleared.
+- **Unknown execution or uncommitted workspace:** if termination or a safely committed workspace cannot be established, Runner quarantines the affected resources. New submissions using them fail with `EXECUTION_RESOURCE_QUARANTINED` (409). This is a safety boundary, not an invitation to retry with another ID. Restarting again does not release an unresolved execution.
+
+The warning `execution_resources_quarantined` identifies the `executionId`, scope, and `phase` (`startup`, `runtime`, or `publication-recovery`). Repeated notifications for the same execution, phase, and resource scope are deduplicated within one Runner manager lifetime. For `workspace-and-devices`, it includes a SHA-256 `workspaceKeyHash` and NPU device indices, not a raw workspace path, command, output, or remote error. A `runner` scope means a legacy record lacks a trustworthy workspace/device scope, so admission is blocked globally on that Runner. The warning describes a resource fence, not a declaration that recovery failed; subsequent validated publication recovery may repair it. A logging failure does not relax admission. To correlate `workspaceKeyHash`, hash the exact canonical `workspaceKey` used by the Runner as UTF-8 bytes with SHA-256 and compare the lowercase hexadecimal digest; do not append a newline or hash a different path spelling. Obtain the canonical key through authorized inspection rather than guessing from a user-entered alias. On Linux, with that exact UTF-8 key already in the shell variable `workspaceKey`, run `printf '%s' "$workspaceKey" | sha256sum` and compare the first output column with the logged hash. The digest is not a plaintext path, but it can still be correlated and may persist in retained logs; treat it as operational metadata under the same access and retention controls.
+
+### Safe operator response
+
+1. Stop new dispatch attempts into the blocked scope. Preserve the original ID, Runner identity, execution ledger and SQLite sidecars, CAS objects/refs, workspace data and relevant logs. Use an appropriate consistent backup procedure; copying a live SQLite file alone is not a complete recovery backup.
+2. Inspect the existing execution and logs through the authorized owner. Correlate the warning and current status, and have the operator check the original host/process and storage condition. An absent connection or an unverified PID is not proof of termination; do not kill or replay a task merely because observation failed.
+3. If valid publication evidence exists, let Runner finish its validation, then inspect the same ID again. Missing/corrupt evidence, conflicting workspace history or a remaining write fence require investigation; do not fabricate a receipt or delete the fence to force success.
+4. If the execution remains unknown, keep it quarantined and escalate with the preserved evidence. **There is currently no supported manual unlock/reset API or operator release procedure.** Even an operator's independent confirmation that a process stopped does not clear the persisted unknown state automatically. Do not edit/delete ledger rows, remove data/CAS, reset the Runner identity or switch data directories to bypass admission.
+
+With a trustworthy scoped quarantine, genuinely independent new work may use an unaffected workspace and no quarantined NPU devices, subject to the normal permission checks. It must not share mutable files, devices or external side effects with the unresolved task; changing only the workspace name or execution ID is not a safe replay strategy. Legacy records with unknown scope block all new submissions on that Runner.
+
+### Legacy IDs without receipts
+
+A stored pre-receipt execution can still be inspected under its original owner. A `POST` reusing that ID returns `EXECUTION_ID_CONFLICT` (409), even if the caller believes its request is identical: without the original immutable request digest, Runner cannot prove idempotent equivalence. Keep querying the original ID rather than repeatedly submitting it or assigning the same job a fresh ID. Records with valid receipts can return the existing execution for an identical request; a changed request or owner still conflicts. This compatibility boundary does not add a way to release quarantine.
+
 ## Docker build/runtime differences
 
 The Docker image bakes service runtime environments into the image while application state remains in the host bind-mounted data directory.

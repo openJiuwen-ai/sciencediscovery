@@ -1,4 +1,4 @@
-lockfileVersion: '9.0'
+﻿lockfileVersion: '9.0'
 
 settings:
   autoInstallPeers: true
@@ -319,6 +319,22 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+
+  packages/execution-router:
+    dependencies:
+      '@sciencediscovery/sandbox-capability':
+        specifier: workspace:*
+        version: link:../sandbox-capability
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   packages/executor:
     dependencies:
@@ -718,6 +734,9 @@ importers:
       '@sciencediscovery/evolve':
         specifier: workspace:*
         version: link:../../packages/evolve
+      '@sciencediscovery/execution-router':
+        specifier: workspace:*
+        version: link:../../packages/execution-router
       '@sciencediscovery/executor':
         specifier: workspace:*
         version: link:../../packages/executor

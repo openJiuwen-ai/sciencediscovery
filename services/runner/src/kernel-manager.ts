@@ -22,6 +22,7 @@ import {
   type KernelSession,
   type PythonExecutionRequest,
   type PythonExecutionResult,
+  type SandboxKind,
   type SandboxNetworkAccess,
   type ScientificLanguage,
 } from "@sciencediscovery/schema";
@@ -273,9 +274,11 @@ class ManagedKernel {
 
 export interface KernelManagerConfig {
   bwrapPath: string;
-  sandboxProvider?: "bubblewrap" | "seatbelt";
+  sandboxProvider?: SandboxKind;
   seatbeltPath?: string;
   dataDir: string;
+  /** [windows-desktop] user-authorized extra workspace roots (validated alongside dataDir). */
+  extraWorkspaceRoots?: string[];
   /** Wall-clock limit for a single evaluation inside a kernel. */
   execTimeoutMs: number;
   idleTimeoutMs?: number;
@@ -349,9 +352,9 @@ export class KernelManager {
       || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
       throw new Error("Persistent kernels accept exactly one read-write workspace mount");
     }
-    const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot);
+    const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot, this.config.extraWorkspaceRoots);
     const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
-      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
+      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot, this.config.extraWorkspaceRoots)
       : undefined;
     const skillRoots = await resolveSandboxSkillRoots(this.config.dataDir, workspaceRoot, request.skillPackagesRoot);
     const maxWorkspaceBytes = resolveQuotaBytes(
@@ -558,6 +561,11 @@ export class KernelManager {
       request.permissionEpoch.id,
     );
     const sandbox = executorSandboxKind(this.config);
+    if (sandbox === "none") {
+      // [windows-desktop] persistent kernels are not supported by the
+      // direct-execution provider; ephemeral execution stays available.
+      throw new Error("Persistent kernels require a sandboxed runner; the direct-execution provider (Windows) supports ephemeral Python only");
+    }
     const launch = await prepareSandboxLaunch(this.config, {
       chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
       egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox, request.sandboxEgressProxy),

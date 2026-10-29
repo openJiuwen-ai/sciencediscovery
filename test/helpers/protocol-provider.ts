@@ -19,6 +19,7 @@ import type { ModelApiProtocol } from "../../packages/schema/src/index.js";
 /** Loopback only, synthetic data. Native protocol state is required on the tool-result turn. */
 export async function protocolProvider(selection: ModelApiProtocol | "all", options: {
   acknowledgement?: string;
+  redirect?: (request: { path: string; body: Record<string, unknown> }) => string | undefined;
   usage?: "valid" | "missing" | "malformed";
   parallel?: boolean;
   truncated?: boolean;
@@ -39,6 +40,8 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
     let raw = ""; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw || "{}");
     requests.push({ path: req.url!, body });
+    const redirect = options.redirect?.({ path: req.url ?? "", body });
+    if (redirect) { res.writeHead(307, { location: redirect }); res.end(); return; }
     const expected = protocol === "openai-responses" ? "/responses" : protocol === "anthropic-messages" ? "/messages" : "/chat/completions";
     if (!req.url?.endsWith(expected) || options.status) { res.writeHead(options.status ?? 404); res.end(JSON.stringify({ error: { message: "original fixture error" } })); return; }
     if (protocol === "openai-responses" && body.max_output_tokens < 16) { res.writeHead(400); res.end(JSON.stringify({ error: { message: "Synthetic Responses fixture requires max_output_tokens >= 16" } })); return; }

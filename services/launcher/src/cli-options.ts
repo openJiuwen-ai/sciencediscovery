@@ -1,4 +1,4 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+﻿// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -151,12 +151,12 @@ export function defaultSettings(
   onCompatibility?: CompatibilityLog,
 ): ServeSettings {
   const sandboxProvider = env.SCIENCE_AGENT_SANDBOX_PROVIDER?.trim() || "auto";
-  if (!["auto", "bubblewrap", "seatbelt"].includes(sandboxProvider)) {
-    throw new Error("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt");
+  if (!["auto", "bubblewrap", "seatbelt", "none"].includes(sandboxProvider)) {
+    throw new Error("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, seatbelt, or none");
   }
   return {
     bwrapPath: env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
-    sandboxProvider: sandboxProvider as "auto" | "bubblewrap" | "seatbelt",
+    sandboxProvider: sandboxProvider as "auto" | "bubblewrap" | "seatbelt" | "none",
     seatbeltPath: env.SCIENCE_AGENT_SEATBELT_PATH?.trim() || "/usr/bin/sandbox-exec",
     dataDir: resolve(
       cwd,
@@ -230,10 +230,10 @@ export function parseInvocation(
       case "--bwrap": invocation.settings.bwrapPath = next(); break;
       case "--sandbox-provider": {
         const provider = next();
-        if (!["auto", "bubblewrap", "seatbelt"].includes(provider)) {
-          throw new Error("--sandbox-provider must be auto, bubblewrap, or seatbelt");
+        if (!["auto", "bubblewrap", "seatbelt", "none"].includes(provider)) {
+          throw new Error("--sandbox-provider must be auto, bubblewrap, seatbelt, or none");
         }
-        invocation.settings.sandboxProvider = provider as "auto" | "bubblewrap" | "seatbelt";
+        invocation.settings.sandboxProvider = provider as "auto" | "bubblewrap" | "seatbelt" | "none";
         break;
       }
       case "--seatbelt": invocation.settings.seatbeltPath = next(); break;

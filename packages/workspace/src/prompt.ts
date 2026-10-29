@@ -366,6 +366,13 @@ export interface WorkspaceAgentOptions {
   webSearch?: WorkspaceToolOptions["webSearch"];
   recordWebResult?: WorkspaceToolOptions["recordWebResult"];
   approvalMode?: "always_allow" | "ask_for_dangerous";
+  /**
+   * [windows-desktop] F6 (gap 1a, 0.B0 审查#5): the run executes on an
+   * unsandboxed provider (Provider A). The JiuwenSwarm backend uses this to
+   * hide its native subagent lifecycle tools — those agents would run
+   * outside ScienceDiscovery's tools, sandbox, approvals and provenance.
+   */
+  unsandboxedExecution?: boolean;
   /** Whether the memory-graph feature is on. Gates the declare/query_graph
    * system-prompt injection so a disabled graph doesn't mislead the model
    * into calling tools that return a disabled error. */

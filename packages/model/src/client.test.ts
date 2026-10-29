@@ -29,7 +29,11 @@ import {
 import { installTestModelCatalog } from "./models-dev.fixture.js";
 
 import {
+  classifyModelWireError,
+  EmptyModelTurnError,
   isModelInputTooLargeError,
+  modelEndpointIdentity,
+  modelWireDiagnosticsOf,
   ModelRequestError,
   normalizeUsage,
   proxyDispatcher,
@@ -38,6 +42,7 @@ import {
   toAnthropicMessages,
   type ModelClientPolicy,
   type ModelStreamCallbacks,
+  type ModelWireDiagnostics,
 } from "./client.js";
 
 for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
@@ -120,7 +125,185 @@ test("provider context overflow is normalized without treating arbitrary token e
   assert.equal(isModelInputTooLargeError(new Error("network request failed")), false);
 });
 
+test("the recorded endpoint identity drops credentials, paths and query strings", () => {
+  assert.equal(modelEndpointIdentity({ baseUrl: "https://user:secret@relay.example/v1/chat?api_key=secret-query", model: "alias" }), "https://relay.example");
+  assert.equal(modelEndpointIdentity({ apiToken: "secret-token", baseUrl: "http://127.0.0.1:8080/v1", model: "alias" }), "http://127.0.0.1:8080");
+  assert.equal(modelEndpointIdentity({ baseUrl: "not a url", model: "alias" }), "invalid");
+});
+
+test("model wire diagnostics record timing, framing and upstream identity without payloads", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(200, { "content-type": "text/event-stream", "x-request-id": "upstream-req-1" });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "hello" } }] })}\n\n`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    response.write("data: {not json\n\n");
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  }, async (baseUrl) => {
+    const seen: ModelWireDiagnostics[] = [];
+    const turn = await streamModelTurn(
+      { apiToken: "super-secret-token", baseUrl, model: "alias-1", proxy: { mode: "direct" } },
+      "s", [{ role: "user", content: "private prompt" }], [], policy, AbortSignal.timeout(5_000),
+      { onWireDiagnostics: (diagnostics) => seen.push(diagnostics) },
+    );
+    const diagnostics = turn.wireDiagnostics!;
+    assert.equal(seen.length, 1, "one summary per request");
+    assert.deepEqual(seen[0], diagnostics);
+    assert.match(diagnostics.requestId, /^model-[0-9a-f-]{36}$/);
+    assert.equal(diagnostics.endpoint, baseUrl);
+    assert.equal(diagnostics.protocol, "openai-chat-completions");
+    assert.equal(diagnostics.model, "alias-1");
+    assert.equal(diagnostics.attempts, 1);
+    assert.equal(diagnostics.retries, 0);
+    assert.equal(diagnostics.httpStatus, 200);
+    assert.equal(diagnostics.upstreamRequestId, "upstream-req-1");
+    assert.equal(diagnostics.sseRecords, 3);
+    assert.equal(diagnostics.sseParseErrors, 1);
+    assert.equal(diagnostics.hasText, true);
+    assert.equal(diagnostics.hasToolCalls, false);
+    assert.equal(diagnostics.finishReason, "stop");
+    assert.equal(diagnostics.truncated, false);
+    assert.deepEqual(diagnostics.retryErrors, []);
+    assert.ok(diagnostics.timeToHeadersMs! >= 0);
+    assert.ok(diagnostics.timeToFirstByteMs! >= diagnostics.timeToHeadersMs!);
+    assert.ok(diagnostics.timeToFirstRecordMs! >= diagnostics.timeToFirstByteMs!);
+    assert.ok(diagnostics.elapsedMs >= diagnostics.timeToFirstRecordMs!);
+    assert.ok(Date.parse(diagnostics.completedAt) >= Date.parse(diagnostics.startedAt));
+    const serialized = JSON.stringify(diagnostics);
+    for (const secret of ["super-secret-token", "private prompt", "hello"]) assert.ok(!serialized.includes(secret));
+    assert.ok(!("prompt" in diagnostics) && !("response" in diagnostics) && !("headers" in diagnostics));
+  });
+});
+
+test("model wire diagnostics classify retried attempts and preserve failed-request evidence", async () => {
+  let attempts = 0;
+  await withServer(async (request, response) => {
+    await readBody(request);
+    attempts += 1;
+    if (attempts < 3) {
+      response.writeHead(503, { "content-type": "application/json", "retry-after": "0" });
+      response.end('{"error":{"message":"busy"}}');
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ baseUrl, model: "alias-2", proxy: { mode: "direct" } }, "s", [], [],
+      { ...policy, maxRetries: 2 }, AbortSignal.timeout(5_000));
+    const diagnostics = turn.wireDiagnostics!;
+    assert.equal(diagnostics.attempts, 3);
+    assert.equal(diagnostics.retries, 2);
+    assert.deepEqual(diagnostics.retryErrors, ["provider_http", "provider_http"]);
+    assert.equal(diagnostics.httpStatus, 200);
+    assert.equal(diagnostics.error, undefined);
+  });
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end('{"error":{"message":"invalid key super-secret-token"}}');
+  }, async (baseUrl) => {
+    const failure = await streamModelTurn({ apiToken: "super-secret-token", baseUrl, model: "alias-3", proxy: { mode: "direct" } },
+      "s", [], [], { ...policy, maxRetries: 0 }, AbortSignal.timeout(5_000)).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    const diagnostics = modelWireDiagnosticsOf(failure)!;
+    assert.equal(diagnostics.httpStatus, 401);
+    assert.equal(diagnostics.attempts, 1);
+    assert.deepEqual(diagnostics.error, { classification: "provider_http", httpStatus: 401 });
+    assert.equal(diagnostics.hasText, false);
+    assert.ok(!JSON.stringify(diagnostics).includes("super-secret-token"));
+  });
+});
+
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
+
+// A reasoning model can spend the whole budget thinking and answer nothing. The
+// record must say so: hasText=false alone cannot tell it from a relay that sent
+// an empty `stop`, and the two shapes are separate failures, so the
+// classification itself names the shape that happened.
+const EMPTY_TURN_CLASSIFICATION = { "reasoning-only": "reasoning_only", "nothing-at-all": "empty_completion" } as const;
+for (const shape of ["reasoning-only", "nothing-at-all"] as const) test(`an empty terminal turn is classified ${EMPTY_TURN_CLASSIFICATION[shape]} for ${shape}`, async () => {
+  const frames = shape === "reasoning-only"
+    ? [{ choices: [{ delta: { reasoning_content: "weighed the evidence, wrote nothing" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] }]
+    : [{ choices: [{ delta: {}, finish_reason: "stop" }] }];
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, frames);
+  }, async (baseUrl) => {
+    const seen: ModelWireDiagnostics[] = [];
+    const failure = await streamModelTurn({ baseUrl, model: "alias-reasoning", proxy: { mode: "direct" } },
+      "s", [{ role: "user", content: "synthetic" }], [], { ...policy, maxRetries: 0 }, AbortSignal.timeout(5_000),
+      { onWireDiagnostics: (diagnostics) => seen.push(diagnostics), rejectEmptyTerminalTurn: true })
+      .then(() => null, (error) => error);
+    assert.ok(failure instanceof EmptyModelTurnError, "an empty terminal turn is still a failure");
+    assert.equal(seen.length, 1, "one summary per request");
+    const record = seen[0]!;
+    assert.equal(record.hasText, false);
+    assert.equal(record.hasToolCalls, false);
+    assert.equal(record.finishReason, "stop");
+    assert.equal(record.hasReasoning, shape === "reasoning-only");
+    assert.deepEqual(record.error, { classification: EMPTY_TURN_CLASSIFICATION[shape] },
+      "the one summary line names which empty shape failed");
+    assert.equal(classifyModelWireError(failure), EMPTY_TURN_CLASSIFICATION[shape],
+      "the thrown error and the reported record agree");
+  });
+});
+
+// The shape above is the chat-completions dialect. The other two dialects carry
+// thinking on their own event names, and a provider may stream only those: if the
+// recorder never sees them, a thinking-only turn is reported as a genuinely empty
+// relay answer — the exact confusion this classification exists to prevent.
+test("an Anthropic thinking-only turn is classified reasoning_only, not an empty answer", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [
+      { type: "message_start", message: { usage: { input_tokens: 9 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "weighed the evidence, wrote nothing" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", usage: { output_tokens: 12 }, delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
+    ]);
+  }, async (baseUrl) => {
+    const seen: ModelWireDiagnostics[] = [];
+    const failure = await streamModelTurn({ apiProtocol: "anthropic-messages", baseUrl, model: "claude-stub" },
+      "s", [{ role: "user", content: "synthetic" }], [], { ...policy, maxRetries: 0 }, AbortSignal.timeout(5_000),
+      { onWireDiagnostics: (diagnostics) => seen.push(diagnostics), rejectEmptyTerminalTurn: true })
+      .then(() => null, (error) => error);
+    assert.ok(failure instanceof EmptyModelTurnError, "an empty terminal turn is still a failure");
+    assert.equal(seen.length, 1, "one summary per request");
+    const record = seen[0]!;
+    assert.equal(record.hasText, false);
+    assert.equal(record.hasToolCalls, false);
+    assert.equal(record.hasReasoning, true, "the recorder saw the thinking deltas");
+    assert.deepEqual(record.error, { classification: "reasoning_only" });
+    assert.equal(classifyModelWireError(failure), "reasoning_only");
+  });
+});
+
+test("a Responses stream that only sends reasoning deltas is classified reasoning_only", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [
+      { type: "response.reasoning_text.delta", delta: "weighed the evidence, wrote nothing" },
+      { type: "response.completed", response: { usage: {} } },
+    ]);
+  }, async (baseUrl) => {
+    const seen: ModelWireDiagnostics[] = [];
+    const failure = await streamModelTurn({ apiProtocol: "openai-responses", baseUrl, model: "stub" },
+      "s", [{ role: "user", content: "synthetic" }], [], { ...policy, maxRetries: 0 }, AbortSignal.timeout(5_000),
+      { onWireDiagnostics: (diagnostics) => seen.push(diagnostics), rejectEmptyTerminalTurn: true })
+      .then(() => null, (error) => error);
+    assert.ok(failure instanceof EmptyModelTurnError, "a delta-only reasoning stream is still a failure");
+    assert.equal(seen.length, 1, "one summary per request");
+    const record = seen[0]!;
+    assert.equal(record.hasText, false);
+    assert.equal(record.hasToolCalls, false);
+    assert.equal(record.hasReasoning, true, "reasoning deltas alone must count as thinking");
+    assert.deepEqual(record.error, { classification: "reasoning_only" });
+    assert.equal(classifyModelWireError(failure), "reasoning_only");
+  });
+});
 
 test("an installed catalog narrows thinking and pricing exactly as the snapshot states", () => {
   installTestModelCatalog();

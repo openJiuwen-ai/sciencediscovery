@@ -56,6 +56,10 @@ interface Props {
   attachLimit?: string;
   /** The files this turn already holds, shown above the input. */
   attachments: readonly Attachment[];
+  /** Why chat is gated, or `undefined` when it is not — the shell reports the
+   *  JiuwenSwarm cluster is still starting. A reason rather than a flag so
+   *  the placeholder can say what is being waited on. */
+  jwBlocked?: string;
   /** The welcome page's arrangement: the card floats, and a grey strip under
    *  it carries the project and the permission mode. */
   landing?: boolean;
@@ -599,6 +603,7 @@ export function Composer({
   attachBlocked,
   attachLimit,
   attachments,
+  jwBlocked,
   client,
   landing = false,
   models,
@@ -700,7 +705,7 @@ export function Composer({
   /** The stored name is the server's; the pill shows it in the interface's
    *  language. */
   const selectedName = selected ? providerName(selected.name) : undefined;
-  const canSend = text.trim() !== "" && !running;
+  const canSend = text.trim() !== "" && !running && jwBlocked === undefined;
 
   // Grow with the content up to the CSS max-height, then scroll. Done by hand
   // because a textarea cannot size to its content.
@@ -805,7 +810,7 @@ export function Composer({
           </span>
         ) : null}
         <textarea
-          disabled={running}
+          disabled={running || jwBlocked !== undefined}
           id="composer-textarea"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -840,7 +845,7 @@ export function Composer({
               submit();
             }
           }}
-          placeholder={landing ? TEXT.landing.placeholder : TEXT.composer.placeholder}
+          placeholder={jwBlocked ?? (landing ? TEXT.landing.placeholder : TEXT.composer.placeholder)}
           ref={area}
           rows={1}
           value={text}

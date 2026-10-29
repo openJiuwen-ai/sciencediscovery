@@ -157,3 +157,19 @@ test("bytes that are not a workbook are reported, not guessed at", () => {
   assert.equal(readWorkbook(new Uint8Array()), undefined);
   assert.equal(readWorkbook(workbook({ "xl/other.xml": "<x/>" })), undefined, "a zip without a workbook part");
 });
+
+test("a 1900 date serial before March reads as the day Excel shows", () => {
+  const [sheet] = readWorkbook(workbook({
+    "xl/styles.xml": "<styleSheet><numFmts></numFmts><cellXfs><xf numFmtId=\"14\"/></cellXfs></styleSheet>",
+    "xl/workbook.xml": WORKBOOK("<sheet name=\"Sheet1\" r:id=\"rId1\"/>"),
+    "xl/_rels/workbook.xml.rels": RELS([["rId1", "worksheets/sheet1.xml"]]),
+    "xl/worksheets/sheet1.xml": SHEET(
+      "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>一月</t></is></c>"
+      + "<c r=\"B1\" t=\"inlineStr\"><is><t>二月</t></is></c><c r=\"C1\" t=\"inlineStr\"><is><t>三月</t></is></c></row>"
+      + "<row r=\"2\"><c r=\"A2\" s=\"0\"><v>1</v></c><c r=\"B2\" s=\"0\"><v>59</v></c><c r=\"C2\" s=\"0\"><v>61</v></c></row>",
+    ),
+  })) ?? [];
+  // Excel dates serial 1 at 1900-01-01; its phantom 1900-02-29 is serial 60, so
+  // the 1899-12-30 epoch is only right from serial 61 on.
+  assert.deepEqual(sheet?.table.rows, [["1900-01-01", "1900-02-28", "1900-03-01"]]);
+});

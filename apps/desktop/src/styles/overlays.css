@@ -699,3 +699,40 @@
 .drop-card.is-blocked .drop-mark { color: var(--muted); }
 .drop-title { color: var(--text-heading); font-size: 14px; font-weight: 600; }
 .drop-body { color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+/* ===== jiuwenswarm readiness banner ===== */
+/* Bottom-right card while the shell-managed agent cluster is still starting:
+   explains the disabled composer without covering any layout. */
+.jw-banner {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  max-width: 280px;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+}
+.jw-banner .spinner {
+  flex: none;
+  margin-top: 3px;
+}
+.jw-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.jw-banner-body strong {
+  color: var(--text-heading);
+  font-weight: 600;
+}
+.jw-banner-body span {
+  color: var(--muted);
+}

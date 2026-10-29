@@ -233,7 +233,7 @@ import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
-import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
+import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
@@ -2720,7 +2720,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
       if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
-      if (ideaTreeSettingsEdit && ideaTreeWeightsValid(ideaTreeSettingsEdit)) await saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit));
+      if (ideaTreeSettingsEdit) await saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit));
       if (providerSettingsRef.current?.hasUnsavedDraft()) {
         const saved = await providerSettingsRef.current.saveDraft();
         if (!saved) return;

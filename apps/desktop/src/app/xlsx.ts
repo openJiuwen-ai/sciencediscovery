@@ -168,11 +168,15 @@ function readDateStyles(part: Uint8Array | undefined): DateStyles {
 }
 
 const SERIAL_EPOCH_1900 = Date.UTC(1899, 11, 30);
+// Excel's 1900 system counts from 1899-12-30 only past its phantom leap day
+// (serial 60). Serials 1-59 are one day later than that epoch would suggest.
+const SERIAL_EPOCH_1900_BEFORE_MARCH = Date.UTC(1899, 11, 31);
 const SERIAL_EPOCH_1904 = Date.UTC(1904, 0, 1);
 
 function serialToText(serial: number, epoch: number): string {
   const milliseconds = Math.round(serial * 86_400_000);
-  const date = new Date(epoch + milliseconds);
+  const countedFrom = epoch === SERIAL_EPOCH_1900 && serial < 61 ? SERIAL_EPOCH_1900_BEFORE_MARCH : epoch;
+  const date = new Date(countedFrom + milliseconds);
   const pad = (value: number) => String(value).padStart(2, "0");
   const day = `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
   const seconds = date.getUTCSeconds();

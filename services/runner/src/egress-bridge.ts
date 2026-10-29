@@ -56,7 +56,9 @@ export const EGRESS_PROXY_URL = `http://127.0.0.1:${EGRESS_BRIDGE_PORT}`;
  * sandbox network access, not a proxy-server product feature; they are also
  * reserved keys, so a Session env profile can never override them.
  */
-export const EGRESS_ENVIRONMENT_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const;
+export const EGRESS_ENVIRONMENT_KEYS = [
+  "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy",
+] as const;
 
 export function egressEnvironment(): Record<string, string> {
   return Object.fromEntries(EGRESS_ENVIRONMENT_KEYS.map((key) => [key, EGRESS_PROXY_URL]));

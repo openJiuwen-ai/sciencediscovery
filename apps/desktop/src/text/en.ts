@@ -118,6 +118,15 @@ export const EN: Text = {
       ? "Files go into this session's workspace, where the agent can read them. You can also drag files onto the window."
       : `Files go into this session's workspace, where the agent can read them. A single file may be up to ${limit}. You can also drag files onto the window.`,
     attachArchived: "This session is archived and cannot be written to. Restore it before uploading.",
+    /** Composer placeholder while the JiuwenSwarm cluster starts. */
+    jwBlocked: "The agent cluster is starting. Chat unlocks when it is ready…",
+  },
+
+  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
+   *  (the shell bridge pushes progress; this is the idle wording). */
+  jiuwen: {
+    starting: "Agent cluster starting",
+    preparing: "Initializing…",
   },
 
   upload: {
@@ -371,7 +380,6 @@ export const EN: Text = {
       fetch: "Refresh list",
       fetching: "Refreshing…",
       empty: "The provider returned no models. Check the base URL and the key.",
-      selectPlaceholder: "Choose from the list",
       preset: "Provider type",
       tokenOptional: "Local service; optional",
     },
@@ -1031,6 +1039,7 @@ export const EN: Text = {
     resizeList: "Resize the list",
     expand: "Expand",
     collapsePanel: "Collapse panel",
+    backToGroups: "Back to artifacts and files",
     allArtifacts: "All artifacts",
     download: "Download",
     version: "Version",

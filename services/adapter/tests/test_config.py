@@ -11,18 +11,29 @@ def test_defaults_are_the_native_backend_on_the_documented_ports():
 
 
 def test_the_executor_is_read_from_the_same_variable_the_api_reads():
-    assert Settings.from_env({"SCIENCE_AGENT_EXECUTOR": "jiuwenswarm"}).executor == "jiuwenswarm"
-    assert Settings.from_env({"SCIENCE_AGENT_EXECUTOR": " jiuwenswarm "}).executor == "jiuwenswarm"
+    endpoints = {"SCIENCE_AGENT_JIUWENSWARM_OVERRIDES": "1", "JIUWENSWARM_GATEWAY_URL": "ws://h:1/tui", "JIUWENSWARM_MGMT_URL": "ws://h:2/ws"}
+    assert Settings.from_env({**endpoints, "SCIENCE_AGENT_EXECUTOR": "jiuwenswarm"}).executor == "jiuwenswarm"
+    assert Settings.from_env({**endpoints, "SCIENCE_AGENT_EXECUTOR": " jiuwenswarm "}).executor == "jiuwenswarm"
     assert Settings.from_env({"SCIENCE_AGENT_EXECUTOR": "something-else"}).executor == "native"
 
 
 def test_ports_urls_token_and_tool_timeout_come_from_the_environment():
     settings = Settings.from_env({
+        "SCIENCE_AGENT_JIUWENSWARM_OVERRIDES": "1",
         "SCIENCE_AGENT_PORT": "5000", "JIUWENSWARM_GATEWAY_URL": "ws://h:1/tui", "JIUWENSWARM_MGMT_URL": "ws://h:2/ws",
         "SCIENCE_AGENT_ADAPTER_TOKEN": "t", "SCIENCE_AGENT_ADAPTER_TOOL_TIMEOUT_S": "120",
     })
     assert settings.port == 5000 and settings.legacy_url == "http://127.0.0.1:5100" and settings.public_url == "http://127.0.0.1:5000"
     assert (settings.gateway_url, settings.mgmt_url, settings.agent_token, settings.tool_timeout_s) == ("ws://h:1/tui", "ws://h:2/ws", "t", 120)
+
+
+def test_standalone_endpoints_require_explicit_opt_in_and_no_port_guessing():
+    foreign = {"JIUWENSWARM_GATEWAY_URL": "ws://foreign:1/tui", "JIUWENSWARM_MGMT_URL": "ws://foreign:2/ws"}
+    assert Settings.from_env(foreign).gateway_url == "ws://127.0.0.1:19001/tui"
+    with pytest.raises(ValueError, match="explicit SD-owned endpoints"):
+        Settings.from_env({**foreign, "SCIENCE_AGENT_EXECUTOR": "jiuwenswarm"})
+    with pytest.raises(ValueError, match="explicit SD-owned endpoints"):
+        Settings.from_env({"SCIENCE_AGENT_EXECUTOR": "jiuwenswarm", "SCIENCE_AGENT_JIUWENSWARM_OVERRIDES": "1"})
 
 
 def test_the_apis_access_token_is_read_for_the_info_route():

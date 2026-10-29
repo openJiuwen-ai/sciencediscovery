@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "note": "Local clarified rubrics are informational only. Official upstream pins in manifest.json remain gating.",
+  "variants": [
+    {
+      "case_id": "da-13-3",
+      "version": "local-rubric-v1",
+      "path": "local-rubrics/da-13-3.local-rubric-v1.txt",
+      "bytes": 10330,
+      "git_blob_oid": "8ec40ac9c4842a8bc6ba4856776923478eec4ce0",
+      "sha256": "6655cc2ba7194eaca947de80b0a1b62f03b328271a9d4ccbabf79735bfdc7871",
+      "clarifies_criteria": [
+        "4",
+        "5"
+      ],
+      "source_official_rubric_oid": "b54c2480ba3da6f95a64fa2a49bd8aa9bdd76082",
+      "measurement_runs": {
+        "manual_answers": "40819738668",
+        "repeat_grade": "40865906295",
+        "da_13_3_scores": [
+          87,
+          64,
+          78
+        ],
+        "criterion_4_levels": [
+          "A",
+          "B",
+          "A"
+        ],
+        "criterion_5_levels": [
+          "A",
+          "B",
+          "B"
+        ],
+        "repeat_grade_official": "40865906295",
+        "da_13_3_official_scores": [
+          87,
+          64,
+          78
+        ],
+        "criterion_4_official_levels": [
+          "A",
+          "B",
+          "A"
+        ],
+        "criterion_5_official_levels": [
+          "A",
+          "B",
+          "B"
+        ],
+        "repeat_grade_local": "40874943681",
+        "da_13_3_local_scores": [
+          87,
+          87,
+          87
+        ],
+        "criterion_4_local_levels": [
+          "A",
+          "A",
+          "A"
+        ],
+        "criterion_5_local_levels": [
+          "A",
+          "A",
+          "A"
+        ]
+      }
+    }
+  ]
+}

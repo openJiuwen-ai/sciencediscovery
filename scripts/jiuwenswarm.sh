@@ -32,6 +32,8 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_dir/.." && pwd)"
+source "$script_dir/swarm-env.sh"
+configure_swarm_environment
 
 # The baseline the migration is measured against (issue 84).
 jw_tag="${JIUWENSWARM_TAG:-workswarm0.2.6}"
@@ -46,7 +48,7 @@ jw_instance="${JIUWENSWARM_INSTANCE:-sciencediscovery}"
 jw_src="${JIUWENSWARM_SRC:-$jw_root/src}"
 jw_bin="$jw_src/.venv/bin"
 # Keep the embedded registry separate even when a standalone instance has the
-# same name. Explicit overrides also provide the opt-in legacy compatibility path.
+# same name. Explicit alternate roots must also belong exclusively to SD.
 export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$HOME/.sciencediscovery/jiuwenswarm}"
 # Early bootstrap and later path getters must agree after a child changes cwd.
 [[ "$JIUWENSWARM_HOME" == /* ]] || export JIUWENSWARM_HOME="$repository_root/$JIUWENSWARM_HOME"
@@ -58,7 +60,7 @@ apply_compatibility_patches() {
 
 verify_compatibility_patches() {
   local package_root
-  package_root="$("$jw_bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("jiuwenswarm").origin).parent.parent)')"
+  package_root="$(swarm_runtime "$jw_bin/python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("jiuwenswarm").origin).parent.parent)')"
   "$jw_bin/python" "$script_dir/swarm-patches.py" verify "$package_root" "$jw_tag"
 }
 
@@ -67,6 +69,9 @@ usage() {
   cat <<'EOT'
 
 Environment:
+  SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
+                         explicitly enable the SD-owned overrides below;
+                         without it inherited JIUWENSWARM_* values are ignored
   JIUWENSWARM_TAG        git tag to install (default workswarm0.2.6)
   JIUWENSWARM_GIT_URL    where to clone it from
   JIUWENSWARM_ROOT       install directory (default .sciencediscovery-data/jiuwenswarm)
@@ -90,10 +95,21 @@ require() {
 # JIUWENSWARM_HOME locates the registry; the named bootstrap then sets
 # JIUWENSWARM_DATA_DIR to that instance's workspace for its child services.
 jw() {
-  JIUWENSWARM_DATA_DIR="$jw_data_dir" "$jw_bin/$1" "${@:2}"
+  swarm_runtime JIUWENSWARM_DATA_DIR="$jw_data_dir" \
+    "$jw_bin/$1" "${@:2}"
 }
 
 instance_workspace() { echo "$JIUWENSWARM_HOME/.jiuwenswarm-instances/$jw_instance"; }
+
+# The known SD default predates ownership markers. An explicit alternate root
+# may only reuse state previously created by SD, never adopt an existing SDK root.
+if [[ "$JIUWENSWARM_HOME" != "$HOME/.sciencediscovery/jiuwenswarm" &&
+      ! -f "$JIUWENSWARM_HOME/.sciencediscovery-owned" &&
+      ( -e "$JIUWENSWARM_HOME/.jiuwenswarm/instances.yaml" ||
+        -d "$JIUWENSWARM_HOME/.jiuwenswarm-instances" ) ]]; then
+  echo "Refusing unowned JiuwenSwarm runtime $JIUWENSWARM_HOME; choose a fresh SD-only directory. Existing data was not changed." >&2
+  exit 1
+fi
 
 port_of() { # agent_server | web | gateway
   jw jiuwenswarm-start --status "$jw_instance" 2>/dev/null \
@@ -174,6 +190,7 @@ cmd_setup() {
     )
   fi
   mkdir -p "$jw_data_dir"
+  printf 'sciencediscovery\n' > "$JIUWENSWARM_HOME/.sciencediscovery-owned"
   if [[ ! -d "$(instance_workspace)" ]]; then
     echo "Creating instance $jw_instance..." >&2
     jw jiuwenswarm-init --name "$jw_instance" >/dev/null
@@ -207,9 +224,9 @@ cmd_start() {
   # Put our guarded sitecustomize hook in every JiuwenSwarm Python process. It applies JiuwenSwarm's
   # own MCP call-timeout patch before startup prewarming can create a client with the 30-second fallback.
   local bootstrap_path="$repository_root/services/adapter/src/sciencediscovery_adapter"
-  SCIENCE_AGENT_JIUWENSWARM_BOOTSTRAP=1 \
-    PYTHONPATH="$bootstrap_path${PYTHONPATH:+:$PYTHONPATH}" \
-    JIUWENSWARM_DATA_DIR="$jw_data_dir" nohup "$jw_bin/jiuwenswarm-start" --name "$jw_instance" app \
+  swarm_runtime SCIENCE_AGENT_JIUWENSWARM_BOOTSTRAP=1 \
+    PYTHONPATH="$bootstrap_path" JIUWENSWARM_DATA_DIR="$jw_data_dir" \
+    nohup "$jw_bin/jiuwenswarm-start" --name "$jw_instance" app \
     >"$jw_log" 2>&1 </dev/null &
   disown
   local attempt

@@ -26,7 +26,10 @@ import {
 } from "@sciencediscovery/schema";
 
 export function hostSandboxKind(platform: NodeJS.Platform = process.platform): SandboxKind {
-  return platform === "darwin" ? "seatbelt" : "bubblewrap";
+  // [windows-desktop] Windows has no bubblewrap/seatbelt equivalent;
+  // the runner executes directly ("none") until the optional WSL sandbox
+  // plugin (Provider B) is installed.
+  return platform === "darwin" ? "seatbelt" : platform === "win32" ? "none" : "bubblewrap";
 }
 
 export function systemPythonEnvironmentRevisionId(

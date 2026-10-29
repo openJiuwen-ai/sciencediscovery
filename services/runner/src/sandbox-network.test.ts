@@ -87,7 +87,8 @@ test("a sandbox without network access keeps the current launch shape", () => {
   assert.equal(launch.args.includes("--share-net"), false);
   assert.deepEqual(launch.commandPrefix, []);
   assert.equal(launch.args.join(" ").includes(EGRESS_SOCKET_PATH), false);
-  assert.deepEqual(Object.keys(launch.env).toSorted(), ["HOME", "PATH"]);
+  assert.deepEqual(Object.keys(launch.env).toSorted(), ["HOME", "PATH", "PYTHONUNBUFFERED"]);
+  assert.equal(launch.env.PYTHONUNBUFFERED, "1");
   assert.equal(seccompVariantFor(NO_SANDBOX_NETWORK_ACCESS), "baseline");
 });
 

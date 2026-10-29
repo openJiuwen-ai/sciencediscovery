@@ -26,10 +26,6 @@ export function ideaTreeSettingsRequest(draft: IdeaTreeSettingsDraft): UpdateIde
   return { templateId: draft.templateId, explorationIntensity: draft.explorationIntensity };
 }
 
-export function ideaTreeWeightsValid(_draft: IdeaTreeSettingsDraft): boolean {
-  return true;
-}
-
 export function IdeaTreeSettingsEditor({
   draft,
   onChange,

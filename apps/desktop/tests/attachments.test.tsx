@@ -110,6 +110,20 @@ test("the server's answer lands on the card of the file it names", () => {
   );
 });
 
+test("a name with path segments is matched by the name the request sent", () => {
+  // The wire carries the last segment only, and the answer can only name it
+  // that way. Compared against the file's own name, this card would read as a
+  // failure while its bytes were safely in the workspace.
+  const after = mergeUpload([card({ id: "a", name: "../outside.csv" })], ["a"], {
+    errors: [],
+    uploaded: [{ originalName: "outside.csv", path: "outside.csv", status: "created" }],
+  });
+  assert.deepEqual(
+    after.map((item) => [item.status, item.path, item.file.name]),
+    [["uploaded", "outside.csv", "../outside.csv"]],
+  );
+});
+
 test("a file the answer refuses is a failed card, with the reason the route gave", () => {
   const after = mergeUpload([card({ id: "a", name: "big.mov" })], ["a"], {
     errors: [],

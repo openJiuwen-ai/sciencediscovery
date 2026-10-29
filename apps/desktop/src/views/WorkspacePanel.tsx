@@ -38,6 +38,9 @@ interface Props {
   actions: WorkspaceActions;
   activeGroup: PanelGroup;
   files: WorkspaceFile[];
+  /** Leaves a child's or a tool's record for the panel's own groups. It is the
+   *  way out of the mode `subagent` and `tool` open. */
+  onCloseDetail: () => void;
   onCollapse: () => void;
   onSelectGroup: (group: PanelGroup) => void;
   outputs: SessionArtifactOutput[];
@@ -450,6 +453,7 @@ export function WorkspacePanel({
   actions,
   activeGroup,
   files,
+  onCloseDetail,
   onCollapse,
   onSelectGroup,
   outputs,
@@ -709,6 +713,23 @@ export function WorkspacePanel({
         tabIndex={0}
       />
       <header className={`panel-head${subagent === undefined && tool === undefined ? "" : " is-subagent"}`}>
+        {/* A child's record and a tool's text are modes of the panel, not tabs
+            beside 产物 and 工作区, so the way back has to be drawn here. The
+            line that opened it is in the transcript, which the reader is no
+            longer looking at. */}
+        {subagent === undefined && tool === undefined ? null : (
+          <button
+            aria-label={TEXT.workspace.backToGroups}
+            className="panel-icon-button panel-back"
+            onClick={onCloseDetail}
+            title={TEXT.workspace.backToGroups}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" width="15">
+              <path d="M14.5 5.5 8 12l6.5 6.5" />
+            </svg>
+          </button>
+        )}
         {tool !== undefined ? (
           <div className="panel-subagent-title" title={tool.name}>
             <span className="panel-subagent-label">{TEXT.conversation.toolCall}</span>

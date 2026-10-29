@@ -611,6 +611,7 @@ async function executeAgentRun(
   evolve: EvolveRuntimeFactory | undefined,
   notificationDelivery?: NotificationBatch,
   deliveredNotice?: RuntimeNotice,
+  executionGovernance?: ExecutionGovernance,
 ): Promise<SessionRunStatus> {
   const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
     ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
@@ -1243,6 +1244,12 @@ async function executeAgentRun(
       };
     },
   });
+  // [windows-desktop] F6 (gap 1a, 0.B0 审查#5): under an unsandboxed provider
+  // the JiuwenSwarm backend hides its native subagent tools. Fail closed: a
+  // governance probe error is treated as unsandboxed.
+  const unsandboxedExecution = executionGovernance
+    ? !(await executionGovernance.sandboxed().catch(() => false))
+    : undefined;
   const agentOptions: WorkspaceAgentOptions = {
     workflowInstructions,
     pluginSettings: settingsSnapshot.plugins,
@@ -1315,6 +1322,7 @@ async function executeAgentRun(
       permission: requestExecution.permission,
     }) : {}),
     approvalMode: session.approvalMode,
+    ...(unsandboxedExecution !== undefined ? { unsandboxedExecution } : {}),
     localRunnerAllowed: store.effectiveRunnerIds(sessionId).includes("local"),
     remoteRunners: workspaceRunners(store.workspacePath(sessionId), runId, requestExecution.permission),
     proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
@@ -1805,6 +1813,7 @@ async function executeAgentRun(
           let subagentRunHandle: ReturnType<typeof runSubagentTask> | undefined;
           const subagentWorkspace: WorkspaceAgentOptions = {
             pluginSettings: settingsSnapshot.plugins,
+            ...(unsandboxedExecution !== undefined ? { unsandboxedExecution } : {}),
             config: agentConfig,
             enabledConnectorIds: subagentConnectorIds,
             ...(approvalsByJiuwenSwarm ? { requestApproval } : {}),
@@ -3199,6 +3208,7 @@ export function scheduleSessionRuns(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  executionGovernance?: ExecutionGovernance,
 ): void {
   if (scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
@@ -3281,6 +3291,7 @@ export function scheduleSessionRuns(
             evolve,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
             delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery)) : undefined,
+            executionGovernance,
           );
         } catch (reason) {
           error = runFailureMessage(reason);
@@ -3462,6 +3473,12 @@ export async function streamStoredRunEvents(
   if (closeOnTerminal && sawTerminal) response.end();
 }
 
+/** [windows-desktop] F6 (gap 1a): run-scoped view of the execution router used for permission hardening. */
+export interface ExecutionGovernance {
+  /** True when the current execution provider is a real sandbox (Provider B/C). */
+  sandboxed(): Promise<boolean>;
+}
+
 export async function streamAgentRun(
   request: IncomingMessage,
   response: ServerResponse,
@@ -3485,6 +3502,7 @@ export async function streamAgentRun(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  executionGovernance?: ExecutionGovernance,
 ): Promise<void> {
   const run = await createQueuedRun(
     store,
@@ -3515,6 +3533,7 @@ export async function streamAgentRun(
     serverConfig,
     memoryGraphClient,
     evolve,
+    executionGovernance,
   );
   request.once("close", () => {
     // Browser disconnects should not cancel queued backend work. Cancellation

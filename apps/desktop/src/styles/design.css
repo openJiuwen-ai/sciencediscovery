@@ -83,21 +83,17 @@ body.is-resizing {
   z-index: 3;
 }
 
+/* The application mark: its own dark tile and gradient monogram, so the rail
+   draws the artwork rather than a coloured box around a glyph. 128px is four
+   times the 32px it is shown at, which keeps the gradient smooth on a retina
+   screen. */
 .rail-logo {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  display: grid;
-  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   margin: 0 0 20px;
-  border-radius: 7px;
-  background: #1476ff;
-  color: #fff;
-}
-
-.rail-logo svg {
-  width: 16px;
-  height: 16px;
+  border-radius: 8px;
+  background: url("../assets/brand/app-mark.png") center / 32px 32px no-repeat;
 }
 
 .rail-nav {
@@ -3528,6 +3524,122 @@ body.is-resizing {
 
 .field-row.is-action .field-input {
   flex: 1;
+}
+
+/* The 模型名称 combobox (ModelForm): an input plus our own dropdown, since a
+ * native datalist both filters itself by the input's value and paints its
+ * picker indicator low in the box. */
+.field-combo {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.field-combo .field-input {
+  flex: 1;
+  min-width: 0;
+  /* Room for the inline refresh action plus the caret. */
+  padding-right: 104px;
+}
+
+/* The wizard's 刷新列表, inlined beside the caret so the input keeps the full
+ * row width every other field has (an outer button would make this row's
+ * input narrower than the 基础URL one above it). */
+.field-combo-refresh {
+  position: absolute;
+  right: 32px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 9px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.field-combo-refresh:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.field-combo-refresh:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.field-combo-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #777;
+  cursor: pointer;
+}
+
+.field-combo-toggle:hover {
+  color: #191919;
+}
+
+.field-combo-caret {
+  display: block;
+  width: 0;
+  height: 0;
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+}
+
+.field-combo-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.field-combo-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.field-combo-option.is-active {
+  background: #f2f4f7;
+}
+
+.field-combo-option.is-current {
+  font-weight: 600;
+}
+
+.field-combo-option-id {
+  overflow-wrap: anywhere;
+}
+
+.field-combo-option-name {
+  color: #777;
+  font-size: 12px;
 }
 
 .test-result {

@@ -144,7 +144,12 @@ export interface ProducedArtifactInfo {
   inputArtifactVersions?: Array<{ artifactId: string; version: number }>;
 }
 
-export type SandboxKind = "bubblewrap" | "seatbelt";
+// [windows-desktop] "none" is the Windows direct-execution mode — no
+// namespace isolation, the interpreter runs as a plain child process with the
+// conda activation paths on PATH . Additive: existing providers keep
+// their semantics, and F6 compensates the weaker isolation with stricter
+// permission enforcement.
+export type SandboxKind = "bubblewrap" | "seatbelt" | "none";
 
 export const SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
 export const SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID = "system-python3-seatbelt-v1";
@@ -547,6 +552,9 @@ export interface RunnerBlockedResult {
 export type ExecutionBlockDecision = { action: "retry" | "cancel" } | { action: "switch"; runnerId: string };
 
 export interface RunnerHealth {
+  runnerInstanceId?: string;
+  runnerBootId?: string;
+  capabilities?: { executionRecoveryVersion?: number };
   /** Absent on older Runners: unknown, not proof that execution is ready. */
   execution?: RunnerExecutionCapability;
   /** Always false: the runner no longer manages a cgroup v2 subtree. */

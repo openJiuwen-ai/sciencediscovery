@@ -23,6 +23,7 @@ class InstanceIsolationTests(unittest.TestCase):
             configs = []
             for home in homes:
                 env = {**os.environ, "JIUWENSWARM_HOME": str(home),
+                       "SCIENCE_AGENT_JIUWENSWARM_OVERRIDES": "1",
                        "JIUWENSWARM_INSTANCE": name, "JIUWENSWARM_SRC": str(source)}
                 env.pop("JIUWENSWARM_DATA_DIR", None)
                 init = subprocess.run([sys.executable, "-m", "jiuwenswarm.init_workspace", "--name", name],
@@ -33,6 +34,7 @@ class InstanceIsolationTests(unittest.TestCase):
                 self.assertEqual(Path(registry["instances"][name]["workspace"]), workspace)
                 self.assertIn(f"JIUWENSWARM_DATA_DIR={workspace}", (workspace / ".env").read_text())
                 configs.append(workspace / "config/config.yaml")
+                (home / ".sciencediscovery-owned").write_text("sciencediscovery\n")
 
                 # The wrapper and early bootstrap must both resolve a relative
                 # selection before their children change working directory.

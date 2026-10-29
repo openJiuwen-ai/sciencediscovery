@@ -173,7 +173,9 @@ logs are `jiuwenswarm-sciencediscovery.log` under the same root. Standalone
 JiuwenSwarm keeps its own home registry and workspaces, so both applications
 can use the name `sciencediscovery` independently.
 
-`JIUWENSWARM_HOME=/absolute/runtime` selects another root; relative values
+Set `SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1` to explicitly enable SD's documented
+`JIUWENSWARM_*` controls. Without it, inherited Swarm variables are ignored.
+`JIUWENSWARM_HOME=/absolute/runtime` then selects another SD-only root; relative values
 resolve from the repository root. Use the same selection for `setup`, `start`,
 `status`, `env`, `stop` and stack startup. Test runs supply their own root.
 `JIUWENSWARM_ROOT` / `JIUWENSWARM_SRC` select the pinned installation, independently
@@ -181,31 +183,32 @@ of runtime data. JiuwenSwarm detects occupied ports and persists a free port
 group at initialization/startup; `scripts/jiuwenswarm.sh env` reports current
 endpoints. Avoid pinning old gateway/management URLs when sharing a host.
 
-Existing local installations are **not moved, rewritten or deleted**. The new
-default creates a fresh isolated instance; old sessions remain in
-`$HOME/.jiuwenswarm-instances/sciencediscovery`. To continue using an old instance,
-first verify that it belongs to ScienceDiscovery, rather than a standalone user.
-Then explicitly select the legacy root for every command, for example:
+Existing local installations are **not moved, rewritten or deleted**. SD refuses
+to reuse an alternate root containing a registry or named workspaces unless it
+carries the `.sciencediscovery-owned` marker written by SD setup. The existing
+SD default and persisted Docker layout remain supported. An ambiguous legacy
+home is not adopted, even after opting into overrides. Choose a fresh directory:
 
 ```bash
-export JIUWENSWARM_HOME="$HOME"
-scripts/jiuwenswarm.sh status
+export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
+export JIUWENSWARM_HOME="$HOME/sd-runtime"
+scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local
 ```
 
-This is an opt-in compatibility mode: setup/start will apply ScienceDiscovery
-configuration to that selected old instance and stop will stop it. It provides
-no separation from a standalone instance using that same root/name. To switch
-to isolation, stop the legacy instance with that selection, unset
-`JIUWENSWARM_HOME`, unset any pinned `JIUWENSWARM_GATEWAY_URL` /
-`JIUWENSWARM_MGMT_URL`, then run setup and start again. Keep the old directories
-as a backup; no automatic migration guesses ownership from the instance name.
+Use the same override opt-in and root for every lifecycle command. The stack
+always resolves endpoints from its own instance after startup, including after
+port reallocation. SDK child processes receive SD-owned runtime paths and a
+limited OS/proxy environment; standalone model credentials, configuration and
+Python search paths are not inherited. Manually starting the adapter requires
+the override opt-in and both SD-owned endpoint URLs; it never guesses ports
+when the JiuwenSwarm executor is selected.
 
 Docker retains the existing persisted layout: with the default Compose data
-mount `/data`, runtime root is `/data/.home`, registry is
-`/data/.home/.jiuwenswarm/instances.yaml` and the named workspace is
-`/data/.home/.jiuwenswarm-instances/sciencediscovery`. Wrapper logs are now
-`/data/.home/jiuwenswarm-sciencediscovery.log`. An explicit container
+mount `/app/data`, runtime root is `/app/data/.home`, registry is
+`/app/data/.home/.jiuwenswarm/instances.yaml` and the named workspace is
+`/app/data/.home/.jiuwenswarm-instances/sciencediscovery`. Wrapper logs are
+`/app/data/.home/jiuwenswarm-sciencediscovery.log`. An explicit container
 `JIUWENSWARM_HOME` must also be on a persisted mount. The image's installation
 remains under `/opt/sciencediscovery/jiuwenswarm/src`. The packaged launcher
 continues using its separate `<dataDir>/jiuwenswarm-home` runtime root.

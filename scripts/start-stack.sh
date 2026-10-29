@@ -124,9 +124,11 @@ fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_dir/.." && pwd)"
+source "$script_dir/swarm-env.sh"
 cd "$repository_root"
 
 configure_backend() {
+  configure_swarm_environment
   local selected="${backend_option:-${SCIENCE_AGENT_EXECUTOR:-jiuwenswarm}}"
   case "$selected" in
     jiuwenswarm)
@@ -503,6 +505,15 @@ prepare_docker() {
   # volume, so JIUWENSWARM_ROOT points there instead of the image-relative
   # default scripts/jiuwenswarm.sh otherwise assumes.
   export JIUWENSWARM_ROOT="${JIUWENSWARM_ROOT:-$data_dir/jiuwenswarm}"
+  export JIUWENSWARM_SRC="${JIUWENSWARM_SRC:-/opt/sciencediscovery/jiuwenswarm/src}"
+  # The image bakes the pinned installation read-only under /opt, and the image
+  # itself exports JIUWENSWARM_SRC; the default above only covers a host that
+  # runs this mode without that image. Say so plainly when neither exists,
+  # instead of letting the failure surface later as a missing-python error.
+  if [[ "$use_jiuwenswarm" -eq 1 && ! -d "$JIUWENSWARM_SRC" ]]; then
+    echo "The JiuwenSwarm installation is missing at $JIUWENSWARM_SRC. Rebuild the image, or set JIUWENSWARM_SRC to the pinned installation." >&2
+    exit 1
+  fi
 
   # Docker includes the sidecar, while the System Settings toggle still
   # controls whether the API mirrors any application data into it.
@@ -551,6 +562,11 @@ EOF
   fi
   # Retain existing container registries/workspaces on the persisted volume.
   export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$HOME}"
+  # This is SD's persisted container home, including layouts created before
+  # ownership markers were introduced. Never mark an explicit foreign root.
+  if [[ "$JIUWENSWARM_HOME" == "$data_dir/.home" ]]; then
+    printf 'sciencediscovery\n' > "$JIUWENSWARM_HOME/.sciencediscovery-owned"
+  fi
 
   if [[ ! -x "$gateway_python" ]]; then
     echo "The Python MCP server environment is missing at $gateway_python. Rebuild the image." >&2
@@ -668,16 +684,16 @@ start_stack() {
     # container's own instance under the bind-mounted data directory on its
     # actual first run.
     if [[ "$mode" == "docker" && "$use_jiuwenswarm" -eq 1 ]]; then
-      "$script_dir/jiuwenswarm.sh" setup >&2 || exit 1
+      SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1 "$script_dir/jiuwenswarm.sh" setup >&2 || exit 1
     fi
     # Where the JiuwenSwarm instance listens; scripts/jiuwenswarm.sh knows its ports.
-    if [[ -z "${JIUWENSWARM_GATEWAY_URL:-}" || -z "${JIUWENSWARM_MGMT_URL:-}" ]]; then
+    if [[ "$use_jiuwenswarm" -eq 1 || -z "${JIUWENSWARM_GATEWAY_URL:-}" || -z "${JIUWENSWARM_MGMT_URL:-}" ]]; then
       # Another root may already listen on our old ports. Start checks this
       # instance's PID and may allocate new ports; read endpoints afterwards.
       if [[ "$use_jiuwenswarm" -eq 1 ]]; then
-        "$script_dir/jiuwenswarm.sh" start >&2 || exit 1
+        SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1 "$script_dir/jiuwenswarm.sh" start >&2 || exit 1
       fi
-      eval "$("$script_dir/jiuwenswarm.sh" env)" || {
+      eval "$(SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1 "$script_dir/jiuwenswarm.sh" env)" || {
         echo "Could not read the JiuwenSwarm instance; run scripts/jiuwenswarm.sh setup and start." >&2
         exit 1
       }
@@ -686,7 +702,7 @@ start_stack() {
     if ! (exec 3<>"/dev/tcp/127.0.0.1/$gateway_port") 2>/dev/null; then
       if [[ "$use_jiuwenswarm" -eq 1 ]]; then
         echo "JiuwenSwarm is not running; starting it (scripts/jiuwenswarm.sh start)..." >&2
-        "$script_dir/jiuwenswarm.sh" start >&2 || exit 1
+        SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1 "$script_dir/jiuwenswarm.sh" start >&2 || exit 1
       fi
       if ! (exec 3<>"/dev/tcp/127.0.0.1/$gateway_port") 2>/dev/null; then
         echo "JiuwenSwarm is not reachable at $JIUWENSWARM_GATEWAY_URL; start it with scripts/jiuwenswarm.sh start." >&2
@@ -701,6 +717,7 @@ start_stack() {
     local legacy_port="${SCIENCE_AGENT_LEGACY_PORT:-$((public_port + 100))}"
     echo "Starting the adapter on port $public_port (legacy API on $legacy_port)..." >&2
     SCIENCE_AGENT_LEGACY_PORT="$legacy_port" \
+    SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1 \
     "$adapter_python" -m sciencediscovery_adapter.server &
     pids+=("$!")
     # The legacy API binds the legacy port; the adapter owns the public one. The

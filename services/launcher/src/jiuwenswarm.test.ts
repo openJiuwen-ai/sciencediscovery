@@ -65,7 +65,10 @@ describe("jiuwenswarmServiceDefinition", () => {
       manifest: withJiuwenswarm, payloadRoot: "/cache/payload/abc", dataDir: "/data",
       baseEnv: {}, pythonBinary: "/cache/payload/abc/python/bin/python3", log: () => {},
     });
-    const service = jiuwenswarmServiceDefinition(paths, {});
+    const service = jiuwenswarmServiceDefinition(paths, {
+      JIUWENSWARM_HOME: "/standalone", JIUWENSWARM_CONFIG: "/standalone/config.yaml",
+      JIUWENSWARM_DATA_DIR: "/standalone/data", OPENAI_API_KEY: "standalone-secret", PATH: "/usr/bin",
+    });
     assert.equal(service.command, "/cache/payload/abc/python/bin/python3");
     assert.ok(service.args[0] === "-c" && service.args[1]?.includes("jiuwenswarm.start_services"));
     assert.equal(
@@ -74,6 +77,10 @@ describe("jiuwenswarmServiceDefinition", () => {
     );
     assert.equal(service.env.SCIENCE_AGENT_JIUWENSWARM_BOOTSTRAP, "1");
     assert.equal(service.env.HOME, "/data/jiuwenswarm-home");
+    assert.equal(service.env.JIUWENSWARM_HOME, "/data/jiuwenswarm-home");
+    assert.equal(service.env.JIUWENSWARM_CONFIG, undefined);
+    assert.equal(service.env.OPENAI_API_KEY, undefined);
+    assert.equal(service.env.PATH, "/usr/bin");
     assert.equal(service.env.JIUWENSWARM_DATA_DIR, "/data/jiuwenswarm-data");
     assert.equal(service.healthUrl, undefined, "its ports are not known until it reports them");
   });

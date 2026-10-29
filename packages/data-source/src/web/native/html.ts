@@ -22,23 +22,33 @@
  * changes: no blocks matched → no results → the aggregation moves on.
  */
 
-const ENTITIES: ReadonlyArray<readonly [string, string]> = [
-  ["&amp;", "&"],
-  ["&lt;", "<"],
-  ["&gt;", ">"],
-  ["&quot;", '"'],
-  ["&#x27;", "'"],
-  ["&#39;", "'"],
-  ["&nbsp;", " "],
-];
+const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
+  ["amp", "&"],
+  ["lt", "<"],
+  ["gt", ">"],
+  ["quot", '"'],
+  ["nbsp", " "],
+]);
+
+/** Matches one reference in the source; its replacement is never scanned again,
+ *  which is what keeps `&amp;lt;` at the two characters `&lt;`. */
+const CHARACTER_REFERENCE = /&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|([a-zA-Z][a-zA-Z0-9]*));/g;
+
+const MAX_CODE_POINT = 0x10_ffff;
+
+/** Only scalars that survive UTF-8 and JSON: no lone surrogate, no non-character. */
+function decodableCodePoint(point: number): boolean {
+  if (!Number.isInteger(point) || point <= 0 || point > MAX_CODE_POINT) return false;
+  if (point >= 0xd800 && point <= 0xdfff) return false;
+  const trail = point & 0xffff;
+  return trail !== 0xfffe && trail !== 0xffff;
+}
 
 export function decodeEntities(value: string): string {
-  let decoded = value;
-  for (const [entity, character] of ENTITIES) decoded = decoded.replaceAll(entity, character);
-  // Numeric references appear in titles from several engines.
-  return decoded.replace(/&#(\d{1,6});/g, (_match, code: string) => {
-    const point = Number(code);
-    return Number.isFinite(point) && point > 0 && point < 0x110000 ? String.fromCodePoint(point) : _match;
+  return value.replace(CHARACTER_REFERENCE, (match: string, decimal?: string, hex?: string, name?: string) => {
+    if (name !== undefined) return NAMED_ENTITIES.get(name) ?? match;
+    const point = decimal !== undefined ? Number(decimal) : Number.parseInt(hex ?? "", 16);
+    return decodableCodePoint(point) ? String.fromCodePoint(point) : match;
   });
 }
 

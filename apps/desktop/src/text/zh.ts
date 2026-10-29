@@ -118,6 +118,15 @@ export const ZH = {
       ? "放进本次会话的工作区，智能体就能读到。也可以直接把文件拖进界面。"
       : `放进本次会话的工作区，智能体就能读到。单个文件最大 ${limit}。也可以直接把文件拖进界面。`,
     attachArchived: "这个会话已经归档，不能再写入。取消归档后才能上传。",
+    /** Composer placeholder while the JiuwenSwarm cluster starts. */
+    jwBlocked: "智能体集群正在启动，就绪后即可对话…",
+  },
+
+  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
+   *  (the shell bridge pushes progress; this is the idle wording). */
+  jiuwen: {
+    starting: "智能体集群启动中",
+    preparing: "正在初始化…",
   },
 
   /** Getting files into the workspace: the composer's button, and the overlay
@@ -397,7 +406,6 @@ export const ZH = {
       fetch: "刷新列表",
       fetching: "正在刷新…",
       empty: "这个服务商没有返回任何模型，请确认基础 URL 与密钥。",
-      selectPlaceholder: "从清单里选择",
       preset: "服务商类型",
       tokenOptional: "本地服务，可不填",
     },
@@ -1066,6 +1074,9 @@ export const ZH = {
     /** The control that appears on an edge the divider closed. */
     expand: "展开",
     collapsePanel: "收起面板",
+    /** The way out of a subagent's record or a tool's text, back to the
+     *  panel's own groups. */
+    backToGroups: "返回产物和文件",
     allArtifacts: "所有产物",
     download: "下载",
     /** The picker beside an open document that chooses which version of the

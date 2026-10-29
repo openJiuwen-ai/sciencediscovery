@@ -20,6 +20,7 @@
     "@sciencediscovery/data-source": "workspace:*",
     "@sciencediscovery/evolve": "workspace:*",
     "@sciencediscovery/executor": "workspace:*",
+    "@sciencediscovery/execution-router": "workspace:*",
     "@sciencediscovery/governance": "workspace:*",
     "@sciencediscovery/idea-tree": "workspace:*",
     "@sciencediscovery/mcp-sources": "workspace:*",

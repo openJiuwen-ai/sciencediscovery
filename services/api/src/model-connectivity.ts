@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { completeChatRequest, normalizeUsage, ModelRequestError, streamModelTurn, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
-import type { ModelApiProtocol, ModelCompatibilityOutcome, ModelConnectivityTestCategory, ModelConnectivityTestResult, ModelProfile, ResolvedProxy } from "@sciencediscovery/schema";
+import { completeChatRequest, normalizeUsage, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
+import { request, type Dispatcher } from "undici";
+import { Readable } from "node:stream";
+import { MODEL_API_VARIANTS, DEFAULT_MODEL_API_VARIANT, type ModelApiProtocol, type ModelCompatibilityOutcome, type ModelConnectivityTestCategory, type ModelConnectivityTestResult, type ModelProfile, type ResolvedProxy } from "@sciencediscovery/schema";
 
 interface ModelConnectivityTestOptions {
+  allowMissingToken?: boolean;
+  beforeDispatch?: (profile: ModelProfile) => void;
   apiToken?: string;
   profile: ModelProfile;
   resolveProxy: () => ResolvedProxy;
@@ -50,6 +54,7 @@ function providerFailure(status: number): ModelCompatibilityOutcome {
 function failure(error: unknown, signal: AbortSignal): ModelCompatibilityOutcome {
   if (signal.aborted) return { category: "timeout", ok: false, message: "Compatibility check timed out; support is unknown" };
   if (error instanceof ModelRequestError) return providerFailure(error.statusCode);
+  if (error instanceof Error && error.message === "Model response exceeds the byte limit") return { category: "invalid_response", ok: false, message: "The endpoint response exceeded the connectivity-test byte limit" };
   if (networkError(error)) return { category: "network", ok: false, message: "Could not connect to model provider; support is unknown" };
   return { category: "invalid_response", ok: false, message: "No valid capability evidence; inspect the configured endpoint and retry explicitly" };
 }
@@ -58,20 +63,32 @@ const unknown = (): ModelCompatibilityOutcome => ({ category: "invalid_response"
 export async function testModelConnectivity(options: ModelConnectivityTestOptions): Promise<ModelConnectivityTestResult> {
   const started = Date.now();
   const wrap = (outcome: ModelCompatibilityOutcome): ModelConnectivityTestResult => ({ ...outcome, latencyMs: Date.now() - started, testedAt: new Date().toISOString() });
-  if (!options.apiToken?.trim()) return wrap({ category: "missing_token", ok: false, message: "Save an API key before testing" });
+  if (!options.apiToken?.trim() && !options.allowMissingToken) return wrap({ category: "missing_token", ok: false, message: "Save an API key before testing" });
   let proxy: ResolvedProxy;
   try { proxy = options.resolveProxy(); } catch { return wrap({ category: "network", ok: false, message: "Could not resolve configured model proxy" }); }
-  const selected = options.profile.apiProtocol ?? (options.profile.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions");
+  const selected = options.profile.apiProtocol ?? (isAnthropicEndpoint(options.profile.baseUrl) ? "anthropic-messages" : "openai-chat-completions");
+  const variant = options.profile.apiVariant ?? DEFAULT_MODEL_API_VARIANT[selected];
+  if (!Object.hasOwn(MODEL_API_VARIANTS, selected) || !MODEL_API_VARIANTS[selected].includes(variant)) return wrap({ category: "invalid_response", ok: false, message: "The endpoint protocol or variant is not supported" });
+  const timeout = Math.max(1, Math.min(10_000, options.timeoutMs ?? 10_000));
   const protocols: NonNullable<ModelConnectivityTestResult["protocols"]> = [];
   for (const apiProtocol of options.compatibility ? PROTOCOLS : [selected]) {
     const endpoint: ModelEndpoint = { ...options.profile, apiProtocol, apiVariant: apiProtocol === selected ? options.profile.apiVariant : undefined,
-      apiToken: options.apiToken, proxy, thinkingMode: "auto" };
-    const signal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
+      apiToken: options.apiToken, proxy, thinkingMode: "disabled" };
+    const dispatchProfile: ModelProfile = { ...options.profile, apiProtocol, apiVariant: endpoint.apiVariant };
+    const signal = AbortSignal.timeout(timeout);
     const policy = { maxTokens: 64, maxRetries: 0, requestTimeoutMs: options.timeoutMs ?? 10_000, maxResponseBytes: 64 * 1024 };
     let basic = unknown(), streaming = unknown(), tools = unknown();
     let usage: "available" | "unknown" = "unknown";
     try {
-      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: apiProtocol === "openai-responses" ? 16 : 8 }, signal, undefined, 64 * 1024);
+      options.beforeDispatch?.(dispatchProfile);
+      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: apiProtocol === "openai-responses" ? 16 : 8 }, signal, async (url, init) => {
+        const headers = new Headers(init?.headers);
+        if (!options.apiToken) { headers.delete("authorization"); headers.delete("x-api-key"); }
+        const incoming = await request(String(url), { method: "POST", headers: Object.fromEntries(headers), body: init?.body as string,
+          signal: init?.signal as AbortSignal, headersTimeout: timeout, bodyTimeout: 0, idempotent: false,
+          ...((init as RequestInit & { dispatcher?: Dispatcher })?.dispatcher ? { dispatcher: (init as RequestInit & { dispatcher?: Dispatcher }).dispatcher } : {}) });
+        return new Response([204, 205, 304].includes(incoming.statusCode) ? null : Readable.toWeb(incoming.body) as ReadableStream<Uint8Array>, { status: incoming.statusCode });
+      }, 64 * 1024);
       if (!response.ok) basic = providerFailure(response.status);
       else {
         const payload = await response.json() as { usage?: unknown; choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
@@ -98,19 +115,22 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
     }
     if (options.compatibility) {
       // Independent requests: a basic failure does not imply streaming or tool incompatibility.
-      const streamSignal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
+      const streamSignal = AbortSignal.timeout(timeout);
       try {
+        options.beforeDispatch?.(dispatchProfile);
         let deltas = "";
         const turn = await streamModelTurn(endpoint, SYSTEM, HISTORY, [], policy, streamSignal, { onTextDelta: d => { deltas += d; } });
         streaming = validTurn(turn) && deltas ? { category: "ok", ok: true, message: "Observed streaming text and a complete response" } : unknown();
         if (turn.usage) usage = "available";
       } catch (error) { streaming = failure(error, streamSignal); }
-      const toolSignal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
+      const toolSignal = AbortSignal.timeout(timeout);
       try {
+        options.beforeDispatch?.(dispatchProfile);
         const instruction = `${SYSTEM} Call compatibility_echo with value OK, then after the tool result reply OK.`;
         const first = await streamModelTurn(endpoint, instruction, HISTORY, TOOLS, policy, toolSignal);
         if (first.usage) usage = "available";
         if (validTurn(first) && first.toolCalls.length === 1 && first.toolCalls[0]!.name === TOOLS[0]!.name && first.toolCalls[0]!.args.value === "OK" && !first.toolCalls[0]!.argsParseError) {
+          options.beforeDispatch?.(dispatchProfile);
           const final = await streamModelTurn(endpoint, instruction, [...HISTORY, first.assistantMessage, { role: "tool", tool_call_id: first.toolCalls[0]!.id, content: "OK" }], TOOLS, policy, toolSignal);
           tools = validTurn(final) && typeof final.assistantMessage.content === "string" && /^OK[.!]?$/i.test(final.assistantMessage.content.trim()) && !final.toolCalls.length ? { category: "ok", ok: true, message: "Tool call ID, arguments and result completed a round-trip" } : unknown();
           if (final.usage) usage = "available";

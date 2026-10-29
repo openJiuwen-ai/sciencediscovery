@@ -44,16 +44,6 @@ function SettingsGlyph() {
   );
 }
 
-/** The mark in the blue tile: a flask, which is the product's own short name. */
-function Logo() {
-  return (
-    <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" viewBox="0 0 24 24" width="16">
-      <path d="M9.5 3.5h5M10 3.5v6.2L5.6 17a2.4 2.4 0 0 0 2.1 3.5h8.6a2.4 2.4 0 0 0 2.1-3.5L14 9.7V3.5" />
-      <path d="M7.6 14.5h8.8" />
-    </svg>
-  );
-}
-
 /**
  * The 64px rail: the logo, the task surface and 设置.
  *
@@ -64,9 +54,9 @@ function Logo() {
 export function Rail({ onOpenSettings, onSelectTask, settingsOpen }: Props) {
   return (
     <nav aria-label={TEXT.appName} className="rail">
-      <div aria-hidden="true" className="rail-logo">
-        <Logo />
-      </div>
+      {/* The mark is the stylesheet's `app-mark.png`; the box carries no glyph
+          of its own, so replacing the artwork is a one-file change. */}
+      <div aria-hidden="true" className="rail-logo" />
       <div className="rail-nav">
         <button
           aria-current={settingsOpen ? undefined : "page"}

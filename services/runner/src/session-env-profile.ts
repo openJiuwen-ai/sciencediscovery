@@ -37,18 +37,23 @@ const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * exporting its own value in the persistent shell.
  */
 export const PROFILE_RESERVED_KEYS = new Set([
+  "ALL_PROXY",
   "HOME",
   "HTTPS_PROXY",
   "HTTP_PROXY",
+  "NO_PROXY",
   "OLDPWD",
   "PATH",
   "PWD",
   "PYTHONNOUSERSITE",
   "PYTHONPATH",
+  "PYTHONUNBUFFERED",
   "R_ENVIRON_USER",
   "SHLVL",
+  "all_proxy",
   "http_proxy",
   "https_proxy",
+  "no_proxy",
   "_",
 ]);
 
