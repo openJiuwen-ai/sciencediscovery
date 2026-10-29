@@ -3245,16 +3245,19 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
     {
       channels: ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"],
       manager: "conda",
+      networkProxy: { mode: "environment" },
       packages: ["scanpy=1.10"],
     },
     {
       indexUrl: "https://mirrors.huaweicloud.com/repository/pypi/simple",
       manager: "pip",
+      networkProxy: { mode: "environment" },
       packages: ["mindspore==2.7.0"],
     },
     {
       indexUrl: "https://download.pytorch.org/whl/cpu",
       manager: "pip",
+      networkProxy: { mode: "environment" },
       packages: ["torch", "torchvision"],
     },
   ]);

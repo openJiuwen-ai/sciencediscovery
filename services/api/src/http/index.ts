@@ -14,6 +14,7 @@
 
 import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./error-diagnostics.js";
 import { randomUUID } from "node:crypto";
+import { testProxyConnectivity } from "../proxy-connectivity.js";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
@@ -1112,6 +1113,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (url.pathname === "/api/proxy/settings" && request.method === "GET") {
         sendJson(response, 200, store.getProxySettings());
+        return;
+      }
+      if (url.pathname === "/api/proxy/test" && request.method === "POST") {
+        sendJson(response, 200, await testProxyConnectivity(await readJson(request)));
         return;
       }
       if (url.pathname === "/api/proxy/settings" && request.method === "PUT") {

@@ -145,7 +145,7 @@ export function createPlatformServices(
     uploadMaxRequestBytes: config.workspaceUpload.maxRequestBytes,
   }, config.memoryGraph.neo4jPassword, config.memoryGraph.available !== false);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
-  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken, () => store.resolveProxy());
   const evolveAvailability = new EvolveAvailability(config.evolve);
   const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 

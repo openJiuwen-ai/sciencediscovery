@@ -1174,6 +1174,7 @@ export class SessionStore {
       projects,
       providers,
       proxyDefaultPolicy,
+      ...(typeof saved.proxyNoProxy === "string" ? { proxyNoProxy: saved.proxyNoProxy } : {}),
       proxyServers,
       quotaSettings,
       sandboxNetworkSettings,
@@ -2195,7 +2196,8 @@ export class SessionStore {
   /** Resolve a module policy (undefined behaves like "inherit") into the
    *  transport-agnostic instruction consumed by outbound callers. */
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy {
-    return resolveProxyPolicy(policy, this.proxyRegistryView());
+    const resolved = resolveProxyPolicy(policy, this.proxyRegistryView());
+    return this.catalog.proxyNoProxy !== undefined ? { ...resolved, noProxy: this.catalog.proxyNoProxy } : resolved;
   }
 
   /**
@@ -2242,6 +2244,7 @@ export class SessionStore {
     const environment = proxyEnvironmentDetails(resolveProxyEnvironment());
     return {
       defaultPolicy: this.catalog.proxyDefaultPolicy,
+      ...(this.catalog.proxyNoProxy !== undefined ? { noProxy: this.catalog.proxyNoProxy } : {}),
       servers: this.catalog.proxyServers
         .map((server) => this.proxyServerSettingsView(server, environment))
         .toSorted((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
@@ -2259,6 +2262,10 @@ export class SessionStore {
   async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
     const defaultPolicy = normalizeProxyDefaultPolicy(isRecord(input) ? input.defaultPolicy : undefined);
     this.assertProxyPolicyKnown(defaultPolicy, "defaultPolicy");
+    if (input.noProxy !== undefined) {
+      if (typeof input.noProxy !== "string" || input.noProxy.length > 4000 || /[\r\n]/.test(input.noProxy)) throw new Error("Invalid proxy bypass list");
+      this.catalog.proxyNoProxy = input.noProxy.trim();
+    }
     this.catalog.proxyDefaultPolicy = defaultPolicy;
     await this.saveCatalog();
     return this.getProxySettings();

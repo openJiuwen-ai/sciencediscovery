@@ -290,6 +290,9 @@ importers:
       '@sciencediscovery/memory':
         specifier: workspace:*
         version: link:../memory
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../network
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
@@ -427,6 +430,9 @@ importers:
 
   packages/model:
     dependencies:
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../network
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
@@ -440,6 +446,12 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+
+  packages/network:
+    dependencies:
+      undici:
+        specifier: 8.9.0
+        version: 8.9.0
 
   packages/operational-logging:
     devDependencies:
@@ -739,6 +751,9 @@ importers:
       '@sciencediscovery/model':
         specifier: workspace:*
         version: link:../../packages/model
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
@@ -840,6 +855,9 @@ importers:
       '@sciencediscovery/cas':
         specifier: workspace:*
         version: link:../../packages/cas
+      '@sciencediscovery/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@sciencediscovery/operational-logging':
         specifier: workspace:*
         version: link:../../packages/operational-logging
@@ -2698,6 +2716,10 @@ packages:
 
   undici@8.12.2:
     resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
+    engines: {node: '>=22.19.0'}
+
+  undici@8.9.0:
+    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.4.0:
@@ -4854,6 +4876,8 @@ snapshots:
   undici-types@8.3.0: {}
 
   undici@8.12.2: {}
+
+  undici@8.9.0: {}
 
   unicorn-magic@0.4.0: {}
 

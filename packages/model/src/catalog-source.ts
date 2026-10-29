@@ -45,7 +45,7 @@ export interface ModelCatalogFetchOptions {
 }
 
 export async function fetchModelsDevCatalog(options: ModelCatalogFetchOptions): Promise<ModelsDevPayload> {
-  const dispatcher = proxyDispatcher(options.proxy);
+  const dispatcher = proxyDispatcher(options.proxy, options.url);
   const timeout = options.timeoutMs ?? CATALOG_TIMEOUT_MS;
   let statusCode: number;
   let bodyText: string;

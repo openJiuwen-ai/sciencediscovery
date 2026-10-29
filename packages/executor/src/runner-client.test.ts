@@ -20,6 +20,25 @@ import type { AddressInfo } from "node:net";
 
 import { RunnerClient } from "./runner-client.js";
 
+test("RunnerClient resolves environment proxy for each setup and install operation", async (context) => {
+  const bodies: Record<string, unknown>[] = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    bodies.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => { server.closeAllConnections(); server.close(); });
+  let policy: import("@sciencediscovery/schema").ResolvedProxy = { mode: "environment", noProxy: "internal.test" };
+  const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "test-token", () => policy);
+  await client.setupScientificEnvironments();
+  policy = { mode: "direct" };
+  await client.installEnvironment("env", { packages: ["numpy"] } as Parameters<RunnerClient["installEnvironment"]>[1]);
+  assert.deepEqual(bodies.map(body => body.networkProxy), [{ mode: "environment", noProxy: "internal.test" }, { mode: "direct" }]);
+});
+
 test("RunnerClient retains an HTTP failure status even when the Runner supplies an error message", async (context) => {
   const server = createServer((_request, response) => {
     response.writeHead(503, { "content-type": "application/json" });

@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { resolveRoute } from "@sciencediscovery/network";
 import { Agent as UndiciAgent, ProxyAgent, request, type Dispatcher } from "undici";
 
 import type { RuntimeMessage as AgentHistoryMessage } from "@sciencediscovery/runtime-core";
@@ -184,7 +185,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Dispatcher honouring the profile's resolved proxy. "environment" keeps the
  *  process default dispatcher; "direct" pins a plain agent; "url" pins one proxy. */
-export function proxyDispatcher(proxy: ResolvedProxy | undefined): Dispatcher | undefined {
+export function proxyDispatcher(proxy: ResolvedProxy | undefined, target?: string): Dispatcher | undefined {
+  if (target && proxy) proxy = resolveRoute(target, proxy);
   if (!proxy || proxy.mode === "environment") return undefined;
   if (proxy.mode === "url") {
     if (!proxy.url) throw new Error("Model proxy mode 'url' requires a proxy URL");
@@ -245,7 +247,7 @@ interface RequestOptions {
 /** POST with a bounded retry budget for pre-stream failures (connect errors,
  *  429, 5xx). Once the stream starts flowing, errors surface to the caller. */
 async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncIterable<Uint8Array> }> {
-  const dispatcher = proxyDispatcher(options.proxy);
+  const dispatcher = proxyDispatcher(options.proxy, options.url);
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= options.policy.maxRetries; attempt += 1) {
     if (options.signal.aborted) { await dispatcher?.close(); throw new Error("aborted"); }
