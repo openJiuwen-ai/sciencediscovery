@@ -24,7 +24,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import websockets
-from .network import websocket_proxy_options
+
+from .network import connect_gateway
+
 
 class GatewayError(RuntimeError):
     """The gateway could not be reached or broke the protocol."""
@@ -127,7 +129,7 @@ class ChatRun:
 
     async def _connect(self) -> None:
         try:
-            self._connection = await websockets.connect(self._url, max_size=None, **websocket_proxy_options(self._url))
+            self._connection = await connect_gateway(self._url)
         except OSError as error:
             raise GatewayError(f"gateway unreachable at {self._url}: {error}") from error
         ack = json.loads(await self._connection.recv())
@@ -309,7 +311,7 @@ async def rpc(url: str, method: str, params: dict[str, Any] | None = None, *, ti
     the `/tui` route chats use.
     """
     try:
-        connection = await websockets.connect(url, max_size=None, **websocket_proxy_options(url))
+        connection = await connect_gateway(url)
     except OSError as error:
         raise GatewayError(f"gateway unreachable at {url}: {error}") from error
     async with connection:

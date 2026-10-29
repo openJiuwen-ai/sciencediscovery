@@ -308,6 +308,14 @@ function emptyCatalog(): EnvironmentCatalog {
   return { environments: [], revisions: [], version: CATALOG_VERSION };
 }
 
+/** External environment commands must fail before the gateway's default idle deadline. */
+export async function executeEnvironmentCommand(executable: string, args: string[], environment: NodeJS.ProcessEnv,
+  timeoutMs = 180_000): Promise<string> {
+  const result = await execFileAsync(executable, args, { encoding: "utf8", env: environment,
+    timeout: timeoutMs, killSignal: "SIGTERM", maxBuffer: 8 * 1024 * 1024 });
+  return result.stdout;
+}
+
 export class EnvironmentStore {
   private catalog = emptyCatalog();
   private initialized = false;
