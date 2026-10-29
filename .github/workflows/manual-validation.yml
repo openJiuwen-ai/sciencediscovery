@@ -9,15 +9,11 @@
 # same ref cancels the previous manual run, including any unfinished work.
 name: Manual validation
 
-run-name: "Manual validation · ${{ github.ref_name }} · l5 · parallel=${{ inputs.max-parallel }} · ${{ inputs.environment }}"
+run-name: "Manual validation · ${{ github.ref_name }} · l5 · parallel=${{ inputs.max-parallel }} · nightly-ci-ds"
 
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: "Environment supplying real-model and judge configuration"
-        type: environment
-        default: nightly-research
       backend:
         description: "E2E execution backend"
         type: choice
@@ -36,13 +32,204 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  validate:
-    name: Validate L3-L5 real E2E
-    uses: ./.github/workflows/real-e2e.yml
-    secrets: inherit
-    with:
-      profile: l5 # Cumulative L3+L4+L5 real slice; full Biomni public-50 required.
-      environment: ${{ inputs.environment }}
-      backend: ${{ inputs.backend }}
-      max-parallel: ${{ fromJSON(inputs.max-parallel) }}
+  real-plan:
+    name: Freeze real E2E matrix
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: nightly-ci-ds
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      max-parallel: ${{ steps.concurrency.outputs.max-parallel }}
+    env:
+      CI_PROFILE: l5
+      CI_E2E_BACKEND: ${{ inputs.backend }}
+      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
+      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+    steps:
+      - name: Validate real worker concurrency
+        id: concurrency
+        env:
+          CI_REAL_MAX_PARALLEL: ${{ inputs.max-parallel }}
+        run: |
+          case "$CI_REAL_MAX_PARALLEL" in
+            1|2|4) echo "max-parallel=$CI_REAL_MAX_PARALLEL" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::max-parallel must be 1, 2 or 4"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      # Node collection imports tsx from the workspace, not the Playwright install.
+      - run: pnpm install --frozen-lockfile
+      - run: node test/sync-e2e.mjs --write
+      - run: npm ci --prefix .e2e
+      # Collection makes no API/model call and needs no credential.
+      - run: node test/support/tagged/shared.mjs list --profile "$CI_PROFILE" --slice e2e-real --output .ci-real-plan
+      - id: matrix
+        run: node .ci/real-matrix.mjs .ci-real-plan/plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-plan
+          path: .ci-real-plan/plan.json
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload real E2E collection diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-collection-diagnostics
+          path: .ci-real-plan
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  real-e2e:
+    name: Real E2E (${{ matrix.shard }})
+    needs: real-plan
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.real-plan.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.real-plan.outputs.max-parallel || '2') }}
+      matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    environment: nightly-ci-ds
+    env:
+      CI_ALLOW_REAL: "1"
+      CI_PROFILE: l5
+      CI_E2E_BACKEND: ${{ inputs.backend }}
+      CI_REAL_SHARD: ${{ matrix.shard }}
+      E2E_COMMIT_SHA: ${{ github.sha }}
+      CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+      SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE: ${{ github.workspace }}/.ci-results/model-invalid-arguments.jsonl
+      CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
+      CI_BIOMNI_CASE_ID: ${{ matrix.biomni_case }}
+      # Biomni inputs exceed the product's 10 GiB default workspace quota.
+      # Forty GiB covers the largest pinned input plus the required output reserve.
+      SCIENCE_AGENT_MAX_WORKSPACE_BYTES: ${{ matrix.biomni_case != '' && '42949672960' || '' }}
+      E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
+      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
+      E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
+      E2E_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      E2E_JUDGE_TOKEN: ${{ secrets.E2E_JUDGE_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+      E2E_DRB_EVALUATION: full
+      E2E_BIOMNI_EVALUATION: rubric
+      # L5 includes the unofficial, non-gating PUCT artifact review.
+      E2E_PUCT_LLM_EVALUATION: "1"
+      E2E_DRB_MAX_SUBAGENTS: "2"
+      E2E_TEAM_CONCURRENCY_HINT: "2"
+      E2E_DRB_RUN_TIMEOUT_MS: "3600000"
+      # RACE and FACT share this deadline. Forty minutes lets citation checking finish.
+      E2E_DRB_EVAL_TIMEOUT_MS: "2400000"
+      E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
+      E2E_BIOMNI_RUN_TIMEOUT_MS: ${{ vars.E2E_BIOMNI_RUN_TIMEOUT_MS || '10800000' }}
+      LLM_BACKEND: openai
+      OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+      RACE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      CLEAN_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      FACT_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      BIOMNI_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Prepare real-research prerequisites (no model calls)
+        if: ${{ matrix.shard != 'basic' }}
+        run: bash .ci/prepare-real-research.sh
+      - name: Provision sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev true
+      - name: Run the frozen real E2E shard
+        run: pnpm ci:e2e:real -- --profile "$CI_PROFILE" --shard "$CI_REAL_SHARD"
+      - name: Summarize actual planned and executed cases
+        if: always()
+        run: node .ci/tagged-summary.mjs
+      - name: Stage real E2E scores
+        if: always()
+        run: node .ci/prepare-real-e2e-results.mjs
+      - name: Upload real E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-results-${{ matrix.shard }}
+          path: .tmp/real-e2e-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload real E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-evidence-${{ matrix.shard }}
+          path: .ci-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  real-report:
+    name: Account for real cases
+    needs: [real-plan, real-e2e]
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: real-e2e-plan
+          path: .ci-real-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: real-e2e-results-*
+          path: .ci-real-results
+      - name: Reconcile every planned identity
+        run: node .ci/real-report.mjs .ci-real-plan/plan.json .ci-real-results
+      - name: Stage combined real E2E scores
+        if: always()
+        run: node .ci/prepare-real-e2e-results.mjs
+      - name: Upload combined real E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-results
+          path: .tmp/real-e2e-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload real suite verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-verdict
+          path: .ci-real-results/verdict.json
+          include-hidden-files: true
+          if-no-files-found: warn
