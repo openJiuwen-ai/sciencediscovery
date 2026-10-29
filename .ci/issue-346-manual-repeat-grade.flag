@@ -1,0 +1,3 @@
+# Presence of this file on branch ci/346-manual-repeat-grade makes Manual
+# validation (nightly-ci-ds) run offline repeat-grade for issue #346 instead of
+# the full L5 research matrix. Temporary diagnostic; remove after measurement.
