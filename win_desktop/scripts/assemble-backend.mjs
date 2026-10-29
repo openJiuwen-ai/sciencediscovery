@@ -509,8 +509,16 @@ for (const e of await readdir(sitePackages, { withFileTypes: true })) {
   const entries = [...mappingLine[0].matchAll(/'([^']+)':\s*'([^']+)'/g)];
   if (entries.length === 0) { say(`warning: empty MAPPING in ${e.name}; left as-is`); continue; }
   const rewritten = entries.map(([, pkg, abs]) => {
-    const tail = relative(jwSrcIn, abs).split(/[\\/]+/).filter(Boolean);
-    if (tail.length === 0) fail(`editable mapping for ${pkg} does not live under the jw src tree`);
+    const rel = relative(jwSrcIn, abs);
+    // Field incident (stale editable venv): a venv carried over from a moved
+    // checkout still mapped into the old absolute path; relative() happily
+    // produced a ".." hop chain that resolved nowhere on the installed
+    // machine, and the payload shipped with every jw import dead. Anything
+    // not strictly inside the jw src tree is a broken payload.
+    if (rel === "" || rel.startsWith("..") || /^[a-zA-Z]:[\\/]/.test(rel)) {
+      fail(`editable mapping for ${pkg} does not live under the jw src tree (mapped to ${abs}); the bundled venv's editable install is stale — reinstall it from this tree before assembling`);
+    }
+    const tail = rel.split(/[\\/]+/).filter(Boolean);
     return `'${pkg}': str(_SRC.joinpath(${tail.map((t) => `'${t}'`).join(", ")}))`;
   }).join(", ");
   const lines = text.split("\n");
@@ -538,7 +546,15 @@ for (const name of VENV_NAMES) {
     if (!e.isFile() || !/^_editable_impl_.*\.pth$/.test(e.name)) continue;
     const file = join(sp, e.name);
     const text = (await readFile(file, "utf8")).trim();
-    if (!text.startsWith(repo)) { say(`warning: ${name}/${e.name} does not point into the repo; left as-is`); continue; }
+    // Field incident (stale editable venv): the envs came from a data dir
+    // carried over after a repo migration; their .pth files still pointed at
+    // the old checkout path. This branch only warned and shipped anyway, and
+    // every Python sidecar died with ModuleNotFoundError on the installed
+    // machine while the build machine looked healthy. A mispointed editable
+    // is always a broken payload — fail the build instead of shipping it.
+    if (!text.startsWith(repo)) {
+      fail(`${name}/${e.name} points outside the repo (${text}) — the venv's editable install is stale; reinstall the editable packages from this repo before assembling`);
+    }
     const tail = text.slice(repo.length).replace(/^[\\/]+/, "").replace(/\//g, "\\");
     await writeFile(file, `${BACKEND_PLACEHOLDER}\\${tail}\n`, "utf8");
     say(`placeholdered ${name}/${e.name}`);
