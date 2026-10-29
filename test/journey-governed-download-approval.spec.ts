@@ -117,6 +117,13 @@ async function resolveCandidate(
   prompt: string,
 ): Promise<void> {
   const before = stub.calls.length;
+  const composer = page.locator("form.composer");
+  await composer.getByRole("textbox").fill(prompt);
+  const preflight = composer.locator(".composer-network-preflight");
+  if (await preflight.isVisible()) {
+    await expect(preflight).toContainText("Research network access is disabled");
+    await preflight.getByRole("button", { name: "Continue without network" }).click();
+  }
   const run = await sendUserMessage(page, sessionId, prompt);
   await expect.poll(() => stub.calls.length, { message: "the run should reach the scripted model", timeout: 60_000 })
     .toBeGreaterThan(before);
