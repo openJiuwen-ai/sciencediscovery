@@ -1390,6 +1390,7 @@ export async function executeShell(
   runtime?: import("./environment-store.js").EnvironmentRuntime,
   onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
   environmentStore?: Pick<EnvironmentStore, "capability" | "resolveRuntime">,
+  expectedEnvironmentRevisionId?: string,
 ): Promise<ShellExecutionResult> {
   if (!request.code.trim()) throw new Error("Shell code is required");
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
@@ -1424,6 +1425,11 @@ export async function executeShell(
   const localPythonPackages = await localPythonPackagePath(config);
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
+  const actualEnvironmentRevisionId = runtime?.revision.id ?? (sandbox === "seatbelt"
+    ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID);
+  if (expectedEnvironmentRevisionId !== undefined && actualEnvironmentRevisionId !== expectedEnvironmentRevisionId) {
+    throw new Error("RECOVERY_ENVIRONMENT_CHANGED");
+  }
   if (request.environmentId && runtime?.environment.id !== request.environmentId) {
     throw new Error("Selected environment requires an active Runner environment lease");
   }
@@ -1475,7 +1481,7 @@ export async function executeShell(
     config,
     launch,
     commandArguments,
-    `${launch.shellPrelude ?? ""}${request.code}`,
+    `${launch.shellPrelude ?? ""}${request.recoveryMetadataPath ? `export SCIENCEDISCOVERY_EXECUTION_ID='${request.executionId.replaceAll("'", "'\"'\"'")}'\n` : ""}${request.code}`,
     executionTimeoutMs(request.executionTimeoutMs, config.execTimeoutMs),
     workspaceRoot,
     signal,

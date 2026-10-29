@@ -66,8 +66,16 @@ test.describe("error diagnostics", { tag: ["@isolation:session", "@category:e2e"
         const toast = page.locator(".toast.error");
         await journey.step("触发真实请求错误", "创建失败显示可操作的错误 Toast，已有表单草稿仍可见。", async () => {
           await page.goto("/");
+          // Initial Project/Session selection closes the narrow navigation drawer.
+          // Wait for the actual Session view before opening it, not just the shell.
+          await expect(page.locator(".session-bar-session")).toBeVisible();
+          await expect(page.locator("form.composer textarea")).toBeEditable();
           const showNavigation = page.getByRole("button", { name: zh ? "打开导航" : "Open navigation" });
-          if (await showNavigation.isVisible()) await showNavigation.click();
+          if (zh) {
+            await expect(showNavigation).toBeVisible();
+            await showNavigation.click();
+            await expect(showNavigation).toHaveAttribute("aria-expanded", "true");
+          }
           await page.getByRole("button", { name: zh ? "添加项目" : "Add project", exact: true }).click();
           const dialog = page.getByRole("dialog", { name: zh ? "创建项目" : "Create Project" });
           await dialog.getByLabel(zh ? "项目名称" : "Project name", { exact: true }).fill("Diagnostic failure");
