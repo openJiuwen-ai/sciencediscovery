@@ -241,7 +241,7 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   const hostPlatform = process.platform === "darwin" ? "darwin" : "linux";
   log(`ScienceDiscovery ${manifest.version} (${hostPlatform}-${manifest.architecture})`);
 
-  await runPreflight({
+  const preflight = await runPreflight({
     bwrapPath: settings.bwrapPath,
     sandboxProvider: settings.sandboxProvider ?? "auto",
     seatbeltPath: settings.seatbeltPath,
@@ -341,7 +341,12 @@ export async function serve(context: ServeContext, log: (message: string) => voi
     const uiHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
     const uiUrl = `http://${uiHost}:${settings.port}`;
     log("");
-    log(`  ScienceDiscovery is ready at ${uiUrl}`);
+    log(`  ScienceDiscovery Web UI is available at ${uiUrl}`);
+    if (!runnerSupervisor.isRunning("sandbox runner")) {
+      log("  Local Runner is unavailable; analyses cannot run on it until it is running again.");
+    } else if (!preflight.sandboxUsable) {
+      log("  Local sandbox is unavailable; sandboxed analyses cannot run. Check the in-app status for the reason and recheck action.");
+    }
     for (const line of accessTokenBanner(settings.dataDir, credentials, uiUrl)) log(line);
     log(`  Data directory: ${settings.dataDir}`);
     log(apiService!.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE === "0"

@@ -372,13 +372,15 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
       settings: { ...defaultSettings({}, root), dataDir: join(root, "data"), scientificEnvironments: false, jiuwenswarm: false,
         bwrapPath: "/nonexistent/bwrap-fixture", port: ports[0]!, runnerPort: ports[1]! } });
     let ready: () => void; const becameReady = new Promise<void>(done => { ready = done; });
+    const logs: string[] = [];
     const signals = process.listenerCount("SIGTERM");
     const running = serve(context, message => {
+      logs.push(message);
       if ((mode === "abort-startup" || mode === "fail-startup") && message.includes("Starting control API")) {
         if (mode === "abort-startup") process.emit("SIGTERM", "SIGTERM");
         throw new Error("fixture startup interruption");
       }
-      if (message.includes("ScienceDiscovery is ready at")) ready!();
+      if (message.includes("ScienceDiscovery Web UI is available at")) ready!();
     });
     if (mode === "abort-startup" || mode === "fail-startup") {
       if (mode === "abort-startup") assert.equal((await running).exitCode, 0);
@@ -396,6 +398,8 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
       return;
     }
     await becameReady;
+    assert.match(logs.join("\n"), /Local sandbox is unavailable; sandboxed analyses cannot run/);
+    assert.doesNotMatch(logs.join("\n"), /ScienceDiscovery is ready at/);
     const observed = JSON.parse(await readFile(join(root, "data/control-observation.json"), "utf8"));
     if (mode === "operator") {
       assert.equal(observed.hasPrivateCredential, false); assert.equal(observed.hasImplicitEndpoint, true);
