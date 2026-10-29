@@ -9,11 +9,15 @@
 # same ref cancels the previous manual run, including any unfinished work.
 name: Manual validation
 
-run-name: "Manual validation · ${{ github.ref_name }} · l5 · parallel=${{ inputs.max-parallel }}"
+run-name: "Manual validation · ${{ github.ref_name }} · l5 · parallel=${{ inputs.max-parallel }} · ${{ inputs.environment }}"
 
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: "Environment supplying real-model and judge configuration"
+        type: environment
+        default: nightly-research
       backend:
         description: "E2E execution backend"
         type: choice
@@ -39,5 +43,6 @@ jobs:
     secrets: inherit
     with:
       profile: l5 # Cumulative L3+L4+L5 real slice; full Biomni public-50 required.
+      environment: ${{ inputs.environment }}
       backend: ${{ inputs.backend }}
       max-parallel: ${{ fromJSON(inputs.max-parallel) }}

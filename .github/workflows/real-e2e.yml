@@ -7,6 +7,10 @@ name: Real E2E
 on:
   workflow_call:
     inputs:
+      environment:
+        description: "Environment supplying real-model and judge configuration"
+        type: string
+        default: nightly-research
       profile:
         description: "Routed real profile: merge, daily or release"
         required: true
@@ -33,7 +37,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: nightly-research
+    environment: ${{ inputs.environment }}
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       max-parallel: ${{ steps.concurrency.outputs.max-parallel }}
@@ -108,7 +112,7 @@ jobs:
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
-    environment: nightly-research
+    environment: ${{ inputs.environment }}
     env:
       CI_ALLOW_REAL: "1"
       CI_PROFILE: ${{ inputs.profile }}

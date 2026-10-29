@@ -209,7 +209,11 @@ The credential-isolation regression checks every job that references a
 model token: it must declare an Environment and exclude pull-request events.
 The check intentionally does not pin Environment names. To change research
 endpoints, configure an Environment with the same variable/secret names and
-update the research Environment in both real-plan and real-e2e in `real-e2e.yml`.
+pass its name as the `environment` input to `real-e2e.yml`. Both real-plan and
+real-e2e use that input; callers that omit it keep `nightly-research`.
+The **Manual validation** workflow exposes this Environment selector. For
+L5 real E2E using `nightly-ci-ds`, dispatch it on `main` with `environment=nightly-ci-ds`
+and `max-parallel=4`; it uses the cumulative `l5` profile.
 
 Environment variables are also used by the credential-free real-plan job so
 its frozen configuration matches its workers. API secrets are injected only
