@@ -92,6 +92,9 @@ const CUSTOM_DISCOVERY: Record<string, NonNullable<CreateModelProviderRequest["m
 const CUSTOM = "__custom__";
 
 interface ModelComboProps {
+  /** The field's inline trailing action (the wizard's 刷新列表), rendered inside
+   *  the combobox so the input itself stays as wide as every other field. */
+  action?: ReactNode;
   /** The busy channel of the surrounding ModelForm ("fetch"/"test"/"save"). */
   disabled: boolean;
   invalidate: () => void;
@@ -113,6 +116,7 @@ interface ModelComboProps {
  * plain input for gateways without a /models endpoint.
  */
 function ModelComboBox({
+  action,
   disabled,
   invalidate,
   listing,
@@ -223,6 +227,7 @@ function ModelComboBox({
         spellCheck={false}
         value={value}
       />
+      {action ?? null}
       {listing.length > 0 ? (
         <button
           aria-expanded={open}
@@ -587,8 +592,18 @@ export function ModelForm({
          * native <select> that appeared once the listing arrived, which read
          * as two overlapping pickers for the same value — see ModelComboBox
          * for what took over. */}
-        <div className="field-row is-action">
+        <div className="field-row">
           <ModelComboBox
+            action={
+              <button
+                className="field-combo-refresh"
+                disabled={busy !== "" || baseUrl.trim() === ""}
+                onClick={() => void fetchListing()}
+                type="button"
+              >
+                {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
+              </button>
+            }
             disabled={busy !== ""}
             invalidate={invalidate}
             listing={listing}
@@ -596,14 +611,6 @@ export function ModelForm({
             placeholder={TEXT.wizard.provider.modelPlaceholder}
             value={modelName}
           />
-          <button
-            className="secondary-button"
-            disabled={busy !== "" || baseUrl.trim() === ""}
-            onClick={() => void fetchListing()}
-            type="button"
-          >
-            {busy === "fetch" ? TEXT.wizard.provider.fetching : TEXT.wizard.provider.fetch}
-          </button>
         </div>
       </div>
 
