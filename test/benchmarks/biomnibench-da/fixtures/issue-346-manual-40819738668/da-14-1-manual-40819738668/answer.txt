@@ -1,0 +1,115 @@
+WHICH SEPSIS ENDOTYPING SIGNATURES CLUSTER TOGETHER?
+=======================================================================
+Data: 3,948 samples / 3,218 patients / 6 cohorts. Analysis population:
+2,203 infected sepsis patients at baseline (one sample per patient).
+26 signature scores. Spearman rank correlation; distance = 1 - rho;
+average linkage; k chosen by 1,000-sample bootstrap stability. [artifact1]
+
+ANSWER IN ONE SENTENCE
+-----------------------------------------------------------------------
+The 26 published and bespoke sepsis signatures collapse onto ONE dominant
+bipolar axis (52.2% of variance) that separates a myeloid/inflammatory-
+coagulopathic module from a lymphoid/adaptive-protective module, PLUS two
+small, largely orthogonal modules (MARS1/Yao-IC and monocyte/myeloid-
+protective mod3). Four clusters are the most reproducible description
+(bootstrap Jaccard 0.966).
+
+THE FOUR CLUSTERS (k = 4; identical partition if all derived/composite
+columns are removed, ARI = 1.000)
+
+C1  MYELOID / INFLAMMATORY-DOMINANT  (13 signatures, mean rho within 0.626)
+    mod1_score, mod2_score, detrimental_score, som_score,
+    myeloid_detrimental_score, myeloid_score, inflammopathic_score,
+    coagulopathic_score, yao_IN_score, wong_score, davenport_SRSq,
+    cano_SRSq, mars2_score
+    -> detrimental: cluster-score AUC for 30-day mortality 0.658
+       (95% CI 0.619-0.692); member AUCs 0.55-0.66.
+
+C2  MARS1-Yao-IC AXIS  (2 signatures, within 0.737; rho = 0.74 to each other)
+    yao_IC_score, mars1_score
+    -> mortality-neutral (AUC 0.551, CI 0.506-0.593); orthogonal to C1
+       (mean rho +0.26) and strongly anti-correlated to C3 (rho -0.56).
+
+C3  MONOCYTE / MYELOID-PROTECTIVE (mod3) MODULE  (5 signatures, within 0.477)
+    mod3_score, neutrophil_protective_score, monocyte_protective_score,
+    myeloid_protective_score, mars4_score
+    -> mortality-neutral (AUC 0.503, CI 0.462-0.542); orthogonal to the
+       main axis (rho +0.09 with C1, +0.06 with C4).
+
+C4  LYMPHOID / ADAPTIVE-PROTECTIVE  (6 signatures, within 0.805)
+    mod4_score, protective_score, lymphoid_protective_score,
+    adaptive_score, yao_IA_score, mars3_score
+    -> protective: cluster-score AUC 0.345 (95% CI 0.309-0.383); member
+       AUCs 0.34-0.39.
+
+Cluster-centroid correlations: C1-C4 = -0.85 (the main axis), C2-C3 = -0.56
+(the second axis), all other pairs between -0.36 and +0.26.
+Membership and statistics: [artifact2] [artifact3] [artifact4]
+
+COARSER TIER (k = 2, silhouette 0.536, the strongest single split)
+-----------------------------------------------------------------------
+15 signatures (C1 + the MARS1/Yao-IC pair) versus 11 signatures (C3 + C4).
+At k = 3 the mod3/monocyte-protective module separates; at k = 5 mod3+mars4
+split from the three myeloid "protective" subscores.
+
+WHICH FRAMEWORKS AGREE (key pairwise Spearman rho, n = 2,203)
+-----------------------------------------------------------------------
+* Sweeney inflammopathic = SRS1 = bespoke myeloid axis:
+  inflammopathic ~ davenport_SRSq 0.75, ~ cano_SRSq 0.74,
+  ~ myeloid_score 0.82, ~ myeloid_detrimental 0.81, ~ detrimental 0.75.
+* Sweeney adaptive = Yao IA = MARS3 = lymphoid/adaptive subspace:
+  adaptive ~ yao_IA 0.876, ~ lymphoid_protective 0.82, ~ mod4 0.78;
+  yao_IA ~ mod4 0.82; mars3 ~ adaptive 0.78, ~ mod4 0.73.
+* Davenport SRS and Cano SRS are the same instrument:
+  davenport_SRSq ~ cano_SRSq 0.928 (label agreement 75.8%, Cramer's V 0.62).
+  Sweeney vs Davenport label agreement is only 57.4% (V 0.48): both
+  inflammopathic (460/638) and coagulopathic (231/414) patients are mostly
+  labelled SRS1.
+* MARS is NOT one axis: mars2 is inflammatory (rho 0.73 with inflammopathic,
+  -0.86 with adaptive; AUC 0.631), mars3 is adaptive (AUC 0.366), mars1 sits
+  with yao_IC (0.74; AUC 0.579) and mars4 with the mod3 module (AUC 0.591).
+* The bespoke subspace maps onto the published schemes:
+  mod1+mod2 = detrimental (C1); mod4 = lymphoid/adaptive (0.96 with
+  lymphoid_protective); mod3 = monocyte-protective (0.57 with
+  monocyte_protective, -0.59 with yao_IC); protective = mod3+mod4 is a
+  composite straddling C3 and C4; som = detrimental/protective.
+* Wong is a peripheral inflammatory member of C1 (rho 0.71 with mod1).
+
+STRUCTURE AND STABILITY
+-----------------------------------------------------------------------
+* PC1 = 52.2% of variance, PC2 = 17.7%, PC1+PC2 = 69.8% (26 signatures).
+* 43.7% of the 325 signature pairs are negatively correlated; the extremes
+  are lymphoid_protective ~ cano_SRSq -0.879, som ~ adaptive -0.878,
+  adaptive ~ mars2 -0.863, inflammopathic ~ adaptive -0.849.
+* Bootstrap (1,000 patient resamples) mean Jaccard: k=2 0.765, k=3 0.902,
+  k=4 0.966, k=5 0.905 -> k = 4 retained.
+* Robust to: population choice (rho agreement 0.998 across 4 definitions),
+  complete/Ward linkage (ARI 0.88), deletion of all deterministic composites
+  (ARI 1.000), and cohort (Mantel r 0.75-0.97 in all six cohorts, p = 0.002;
+  92.9% of pairs with |rho| >= 0.5 keep their sign in all four large cohorts).
+* NOT robust to using 1-|rho| instead of 1-rho (ARI 0.41): treating
+  anti-correlated signatures as "similar" merges the two poles.
+
+INTERPRETATION
+-----------------------------------------------------------------------
+The consensus structure is two-tiered. Tier 1 is a single
+myeloid-inflammatory versus lymphoid-adaptive gradient that all published
+schemes load onto with opposite signs - which is why "consensus" endotyping
+works at the score level even though categorical labels disagree. Tier 2 is
+two small modules (MARS1/Yao-IC; mod3/monocyte-myeloid-protective) that are
+nearly uncorrelated with that gradient and therefore carry information a
+single inflammation score would miss. The myeloid pole is mortality-
+detrimental (AUC 0.66) and the lymphoid/adaptive pole mortality-protective
+(AUC 0.35), consistent with hyper-inflammatory versus immunoparalytic arms
+of sepsis. [artifact8]
+
+CAVEATS
+-----------------------------------------------------------------------
+Correlational design: co-variation can reflect shared severity, leukocyte
+composition or batch rather than shared mechanism. Scores are not independent
+measurements (many derive from the same 104 genes; five columns are exact
+algebraic composites), so "four clusters" describes score geometry, not four
+independent pathways. Orientation of yao_IA/IC/IN and wong_score was inferred
+from the data, not from the source publications. Mortality was available for
+1,917/2,203 patients with cohort-structured missingness, and no severity
+adjustment was possible (SOFA missing 78%).
