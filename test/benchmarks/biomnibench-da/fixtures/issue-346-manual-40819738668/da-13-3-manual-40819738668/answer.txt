@@ -1,0 +1,222 @@
+QUESTION: Which proteins correlate with changes in body composition (fat percentage and
+breast volume) following feminizing GAHT?
+
+SHORT ANSWER
+Using the pre-computed per-protein mixed-linear-model results (5,278 Olink Explore HT
+proteins; model: protein NPX ~ body-composition variable + age + baseline BMI +
+random intercept per participant), and calling significance at Benjamini-Hochberg
+FDR < 0.05:
+
+  * PERCENT BODY FAT  -> 38 proteins (36 negative, 2 positive).
+  * BREAST VOLUME     -> 249 proteins (237 negative, 12 positive).
+  * SHARED (both)     -> 28 proteins, all 28 with the same sign for both traits
+                         (27 down, leptin up); 63.6-fold more overlap than chance
+                         (Fisher OR 63.6, p = 5.1e-30).
+  * UNION             -> 259 distinct proteins.
+
+The percent-fat signature is leptin plus a tightly co-ordinated set of keratinocyte /
+stratified-epithelial, mucosal, matrix and inflammatory proteins. The breast-volume
+signature is much broader, is ~80% negative genome-wide, and is anchored by INSL3
+(falling) and prolactin (rising) - i.e. it behaves largely as a readout of cumulative
+GAHT exposure / androgen suppression rather than of breast tissue per se.
+
+
+1. PROTEINS CORRELATED WITH PERCENT BODY FAT (n = 38, FDR < 0.05)
+Slope = change in protein NPX per +1 percentage point body fat.
+
+Strongest by adjusted p:
+  CA6      -0.1393  padj 5.46e-04   (carbonic anhydrase VI)
+  LEP      +0.1962  padj 5.46e-04   (leptin)  <-- the only classical adipokine hit
+  PLB1     -0.0839  padj 5.46e-04   (phospholipase B1)
+  CCL24    -0.1025  padj 1.81e-03   (eotaxin-2)
+  CYTL1    -0.0761  padj 2.89e-03
+  DPEP1    -0.0447  padj 2.89e-03
+  ENDOU    -0.0581  padj 2.89e-03
+  PGLYRP3  -0.0848  padj 2.89e-03
+  PSG1     -0.0977  padj 2.89e-03
+  WIF1     -0.0463  padj 2.89e-03
+  CST6     -0.0698  padj 4.89e-03   (cystatin E/M)
+  IVL      -0.0736  padj 1.01e-02   (involucrin)
+  PI3      -0.0964  padj 1.28e-02   (elafin)
+  DEFB4A   -0.2094  padj 1.44e-02   (beta-defensin 4A)
+  ENPP5    -0.0537  padj 1.44e-02
+  MMP3     -0.1123  padj 1.53e-02   (stromelysin-1)
+  MUC1     -0.1669  padj 1.53e-02
+  LY75     -0.0499  padj 1.86e-02
+  RELT     -0.0449  padj 1.86e-02
+  SPINK5   -0.0572  padj 1.86e-02   (LEKTI)
+  VIT      -0.0628  padj 1.86e-02
+  CLSTN2   -0.0637  padj 2.07e-02
+  DSG3     -0.0470  padj 2.07e-02   (desmoglein-3)
+  CBLIF    -0.0563  padj 2.50e-02   (gastric intrinsic factor)
+  CFC1     +0.0706  padj 2.50e-02   <-- one of only two positive fat associations
+  KLK6     -0.0380  padj 3.07e-02
+  PPY      -0.0942  padj 3.07e-02   (pancreatic polypeptide)
+  ART3     -0.0462  padj 3.36e-02
+  CEACAM19 -0.0394  padj 3.53e-02
+  IGSF21   -0.0486  padj 3.53e-02
+  CRTAC1   -0.0418  padj 4.37e-02
+  FGFBP2   -0.0600  padj 4.37e-02
+  ITGAV    -0.0251  padj 4.48e-02
+  KLK13    -0.0496  padj 4.48e-02
+  SOST     -0.0546  padj 4.48e-02   (sclerostin)
+  XPNPEP2  -0.0447  padj 4.48e-02
+  COL15A1  -0.0396  padj 4.72e-02
+  MAPK4    -0.2175  padj 4.72e-02
+
+Largest absolute effects: MAPK4 (-0.217), DEFB4A (-0.209), LEP (+0.196), MUC1 (-0.167),
+CA6 (-0.139), MMP3 (-0.112), CCL24 (-0.102), PSG1 (-0.098), PI3 (-0.096), PPY (-0.094).
+
+Direction is overwhelmingly negative: 36/38 proteins fall as percent fat rises
+(binomial p = 5.4e-09). The only two that rise are LEP (leptin) and CFC1.
+Median |effect| among fat hits is 2.86x that of non-hits (0.0591 vs 0.0206 NPX per %fat),
+so these are the large-effect tail, not marginal calls.
+
+
+2. PROTEINS CORRELATED WITH BREAST VOLUME (n = 249, FDR < 0.05)
+Slope = change in protein NPX per +1 unit breast volume (unit not stated in the file).
+
+Top by adjusted p:
+  INSL3    -0.01515  padj 3.32e-05   (insulin-like factor 3; Leydig-cell marker)
+  PRL      +0.00435  padj 2.79e-04   (prolactin)
+  PROK1    -0.00428  padj 3.07e-04
+  MUC1     -0.00528  padj 3.07e-04
+  SPINT3   -0.02035  padj 3.07e-04
+  PM20D1   -0.00431  padj 3.07e-04
+  PTPRH    -0.00227  padj 3.26e-04
+  B3GNT7   -0.00155  padj 3.26e-04
+  PAMR1    -0.00174  padj 3.76e-04
+  CST6     -0.00212  padj 3.76e-04
+  CLSTN2   -0.00234  padj 4.60e-04
+  EDDM3B   -0.00686  padj 5.85e-04
+  CXCL13   +0.00592  padj 6.67e-04
+  MDGA1    -0.00168  padj 7.33e-04
+  PTPRZ1   -0.00164  padj 7.33e-04
+  PGLYRP3  -0.00243  padj 7.33e-04
+  FGFBP2   -0.00199  padj 7.33e-04
+  CCL24    -0.00244  padj 7.33e-04
+  TNN      -0.00120  padj 7.39e-04
+  NCAM1    -0.00200  padj 8.46e-04
+
+The 12 positive breast-volume associations: PRL, CXCL13, LEP, GAPDH, TNFAIP6, PAEP,
+CCL28, VEGFD, EDA2R, MZB1, CD70, RAB27B.
+The remaining 237 are negative.
+
+
+3. THE SHARED SIGNATURE (significant for BOTH traits, n = 28)
+All 28 have concordant signs; 27 are negative, LEP is positive. Ordered by the larger
+of the two adjusted p-values (conservative ordering):
+
+  CA6, PLB1, CCL24, PGLYRP3, LEP(+), DPEP1, CST6, PI3, ENPP5, DEFB4A, MMP3, MUC1,
+  PSG1, SPINK5, VIT, CLSTN2, IVL, CBLIF, LY75, KLK6, PPY, CYTL1, IGSF21, ENDOU,
+  CEACAM19, FGFBP2, SOST, XPNPEP2
+
+Quantitative coherence of this shared set: the two slope vectors correlate at
+Pearson r = 0.980 (R2 = 0.96; OLS est_fat = 35.4 x est_breast, p = 9.6e-20), and
+28/28 agree in sign (binomial p = 7.5e-09). Across all 5,278 proteins the two slope
+vectors correlate only weakly (r = 0.320), so the shared set is a genuinely
+selected, coherent module rather than a sample of a global trend.
+
+Fat-specific hits (significant for fat, not breast; n = 10) - the proteins most likely
+to reflect adiposity itself rather than treatment exposure:
+  WIF1 (-0.046), RELT (-0.045), DSG3 (-0.047), CFC1 (+0.071), ART3 (-0.046),
+  CRTAC1 (-0.042), ITGAV (-0.025), KLK13 (-0.050), COL15A1 (-0.040), MAPK4 (-0.217)
+
+Breast-specific hits (n = 221), headed by INSL3, PRL, PM20D1, SPINT3, PROK1, PTPRH,
+B3GNT7, PAMR1, EDDM3B, CXCL13.
+
+
+4. FUNCTIONAL PATTERN (curated gene sets, exploratory one-sided Fisher tests,
+   background = the 5,278 panel proteins)
+
+Among the 38 percent-fat hits:
+  Keratinocyte differentiation / cornified envelope  8/11 genes  OR 465.5  p 5.3e-16
+      (CST6, DEFB4A, DSG3, IVL, KLK13, KLK6, PI3, SPINK5)
+  Squamous / upper-GI & mucosal epithelium           5/14        OR  88.1  p 2.8e-08
+      (CA6, CBLIF, MUC1, PGLYRP3, PLB1)
+  Extracellular matrix / connective tissue / bone    5/20        OR  52.8  p 2.1e-07
+      (COL15A1, CRTAC1, ITGAV, MMP3, SOST)
+  Pregnancy / placental & reproductive               3/10        OR  64.1  p 4.0e-05
+      (CFC1, ENDOU, PSG1)
+  Inflammation / immune signalling                   3/18        OR  29.9  p 2.6e-04
+      (CCL24, LY75, RELT)
+  Adipocyte / lipid & energy metabolism              1/12        OR  12.8  p 0.083
+      (LEP only)
+
+Among the 249 breast-volume hits the same categories are enriched (inflammation 14/18,
+OR 74.8; squamous 10/14, OR 52.6; neural 9/12, OR 62.8; ECM 10/20, OR 21.0;
+keratinocyte 6/11, OR 24.8; pregnancy 4/10, OR 13.7), while the adipocyte/lipid set is
+NOT (1/12, OR 1.8, p = 0.44).
+
+
+5. INTERPRETATION
+
+(a) Internal positive control passes. Leptin is the 2nd-strongest fat association in
+the entire panel (+0.196 NPX per +1 %fat, padj 5.5e-04) and rises with fat exactly as
+established physiology predicts (Zhang 1994 Nature; Considine 1996 NEJM). It is,
+however, the ONLY classical adipocyte protein that is significant: FABP4, CFD/adipsin,
+RBP4, NAMPT, LEPR, LPL and PLIN1 are all null (padj >= 0.15), and adiponectin (ADIPOQ)
+is not on the panel. The fat signature is therefore not a generic adipokine response.
+
+(b) Percent fat tracks a coordinated decline of stratified-epithelial / barrier
+proteins. Eight of the eleven keratinocyte-differentiation genes measured are fat hits,
+all negative, together with mucosal (CA6, PLB1, PGLYRP3, MUC1, CBLIF) and matrix
+(MMP3, SOST, COL15A1) proteins. Two non-exclusive readings fit: a genuine
+adiposity-epidermal axis (adiposity perturbs epidermal differentiation/barrier
+function), or a shared hormonal driver, since androgens are major trophic regulators of
+sebaceous/keratinocyte biology and androgen suppression and fat gain occur together
+during feminizing GAHT. These data cannot separate the two.
+
+(c) Breast volume behaves largely as a treatment-exposure readout. The single
+strongest breast association in the panel is INSL3 (-0.0152, padj 3.3e-05), a
+Leydig-cell-specific marker of gonadal androgen output (Ivell & Anand-Ivell 2009),
+with a null fat association; the second strongest is prolactin (+0.00435,
+padj 2.8e-04), whose secretion is stimulated by oestrogen (Freeman 2000). A
+falling androgen marker and a rising oestrogen-responsive hormone both tracking breast
+volume is the signature of cumulative GAHT exposure, which is also what drives breast
+growth. In addition, 79.6% of ALL 5,278 proteins have a negative breast-volume slope
+(binomial p < 1e-300) - a global downward shift consistent with oestrogen-driven
+plasma-volume expansion / haemodilution (Stachenfeld 2008). Breast-volume hits should
+therefore be read as partly a treatment-exposure/dilution signature.
+
+(d) The 28 shared proteins are a coherent epithelial-matrix-inflammatory module, but
+their sharing is not evidence of a common body-composition mechanism. Because both fat
+percentage and breast volume increase during GAHT and are therefore collinear with time
+on treatment and cumulative hormone exposure, the shared set is most parsimoniously a
+GAHT-exposure signature that both traits inherit. The 10 fat-specific proteins listed in
+section 3 are the better candidates for fat biology proper.
+
+(e) Other mechanistically informative hits: SOST/sclerostin (down with both) is the
+osteocyte Wnt antagonist and bone-turnover readout (Bonewald 2011), consistent with the
+known inverse adiposity-sclerostin relationship and with GAHT's bone-active hormonal
+changes; MMP3 and COL15A1 indicate matrix remodelling; PSG1, CFC1, ENDOU and PAEP are
+placental/pregnancy-associated, which matters because the cohort includes a pregnancy
+comparator arm and suggests those contrasts contribute to the fitted slopes.
+
+
+6. WHAT THIS ANALYSIS CANNOT CONCLUDE
+  * Only pre-computed results were available (no NPX matrix, sample metadata, arm
+    labels, confidence intervals, standard errors or raw p-values); nothing was
+    re-fitted and the model specification could not be verified. The supplied
+    adj.p.value columns were confirmed to be already FDR-adjusted (re-running BH on
+    them yields 0 hits, versus 38 and 249 as supplied), so they were used as-is.
+  * Percent fat and breast volume were modelled in separate single-predictor models, so
+    the 28 shared proteins are NOT shown to be independently associated with both
+    traits; the two traits are correlated and both move with treatment.
+  * Causal direction is not identifiable: "protein per unit fat" is equally compatible
+    with adipose tissue driving the protein, the protein driving adiposity, or a third
+    variable (oestradiol dose, time on treatment, plasma volume) driving both.
+  * A random-intercept model with a time-varying predictor returns a variance-weighted
+    blend of within-person and between-person slopes; with two time points these are
+    not separable, so "correlates with change" is an interpretation rather than a
+    demonstrated within-person effect.
+  * The two estimate columns are on different units (sd ratio 32.8; the breast-volume
+    unit is unstated), so cross-trait magnitudes are not comparable - only signs,
+    ranks and within-trait ratios are used here.
+  * The functional annotation is exploratory (hand-curated gene sets, chosen after
+    inspecting the hit list, uncorrected across seven categories, panel-based
+    background): hypotheses, not confirmatory enrichment.
+  * Coverage gaps: adiponectin, IGF-1, IGF-2 and CRP are absent from the panel, so no
+    claim of "no association" can be made for them.
+  * Generalisation is limited to a 6-month feminizing-GAHT cohort; no arm-stratified
+    (CPA vs spironolactone) analysis was possible with the supplied table.
