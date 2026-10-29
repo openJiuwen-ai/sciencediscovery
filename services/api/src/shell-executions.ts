@@ -6,16 +6,18 @@ import type { DatabaseSync } from "node:sqlite";
 import { VersionStore, type AgentStateRef } from "@sciencediscovery/cas";
 import type { ShellExecutionContext } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
+import { assertRecoveryContext, projectExecutionRecovery, unknownRecovery, type RecoveryContext } from "@sciencediscovery/schema";
 import { shortErrorMessage, type OperationalLogger } from "@sciencediscovery/operational-logging";
 import type { AgentShellExecution, ExecutionOwner, ExecutionRun, ManagedExecution, ShellExecutionResult } from "@sciencediscovery/schema";
 import type { AgentNotifications } from "./agent-notifications.js";
 import { apiLog } from "./logging.js";
 
+type RecoveryAttempt = { context: RecoveryContext; requestDigest: string };
 type Record = Omit<AgentShellExecution, "result"> & {
   resultRef?: AgentStateRef;
   candidateResultRef?: AgentStateRef;
   candidateFailure?: AuthoritativeFailure;
-  recoveryContext?: ShellExecutionContext;
+  originalExecutionContext?: ShellExecutionContext;
   expectedRunnerInstanceId?: string;
   catalogRevision?: number;
   submissionDigest?: string;
@@ -28,7 +30,37 @@ export interface ExecutionRecoveryHandlers {
     status: "succeeded" | "failed" | "cancelled"): Promise<ShellExecutionResult>;
   finalizeFailure?(context: ShellExecutionContext, failure: AuthoritativeFailure): Promise<void>;
 }
-const publicRecord = ({ recoveryContext: _, expectedRunnerInstanceId: __, catalogRevision: ___, submissionDigest: ______, candidateResultRef: ____, candidateFailure: _____, ...record }: Record) => record;
+const publicRecord = ({ originalExecutionContext: _, expectedRunnerInstanceId: __, catalogRevision: ___, submissionDigest: ______, candidateResultRef: ____, candidateFailure: _____, ...record }: Record) => record;
+// PR 472 stored its private provenance context under the name later used by
+// explicit continuation. Upgrade that older shape without exposing it publicly.
+const readRecord = (json: string): Record => {
+  const record = JSON.parse(json) as Record;
+  const candidate: unknown = record.recoveryContext;
+  if (candidate !== undefined) {
+    // A legacy private context must match this catalog entry, including its
+    // permission epoch. Malformed/mixed shapes never become public metadata.
+    if (candidate && typeof candidate === "object" && "permissionEpoch" in candidate) {
+      const legacy = candidate as ShellExecutionContext;
+      if (legacy.executionId === record.id && legacy.sessionId === record.sessionId
+        && legacy.agentId === record.agentId && legacy.runnerId === record.runnerId
+        && legacy.turnId === record.turnId && typeof legacy.code === "string"
+        && typeof legacy.workspaceRoot === "string" && legacy.permissionEpoch
+        && legacy.permissionEpoch.sessionId === record.sessionId
+        && Array.isArray(legacy.permissionEpoch.mounts) && Array.isArray(legacy.permissionEpoch.secretRefs)) {
+        record.originalExecutionContext ??= legacy;
+      }
+      delete record.recoveryContext;
+    } else {
+      try {
+        assertRecoveryContext(candidate);
+        const { parentExecutionId, recoveryPointId, manifestDigest, attemptToken } = candidate;
+        record.recoveryContext = { parentExecutionId, recoveryPointId, manifestDigest, attemptToken };
+      } catch { delete record.recoveryContext; }
+    }
+  }
+  if (record.recovery !== undefined) record.recovery = projectExecutionRecovery(record.recovery);
+  return record;
+};
 const stableDigest = (value: unknown) => createHash("sha256").update(JSON.stringify(value, (_key, item: unknown) =>
   item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item)).digest("hex");
@@ -185,15 +217,22 @@ export class ShellExecutions {
     private readonly log: Pick<OperationalLogger, "info" | "warn"> = apiLog) {
     db.exec(`CREATE TABLE IF NOT EXISTS shell_executions (id TEXT PRIMARY KEY, session TEXT NOT NULL, agent TEXT NOT NULL, record TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS shell_execution_leases (id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires INTEGER NOT NULL);`);
+    db.exec(`CREATE TABLE IF NOT EXISTS recovery_attempts (
+      session TEXT NOT NULL, agent TEXT NOT NULL, token TEXT NOT NULL,
+      request_digest TEXT NOT NULL, execution TEXT NOT NULL, PRIMARY KEY(session, agent, token))`);
     for (const row of db.prepare("SELECT record FROM shell_executions").all()) {
-      const execution = JSON.parse(String(row.record)) as Record;
-      if (!terminal(execution.state) && !this.db.prepare("SELECT 1 FROM shell_execution_leases WHERE id = ? AND expires > ?").get(execution.id, Date.now())) {
+      const execution = readRecord(String(row.record));
+      const leased = this.db.prepare("SELECT 1 FROM shell_execution_leases WHERE id = ? AND expires > ?").get(execution.id, Date.now());
+      if (!terminal(execution.state) && !leased) {
         this.log.warn("shell_execution_orphaned", { ...correlation(execution), state: execution.state, accepted: execution.accepted });
         execution.state = "unknown";
         execution.provenance = "unconfirmed";
         execution.error = "API restarted before finalization; recovering the original Runner execution. The command was not replayed.";
         execution.observation = { ...execution.observation, status: "stale", failureCount: 0 };
         delete execution.finishedAt;
+        this.save(execution);
+      } else if (!leased && JSON.stringify(execution) !== String(row.record)) {
+        // Upgrade legacy evidence only when it changed; retain the CAS revision.
         this.save(execution);
       }
     }
@@ -220,6 +259,7 @@ export class ShellExecutions {
   }
 
   private save(execution: Record): void {
+    if (execution.recovery !== undefined) execution.recovery = projectExecutionRecovery(execution.recovery);
     const revision = execution.catalogRevision ?? 0;
     const next = { ...execution, catalogRevision: revision + 1 };
     const row = this.db.prepare("SELECT id FROM shell_executions WHERE id = ?").get(execution.id);
@@ -289,13 +329,13 @@ export class ShellExecutions {
   private async scanPending(runnerId?: string, force = false): Promise<void> {
     if (this.closed || !this.recovery) return;
     const rows = this.db.prepare(`SELECT record FROM shell_executions
-      WHERE json_extract(record, '$.provenance') != 'committed' AND json_type(record, '$.recoveryContext') = 'object'
+      WHERE json_extract(record, '$.provenance') != 'committed' AND (json_type(record, '$.originalExecutionContext') = 'object' OR json_type(record, '$.recoveryContext.permissionEpoch') = 'object')
       AND (? IS NULL OR json_extract(record, '$.runnerId') = ?)
       AND (? OR coalesce(json_extract(record, '$.observation.lastError.retryable'), 1) != 0)
       AND (? OR coalesce(json_extract(record, '$.observation.nextRetryAt'), '') <= ?)
       ORDER BY coalesce(json_extract(record, '$.observation.nextRetryAt'), ''), rowid LIMIT 100`)
       .all(runnerId ?? null, runnerId ?? null, Number(force || Boolean(runnerId)), Number(force || Boolean(runnerId)), new Date().toISOString());
-    const due = rows.map(row => JSON.parse(String(row.record)) as Record).filter(record => !this.active.has(record.id));
+    const due = rows.map(row => readRecord(String(row.record))).filter(record => !this.active.has(record.id));
     for (let offset = 0; offset < Math.min(due.length, 100); offset += 4) {
       await Promise.all(due.slice(offset, offset + 4).map(record => this.reconcile(record.id, record).catch(() => undefined)));
     }
@@ -319,6 +359,7 @@ export class ShellExecutions {
 
   private observed(execution: Record, value: ManagedExecution): void {
     this.assertObserved(execution, value);
+    execution.recovery = projectExecutionRecovery(value.recovery);
     execution.accepted = true;
     execution.dispatchPhase = "accepted";
     if (value.receipt) { execution.receipt = value.receipt; execution.expectedRunnerInstanceId = value.receipt.runnerInstanceId; }
@@ -347,18 +388,18 @@ export class ShellExecutions {
 
   private async commitFailure(execution: Record, observed: ManagedExecution,
     finalizeFailure = this.recovery?.finalizeFailure): Promise<void> {
-    if (execution.recoveryContext) {
+    if (execution.originalExecutionContext) {
       if (!finalizeFailure) throw new RecoveryError("PROVENANCE_COMMIT_FAILED", "Authoritative failure finalizer is unavailable");
       execution.candidateFailure ??= { state: observed.state as "failed" | "cancelled",
         finishedAt: observed.finishedAt ?? new Date().toISOString(),
         ...(observed.startedAt ? { startedAt: observed.startedAt } : {}), ...(observed.error ? { error: observed.error } : {}) };
       this.save(execution);
-      await finalizeFailure(execution.recoveryContext, execution.candidateFailure);
+      await finalizeFailure(execution.originalExecutionContext, execution.candidateFailure);
     }
     this.finish(execution, { state: observed.state, provenance: "committed", error: observed.error });
     // Context-backed failures already used the immutable finalizer above.
     // Legacy managed dispatch recorded uncertainty until this verified outcome.
-    if (!execution.recoveryContext) await this.recordAdoptedOutcome(execution, observed);
+    if (!execution.originalExecutionContext) await this.recordAdoptedOutcome(execution, observed);
   }
 
   private async existingResult(execution: Record, observed: ManagedExecution): Promise<ShellExecutionResult> {
@@ -421,7 +462,7 @@ export class ShellExecutions {
     const work = Promise.resolve().then(async () => {
       execution = this.record(id, owner);
       try {
-        if (!execution.recoveryContext && runner) {
+        if (!execution.originalExecutionContext && runner) {
           const timeout = AbortSignal.timeout(RUNNER_REQUEST_TIMEOUT_MS);
           let observed: ManagedExecution;
           try {
@@ -456,10 +497,10 @@ export class ShellExecutions {
             state: reconciled.state, provenance: reconciled.provenance });
           return;
         }
-        if (!handlers || !execution.recoveryContext || !execution.expectedRunnerInstanceId)
+        if (!handlers || !execution.originalExecutionContext || !execution.expectedRunnerInstanceId)
           throw new RecoveryError("RECOVERY_CONTEXT_UNAVAILABLE", "Original execution context or Runner identity is missing; inspect existing logs. A new run is not safe automatically.");
-        if (execution.recoveryContext.executionId !== execution.id || execution.recoveryContext.sessionId !== execution.sessionId
-          || execution.recoveryContext.agentId !== execution.agentId || execution.recoveryContext.runnerId !== execution.runnerId)
+        if (execution.originalExecutionContext.executionId !== execution.id || execution.originalExecutionContext.sessionId !== execution.sessionId
+          || execution.originalExecutionContext.agentId !== execution.agentId || execution.originalExecutionContext.runnerId !== execution.runnerId)
           throw new RecoveryError("EXECUTION_IDENTITY_MISMATCH", "Stored execution context does not match its original owner and Runner");
         execution.observation = { ...execution.observation, status: "reconciling", failureCount: execution.observation?.failureCount ?? 0 };
         this.save(execution);
@@ -475,7 +516,7 @@ export class ShellExecutions {
           await this.commitFailure(execution, observed, handlers.finalizeFailure);
           return;
         }
-        if (!observed.result || !observed.version || (!execution.recoveryContext.explicitHandoff && !observed.result.workspaceSnapshot))
+        if (!observed.result || !observed.version || (!execution.originalExecutionContext.explicitHandoff && !observed.result.workspaceSnapshot))
           throw new RecoveryError("RESULT_NOT_COMMITTED", "Runner terminated without a committed result; recovery will not rerun it");
         const candidate = await this.existingResult(execution, observed);
         const guardedClient = new Proxy(client, { get(target, key) {
@@ -490,7 +531,7 @@ export class ShellExecutions {
         } });
         const status = observedStatus(observed);
         if (status === "unconfirmed") throw new RecoveryError("RESULT_NOT_COMMITTED", "Runner outcome remains unconfirmed");
-        const result = await handlers.finalize(execution.recoveryContext, candidate, guardedClient, status);
+        const result = await handlers.finalize(execution.originalExecutionContext, candidate, guardedClient, status);
         handlers.runner(publicRecord(execution));
         execution.resultRef = await this.versions.put("agent-state", JSON.stringify(result), "application/json");
         this.finish(execution, { state: observed.state, provenance: "committed" });
@@ -505,28 +546,29 @@ export class ShellExecutions {
     const row = this.db.prepare("SELECT record FROM shell_executions WHERE id = ? AND session = ? AND agent = ?")
       .get(id, owner.sessionId, owner.agentId);
     if (!row) throw new Error("Execution not found for this Agent");
-    return JSON.parse(String(row.record)) as Record;
+    return readRecord(String(row.record));
   }
 
   snapshot(sessionId: string, agentId?: string): Record[] {
     const where = agentId === undefined ? "session = ?" : "session = ? AND agent = ?";
     const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
     return this.db.prepare(`SELECT record FROM shell_executions WHERE ${where} ORDER BY rowid`).all(...args)
-      .map((row) => publicRecord(JSON.parse(String(row.record)) as Record));
+      .map((row) => publicRecord(readRecord(String(row.record))));
   }
 
   list(owner: ExecutionOwner): AgentShellExecution[] {
-    return this.snapshot(owner.sessionId).filter((item) => item.agentId === owner.agentId).map(({ resultRef: _, ...item }) => item);
+    return this.snapshot(owner.sessionId).filter((item) => item.agentId === owner.agentId).map(({ resultRef: _, ...item }) => ({ ...item, recovery: item.recovery ?? unknownRecovery() }));
   }
 
   /** The catalog entry alone: state and timestamps without reading the result payload. */
   find(id: string, owner: ExecutionOwner): AgentShellExecution {
     const { resultRef: _, ...execution } = publicRecord(this.record(id, owner));
-    return execution;
+    return { ...execution, recovery: execution.recovery ?? unknownRecovery() };
   }
 
   async get(id: string, owner: ExecutionOwner): Promise<AgentShellExecution> {
     const { resultRef, ...execution } = publicRecord(this.record(id, owner));
+    execution.recovery ??= unknownRecovery();
     if (!resultRef) return execution;
     const result = JSON.parse((await this.versions.readState(resultRef)).toString()) as ShellExecutionResult;
     if (execution.runnerId === "local") return { ...execution, result };
@@ -543,22 +585,45 @@ export class ShellExecutions {
 
   /** Return only after the Runner acknowledges acceptance (or an explicit unknown outcome). */
   async start(owner: ExecutionOwner, identity: { runnerId: string; workspaceId: string; turnId: string },
-    runner: () => RunnerClient, recordExecution: RecordExecution, context?: (id: string) => ShellExecutionContext, finalizeFailure?: ExecutionRecoveryHandlers["finalizeFailure"]): Promise<AgentShellExecution> {
+    runner: () => RunnerClient, recordExecution: RecordExecution, contextOrAttempt?: ((id: string) => ShellExecutionContext) | RecoveryAttempt,
+    finalizeFailure?: ExecutionRecoveryHandlers["finalizeFailure"], continuation?: RecoveryAttempt): Promise<AgentShellExecution> {
+    const context = typeof contextOrAttempt === "function" ? contextOrAttempt : undefined;
+    const recoveryAttempt = typeof contextOrAttempt === "function" ? continuation : contextOrAttempt;
+
     if (this.closed) throw new Error("Shell execution storage is closed");
+    if (recoveryAttempt) {
+      assertRecoveryContext(recoveryAttempt.context);
+      if (!/^[a-f0-9]{64}$/.test(recoveryAttempt.requestDigest)) throw new Error("INVALID_RECOVERY_REQUEST_DIGEST");
+      const previous = this.db.prepare("SELECT request_digest, execution FROM recovery_attempts WHERE session = ? AND agent = ? AND token = ?")
+        .get(owner.sessionId, owner.agentId, recoveryAttempt.context.attemptToken);
+      if (previous) {
+        if (previous.request_digest !== recoveryAttempt.requestDigest) throw new Error("RECOVERY_ATTEMPT_CONFLICT");
+        return this.get(String(previous.execution), owner); // including unknown: NEVER redispatch
+      }
+      const parent = this.record(recoveryAttempt.context.parentExecutionId, owner);
+      if (parent.runnerId !== identity.runnerId || parent.workspaceId !== identity.workspaceId) throw new Error("RECOVERY_TARGET_MISMATCH");
+      if (parent.state !== "failed" || parent.provenance !== "committed" || !parent.runnerVersionId
+        || parent.recovery?.capability !== "supported" || parent.recovery.manifestRef?.objectId !== recoveryAttempt.context.manifestDigest
+        || !parent.recovery.manifest?.continuation.points.some(point => point.id === recoveryAttempt.context.recoveryPointId)) {
+        throw new Error("ORIGINAL_NOT_RECOVERABLE");
+      }
+    }
     const execution: Record = { ...owner, ...identity, id: randomUUID(), state: "queued",
-      queuedAt: new Date().toISOString(), accepted: false, provenance: "pending", dispatchPhase: "prepared", finalization: "pending" };
+      queuedAt: new Date().toISOString(), accepted: false, provenance: "pending", dispatchPhase: "prepared", finalization: "pending",
+      ...(recoveryAttempt ? { recoveryContext: recoveryAttempt.context } : {}) };
     if (context) {
-      execution.recoveryContext = context(execution.id);
-      if (execution.recoveryContext.toolCallId) {
+      execution.originalExecutionContext = context(execution.id);
+      if (execution.originalExecutionContext.toolCallId) {
         // A replay of one logical tool call has the same ID even after API restart.
-        execution.id = `shell:${stableDigest({ ...owner, turnId: identity.turnId, toolCallId: execution.recoveryContext.toolCallId })}`;
-        execution.recoveryContext.executionId = execution.id;
+        execution.id = `shell:${stableDigest({ ...owner, turnId: identity.turnId, toolCallId: execution.originalExecutionContext.toolCallId })}`;
+        execution.originalExecutionContext.executionId = execution.id;
         const { id: _epochId, createdAt: _epochCreated, reason: _epochReason, memoryLostReason: _memoryReason,
-          ...permissionScope } = execution.recoveryContext.permissionEpoch;
-        execution.submissionDigest = stableDigest({ identity, context: { ...execution.recoveryContext, permissionEpoch: permissionScope } });
+          ...permissionScope } = execution.originalExecutionContext.permissionEpoch;
+        execution.submissionDigest = stableDigest({ identity, context: { ...execution.originalExecutionContext, permissionEpoch: permissionScope },
+          ...(recoveryAttempt ? { recoveryAttempt } : {}) });
         const existing = this.db.prepare("SELECT record FROM shell_executions WHERE id = ?").get(execution.id);
         if (existing) {
-          const original = JSON.parse(String(existing.record)) as Record;
+          const original = readRecord(String(existing.record));
           if (original.submissionDigest !== execution.submissionDigest || original.sessionId !== owner.sessionId || original.agentId !== owner.agentId)
             throw new RecoveryError("EXECUTION_ID_CONFLICT", "Logical submission identity was already used with a different request");
           return this.get(original.id, owner);
@@ -577,25 +642,39 @@ export class ShellExecutions {
       // inspected first and a replacement is never submitted automatically. When
       // the record also lacks a recovery context there is no auto-recovery path
       // at all, so the message explains that limit and how to proceed safely.
-      // snapshot() strips recoveryContext via publicRecord, so read the full
+      // snapshot() strips originalExecutionContext via publicRecord, so read the full
       // record here to distinguish a recoverable unknown from a legacy one.
       if (uncertain) {
         const row = this.db.prepare("SELECT record FROM shell_executions WHERE id = ? AND session = ?").get(uncertain.id, owner.sessionId);
-        const full = row ? JSON.parse(String(row.record)) as Record : undefined;
-        const message = full?.recoveryContext
+        const full = row ? readRecord(String(row.record)) : undefined;
+        const message = full?.originalExecutionContext
           ? `Execution ${uncertain.id} has an unconfirmed outcome. Inspect execution_status before starting more work in this workspace; no replacement was submitted.`
           : `Execution ${uncertain.id} has an unconfirmed outcome and no recovery context; it cannot be auto-recovered and keeps this workspace blocked. Inspect execution_status/execution_logs before continuing; no replacement was submitted. New work in a separate workspace is only safe when it shares no mutable resources or external side effects (such as the same external target or remote resource) with this unknown task — switching workspaces is not a generally safe way to re-run it.`;
         throw new RecoveryError("ORIGINAL_EXECUTION_UNCONFIRMED", message);
       }
     }
-    try { this.save(execution); } // intent precedes the only submission attempt
-    catch (error) {
+    this.db.exec("SAVEPOINT recovery_intent");
+    try {
+      this.save(execution); // intent and continuation token precede the only submission attempt
+      if (recoveryAttempt) this.db.prepare("INSERT INTO recovery_attempts VALUES (?, ?, ?, ?, ?)")
+        .run(owner.sessionId, owner.agentId, recoveryAttempt.context.attemptToken, recoveryAttempt.requestDigest, execution.id);
+      this.db.exec("RELEASE recovery_intent");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO recovery_intent; RELEASE recovery_intent");
+      if (recoveryAttempt) {
+        const existing = this.db.prepare("SELECT request_digest, execution FROM recovery_attempts WHERE session = ? AND agent = ? AND token = ?")
+          .get(owner.sessionId, owner.agentId, recoveryAttempt.context.attemptToken);
+        if (existing) {
+          if (existing.request_digest !== recoveryAttempt.requestDigest) throw new Error("RECOVERY_ATTEMPT_CONFLICT");
+          return this.get(String(existing.execution), owner);
+        }
+      }
       // Another API can win between the optimistic lookup and atomic insert/CAS.
       // Return that same intent, never schedule a second dispatch closure.
       if (execution.submissionDigest) {
         const row = this.db.prepare("SELECT record FROM shell_executions WHERE id = ?").get(execution.id);
         if (row) {
-          const original = JSON.parse(String(row.record)) as Record;
+          const original = readRecord(String(row.record));
           if (original.submissionDigest === execution.submissionDigest && original.sessionId === owner.sessionId && original.agentId === owner.agentId)
             return this.get(original.id, owner);
           throw new RecoveryError("EXECUTION_ID_CONFLICT", "Logical submission identity was already used with a different request");
@@ -612,7 +691,7 @@ export class ShellExecutions {
     const work = Promise.resolve().then(async () => {
       try {
         const result = await recordExecution(execution.id, async (request) => {
-          if (execution.recoveryContext && typeof runner().health === "function") {
+          if (execution.originalExecutionContext && typeof runner().health === "function") {
             const health = await runner().health();
             execution.expectedRunnerInstanceId = health.runnerInstanceId;
           }
@@ -637,12 +716,14 @@ export class ShellExecutions {
           // that do not duplicate it inside the result payload.
           return this.existingResult(execution, observed);
         }, () => observedStatus(observed));
+        execution.recovery = projectExecutionRecovery(observed?.recovery);
         execution.resultRef = await this.versions.put("agent-state", JSON.stringify(result), "application/json");
         execution.runnerVersionId = observed!.version!.digest;
         this.finish(execution, { state: observed!.state, provenance: "committed" });
       } catch (error) {
         // A lost submit response or failed provenance does not prove the command did not run.
         const recorded = error instanceof RecordedRunnerFailure;
+        execution.recovery = projectExecutionRecovery(observed?.recovery);
         if (observed?.version) execution.runnerVersionId = observed.version.digest;
         if (!recorded) {
           this.log.warn("shell_execution_unconfirmed", { ...correlation(execution), accepted: execution.accepted, stage,
@@ -713,6 +794,7 @@ export class ShellExecutions {
 
   /** Adopt the Runner's terminal record under the same rules as an uninterrupted observation. */
   private async settle(execution: Record, observed: ManagedExecution): Promise<void> {
+    execution.recovery = projectExecutionRecovery(observed.recovery);
     if (observed.state !== "unknown") this.assertTerminalEvidence(observed);
     if (observed.version) execution.runnerVersionId = observed.version.digest;
     if (observed.state !== "unknown" && observed.result && observed.version) {

@@ -43,6 +43,7 @@
 - [Project/Session Runner 继承](runner-inheritance.md) — Runner 选择、远端执行和继承语义。
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — allowlisted host workload。
 - [网络代理机制](network-proxy.md) — 出站代理解析和安全边界。
+- [长任务失败恢复](../reference/builtin-tools.md) — 可选证据、不可变检查点与显式授权的新尝试。
 - [内容寻址存储](cas.md) — CAS、版本对象和 workspace change detection。
 - [PDF worker](paper-worker.md) — PDF 抽取 worker 协议和限制。
 - [Web 前端](web-frontend.md) — Web host、事件映射和前端开发入口。
