@@ -3530,6 +3530,94 @@ body.is-resizing {
   flex: 1;
 }
 
+/* The 模型名称 combobox (ModelForm): an input plus our own dropdown, since a
+ * native datalist both filters itself by the input's value and paints its
+ * picker indicator low in the box. */
+.field-combo {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.field-combo .field-input {
+  flex: 1;
+  min-width: 0;
+  padding-right: 30px;
+}
+
+.field-combo-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #777;
+  cursor: pointer;
+}
+
+.field-combo-toggle:hover {
+  color: #191919;
+}
+
+.field-combo-caret {
+  display: block;
+  width: 0;
+  height: 0;
+  border: 4px solid transparent;
+  border-top-color: currentColor;
+}
+
+.field-combo-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.field-combo-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.field-combo-option.is-active {
+  background: #f2f4f7;
+}
+
+.field-combo-option.is-current {
+  font-weight: 600;
+}
+
+.field-combo-option-id {
+  overflow-wrap: anywhere;
+}
+
+.field-combo-option-name {
+  color: #777;
+  font-size: 12px;
+}
+
 .test-result {
   margin: 6px 0 14px;
   color: #8a5a00;
