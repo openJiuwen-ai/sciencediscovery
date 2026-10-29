@@ -100,14 +100,23 @@ contextBridge.exposeInMainWorld("sdShell", {
   /** Loading page: rerun the backend startup flow (slow/error states). */
   retryBackend: (): Promise<void> => ipcRenderer.invoke("sd-shell:retry-backend"),
   /** Receive JiuwenSwarm readiness/progress updates after the main UI
-   *  loads, so the app can disable chat until the cluster is actually ready. */
+   *  loads, so the app can disable chat until the cluster is actually
+   *  ready. Returns an unsubscribe function so an unmounted listener can
+   *  take its ipcRenderer listener back down. */
   onJiuwenState: (callback: (state: {
     ready: boolean;
     elapsed?: number;
     attempt?: number;
     message?: string;
-  }) => void): void => {
-    ipcRenderer.on("sd-shell:jiuwenswarm-state", (_event, value) => callback(value));
+  }) => void): (() => void) => {
+    const listener = (_event: unknown, value: {
+      ready: boolean;
+      elapsed?: number;
+      attempt?: number;
+      message?: string;
+    }) => callback(value);
+    ipcRenderer.on("sd-shell:jiuwenswarm-state", listener);
+    return () => ipcRenderer.removeListener("sd-shell:jiuwenswarm-state", listener);
   },
   /** Pull the current state once on mount — the
    *  first push races the renderer's listener registration and can be lost. */
