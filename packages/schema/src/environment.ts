@@ -547,6 +547,9 @@ export interface RunnerBlockedResult {
 export type ExecutionBlockDecision = { action: "retry" | "cancel" } | { action: "switch"; runnerId: string };
 
 export interface RunnerHealth {
+  runnerInstanceId?: string;
+  runnerBootId?: string;
+  capabilities?: { executionRecoveryVersion?: number };
   /** Absent on older Runners: unknown, not proof that execution is ready. */
   execution?: RunnerExecutionCapability;
   /** Always false: the runner no longer manages a cgroup v2 subtree. */

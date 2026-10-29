@@ -38,6 +38,8 @@ import type {
 
 import { appendBounded, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
+import { ExecutionManager } from "./execution-manager.js";
+import { RunnerReadiness } from "./readiness.js";
 import { EgressGatewayRegistry, MAX_UNIX_SOCKET_PATH_BYTES } from "./egress-gateway.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
@@ -796,7 +798,7 @@ test("managed Shell HTTP submission detaches, exposes incremental logs, queues w
   assert.equal(second.status, 202);
   assert.equal((await get("managed-second")).state, "queued");
   const denied = await fetch(`${origin}/shell-executions/managed-first?sessionId=another&agentId=main`, { headers });
-  assert.equal(denied.status, 400);
+  assert.equal(denied.status, 404);
   await fetch(`${origin}/shell-executions/managed-first/cancel?${owner}`, { method: "POST", headers });
   await waitFor(async () => (await get("managed-first")).state === "cancelled");
   await waitFor(async () => (await get("managed-second")).state === "completed");
@@ -805,7 +807,8 @@ test("managed Shell HTTP submission detaches, exposes incremental logs, queues w
   const replay = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
     agentId: "main", executionId: "managed-second", workspaceRoot, permissionEpoch: epoch(), code: "echo replay",
   }));
-  assert.equal(replay.status, 400);
+  assert.equal(replay.status, 409);
+  assert.equal((await replay.json() as { code: string }).code, "EXECUTION_ID_CONFLICT");
 });
 
 test("remote workspace executes signed Shell and Python without a local projects tree", async (context) => {
@@ -2171,6 +2174,86 @@ test("the runner socket is configured by environment like every other listener s
   }, "/tmp");
   assert.equal(socketConfig.socketPath, "/tmp/data/run/runner.sock");
   assert.equal(loadRunnerConfig({}, "/tmp").socketPath, undefined);
+});
+
+test("managed recovery HTTP contract returns original receipts, scoped conflicts and restart identity without launching a sandbox", async context => {
+  const { dataDir, workspaceRoot } = await workspaceFixture(context);
+  // This is the HTTP/ledger contract test, not sandbox or NPU acceptance.
+  context.mock.method(RunnerReadiness.prototype, "get", async () => ({
+    instanceId: "mock-readiness", checkedAt: new Date().toISOString(), sandbox: "bubblewrap",
+    dependencyAvailable: true, sandboxUsable: true, ready: true, reason: "ready",
+  }));
+  const submit = ExecutionManager.prototype.submit;
+  const close = ExecutionManager.prototype.close;
+  const managerShutdowns: Promise<void>[] = [];
+  context.mock.method(ExecutionManager.prototype, "close", function(this: ExecutionManager) {
+    const shutdown = close.call(this);
+    managerShutdowns.push(shutdown);
+    return shutdown;
+  });
+  let launches = 0;
+  context.mock.method(ExecutionManager.prototype, "submit", function(this: ExecutionManager, input: ShellExecutionRequest) {
+    return submit.call(this, input, async (_signal, log) => {
+      launches += 1;
+      log("stdout", Buffer.from("训练🧬\n"));
+      return {
+        executionId: input.executionId, environmentRevisionId: "test-revision", exitCode: 0, stdout: "训练🧬\n", stderr: "",
+        createdFiles: [], modifiedFiles: [], language: "shell", kernelMode: "ephemeral", kernelId: `ephemeral:${input.executionId}`,
+        cgroupMode: "none", sandbox: "bubblewrap", environmentVariables: {}, networkPolicy: "none", runnerVersion: "test",
+        workingDirectory: "/workspace", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      };
+    });
+  });
+  const server = createRunnerServer({ ...config(dataDir), npuBrokerEnabled: false });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>(done => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const health = await fetch(`${origin}/health`).then(response => response.json()) as RunnerHealth;
+  assert.equal(health.capabilities?.executionRecoveryVersion, 1);
+  assert.ok(health.runnerInstanceId);
+  assert.ok(health.runnerBootId);
+  const input = { agentId: "main", executionId: "cpu-http", workspaceRoot, permissionEpoch: epoch(), code: "mock command" };
+  const first = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", input));
+  assert.equal(first.status, 202);
+  const accepted = await first.json() as import("@sciencediscovery/schema").ManagedExecution;
+  assert.equal(accepted.receipt?.runnerInstanceId, health.runnerInstanceId);
+  const duplicate = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", input));
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json() as import("@sciencediscovery/schema").ManagedExecution).receipt?.requestDigest, accepted.receipt?.requestDigest);
+  for (const changed of [{ ...input, code: "changed" }, { ...input, agentId: "another-agent" }]) {
+    const conflict = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", changed));
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), { error: "Execution ID conflicts with an existing submission", code: "EXECUTION_ID_CONFLICT" });
+  }
+  const owner = new URLSearchParams({ sessionId: input.permissionEpoch.sessionId, agentId: input.agentId });
+  const headers = { authorization: "Bearer runner-test-token" };
+  let execution = accepted;
+  for (let poll = 0; poll < 100 && execution.state !== "completed"; poll++) {
+    await new Promise(done => setTimeout(done, 5));
+    execution = await fetch(`${origin}/shell-executions/cpu-http?${owner}`, { headers }).then(response => response.json()) as typeof execution;
+  }
+  assert.equal(execution.state, "completed");
+  assert.equal(launches, 1);
+  assert.equal(execution.evidence?.processTerminated, true);
+  const logs = await fetch(`${origin}/shell-executions/cpu-http/logs?${owner}`, { headers }).then(response => response.json());
+  assert.equal((logs as { chunks: { text: string }[] }).chunks.map(chunk => chunk.text).join(""), "训练🧬\n");
+  const unauthorizedOwner = await fetch(`${origin}/shell-executions/cpu-http?sessionId=other&agentId=main`, { headers });
+  assert.equal(unauthorizedOwner.status, 404);
+  assert.deepEqual(await unauthorizedOwner.json(), { error: "Execution not found for this Agent", code: "EXECUTION_NOT_FOUND" });
+  await new Promise<void>(done => server.close(() => done()));
+  await Promise.all(managerShutdowns); // HTTP close precedes the async execution/lease drain.
+  const restarted = createRunnerServer({ ...config(dataDir), npuBrokerEnabled: false });
+  await new Promise<void>(done => restarted.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>(done => restarted.close(() => done())));
+  const secondOrigin = `http://127.0.0.1:${(restarted.address() as AddressInfo).port}`;
+  const restartedHealth = await fetch(`${secondOrigin}/health`).then(response => response.json()) as RunnerHealth;
+  assert.equal(restartedHealth.runnerInstanceId, health.runnerInstanceId);
+  assert.notEqual(restartedHealth.runnerBootId, health.runnerBootId);
+  const replay = await fetch(`${secondOrigin}/shell-executions`, signedExecutionInit("runner-test-token", input));
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), execution);
+  assert.deepEqual(await fetch(`${secondOrigin}/shell-executions/cpu-http/logs?${owner}`, { headers }).then(response => response.json()), logs);
+  assert.equal(launches, 1);
 });
 
 test("health marks egress unavailable when the fallback socket directory cannot hold its socket", async (context) => {

@@ -35,10 +35,123 @@ import {
 } from "@sciencediscovery/schema";
 
 import { MemoryGraphClient, MemoryGraphSink } from "@sciencediscovery/memory";
-import { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import { prepareShellExecutionContext, ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import { committedWorkspaceSnapshot, VersionStore } from "@sciencediscovery/cas";
 import { SessionStore } from "./store.js";
+
+test("legacy managed no-result failure and cancellation settle provenance without replay", async context => {
+  for (const state of ["failed", "cancelled"] as const) {
+    const dataDir = resolve(process.cwd(), ".tmp", `legacy-managed-provenance-${process.pid}-${Date.now()}-${state}`);
+    const store = new SessionStore(dataDir);
+    context.after(async () => { await store.shellExecutions.close(); await rm(dataDir, { force: true, recursive: true }); });
+    store.setAvailableSkillIds([]);
+    await store.load();
+    const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+    const project = await store.createProject("Legacy managed failure");
+    const session = await store.createSession(project.id, "Failure", { modelId: model.id });
+    const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+    const owner = { sessionId: session.id, agentId: "main" };
+    const identity = { runnerId: "local", workspaceId: session.id, turnId: "original-turn" };
+    const recorder = new ProvenanceRecorder(dataDir, store);
+    let submissions = 0;
+    let adoptions = 0;
+    store.shellExecutions.setOutcomeAdopter(async ({ execution, observed, status }) => {
+      adoptions++;
+      await recorder.adoptShellOutcome({ ...owner, executionId: execution.id, permissionEpoch,
+        result: observed.result ?? {}, status, turnId: execution.turnId, runnerId: execution.runnerId });
+    });
+    const timestamp = new Date().toISOString();
+    const runner = {
+      health: async () => ({ sandbox: "bubblewrap" }),
+      startShellExecution: async (request: ShellExecutionRequest) => {
+        submissions++;
+        return { ...owner, id: request.executionId, state, queuedAt: timestamp, finishedAt: timestamp,
+          error: "Execution ended before process admission",
+          receipt: { runnerInstanceId: "original-ledger", runnerBootId: "boot", revision: 1, requestDigest: "original-request", acceptedAt: timestamp },
+          evidence: { runnerInstanceId: "original-ledger", runnerBootId: "boot", revision: 1,
+            processTerminated: true, terminationReason: "not_started" } };
+      },
+    } as unknown as RunnerClient;
+    // No recovery-context callback: retain the supported legacy managed path.
+    const job = await store.shellExecutions.start(owner, identity, () => runner,
+      (executionId, dispatch, completionStatus) => recorder.executeShell({ ...owner, ...identity,
+        code: "one command", permissionEpoch, explicitHandoff: true, workspaceRoot: store.workspacePath(session.id),
+        executionId, runnerClient: runner, dispatch, completionStatus }));
+    const completed = await store.shellExecutions.wait(job.id, owner, 30_000);
+    assert.equal(completed.state, state);
+    assert.equal(completed.provenance, "committed");
+    assert.deepEqual((await store.listExecutionRuns(session.id)).map(run => run.status), ["unconfirmed", state]);
+    await store.shellExecutions.reconcile(job.id, owner, undefined, () => runner);
+    const history = await store.listExecutionRuns(session.id);
+    assert.equal(history.length, 2);
+    assert.equal(new Set(history.map(run => run.id)).size, 1);
+    assert.equal(history[1]!.exitCode, null);
+    assert.equal(submissions, 1);
+    assert.equal(adoptions, 1);
+  }
+});
+
+test("managed lost ACK survives store recreation and adopts one same-ID provenance outcome", async context => {
+  for (const exitCode of [0, 1, 127]) {
+    const dataDir = resolve(process.cwd(), ".tmp", `managed-provenance-${process.pid}-${Date.now()}-${exitCode}`);
+    context.after(() => rm(dataDir, { force: true, recursive: true }));
+    const store = new SessionStore(dataDir);
+    store.setAvailableSkillIds([]);
+    await store.load();
+    const model = await store.createModel({ apiToken: "test", baseUrl: "https://models.example.test/v1", model: "test", name: "Test" });
+    const project = await store.createProject("Managed provenance recovery");
+    const session = await store.createSession(project.id, "Recovery", { modelId: model.id });
+    const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+    const owner = { sessionId: session.id, agentId: "main" };
+    const identity = { runnerId: "local", workspaceId: session.id, turnId: "original-turn" };
+    const original = { ...owner, ...identity, code: "one command", permissionEpoch, explicitHandoff: true,
+      workspaceRoot: store.workspacePath(session.id), toolCallId: "original-tool-call" };
+    const versions = new VersionStore(dataDir);
+    const version = await versions.put("agent-state", "committed workspace");
+    const timestamp = new Date().toISOString();
+    let launches = 0;
+    const runner = {
+      health: async () => ({ sandbox: "bubblewrap", runnerInstanceId: "original-ledger" }),
+      startShellExecution: async () => { launches++; throw new TypeError("lost acknowledgement"); },
+      getShellExecution: async (id: string) => ({
+        ...owner, id, state: "completed", queuedAt: timestamp, version,
+        receipt: { runnerInstanceId: "original-ledger", runnerBootId: "boot", revision: 2, requestDigest: "original-request", acceptedAt: timestamp },
+        evidence: { runnerInstanceId: "original-ledger", runnerBootId: "boot", revision: 2, processTerminated: true,
+          terminationReason: "exited", resultDigest: "immutable-result", workspaceVersionDigest: version.digest },
+        result: { executionId: id, exitCode, stdout: "original output", stderr: "", createdFiles: [], modifiedFiles: [],
+          environmentRevisionId: SYSTEM_SHELL_ENVIRONMENT_REVISION_ID, environmentVariables: {}, cgroupMode: "none",
+          kernelId: `ephemeral:${id}`, kernelMode: "ephemeral", language: "shell", networkPolicy: "none", runnerVersion: "test",
+          sandbox: "bubblewrap", workingDirectory: "/workspace", startedAt: timestamp, finishedAt: timestamp },
+      }),
+    } as unknown as RunnerClient;
+    const recorder = new ProvenanceRecorder(dataDir, store);
+    const job = await store.shellExecutions.start(owner, identity, () => runner,
+      (executionId, dispatch, completionStatus) => recorder.executeShell({ ...original, executionId, runnerClient: runner, dispatch, completionStatus }),
+      executionId => prepareShellExecutionContext({ ...original, executionId, runnerClient: runner }));
+    await store.shellExecutions.wait(job.id, owner, 1000);
+    assert.deepEqual((await store.listExecutionRuns(session.id)).map(run => run.status), ["unconfirmed"]);
+    await store.shellExecutions.close();
+    const restarted = new SessionStore(dataDir);
+    restarted.setAvailableSkillIds([]);
+    await restarted.load();
+    context.after(() => restarted.shellExecutions.close());
+    const restoredRecorder = new ProvenanceRecorder(dataDir, restarted);
+    const handlers = { runner: () => runner,
+      finalize: restoredRecorder.commitExistingShellExecutionResult.bind(restoredRecorder) };
+    const recovered = await restarted.shellExecutions.reconcile(job.id, owner, handlers);
+    assert.equal(recovered.provenance, "committed");
+    assert.equal(recovered.id, job.id);
+    assert.equal(recovered.error, undefined);
+    assert.equal(recovered.result?.stdout, "original output");
+    assert.equal(recovered.result?.exitCode, exitCode);
+    await restarted.shellExecutions.reconcile(job.id, owner, handlers);
+    const history = await restarted.listExecutionRuns(session.id);
+    assert.deepEqual(history.map(run => run.status), ["unconfirmed", exitCode === 0 ? "succeeded" : "failed"]);
+    assert.equal(new Set(history.map(run => run.id)).size, 1);
+    assert.equal(launches, 1);
+  }
+});
 
 test("multi-step persistent R executions create separate runs and an artifact derivation", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `r-provenance-${process.pid}-${Date.now()}`);
@@ -177,13 +290,14 @@ test("multi-step persistent R executions create separate runs and an artifact de
   assert.equal(shellRun.tool, "run_shell");
   assert.equal(await recorder.cas.verify(revision.snapshot.hash), true);
   assert.deepEqual(store.listEnvironments(), [localEnvironment], "remote catalog must not replace local environments");
+  const verifiedRuns = await store.listExecutionRuns(session.id);
   runnerClient.environmentSnapshot = async () => Buffer.from("corrupt snapshot");
   await assert.rejects(recorder.executeShell({
     agentId: "main", code: "Rscript analysis.R", environmentId: environment.id, cwd: "analysis",
     permissionEpoch, runnerClient, sessionId: session.id, turnId: "turn-bad-snapshot", workspaceRoot,
   }), /snapshot/i);
-  assert.equal((await store.listExecutionRuns(session.id)).at(-1)?.turnId, "turn-bad-snapshot",
-    "completed execution must still be recorded when environment snapshot synchronization fails");
+  assert.deepEqual(await store.listExecutionRuns(session.id), verifiedRuns,
+    "unverified environment snapshots must not commit successful shell provenance");
 });
 
 for (const direct of [false, true]) {

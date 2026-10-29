@@ -158,7 +158,16 @@ test("remote direct Shell/Python retains durable output, workspace version and e
   assert.equal(await readFile(resolve(f.remoteRoot, "result.txt"), "utf8"), "hello");
   await assert.rejects(readFile(resolve(f.workspaceRoot, "result.txt")), { code: "ENOENT" });
   assert.match((await f.client.shellExecutionLogs(execution.id, f.owner)).chunks.map(c => c.text).join(""), /42/);
-  await assert.rejects(f.client.startShellExecution(f.request), /already been used/);
+  // A lost submit response may safely be retried with the same request: the
+  // existing durable outcome is returned, not a second direct execution.
+  await writeFile(resolve(f.remoteRoot, "result.txt"), "after-completion");
+  const repeated = await f.client.startShellExecution(f.request);
+  assert.deepEqual(repeated, execution);
+  assert.equal(await readFile(resolve(f.remoteRoot, "result.txt"), "utf8"), "after-completion");
+  // Identity reuse with a different command must still fail closed.
+  await assert.rejects(f.client.startShellExecution({ ...f.request, code: "printf changed > result.txt" }), /Execution ID conflicts with an existing submission/);
+  assert.deepEqual(await f.client.getShellExecution(execution.id, f.owner), execution);
+  assert.equal(await readFile(resolve(f.remoteRoot, "result.txt"), "utf8"), "after-completion");
 });
 
 test("ready sandbox accepts a separately authorized direct HTTP submission", async t => {

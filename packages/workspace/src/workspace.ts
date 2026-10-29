@@ -1532,6 +1532,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             content: [{ type: "text", text: JSON.stringify({
               ...execution,
               ...(pending ? { instruction: "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it." } : {}),
+              ...(execution.state === "unknown" ? { instruction: "Original execution outcome is unconfirmed. Use execution_status to re-synchronize the same ID and execution_logs for retained output. Do not create a replacement or resume from a checkpoint while its process state is unknown." } : {}),
             }) }],
             details: execution,
           };
@@ -1597,7 +1598,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     });
     const statusTool: AgentTool<typeof statusParameters> = {
       name: "execution_status", label: "Execution status",
-      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Inspecting an unknown execution by execution_id asks its Runner for that same execution's outcome; never replay it.",
+      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Inspection re-synchronizes the original Runner execution when recovery context is available. Read observation.status/lastError and finalization separately from process state. Unknown is not proof of failure: never replay it.",
       parameters: statusParameters,
       execute: async (_id, params, signal) => {
         if (params.wait_ms !== undefined && !params.execution_id) throw new Error("wait_ms requires execution_id");

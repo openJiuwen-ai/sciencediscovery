@@ -563,6 +563,17 @@ export async function initializePlatformServices(
     apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });
     console.warn("MCP catalog was unavailable during API startup:", error);
   });
+  store.shellExecutions.configureRecovery({
+    runner: (execution) => {
+      try {
+        store.assertSessionWritable(execution.sessionId);
+        store.assertSessionAllowsRunner(execution.sessionId, execution.runnerId);
+      } catch { throw Object.assign(new Error("Execution observation is no longer authorized"), { statusCode: 403 }); }
+      return execution.runnerId === "local" ? runnerClient : remoteCompute.runnerClient(execution.runnerId);
+    },
+    finalize: (context, result, runner, status) => provenanceRecorder.commitExistingShellExecutionResult(context, result, runner, status),
+    finalizeFailure: (context, failure) => provenanceRecorder.commitExistingShellExecutionFailure(context, failure),
+  });
   await initializeComponent("artifact_recovery", () => artifactManager.resumeInterrupted());
   await initializeComponent("run_recovery", () => recoverSessionRuns(store, memoryGraphClient));
   // A run left "running" by a previous process is never going to finish: the
