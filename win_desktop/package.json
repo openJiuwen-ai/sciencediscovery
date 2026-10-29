@@ -1,6 +1,6 @@
 {
   "name": "sd-shell",
-  "version": "0.3.1",
+  "version": "0.3.0",
   "private": true,
   "author": "ScienceDiscovery",
   "description": "ScienceDiscovery Windows desktop shell (Electron). Loads the SD web UI, injects the local access token, owns the backend stack lifecycle.",
