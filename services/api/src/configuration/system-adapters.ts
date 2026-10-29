@@ -98,16 +98,13 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
         );
       } else {
         const current = normalizeIdeaTreeSettings(input, currentIdeaTree(snapshot));
-        message = "Deployment-wide. A later idea-tree invocation reads these limits. Prompts, assessor text, weights, template, and maxTokens stay in Settings. An idea-tree run already in progress keeps the settings it started with.";
+        message = "Deployment-wide. A later idea-tree invocation reads these limits. Template and exploration intensity choose research budgets and assessor definitions. An idea-tree run already in progress keeps the settings it started with.";
         fields.push(
           enumField("explorationIntensity", "Exploration intensity", intensities, current.explorationIntensity),
           enumField("scoreDirection", "Score direction", directions, current.scoreDirection),
-          numberField("maxRounds", "Maximum rounds", current.maxRounds ?? 3, "Integer from 1 to 100."),
-          numberField("candidatesPerRound", "Candidates per round", current.candidatesPerRound ?? 3, "Integer from 1 to 20."),
           numberField("maxTokensPerCall", "Tokens per call", current.maxTokensPerCall ?? 32768, "Integer from 256 to 32768."),
           numberField("maxDepth", "Maximum depth", current.maxDepth, "Integer from 1 to 20."),
           numberField("maxNodes", "Maximum nodes", current.maxNodes, "Integer from 2 to 10000."),
-          numberField("maxSearchRounds", "Maximum search rounds", current.maxSearchRounds, "Integer from 1 to 10000."),
         );
       }
       const current = id === "timeouts.configure" ? currentTimeouts(snapshot) : id === "quotas.configure" ? currentQuotas(snapshot) : currentIdeaTree(snapshot);

@@ -2448,8 +2448,7 @@ export class SessionStore {
 
   /** Persist an Idea Tree settings update. Each field is independent — only
    *  the keys present in the payload move. The normalizer validates numeric
-   *  ranges and the assessor weight sum (enforced only when all three weights
-   *  are provided together). */
+   *  ranges and rejects template-owned fields. */
   async updateIdeaTreeSettings(input: UpdateIdeaTreeSettingsRequest): Promise<IdeaTreeSettings> {
     const next = normalizeIdeaTreeSettings(input, this.catalog.ideaTreeSettings);
     this.catalog.ideaTreeSettings = next;

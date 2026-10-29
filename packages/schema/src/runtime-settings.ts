@@ -286,28 +286,6 @@ export interface UpdateMemoryGraphSettingsRequest {
   neo4jPassword?: string | null;
 }
 
-/**
- * Assessor 子维度定义。每个 Assessor 评估四个子维度，管理员可覆盖维度名称和评分描述。
- * 空值即默认：不填则使用 fixture 的默认维度 d1-d4。
- */
-export interface IdeaTreeAssessorDimension {
-  name: string;
-  description?: string;
-}
-
-/**
- * 单个 Assessor 的配置。三个 Assessor 分别对应 activity / stability / sustainability。
- * 权重可选，三个权重必须求和为 1.0；不填则使用默认 0.35/0.35/0.30。
- */
-export interface IdeaTreeAssessorConfig {
-  /** 覆盖该 Assessor 的 system prompt。空值使用 workflow skill 默认。 */
-  systemPrompt?: string;
-  /** 覆盖该 Assessor 的评分标准。空值使用默认维度。支持直接输入或上传文件内容。 */
-  scoringCriteria?: string;
-  /** 该 Assessor 的权重。三个权重必须求和为 1.0。 */
-  weight?: number;
-}
-
 /** Idea Tree stages that can think at their own effort; `assess` covers every assessor of the template. */
 export const IDEA_TREE_THINKING_ROLES = ["ideate", "design", "assess", "aggregate", "propagate"] as const;
 
@@ -330,24 +308,16 @@ export type IdeaTreeRoleThinkingEfforts = Partial<Record<IdeaTreeThinkingRole, M
 export interface IdeaTreeSettings {
   templateId: "scientific-hypothesis-general/v1" | "water-treatment-materials/v1";
   explorationIntensity: "quick" | "standard" | "deep";
-  maxRounds?: number;
-  candidatesPerRound?: number;
   maxTokens?: number | null;
   maxTokensPerCall?: number;
   /** 建树默认参数 */
   maxDepth: number;
   maxNodes: number;
-  maxSearchRounds: number;
   /** 评分方向 */
   scoreDirection: "maximize" | "minimize";
 
   /** Design 阶段（Creative Designer）system prompt 覆盖 */
   designSystemPrompt?: string;
-
-  /** 三个 Assessor 的配置 */
-  assessorActivity: IdeaTreeAssessorConfig;
-  assessorStability: IdeaTreeAssessorConfig;
-  assessorSustainability: IdeaTreeAssessorConfig;
 
   /** Aggregator 的 system prompt 覆盖 */
   aggregatorSystemPrompt?: string;
@@ -362,35 +332,23 @@ export interface IdeaTreeSettings {
 export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
   templateId: "scientific-hypothesis-general/v1",
   explorationIntensity: "standard",
-  maxRounds: 3,
-  candidatesPerRound: 3,
   maxTokens: null,
   maxTokensPerCall: 32768,
   maxDepth: 5,
   maxNodes: 100,
-  maxSearchRounds: 10,
   scoreDirection: "maximize",
-  assessorActivity: {},
-  assessorStability: {},
-  assessorSustainability: {},
 };
 
 /** Idea Tree 设置返回给前端的视图 */
 export interface IdeaTreeSettingsDetails {
   templateId: "scientific-hypothesis-general/v1" | "water-treatment-materials/v1";
   explorationIntensity: "quick" | "standard" | "deep";
-  maxRounds?: number;
-  candidatesPerRound?: number;
   maxTokens?: number | null;
   maxTokensPerCall?: number;
   maxDepth: number;
   maxNodes: number;
-  maxSearchRounds: number;
   scoreDirection: "maximize" | "minimize";
   designSystemPrompt?: string;
-  assessorActivity: IdeaTreeAssessorConfig;
-  assessorStability: IdeaTreeAssessorConfig;
-  assessorSustainability: IdeaTreeAssessorConfig;
   aggregatorSystemPrompt?: string;
   propagateInsightSystemPrompt?: string;
   roleThinkingEfforts?: IdeaTreeRoleThinkingEfforts;
@@ -400,18 +358,12 @@ export interface IdeaTreeSettingsDetails {
 export interface UpdateIdeaTreeSettingsRequest {
   templateId?: "scientific-hypothesis-general/v1" | "water-treatment-materials/v1";
   explorationIntensity?: "quick" | "standard" | "deep";
-  maxRounds?: number;
-  candidatesPerRound?: number;
   maxTokens?: number | null;
   maxTokensPerCall?: number;
   maxDepth?: number;
   maxNodes?: number;
-  maxSearchRounds?: number;
   scoreDirection?: "maximize" | "minimize";
   designSystemPrompt?: string | null;
-  assessorActivity?: IdeaTreeAssessorConfig;
-  assessorStability?: IdeaTreeAssessorConfig;
-  assessorSustainability?: IdeaTreeAssessorConfig;
   aggregatorSystemPrompt?: string | null;
   propagateInsightSystemPrompt?: string | null;
   /** Replaces the whole per-stage map; `null` or `{}` returns every stage to inherit. */
