@@ -110,6 +110,31 @@ for (const name of VENV_NAMES) {
   }
 }
 
+// Every bundled venv must share ONE interpreter: assemble replaces each
+// launcher with the single bundled base interpreter (gateway's home) and
+// first-run bootstrap points every pyvenv.cfg `home` at it. A venv
+// provisioned on another minor (paper drifted to 3.11 once) ships
+// wrong-ABI compiled extensions and dies off-machine (SRE module
+// mismatch / DLL load failure). Gate on pyvenv.cfg version_info.
+{
+  const venvPython = (venvDir) =>
+    /^version_info\s*=\s*(\d+\.\d+)/m.exec(readFileSync(join(venvDir, "pyvenv.cfg"), "utf8"))?.[1];
+  const bundled = [
+    ...VENV_NAMES.map((name) => ({ label: `envs/${name}`, dir: join(data, "envs", name) })),
+    { label: "jiuwenswarm", dir: join(data, "jiuwenswarm", "src", ".venv") },
+  ];
+  const base = venvPython(join(data, "envs", "gateway"));
+  for (const { label, dir } of bundled) {
+    const v = venvPython(dir);
+    if (v !== base) {
+      fail(
+        `venv ${label} is Python ${v} but the bundled interpreter is ${base}. ` +
+        `Re-provision it with 'uv sync --python ${base}' (or add a .python-version), then rebuild.`,
+      );
+    }
+  }
+}
+
 say("sanity checks passed");
 
 // ---------------------------------------------------------------------------
