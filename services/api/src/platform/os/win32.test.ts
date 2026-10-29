@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:windows"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:windows", "arch:amd64"] });
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
