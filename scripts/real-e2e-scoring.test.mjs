@@ -67,6 +67,12 @@ test("Biomni and PUCT judge retries preserve evidence and scoring contracts", ()
   });
 });
 
+test("Biomni local clarified rubric registry pins da-13-3 without touching official", () => {
+  execFileSync(process.env.SCIENCE_TEST_PYTHON ?? "python3", ["-m", "unittest", "discover", "-s", "test/benchmarks/biomnibench-da", "-p", "test_local_rubrics.py"], {
+    cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 30_000, stdio: "pipe",
+  });
+});
+
 test("Biomni offline repeat grading preserves all eight inputs and reports criterion noise", () => {
   execFileSync(process.env.SCIENCE_TEST_PYTHON ?? "python3", ["-m", "unittest", "discover", "-s", "test/benchmarks/biomnibench-da", "-p", "test_repeat_grade.py"], {
     cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 30_000, stdio: "pipe",

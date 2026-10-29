@@ -148,7 +148,7 @@ settings snapshot must include the Skill ID.
 This fidelity boundary applies to the **official baseline**. Any local clarified
 rubric/checklist must be a separate file with its own version and pin; it must
 never edit the upstream task or rubric in place or be appended to the official
-research prompt. A local-variant score is for regression tracking only.
+research prompt. A local-variant score is for regression tracking only. Registered pins live in `local-rubrics.json`; the first pin is `da-13-3` `local-rubric-v1` (criteria 4 and 5 only; see `issue-346-measurement.md`).
 
 Each task appends this parameter block before the platform delivery appendix:
 
@@ -177,7 +177,7 @@ including using its available scientific tools.
 | Metric | Definition |
 | --- | --- |
 | Official score | Original pinned rubric, every criterion scored and summed by the local adapter, bounded to 0–100; the only score used in gates and release figures |
-| Local-variant score | Separately identified clarified rubric, informational only; unavailable until a local variant is registered and evaluated |
+| Local-variant score | Separately identified clarified rubric, informational only; `da-13-3` registers `local-rubric-v1` (criteria 4/5 clarifications for #346); unavailable/`—` for cases without a registry pin |
 | Tool calls | Unique tool-call IDs per Agent run, including main and subagent streams; failed attempts count |
 | Tool rounds | Distinct `(agentId, agentRunId, turn)` containing a tool call; parallel calls in one turn count as one round |
 | Memory | Peak sampled sum of RSS for this isolated local worker and descendants, sampled every second during generation |

@@ -47,4 +47,20 @@ Not the original eight historical pairs. No research rerun.
 - **da-13-3 criterion 6** was stable A/A/A on this sample — do not rewrite from this measurement alone.
 - **da-14-1** showed zero judge noise on a perfect (100) answer; the original 21-column / criteria 1–2 ambiguity remains a task/rubric clarity debt for incomplete answers, not demonstrated as same-input grade jitter here.
 
-Official upstream rubrics stay unchanged. Local clarified rubric files are still outstanding follow-through on Draft PR #689.
+Official upstream rubrics stay unchanged.
+
+
+## Local clarified rubric (local-rubric-v1)
+
+Yi authorized rewriting **da-13-3 criteria #4 and #5** as a separately pinned local variant after Manual-trace measurement
+(40819738668 + 40865906295): official same-input grades flipped A/B on #4 and #5 because the official A-level checklists
+require specific adipose-deposition / "body composition drives remodeling" slogans, while the Manual answer used a
+treatment-exposure collinearity / correlation≠causation framing.
+
+- File: `local-rubrics/da-13-3.local-rubric-v1.txt`
+- Registry: `local-rubrics.json` (channel `local-variant`, version `local-rubric-v1`)
+- Official upstream rubric OID `b54c2480…` unchanged; gates/release still use official only
+- Local A levels accept either the official narrative **or** a substantive alternative (collinearity / non-causal framing)
+  when direction, leptin/adipokine substance, overlap explanation (#4), and GAHT context + limitations (#5) are present
+- da-13-3 criterion #6 and da-14-1 were **not** rewritten from this measurement ( #6 stable here; da-14-1 perfect/stable on this sample)
+- Residual: re-run offline local-variant repeat-grade on the Manual fixtures inside CI `nightly-ci-ds` to quantify remaining noise; Draft PR stays unmerged until maintainers accept

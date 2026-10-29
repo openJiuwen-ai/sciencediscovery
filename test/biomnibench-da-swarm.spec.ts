@@ -166,6 +166,25 @@ for (const sample of cases) {
           judge_tokens: tokens.total, judge_input_tokens: tokens.input, judge_output_tokens: tokens.output,
           total_tokens: metrics.measurements.generation_tokens + tokens.total });
         if (!tokens.complete) throw new Error("UNREPORTED_JUDGE_TOKENS");
+        // Optional non-gating local clarified rubric (#346). Failures here must not sink the official gate.
+        try {
+          const localRegistry = JSON.parse(await readFile(join(scripts, "local-rubrics.json"), "utf8"));
+          const variant = (localRegistry.variants || []).find((entry: { case_id?: string }) => entry.case_id === sample.id);
+          if (variant?.path) {
+            await execute(python, [join(scripts, "judge.py"), "--case", sample.id, "--rubric", join(scripts, variant.path),
+              "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
+              "--output", testInfo.outputPath("quality-scorecard.local.json")], { timeout: evaluationBudget });
+            metrics.local_evaluation = {
+              ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.local.json"), "utf8")),
+              gating: false,
+            };
+          }
+        } catch (localError) {
+          metrics.local_evaluation = {
+            status: "error", score: null, gating: false,
+            error: localError instanceof Error ? localError.message : String(localError),
+          };
+        }
         validateMetrics(metrics, entry, plan);
         completed = true;
       });
