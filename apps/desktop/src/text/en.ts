@@ -118,6 +118,15 @@ export const EN: Text = {
       ? "Files go into this session's workspace, where the agent can read them. You can also drag files onto the window."
       : `Files go into this session's workspace, where the agent can read them. A single file may be up to ${limit}. You can also drag files onto the window.`,
     attachArchived: "This session is archived and cannot be written to. Restore it before uploading.",
+    /** Composer placeholder while the JiuwenSwarm cluster starts. */
+    jwBlocked: "The agent cluster is starting. Chat unlocks when it is ready…",
+  },
+
+  /** The bottom-right banner while the JiuwenSwarm cluster is still starting
+   *  (the shell bridge pushes progress; this is the idle wording). */
+  jiuwen: {
+    starting: "Agent cluster starting",
+    preparing: "Initializing…",
   },
 
   upload: {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import type { ApiClient } from "../api/client.js";
 import {
@@ -90,6 +90,172 @@ const CUSTOM_DISCOVERY: Record<string, NonNullable<CreateModelProviderRequest["m
 };
 
 const CUSTOM = "__custom__";
+
+interface ModelComboProps {
+  /** The busy channel of the surrounding ModelForm ("fetch"/"test"/"save"). */
+  disabled: boolean;
+  invalidate: () => void;
+  listing: ProviderModelEntry[];
+  onModelChange: (next: string) => void;
+  placeholder: string;
+  value: string;
+}
+
+/**
+ * The 模型名称 field: one input that both carries a hand-typed value and
+ * offers the fetched listing through a dropdown of our own. It replaced a
+ * native <datalist>, whose two traits could not be fixed in place: it filters
+ * the suggestions by the input's current value, so after picking GLM-5.2 the
+ * dropdown only ever offered GLM-5.2 again (users could not switch models),
+ * and its picker indicator sits low in the box. Opening this dropdown always
+ * shows the whole listing (typing filters only while typing), the caret is
+ * centered by our own CSS, and with no listing fetched it degrades to a plain
+ * input for gateways without a /models endpoint.
+ */
+function ModelComboBox({
+  disabled,
+  invalidate,
+  listing,
+  onModelChange,
+  placeholder,
+  value,
+}: ModelComboProps) {
+  const [open, setOpen] = useState(false);
+  /** What the dropdown filters on. Reset on every open, so the freshly opened
+   * menu lists everything regardless of what the input already holds; only
+   * typing after the open narrows it. */
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const menuRef = useRef<HTMLUListElement | null>(null);
+
+  const needle = query.trim().toLowerCase();
+  const options = open
+    ? needle === ""
+      ? listing
+      : listing.filter(
+          (entry) =>
+            entry.id.toLowerCase().includes(needle) ||
+            (entry.displayName ?? "").toLowerCase().includes(needle),
+        )
+    : [];
+
+  useEffect(() => {
+    if (!open || activeIndex < 0 || !menuRef.current) return;
+    menuRef.current.children[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+
+  const applyChoice = (id: string) => {
+    onModelChange(id);
+    invalidate();
+    setOpen(false);
+    setQuery("");
+    setActiveIndex(-1);
+  };
+
+  const closeMenu = () => {
+    setOpen(false);
+    setQuery("");
+    setActiveIndex(-1);
+  };
+
+  const openMenu = () => {
+    setQuery("");
+    setActiveIndex(-1);
+    setOpen(true);
+    // Selecting the current value lets a keystroke replace it at once, while
+    // the dropdown itself still shows the unfiltered listing (see `query`).
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (!open || options.length === 0) {
+      if (event.key === "ArrowDown" && listing.length > 0) {
+        event.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(index + 1, options.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter") {
+      const entry = activeIndex >= 0 ? options[activeIndex] : undefined;
+      if (entry) {
+        event.preventDefault();
+        applyChoice(entry.id);
+      } else {
+        closeMenu();
+      }
+    } else if (event.key === "Escape") {
+      // Close only the dropdown here; the surrounding dialog (settings modal,
+      // wizard step) must not see this Escape.
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+    }
+  };
+
+  return (
+    <span className="field-combo">
+      <input
+        aria-autocomplete="list"
+        aria-expanded={open}
+        className="field-input"
+        disabled={disabled}
+        onBlur={closeMenu}
+        onChange={(event) => {
+          onModelChange(event.target.value);
+          setQuery(event.target.value);
+          invalidate();
+        }}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        ref={inputRef}
+        role="combobox"
+        spellCheck={false}
+        value={value}
+      />
+      {listing.length > 0 ? (
+        <button
+          aria-expanded={open}
+          className="field-combo-toggle"
+          disabled={disabled}
+          onClick={() => (open ? closeMenu() : openMenu())}
+          type="button"
+        >
+          <span aria-hidden="true" className="field-combo-caret" />
+        </button>
+      ) : null}
+      {open && options.length > 0 ? (
+        <ul className="field-combo-menu" ref={menuRef} role="listbox">
+          {options.map((entry, index) => (
+            <li
+              aria-selected={index === activeIndex}
+              className={`field-combo-option${index === activeIndex ? " is-active" : ""}${
+                entry.id === value ? " is-current" : ""
+              }`}
+              key={entry.id}
+              onClick={() => applyChoice(entry.id)}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              role="option"
+            >
+              <span className="field-combo-option-id">{entry.id}</span>
+              {entry.displayName && entry.displayName !== entry.id ? (
+                <small className="field-combo-option-name">{entry.displayName}</small>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </span>
+  );
+}
 
 function failureMessage(test: ModelConnectivityTestResult): string {
   if (test.message.trim() !== "") return test.message;
@@ -413,34 +579,19 @@ export function ModelForm({
 
       <div className="field">
         <span className="field-label">{TEXT.wizard.provider.model}</span>
-        {listing.length > 0 ? (
-          <select
-            className="field-select"
-            disabled={busy !== ""}
-            onChange={(event) => {
-              setModelName(event.target.value);
-              invalidate();
-            }}
-            value={listing.some((entry) => entry.id === modelName) ? modelName : ""}
-          >
-            <option value="">{TEXT.wizard.provider.selectPlaceholder}</option>
-            {listing.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.displayName ?? entry.id}
-              </option>
-            ))}
-          </select>
-        ) : null}
+        {/* This field used to render a select BESIDE the hand-typed input once
+         * the listing arrived, which read as two overlapping pickers for the
+         * same value. The native datalist that replaced it filtered its own
+         * suggestions by the input's value, so after one pick the dropdown
+         * could not offer anything else — see ModelComboBox for what took
+         * over. */}
         <div className="field-row is-action">
-          <input
-            className="field-input"
+          <ModelComboBox
             disabled={busy !== ""}
-            onChange={(event) => {
-              setModelName(event.target.value);
-              invalidate();
-            }}
+            invalidate={invalidate}
+            listing={listing}
+            onModelChange={setModelName}
             placeholder={TEXT.wizard.provider.modelPlaceholder}
-            spellCheck={false}
             value={modelName}
           />
           <button
