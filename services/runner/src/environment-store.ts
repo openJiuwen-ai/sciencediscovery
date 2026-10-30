@@ -455,6 +455,7 @@ export class EnvironmentStore {
         this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
         component = "conda";
         this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base", { started: true });
+        await this.upgradeStarterPackages("python");
         await this.validateStarter("python");
         this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
         this.updateSetup("ready", "complete", "Python base environment is ready", { completed: true });
@@ -518,6 +519,7 @@ export class EnvironmentStore {
       }
       this.updateSetup("installing", "verifying-python-base", "Verifying the managed Python base environment");
       this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base environment", { started: true });
+      await this.upgradeStarterPackages("python");
       await this.validateStarter("python");
       this.initialized = true;
       this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
@@ -1111,6 +1113,45 @@ export class EnvironmentStore {
     const runtime = this.resolveRuntimeUnchecked(undefined, language);
     await access(runtime.interpreterPath, constants.X_OK);
     await this.snapshotBytes(runtime.revision.id);
+  }
+
+  /** Bring a persisted starter forward when the product's required package
+   * contract grows. The prefix is updated in place, while the new inventory is
+   * recorded as a distinct audit revision just like an ordinary task update. */
+  private async upgradeStarterPackages(language: ScientificLanguage): Promise<void> {
+    const environment = this.requiredEnvironment(`starter-${language}`);
+    const previousRevision = this.currentRevision(environment.id);
+    const installedNames = new Set(previousRevision.packages
+      .filter((value) => !value.includes(":"))
+      .map((value) => value.split(/[<>=!~]/, 1)[0]!.toLowerCase()));
+    const missing = starterPackages(language).filter((specification) => {
+      const name = specification.split(/[<>=!~]/, 1)[0]!.toLowerCase();
+      return !installedNames.has(name);
+    });
+    if (!missing.length) return;
+
+    const revisionId = `rev-${randomUUID()}`;
+    const prefix = this.revisionPath(environment.id, environment.runtimeRevisionId ?? previousRevision.id);
+    await this.beginUpdate(environment);
+    try {
+      await this.runProvisioner([
+        "install", "--yes", ...this.offlineArguments(), "--strict-channel-priority", "--override-channels", "--prefix", prefix,
+        ...this.config.allowedChannels.flatMap((channel) => ["--channel", channel]),
+        ...missing,
+      ], `upgrade-${environment.id}-${revisionId}`);
+      const revision = await this.recordRevision(
+        environment.id, revisionId, language, prefix, this.config.allowedChannels,
+        missing.map((specification) => `runner:starter-upgrade:${specification}`),
+      );
+      environment.currentRevisionId = revision.id;
+      environment.status = "ready";
+      delete environment.error;
+      environment.updatedAt = new Date().toISOString();
+      await this.saveCatalog();
+    } catch (error) {
+      await this.failUpdate(environment, previousRevision.id);
+      throw withPackageInstallGuidance(error);
+    }
   }
 
   private updateSetup(
