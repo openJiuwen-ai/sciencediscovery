@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ScienceDiscovery — 初始设置</title>
+<style>
+  /* The shell's data-directory screen in the SPA wizard's
+     split-screen language (tokens/layout ported from apps/desktop wizard.css,
+     so the first run reads as ONE flow: this page → loading page → SPA wizard).
+     The form keeps the shell's real semantics — this IS the control that fixes
+     the live data directory, unlike the SPA's record-only workspace step. */
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .wizard-page {
+    --wizard-ink: #191919;
+    --wizard-muted: #808080;
+    --wizard-line: #c2c2c2;
+    --wizard-hairline: #f0f0f0;
+    --wizard-ok: #01802b;
+    --wizard-ok-bg: #d5f2dc;
+    --wizard-err: #bf0a1c;
+    --wizard-err-bg: #fce3e0;
+    --wizard-warn: #b45309;
+    --wizard-info: #0f5ed4;
+    --wizard-info-bg: #f0f7ff;
+    position: fixed; inset: 0; z-index: 400;
+    display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 37vw, 710px);
+    height: 100vh; overflow: hidden;
+    background: #fff; color: var(--wizard-ink);
+    font-family: "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  }
+  .wizard-pane { display: flex; flex-direction: column; min-width: 0; height: 100vh; background: #fff; }
+  .wizard-brand { flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 40px clamp(32px, 6.25vw, 120px) 0; }
+  .wizard-brand-mark {
+    width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 7px; background: linear-gradient(135deg, #449aff 0%, #1476ff 52%, #3589ff 100%); color: #fff;
+  }
+  .wizard-brand-mark svg { width: 18px; height: 18px; }
+  .wizard-brand-name { color: var(--wizard-ink); font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: .1px; }
+  .wizard-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 clamp(32px, 6.25vw, 120px); }
+  .wizard-content { width: 100%; max-width: 544px; padding-top: clamp(72px, 12.2vh, 132px); padding-bottom: 64px; }
+  .wizard-progress { width: 120px; height: 4px; margin-bottom: 32px; border-radius: 2px; background: #c4c4c4; overflow: hidden; }
+  .wizard-progress > span { display: block; width: 100%; height: 100%; border-radius: 2px; background: var(--wizard-ink); }
+  .wizard-content h1 { margin: 0 0 16px; color: var(--wizard-ink); font-size: 32px; line-height: 48px; font-weight: 600; letter-spacing: 0; }
+  .wizard-sub { margin: 0; color: var(--wizard-muted); font-size: 14px; line-height: 22px; }
+  .wizard-form { max-width: 480px; margin-top: 48px; }
+  .wizard-note { margin: 12px 0 0; color: var(--wizard-muted); font-size: 12px; line-height: 18px; }
+
+  .field { display: grid; gap: 4px; }
+  .field-label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--wizard-ink); font-size: 14px; line-height: 22px; font-weight: 400; }
+  .field-dir { position: relative; display: block; }
+  .field-input {
+    width: 100%; height: 32px; min-height: 32px; padding: 0 12px;
+    border: 1px solid var(--wizard-line); border-radius: 6px;
+    background: #fff; color: var(--wizard-ink);
+    font: inherit; font-size: 14px; line-height: 30px; outline: 0;
+  }
+  .field-dir .field-input { padding-right: 40px; }
+  .field-input::placeholder { color: var(--wizard-muted); }
+  .field-input:hover { border-color: #a8a8a8; }
+  .field-input:focus { border-color: var(--wizard-ink); box-shadow: 0 0 0 3px rgba(25, 25, 25, .08); }
+  .field-icon {
+    position: absolute; top: 0; right: 0; width: 36px; height: 32px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; background: none; color: var(--wizard-muted); cursor: pointer;
+  }
+  .field-icon:hover { color: var(--wizard-ink); }
+  .field-icon svg { width: 16px; height: 16px; }
+  .link-button {
+    justify-self: start; margin-top: 2px; padding: 0; border: 0; background: none;
+    color: var(--wizard-muted); font: inherit; font-size: 12px; line-height: 18px; cursor: pointer;
+  }
+  .link-button:hover { color: var(--wizard-ink); }
+  .link-button[hidden] { display: none; }
+
+  .wizard-check { display: grid; gap: 2px; margin-top: 10px; font-size: 12px; line-height: 18px; }
+  .wizard-check .is-ok { color: var(--wizard-ok); }
+  .wizard-check .is-warn { color: var(--wizard-warn); }
+  .wizard-check .is-err { color: var(--wizard-err); }
+
+  .form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 12px; margin-top: 32px; }
+  .form-actions > button { min-width: 160px; }
+  .primary-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 40px; min-height: 40px; padding: 0 24px;
+    border: 1px solid transparent; border-radius: 999px;
+    background: var(--wizard-ink); color: #fff;
+    font: inherit; font-size: 14px; font-weight: 400; line-height: 1; white-space: nowrap;
+    box-shadow: none; cursor: pointer;
+    transition: background .16s ease, opacity .16s ease;
+  }
+  .primary-button:hover:not(:disabled) { background: #000; }
+  .primary-button:disabled { opacity: .35; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--wizard-ink); outline-offset: 2px; box-shadow: none; }
+
+  .test-result { display: block; margin-top: 16px; padding: 8px 12px; border-radius: 4px; font-size: 12px; line-height: 16px; }
+  .test-result.is-ok { background: var(--wizard-ok-bg); color: var(--wizard-ok); }
+  .test-result.is-err { background: var(--wizard-err-bg); color: var(--wizard-err); }
+  .test-result.is-busy { background: var(--wizard-info-bg); color: var(--wizard-info); }
+  .test-result[hidden] { display: none; }
+
+  .wizard-art { position: relative; height: 100vh; overflow: hidden; background: #0d4f8b; }
+  .wizard-art::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: url("panel-model.webp");
+    background-position: center center; background-repeat: no-repeat; background-size: cover;
+  }
+  .wizard-art-copy { position: absolute; top: 0; right: 0; left: 0; z-index: 2; padding: 15.2vh 24px 0; color: #fff; text-align: center; pointer-events: none; }
+  .wizard-art-copy h2 {
+    margin: 0 0 24px; font-family: "HarmonyOS Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: clamp(28px, 2.5vw, 48px); font-weight: 400; line-height: 1.12; letter-spacing: .2px;
+  }
+  .wizard-art-copy p { margin: 0; font-size: clamp(14px, 1.04vw, 20px); font-weight: 400; line-height: 22px; opacity: .96; }
+
+  @media (max-width: 900px) {
+    .wizard-page { grid-template-columns: 1fr; }
+    .wizard-art { display: none; }
+  }
+  @media (max-height: 720px) {
+    .wizard-brand { padding-top: 20px; }
+    .wizard-content { padding-top: 40px; padding-bottom: 24px; }
+    .wizard-content h1 { font-size: 28px; line-height: 40px; }
+    .wizard-form { margin-top: 32px; }
+    .form-actions { margin-top: 24px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .primary-button { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="wizard-page">
+    <main class="wizard-pane">
+      <header class="wizard-brand">
+        <span class="wizard-brand-mark" aria-hidden="true">
+          <svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewBox="0 0 24 24">
+            <path d="M9 3h6" />
+            <path d="M10 3v5.2L5.2 17a2.4 2.4 0 0 0 2.1 3.6h9.4a2.4 2.4 0 0 0 2.1-3.6L14 8.2V3" />
+            <path d="M7.5 15h9" />
+          </svg>
+        </span>
+        <span class="wizard-brand-name">ScienceDiscovery</span>
+      </header>
+
+      <div class="wizard-scroll">
+        <div class="wizard-content">
+          <div class="wizard-progress" aria-hidden="true"><span style="width: 33.3%"></span></div>
+
+          <section>
+            <h1>配置你的研究工作区</h1>
+            <p class="wizard-sub">产物、中间结果与运行环境都会落在这个目录下，便于统一管理。</p>
+
+            <div class="wizard-form">
+              <label class="field">
+                <span class="field-label">工作区目录</span>
+                <span class="field-dir">
+                  <input class="field-input" id="data-dir" placeholder="选择或输入目录路径" spellcheck="false" />
+                  <button class="field-icon" id="browse" title="浏览目录" aria-label="浏览目录" type="button">
+                    <svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewBox="0 0 24 24">
+                      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                    </svg>
+                  </button>
+                </span>
+                <button class="link-button" id="use-default" type="button" hidden>使用默认位置</button>
+              </label>
+
+              <div id="dir-check" class="wizard-check"></div>
+              <p class="wizard-note">确认后将在选定的目录准备运行环境（Python）并启动本地服务。</p>
+
+              <div class="form-actions">
+                <button class="primary-button" id="next" type="button" disabled>下一步</button>
+              </div>
+              <div id="msg" class="test-result" hidden></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <aside class="wizard-art" aria-hidden="true">
+      <div class="wizard-art-copy">
+        <h2>AI Workbench</h2>
+        <p>Finding better solutions</p>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const api = window.sdShell && window.sdShell.wizard;
+  if (!api) {
+    document.body.innerHTML = '<div class="wizard-page"><div class="wizard-pane"><div class="wizard-scroll"><div class="wizard-content"><h1>无法启动初始设置</h1><p class="wizard-sub">preload 桥接缺失，请重新安装应用。</p></div></div></div></div>';
+  } else {
+    let lastCheckOk = false;
+    let dirCheckTimer = null;
+
+    function fmtBytes(b) {
+      if (b == null) return "未知";
+      if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(1) + "GB";
+      if (b >= 1024 ** 2) return Math.round(b / 1024 ** 2) + "MB";
+      return Math.max(0, Math.round(b / 1024)) + "KB";
+    }
+
+    function setMsg(text, cls) {
+      const el = $("msg");
+      el.hidden = !text;
+      el.className = "test-result" + (cls ? " " + cls : "");
+      el.textContent = text || "";
+    }
+
+    async function checkDir(path) {
+      const res = await api.checkDir(path);
+      const box = $("dir-check");
+      lastCheckOk = res.ok;
+      $("next").disabled = !res.ok;
+      if (!path.trim()) { box.innerHTML = ""; return; }
+      const lines = [];
+      lines.push(res.writable
+        ? '<span class="is-ok">✓ 目录可写</span>'
+        : '<span class="is-err">✗ 目录不可写（请检查权限或杀毒软件）</span>');
+      if (res.freeBytes === null || res.freeBytes === undefined) {
+        lines.push('<span class="is-warn">⚠ 无法读取磁盘剩余空间</span>');
+      } else if (res.freeOk) {
+        lines.push('<span class="is-ok">✓ 磁盘剩余 ' + fmtBytes(res.freeBytes) + '（建议 ≥5GB）</span>');
+      } else {
+        lines.push('<span class="is-err">✗ 磁盘剩余 ' + fmtBytes(res.freeBytes) + '，不足 5GB</span>');
+      }
+      for (const w of res.warnings || []) lines.push('<span class="is-warn">⚠ ' + w + "</span>");
+      box.innerHTML = lines.join("<br/>");
+    }
+
+    $("data-dir").addEventListener("input", (e) => {
+      $("next").disabled = true;
+      setMsg("", "");
+      clearTimeout(dirCheckTimer);
+      dirCheckTimer = setTimeout(() => checkDir(e.target.value.trim()), 400);
+    });
+
+    $("browse").addEventListener("click", async () => {
+      const picked = await api.browseDir();
+      if (!picked) return;
+      $("data-dir").value = picked;
+      $("next").disabled = true;
+      checkDir(picked);
+    });
+
+    $("use-default").addEventListener("click", () => {
+      const d = $("use-default").dataset.dir || "";
+      if (!d) return;
+      $("data-dir").value = d;
+      $("next").disabled = true;
+      setMsg("", "");
+      checkDir(d);
+    });
+
+    $("next").addEventListener("click", async () => {
+      if (!lastCheckOk) return;
+      const path = $("data-dir").value.trim();
+      $("next").disabled = true;
+      setMsg("正在确认目录并启动服务…", "is-busy");
+      const res = await api.confirmDir(path);
+      if (!res.ok) {
+        setMsg(res.message || "目录不可用。", "is-err");
+        $("next").disabled = false;
+        return;
+      }
+      // The shell wizard ends here — the main
+      // startup flow owns the window next (loading page, then the SPA), which
+      // opens straight at model configuration.
+      setMsg("目录已确认，正在进入系统…", "is-busy");
+    });
+
+    (async () => {
+      const st = await api.getState();
+      $("data-dir").value = st.dataDir || st.defaultDataDir || "";
+      if (st.defaultDataDir) {
+        const link = $("use-default");
+        link.dataset.dir = st.defaultDataDir;
+        link.hidden = false;
+      }
+      if ($("data-dir").value) checkDir($("data-dir").value.trim());
+    })();
+  }
+  </script>
+</body>
+</html>

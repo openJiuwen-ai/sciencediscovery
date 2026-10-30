@@ -22,7 +22,7 @@ The package exposes:
 - `read(hash)` to retrieve bytes;
 - `verify(hash)` to retrieve and re-hash an object.
 
-`put` and `putFile` fsync temporary bytes and publish by an atomic, non-replacing hard link, then sync the containing directory. Existing objects are integrity-checked, never repaired in place. `putFile` streams the source. Reads verify the hash; typed reads additionally verify size and pool.
+`put` and `putFile` fsync temporary bytes and publish by an atomic, non-replacing hard link, then sync the containing directory (on Windows the directory sync is a no-op: NTFS has no directory-fsync semantics and durability relies on volume-level policy). Existing objects are integrity-checked, never repaired in place. `putFile` streams the source. Reads verify the hash; typed reads additionally verify size and pool.
 
 ## CAS and workspace change detection
 

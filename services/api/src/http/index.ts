@@ -164,6 +164,7 @@ import {
 } from "@sciencediscovery/idea-tree";
 
 import { SessionStoreHttpError } from "../store.js";
+import { providerBadgeLabel, type ExecutionBadge, type ExecutionCapability } from "@sciencediscovery/execution-router";
 import { validateLiveProvider } from "../store/providers.js";
 import { normalizeApiToken } from "../store/secrets.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
@@ -705,7 +706,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // loaded (a few tries, the adapter may still be starting) and again on every change.
   const jiuwenSwarm = jiuwenSwarmConfigFromEnv();
   const webBackend = jiuwenSwarm ? "jiuwenswarm" as const : "native" as const;
-  if (jiuwenSwarm) store.useEverySkillEverywhere();
+  // Desktop (SCIENCE_AGENT_SKILL_SELECTION=desktop): the UI's selection in project settings decides which skills a
+  // run stages — and installs in JiuwenSwarm, whose on/off switches each run aligns with it. Server deployments
+  // keep the JiuwenSwarm behavior: every installed skill everywhere, switched in JiuwenSwarm itself.
+  if (jiuwenSwarm && jiuwenSwarm.skillSelection !== "desktop") store.useEverySkillEverywhere();
   // The UI's language as JiuwenSwarm's; remembered so that each page load does not rewrite JiuwenSwarm's config.
   let jiuwenSwarmLanguage: "en" | "zh" | undefined;
   const syncJiuwenSwarmWeb = async () => jiuwenSwarm
@@ -861,6 +865,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
   };
 
+
+  // F10.6p: resolve with `fallback` if `promise` has not settled within `ms`.
+  // Health answers must stay inside the caller's budget; a wedged dependency
+  // reports degraded instead of parking the response.
+  const settleWithin = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+    Promise.race([promise, new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms))]);
+
   const server = createServer(async (request, response) => {
     const requestId = randomUUID();
     response.setHeader("x-request-id", requestId);
@@ -871,14 +882,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     });
     const requestPath = (request.url ?? "/").split("?", 1)[0] || "/";
     try {
-      await ready;
       const url = new URL(request.url ?? "/", "http://localhost");
+      // F10.6p: /health used to gate on `await ready` like every route and then
+      // wait out the runner client's 5s timeout — on a machine whose runner
+      // wedged, every answer arrived after the shell wizard's shorter poll
+      // timeout, so first-run never turned healthy (shell.log/api.log
+      // 2026-10-19: 502 PoolTimeout at ~5030ms, wizard stuck on step 10).
+      // Answer fast instead: 503 "starting" until ready, bounded component
+      // checks after that — never a hung response.
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/api/health")) {
-        const runner = await runnerClient.health().catch(() => undefined);
+        if (!(await settleWithin(ready.then(() => true), 3_000, false))) {
+          sendJson(response, 503, { service: "sciencediscovery-api", status: "starting" });
+          return;
+        }
+        const runner = await settleWithin(runnerClient.health().catch(() => undefined), 2_000, undefined);
         // Toggle off → disabled (the System Settings switch is off). Toggle on
         // but sidecar/Neo4j down → degraded. The client always exists now.
         const memoryGraph = store.getMemoryGraphSettings().enabled
-          ? await memoryGraphClient.health().catch(() => "degraded")
+          ? await settleWithin(memoryGraphClient.health().catch(() => "degraded"), 1_500, "degraded")
           : "disabled";
         const quotas = store.getQuotaSettings();
         const workspace: WorkspaceCapabilities = {
@@ -902,6 +923,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         });
         return;
       }
+      await ready;
       // Authenticated by a run-scoped token rather than the user's, so it sits
       // ahead of the `/api/` gate. It is not open: an invalid or expired run
       // token is a 401, and the token grants this endpoint and nothing else.
@@ -943,6 +965,25 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
 
       if (await handleExecutionReadiness(request, response, url, store, runnerClient, remoteCompute, () => readJson(request))) return;
+      if (url.pathname === "/api/execution-provider") {
+        // F5 执行路由层：角标数据源（GET）与热切换重探（POST refresh，
+        // 复用 runner /execution-capability 协议，不新增 wire 格式）。
+        if (request.method === "GET") {
+          sendJson(response, 200, {
+            capability: await platform.executionRouter.capability(),
+            providers: platform.executionRouter.providers(),
+          });
+          return;
+        }
+        if (request.method === "POST") {
+          const body = await readJson<{ refresh?: boolean }>(request);
+          sendJson(response, 200, {
+            capability: await platform.executionRouter.capability(body.refresh === true),
+            providers: platform.executionRouter.providers(),
+          });
+          return;
+        }
+      }
       if (request.method === "GET" && url.pathname === "/api/projects") {
         // The inbox is a Project, not one the user made. Its id is handed out
         // by `POST /api/inbox` instead, so it never appears in a picker.

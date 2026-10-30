@@ -1,4 +1,6 @@
-# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+# Portions Copyright (c) 2026 AgentDescent, licensed under the MIT License.
+# See LICENSE.agentdescent in this directory for the upstream permission notice.
+# Modifications Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,13 +16,14 @@
 
 """Sandbox-side runner for the OpenEvolve example's candidate programs.
 
-Byte-for-byte copy of ``examples/openevolve/_openevolve_runner.py`` (upstream
-commit ``411fb59``). Vendored rather than imported because the agentdescent
+Adapted from ``examples/openevolve/_openevolve_runner.py`` in AgentDescent
+(also present in tag ``v0.4.6``). Vendored rather than imported because the agentdescent
 wheel does not package ``examples/``. The CPU-budget interaction encoded here
 is non-obvious: ``RLIMIT_CPU`` counts across threads, so OpenBLAS threads cap
 the wall-clock a candidate gets, and rewriting this fails in ways that look
 like poor candidate quality. See ``vendor/era/runner.py``'s header for the same
-note in the ERA port.
+note in the ERA port. Local changes report unavailable resource limits and
+allow importing this module on Windows, where ``resource`` is unavailable.
 
 This module is executed by the system Python inside Bubblewrap/Seatbelt. It
 uses only the standard library and emits exactly one JSON object on stdout.
@@ -35,7 +38,15 @@ import io
 import json
 import math
 import random
-import resource
+# `resource` is a Unix-only stdlib module; Windows has no counterpart.
+# set_resource_limits() below already treats every refused limit as
+# "unavailable" (see its docstring), so with resource = None every getattr()
+# simply misses and all limits report unavailable — the graceful path the
+# Darwin RLIMIT_AS case already exercises.
+try:
+    import resource
+except ImportError:
+    resource = None
 import time
 from typing import List
 

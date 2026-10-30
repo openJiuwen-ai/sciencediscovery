@@ -7,6 +7,10 @@ import { link, lstat, mkdir, open, readdir, readFile, readlink, rm, type FileHan
 import { dirname, resolve, toNamespacedPath } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+// [windows-desktop] Windows cannot fsync a directory handle (EPERM), so
+// directory durability goes through the platform facade (posix: fsync, win32: no-op).
+import { syncDirectory } from "./platform/index.js";
+
 export type Pool = "data" | "agent-state";
 export interface ObjectRef<P extends Pool = Pool> {
   pool: P;
@@ -47,13 +51,6 @@ export function assertRef(ref: ObjectRef, pool?: Pool): void {
   if (!ref || (ref.pool !== "data" && ref.pool !== "agent-state") || (pool && ref.pool !== pool)
     || !/^sha256:[a-f0-9]{64}$/.test(ref.digest) || !Number.isSafeInteger(ref.size) || ref.size < 0
     || typeof ref.mediaType !== "string" || !ref.mediaType) throw new Error("Invalid or cross-pool reference");
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  // Windows FlushFileBuffers requires a writable handle, including for a directory.
-  const access = process.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY;
-  const handle = await open(path, access | constants.O_DIRECTORY);
-  try { await handle.sync(); } finally { await handle.close(); }
 }
 
 /** Publish without replacing existing bytes, including under concurrent writers. */

@@ -30,11 +30,13 @@ const defaultManifestPath = resolve(scriptDirectory, "../services/runner/src/mic
 
 function usage() {
   return `Usage:
-  node scripts/fetch-managed-micromamba.mjs --arch <x86_64|aarch64|amd64|arm64> --output <path> [--source <path>]
-  node scripts/fetch-managed-micromamba.mjs --arch <arch> --print-tsv
+  node scripts/fetch-managed-micromamba.mjs --arch <x86_64|aarch64|amd64|arm64> --output <path> [--platform <linux|darwin|win32>] [--source <path>]
+  node scripts/fetch-managed-micromamba.mjs --arch <arch> [--platform <linux|darwin|win32>] --print-tsv
 
 Downloads (or copies) the pinned micromamba binary, verifies its SHA256, and
-writes it executable. The release manifest is shared with the Runner runtime.`;
+writes it executable. The release manifest is shared with the Runner runtime.
+--platform defaults to linux (the Docker build); win32 fetches the win-64
+release used by the Windows desktop build.`;
 }
 
 function parseArguments(arguments_) {
@@ -43,7 +45,7 @@ function parseArguments(arguments_) {
     const argument = arguments_[index];
     if (argument === "--help" || argument === "-h") options.help = true;
     else if (argument === "--print-tsv") options.printTsv = true;
-    else if (["--arch", "--manifest", "--output", "--source"].includes(argument)) {
+    else if (["--arch", "--manifest", "--output", "--platform", "--source"].includes(argument)) {
       const value = arguments_[index + 1];
       if (!value) throw new Error(`${argument} requires a value`);
       options[argument.slice(2)] = value;
@@ -62,7 +64,7 @@ function assertSafeField(value, label) {
   return value;
 }
 
-export async function loadRelease(architecture, manifestPath = defaultManifestPath) {
+export async function loadRelease(architecture, manifestPath = defaultManifestPath, platform = "linux") {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const aliases = {
     aarch64: "arm64",
@@ -72,8 +74,14 @@ export async function loadRelease(architecture, manifestPath = defaultManifestPa
     x86_64: "x64",
   };
   const runtimeArchitecture = aliases[architecture];
-  const release = runtimeArchitecture ? manifest.releases?.[runtimeArchitecture] : undefined;
-  if (!release) throw new Error(`Managed micromamba is unavailable for architecture ${architecture}`);
+  const platformReleases = platform === "linux"
+    ? manifest.releases
+    : platform === "darwin"
+      ? manifest.darwinReleases
+      : platform === "win32" ? manifest.win32Releases : undefined;
+  if (!platformReleases) throw new Error(`Managed micromamba is unavailable for platform ${platform}`);
+  const release = runtimeArchitecture ? platformReleases?.[runtimeArchitecture] : undefined;
+  if (!release) throw new Error(`Managed micromamba is unavailable for architecture ${architecture} on ${platform}`);
 
   const version = assertSafeField(manifest.version, "version");
   const baseUrl = assertSafeField(manifest.baseUrl, "base URL").replace(/\/$/, "");
@@ -310,9 +318,10 @@ export async function fetchManagedMicromamba({
   condaMirrorBaseUrl = process.env.MICROMAMBA_CONDA_MIRROR,
   manifestPath,
   output,
+  platform = "linux",
   source,
 }) {
-  const release = await loadRelease(architecture, manifestPath);
+  const release = await loadRelease(architecture, manifestPath, platform);
   await mkdir(dirname(output), { recursive: true });
   const bytes = await acquireManagedMicromambaBytes(release, source, {
     binaryCacheBaseUrl,
@@ -349,7 +358,7 @@ async function main() {
     return;
   }
   if (!options.arch) throw new Error("--arch is required");
-  const release = await loadRelease(options.arch, options.manifest);
+  const release = await loadRelease(options.arch, options.manifest, options.platform ?? "linux");
   if (options.printTsv) {
     console.log([
       release.version,
@@ -367,6 +376,7 @@ async function main() {
     architecture: options.arch,
     manifestPath: options.manifest,
     output: options.output,
+    platform: options.platform ?? "linux",
     source: options.source,
   });
 }

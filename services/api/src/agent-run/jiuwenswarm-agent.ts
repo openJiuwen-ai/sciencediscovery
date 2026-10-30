@@ -22,7 +22,7 @@ import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool
 import { DurableContextStore } from "@sciencediscovery/context";
 
 import { startModelGateway, withoutWithheldNotice, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
-import { importSkillsToJiuwenSwarm, skillLoadedBy } from "./jiuwenswarm-skills.js";
+import { importSkillsToJiuwenSwarm, reconcileJiuwenSwarmSkills, skillLoadedBy } from "./jiuwenswarm-skills.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
 import { waitForRecording } from "./recording-wait.js";
 import { RunDeadlines } from "./run-deadlines.js";
@@ -89,6 +89,14 @@ export interface JiuwenSwarmAgentConfig {
    */
   skills?: "jiuwenswarm" | "ours";
   /**
+   * Whose switches decide which skills are on. `desktop` (SCIENCE_AGENT_SKILL_SELECTION=desktop, the desktop
+   * app): the UI's selection in project settings — each run stages just what it enabled, installs that in
+   * JiuwenSwarm and aligns its on/off switches to it (skills installed earlier but no longer selected are
+   * switched off; JiuwenSwarm's builtin skills are never touched). Unset (default, server deployments):
+   * every installed skill is staged for every run and JiuwenSwarm's own switches are the user's.
+   */
+  skillSelection?: "desktop";
+  /**
    * How the model delegates. `jiuwenswarm` (explicit opt-in, with JiuwenSwarm's tools): the model spawns and
    * collects sub-agents with JiuwenSwarm's own `subagent_spawn`/`subagent_wait`; ScienceDiscovery's `task`
    * is not offered. Those sub-agents run inside JiuwenSwarm itself, with its own built-in tools only: no
@@ -117,6 +125,19 @@ export const SUBAGENT_DELEGATION_SECTION = [
   "## Delegation",
   "For an independent, well-scoped task, delegate it with `subagent_spawn` (subagent_type, display_name, role, task_description) rather than doing it yourself. Call it several times in the same turn for tasks that may run concurrently, then a single `subagent_wait` (subagent_ids, timeout_seconds) to collect their results.",
   "A sub-agent starts with no access to this conversation or its workspace: put everything it needs in task_description.",
+].join("\n");
+
+/**
+ * [windows-desktop] F6 (gap 1a, 0.B0 审查#5): what the model is told when the run
+ * executes unsandboxed (Provider A). JiuwenSwarm's native subagent tools are
+ * hidden, not just undocumented, so this section replaces the delegation
+ * guidance and points at the sandbox plugin as the unlock.
+ */
+export const UNSANDBOXED_SUBAGENT_SECTION = [
+  "## Delegation is restricted in this execution mode",
+  "This run executes directly on the host without a sandbox, so JiuwenSwarm's own sub-agent tools (subagent_spawn, subagent_wait and their lifecycle tools) are disabled: those agents would run outside ScienceDiscovery's tools, approvals, workspace handoff and audit.",
+  "Use ScienceDiscovery's own `task` tool for delegation; it runs a fully governed nested run.",
+  "Installing the sandbox engine plugin (Provider B) re-enables the native sub-agent delegation.",
 ].join("\n");
 
 /** ScienceDiscovery's web tools and the JiuwenSwarm tools that take their place. */
@@ -197,6 +218,7 @@ export function jiuwenSwarmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
     ...(env.SCIENCE_AGENT_JIUWENSWARM_PROMPT?.trim() === "replace" ? { prompt: "replace" as const } : {}),
     ...(env.SCIENCE_AGENT_JIUWENSWARM_TOOLS?.trim() === "ours" ? { tools: "ours" as const } : {}),
     ...(env.SCIENCE_AGENT_JIUWENSWARM_SKILLS?.trim() === "ours" ? { skills: "ours" as const } : {}),
+    ...(env.SCIENCE_AGENT_SKILL_SELECTION?.trim() === "desktop" ? { skillSelection: "desktop" as const } : {}),
     subagents,
   };
 }
@@ -342,7 +364,12 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     if (allJiuwenSwarmTools) for (const name of Object.keys(JIUWENSWARM_WEB_TOOLS)) tools.delete(name);
     // With JiuwenSwarm's own sub-agent tools the model does not also get ours: those sub-agents run inside
     // JiuwenSwarm, with none of ScienceDiscovery's tools, sandbox, handoff or provenance.
-    const jiuwenSwarmSubagents = allJiuwenSwarmTools && (this.config.subagents ?? "task") === "jiuwenswarm" && tools.has("task");
+    // [windows-desktop] F6 (gap 1a, 0.B0 审查#5): on an unsandboxed provider those
+    // native sub-agent tools are withheld entirely — a JiuwenSwarm-internal agent
+    // would bypass ScienceDiscovery's approvals and audit. ScienceDiscovery's own
+    // `task` bridge stays available.
+    const jiuwenSwarmSubagents = allJiuwenSwarmTools && this.options.unsandboxedExecution !== true
+      && (this.config.subagents ?? "task") === "jiuwenswarm" && tools.has("task");
     if (jiuwenSwarmSubagents) tools.delete("task");
     await this.installSkills(tools, allJiuwenSwarmTools);
     this.loadSkill = (id) => {
@@ -444,8 +471,16 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     const root = this.options.skillPackagesRoot;
     const wanted = (this.config.skills ?? "jiuwenswarm") === "jiuwenswarm" && allJiuwenSwarmTools
       && (this.config.prompt ?? "prepend") === "prepend";
-    if (!wanted || !skills.length || !root || !tools.has("read_skill")) return;
-    const imported = await importSkillsToJiuwenSwarm(this.config, skills, root, this.controller.signal);
+    if (!wanted || (skills.length > 0 && (!root || !tools.has("read_skill")))) return;
+    const imported = skills.length && root
+      ? await importSkillsToJiuwenSwarm(this.config, skills, root, this.controller.signal)
+      : new Map<string, string>();
+    // Desktop selection: align JiuwenSwarm's switches with what this run staged — also when that is nothing,
+    // so switching every skill off really turns them off there (a run with no staged skills installs none,
+    // and leftovers from earlier runs would otherwise stay on).
+    if (this.config.skillSelection === "desktop") {
+      await reconcileJiuwenSwarmSkills(this.config, new Set(imported.values()));
+    }
     for (const [id, name] of imported) {
       this.skillNames.set(id, name);
       this.skillIds.set(name, id);
@@ -576,7 +611,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     const delegationRule = jiuwenSwarmSubagents ? [] : [toolNames.has("task")
       ? "Delegation for this run uses only the platform task tool. Swarm-native subagent tools are unavailable; ignore any generic instructions recommending them. Use task to delegate and collect results."
       : "Delegation is unavailable for this run. Ignore any generic instructions recommending Swarm-native subagent tools; complete the assigned work with the available tools."];
-    const systemPrompt = [withHostRule, ...replacementSections, ...delegationRule].join("\n\n");
+    const systemPrompt = [withHostRule, ...replacementSections,
+      ...(this.options.unsandboxedExecution === true ? [UNSANDBOXED_SUBAGENT_SECTION] : []), ...delegationRule].join("\n\n");
     const nativeToolNames = [...(jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []), ...(jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_TOOLS : [])];
     const response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/runs`, {
       method: "POST",

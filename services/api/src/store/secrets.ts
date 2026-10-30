@@ -12,8 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import { readFile, rm, writeFile } from "node:fs/promises";
+
+// [windows-desktop] the master key's at-rest format follows the platform
+// adapter (posix = raw 32 bytes behind 0600, win32 = DPAPI-wrapped), keeping
+// this module free of platform branches.
+import { renameReplace, restrictToOwner, secretProtector } from "../platform/os/index.js";
+import type { SecretProtector } from "../platform/os/types.js";
 
 import type {
   CreateModelProfileRequest,
@@ -193,26 +199,90 @@ export function normalizeApiToken(value: string | null | undefined): string | un
   return token;
 }
 
-export async function loadOrCreateModelSecretKey(path: string): Promise<Buffer> {
-  const readExisting = async (): Promise<Buffer> => {
-    const key = await readFile(path);
-    if (key.length !== MODEL_SECRET_KEY_BYTES) throw new Error("The model credential key has an invalid length");
-    await chmod(path, 0o600);
-    return key;
+/**
+ * Load the model-secret master key, creating it on first start.
+ *
+ * At-rest format follows the platform's protector: POSIX keeps the raw 32
+ * bytes behind 0600; Windows stores a DPAPI blob (CurrentUser scope). A
+ * legacy raw-key file on a wrapping platform is upgraded in place — racing
+ * writers wrap the same bytes, so last-write-wins is lossless. A blob that
+ * fails to unwrap (copied from another account/machine) is an error, never a
+ * silent regeneration: the old ciphertext would become undecryptable.
+ */
+export async function loadOrCreateModelSecretKey(
+  path: string,
+  protector: SecretProtector = secretProtector,
+): Promise<Buffer> {
+  const readKey = async (): Promise<{ key: Buffer; raw: boolean }> => {
+    const bytes = await readFile(path);
+    if (protector.isWrapped(bytes)) {
+      let key: Buffer;
+      try {
+        key = await protector.unwrap(bytes);
+      } catch (error) {
+        throw new Error(
+          "The stored model credential key cannot be decrypted; it may belong to a different Windows account or be corrupted",
+          { cause: error },
+        );
+      }
+      if (key.length !== MODEL_SECRET_KEY_BYTES) throw new Error("The model credential key has an invalid length");
+      return { key, raw: false };
+    }
+    if (bytes.length !== MODEL_SECRET_KEY_BYTES) throw new Error("The model credential key has an invalid length");
+    // Mode bits alone do not yield an owner-only ACL on Windows; the facade
+    // applies an icacls owner-only grant there (0600 on posix).
+    await restrictToOwner(path);
+    return { key: bytes, raw: true };
   };
+
+  let existing: { key: Buffer; raw: boolean };
   try {
-    return await readExisting();
+    existing = await readKey();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // First start. `wx` keeps the create race-safe: the loser of two
+    // services starting at once reads the winner's file back.
+    const key = randomBytes(MODEL_SECRET_KEY_BYTES);
+    const wrapped = protector.wrapsAtRest ? await protector.wrap(key) : key;
+    try {
+      await writeFile(path, wrapped, { flag: "wx", mode: 0o600 });
+      // `wx` won the create race, but mode bits are not an owner-only ACL on
+      // Windows — restrict before the key becomes usable.
+      await restrictToOwner(path);
+      return key;
+    } catch (error2) {
+      if ((error2 as NodeJS.ErrnoException).code !== "EEXIST") throw error2;
+      existing = await readKey();
+    }
   }
-  const key = randomBytes(MODEL_SECRET_KEY_BYTES);
-  try {
-    await writeFile(path, key, { flag: "wx", mode: 0o600 });
-    return key;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    return await readExisting();
+
+  if (existing.raw && protector.wrapsAtRest) {
+    // Legacy raw key on a wrapping platform: upgrade in place, atomically.
+    // The temp name is process- and run-unique: a fixed `${path}.tmp` made a
+    // concurrent second starter abort on `wx` (EEXIST) and a crash between
+    // write and rename wedge every later start until the leftover was
+    // removed by hand.
+    const wrapped = await protector.wrap(existing.key);
+    const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      try {
+        await writeFile(temp, wrapped, { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        // Unreachable with a unique name barring a torn same-name leftover;
+        // drop it and retry once so it can never wedge startup.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        await rm(temp, { force: true });
+        await writeFile(temp, wrapped, { flag: "wx", mode: 0o600 });
+      }
+      await renameReplace(temp, path);
+      // The file the rename brought in carries the temp file's default ACL;
+      // restore owner-only before returning.
+      await restrictToOwner(path);
+    } finally {
+      await rm(temp, { force: true });
+    }
   }
+  return existing.key;
 }
 
 /**

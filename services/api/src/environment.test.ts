@@ -33,6 +33,8 @@ import {
 test("system environment revisions follow the selected native sandbox", () => {
   assert.equal(hostSandboxKind("linux"), "bubblewrap");
   assert.equal(hostSandboxKind("darwin"), "seatbelt");
+  // [windows-desktop] Windows hosts run unsandboxed direct execution.
+  assert.equal(hostSandboxKind("win32"), "none");
   assert.equal(systemPythonEnvironmentRevisionId("bubblewrap"), SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID);
   assert.equal(systemPythonEnvironmentRevisionId("seatbelt"), SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID);
   assert.equal(systemShellEnvironmentRevisionId("bubblewrap"), SYSTEM_SHELL_ENVIRONMENT_REVISION_ID);

@@ -21,6 +21,7 @@ import {
   SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID,
   epochSandboxNetworkAccess,
   type KernelSession,
+  type SandboxKind,
   type SandboxNetworkAccess,
   type ShellExecutionRequest,
   type ShellExecutionResult,
@@ -309,9 +310,11 @@ class ManagedShellSession {
 
 export interface ShellSessionManagerConfig {
   bwrapPath: string;
-  sandboxProvider?: "bubblewrap" | "seatbelt";
+  sandboxProvider?: SandboxKind;
   seatbeltPath?: string;
   dataDir: string;
+  /** [windows-desktop] user-authorized extra workspace roots (validated alongside dataDir). */
+  extraWorkspaceRoots?: string[];
   /** Wall-clock limit for a single evaluation inside a session. */
   execTimeoutMs: number;
   idleTimeoutMs?: number;
@@ -389,9 +392,9 @@ export class ShellSessionManager {
       || request.permissionEpoch.mounts[0]?.mode !== "read-write") {
       throw new Error("Persistent shell sessions accept exactly one read-write workspace mount");
     }
-    const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot);
+    const workspaceRoot = await validatedWorkspace(this.config.dataDir, request.workspaceRoot, this.config.extraWorkspaceRoots);
     const readOnlyWorkspaceRoot = request.readOnlyWorkspaceRoot
-      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot)
+      ? await validatedWorkspace(this.config.dataDir, request.readOnlyWorkspaceRoot, this.config.extraWorkspaceRoots)
       : undefined;
     const skillRoots = await resolveSandboxSkillRoots(this.config.dataDir, workspaceRoot, request.skillPackagesRoot);
     const maxWorkspaceBytes = resolveQuotaBytes(
@@ -565,6 +568,12 @@ export class ShellSessionManager {
     // A fresh session always starts from the clearenv baseline: the profile is
     // produced by this shell, not consumed by it.
     const sandbox = executorSandboxKind(this.config);
+    if (sandbox === "none") {
+      // [windows-desktop] Ephemeral shell runs through the environment's
+      // m2-bash (executor.executeEnvironmentShell); this guard protects persistent
+      // shell sessions (resident workers), which wait for the WSL sandbox plugin.
+      throw new Error("Persistent shell sessions require a sandboxed runner; the direct-execution provider (Windows) supports ephemeral shell only");
+    }
     const launch = await prepareSandboxLaunch(this.config, {
       chdir: workspaceBinds.chdir,
       egress: await prepareSandboxEgress(this.config.dataDir, networkAccess, this.gateways, sandbox, request.sandboxEgressProxy),

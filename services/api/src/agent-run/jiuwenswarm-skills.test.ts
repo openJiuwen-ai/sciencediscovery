@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
-import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled, skillLoadedBy } from "./jiuwenswarm-skills.js";
+import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, reconcileJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled, skillLoadedBy } from "./jiuwenswarm-skills.js";
 
 const ids = new Map([["evolve-design", "evolve-design"], ["sciencediscovery-skill-creator", "skill-creator"]]);
 
@@ -57,6 +57,32 @@ test("the skill list and the on/off switch go to the adapter with its token", as
 test("a refused switch is an error, not silence", async () => {
   const refusing = (async () => new Response("no", { status: 502 })) as unknown as typeof fetch;
   await assert.rejects(setJiuwenSwarmSkillEnabled({ adapterUrl: "http://a", fetch: refusing }, "xlsx", false), /HTTP 502/);
+});
+
+test("reconcile switches only what disagrees: staged names on, other installed ones off, builtin untouched", async () => {
+  const calls: Array<{ url: string; body?: string }> = [];
+  const listed = { skills: [
+    { name: "evolve-design", description: "staged, already on", enabled: true, source: "imported" },
+    { name: "old-skill", description: "an earlier run", enabled: true, source: "imported" },
+    { name: "picked-skill", description: "staged, left off", enabled: false, source: "imported" },
+    { name: "xlsx", description: "JiuwenSwarm's own", enabled: false, source: "builtin" },
+  ] };
+  const fake = (async (url: string, init: RequestInit) => {
+    calls.push({ url, body: init.body as string });
+    return new Response(JSON.stringify(url.endsWith("/agent/skills") ? listed : {}));
+  }) as unknown as typeof fetch;
+  await reconcileJiuwenSwarmSkills({ adapterUrl: "http://a", fetch: fake }, new Set(["evolve-design", "picked-skill"]));
+  assert.deepEqual(calls.map(({ url }) => url.slice("http://a".length)), [
+    "/agent/skills",
+    "/agent/skills/old-skill/enabled",
+    "/agent/skills/picked-skill/enabled",
+  ]);
+  assert.deepEqual(calls.map(({ body }) => body), [undefined, JSON.stringify({ enabled: false }), JSON.stringify({ enabled: true })]);
+});
+
+test("a reconcile that cannot list the skills is a warning, not a failure", async () => {
+  const failing = (async () => new Response("down", { status: 502 })) as unknown as typeof fetch;
+  await reconcileJiuwenSwarmSkills({ adapterUrl: "http://a", fetch: failing }, new Set(["x"]));
 });
 
 test("the UI's language is sent to the adapter as JiuwenSwarm's", async () => {

@@ -103,6 +103,26 @@ export async function setJiuwenSwarmSkillEnabled(
 }
 
 /**
+ * Align JiuwenSwarm's own on/off switches with the desktop UI's selection: the names this run staged are on,
+ * skills installed earlier but not staged now are off. JiuwenSwarm's builtin skills are its own and never
+ * touched. It is one setting for every session there, and sessions started afterwards see it — this runs
+ * before the run's own session is created, so the selection applies to it. Never throws.
+ */
+export async function reconcileJiuwenSwarmSkills(
+  config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">,
+  enabledNames: ReadonlySet<string>,
+): Promise<void> {
+  try {
+    for (const { enabled, name, source } of await listJiuwenSwarmSkills(config)) {
+      if (source === "builtin" || enabled === enabledNames.has(name)) continue;
+      await setJiuwenSwarmSkillEnabled(config, name, enabledNames.has(name));
+    }
+  } catch (error) {
+    console.warn(`[jiuwenswarm] could not align its skill switches with the selection: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * JiuwenSwarm's language, from the UI's: its own prompt, rails and tools, and the language it asks the model to
  * answer in. One setting for every session (sessions started afterwards use it).
  */

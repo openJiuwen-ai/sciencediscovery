@@ -13,7 +13,7 @@ ScienceDiscovery 通过 `@sciencediscovery/cas` 包保存不可变的审计与�
 
 两池均采用 OCI image layout（oci-layout、index.json、blobs/sha256）。只有本地沙箱工作区文件字节进入 Data Pool；stdin/stdout/stderr、读取观察、Prompt、响应、tree 元数据和状态记录进入 Agent State Pool。CasStore 默认写 State Pool，工作区文件写入方显式选择 data。旧裸 hash 接口兼容读取两池和原 cas/sha256/<前两位>/<hash>，旧对象无需移动。新 DataRef/AgentStateRef 接口在类型和运行时均校验所属池。
 
-包提供 hash、sha256File、put/putFile、has、read 和 verify。新对象写临时文件并 fsync，以不覆盖的原子 hard link 发布，再同步目录；已有对象必须校验，不静默覆盖损坏内容。putFile 流式读取；read 校验 hash，typed read 额外校验 size 和 pool。
+包提供 hash、sha256File、put/putFile、has、read 和 verify。新对象写临时文件并 fsync，以不覆盖的原子 hard link 发布，再同步目录（Windows 上目录同步为 no-op：NTFS 无目录 fsync 语义，持久化由卷级策略保证）；已有对象必须校验，不静默覆盖损坏内容。putFile 流式读取；read 校验 hash，typed read 额外校验 size 和 pool。
 
 ## CAS 与工作区变更检测
 

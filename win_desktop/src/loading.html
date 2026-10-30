@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>ScienceDiscovery — 正在启动</title>
+<style>
+  /* The startup wait page in the SPA wizard's split-screen
+     language, matching the redesigned wizard page before it and the SPA's own
+     boot step after it. The mechanics are unchanged (main-process stage
+     pushes, error-only retry, live estimate countdown). */
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .wizard-page {
+    --wizard-ink: #191919;
+    --wizard-muted: #808080;
+    --wizard-line: #c2c2c2;
+    --wizard-err: #bf0a1c;
+    --wizard-err-bg: #fce3e0;
+    --wizard-info: #0f5ed4;
+    --wizard-info-bg: #f0f7ff;
+    position: fixed; inset: 0; z-index: 400;
+    display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 37vw, 710px);
+    height: 100vh; overflow: hidden;
+    background: #fff; color: var(--wizard-ink);
+    font-family: "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  }
+  .wizard-pane { display: flex; flex-direction: column; min-width: 0; height: 100vh; background: #fff; }
+  .wizard-brand { flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 40px clamp(32px, 6.25vw, 120px) 0; }
+  .wizard-brand-mark {
+    width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 7px; background: linear-gradient(135deg, #449aff 0%, #1476ff 52%, #3589ff 100%); color: #fff;
+  }
+  .wizard-brand-mark svg { width: 18px; height: 18px; }
+  .wizard-brand-name { color: var(--wizard-ink); font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: .1px; }
+  .wizard-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 clamp(32px, 6.25vw, 120px); }
+  .wizard-content { width: 100%; max-width: 544px; padding-top: clamp(72px, 12.2vh, 132px); padding-bottom: 64px; }
+  .wizard-progress { width: 120px; height: 4px; margin-bottom: 32px; border-radius: 2px; background: #c4c4c4; overflow: hidden; }
+  .wizard-progress > span { display: block; width: 66.6%; height: 100%; border-radius: 2px; background: var(--wizard-ink); transition: width .4s ease; }
+  .wizard-content h1 { margin: 0 0 16px; color: var(--wizard-ink); font-size: 32px; line-height: 48px; font-weight: 600; letter-spacing: 0; }
+  .wizard-sub { margin: 0; color: var(--wizard-muted); font-size: 14px; line-height: 22px; }
+  .wizard-form { max-width: 480px; margin-top: 48px; }
+
+  .boot-status { display: flex; align-items: center; gap: 12px; margin: 0; }
+  .boot-status p { margin: 0; font-size: 14px; line-height: 22px; }
+  .boot-status.is-error p { color: var(--wizard-err); }
+  .spinner {
+    width: 18px; height: 18px; flex: 0 0 18px; border-radius: 50%;
+    border: 2px solid #e5e5e5; border-top-color: var(--wizard-ink);
+    animation: wizard-spin .9s linear infinite;
+  }
+  .spinner.stopped { animation: none; border-top-color: #e5e5e5; }
+  @keyframes wizard-spin { to { transform: rotate(360deg); } }
+  .wizard-hint { margin: 6px 0 0; color: var(--wizard-muted); font-size: 12px; line-height: 18px; }
+  .progress-line { margin: 6px 0 0; color: var(--wizard-muted); font-size: 12px; line-height: 18px; min-height: 18px; }
+
+  .form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 12px; margin-top: 32px; }
+  .primary-button, .secondary-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 40px; min-height: 40px; padding: 0 24px;
+    border-radius: 999px; font: inherit; font-size: 14px; font-weight: 400; line-height: 1; white-space: nowrap;
+    box-shadow: none; cursor: pointer;
+    transition: background .16s ease, border-color .16s ease, opacity .16s ease;
+  }
+  .form-actions > button { min-width: 160px; }
+  .primary-button { border: 1px solid transparent; background: var(--wizard-ink); color: #fff; }
+  .primary-button:hover:not(:disabled) { background: #000; }
+  .secondary-button { border: 1px solid var(--wizard-line); background: #fff; color: var(--wizard-ink); }
+  .secondary-button:hover:not(:disabled) { border-color: #a8a8a8; background: #f6f6f6; }
+  .primary-button:disabled, .secondary-button:disabled { opacity: .35; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--wizard-ink); outline-offset: 2px; box-shadow: none; }
+  .form-actions[hidden] { display: none; }
+
+  .wizard-art { position: relative; height: 100vh; overflow: hidden; background: #0d4f8b; }
+  .wizard-art::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: url("panel-model.webp");
+    background-position: center center; background-repeat: no-repeat; background-size: cover;
+  }
+  .wizard-art-copy { position: absolute; top: 0; right: 0; left: 0; z-index: 2; padding: 15.2vh 24px 0; color: #fff; text-align: center; pointer-events: none; }
+  .wizard-art-copy h2 {
+    margin: 0 0 24px; font-family: "HarmonyOS Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: clamp(28px, 2.5vw, 48px); font-weight: 400; line-height: 1.12; letter-spacing: .2px;
+  }
+  .wizard-art-copy p { margin: 0; font-size: clamp(14px, 1.04vw, 20px); font-weight: 400; line-height: 22px; opacity: .96; }
+
+  @media (max-width: 900px) {
+    .wizard-page { grid-template-columns: 1fr; }
+    .wizard-art { display: none; }
+  }
+  @media (max-height: 720px) {
+    .wizard-brand { padding-top: 20px; }
+    .wizard-content { padding-top: 40px; padding-bottom: 24px; }
+    .wizard-content h1 { font-size: 28px; line-height: 40px; }
+    .wizard-form { margin-top: 32px; }
+    .form-actions { margin-top: 24px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .primary-button, .secondary-button { transition: none; }
+    .spinner { animation: none; }
+    .wizard-progress > span { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="wizard-page">
+    <main class="wizard-pane">
+      <header class="wizard-brand">
+        <span class="wizard-brand-mark" aria-hidden="true">
+          <svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewBox="0 0 24 24">
+            <path d="M9 3h6" />
+            <path d="M10 3v5.2L5.2 17a2.4 2.4 0 0 0 2.1 3.6h9.4a2.4 2.4 0 0 0 2.1-3.6L14 8.2V3" />
+            <path d="M7.5 15h9" />
+          </svg>
+        </span>
+        <span class="wizard-brand-name">ScienceDiscovery</span>
+      </header>
+
+      <div class="wizard-scroll">
+        <div class="wizard-content">
+          <div class="wizard-progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+          <section>
+            <h1 id="heading">正在准备工作环境</h1>
+            <p class="wizard-sub">首次启动需要准备运行时（Python 环境与依赖），可能需要几分钟到十几分钟，取决于磁盘速度与杀毒软件。</p>
+
+            <div class="wizard-form">
+              <div class="boot-status" id="boot">
+                <span class="spinner" id="ring" aria-hidden="true"></span>
+                <p id="stage">正在启动本地服务…</p>
+              </div>
+              <p class="progress-line" id="progress"></p>
+              <p class="wizard-hint">启动期间可以最小化窗口，首次准备环境不会中断。</p>
+
+              <div class="form-actions" id="actions" hidden>
+                <button class="secondary-button" id="open-logs" type="button" hidden>打开日志</button>
+                <button class="primary-button" id="retry" type="button">重试</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <aside class="wizard-art" aria-hidden="true">
+      <div class="wizard-art-copy">
+        <h2>AI Workbench</h2>
+        <p>Finding better solutions</p>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    // Stage texts arrive from the main process as the stack comes up
+    // (start-stack say() lines mapped in loading-stage.ts), with a
+    // remaining-time hint. The step N/M counter used to lead the progress line
+    // — removed because the internal step count is
+    // meaningless to users; the bar below still tracks current/total.
+    // The retry row only appears on the "error"
+    // stage — a real failure; the "slow" stage self-heals via the background
+    // watcher. Elapsed time is always on (page-side timer), the estimate
+    // counts down live between pushes, and an overrun shows a keep-going hint.
+    const stage = document.getElementById("stage");
+    const progress = document.getElementById("progress");
+    const ring = document.getElementById("ring");
+    const boot = document.getElementById("boot");
+    const actions = document.getElementById("actions");
+    const retry = document.getElementById("retry");
+    const openLogs = document.getElementById("open-logs");
+    const bar = document.getElementById("progress-bar");
+    const pageStart = Date.now();
+    let estimateDeadline = 0;
+    let lastStepKey = "";
+
+    function renderProgress() {
+      const parts = [];
+      if (estimateDeadline > 0) {
+        const left = Math.ceil((estimateDeadline - Date.now()) / 1000);
+        if (left > 0) parts.push(left < 90 ? `约还需 ${left} 秒` : `约还需 ${Math.round(left / 60)} 分钟`);
+        else parts.push("仍在推进，请稍候…");
+      }
+      const s = Math.max(0, Math.floor((Date.now() - pageStart) / 1000));
+      parts.push(`已耗时 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
+      progress.textContent = parts.join(" · ");
+    }
+    setInterval(renderProgress, 1000);
+
+    if (window.sdShell && window.sdShell.onLoadingStage) {
+      window.sdShell.onLoadingStage((s) => {
+        const failed = s.stage === "error";
+        stage.textContent = s.text;
+        boot.classList.toggle("is-error", failed);
+        ring.classList.toggle("stopped", failed);
+        actions.hidden = !failed;
+        if (failed) {
+          retry.disabled = false;
+          retry.textContent = "重试";
+          // The open-logs button comes through the wizard bridge; hide the
+          // button rather than the whole row when it is unavailable.
+          openLogs.hidden = !(window.sdShell.wizard && window.sdShell.wizard.openLogs);
+        }
+        const stepKey = s.current + "/" + s.total;
+        const sec = s.estimateSec || 0;
+        if (s.total > 0 && s.current > 0) {
+          bar.style.width = `${Math.min(96, (s.current / s.total) * 100).toFixed(1)}%`;
+        }
+        if (sec > 0 && (stepKey !== lastStepKey || estimateDeadline <= Date.now())) {
+          estimateDeadline = Date.now() + sec * 1000;
+        } else if (sec <= 0) {
+          estimateDeadline = 0;
+        }
+        lastStepKey = stepKey;
+        renderProgress();
+      });
+    }
+    if (window.sdShell && window.sdShell.retryBackend) {
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "正在重试…";
+        void window.sdShell.retryBackend();
+      });
+    }
+    if (window.sdShell && window.sdShell.wizard && window.sdShell.wizard.openLogs) {
+      openLogs.addEventListener("click", () => {
+        void window.sdShell.wizard.openLogs();
+      });
+    }
+  </script>
+</body>
+</html>

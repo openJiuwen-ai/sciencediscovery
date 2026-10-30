@@ -38,15 +38,25 @@ def next_turn():
 
 
 class H(BaseHTTPRequestHandler):
+    # [windows-desktop] speak HTTP/1.1 with explicit Content-Length on
+    # every response. With the HTTP/1.0 default the connection closes after
+    # each reply, and undici (the openai JS SDK transport) then fails pooled
+    # POST reuse with SocketError "other side closed".
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, *a): pass
 
     def do_GET(self):
-        self.send_response(200); self.send_header("content-type", "application/json"); self.end_headers()
-        self.wfile.write(json.dumps({"data": [{"id": "stub-model", "object": "model"}]}).encode())
+        payload = json.dumps({"data": [{"id": "stub-model", "object": "model"}]}).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_POST(self):
         n = int(self.headers.get("content-length", 0)); body = json.loads(self.rfile.read(n) or b"{}")
-        if LOG: open(LOG, "a").write(json.dumps(body, ensure_ascii=False) + "\n")
+        if LOG: open(LOG, "a", encoding="utf-8", errors="replace").write(json.dumps(body, ensure_ascii=False) + "\n")
         # JiuwenSwarm probes a newly added model (image modality) with a tool-less request;
         # those must not consume a scripted turn meant for the run.
         turn = next_turn() if body.get("tools") else {"text": "hello from stub"}
@@ -66,15 +76,21 @@ class H(BaseHTTPRequestHandler):
             words = turn.get("text", "").split(" ")
             parts, finish = [{"content": w + (" " if i < len(words) - 1 else "")} for i, w in enumerate(words)], "stop"
         if body.get("stream"):
-            self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
-            for part in parts:
-                self.wfile.write(chunk(part).encode()); self.wfile.flush()
-            self.wfile.write(chunk({}, finish).encode()); self.wfile.write(b"data: [DONE]\n\n")
+            payload = b"".join(chunk(part).encode() for part in parts) + chunk({}, finish).encode() + b"data: [DONE]\n\n"
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
         else:
             message = {"role": "assistant", "content": turn.get("text")}
             if "tool" in turn: message["tool_calls"] = [{k: v for k, v in parts[0]["tool_calls"][0].items() if k != "index"}]
-            self.send_response(200); self.send_header("content-type", "application/json"); self.end_headers()
-            self.wfile.write(json.dumps({"id": "c1", "object": "chat.completion", "model": "stub-model", "choices": [{"index": 0, "message": message, "finish_reason": finish}], "usage": {"prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4}}).encode())
+            payload = json.dumps({"id": "c1", "object": "chat.completion", "model": "stub-model", "choices": [{"index": 0, "message": message, "finish_reason": finish}], "usage": {"prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4}}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
 
 
 ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("STUB_LLM_PORT", "18999"))), H).serve_forever()
