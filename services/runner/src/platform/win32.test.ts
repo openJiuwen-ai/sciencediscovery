@@ -84,10 +84,10 @@ test("environmentInterpreterPath follows the win-64 conda layout", () => {
   assert.equal(environmentInterpreterPath("C:\\envs\\rev-1", "r"), "C:\\envs\\rev-1\\Scripts\\R.exe");
 });
 
-test("condaActivationPaths cover the win-64 delay-load DLL directories", () => {
-  // Without Library\bin on PATH, importing numpy/scipy dies with 0xC06D007F.
+test("condaActivationPaths cover win-64 DLLs and managed shell tools", () => {
   assert.deepEqual(condaActivationPaths("C:\\envs\\rev-1"),
-    ["C:\\envs\\rev-1", "C:\\envs\\rev-1\\Library\\bin", "C:\\envs\\rev-1\\Scripts"]);
+    ["C:\\envs\\rev-1", "C:\\envs\\rev-1\\Library\\bin",
+      "C:\\envs\\rev-1\\Library\\usr\\bin", "C:\\envs\\rev-1\\Scripts"]);
 });
 
 test("renameReplace replaces an existing destination", async (context) => {
@@ -107,10 +107,10 @@ test("renameReplace replaces an existing destination", async (context) => {
 test("starterPackages swaps matplotlib for matplotlib-base on win32", () => {
   // qt6's in-package qml test resources exceed MAX_PATH even under a shallow
   // prefix; agents render via Agg to files, so matplotlib-base loses nothing.
-  // m2-bash (MSYS2 bash) is bundled so run_shell works on the
-  // direct-execution provider — Windows hosts have no system bash.
+  // Define the minimum shell contract without depending on a user's Git install.
   assert.deepEqual(starterPackages("python"),
-    ["python=3.12", "numpy=2.0", "pandas=2.2", "scipy=1.14", "matplotlib-base=3.9", "m2-bash"]);
+    ["python=3.12", "numpy=2.0", "pandas=2.2", "scipy=1.14", "matplotlib-base=3.9",
+      "m2-bash", "m2-coreutils", "m2-grep", "m2-sed"]);
   assert.deepEqual(starterPackages("r"), ["r-base=4.4", "r-tidyverse=2.0", "r-data.table=1.16"]);
 });
 
