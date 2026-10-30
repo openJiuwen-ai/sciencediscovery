@@ -177,7 +177,10 @@ test("run_shell selects the latest environment by ID and preserves its execution
   const result = await tool.execute("tool-call", { command: "python -m sample", runner_id: "runner-test", environment_id: "env-test", cwd: "analysis" });
   assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
-  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
+  assert.deepEqual(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : ""), {
+    executionId: "execution", state: "completed", exitCode: 0, stdout: "ok", stderr: "",
+    createdFiles: [], modifiedFiles: [],
+  });
 });
 
 test("a command written with the workspace's host path uses the sandbox's /workspace instead", () => {
@@ -2173,6 +2176,125 @@ test("Shell background mode and management tools do not start additional Shells"
   await tools.find((tool) => tool.name === "execution_logs")!.execute("logs", { execution_id: "job", cursor: 3 });
   await tools.find((tool) => tool.name === "execution_cancel")!.execute("cancel", { execution_id: "job" });
   assert.deepEqual(calls.slice(-3), ["wait:job:0", "logs:job:3", "cancel:job"]);
+});
+
+test("run_shell exposes a compact model result without execution internals or environment secrets", async () => {
+  const result = {
+    cgroupMode: "none" as const,
+    createdFiles: ["report.txt"],
+    environmentRevisionId: "revision-secret",
+    environmentVariables: {
+      SCIENCE_AGENT_RUNNER_TOKEN: "runner-secret",
+      HTTP_PROXY: "http://proxy-secret",
+      PATH: "/internal/path",
+    },
+    executionId: "duplicate-inner-id",
+    exitCode: 127,
+    finishedAt: "2026-10-30T09:20:41.285Z",
+    kernelId: "ephemeral:execution",
+    kernelMode: "ephemeral" as const,
+    language: "shell" as const,
+    modifiedFiles: ["notes.txt"],
+    networkDeniedHosts: ["blocked.example:443"],
+    networkPermission: {
+      authorizationId: "spent-network-token",
+      blockedHosts: [{ host: "blocked.example:443", reason: "not approved" }],
+      hosts: ["blocked.example:443"],
+      instruction: "Request the complete host set before a new execution",
+      state: "blocked" as const,
+    },
+    networkPolicy: "domain-allowlist" as const,
+    runnerVersion: "runner-internal",
+    sandbox: "bubblewrap" as const,
+    startedAt: "2026-10-30T09:20:40.755Z",
+    stderr: "head: command not found\n",
+    stdout: "shell-test:\nbash\n",
+    workingDirectory: "/internal/workspace",
+    workspaceSnapshot: { pool: "agent-state" as const, digest: `sha256:${"a".repeat(64)}` as const, size: 1, mediaType: "record" },
+  };
+  const execution = {
+    accepted: true,
+    agentId: "agent-internal",
+    finalization: "committed" as const,
+    finishedAt: "2026-10-30T09:20:41.285Z",
+    id: "execution-visible",
+    provenance: "committed" as const,
+    queuedAt: "2026-10-30T09:20:40.636Z",
+    result,
+    runnerId: "runner-internal",
+    runnerVersionId: `sha256:${"b".repeat(64)}`,
+    sessionId: "session-internal",
+    startedAt: "2026-10-30T09:20:40.755Z",
+    state: "failed" as const,
+    turnId: "turn-internal",
+    workspaceId: "workspace-internal",
+  } satisfies import("@sciencediscovery/schema").AgentShellExecution;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("managed path only"); },
+    shellExecutions: {
+      start: async () => execution,
+      wait: async () => execution,
+      get: async () => execution,
+      list: () => [execution],
+      logs: async () => { throw new Error("unused"); },
+      cancel: async () => execution,
+    },
+  });
+
+  const response = await tools.find((tool) => tool.name === "run_shell")!
+    .execute("shell", { command: "test command" });
+  const text = response.content[0]!.text;
+  const modelResult = JSON.parse(text);
+  assert.deepEqual(modelResult, {
+    executionId: "execution-visible",
+    state: "failed",
+    exitCode: 127,
+    stdout: "shell-test:\nbash\n",
+    stderr: "head: command not found\n",
+    createdFiles: ["report.txt"],
+    modifiedFiles: ["notes.txt"],
+    networkDeniedHosts: ["blocked.example:443"],
+    networkPermission: {
+      state: "blocked",
+      hosts: ["blocked.example:443"],
+      blockedHosts: [{ host: "blocked.example:443", reason: "not approved" }],
+      instruction: "Request the complete host set before a new execution",
+    },
+  });
+  assert.deepEqual(response.details, {
+    ...modelResult,
+    id: "execution-visible",
+    agentId: "agent-internal",
+    runnerId: "runner-internal",
+    workspaceId: "workspace-internal",
+    startedAt: "2026-10-30T09:20:40.755Z",
+    finishedAt: "2026-10-30T09:20:41.285Z",
+  });
+  assert.doesNotMatch(JSON.stringify(response.details), /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
+  assert.doesNotMatch(text, /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
+});
+
+test("run_shell compact output keeps pending and unknown recovery instructions", async () => {
+  const states = ["running", "unknown"] as const;
+  for (const state of states) {
+    const execution = { id: `execution-${state}`, state } as import("@sciencediscovery/schema").AgentShellExecution;
+    const tools = createWorkspaceTools(process.cwd(), {
+      enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+      executeShell: async () => { throw new Error("managed path only"); },
+      shellExecutions: { start: async () => execution, wait: async () => execution,
+        get: async () => execution, list: () => [execution], logs: async () => { throw new Error("unused"); }, cancel: async () => execution },
+    });
+    const response = await tools.find((tool) => tool.name === "run_shell")!
+      .execute("shell", { command: "long command", background: true });
+    const modelResult = JSON.parse(response.content[0]!.text);
+    assert.equal(modelResult.executionId, `execution-${state}`);
+    assert.equal(modelResult.state, state);
+    assert.match(modelResult.instruction, state === "unknown" ? /outcome is unconfirmed/ : /still running or queued/);
+    assert.deepEqual(response.details, { ...modelResult, id: `execution-${state}` });
+    assert.deepEqual(Object.keys(modelResult).sort(), ["executionId", "instruction", "state"]);
+  }
 });
 
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {

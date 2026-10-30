@@ -33,6 +33,7 @@ import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
+  AgentShellExecution,
   ConnectorId,
   CreateSkillPackageRequest,
   CreateEnvironmentRequest,
@@ -113,6 +114,59 @@ export function filterTools<T extends { name: string }>(tools: readonly T[], pol
 
 const MAX_DECLARE_ARTIFACT_PATHS = 50;
 const SUBAGENT_RESULT_TEXT_LIMIT = 20_000;
+
+/** Keep the model-facing Shell result focused on facts it can act on.
+ * The execution ledger and provenance store retain the complete record. */
+function shellExecutionModelView(execution: Pick<AgentShellExecution,
+  "error" | "finalization" | "id" | "recovery" | "result" | "state">): Record<string, unknown> {
+  const result = execution.result;
+  const pending = execution.state === "queued" || execution.state === "running";
+  const instruction = execution.state === "unknown"
+    ? "Original execution outcome is unconfirmed. Use execution_status to re-synchronize the same ID and execution_logs for retained output. Do not create a replacement or resume from a checkpoint while its process state is unknown."
+    : pending
+      ? "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it."
+      : undefined;
+  const networkPermission = result?.networkPermission;
+  return {
+    executionId: execution.id,
+    state: execution.state,
+    ...(result ? {
+      exitCode: result.exitCode,
+      ...(result.stdout !== undefined ? { stdout: result.stdout } : {}),
+      ...(result.stderr !== undefined ? { stderr: result.stderr } : {}),
+      ...(result.createdFiles !== undefined ? { createdFiles: result.createdFiles } : {}),
+      ...(result.modifiedFiles !== undefined ? { modifiedFiles: result.modifiedFiles } : {}),
+      ...(result.networkDeniedHosts?.length ? { networkDeniedHosts: result.networkDeniedHosts } : {}),
+      ...(networkPermission ? { networkPermission: {
+        state: networkPermission.state,
+        hosts: networkPermission.hosts,
+        ...(networkPermission.blockedHosts?.length ? { blockedHosts: networkPermission.blockedHosts } : {}),
+        instruction: networkPermission.instruction,
+      } } : {}),
+      ...(result.memoryStateLost ? { memoryStateLost: result.memoryStateLost } : {}),
+      ...(result.producedArtifacts?.length ? { producedArtifacts: result.producedArtifacts } : {}),
+    } : {}),
+    ...(execution.error ? { error: execution.error } : {}),
+    ...(execution.recovery ? { recovery: execution.recovery } : {}),
+    ...(execution.finalization && execution.finalization !== "committed"
+      ? { finalization: execution.finalization } : {}),
+    ...(instruction ? { instruction } : {}),
+  };
+}
+
+/** Operational metadata is available to product traces without copying the
+ * credential-bearing Runner result into those traces. */
+function shellExecutionDetailsView(execution: AgentShellExecution, modelView: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...modelView,
+    id: execution.id,
+    ...(execution.agentId ? { agentId: execution.agentId } : {}),
+    ...(execution.runnerId ? { runnerId: execution.runnerId } : {}),
+    ...(execution.workspaceId ? { workspaceId: execution.workspaceId } : {}),
+    ...(execution.startedAt ? { startedAt: execution.startedAt } : {}),
+    ...(execution.finishedAt ? { finishedAt: execution.finishedAt } : {}),
+  };
+}
 
 type SubagentContractStopReason = "loop_capped" | "token_capped" | "turn_capped";
 type SubagentStopReason =
@@ -1552,32 +1606,26 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
               }
             } while (onProgress && (execution.state === "queued" || execution.state === "running") && Date.now() < deadline);
           }
-          const pending = execution.state === "queued" || execution.state === "running";
+          const modelView = shellExecutionModelView(execution);
           return {
             isError: ["failed", "cancelled", "unknown"].includes(execution.state) || Boolean(execution.result?.networkDeniedHosts?.length),
-            content: [{ type: "text", text: JSON.stringify({
-              ...execution,
-              ...(pending ? { instruction: "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it." } : {}),
-              ...(execution.state === "unknown" ? { instruction: "Original execution outcome is unconfirmed. Use execution_status to re-synchronize the same ID and execution_logs for retained output. Do not create a replacement or resume from a checkpoint while its process state is unknown." } : {}),
-            }) }],
-            details: execution,
+            content: [{ type: "text", text: JSON.stringify(modelView) }],
+            details: shellExecutionDetailsView(execution, modelView),
           };
         }
         if (params.background || params.wait_ms !== undefined || params.recovery_context || params.recovery_metadata_path) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
           environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
         });
+        const modelView = shellExecutionModelView({
+          id: result.executionId,
+          result,
+          state: result.exitCode === 0 && !result.networkDeniedHosts?.length ? "completed" : "failed",
+        });
         return {
           isError: result.exitCode !== 0 || Boolean(result.networkDeniedHosts?.length),
-          content: [{ type: "text", text: [
-            result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
-            result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
-            `created files: ${result.createdFiles.join(", ") || "none"}`,
-            `kernel mode: ${result.kernelMode}`,
-            ...(result.networkPermission ? [JSON.stringify(result.networkPermission)] : []),
-            ...(result.memoryStateLost ? [`persistent shell state lost: ${result.memoryStateLost}`] : []),
-          ].join("\n") }],
-          details: result,
+          content: [{ type: "text", text: JSON.stringify(modelView) }],
+          details: modelView,
         };
       },
       label: "Run shell",
