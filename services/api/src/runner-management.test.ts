@@ -98,3 +98,18 @@ test("the unified catalog retains machine reachability when its Runner is discon
   assert.equal(connected.reachability, undefined);
   assert.equal(probes, 1, "a connected Runner already proves the machine is online");
 });
+
+test("a page render reads reachability without waiting for the machine", async () => {
+  const host = { id: "host", alias: "node" };
+  const store = { getRemoteHost: () => host } as unknown as SessionStore;
+  const remote = {
+    runnerStatusWithResources: async () => ({ state: "disconnected" }),
+    reachabilityNow: (target: unknown) => {
+      assert.equal(target, host);
+      return { state: "checking", checkedAt: "2026-09-12T00:00:00.000Z" };
+    },
+  } as unknown as Parameters<typeof runnerTarget>[2];
+  const target = await runnerTarget(store, {} as RunnerClient, remote, "host", { reachability: "now" });
+  assert.equal(target.reachability?.state, "checking");
+  assert.equal(target.runnerStatus?.state, "disconnected");
+});

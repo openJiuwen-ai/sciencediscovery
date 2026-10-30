@@ -5,21 +5,27 @@ import { useEffect, useState } from "react";
 import type { ExecutionBlock, ExecutionBlockDecision } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api/client.js";
 import { useLocale } from "./i18n/index.js";
+import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
+
+type RunnerReadiness = Awaited<ReturnType<ApiClient["getRunnerExecutionCapability"]>>;
 
 export function RunnerReadinessPanel({ client, runnerId }: { client: ApiClient; runnerId: string }) {
   const { locale } = useLocale();
   const zh = locale === "zh-CN";
-  const [value, setValue] = useState<Awaited<ReturnType<ApiClient["getRunnerExecutionCapability"]>>>();
+  // The last answer stays on screen while the next probe runs. Blanking it to
+  // "checking" on every visit made a known state look like an unknown one.
+  const [value, setValue] = useState<RunnerReadiness | undefined>(() => readSettingsCache<RunnerReadiness>(client, `runner-capability:${runnerId}`));
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(value === undefined);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    setBusy(true); setError(""); setValue(undefined);
+    setError("");
     const read = async (refresh: boolean) => {
       try {
         const result = await client.getRunnerExecutionCapability(runnerId, refresh);
+        writeSettingsCache(client, `runner-capability:${runnerId}`, result);
         if (active) { setValue(result); setError(""); }
       } catch (reason) { if (active) setError(String(reason)); }
       finally { if (active) { setBusy(false); timer = setTimeout(() => void read(false), 5000); } }
@@ -29,12 +35,12 @@ export function RunnerReadinessPanel({ client, runnerId }: { client: ApiClient; 
   }, [client, runnerId, revision]);
   return <section className="runner-readiness-card" aria-label={zh ? "计算能力" : "Execution readiness"}>
     <strong>{zh ? "计算能力" : "Execution readiness"}</strong>
-    <p role="status">{busy ? (zh ? "正在目标 Runner 检查…" : "Checking on the target Runner…") : value?.capability?.ready
+    <p role="status">{!value ? (error ? (zh ? "计算受限；工作台仍可使用" : "Compute unavailable; the workbench remains usable") : (zh ? "正在目标 Runner 检查…" : "Checking on the target Runner…")) : value.capability?.ready
       ? (zh ? "已连接，沙箱可用" : "Connected; sandbox available")
       : (zh ? "计算受限；工作台仍可使用" : "Compute unavailable; the workbench remains usable")}</p>
     <p>{error || value?.reason || (!value?.capability?.ready ? value?.capability?.detail ?? value?.capability?.reason : "")}</p>
     {value?.capability && <small>{value.capability.sandbox} · {value.capability.checkedAt}</small>}
-    <button type="button" disabled={busy} onClick={() => setRevision(x => x + 1)}>{zh ? "重新检查" : "Recheck"}</button>
+    <button type="button" disabled={busy} onClick={() => { setBusy(true); setRevision(x => x + 1); }}>{zh ? "重新检查" : "Recheck"}</button>
   </section>;
 }
 

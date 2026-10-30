@@ -8,6 +8,7 @@ import type { ApiClient, RunnerWorkspaceBinding } from "./api/client.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { RunnerReadinessPanel } from "./ExecutionReadiness.js";
 import { useLocale } from "./i18n/index.js";
+import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
 
 export function RunnerEnvironmentSettings({ client, onError, runnerId, runner, machine }: {
   client: ApiClient; onError: (reason: string | Error) => void; runnerId: string; runner?: RemoteHostTarget; machine: ReactNode;
@@ -38,14 +39,19 @@ export function RunnerEnvironmentSettings({ client, onError, runnerId, runner, m
 
 function RunnerWorkspaces({ client, runnerId, runnerName }: { client: ApiClient; runnerId: string; runnerName: string }) {
   const { t } = useLocale();
-  const [items, setItems] = useState<RunnerWorkspaceBinding[]>();
+  const [items, setItems] = useState<RunnerWorkspaceBinding[] | undefined>(() =>
+    readSettingsCache<RunnerWorkspaceBinding[]>(client, `runner-workspaces:${runnerId}`));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState<Record<string, Array<{ path: string; size: number }>>>({});
   const [deleted, setDeleted] = useState<string[]>([]);
   async function refresh() {
     setBusy(true); setError("");
-    try { setItems(await client.listRunnerWorkspaces(runnerId)); }
+    try {
+      const next = await client.listRunnerWorkspaces(runnerId);
+      writeSettingsCache(client, `runner-workspaces:${runnerId}`, next);
+      setItems(next);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : t("runnerWorkspaces.loadFailed")); }
     finally { setBusy(false); }
   }
