@@ -82,6 +82,21 @@ class FakeTransport implements RemoteTransport {
   }
 }
 
+/** Answers after a beat, the way a machine that is slow but up does. */
+class SlowTransport implements RemoteTransport {
+  readonly calls: string[] = [];
+
+  async open(): Promise<SshSession> {
+    throw new Error("Unexpected SSH connection");
+  }
+
+  async run(_target: RemoteSshAccess, script: string): Promise<RemoteCommandResult> {
+    this.calls.push(script);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return { exitCode: 0, stderr: "", stdout: "" };
+  }
+}
+
 const TRUSTED_KEY = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}` };
 
 /** Credentials the product holds itself; no ssh config, agent or known_hosts. */
@@ -486,6 +501,27 @@ test("a machine with no Runner connected still reports whether it answers", asyn
   const offline = await client.reachability(sshHost);
   assert.equal(offline.state, "offline");
   assert.match(offline.error ?? "", /No route to host/u);
+});
+
+test("a machine list answers before the machine does, and the answer lands behind it", async () => {
+  const sshHost: RemoteHostTarget = {
+    alias: "slow-node", connectionKind: "ssh", createdAt: "2026-09-01T00:00:00.000Z",
+    id: "host-slow", runnerCommand: "sciencediscovery-runner", status: "ready",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+  const transport = new SlowTransport();
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
+
+  // The first render has nothing to show yet, and says so instead of waiting.
+  assert.equal(client.reachabilityNow(sshHost).state, "checking");
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.equal(transport.calls.length, 1, "the ask runs behind the answer");
+  assert.equal(client.reachabilityNow(sshHost).state, "checking");
+  assert.equal(transport.calls.length, 1, "a second render joins the ask already in flight");
+
+  await client.refreshReachability(sshHost);
+  assert.equal(client.reachabilityNow(sshHost).state, "online", "the next render reads the landed answer");
+  assert.equal(transport.calls.length, 1);
 });
 
 test("a machine this installation cannot reach at all is unknown, not offline", async () => {

@@ -37,6 +37,7 @@ import { SshKeyFileField } from "./SshKeyFileField.js";
 import { ChevronRightIcon, CpuIcon, ThermometerIcon, ZapIcon } from "./icons.js";
 import { PermissionDecisionActions } from "./PermissionDecisionActions.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
+import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
 
 /**
  * Remote machines a Session may use: its own `remoteRunnerHostIds` override
@@ -374,9 +375,11 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   onError: (reason: string | Error) => void;
 }) {
   const { t } = useLocale();
-  const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
+  // A machine the settings pane has already listed is not a blank page the
+  // second time it is opened: paint it, then let the refresh land.
+  const [hosts, setHosts] = useState<RemoteHostTarget[]>(() => readSettingsCache<RemoteHostTarget[]>(client, "runner-hosts") ?? []);
   // One selection map covers every Runner, including the built-in endpoint.
-  const [npu, setNpu] = useState<NpuRunnerSelectionsResponse>();
+  const [npu, setNpu] = useState<NpuRunnerSelectionsResponse | undefined>(() => readSettingsCache<NpuRunnerSelectionsResponse>(client, "runner-npu"));
   const npuSelections = npu?.selections ?? {};
   const selectNpu = (runnerId: string, devices: number[]): void => {
     setNpu((current) => current && { ...current, selections: { ...current.selections, [runnerId]: devices } });
@@ -414,17 +417,28 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 
   async function refresh(): Promise<void> {
     const items = await client.listRunners();
+    writeSettingsCache(client, "runner-hosts", items);
     setHosts(items);
     onHostsChange?.(items);
   }
 
   useEffect(() => { void refresh().catch((error: Error) => onError(error)); }, [client]);
+  // A machine whose reachability the API answered from nothing is being asked
+  // behind the answer; poll until every "checking" badge has an outcome.
+  const checkingHosts = hosts.some((host) => host.reachability?.state === "checking");
+  useEffect(() => {
+    if (!checkingHosts) return;
+    const timer = globalThis.setInterval(() => { void refresh().catch(() => undefined); }, 2_000);
+    return () => globalThis.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkingHosts, client]);
   // Read once for all Runners rather than per machine record, and separately
   // from the catalog so a machine list still renders if this call fails.
   useEffect(() => {
     let cancelled = false;
     const load = async (): Promise<void> => {
       const loaded = await client.listRunnerNpuDevices();
+      writeSettingsCache(client, "runner-npu", loaded);
       if (!cancelled) setNpu(loaded);
     };
     void load().catch((error: unknown) => { onError(error instanceof Error ? error : String(error)); });

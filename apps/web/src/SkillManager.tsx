@@ -30,6 +30,7 @@ import type { ApiClient } from "./api.js";
 import { translate, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
+import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
 import { SkillWorkspaceDialog } from "./SkillWorkspaceDialog.js";
 
 export interface SkillEditorDraft {
@@ -173,12 +174,16 @@ export function SkillManager({
 }) {
   const [view, setView] = useState<SkillManagerView>(initialView);
   // With the JiuwenSwarm backend its skills (ours imported there, and its own) get a tab of their own.
-  const [jiuwenSwarm, setJiuwenSwarm] = useState(false);
+  // The answer does not change between openings of this pane, so a known one paints at once.
+  const [jiuwenSwarm, setJiuwenSwarm] = useState(() => readSettingsCache<boolean>(client, "jiuwenswarm-skills") ?? false);
   useEffect(() => {
     let active = true;
     // An API without the route (or a client without the call) is the built-in backend.
     void Promise.resolve().then(() => client.listJiuwenSwarmSkills())
-      .then((result) => { if (active) setJiuwenSwarm(result.backend === "jiuwenswarm"); }, () => undefined);
+      .then((result) => {
+        writeSettingsCache(client, "jiuwenswarm-skills", result.backend === "jiuwenswarm");
+        if (active) setJiuwenSwarm(result.backend === "jiuwenswarm");
+      }, () => undefined);
     return () => { active = false; };
   }, [client]);
 
@@ -265,7 +270,8 @@ function SkillCatalogManager({
   const [draftSourceSummary, setDraftSourceSummary] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string>();
-  const [reviewDrafts, setReviewDrafts] = useState<SkillReviewDraftSummary[]>([]);
+  const [reviewDrafts, setReviewDrafts] = useState<SkillReviewDraftSummary[]>(() =>
+    readSettingsCache<SkillReviewDraftSummary[]>(client, "skill-review-drafts") ?? []);
   const [workspaceSkillId, setWorkspaceSkillId] = useState<string>();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const importInput = useRef<HTMLInputElement>(null);
@@ -286,6 +292,7 @@ function SkillCatalogManager({
     async function refreshPending(): Promise<void> {
       try {
         const next = await client.listSkillReviewDrafts();
+        writeSettingsCache(client, "skill-review-drafts", next);
         if (!active) return;
         setReviewDrafts(next);
       } catch (reason) {

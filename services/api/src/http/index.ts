@@ -1454,14 +1454,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "GET" && url.pathname === "/api/runners") {
         sendJson(response, 200, await Promise.all(["local", ...store.listRemoteHosts().map((host) => host.id)]
-          .map((id) => runnerTarget(store, runnerClient, remoteCompute, id))));
+          .map((id) => runnerTarget(store, runnerClient, remoteCompute, id, { reachability: "now" }))));
         return;
       }
       const runnerDetail = url.pathname.match(/^\/api\/runners\/([^/]+)$/);
       if (runnerDetail && request.method === "GET" && runnerDetail[1] !== "npu") {
         const id = decodeURIComponent(runnerDetail[1]!);
         if (id !== "local" && !store.getRemoteHost(id)) return sendError(response, 404, "Runner not found");
-        sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id));
+        sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id, { reachability: "now" }));
         return;
       }
       if (request.method === "POST" && /^\/api\/runners\/local\/(connect|probe)$/.test(url.pathname)) {
@@ -1477,7 +1477,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // "disconnected" would otherwise say nothing about the machine.
           const reachability = runnerStatus.state === "ready"
             ? undefined
-            : await remoteCompute.reachability(host);
+            : remoteCompute.reachabilityNow(host);
           return { ...host, runnerStatus, ...(reachability ? { reachability } : {}) };
         })));
         return;

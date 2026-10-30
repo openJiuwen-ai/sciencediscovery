@@ -15,6 +15,7 @@
 import { CodexConfigCard } from "./CodexConfigCard.js";
 import { compactStatus, reasoningStatus, reportedFailure, researchLabel, returnedPaperCount } from "./timeline/research-label.js";
 import { ProjectRecordSlot } from "./plugins/project-views.js";
+import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
 import { useEffect, useState, type FormEvent } from "react";
 
 import type {
@@ -133,9 +134,11 @@ export function SpecialistManager({
   onError,
   skills,
   skillsBackend,
+  knownSpecialists,
 }: {
   client: ApiClient;
   connectors: ConnectorManifest[];
+  knownSpecialists?: Specialist[];
   onChanged: (specialists: Specialist[]) => void;
   onError: (reason: string | Error) => void;
   skills: SkillDescriptor[];
@@ -143,7 +146,9 @@ export function SpecialistManager({
   skillsBackend?: "jiuwenswarm" | "native";
 }) {
   const { t } = useLocale();
-  const [specialists, setSpecialists] = useState<Specialist[]>([]);
+  // The App already holds the catalog it loaded at startup, so the list paints
+  // from it instead of from nothing; the refresh below still runs.
+  const [specialists, setSpecialists] = useState<Specialist[]>(() => knownSpecialists ?? []);
   const [editingId, setEditingId] = useState<string>();
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
@@ -152,8 +157,9 @@ export function SpecialistManager({
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [reviewerEnabled, setReviewerEnabled] = useState<boolean | undefined>(undefined);
-  const [reviewerBusy, setReviewerBusy] = useState(true);
+  const cachedReviewer = readSettingsCache<{ enabled: boolean }>(client, "reviewer-specialist-settings");
+  const [reviewerEnabled, setReviewerEnabled] = useState<boolean | undefined>(cachedReviewer?.enabled);
+  const [reviewerBusy, setReviewerBusy] = useState(cachedReviewer === undefined);
   const [builtinBusy, setBuiltinBusy] = useState(false);
   const [builtinExpanded, setBuiltinExpanded] = useState(false);
 
@@ -199,6 +205,7 @@ export function SpecialistManager({
   useEffect(() => {
     void client.getReviewerSpecialistSettings()
       .then((settings) => {
+        writeSettingsCache(client, "reviewer-specialist-settings", settings);
         setReviewerEnabled(settings.enabled);
       })
       .catch((error: Error) => onError(error))
