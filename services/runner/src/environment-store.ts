@@ -39,7 +39,7 @@ import micromambaManifest from "./micromamba-releases.json" with { type: "json" 
 import { EnvironmentAccess } from "./environment-access.js";
 // [windows-desktop] win-64 binary name (.exe), conda interpreter layout
 // and rename retry live in the platform adaptation layer ().
-import { environmentInterpreterPath, micromambaBinaryName, packageInstallGuidance, renameReplace, starterPackages } from "./platform/index.js";
+import { environmentInterpreterPath, environmentShellPath, environmentShellUtilityPath, micromambaBinaryName, packageInstallGuidance, renameReplace, starterPackages } from "./platform/index.js";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_VERSION = 1;
@@ -55,6 +55,7 @@ const MANAGED_PROVISIONER_TIMEOUT_MS = 120_000;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
 );
+const MANAGED_SHELL_UTILITIES = ["cat", "grep", "head", "sed", "tail", "wc"] as const;
 // [windows-desktop] starter specs are platform-dispatched (win32 uses
 // matplotlib-base, see platform/win32.ts ). POSIX list unchanged.
 
@@ -437,6 +438,31 @@ export class EnvironmentStore {
       state: this.setupState,
       updatedAt: this.setupUpdatedAt,
     };
+  }
+
+  async shellCapability(): Promise<{ available: boolean; name: "bash"; utilities: string[]; unavailableReason?: string }> {
+    if (!this.capability.available) {
+      return { available: false, name: "bash", utilities: [],
+        unavailableReason: this.capability.unavailableReason ?? "The managed shell environment is unavailable" };
+    }
+    const runtime = this.resolveRuntime(undefined, "python");
+    try {
+      await access(environmentShellPath(runtime.prefixPath), constants.X_OK);
+      const utilities: string[] = [];
+      for (const utility of MANAGED_SHELL_UTILITIES) {
+        if (await access(environmentShellUtilityPath(runtime.prefixPath, utility), constants.X_OK).then(() => true, () => false)) {
+          utilities.push(utility);
+        }
+      }
+      const missing = MANAGED_SHELL_UTILITIES.filter((utility) => !utilities.includes(utility));
+      return missing.length
+        ? { available: false, name: "bash", utilities,
+            unavailableReason: `Managed Bash is missing required utilities: ${missing.join(", ")}` }
+        : { available: true, name: "bash", utilities };
+    } catch (error) {
+      return { available: false, name: "bash", utilities: [],
+        unavailableReason: `Managed Bash is unavailable: ${error instanceof Error ? error.message : String(error)}` };
+    }
   }
 
   async initialize(): Promise<void> {

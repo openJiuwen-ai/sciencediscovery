@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 
-import { condaActivationPaths, environmentInterpreterPath, environmentShellPath, micromambaBinaryName, packageInstallGuidance, renameReplace, restrictToOwner, starterPackages, terminateTree } from "./index.js";
+import { condaActivationPaths, environmentInterpreterPath, environmentShellPath, environmentShellUtilityPath, micromambaBinaryName, packageInstallGuidance, renameReplace, restrictToOwner, starterPackages, terminateTree } from "./index.js";
 
 function processAlive(pid: number): boolean {
   // tasklist exit code stays 0 even for no match, so inspect the output.
@@ -117,6 +117,7 @@ test("starterPackages swaps matplotlib for matplotlib-base on win32", () => {
 test("environmentShellPath resolves the m2-bash location inside a win-64 prefix", () => {
 // Verified on a real install: m2-bash lands at Library\usr\bin\bash.exe inside a win-64 prefix.
   assert.equal(environmentShellPath("C:\\envs\\rev-1"), "C:\\envs\\rev-1\\Library\\usr\\bin\\bash.exe");
+  assert.equal(environmentShellUtilityPath("C:\\envs\\rev-1", "head"), "C:\\envs\\rev-1\\Library\\usr\\bin\\head.exe");
 });
 
 test("packageInstallGuidance explains missing win-64 builds with alternatives", () => {

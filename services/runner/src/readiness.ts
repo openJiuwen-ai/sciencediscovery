@@ -15,11 +15,17 @@ export class RunnerReadiness {
   private readonly instanceId = randomUUID();
   private cached?: RunnerExecutionCapability;
   private pending?: Promise<RunnerExecutionCapability>;
-  constructor(private readonly sandbox: SandboxKind, private readonly executable: string) {}
+  constructor(
+    private readonly sandbox: SandboxKind,
+    private readonly executable: string,
+    private readonly shellProbe?: () => Promise<NonNullable<RunnerExecutionCapability["shell"]>>,
+  ) {}
 
   async get(refresh = false): Promise<RunnerExecutionCapability> {
     if (this.pending) return this.pending;
-    if (!refresh && this.cached) return this.cached;
+    // The managed environment can finish setup after Runner startup. Its
+    // lightweight file probe must therefore not stay cached as unavailable.
+    if (!refresh && this.cached && !(this.sandbox === "none" && this.shellProbe)) return this.cached;
     this.pending = this.probe().then(value => (this.cached = value)).finally(() => { this.pending = undefined; });
     return this.pending;
   }
@@ -30,10 +36,15 @@ export class RunnerReadiness {
       // probe. ready=true so runs proceed; sandboxUsable stays false so the
       // UI/API can still surface that isolation is absent (F6 tightens
       // permissions to compensate).
+      const shell = await this.shellProbe?.();
+      const ready = shell?.available !== false;
       return {
         instanceId: this.instanceId, checkedAt: new Date().toISOString(), sandbox: "none",
-        dependencyAvailable: true, sandboxUsable: false, ready: true, reason: "ready",
-        detail: "unsandboxed direct execution",
+        dependencyAvailable: ready, sandboxUsable: false, ready,
+        reason: ready ? "ready" : "dependency-unavailable",
+        detail: shell?.unavailableReason ?? "unsandboxed direct execution",
+        platform: process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux",
+        ...(shell ? { shell } : {}),
       };
     }
     const report: RunnerExecutionCapability = {

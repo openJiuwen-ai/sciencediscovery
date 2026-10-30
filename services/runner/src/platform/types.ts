@@ -102,4 +102,7 @@ export interface OsAdaptation {
    * bwrap/seatbelt path and never use the unsandboxed shell path.
    */
   environmentShellPath(prefixPath: string): string;
+
+  /** Absolute path of a utility shipped beside the managed shell. */
+  environmentShellUtilityPath(prefixPath: string, utility: string): string;
 }

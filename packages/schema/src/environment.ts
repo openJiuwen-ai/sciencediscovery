@@ -513,6 +513,13 @@ export interface RunnerExecutionCapability {
   ready: boolean;
   reason: "ready" | "dependency-unavailable" | "incompatible" | "sandbox-unusable";
   detail?: string;
+  platform?: "linux" | "macos" | "windows";
+  shell?: {
+    available: boolean;
+    name: "bash";
+    utilities: string[];
+    unavailableReason?: string;
+  };
 }
 
 export interface ExecutionBlock {
