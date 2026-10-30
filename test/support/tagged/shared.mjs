@@ -257,6 +257,10 @@ export async function main(args=process.argv.slice(2)) {
     ?(requestedOs??[profile.targets[0].os]).flatMap(os=>(requestedArch??[profile.targets[0].arch]).map(arch=>({os,arch})))
     :profile.targets.map(t=>targetArch?{...t,arch:targetArch}:t);
   let plan=createPlan(catalog,{revision,selector:selector||'',targets,execution,...(dimensions.length?{}:{profile:profileName})});
+  if (process.env.E2E_BIOMNI_CASE_IDS?.trim()) {
+    const biomniCaseIds = process.env.E2E_BIOMNI_CASE_IDS.split(',').map(id => id.trim());
+    plan = subplan({ ...plan, biomni_case_ids: biomniCaseIds }, plan.entries);
+  }
   if(needPW){
     // Pin the evaluator/input implementation independently of the candidate
     // product SHA so stored scores identify their judge/rubric version.

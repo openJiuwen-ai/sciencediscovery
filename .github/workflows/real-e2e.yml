@@ -19,6 +19,10 @@ on:
         description: "Maximum concurrent isolated real workers (allowed: 1, 2, 4)"
         type: number
         default: 2
+      biomni-case-ids:
+        description: "Optional comma-separated BiomniBench-DA L5 IDs; empty runs all public tasks"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -40,6 +44,7 @@ jobs:
     env:
       CI_PROFILE: ${{ inputs.profile }}
       CI_E2E_BACKEND: ${{ inputs.backend }}
+      E2E_BIOMNI_CASE_IDS: ${{ inputs.biomni-case-ids || '' }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
     steps:
@@ -113,12 +118,14 @@ jobs:
       CI_ALLOW_REAL: "1"
       CI_PROFILE: ${{ inputs.profile }}
       CI_E2E_BACKEND: ${{ inputs.backend }}
+      E2E_BIOMNI_CASE_IDS: ${{ inputs.biomni-case-ids || '' }}
       CI_REAL_SHARD: ${{ matrix.shard }}
       E2E_COMMIT_SHA: ${{ github.sha }}
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE: ${{ github.workspace }}/.ci-results/model-invalid-arguments.jsonl
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
       CI_BIOMNI_CASE_ID: ${{ matrix.biomni_case }}
+      SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS: "900000"
       # Biomni inputs exceed the product's 10 GiB default workspace quota.
       # Forty GiB covers the largest pinned input plus the required output reserve.
       SCIENCE_AGENT_MAX_WORKSPACE_BYTES: ${{ matrix.biomni_case != '' && '42949672960' || '' }}

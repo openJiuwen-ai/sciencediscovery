@@ -26,7 +26,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_JIUWENSWARM_PLANNING` | `todo` | JiuwenSwarm todo tools; `update_plan` selects the product planning tool. |
 | `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` | `task` | Platform task bridge (children still use Swarm); `jiuwenswarm` selects native Swarm subagents. |
 | `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `jiuwenswarm` | Install selected Skills into Swarm when default prompt/tools are used; `ours` uses product loading. |
-| `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | Initial no-output/no-progress timeout (`0` is unlimited) |
+| `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `900000` | Initial no-output/no-progress timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | Initial whole-turn timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | Maximum concurrency for explicitly parallel-safe tool calls in one Agent step; positive integer, and `1` makes tool execution serial |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner bind address |

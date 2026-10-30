@@ -6,6 +6,20 @@ addition to L4. The other 50 upstream tasks are private and are not covered.
 The former `da-13-3` and `da-14-1` smoke cases are included in this corpus.
 L1–L4 do not select these paid benchmark tasks.
 
+For a manual GitHub Actions run, enter a comma-separated list in the CI
+workflow's `biomni-case-ids` input. Enter the following four IDs to create only
+four isolated L5 workers:
+
+```
+da-1-3,da-1-4,da-17-1,da-17-3
+```
+
+The manual `release` profile still runs the normal cumulative L1-L4 checks and
+their real cases. Within its BiomniBench-DA L5 portion, the matrix creates only
+those four workers. Leaving the input empty keeps the standard full 50-task
+release plan. The same input is available to reusable CI callers as
+`biomni-case-ids`.
+
 ## Resumable serial execution on a shared host
 
 Prepare and build an isolated, committed checkout first, including the pinned

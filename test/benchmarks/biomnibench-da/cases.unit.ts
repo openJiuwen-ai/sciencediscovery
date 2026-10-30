@@ -9,7 +9,9 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import { analysisPrompt, loadAnalysisPrompt, researchTeamParameters, researchTeamReference, selectedCases, cases, manifest } from "./cases.ts";
 
 test("BiomniBench selection rejects typos and duplicates", () => {
+  assert.equal(selectedCases("").length, cases.length);
   assert.equal(selectedCases("da-13-3,da-14-1").length, 2);
+  assert.deepEqual(selectedCases("da-1-3,da-1-4,da-17-1,da-17-3").map(item => item.id), ["da-1-3", "da-1-4", "da-17-1", "da-17-3"]);
   assert.equal(selectedCases("da-14-1")[0].id, "da-14-1");
   for (const bad of ["", "da-999-1", "da-13-3,da-13-3"]) assert.throws(() => selectedCases(bad));
 });

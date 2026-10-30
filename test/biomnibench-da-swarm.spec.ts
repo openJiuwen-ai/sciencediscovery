@@ -13,7 +13,7 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { mainRunChain } from "./helpers/run-chain.ts";
-import { loadAnalysisPrompt, cases, manifest, researchTeamReference } from "./benchmarks/biomnibench-da/cases.ts";
+import { loadAnalysisPrompt, selectedCases, manifest, researchTeamReference } from "./benchmarks/biomnibench-da/cases.ts";
 import { generationTokens, judgeTokens, machineIdentity, MEASUREMENT_VERSION, settled, startMemorySampler, toolMetrics } from "./benchmarks/biomnibench-da/metrics.mjs";
 import { manifestHash, validateMetrics } from "../.ci/biomni-gate.mjs";
 import { biomniCase } from "./support/tagged/execution.mjs";
@@ -53,7 +53,7 @@ async function waitForResearch(page: any, sessionId: string, rootRunId: string, 
   throw new Error("Research did not settle with trace.md and answer.txt within the end-to-end budget");
 }
 
-for (const sample of cases) {
+for (const sample of selectedCases()) {
 /**
  * E2E-META
  * Purpose: Run every public BiomniBench-DA task in L5 and require complete score and resource evidence.

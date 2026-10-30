@@ -20,7 +20,7 @@ export const researchTeamParameters = [
 ].join("\n");
 
 export function selectedCases(value = process.env.E2E_BIOMNI_CASE_IDS) {
-  if (value === undefined) return [...cases];
+  if (value === undefined || value.trim() === "") return [...cases];
   const ids = value.split(",").map(s => s.trim());
   if (ids.some(id => !cases.some(c => c.id === id)) || new Set(ids).size !== ids.length) {
     throw new Error("E2E_BIOMNI_CASE_IDS must contain unique public BiomniBench-DA IDs");

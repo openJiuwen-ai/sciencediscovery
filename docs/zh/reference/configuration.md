@@ -26,7 +26,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_JIUWENSWARM_PLANNING` | `todo` | JiuwenSwarm todo；`update_plan` 改用产品规划工具。 |
 | `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` | `task` | 平台 task 桥接（子运行仍使用 Swarm）；`jiuwenswarm` 改用 Swarm 原生子代理。 |
 | `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `jiuwenswarm` | 默认提示词与工具模式下将选中技能安装给 Swarm；`ours` 改用产品加载方式。 |
-| `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
+| `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `900000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | 初始 Agent 单轮总时长上限（`0` = 无限） |
 | `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | 单个 Agent Step 中显式声明为并发安全的工具最大并发数；必须为正整数，`1` 表示工具串行执行 |
 | `SCIENCE_AGENT_RUNNER_HOST` | `127.0.0.1` | Runner 监听地址 |

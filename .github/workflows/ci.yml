@@ -45,6 +45,10 @@ on:
         type: choice
         options: ['1', '2', '4']
         default: '2'
+      biomni-case-ids:
+        description: "Optional comma-separated BiomniBench-DA L5 IDs; empty runs all public tasks"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       release-version:
@@ -69,6 +73,10 @@ on:
         description: "Maximum concurrent isolated real workers (allowed: 1, 2, 4)"
         type: number
         default: 2
+      biomni-case-ids:
+        description: "Optional comma-separated BiomniBench-DA L5 IDs; empty runs all public tasks"
+        type: string
+        default: ""
 
 # Keyed on the calling workflow as well as the ref: a nightly run and a push
 # run land on refs/heads/main at the same time, and without the workflow name
@@ -184,6 +192,7 @@ jobs:
       profile: ${{ needs.policy.outputs.profile }}
       backend: ${{ needs.policy.outputs.backend }}
       max-parallel: ${{ fromJSON(format('{0}', inputs.max-parallel || 2)) }}
+      biomni-case-ids: ${{ inputs.biomni-case-ids || '' }}
 
   real-scheduled:
     name: L4/L5 real E2E
@@ -197,6 +206,7 @@ jobs:
       profile: ${{ needs.policy.outputs.profile }}
       backend: ${{ needs.policy.outputs.backend }}
       max-parallel: ${{ fromJSON(format('{0}', inputs.max-parallel || 2)) }}
+      biomni-case-ids: ${{ inputs.biomni-case-ids || '' }}
 
   ut:
     needs: [policy, l1]
