@@ -151,4 +151,7 @@ export const win32Adaptation: OsAdaptation = {
     // (MSYS2 port, msys2 runtime DLLs included).
     return resolve(prefixPath, "Library", "usr", "bin", "bash.exe");
   },
+  environmentShellUtilityPath(prefixPath, utility) {
+    return resolve(prefixPath, "Library", "usr", "bin", `${utility}.exe`);
+  },
 };

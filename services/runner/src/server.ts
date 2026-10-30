@@ -1145,13 +1145,6 @@ async function sandboxNetworkCapability(
 export async function startRunnerServer(config = loadRunnerConfig()): Promise<Server> {
   const sandbox = executorSandboxKind(config);
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
-  const readiness = new RunnerReadiness(sandbox, sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath);
-  const capability = await readiness.get();
-  if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
-  // The operational log is a file. A missing sandbox executable is a setup
-  // step the operator must take, so it also goes to the terminal that started
-  // the Runner (source mode no longer blocks startup on it).
-  if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
   const environmentStore = new EnvironmentStore({
     allowedChannels: config.scientificAllowedChannels ?? ["conda-forge"],
     enabled: config.scientificEnvsEnabled === true,
@@ -1161,6 +1154,16 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     runnerVersion: RUNNER_VERSION,
   });
   await environmentStore.initialize();
+  const readiness = new RunnerReadiness(
+    sandbox,
+    sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath,
+    sandbox === "none" ? () => environmentStore.shellCapability() : undefined,
+  );
+  const capability = await readiness.get();
+  if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
+  // The operational log is a file. A missing execution dependency is a setup
+  // step the operator must take, so it also goes to the starting terminal.
+  if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
   const envProfiles = new SessionEnvProfileStore();
   // A short runtime directory keeps the socket independent of how deep the
   // checkout (and therefore the data directory) happens to be. Resolution is

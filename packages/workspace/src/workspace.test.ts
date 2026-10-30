@@ -73,6 +73,19 @@ test("direct recovery tools describe reachable remote scope and forward consent 
   assert.deepEqual(calls[1], [{ authorizationId: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account }, controller.signal, "new-call"]);
 });
 
+test("run_shell describes the target-specific Windows shell contract", () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
+    executeShell: async () => ({}) as ShellExecutionResult,
+    runnerReadiness: { check: async () => ({ ready: true }), wait: async () => ({ action: "cancel" }) },
+  });
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  assert.match(shell.description, /check_runner capability is authoritative/);
+  assert.match(shell.description, /Windows direct-execution Runners use managed Bash/);
+  assert.match(shell.description, /cat, grep, head, sed, tail and wc/);
+  assert.match(tools.find((tool) => tool.name === "check_runner")!.description, /platform, Shell, guaranteed utilities/);
+});
+
 test("Runner waiting instructions distinguish a requested card from repair authorization", async () => {
   const calls: string[] = [];
   const tools = createWorkspaceTools(process.cwd(), {

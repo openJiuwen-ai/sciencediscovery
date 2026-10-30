@@ -45,6 +45,25 @@ test("a missing sandbox executable says how to install it, in at most three line
   for (const detail of [bubblewrap.detail, seatbelt.detail]) assert.ok((detail ?? "").split("\n").length <= 3);
 });
 
+test("none-provider readiness reports and rechecks its managed shell contract", async () => {
+  let available = false;
+  const readiness = new RunnerReadiness("none", "unused", async () => ({
+    available,
+    name: "bash",
+    utilities: available ? ["cat", "grep", "head", "sed", "tail", "wc"] : [],
+    ...(available ? {} : { unavailableReason: "Managed Bash is missing required utilities: head" }),
+  }));
+  const missing = await readiness.get();
+  assert.equal(missing.ready, false);
+  assert.equal(missing.reason, "dependency-unavailable");
+  assert.equal(missing.shell?.available, false);
+  available = true;
+  const repaired = await readiness.get();
+  assert.equal(repaired.ready, true);
+  assert.equal(repaired.shell?.utilities.includes("head"), true);
+  assert.equal(repaired.platform, "linux");
+});
+
 test("management remains reachable and execution fails closed without a sandbox", async t => {
   const root = await mkdtemp(join(tmpdir(), "runner-no-sandbox-"));
   t.after(() => rm(root, { recursive: true, force: true }));
