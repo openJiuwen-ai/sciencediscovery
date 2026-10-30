@@ -91,9 +91,11 @@ export const win32Adaptation: OsAdaptation = {
       : resolve(prefixPath, "Scripts", "R.exe");
   },
   condaActivationPaths(prefixPath) {
-    // win-64 python.exe delay-loads numpy/scipy DLLs from
-    // Library\bin; without these on PATH the import dies with 0xC06D007F.
-    return [prefixPath, resolve(prefixPath, "Library", "bin"), resolve(prefixPath, "Scripts")];
+    // Match the useful part of conda's win-64 activation order. Library\bin
+    // supplies delayed DLLs for Python, while Library\usr\bin contains the
+    // managed MSYS2 shell and its explicitly installed command-line tools.
+    return [prefixPath, resolve(prefixPath, "Library", "bin"),
+      resolve(prefixPath, "Library", "usr", "bin"), resolve(prefixPath, "Scripts")];
   },
   async renameReplace(source, destination) {
     // AV scanners and search indexers briefly hold freshly written
@@ -120,9 +122,13 @@ export const win32Adaptation: OsAdaptation = {
       return [
         ...STARTER_PACKAGE_SPECS.python
           .map((spec) => (spec === "matplotlib=3.9" ? "matplotlib-base=3.9" : spec)),
-        // run_shell needs a shell binary and Windows hosts have no bash; the starter
-        // env preinstalls MSYS2 m2-bash (~3MB, lands at Library\usr\bin\bash.exe).
+        // run_shell needs a stable shell toolchain rather than whichever Unix
+        // utilities happen to be installed on the host. head/tail/cat/wc come
+        // from coreutils; grep and sed are separate MSYS2 packages.
         "m2-bash",
+        "m2-coreutils",
+        "m2-grep",
+        "m2-sed",
       ];
     }
     return [...STARTER_PACKAGE_SPECS[language]];
