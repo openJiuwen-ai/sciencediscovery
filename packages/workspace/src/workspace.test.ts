@@ -615,6 +615,7 @@ test("run_npu_job submits only allowlisted workloads with workspace-scoped input
   const resultText = result.content[0]?.type === "text" ? result.content[0].text : "";
   assert.match(resultText, /createdFiles/);
   assert.match(resultText, /artifacts/);
+  assert.doesNotMatch(resultText, /session-1|workspaceRoot|configPath|"logs"/);
   assert.deepEqual(declaredArtifacts, ["antibody_pipeline/runs/run-1/01_rfdiffusion/output_000000.pdb"]);
 });
 
@@ -1333,8 +1334,11 @@ test("managed environments expose governed create, delete, install, and uninstal
     .execute("list-call", {});
   await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.create)!
     .execute("create-call", { language: "python", name: "analysis" });
-  await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.install)!
+  const installed = await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.install)!
     .execute("install-call", { environmentId: "task-test", packages: ["numpy=2.0"] });
+  const installedText = installed.content[0]?.type === "text" ? installed.content[0].text : "";
+  assert.match(installedText, /revisionId/);
+  assert.doesNotMatch(installedText, /packageSpecHash|provisioner|runnerVersion|snapshot/);
   await tools.find((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.install)!
     .execute("pip-install-call", {
       environmentId: "task-test",
@@ -1725,6 +1729,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
         createdAt: "2026-08-20T00:00:00.000Z",
         draftId: "11111111-1111-4111-8111-111111111111",
         fileCount: 1 + (input.resources?.length ?? 0),
+        files: [{ content: input.instructions, path: "SKILL.md" }],
         name: input.name,
         updatedAt: "2026-08-20T00:00:00.000Z",
       };
@@ -1763,6 +1768,7 @@ test("create_skill requires the selected skill-creator instructions before mutat
   assert.equal(request?.metadata?.version, "1.0.0");
   assert.equal(request?.resources?.[0]?.path, "references/rubric.md");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /pending draft/);
+  assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /Apply the rubric|"files"/);
 });
 
 test("subagent tools preserve structured governance inputs", async () => {
@@ -2129,7 +2135,11 @@ test("independent SSH/SLURM jobs are not offered to the model", () => {
 
 test("workspace_transfer exposes explicit mappings and independent management operations", async () => {
   const calls: string[] = [];
-  const record = { id: "transfer", state: "queued" } as import("@sciencediscovery/schema").WorkspaceTransfer;
+  const record = {
+    agentId: "agent-secret", createdAt: "2026-10-30T00:00:00.000Z", files: [{ sourcePath: "in", targetPath: "out" }],
+    id: "transfer", progress: [{ bytes: 2, sha256: "hash-secret", size: 10, sourcePath: "in", state: "copying", targetPath: "out" }],
+    sessionId: "session-secret", sourceSnapshotId: "snapshot-secret", sourceWorkspaceId: "own", state: "running", targetWorkspaceId: "remote",
+  } as import("@sciencediscovery/schema").WorkspaceTransfer;
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
     workspaceTransfers: {
@@ -2145,7 +2155,10 @@ test("workspace_transfer exposes explicit mappings and independent management op
   assert.match((listed.content[0] as { text: string }).text, /own/);
   await tool.execute("copy", { operation: "start", source_workspace_id: "own", target_workspace_id: "remote", files: [{ source_path: "in", target_path: "out" }] });
   assert.deepEqual(JSON.parse(calls[0]!), { sourceWorkspaceId: "own", targetWorkspaceId: "remote", files: [{ sourcePath: "in", targetPath: "out" }], conflict: "reject" });
-  await tool.execute("status", { operation: "status", transfer_id: "transfer" });
+  const status = await tool.execute("status", { operation: "status", transfer_id: "transfer" });
+  const statusText = (status.content[0] as { text: string }).text;
+  assert.match(statusText, /transferId.*transfer/);
+  assert.doesNotMatch(statusText, /agent-secret|session-secret|snapshot-secret|hash-secret|"files"/);
   await tool.execute("cancel", { operation: "cancel", transfer_id: "transfer" });
   assert.deepEqual(calls.slice(1), ["status:transfer", "cancel:transfer"]);
   await assert.rejects(tool.execute("missing", { operation: "start" }), /explicit file mappings/);
@@ -2153,7 +2166,9 @@ test("workspace_transfer exposes explicit mappings and independent management op
 
 test("Shell background mode and management tools do not start additional Shells", async () => {
   const calls: string[] = [];
-  const job = { id: "job", state: "running", runnerId: "remote" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const job = { id: "job", state: "running", runnerId: "remote", result: {
+    environmentVariables: { SCIENCE_AGENT_RUNNER_TOKEN: "runner-secret" }, stderr: "large stderr", stdout: "large stdout",
+  } } as import("@sciencediscovery/schema").AgentShellExecution;
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
     executeShell: async () => { throw new Error("legacy endpoint must not run"); },
@@ -2172,7 +2187,9 @@ test("Shell background mode and management tools do not start additional Shells"
   assert.match((background.content[0] as { text: string }).text, /still running/);
   await shell.execute("foreground", { command: "echo next", wait_ms: 5 });
   assert.equal(calls.at(-1), "wait:job:5");
-  await tools.find((tool) => tool.name === "execution_status")!.execute("status", { execution_id: "job", wait_ms: 0 });
+  const status = await tools.find((tool) => tool.name === "execution_status")!.execute("status", { execution_id: "job", wait_ms: 0 });
+  const statusText = (status.content[0] as { text: string }).text;
+  assert.doesNotMatch(statusText, /runner-secret|large stdout|large stderr|environmentVariables/);
   await tools.find((tool) => tool.name === "execution_logs")!.execute("logs", { execution_id: "job", cursor: 3 });
   await tools.find((tool) => tool.name === "execution_cancel")!.execute("cancel", { execution_id: "job" });
   assert.deepEqual(calls.slice(-3), ["wait:job:0", "logs:job:3", "cancel:job"]);

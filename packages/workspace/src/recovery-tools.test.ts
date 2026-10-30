@@ -25,8 +25,12 @@ test("run_shell forwards explicit recovery through the existing managed executio
   await shell.execute("resume", { command: "python3 recovery-fixture.py resume", recovery_metadata_path: "recovery.json", recovery_context: context, background: true });
   assert.deepEqual(options, { environmentId: undefined, cwd: undefined, recoveryMetadataPath: "recovery.json", recoveryContext: context });
   const status = tools.find(tool => tool.name === "execution_status")!;
-  assert.deepEqual((await status.execute("inspect", { execution_id: "child" })).details, job);
-  assert.deepEqual((await status.execute("list", {})).details, [job]);
+  assert.deepEqual((await status.execute("inspect", { execution_id: "child" })).details, {
+    executionId: "child", id: "child", recovery: job.recovery, state: "failed",
+  });
+  assert.deepEqual((await status.execute("list", {})).details, {
+    executions: [{ executionId: "child", recovery: job.recovery, state: "failed" }],
+  });
   assert.equal(submissions, 1);
 });
 

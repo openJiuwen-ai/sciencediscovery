@@ -168,6 +168,63 @@ function shellExecutionDetailsView(execution: AgentShellExecution, modelView: Re
   };
 }
 
+/** Status and cancellation responses point callers at execution_logs instead
+ * of repeatedly copying retained stdout/stderr and the complete Runner record. */
+function shellExecutionStatusView(execution: AgentShellExecution): Record<string, unknown> {
+  const view = shellExecutionModelView(execution);
+  const { stdout: _stdout, stderr: _stderr, ...status } = view;
+  return status;
+}
+
+function workspaceTransferView(transfer: WorkspaceTransfer): Record<string, unknown> {
+  return {
+    transferId: transfer.id, state: transfer.state,
+    sourceWorkspaceId: transfer.sourceWorkspaceId, targetWorkspaceId: transfer.targetWorkspaceId,
+    createdAt: transfer.createdAt,
+    ...(transfer.finishedAt ? { finishedAt: transfer.finishedAt } : {}),
+    ...(transfer.error ? { error: transfer.error } : {}),
+    ...(transfer.errorCode ? { errorCode: transfer.errorCode } : {}),
+    progress: (transfer.progress ?? []).map(({ bytes, error, size, sourcePath, state, targetPath }) => ({
+      sourcePath, targetPath, size, bytes, state, ...(error ? { error } : {}),
+    })),
+  };
+}
+
+function npuJobView(job: NpuJob): Record<string, unknown> {
+  return {
+    jobId: job.id, workloadId: job.workloadId, state: job.state, createdAt: job.createdAt,
+    ...(job.startedAt ? { startedAt: job.startedAt } : {}),
+    ...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
+    ...(job.environmentRevisionId ? { environmentRevisionId: job.environmentRevisionId } : {}),
+    ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+    ...(job.error ? { error: job.error } : {}),
+    ...(job.createdFiles?.length ? { createdFiles: job.createdFiles } : {}),
+  };
+}
+
+function environmentRevisionView(revision: EnvironmentRevision): Record<string, unknown> {
+  return {
+    revisionId: revision.id, environmentId: revision.environmentId,
+    language: revision.language, languageVersion: revision.languageVersion,
+    platform: revision.platform, packages: revision.packages, channels: revision.channels,
+    createdAt: revision.createdAt,
+    ...(revision.localWheels?.length ? {
+      localWheels: revision.localWheels.map(({ distribution, filename, manager, version }) => ({
+        filename, manager, ...(distribution ? { distribution } : {}), ...(version ? { version } : {}),
+      })),
+    } : {}),
+  };
+}
+
+function skillReviewDraftView(draft: SkillReviewDraftSummary): SkillReviewDraftSummary {
+  return {
+    ...(draft.baseRevision !== undefined ? { baseRevision: draft.baseRevision } : {}),
+    ...(draft.comparisonSource ? { comparisonSource: draft.comparisonSource } : {}),
+    createdAt: draft.createdAt, draftId: draft.draftId, fileCount: draft.fileCount, name: draft.name,
+    ...(draft.provenance ? { provenance: draft.provenance } : {}), updatedAt: draft.updatedAt,
+  };
+}
+
 type SubagentContractStopReason = "loop_capped" | "token_capped" | "turn_capped";
 type SubagentStopReason =
   | "cancelled"
@@ -1084,7 +1141,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           if (!params.transfer_id) throw new Error("transfer_id is required");
           result = params.operation === "cancel" ? await transfers.cancel(params.transfer_id) : transfers.get(params.transfer_id);
         }
-        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        const projected = params.operation === "workspaces"
+          ? result
+          : Array.isArray(result)
+            ? result.map((transfer) => workspaceTransferView(transfer as WorkspaceTransfer))
+            : workspaceTransferView(result as WorkspaceTransfer);
+        return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
       },
     };
     tools.push(transferTool);
@@ -1228,13 +1290,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             inputs,
             workloadId,
           }, signal);
-          return { content: [{ type: "text", text: JSON.stringify({ job }) }], details: { job } };
+          const projected = { job: npuJobView(job) };
+          return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
         }
         const jobId = params.job_id?.trim();
         if (!jobId) throw new Error(`job_id is required for ${params.operation}`);
         if (params.operation === "status") {
           const job = await broker.get(jobId, signal);
-          return { content: [{ type: "text", text: JSON.stringify({ job }) }], details: { job } };
+          const projected = { job: npuJobView(job) };
+          return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
         }
         if (params.operation === "logs") {
           const logs = await broker.logs(jobId, signal);
@@ -1243,7 +1307,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (params.operation === "result") {
           const result = await broker.result(jobId, signal);
           const artifacts = await declareNpuJobArtifacts(result.job.createdFiles ?? []);
-          const details = artifacts.length > 0 ? { ...result, artifacts } : result;
+          const details = artifacts.length > 0
+            ? { job: npuJobView(result.job), artifacts }
+            : { job: npuJobView(result.job) };
           // Mirror the terminal job to the memory graph (fire-and-forget — the
           // recorder swallows its own failures). Only successfully declared
           // artifacts carry an artifact_id; failed declarations are skipped so
@@ -1256,7 +1322,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           return { content: [{ type: "text", text: JSON.stringify(details) }], details };
         }
         const job = await broker.cancel(jobId, signal);
-        return { content: [{ type: "text", text: JSON.stringify({ job }) }], details: { job } };
+        const projected = { job: npuJobView(job) };
+        return { content: [{ type: "text", text: JSON.stringify(projected) }], details: projected };
       },
       label: "Run NPU broker job",
       name: "run_npu_job",
@@ -1679,7 +1746,12 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const value = params.execution_id
           ? await manager.wait(params.execution_id, params.wait_ms ?? 0, signal)
           : manager.list();
-        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+        if (Array.isArray(value)) {
+          const executions = value.map((execution) => shellExecutionStatusView(execution));
+          return { content: [{ type: "text", text: JSON.stringify({ executions }) }], details: { executions } };
+        }
+        const modelView = shellExecutionStatusView(value);
+        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: shellExecutionDetailsView(value, modelView) };
       },
     };
     tools.push(statusTool);
@@ -1701,7 +1773,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: cancelParameters,
       execute: async (_id, params) => {
         const value = await manager.cancel(params.execution_id);
-        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+        const modelView = shellExecutionStatusView(value);
+        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: shellExecutionDetailsView(value, modelView) };
       },
     };
     tools.push(cancelTool);
@@ -1810,10 +1883,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             manager: params.manager ?? "conda",
             packages: params.packages,
           }, signal, params.runner_id);
-          return {
-            content: [{ type: "text", text: JSON.stringify(revision, null, 2) }],
-            details: { revision },
-          };
+          const projected = environmentRevisionView(revision);
+          return { content: [{ type: "text", text: JSON.stringify(projected, null, 2) }], details: { revision: projected } };
         },
         label: "Install environment packages",
         name: ENVIRONMENT_TOOL_NAMES.install,
@@ -1830,10 +1901,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         description: "Remove conda package specifications from a named environment. Success creates a new immutable revision; base environments are read-only.",
         execute: async (_toolCallId, params, signal) => {
           const revision = await options.environmentManagement!.uninstall(params.environmentId, { packages: params.packages }, signal, params.runner_id);
-          return {
-            content: [{ type: "text", text: JSON.stringify(revision, null, 2) }],
-            details: { revision },
-          };
+          const projected = environmentRevisionView(revision);
+          return { content: [{ type: "text", text: JSON.stringify(projected, null, 2) }], details: { revision: projected } };
         },
         label: "Uninstall environment packages",
         name: ENVIRONMENT_TOOL_NAMES.uninstall,
@@ -2115,12 +2184,13 @@ export function createSkillTools(options: Pick<WorkspaceToolOptions, "skills" | 
           name: params.name,
           ...(params.resources ? { resources: params.resources } : {}),
         }, signal);
+        const projected = skillReviewDraftView(created);
         return {
           content: [{
             type: "text",
-            text: `${JSON.stringify(created, null, 2)}\n\nThe Skill is a pending draft and is not active yet. Ask the user to open Settings > Skills, review the files and diff, then confirm or discard it.`,
+            text: `${JSON.stringify(projected, null, 2)}\n\nThe Skill is a pending draft and is not active yet. Ask the user to open Settings > Skills, review the files and diff, then confirm or discard it.`,
           }],
-          details: created,
+          details: projected,
         };
       },
       label: "Create Skill draft",
