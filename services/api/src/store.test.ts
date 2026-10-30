@@ -219,6 +219,7 @@ interface PersistedCatalog {
   reviewerSpecialistFeedbackPolicy?: string;
   reviewerSpecialistLevel?: string;
   reviewerSpecialistDefaultOnMigrated?: boolean;
+  subagents: Array<Record<string, unknown>>;
   sessions: Array<{
     approvalMode: "always_allow" | "ask_for_dangerous";
     id: string;
@@ -231,6 +232,8 @@ interface PersistedCatalog {
     title: string;
   }>;
   webConnectorMigrated?: boolean;
+  workspaceFileRecords: Array<Record<string, unknown>>;
+  workspaceFileRevisions: Array<Record<string, unknown>>;
 }
 
 test("remote environment audit revisions never replace the local catalog or disappear on refresh", async (context) => {
@@ -348,11 +351,23 @@ test("SessionStore persists global package sources and migrates old catalogs to 
   );
 });
 
+/** The catalog as the store would restore it: the row plus the three
+ *  collections that live in tables of their own. */
 async function readPersistedCatalog(tempRoot: string): Promise<PersistedCatalog> {
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
-  const row = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
-  database.close();
-  return JSON.parse(row.json) as PersistedCatalog;
+  try {
+    const row = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+    const catalog = JSON.parse(row.json) as PersistedCatalog;
+    catalog.subagents = (database.prepare("SELECT subagent_json FROM subagents").all() as Array<{ subagent_json: string }>)
+      .map((entry) => JSON.parse(entry.subagent_json) as PersistedCatalog["subagents"][number]);
+    catalog.workspaceFileRecords = (database.prepare("SELECT record_json FROM workspace_files").all() as Array<{ record_json: string }>)
+      .map((entry) => JSON.parse(entry.record_json) as PersistedCatalog["workspaceFileRecords"][number]);
+    catalog.workspaceFileRevisions = (database.prepare("SELECT revision_json FROM workspace_file_revisions").all() as Array<{ revision_json: string }>)
+      .map((entry) => JSON.parse(entry.revision_json) as PersistedCatalog["workspaceFileRevisions"][number]);
+    return catalog;
+  } finally {
+    database.close();
+  }
 }
 
 test("SessionStore seeds web connector on first load of a pre-migration catalog and never re-seeds", async (context) => {
@@ -3346,6 +3361,62 @@ test("SessionStore recovers flushed running subagents as failed after restart", 
   const reloaded = new SessionStore(tempRoot);
   await reloaded.load();
   assert.equal(reloaded.listSubagents(session.id)[0]?.interruptedByRestart, true);
+});
+
+test("a saved catalog keeps subagents and file provenance out of its JSON row and deletes them with their Project", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-side-tables-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "side-tables-token",
+    baseUrl: "https://models.example.test/v1",
+    model: "science-model",
+    name: "Side tables model",
+  });
+  const project = await store.createProject("Side tables", { modelId: model.id, reviewModelId: model.id });
+  const session = await store.createSession(project.id, "Session");
+  await store.createSubagent(session.id, "turn-1", { description: "Inside", prompt: "Do the work." });
+  await store.recordWorkspaceFileRevision(session.id, {
+    mode: "write",
+    modifiedAt: new Date().toISOString(),
+    origin: "agent",
+    path: "report.md",
+    size: 4,
+  });
+
+  const catalog = await readPersistedCatalog(tempRoot);
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  const row = JSON.parse((database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json) as Record<string, unknown>;
+  const subagentRows = (database.prepare("SELECT count(*) AS total FROM subagents").get() as { total: number }).total;
+  const fileRows = (database.prepare("SELECT count(*) AS total FROM workspace_files").get() as { total: number }).total;
+  database.close();
+  // The row's size is what every save pays for, so the two collections that
+  // grow without bound must not be in it.
+  assert.equal("subagents" in row, false);
+  assert.equal("workspaceFileRecords" in row, false);
+  assert.equal("workspaceFileRevisions" in row, false);
+  assert.equal(row.sideTablesSeeded, true);
+  assert.equal(subagentRows, 1);
+  assert.equal(fileRows, 1);
+  assert.equal(catalog.subagents.length, 1);
+  assert.deepEqual(catalog.workspaceFileRecords.map((record) => record.path), ["report.md"]);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.listSubagents(session.id).length, 1, "subagents come back from their table");
+  assert.equal(reopened.getWorkspaceFileProvenance(session.id, "report.md")?.file.path, "report.md");
+
+  await reopened.deleteProject(project.id, project.id);
+  const afterDelete = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  const remaining = {
+    files: (afterDelete.prepare("SELECT count(*) AS total FROM workspace_files").get() as { total: number }).total,
+    revisions: (afterDelete.prepare("SELECT count(*) AS total FROM workspace_file_revisions").get() as { total: number }).total,
+    subagents: (afterDelete.prepare("SELECT count(*) AS total FROM subagents").get() as { total: number }).total,
+  };
+  afterDelete.close();
+  assert.deepEqual(remaining, { files: 0, revisions: 0, subagents: 0 }, "the Project's rows go with it");
 });
 
 test("SessionStore gates privileged actions with Session-scoped matching grants and per-action authorizations", async (context) => {
