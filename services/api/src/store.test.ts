@@ -77,6 +77,7 @@ test("CFG connector proposals require a user decision and preserve inherited con
   assert.equal(reopened.proposeConnectorConfiguration({ ...input, runId: "user-request:3" }).id, requestedAgain.id,
     "a pending request is reused across repeated user submissions");
   await reopened.deleteProject(project.id, project.id);
+  await reopened.whenDeletionsSettle();
   const db = new DatabaseSync(resolve(root, "catalog.sqlite"));
   try {
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM connector_configuration_requests WHERE session_id = ?").get(session.id) as { count: number }).count, 0);
@@ -579,6 +580,7 @@ test("SessionStore keeps stable Workspace file identities, revisions, and cross-
 
   const renamedSource = await reopened.updateSession(sourceSession.id, { title: "Renamed source before deletion" });
   await reopened.deleteSession(sourceSession.id, sourceSession.id);
+  await reopened.whenDeletionsSettle();
   const afterSourceDeletion = reopened.getWorkspaceFileProvenance(targetSession.id, "imports/data.csv");
   assert.equal(afterSourceDeletion?.lineage[0]?.session.deleted, true);
   assert.equal(afterSourceDeletion?.lineage[0]?.session.title, renamedSource.title);
@@ -2870,6 +2872,7 @@ test("SessionStore permanently deletes Session and Project cascades from catalog
   assert.equal(store.getPermissionEpoch(firstEpochId), undefined);
   assert.equal(store.listProjectArtifacts(project.id)[0]?.id, artifact.artifact.id);
   assert.equal(store.listProjectArtifactVersions(project.id, artifact.artifact.id)[0]?.id, artifact.version.id);
+  await store.whenDeletionsSettle();
   for (const path of firstPaths) await assert.rejects(stat(path), { code: "ENOENT" });
 
   await assert.rejects(store.deleteProject(project.id, "wrong"), /confirmation does not match/);
@@ -2877,6 +2880,7 @@ test("SessionStore permanently deletes Session and Project cascades from catalog
   await store.deleteProject(project.id, project.id);
   assert.equal(store.getProject(project.id), undefined);
   assert.equal(store.getSession(second.id), undefined);
+  await store.whenDeletionsSettle();
   for (const path of secondPaths) await assert.rejects(stat(path), { code: "ENOENT" });
 });
 
@@ -2951,6 +2955,7 @@ test("deleting a Session removes the stored tool output its history still refere
   assert.equal((await new ToolOutputStore({ root }).read(saved.ref)).text, "kept\nlines\n");
 
   await store.deleteSession(session.id, session.id);
+  await store.whenDeletionsSettle();
   await assert.rejects(stat(root), { code: "ENOENT" });
   await assert.rejects(new ToolOutputStore({ root }).read(saved.ref), /no longer available/);
 });
@@ -3409,6 +3414,7 @@ test("a saved catalog keeps subagents and file provenance out of its JSON row an
   assert.equal(reopened.getWorkspaceFileProvenance(session.id, "report.md")?.file.path, "report.md");
 
   await reopened.deleteProject(project.id, project.id);
+  await reopened.whenDeletionsSettle();
   const afterDelete = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const remaining = {
     files: (afterDelete.prepare("SELECT count(*) AS total FROM workspace_files").get() as { total: number }).total,

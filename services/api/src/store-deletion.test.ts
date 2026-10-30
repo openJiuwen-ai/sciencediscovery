@@ -14,8 +14,10 @@ import { SessionStore } from "./store.js";
 
 async function fixture(t: TestContext) {
   const data = await mkdtemp(join(tmpdir(), "store-delete-"));
-  t.after(() => rm(data, { recursive: true, force: true }));
   const store = new SessionStore(data); await store.load();
+  // A delete returns before it has reclaimed anything; the temp directory must
+  // not be removed under the work it queued.
+  t.after(async () => { await store.whenDeletionsSettle(); await rm(data, { recursive: true, force: true }); });
   const project = await store.createProject("Deletion");
   const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
   return { data, store, project, session, root: store.workspacePath(session.id), versions: new VersionStore(data) };
@@ -43,6 +45,9 @@ test("Session deletion waits for main/child commits and fences late creation; fi
   await assert.rejects(store.createAgentWorkspace(session.id, "late"), /deleted/);
   finish.resolve(); await writer; await deletion;
   assert.equal(store.getSession(session.id), undefined);
+  // The catalog commit ends the request; the tree is recorded and moved aside
+  // afterwards, behind the fence this test has already observed.
+  await store.whenDeletionsSettle();
   await assert.rejects(stat(root), { code: "ENOENT" });
   const refs = await RefStore.open(versions);
   try { assert.ok(refs.head(workspaceHeadName(child))); assert.ok(refs.head(workspaceHeadName(root))); }
@@ -103,6 +108,25 @@ test("startup restores a staged Session under its persistent deletion gate", asy
   const reopened = new SessionStore(data); await reopened.load();
   assert.equal(await readFile(join(root, "input"), "utf8"), "keep");
   await reopened.mutateWorkspace(root, "recovered", async () => writeFile(join(root, "next"), "ok"));
+  await assert.rejects(stat(journal), { code: "ENOENT" });
+});
+
+test("startup finishes a reclamation that died before it moved the data", async (t) => {
+  const data = await mkdtemp(join(tmpdir(), "store-delete-reclaim-"));
+  t.after(() => rm(data, { recursive: true, force: true }));
+  const source = join(data, "messages", "gone-session.json");
+  const journal = join(data, ".trash", "unfinished-reclaim");
+  const staged = join(journal, "data", "messages", "gone-session.json");
+  await mkdir(dirname(source), { recursive: true });
+  await writeFile(source, "[]\n");
+  await mkdir(journal, { recursive: true });
+  // The catalog no longer names the Session, but nothing was moved: only the
+  // journal knows what the interrupted request had committed.
+  await writeFile(join(journal, "operation.json"), JSON.stringify({ root: journal, sessionIds: ["gone-session"],
+    scopes: [join(data, "projects", "p", "sessions", "gone-session")],
+    entries: [{ source, staged }] }));
+  const store = new SessionStore(data); await store.load();
+  await assert.rejects(stat(source), { code: "ENOENT" });
   await assert.rejects(stat(journal), { code: "ENOENT" });
 });
 

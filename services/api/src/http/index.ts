@@ -3929,6 +3929,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
   const cleanup = () => cleanupPromise ??= (async () => {
     jiuwenSwarmWebSyncAbort.abort();
+    // Deletions answer from the catalog and reclaim files afterwards; leaving
+    // them mid-flight would hand the next start a journal to finish.
+    await store.whenDeletionsSettle();
     ideaResearch.close();
     await (await platform.connectorPlugins).dispose();
     remoteCompute.close();
