@@ -661,7 +661,7 @@ say("precompiling Python bytecode for bundled venvs");
 const compileEnv = { ...process.env, PYTHONWARNINGS: "ignore" };
 const compileAll = (pythonExe, target, exclude) =>
   execFileSync(pythonExe, ["-m", "compileall", "-q", "--invalidation-mode", "checked-hash",
-    ...(exclude ? ["-x", exclude] : []), target], { env: compileEnv, windowsHide: true, stdio: "pipe" });
+    ...(exclude ? ["-x", exclude] : []), target], { env: compileEnv, windowsHide: true, stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
 const basePythonExe = join(out, "python", "python.exe");
 const jwVenvPython = join(out, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv", "Scripts", "python.exe");
 const compileTargets = [

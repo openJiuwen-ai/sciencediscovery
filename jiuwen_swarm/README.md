@@ -66,6 +66,16 @@ For `workswarm0.2.6`:
 - `chat.error`, `execution.error`, `runtime.error` and `error` are terminal
   failures: the adapter reports them without waiting for a later completion
   marker or the platform idle timeout. Transport heartbeats are not progress.
+- Startup latency: the consolidated compatibility patch
+  `0010-jw-startup-latency.patch` keeps heavy imports (feishu SDK, heartbeat
+  chain, tui_connect, AgentServer's pandas/pdfplumber/milvus) off the
+  pre-listen path, shortens the channel-config settle window, and gates every
+  post-listen warmup (checkpointer, MCP prewarm, personal context, image
+  modality) behind the first Gateway connection. The listen-to-first-handshake
+  window carries no warmup imports or synchronous sections; the root cause,
+  measurements, and the known leftover (the post-ack checkpointer warmup still
+  blocks the loop; moving its sync sections off-loop is deferred to upstream)
+  are documented in the patch header itself.
 
 Set `SCIENCE_AGENT_TRACE_TOOLS=1` on the adapter to log `[tool-contract]`
 records containing expected, incoming Swarm, and outgoing LLM tool names.

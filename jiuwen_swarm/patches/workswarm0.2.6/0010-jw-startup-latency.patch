@@ -1,0 +1,1082 @@
+SD-patch 0010: consolidated JiuwenSwarm startup-latency patch (formerly
+seven separately numbered patches; consolidated so one patch owns each
+file region and repeated `swarm-patches.py apply` stays idempotent).
+
+Root cause (measured on the dist50 cold install, 2026-10-25 16:02 run):
+AgentServer schedules its nonblocking warmups right after listen, but
+ensure_persistent_checkpointer() executes heavy synchronous sections on
+the event loop (~9.5s on a cold install tree: module imports plus
+sqlite creation). While the loop is blocked the server cannot accept
+or handshake new WebSocket connections, so the Gateway's connect
+attempt waits idle and its connection.ack only lands after
+"persistent checkpointer ready" (observed: handshake handled at
+43.906, checkpointer ready at 43.893, ack at 43.910). The same
+coupling exists on the warm repo tree at ~4s scale. On top of that,
+the import chain ahead of listen paid for modules the first request
+did not need: the feishu SDK (~4.7s, imported even with the channel
+disabled), the heartbeat chain (~2.8s), the heavy tui_connect module
+(~1.8s), and the AgentServer import pulling pandas/pdfplumber/milvus
+(~6.8s), plus a channel-config settle window (0.75s -> 0.2s) ahead of
+the homepage RPC batch.
+
+Changes (one patch, one file region each):
+- gateway/app_gateway.py: feishu SDK lazy-import guard; tui_connect
+  preload in a worker thread during the agent-server connect retry;
+  channel-config settle window 0.75s -> 0.2s; IM pipelines built on a
+  worker thread after the preload resolves; socket imported at module
+  top so the probe loop performs no function-level imports.
+- agents/swarm/context.py, common/utils.py,
+  server/runtime/agent_manager.py, server/runtime/agent_adapter/interface.py,
+  server/agent_ws_server.py: heartbeat import chain deferred off the
+  critical path.
+- agents/harness/common/tools/__init__.py, gateway/__init__.py,
+  gateway/cron/__init__.py, server/app_agentserver.py,
+  server/runtime/agent_manager.py, server/agent_ws_server.py:
+  AgentServer import slimming - pandas/pdfplumber/milvus stay out of
+  the import path until actually used.
+- server/agent_ws_server.py + gateway/routing/agent_client.py: the
+  Gateway<->AgentServer connect path no longer waits on warmups; the
+  ws handshake performs no imports.
+- server/agent_ws_server.py: every post-listen warmup (checkpointer,
+  mcp prewarm, personal context, image modality) gated behind the
+  first Gateway connection, with their module imports preloaded in
+  worker threads, so the listen -> first-handshake window is free of
+  background warmup work.
+
+Effect: the listen -> first-handshake window is free of every
+background warmup's imports and sync sections, so the Gateway connects
+and receives connection.ack immediately after the port opens.
+Measured on the Windows desktop line (same-machine A/B on gateway
+startup stage logs): warm restart ~17.5s -> ~5-7s; user-perceived cold
+start 50s+ -> 20-25s.
+
+Known leftover (documented for follow-up): after the first ack the
+checkpointer warmup still blocks the AgentServer loop for its duration
+on cold trees - first requests during that window queue. Fully fixing
+that requires moving the synchronous sections of
+ensure_persistent_checkpointer off the event loop, which touches
+openjiuwen upstream behaviour and is deferred.
+
+diff --git a/jiuwenswarm/agents/harness/common/tools/__init__.py b/jiuwenswarm/agents/harness/common/tools/__init__.py
+index d2c51fc..bfe674f 100644
+--- a/jiuwenswarm/agents/harness/common/tools/__init__.py
++++ b/jiuwenswarm/agents/harness/common/tools/__init__.py
+@@ -2,57 +2,84 @@
+ 
+ """Tools for JiuWenSwarm AgentServer."""
+ 
+-from .memory_tools import (
+-    set_global_memory_manager,
+-    init_memory_manager_async,
+-    get_decorated_tools,
+-    memory_search,
+-    memory_get,
+-    write_memory,
+-    edit_memory,
+-    read_memory,
+-    set_group_chat_mode,
+-    is_group_chat_mode,
+-)
++from typing import Any
+ 
+-from .send_file_to_user import (
+-    SendFileToolkit,
+-)
+-from .skill_toolkits import (
+-    SkillToolkit,
+-)
+-from .skill_retrieval_toolkits import (
+-    build_model_discovery_settings,
+-    is_skill_retrieval_enabled,
+-    is_skill_retrieval_index_enabled,
+-    skill_sources_from_manager,
+-    SkillRetrievalToolkit,
+-)
+-from .symphony_toolkits import (
+-    SymphonyToolkit,
+-)
++# [windows-desktop] reason: this package __init__ used to eagerly import five
++# toolkit modules plus deep openjiuwen re-exports (~6.9s cold import). AgentServer
++# pulls it on its critical path via tools.bash_tool_safety (whose own module body
++# is tiny), so every startup paid the full toolkit chain before the ws port
++# listened. The re-exports below are now lazy (PEP 562 module __getattr__):
++# `from ...tools import X` keeps working, sub-module imports
++# (`from ...tools.memory_tools import X`) are unaffected, and AgentServer starts
++# without the chain; a post-listen warmup task preloads the toolkits so first
++# requests still find them cached.
++_TOOLKIT_EXPORTS: dict[str, str] = {
++    "set_global_memory_manager": ".memory_tools",
++    "init_memory_manager_async": ".memory_tools",
++    "get_decorated_tools": ".memory_tools",
++    "memory_search": ".memory_tools",
++    "memory_get": ".memory_tools",
++    "write_memory": ".memory_tools",
++    "edit_memory": ".memory_tools",
++    "read_memory": ".memory_tools",
++    "set_group_chat_mode": ".memory_tools",
++    "is_group_chat_mode": ".memory_tools",
++    "SendFileToolkit": ".send_file_to_user",
++    "SkillToolkit": ".skill_toolkits",
++    "build_model_discovery_settings": ".skill_retrieval_toolkits",
++    "is_skill_retrieval_enabled": ".skill_retrieval_toolkits",
++    "is_skill_retrieval_index_enabled": ".skill_retrieval_toolkits",
++    "skill_sources_from_manager": ".skill_retrieval_toolkits",
++    "SkillRetrievalToolkit": ".skill_retrieval_toolkits",
++    "SymphonyToolkit": ".symphony_toolkits",
++}
+ 
+-# Re-export deep openjiuwen symbols at ≤3-layer depth so task_tools.py can comply
+-# with the G.IMP import-depth lint rule without creating additional files.
+-try:
+-    from openjiuwen.core.foundation.tool.tool import tool
+-except ImportError:
+-    tool = None  # type: ignore[assignment]
++# Deep openjiuwen symbols re-exported at <=3-layer depth so task_tools.py can
++# comply with the G.IMP import-depth lint rule (same contract as before:
++# unavailable optional deps resolve to None instead of raising).
++_OJ_EXPORTS: dict[str, tuple[str, str]] = {
++    "tool": ("openjiuwen.core.foundation.tool.tool", "tool"),
++    "ce_config": (
++        "openjiuwen.extensions.context_evolver.core",
++        "config",
++    ),
++    "JSONFileConnector": (
++        "openjiuwen.extensions.context_evolver.core.file_connector.json_file_connector",
++        "JSONFileConnector",
++    ),
++    "TaskMemoryService": (
++        "openjiuwen.extensions.context_evolver.service.task_memory_service",
++        "TaskMemoryService",
++    ),
++    "AddMemoryRequest": (
++        "openjiuwen.extensions.context_evolver.service.task_memory_service",
++        "AddMemoryRequest",
++    ),
++}
++
++
++def __getattr__(name: str) -> Any:
++    src = _TOOLKIT_EXPORTS.get(name)
++    if src is not None:
++        import importlib
++
++        value = getattr(importlib.import_module(src, __name__), name)
++        globals()[name] = value  # cache: subsequent lookups skip __getattr__
++        return value
++
++    spec = _OJ_EXPORTS.get(name)
++    if spec is not None:
++        import importlib
++
++        try:
++            value = getattr(importlib.import_module(spec[0]), spec[1])
++        except ImportError:
++            value = None
++        globals()[name] = value
++        return value
++
++    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+ 
+-try:
+-    from openjiuwen.extensions.context_evolver.core import config as ce_config
+-    from openjiuwen.extensions.context_evolver.core.file_connector.json_file_connector import (
+-        JSONFileConnector,
+-    )
+-    from openjiuwen.extensions.context_evolver.service.task_memory_service import (
+-        AddMemoryRequest,
+-        TaskMemoryService,
+-    )
+-except ImportError:
+-    ce_config = None  # type: ignore[assignment]
+-    JSONFileConnector = None  # type: ignore[assignment]
+-    TaskMemoryService = None  # type: ignore[assignment]
+-    AddMemoryRequest = None  # type: ignore[assignment]
+ 
+ __all__ = [
+     "set_global_memory_manager",
+diff --git a/jiuwenswarm/agents/swarm/context.py b/jiuwenswarm/agents/swarm/context.py
+index ec3c7ef..f52a3fc 100644
+--- a/jiuwenswarm/agents/swarm/context.py
++++ b/jiuwenswarm/agents/swarm/context.py
+@@ -21,19 +21,14 @@ from typing import Any
+ from openjiuwen.agent_teams import paths as ojw_paths
+ from openjiuwen.agent_teams.schema.build_context import BuildContext
+ 
+-
+-_heartbeat_job_service: Any | None = None
+-
+-
+-def set_heartbeat_job_service(service: Any | None) -> None:
+-    """Publish the AgentServer-owned Heartbeat service to Team builders."""
+-    global _heartbeat_job_service
+-    _heartbeat_job_service = service
+-
+-
+-def get_heartbeat_job_service() -> Any | None:
+-    """Return the process-local Heartbeat service, if AgentServer installed it."""
+-    return _heartbeat_job_service
++# [windows-desktop] reason: the heartbeat service slot is owned by the
++# lightweight jiuwenswarm.common.utils module so AgentServer startup can
++# publish it without importing this (heavy) swarm package. Re-export keeps
++# the public surface of this module unchanged.
++from jiuwenswarm.common.utils import (
++    get_heartbeat_job_service,
++    set_heartbeat_job_service,
++)
+ 
+ 
+ @dataclass
+diff --git a/jiuwenswarm/common/utils.py b/jiuwenswarm/common/utils.py
+index e9c3379..6741311 100644
+--- a/jiuwenswarm/common/utils.py
++++ b/jiuwenswarm/common/utils.py
+@@ -2480,6 +2480,25 @@ def get_heartbeat_jobs_path() -> Path:
+     return get_agent_home_dir() / "heartbeat_jobs.json"
+ 
+ 
++# [windows-desktop] reason: AgentServer startup must not import
++# jiuwenswarm.agents.swarm (its package __init__ pulls the heavy
++# assembly/registry chain, ~2.6s on the listening critical path). The
++# heartbeat service slot therefore lives here in the lightweight common
++# module; jiuwenswarm.agents.swarm.context re-exports it unchanged.
++_heartbeat_job_service: Any | None = None
++
++
++def set_heartbeat_job_service(service: Any | None) -> None:
++    """Publish the AgentServer-owned Heartbeat service to Team builders."""
++    global _heartbeat_job_service
++    _heartbeat_job_service = service
++
++
++def get_heartbeat_job_service() -> Any | None:
++    """Return the process-local Heartbeat service, if AgentServer installed it."""
++    return _heartbeat_job_service
++
++
+ def get_deepagent_todo_dir() -> Path:
+     """Get the DeepAgent todo directory path.
+ 
+diff --git a/jiuwenswarm/gateway/__init__.py b/jiuwenswarm/gateway/__init__.py
+index c7d918d..a8404b8 100644
+--- a/jiuwenswarm/gateway/__init__.py
++++ b/jiuwenswarm/gateway/__init__.py
+@@ -2,15 +2,38 @@
+ 
+ """Gateway 模块 - 系统枢纽."""
+ 
+-from jiuwenswarm.gateway.routing.agent_client import AgentServerClient, WebSocketAgentServerClient
+-from jiuwenswarm.gateway.channel_manager import ChannelManager
+-from jiuwenswarm.gateway.health_check import (
+-    HEALTH_CHECK_CHANNEL_ID,
+-    GatewayHealthCheckService,
+-    HealthCheckConfig,
+-    IHealthCheck,
+-)
+-from jiuwenswarm.gateway.message_handler import MessageHandler
++from typing import Any
++
++# [windows-desktop] reason: AgentServer's heartbeat rail imports
++# jiuwenswarm.gateway.cron.cron_expr (two pure cron helpers) and used to pay
++# for this __init__'s eager re-exports of routing/channel_manager/
++# message_handler (~0.94s incl. IM-platform SDKs) on its startup critical
++# path. The re-exports are now lazy (PEP 562 module __getattr__): from-imports
++# keep working, direct sub-module imports are unaffected, and the Gateway
++# process still loads everything it uses on demand.
++_EXPORTS: dict[str, str] = {
++    "AgentServerClient": ".routing.agent_client",
++    "WebSocketAgentServerClient": ".routing.agent_client",
++    "ChannelManager": ".channel_manager",
++    "HEALTH_CHECK_CHANNEL_ID": ".health_check",
++    "GatewayHealthCheckService": ".health_check",
++    "HealthCheckConfig": ".health_check",
++    "IHealthCheck": ".health_check",
++    "MessageHandler": ".message_handler",
++}
++
++
++def __getattr__(name: str) -> Any:
++    src = _EXPORTS.get(name)
++    if src is not None:
++        import importlib
++
++        value = getattr(importlib.import_module(src, __name__), name)
++        globals()[name] = value  # cache: subsequent lookups skip __getattr__
++        return value
++
++    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
++
+ 
+ __all__ = [
+     "AgentServerClient",
+diff --git a/jiuwenswarm/gateway/app_gateway.py b/jiuwenswarm/gateway/app_gateway.py
+index 514eeea..1c8eef1 100644
+--- a/jiuwenswarm/gateway/app_gateway.py
++++ b/jiuwenswarm/gateway/app_gateway.py
+@@ -21,6 +21,15 @@ import json
+ import logging
+ import os
+ import re
++# [windows-desktop] reason: _connect_with_retry used to import socket inside
++# the function body. When the tui_connect preload task (SD-patch 0011) holds
++# the process-wide import lock in its worker thread, that inner import parks
++# the event loop until the preload finishes (measured ~10s on a cold install
++# tree with Defender scanning), delaying the AgentServer TCP probe loop and
++# the ws handshake that should run in parallel. Importing at module top costs
++# nothing here (websockets already pulls socket in) and keeps the connect
++# path lock-free.
++import socket
+ import sys
+ import time
+ import uuid as uuid_module
+@@ -372,16 +381,16 @@ async def _connect_with_retry(
+     尚未 listen 时反复走完整 WS 握手; 重试间隔改为指数退避 (0.2s 起, 翻倍至上限
+     ``interval``), 让 AgentServer 一旦 listen 即在亚秒级连上, 而非硬等下一个 3s 节拍.
+     """
+-    import socket as _socket
+-    from urllib.parse import urlparse as _urlparse
+-
+-    parsed = _urlparse(uri)
++    # [windows-desktop] reason: socket/urlparse are imported at module top so
++    # this loop never waits on the process-wide import lock held by the
++    # tui_connect preload thread; see the comment near "import socket" above.
++    parsed = urlparse(uri)
+     host = parsed.hostname or "127.0.0.1"
+     port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+ 
+     def _tcp_ready(timeout: float = 0.5) -> bool:
+         try:
+-            with _socket.create_connection(("127.0.0.1", port), timeout=timeout):
++            with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+                 return True
+         except OSError:
+             return False
+@@ -1748,6 +1757,24 @@ async def _run(
+     else:
+         third_agent = get_unsupported_third_agent()
+ 
++    # [SD-patch 0011] Preload the heavy tui_connect module (openjiuwen llm
++    # foundation/auto_harness, ~1.8s warm) in a worker thread while the event
++    # loop idles in the agent-server connect retry below; the import site later
++    # in startup then resolves instantly instead of blocking the loop.
++    async def _preload_tui_connect():
++        def _load():
++            import importlib
++
++            return importlib.import_module(
++                "jiuwenswarm.gateway.channel_manager.tui.tui_connect"
++            )
++
++        return await asyncio.to_thread(_load)
++
++    _tui_connect_preload = asyncio.create_task(
++        _preload_tui_connect(), name="preload-tui-connect"
++    )
++
+     # 如果是 WebSocket 客户端，需要连接；如果是 YuanrongFrontendAgentClient，无需连接
+     if isinstance(client, WebSocketAgentServerClient):
+         await _connect_with_retry(
+@@ -1765,12 +1792,28 @@ async def _run(
+     await message_handler.start_forwarding()
+ 
+     # IM Pipeline 初始化（数字分身）
+-    from jiuwenswarm.gateway.im_pipeline.im_inbound import IMInboundPipeline
+-    from jiuwenswarm.gateway.im_pipeline.im_outbound import IMOutboundPipeline
+-    im_inbound = IMInboundPipeline()
+-    im_outbound = IMOutboundPipeline()
+-    message_handler.set_inbound_pipeline(im_inbound)
+-    message_handler.set_outbound_pipeline(im_outbound)
++    # [windows-desktop] reason: im_inbound/im_outbound import the openjiuwen llm
++    # foundation chain, which overlaps heavily with the tui_connect preload
++    # still running in its worker thread. Importing and constructing them
++    # inline here would park the event loop on the process-wide import lock
++    # until that preload finishes (measured ~10s on a cold install tree with
++    # Defender scanning), serializing the web channel setup that should run
++    # in parallel. Instead, build them in a worker thread as a background task
++    # and attach them after the tui_connect preload resolves below. No IM
++    # traffic can arrive before that point: IM channels are only configured
++    # in the channel-configuration phase, which runs strictly later.
++    async def _build_im_pipelines():
++        def _load():
++            from jiuwenswarm.gateway.im_pipeline.im_inbound import IMInboundPipeline
++            from jiuwenswarm.gateway.im_pipeline.im_outbound import IMOutboundPipeline
++
++            return IMInboundPipeline(), IMOutboundPipeline()
++
++        return await asyncio.to_thread(_load)
++
++    _im_pipelines_task = asyncio.create_task(
++        _build_im_pipelines(), name="im-pipelines-build"
++    )
+ 
+     cron_store = CronJobStore(path=get_cron_jobs_path())
+     cron_scheduler = CronSchedulerService(
+@@ -2152,12 +2195,19 @@ async def _run(
+     # gateway_server）；TuiChannel 只接管出站 send 与 ws 五维索引，被 GatewayServer
+     # 在 forward 分支委托 register_ws/unregister_ws。移除原 register_external_channel("tui",
+     # gateway_server)，tui 出站不再走 GatewayServer.send（其 routing_target 反查缺五维索引）。
+-    from jiuwenswarm.gateway.channel_manager.tui.tui_connect import (
+-        CLI_FORWARD_NO_LOCAL_HANDLER_METHODS,
+-        CLI_FORWARD_REQ_METHODS,
+-        CliRouteBindParams,
+-        build_cli_route_binding,
+-    )
++    # [SD-patch 0011] Resolve the module preloaded during the agent-server
++    # connect wait above; import errors surface here exactly as before.
++    _tui_connect = await _tui_connect_preload
++    # [windows-desktop] reason: the IM pipelines task started near
++    # agent_server_connected resolves here; both heavy imports ran in worker
++    # threads while the event loop kept setting up web/TUI routing.
++    im_inbound, im_outbound = await _im_pipelines_task
++    message_handler.set_inbound_pipeline(im_inbound)
++    message_handler.set_outbound_pipeline(im_outbound)
++    CLI_FORWARD_NO_LOCAL_HANDLER_METHODS = _tui_connect.CLI_FORWARD_NO_LOCAL_HANDLER_METHODS
++    CLI_FORWARD_REQ_METHODS = _tui_connect.CLI_FORWARD_REQ_METHODS
++    CliRouteBindParams = _tui_connect.CliRouteBindParams
++    build_cli_route_binding = _tui_connect.build_cli_route_binding
+     from jiuwenswarm.gateway.channel_manager.tui.tui_channel import (
+         TuiChannel,
+         TuiChannelConfig,
+@@ -2451,8 +2501,17 @@ async def _run(
+             feishu_channel, feishu_task = None, None
+ 
+             apps = feishu_conf.get("apps") or []
+-            if not apps:
+-                logger.info("[App] channels.feishu.apps empty, FeishuChannel disabled")
++            # [SD-patch 0010] Guard the feishu SDK import (lark_oapi, ~4.7s) behind
++            # real usage: a disabled default template entry must not pay the cost.
++            usable_feishu_apps = [
++                app for app in apps
++                if isinstance(app, dict)
++                and _is_channel_enabled(app, ["app_id", "app_secret"])[0]
++            ]
++            if not usable_feishu_apps:
++                logger.info(
++                    "[App] channels.feishu.apps empty or all disabled, FeishuChannel disabled"
++                )
+             else:
+                 from jiuwenswarm.gateway.channel_manager.im_platforms.feishu.feishu_connect import \
+                     FeishuChannel, FeishuConfig
+@@ -2525,6 +2584,17 @@ async def _run(
+                     "[App] channels.feishu_enterprise missing or invalid; "
+                     "FeishuEnterpriseChannel disabled"
+                 )
++            elif not any(
++                isinstance(bot_key, str) and bot_key.strip()
++                and isinstance(bot_conf, dict)
++                and _is_channel_enabled(bot_conf, ["app_id", "app_secret"])[0]
++                for bot_key, bot_conf in enterprise_conf.items()
++            ):
++                # [SD-patch 0010] Same lazy-import guard as channels.feishu above.
++                logger.info(
++                    "[App] channels.feishu_enterprise empty or all disabled; "
++                    "FeishuEnterpriseChannel disabled"
++                )
+             else:
+                 from jiuwenswarm.gateway.channel_manager.im_platforms.feishu.feishu_connect import \
+                     FeishuChannel, FeishuConfig
+@@ -3120,7 +3190,10 @@ async def _run(
+         try:
+             await asyncio.wait_for(homepage_request_dispatched.wait(), timeout=5.0)
+             log_startup_stage("homepage_request_dispatched")
+-            await asyncio.sleep(0.75)
++            # [SD-patch 0012] 0.75s -> 0.2s: the homepage RPC batch is already
++            # dispatched when the event above fires; a shorter window keeps the
++            # optional channel configuration (and probe-facing readiness) closer.
++            await asyncio.sleep(0.2)
+         except asyncio.TimeoutError:
+             logger.info(
+                 "[App] no Web homepage request within 5s; applying optional channel configuration"
+diff --git a/jiuwenswarm/gateway/cron/__init__.py b/jiuwenswarm/gateway/cron/__init__.py
+index 57693cf..dd05081 100644
+--- a/jiuwenswarm/gateway/cron/__init__.py
++++ b/jiuwenswarm/gateway/cron/__init__.py
+@@ -5,10 +5,35 @@ This package provides:
+ - An asyncio scheduler that wakes the agent before push time and pushes results to channels
+ """
+ 
+-from .models import CronJob, CronTarget, CronTargetChannel
+-from .store import CronJobStore
+-from .scheduler import CronSchedulerService
+-from .controller import CronController
++from typing import Any
++
++# [windows-desktop] reason: AgentServer's heartbeat rail imports only the two
++# pure helpers in gateway.cron.cron_expr (stdlib-only module), but this eager
++# __init__ pulled .scheduler -> gateway.message_handler -> channel_manager
++# (IM-platform SDKs, ~0.7s cold) onto AgentServer's startup path. Lazy
++# re-exports (PEP 562) keep every existing import working while making
++# `import jiuwenswarm.gateway.cron.cron_expr` load just that module.
++_EXPORTS: dict[str, str] = {
++    "CronJob": ".models",
++    "CronTarget": ".models",
++    "CronTargetChannel": ".models",
++    "CronJobStore": ".store",
++    "CronSchedulerService": ".scheduler",
++    "CronController": ".controller",
++}
++
++
++def __getattr__(name: str) -> Any:
++    src = _EXPORTS.get(name)
++    if src is not None:
++        import importlib
++
++        value = getattr(importlib.import_module(src, __name__), name)
++        globals()[name] = value  # cache: subsequent lookups skip __getattr__
++        return value
++
++    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
++
+ 
+ __all__ = [
+     "CronJob",
+@@ -18,4 +43,3 @@ __all__ = [
+     "CronSchedulerService",
+     "CronController",
+ ]
+-
+diff --git a/jiuwenswarm/gateway/routing/agent_client.py b/jiuwenswarm/gateway/routing/agent_client.py
+index 79768d0..ce99566 100644
+--- a/jiuwenswarm/gateway/routing/agent_client.py
++++ b/jiuwenswarm/gateway/routing/agent_client.py
+@@ -15,6 +15,21 @@ from urllib.parse import urlsplit
+ 
+ from websockets.exceptions import ConnectionClosed, PayloadTooBig
+ 
++# [windows-desktop] reason: WebSocketAgentServerClient.connect used to import
++# websockets.legacy.client inside the function body. That import sits on the
++# Gateway's startup critical path (connect to AgentServer) and, when the
++# tui_connect preload worker thread holds the process-wide import lock, the
++# event loop parks on it until the preload finishes (measured ~10s on a cold
++# install tree with Defender scanning). Resolving the connect callable at
++# module import time keeps the ws handshake lock-free; the ImportError
++# fallback preserves the original compatibility behaviour.
++try:  # noqa: SIM105
++    from websockets.legacy.client import connect as _legacy_ws_connect
++except ImportError:  # older websockets without the legacy subpackage
++    import websockets as _websockets_fallback
++
++    _legacy_ws_connect = _websockets_fallback.connect
++
+ from jiuwenswarm.common.e2a.constants import E2A_WIRE_SERVER_PUSH_KEY
+ from jiuwenswarm.common.e2a.models import E2AEnvelope
+ from jiuwenswarm.common.e2a.wire_codec import (
+@@ -208,12 +223,7 @@ class WebSocketAgentServerClient(AgentServerClient):
+         self._uri = uri
+         self._server_ready = False
+         origin = _build_ws_origin(uri)
+-        try:
+-            from websockets.legacy.client import connect as legacy_connect
+-            connect_fn = legacy_connect
+-        except ImportError:
+-            import websockets
+-            connect_fn = websockets.connect
++        connect_fn = _legacy_ws_connect
+         self._ws = await connect_fn(
+             uri,
+             origin=origin,
+diff --git a/jiuwenswarm/server/agent_ws_server.py b/jiuwenswarm/server/agent_ws_server.py
+index a1cfe05..5782435 100644
+--- a/jiuwenswarm/server/agent_ws_server.py
++++ b/jiuwenswarm/server/agent_ws_server.py
+@@ -20,7 +20,11 @@ from weakref import WeakValueDictionary
+ from openjiuwen.core.common.logging import server_logger
+ from websockets.exceptions import ConnectionClosed as WebSocketConnectionClosed
+ 
+-from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService, reset_harness_packages_state
++# [windows-desktop] reason: jiuwenswarm.agents.harness.common.auto_harness's
++# import chain (openjiuwen rsi orchestrator/schema/pipelines, ~1.9s cold) must
++# stay off the module import path. AutoHarnessService is imported inside its
++# request handlers; reset_harness_packages_state runs in the post-listen
++# checkpointer warmup task (see _warmup_checkpointer in start()).
+ from jiuwenswarm.agents.harness.code.rails.heartbeat.runtime import HeartbeatRailRuntime
+ from jiuwenswarm.server.gateway_push.wire import build_server_push_wire
+ from jiuwenswarm.server.ws_send import send_wire_payload
+@@ -56,10 +60,11 @@ from jiuwenswarm.common.ws_diagnostics import (
+ from jiuwenswarm.common.ws_limits import AGENT_WS_MAX_MESSAGE_BYTES
+ from jiuwenswarm.extensions.hook_event import AgentServerHookEvents
+ from jiuwenswarm.agents.harness.common.plugins.rail_manager import get_rail_manager
+-from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import (
+-    is_interrupt_resume_payload,
+-)
+-from jiuwenswarm.agents.harness.common.rails.permissions.permissions_persist import persist_cli_trusted_directory
++# [windows-desktop] reason: interrupt_helpers drags the openjiuwen rails/
++# interrupt chain (~1.1s cold); is_interrupt_resume_payload is imported inside
++# the three request handlers that use it (plus warmed by tools-prewarm).
++# permissions_persist similarly drags openjiuwen.harness.security (~1.0s) and
++# is imported inside _handle_command_add_dir, the only caller.
+ from jiuwenswarm.extensions.hooks_context import AgentServerChatHookContext
+ from jiuwenswarm.server.runtime.agent_manager import AgentManager, ACP_DEFAULT_CAPABILITIES
+ from jiuwenswarm.server.runtime.agent_warm_pool import WarmClaim
+@@ -1321,7 +1326,7 @@ class AgentWebSocketServer:
+         # output ownership.
+         self._session_stream_tasks: dict[str, dict[asyncio.Task, asyncio.Event]] = {}
+         # Scheduler service instance (for scheduled auto_harness tasks)
+-        self._scheduler_service: Optional[AutoHarnessService] = None
++        self._scheduler_service: Optional["AutoHarnessService"] = None
+         self._scheduler_agent: Any = None
+         # Model cache for scheduled task execution (same approach as interface_deep)
+         self._model_cache: dict[str, Any] = {}
+@@ -1335,6 +1340,17 @@ class AgentWebSocketServer:
+         self._personal_context_start_task: asyncio.Task[None] | None = None
+         # checkpointer 后台预热任务 (start() 里 fire-and-forget, stop() 时 cancel)
+         self._checkpointer_warmup_task: Optional[asyncio.Task] = None
++        # [windows-desktop] reason: the checkpointer warmup runs heavy
++        # synchronous sections on the event loop (module imports plus sqlite
++        # creation inside ensure_persistent_checkpointer; ~9.5s on a cold
++        # install tree). While it runs, the loop cannot accept or handshake
++        # new Gateway WebSocket connections, so the Gateway's connect/ack is
++        # delayed behind the warmup (observed: handshake handled only after
++        # "persistent checkpointer ready"). This event is set right after the
++        # first connection.ack is sent, so the warmup only starts blocking
++        # the loop after the Gateway is already connected.
++        self._first_gateway_connection: asyncio.Event = asyncio.Event()
++        self._tools_prewarm_task: Optional[asyncio.Task] = None
+         # MCP 连接缓存预热任务 (同上, 建 Runner.resource_mgr 供首轮对话命中)
+         self._mcp_prewarm_task: Optional[asyncio.Task] = None
+         # 图像模态探针重探任务 (模型配置变更时拉起, stop() 时 cancel)
+@@ -1476,9 +1492,6 @@ class AgentWebSocketServer:
+             logger.warning("[AgentWebSocketServer] 服务端已在运行")
+             return
+ 
+-        # Reset harness package state to native on service startup
+-        reset_harness_packages_state()
+-
+         try:
+             from websockets.legacy.server import serve as legacy_serve
+             self._server = await legacy_serve(
+@@ -1512,13 +1525,46 @@ class AgentWebSocketServer:
+ 
+         # 端口已 listen, 后台预热 checkpointer, 不阻塞启动与握手.
+         # _checkpointer_warmup_task 供 shutdown 时 cancel, 避免任务悬挂.
+-        from jiuwenswarm.server.runtime.agent_adapter.interface_deep import ensure_persistent_checkpointer
+-
++        # [windows-desktop] reason: interface_deep's import chain (image_tools
++        # -> google.genai/fastmcp, auto_harness, openjiuwen rsi/agent_teams)
++        # costs seconds on first load; it moved INSIDE the fire-and-forget
++        # warmup task so the ws listening stage does not pay for it.
++        # The heavy imports run in a worker thread (asyncio.to_thread) so the
++        # event loop keeps serving handshakes/pings while multi-second module
++        # loads proceed. reset_harness_packages_state also moved here from the
++        # pre-listen path: no agent can run between listen and this task, so
++        # resetting harness package state a moment later is equivalent.
+         async def _warmup_checkpointer() -> None:
++            def _reset_harness_state() -> None:
++                from jiuwenswarm.agents.harness.common.auto_harness import (
++                    reset_harness_packages_state,
++                )
++
++                reset_harness_packages_state()
++
++            def _import_ensure_checkpointer():
++                from jiuwenswarm.server.runtime.agent_adapter.interface_deep import ensure_persistent_checkpointer
++
++                return ensure_persistent_checkpointer
++
++            try:
++                await asyncio.to_thread(_reset_harness_state)
++            except Exception as exc:  # noqa: BLE001
++                logger.warning(
++                    "[AgentWebSocketServer] harness package state reset failed: %s",
++                    exc,
++                )
++
++            # [windows-desktop] reason: gate the heavy warmup body behind the
++            # first Gateway connection (see _first_gateway_connection); see
++            # _await_first_connection for the timeout rationale.
++            await self._await_first_connection()
++
+             retry_delay = 1.0
+             while not self._heartbeat_runtime.is_available:
+                 try:
+-                    await ensure_persistent_checkpointer()
++                    ensure = await asyncio.to_thread(_import_ensure_checkpointer)
++                    await ensure()
+                     await self._heartbeat_runtime.start()
+                     return
+                 except Exception as exc:  # noqa: BLE001
+@@ -1535,9 +1581,70 @@ class AgentWebSocketServer:
+             _warmup_checkpointer(), name="checkpointer-warmup"
+         )
+ 
++        # [windows-desktop] reason: the tools package __init__ is lazy now
++        # (see jiuwenswarm/agents/harness/common/tools/__init__.py). This
++        # post-listen warmup preloads the toolkit modules in a worker thread
++        # so the first chat request finds them cached, matching the previous
++        # eager-import behaviour without paying it before the port listens.
++        # It also installs the shell tool safety hooks (whose BashTool import
++        # chain costs ~5.2s cold) and warms the interrupt chain, both off the
++        # startup critical path; AgentManager.get_agent() enforces the safety
++        # hooks synchronously for any agent created before this task finishes.
++        async def _warmup_tools_package() -> None:
++            def _load_toolkits() -> None:
++                import importlib
++
++                from jiuwenswarm.agents.harness.common.tools.bash_tool_safety import (
++                    install_shell_tool_safety_hooks,
++                )
++
++                install_shell_tool_safety_hooks()
++                importlib.import_module(
++                    "jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers"
++                )
++                for sub in (
++                    "memory_tools",
++                    "send_file_to_user",
++                    "skill_toolkits",
++                    "skill_retrieval_toolkits",
++                    "symphony_toolkits",
++                ):
++                    importlib.import_module(
++                        f"jiuwenswarm.agents.harness.common.tools.{sub}"
++                    )
++
++            try:
++                await asyncio.to_thread(_load_toolkits)
++            except Exception as exc:  # noqa: BLE001
++                logger.warning(
++                    "[AgentWebSocketServer] tools package prewarm failed "
++                    "(will lazy-load on demand): %s",
++                    exc,
++                )
++
++        self._tools_prewarm_task = asyncio.create_task(
++            _warmup_tools_package(), name="tools-prewarm"
++        )
++
+         async def _warmup_mcp_connections() -> None:
+             try:
++                # [windows-desktop] reason (SD-patch 0016): dist51 field run
++                # (2026-10-25 21:27) showed a fresh ~15s loop stall between
++                # listen and the first ws handshake even with the checkpointer
++                # gated; the remaining post-listen tasks (this one included)
++                # performed their module imports on the event loop. Gate this
++                # task behind the first Gateway connection and preload every
++                # module it lazily imports inside a worker thread so nothing
++                # here can stall the handshake window.
++                await self._await_first_connection()
++
++                def _preload_mcp_chain() -> None:
++                    import jiuwenswarm.common.mcp_config  # noqa: F401
++                    import jiuwenswarm.server.runtime.mcp.state_store  # noqa: F401
++
++                await asyncio.to_thread(_preload_mcp_chain)
+                 from jiuwenswarm.common.mcp_config import prewarm_connected_mcps
++
+                 await prewarm_connected_mcps()
+             except Exception as exc:  # noqa: BLE001
+                 logger.warning(
+@@ -1558,6 +1665,28 @@ class AgentWebSocketServer:
+         # 启动 (用户依然可以在 TUI 里跑 /sandbox enable 重试)。
+         await self._bootstrap_internal_jiuwenbox()
+ 
++    async def _await_first_connection(self) -> None:
++        """Block a calling background task until the first Gateway handshake.
++
++        [windows-desktop] reason (SD-patch 0015/0016): post-listen warmups run
++        heavy synchronous sections (module imports, sqlite creation) that stall
++        the event loop; while stalled the server cannot accept or handshake new
++        WebSocket connections, so the Gateway's connect/ack queues behind them
++        (measured ~9.5s and again ~15s on cold install trees). Waiting here
++        keeps that window free. The 60s timeout keeps standalone/AgentServer-
++        only runs working when no Gateway ever connects.
++        """
++        if self._first_gateway_connection.is_set():
++            return
++        try:
++            async with asyncio.timeout(60.0):
++                await self._first_gateway_connection.wait()
++        except (asyncio.TimeoutError, TimeoutError):
++            logger.warning(
++                "[AgentWebSocketServer] no Gateway connection within 60s; "
++                "proceeding with background warmup anyway"
++            )
++
+     def schedule_image_modality_warmup(
+         self, *, reason: str, reset_cache: bool = False
+     ) -> None:
+@@ -1572,24 +1701,41 @@ class AgentWebSocketServer:
+             reason: 传给 warm/refresh 的日志标签（"startup" / "model config change"）。
+             reset_cache: True 时先清空旧结论再探（配置变更场景），False 仅补探。
+         """
+-        from jiuwenswarm.server.runtime.image_modality_warmup import (
+-            refresh_image_modality_cache,
+-            warm_image_modality_cache,
+-        )
++
++        # [windows-desktop] reason (SD-patch 0016): this used to import
++        # image_modality_warmup on the event loop right after listen; on a cold
++        # install tree that module import is part of the loop stall that delays
++        # the first Gateway handshake. Move the import into the scheduled task
++        # and preload it in a worker thread; the loop-side import then hits
++        # sys.modules.
++        async def _scheduled_warm() -> None:
++            def _preload() -> None:
++                import jiuwenswarm.server.runtime.image_modality_warmup  # noqa: F401
++
++            await asyncio.to_thread(_preload)
++            from jiuwenswarm.server.runtime.image_modality_warmup import (
++                refresh_image_modality_cache,
++                warm_image_modality_cache,
++            )
++
++            if reset_cache:
++                await refresh_image_modality_cache(get_config(), reason=reason)
++            else:
++                await warm_image_modality_cache(get_config(), reason=reason)
+ 
+         previous_task = self._image_modality_refresh_task
+         if previous_task is not None and not previous_task.done():
+             previous_task.cancel()
+-        if reset_cache:
+-            coro = refresh_image_modality_cache(get_config(), reason=reason)
+-        else:
+-            coro = warm_image_modality_cache(get_config(), reason=reason)
+         self._image_modality_refresh_task = asyncio.create_task(
+-            coro, name=f"image-modality-warmup-{reason}"
++            _scheduled_warm(), name=f"image-modality-warmup-{reason}"
+         )
+ 
+     async def _start_personal_context_best_effort(self) -> None:
+         """Start optional PersonalContext without changing AgentServer readiness."""
++        # [windows-desktop] reason (SD-patch 0016): keep every post-listen
++        # background task out of the listen->first-handshake window; see
++        # _await_first_connection.
++        await self._await_first_connection()
+         start_cancelled: asyncio.CancelledError | None = None
+         try:
+             await self._personal_context_host.start()
+@@ -1904,6 +2050,17 @@ class AgentWebSocketServer:
+             except Exception as exc:  # noqa: BLE001
+                 logger.warning("[AgentWebSocketServer] checkpointer warmup cancel failed: %s", exc)
+         await self._heartbeat_runtime.stop()
++        # 同理取消 tools 工具链后台预热任务.
++        tools_prewarm = self._tools_prewarm_task
++        self._tools_prewarm_task = None
++        if tools_prewarm is not None and not tools_prewarm.done():
++            tools_prewarm.cancel()
++            try:
++                await tools_prewarm
++            except asyncio.CancelledError:
++                pass
++            except Exception as exc:  # noqa: BLE001
++                logger.warning("[AgentWebSocketServer] tools prewarm cancel failed: %s", exc)
+         # 同理取消 MCP 连接缓存预热任务.
+         mcp_prewarm = self._mcp_prewarm_task
+         self._mcp_prewarm_task = None
+@@ -1974,6 +2131,11 @@ class AgentWebSocketServer:
+             }
+             await send_wire_payload(ws, ack_frame)
+             logger.info("[AgentWebSocketServer] 已发送 connection.ack: %s", remote)
++            # [windows-desktop] reason: release the checkpointer warmup gate;
++            # see _first_gateway_connection in __init__. Set after the ack so
++            # the Gateway already holds a fully established, acked connection
++            # before the warmup's synchronous sections block this loop.
++            self._first_gateway_connection.set()
+         except Exception as e:
+             logger.warning("[AgentWebSocketServer] 发送 connection.ack 失败: %s", e)
+ 
+@@ -3547,6 +3709,11 @@ class AgentWebSocketServer:
+             return False
+         if not self._should_sync_code_mode_state(request):
+             return False
++        # [windows-desktop] heavy interrupt chain: import on demand.
++        from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import (
++            is_interrupt_resume_payload,
++        )
++
+         if is_interrupt_resume_payload(request.params):
+             logger.info(
+                 "[_ensure_code_mode_state] Skip mode sync while resuming tool interrupt "
+@@ -3691,6 +3858,11 @@ class AgentWebSocketServer:
+             and not is_team_params(request.params)
+         )
+         session_id = request.session_id or "default"
++        # [windows-desktop] heavy interrupt chain: import on demand.
++        from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import (
++            is_interrupt_resume_payload,
++        )
++
+         interrupt_resume = is_interrupt_resume_payload(request.params)
+         if admitted and interrupt_resume:
+             admitted = self._should_admit_interrupt_resume(request)
+@@ -3825,6 +3997,11 @@ class AgentWebSocketServer:
+             and not is_team_params(request.params)
+         )
+         session_id = request.session_id or "default"
++        # [windows-desktop] heavy interrupt chain: import on demand.
++        from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import (
++            is_interrupt_resume_payload,
++        )
++
+         interrupt_resume = is_interrupt_resume_payload(request.params)
+         if admitted and interrupt_resume:
+             admitted = self._should_admit_interrupt_resume(request)
+@@ -6941,6 +7118,11 @@ class AgentWebSocketServer:
+             ):
+                 persist = {"ok": False, "error": "path is required"}
+             else:
++                # [windows-desktop] heavy permissions chain: import on demand.
++                from jiuwenswarm.agents.harness.common.rails.permissions.permissions_persist import (
++                    persist_cli_trusted_directory,
++                )
++
+                 persist = persist_cli_trusted_directory(str(directory_path))
+             resp = AgentResponse(
+                 request_id=request.request_id,
+@@ -11698,6 +11880,9 @@ class AgentWebSocketServer:
+     ) -> None:
+         """Handle harness.packages.get request - retrieve packages info."""
+         try:
++            # [windows-desktop] heavy auto_harness chain: import on demand.
++            from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService
++
+             service = AutoHarnessService(rail=None, agent=None)
+             payload = await asyncio.to_thread(service.get_packages_info)
+             resp = AgentResponse(
+@@ -11724,6 +11909,9 @@ class AgentWebSocketServer:
+     ) -> None:
+         """Handle harness.packages.scan request - scan runtime extensions."""
+         try:
++            # [windows-desktop] heavy auto_harness chain: import on demand.
++            from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService
++
+             service = AutoHarnessService(rail=None, agent=None)
+             payload = await asyncio.to_thread(service.scan_runtime_extensions)
+             await asyncio.to_thread(service.save_packages, payload)
+@@ -11785,6 +11973,9 @@ class AgentWebSocketServer:
+                     hasattr(agent_instance, "load_harness_config") if agent_instance else False,
+                 )
+ 
++            # [windows-desktop] heavy auto_harness chain: import on demand.
++            from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService
++
+             service = AutoHarnessService(
+                 rail=None,
+                 agent=agent_instance,
+@@ -11852,6 +12043,9 @@ class AgentWebSocketServer:
+             if agent is not None:
+                 agent_instance = await agent.ensure_instance()
+ 
++            # [windows-desktop] heavy auto_harness chain: import on demand.
++            from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService
++
+             service = AutoHarnessService(
+                 rail=None,
+                 agent=agent_instance,
+@@ -11929,6 +12123,9 @@ class AgentWebSocketServer:
+             if agent is not None:
+                 agent_instance = await agent.ensure_instance()
+ 
++            # [windows-desktop] heavy auto_harness chain: import on demand.
++            from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService
++
+             service = AutoHarnessService(
+                 rail=None,
+                 agent=agent_instance,
+@@ -12100,6 +12297,9 @@ class AgentWebSocketServer:
+             action, request.request_id, request.channel_id,
+         )
+         try:
++            # [windows-desktop] heavy auto_harness chain: import on demand.
++            from jiuwenswarm.agents.harness.common.auto_harness import AutoHarnessService
++
+             # Lazy initialization: create scheduler service on first request
+             if self._scheduler_service is None:
+                 logger.info("[AgentServer] Initializing scheduler service on first request")
+diff --git a/jiuwenswarm/server/app_agentserver.py b/jiuwenswarm/server/app_agentserver.py
+index 61b4e86..4675d3b 100644
+--- a/jiuwenswarm/server/app_agentserver.py
++++ b/jiuwenswarm/server/app_agentserver.py
+@@ -165,11 +165,14 @@ migrate_media_capability_switches(_env_file)
+ apply_free_search_runtime_defaults()
+ _mark_startup_import_phase("runtime_environment_applied")
+ 
+-from jiuwenswarm.agents.harness.common.tools.bash_tool_safety import (
+-    install_shell_tool_safety_hooks,
+-)
+-
+-install_shell_tool_safety_hooks()
++# [windows-desktop] reason: shell tool safety hooks used to be installed here at
++# module level. install_shell_tool_safety_hooks() imports
++# openjiuwen.harness.tools.shell.bash._tool, whose parent package __init__
++# pulls the whole openjiuwen harness toolchain (~5.2s cold) onto the entry
++# critical path. The hooks are now (a) installed by the post-listen warmup
++# task in AgentWebSocketServer.start() (see tools-prewarm) and (b) enforced
++# synchronously at AgentManager.get_agent() -- the single entry point for
++# agent creation -- so no bash tool can run before the hooks are in place.
+ 
+ # Normalize known provider compatibility gaps before any runtime Model is built.
+ from jiuwenswarm.llm_provider_compat_patch import apply_provider_compat_patches
+diff --git a/jiuwenswarm/server/runtime/agent_adapter/interface.py b/jiuwenswarm/server/runtime/agent_adapter/interface.py
+index be20477..15a8adf 100644
+--- a/jiuwenswarm/server/runtime/agent_adapter/interface.py
++++ b/jiuwenswarm/server/runtime/agent_adapter/interface.py
+@@ -985,7 +985,10 @@ class JiuWenSwarm:
+         # Team members are assembled declaratively outside the single-agent
+         # adapter. Publish the same process-owned service to their build context;
+         # this is dependency injection only, never scheduler ownership.
+-        from jiuwenswarm.agents.swarm.context import set_heartbeat_job_service
++        # [windows-desktop] reason: import the lightweight utils slot instead of
++        # jiuwenswarm.agents.swarm.context so the first single-agent request does
++        # not pay for the heavy swarm package __init__ (assembly/registry).
++        from jiuwenswarm.common.utils import set_heartbeat_job_service
+ 
+         set_heartbeat_job_service(service)
+         if self._adapter is not None and hasattr(self._adapter, "set_heartbeat_service"):
+diff --git a/jiuwenswarm/server/runtime/agent_manager.py b/jiuwenswarm/server/runtime/agent_manager.py
+index 0b2840c..4cb1ddc 100644
+--- a/jiuwenswarm/server/runtime/agent_manager.py
++++ b/jiuwenswarm/server/runtime/agent_manager.py
+@@ -21,7 +21,14 @@ from jiuwenswarm.common.mode_matrix import (
+     NEW_AGENT_WORK_PLAN,
+     deprecate_mode,
+ )
+-from jiuwenswarm.agents.harness.common.rsi.errors import RsiHarnessInstallConflict
++# [windows-desktop] reason: shell tool safety hooks must be installed before
++# any agent (and thus any bash tool) is created. AgentServer used to install
++# them at process entry; the openjiuwen import chain is heavy (~5.2s) so the
++# install now happens in the post-listen warmup task, with this synchronous
++# guard at the single agent-creation entry point (idempotent, cached).
++from jiuwenswarm.agents.harness.common.tools.bash_tool_safety import (
++    install_shell_tool_safety_hooks as _install_shell_tool_safety_hooks,
++)
+ 
+ if TYPE_CHECKING:
+     from jiuwenswarm.server.runtime.agent_adapter.interface import JiuWenSwarm
+@@ -153,7 +160,11 @@ class AgentManager:
+     def set_heartbeat_service(self, service: Any | None) -> None:
+         """Inject the process-owned Heartbeat service into single and Team agents."""
+         self._heartbeat_service = service
+-        from jiuwenswarm.agents.swarm.context import set_heartbeat_job_service
++        # [windows-desktop] reason: importing jiuwenswarm.agents.swarm.context
++        # here forces the heavy swarm package __init__ (assembly/registry
++        # chain, ~2.6s) onto the AgentServer listening critical path. The
++        # slot now lives in common.utils; swarm.context re-exports it.
++        from jiuwenswarm.common.utils import set_heartbeat_job_service
+ 
+         set_heartbeat_job_service(service)
+         for agents in self.agents.values():
+@@ -955,6 +966,11 @@ class AgentManager:
+         Returns:
+             JiuWenSwarm | None: Agent 实例
+         """
++        # [windows-desktop] reason: bash/PowerShell safety hooks are installed
++        # after listen by the warmup task; this synchronous, idempotent guard
++        # makes agent creation (the only path that can run shell tools) wait
++        # for them, closing the race window entirely.
++        _install_shell_tool_safety_hooks()
+         channel_key = _normalize_channel_id(channel_id)
+         mode_key = _normalize_mode(mode)
+         sub_mode_key = collapse_plan_sub_mode(mode_key, sub_mode)
+@@ -1182,6 +1198,10 @@ class AgentManager:
+         ``DeepAgent.load_plugin`` LoadRecords and session fan-out.  It never
+         touches the legacy ``harness-packages.json`` broadcast.
+         """
++        # [windows-desktop] reason: jiuwenswarm.agents.harness.common.rsi.errors
++        # drags the openjiuwen rsi schema chain (~0.6s cold); this broadcast
++        # path is rare, so the exception class imports on demand.
++        from jiuwenswarm.agents.harness.common.rsi.errors import RsiHarnessInstallConflict
+ 
+         # ``new_installation=None`` is used only by the installer while
+         # restoring the pre-install state after an active-pointer write
