@@ -193,7 +193,7 @@ parallel distribution jobs. Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.
 
-L3, L4 and L5 reuse the existing **nightly-research** Environment, with **no required
+L3, L4 and L5 reuse the existing **nightly-ci-ds** Environment, with **no required
 reviewers and no final approval job**, as agreed in
 [issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):
 

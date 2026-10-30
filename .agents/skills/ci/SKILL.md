@@ -159,7 +159,7 @@ require a queue-only job before a PR can enter the queue. Require review of the
 current PR head and dismiss stale approvals; admin setup is documented in
 [.ci/README.md](../../../.ci/README.md#merge-queue-and-credentials-repository-setup).
 
-L3/L4/L5 reuse **nightly-research**, with no Environment required reviewers or
+L3/L4/L5 reuse **nightly-ci-ds**, with no Environment required reviewers or
 final approval job. Its model/judge variables configure `real-plan`; secrets
 are injected only into `real-e2e`. Keep model credentials in the Environment,
 not repository secrets, and exclude `pull_request` from jobs using them.
