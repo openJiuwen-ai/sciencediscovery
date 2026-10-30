@@ -26,7 +26,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
 import { PluginControl } from "./plugins/control.js";
-import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
+import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement, checkpointRetiredWorkspace } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -573,6 +573,9 @@ export class SessionStore {
   private transferStore?: WorkspaceTransfers;
   private loaded = false;
   private saveQueue = Promise.resolve();
+  /** Physical reclamation outlives the request that asked for it; deletes queue
+   *  here so two large Workspaces are never hashed at the same time. */
+  private deletionWork: Promise<void> = Promise.resolve();
   /** Side-table rows whose in-memory value has not reached disk yet. They are
    *  written by `saveCatalog` in the same transaction as the catalog row, so a
    *  reader never sees a catalog naming a file whose row is missing. */
@@ -1958,7 +1961,7 @@ export class SessionStore {
   }
 
   private async withDeletionBoundary<T>(paths: () => string[], sessionIds: () => string[], scopes: string[],
-    action: (operation: StagedDeletion) => Promise<T>, projectId?: string): Promise<T> {
+    action: (operation: StagedDeletion, roots: string[]) => Promise<T>, projectId?: string): Promise<T> {
     const root = resolve(this.dataDir, ".trash", randomUUID());
     const operation: StagedDeletion = { entries: [], root, sessionIds: sessionIds(), scopes, projectId };
     // The recovery journal must exist before admission closes, including a crash
@@ -1982,10 +1985,10 @@ export class SessionStore {
           }
           await writeFile(resolve(root, "operation.next.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
           await rename(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
-          for (const workspace of roots) {
-            if (await this.pathExists(workspace)) await this.mutateWorkspace(workspace, "pre-deletion", async () => {});
-          }
-          return await action(operation);
+          // The final Workspace snapshot and the move into `.trash` are not part
+          // of the request: they run behind the fence this retirement installs,
+          // which keeps the data unreachable for as long as they take.
+          return await action(operation, roots);
         } catch (error) {
           if (operation.committed) throw error;
           try { await this.rollbackStagedDeletion(operation); }
@@ -2000,11 +2003,43 @@ export class SessionStore {
     }
   }
 
+  /** Rename into the journal's staging area. A source that is already gone was
+   *  reclaimed by an earlier attempt, so the operation converges instead of
+   *  failing on its own history. */
   private async stageDeletion(operation: StagedDeletion): Promise<void> {
     for (const entry of operation.entries) {
+      if (!await this.pathExists(entry.source)) continue;
       await mkdir(dirname(entry.staged), { recursive: true });
       await rename(entry.source, entry.staged);
     }
+  }
+
+  /** Record the last tree, then move the data aside and destroy it.
+   *
+   *  This runs after the catalog commit, so the request that asked for the
+   *  deletion has already returned. The fence installed by the retirement is
+   *  permanent (state `retired`, released only by a rollback), so no writer is
+   *  admitted while this runs — which is why the snapshot may commit without
+   *  taking the Workspace lease a second time. A failure leaves the journal in
+   *  `.trash`, and recovery finishes the same operation at the next start. */
+  private retireDeletedData(operation: StagedDeletion, roots: string[]): void {
+    this.deletionWork = this.deletionWork.then(async () => {
+      try {
+        const versions = new VersionStore(this.dataDir);
+        for (const workspace of roots) {
+          if (await this.pathExists(workspace)) await checkpointRetiredWorkspace(versions, workspace, "pre-deletion");
+        }
+        await this.stageDeletion(operation);
+        await this.finishStagedDeletion(operation);
+      } catch (error) {
+        console.warn(`Could not reclaim deleted data ${operation.root}; recovery will retry it:`, error);
+      }
+    });
+  }
+
+  /** Resolves once every deletion queued so far has been reclaimed physically. */
+  async whenDeletionsSettle(): Promise<void> {
+    await this.deletionWork;
   }
 
   private async finishStagedDeletion(operation: StagedDeletion): Promise<void> {
@@ -2039,11 +2074,20 @@ export class SessionStore {
         operation.root = root;
         const scopes = operation.scopes ?? operation.entries.map((entry) => entry.source);
         if (!scopes.every((scope) => resolve(scope).startsWith(`${this.dataDir}/`))) throw new Error("Invalid deletion scope");
-        await withWorkspaceRetirement(new VersionStore(this.dataDir), scopes, root, async (_roots, reopen) => {
+        await withWorkspaceRetirement(new VersionStore(this.dataDir), scopes, root, async (roots, reopen) => {
           const catalogStillReferencesData = operation.sessionIds.some((id) => Boolean(this.getSession(id)))
             || Boolean(operation.projectId && this.getProject(operation.projectId));
           if (catalogStillReferencesData) { await this.rollbackStagedDeletion(operation); reopen(); }
-          else await this.finishStagedDeletion(operation);
+          else {
+            // The operation was cut short between the catalog commit and the
+            // move; finish it here so the data is neither reachable nor orphaned.
+            const versions = new VersionStore(this.dataDir);
+            for (const workspace of roots) {
+              if (await this.pathExists(workspace)) await checkpointRetiredWorkspace(versions, workspace, "pre-deletion");
+            }
+            await this.stageDeletion(operation);
+            await this.finishStagedDeletion(operation);
+          }
         }, () => this.deletionWorkspaceRoots(scopes));
         await this.finishStagedDeletion(operation);
       } catch (error) {
@@ -5515,8 +5559,7 @@ export class SessionStore {
     if (!session) throw new Error("Session not found");
     if (confirmationId !== session.id) throw new Error("Session deletion confirmation does not match the target");
     return this.withDeletionBoundary(() => this.knownSessionDataPaths(session), () => [session.id],
-      [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation) => {
-    await this.stageDeletion(operation);
+      [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation, roots) => {
     try {
       // Unpublish only inside the catalog write. Until that callback runs, the
       // open Session page can still read the session it is showing.
@@ -5552,7 +5595,7 @@ export class SessionStore {
     this.database?.prepare("DELETE FROM connector_configuration_requests WHERE session_id = ?").run(session.id);
     this.cleanupConfigurationSession(session.id);
     this.notifications.deleteSession(session.id);
-    await this.finishStagedDeletion(operation);
+    this.retireDeletedData(operation, roots);
     });
   }
 
@@ -5566,8 +5609,7 @@ export class SessionStore {
       sessions = this.listSessions(projectId, "all");
       return [...sessions.flatMap((session) => this.knownSessionDataPaths(session)), resolve(this.dataDir, "projects", projectId)];
     }, () => sessions.map((session) => session.id),
-      [resolve(this.dataDir, "projects", projectId)], async (operation) => {
-    await this.stageDeletion(operation);
+      [resolve(this.dataDir, "projects", projectId)], async (operation, roots) => {
     try {
       await this.saveCatalog(() => {
         if (!this.getProject(projectId)) throw new Error("Project not found");
@@ -5610,7 +5652,7 @@ export class SessionStore {
       this.cleanupConfigurationSession(session.id);
       this.notifications.deleteSession(session.id);
     }
-    await this.finishStagedDeletion(operation);
+    this.retireDeletedData(operation, roots);
     }, projectId);
   }
 

@@ -217,7 +217,9 @@ test("completion records, cancelled timers, and stop survive a database restart"
 
 test("SessionStore archive closes the gate; restoring the Session retains records without auto-resume", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "inbox-store-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
+  // The delete below answers before it has reclaimed the tree; the directory
+  // must not be removed under the work it queued.
+  context.after(async () => { await store.whenDeletionsSettle(); await rm(root, { recursive: true, force: true }); });
   const store = new SessionStore(root);
   await store.load();
   const project = await store.createProject("Inbox lifecycle");

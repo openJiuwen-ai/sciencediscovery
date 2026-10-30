@@ -469,6 +469,7 @@ test("cancelling a quiet-window batch before Session deletion prevents a later d
   assert.equal(await coordinator.cancelSession(session.id), true);
   assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.status, "cancelled");
   await store.deleteSession(session.id, session.id);
+  await store.whenDeletionsSettle();
   await new Promise((resolveWait) => setTimeout(resolveWait, 550));
   assert.equal(executions, 0);
 });
