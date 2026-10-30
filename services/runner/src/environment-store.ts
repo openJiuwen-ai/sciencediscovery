@@ -538,14 +538,15 @@ export class EnvironmentStore {
       this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
       component = "conda";
       if (this.config.packageCacheDir) await access(this.config.packageCacheDir);
-      if (!this.catalog.environments.some((environment) => environment.id === "starter-python")) {
+      const pythonStarterExisted = this.catalog.environments.some((environment) => environment.id === "starter-python");
+      if (!pythonStarterExisted) {
         this.updateSetup("installing", "creating-python-base", "Creating the managed Python base environment");
         this.updateSetupComponent("conda", "installing", "creating-python-base", "Creating the managed Python base environment", { started: true });
         await this.bootstrapStarter("python");
       }
       this.updateSetup("installing", "verifying-python-base", "Verifying the managed Python base environment");
       this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base environment", { started: true });
-      await this.upgradeStarterPackages("python");
+      if (pythonStarterExisted) await this.upgradeStarterPackages("python");
       await this.validateStarter("python");
       this.initialized = true;
       this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
