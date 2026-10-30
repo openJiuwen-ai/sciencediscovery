@@ -155,20 +155,27 @@ export class VersionStore {
       }
       return ref;
     }
+    await this.publishWorkspaceObject(file, ref);
+    return ref;
+  }
+
+  /** Copy the source into a temporary object and link it under its digest. */
+  private async publishWorkspaceObject(file: FileHandle, ref: DataRef): Promise<void> {
     const directory = resolve(this.poolRoot("data"), "blobs", "sha256");
     const temporary = resolve(directory, `${randomUUID()}.tmp`);
     try {
       const output = await open(temporary, "wx", 0o600);
       try {
-        let written = 0;
+        const digest = createHash("sha256");
         for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) {
           const bytes = chunk as Buffer;
+          digest.update(bytes);
           await output.writeFile(bytes);
-          written += bytes.length;
         }
-        // The digest was taken from an earlier pass over the same handle; the
-        // second must see the same bytes or the object would not match its name.
-        if (written !== size) throw new Error("Workspace changed during snapshot");
+        // The name came from an earlier pass over the same handle, and a
+        // same-size rewrite in place keeps every stat field of its tick: only
+        // the bytes actually written can say the object is what it claims.
+        if (`sha256:${digest.digest("hex")}` !== ref.digest) throw new Error("Workspace changed during snapshot");
         await output.sync();
       } finally { await output.close(); }
       try { await link(temporary, this.objectPath(ref)); }
@@ -177,7 +184,6 @@ export class VersionStore {
         await this.verifyRef(ref);
       }
       await syncDirectory(directory);
-      return ref;
     } finally { await rm(temporary, { force: true }); }
   }
 

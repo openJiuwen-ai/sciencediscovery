@@ -54,7 +54,10 @@ test("dual pools preserve typed identity, concurrent writes and OCI layout", asy
   const b = await store.putRecord("Test", { a: 1, b: 2 });
   assert.deepEqual(a, b);
   await writeFile(store.objectPath(data), "evil");
-  await assert.rejects(store.put("data", "same"), /Corrupt/);
+  // This instance admitted those bytes when it published them, so it does not
+  // read them back on every put; corruption is caught by a read, and by a
+  // store that has not admitted the object.
+  await assert.rejects(new VersionStore(store.dataDir).put("data", "same"), /integrity/);
   await assert.rejects(store.readData(data), /integrity/);
 }));
 
@@ -274,11 +277,11 @@ test("unchanged workspace snapshots reuse verified bytes but mutations and CAS t
   await mkdir(workspace);
   const path = resolve(workspace, "matrix");
   await writeFile(path, "large-input");
-  const writes = t.mock.method(store, "putStream");
+  const writes = t.mock.method(store, "publishWorkspaceObject");
   const first = await snapshotWorkspace(store, workspace);
   assert.equal(writes.mock.callCount(), 1);
   assert.deepEqual(await snapshotWorkspace(store, workspace), first);
-  assert.equal(writes.mock.callCount(), 1, "do not stream and republish unchanged large inputs");
+  assert.equal(writes.mock.callCount(), 1, "do not copy and republish unchanged large inputs");
   await writeFile(path, "other-input");
   const changed = await snapshotWorkspace(store, workspace);
   assert.notEqual(changed.digest, first.digest);
@@ -311,12 +314,12 @@ test("a same-size in-place rewrite never reuses stale workspace bytes", async ()
 test("unchanged workspace bytes are still reused without republishing", async (t) => fixture(async (store, root) => {
   const path = resolve(root, "reused");
   await writeFile(path, "unchanged-bytes");
-  const writes = t.mock.method(store, "putStream");
+  const writes = t.mock.method(store, "publishWorkspaceObject");
   const file = await open(path, "r+");
   try {
     const first = await store.putWorkspaceFile(Buffer.from(path), file);
     const second = await store.putWorkspaceFile(Buffer.from(path), file);
-    assert.equal(writes.mock.callCount(), 1, "unchanged bytes must not be streamed and republished");
+    assert.equal(writes.mock.callCount(), 1, "unchanged bytes must not be copied and republished");
     assert.deepEqual(second, first);
   } finally { await file.close(); }
 }));
