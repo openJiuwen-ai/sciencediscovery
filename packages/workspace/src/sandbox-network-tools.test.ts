@@ -64,7 +64,9 @@ test("a completed legacy execution carrying a caught network denial is still a t
       get: async () => terminal, cancel: async () => terminal, logs: async () => { throw Error("unused"); } },
   });
   const result = await tools.find(t => t.name === "run_shell")!.execute("legacy", { command: "printf partial" });
-  assert.equal(result.isError, true); assert.equal(result.details, terminal);
+  assert.equal(result.isError, true); assert.deepEqual(result.details, {
+    executionId: "legacy", state: "completed", exitCode: 0, networkDeniedHosts: ["pypi.org:443"], id: "legacy",
+  });
   assert.match(JSON.stringify(result.content), /pypi.org:443/);
 });
 
@@ -74,7 +76,10 @@ test("an ordinary offline shell result needs no network permission and remains s
     cgroupMode: "none", sandbox: "bubblewrap", environmentVariables: {}, runnerVersion: "test", workingDirectory: "/workspace", startedAt: "now", finishedAt: "now" };
   const tools = createWorkspaceTools(process.cwd(), { enabledConnectorIds: [], executePython: async () => { throw Error("unused"); }, executeShell: async () => terminal });
   const result = await tools.find(t => t.name === "run_shell")!.execute("offline", { command: "printf local" });
-  assert.equal(result.isError, false); assert.equal(result.details, terminal);
+  assert.equal(result.isError, false); assert.deepEqual(result.details, {
+    executionId: "offline", state: "completed", exitCode: 0, stdout: "local result", stderr: "",
+    createdFiles: [], modifiedFiles: [],
+  });
   assert.match(JSON.stringify(result.content), /local result/);
   assert.doesNotMatch(JSON.stringify(result.content), /authorizationId|networkPermission/);
 });
