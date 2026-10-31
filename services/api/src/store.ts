@@ -506,13 +506,10 @@ export class SessionStore {
   private settingsMutationQueue: Promise<void> = Promise.resolve();
   private secretKey?: Buffer;
   private skillIds = new Set<string>(BUNDLED_SKILL_IDS);
-
-
-
-
-  /** Every Session uses every installed skill, whatever its settings say (the JiuwenSwarm backend: its skills are one set). */
-  private everySkillEverywhere = false;
   private connectorIds = knownConnectorIdSet();
+  // A shared JiuwenSwarm catalog cannot enforce a Project/Session Skill selection.
+  // The HTTP composition root sets this false for server deployments.
+  private skillSelectionAvailable = true;
 
   private readonly initialTimeoutSettings: SystemTimeoutSettings;
   private readonly initialQuotaSettings: SystemQuotaSettings;
@@ -1758,15 +1755,6 @@ export class SessionStore {
     await this.saveCatalog();
   }
 
-  /**
-   * With the JiuwenSwarm backend there is no skill selection per Project or Session: JiuwenSwarm has one set of skills
-   * for every session, switched on and off there. Stored selections are kept, and apply again with the built-in backend.
-   */
-  useEverySkillEverywhere(): void {
-    this.everySkillEverywhere = true;
-    this.syncSessionCompatibilityForProject();
-  }
-
   setAvailableSkillIds(ids: Iterable<string>): void {
     this.skillIds = new Set(ids);
     // In `all` mode the effective set is the catalog itself, so installing or
@@ -1831,9 +1819,8 @@ export class SessionStore {
       }
     }
 
-    // `all` (the default) means the whole installed catalog; `selected` intersects
+    // Explicit `all` means the whole installed catalog; `selected` intersects
     // the stored whitelist with what is still installed.
-    if (this.everySkillEverywhere) effective.skillSelectionMode = "all";
     if (effective.skillSelectionMode === "all") {
       effective.enabledSkillIds = [...this.skillIds];
       sources.enabledSkillIds = sources.skillSelectionMode;
@@ -1871,9 +1858,13 @@ export class SessionStore {
 
   setConfigurationSkillLibrarySource(source: () => SkillLibrary[]): void { this.configurationSkillLibrarySource = source; }
 
+  setSkillSelectionAvailable(available: boolean): void {
+    this.skillSelectionAvailable = available;
+  }
+
   /** Read-only catalog facts for scoped discovery, without collecting unrelated secrets or version hashes. */
   configurationSkillResources(): { ids: string[]; libraries: SkillLibrary[]; selectionAvailable: boolean } {
-    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: !this.everySkillEverywhere };
+    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
@@ -1952,7 +1943,7 @@ export class SessionStore {
       connectors: version([...this.connectorIds].sort()), connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
       policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
       autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
-      skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource(), this.everySkillEverywhere]),
+      skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource()]),
       reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
     };
     const timeoutSettings = this.getTimeoutSettings();
@@ -1983,7 +1974,7 @@ export class SessionStore {
         projectEffective: structuredClone(this.getProjectSettings(project.id).effective),
         installedSkillIds: [...this.skillIds].sort(),
         skillLibraries: structuredClone(this.configurationSkillLibrarySource()),
-        skillSelectionAvailable: !this.everySkillEverywhere,
+        skillSelectionAvailable: this.skillSelectionAvailable,
         effectiveModel: structuredClone(this.getModel(settings.effective.modelId)),
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
@@ -2074,7 +2065,6 @@ export class SessionStore {
     const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
     const patch: RuntimeSettingsOverrides = {};
     if (capabilityId === "skill.select") {
-      if (this.everySkillEverywhere) throw new Error("SKILL_SELECTION_UNAVAILABLE");
       if (values.skillSelectionMode !== undefined) patch.skillSelectionMode = values.skillSelectionMode as SkillSelectionMode;
       if (values.enabledSkillIds !== undefined) patch.enabledSkillIds = [...values.enabledSkillIds as string[]];
       if (values.enabledSkillLibraryIds !== undefined) {
