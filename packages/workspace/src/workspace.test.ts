@@ -2288,9 +2288,20 @@ test("workspace_transfer exposes explicit mappings and independent management op
 
 test("Shell background mode and management tools do not start additional Shells", async () => {
   const calls: string[] = [];
-  const job = { id: "job", state: "running", runnerId: "remote", result: {
-    environmentVariables: { SCIENCE_AGENT_RUNNER_TOKEN: "runner-secret" }, stderr: "large stderr", stdout: "large stdout",
-  } } as import("@sciencediscovery/schema").AgentShellExecution;
+  const job = {
+    accepted: true, agentId: "agent", id: "job", provenance: "committed" as const,
+    queuedAt: "2026-10-30T09:20:40.636Z", runnerId: "remote", sessionId: "session",
+    state: "running" as const, turnId: "turn", workspaceId: "workspace",
+    result: {
+      cgroupMode: "none" as const, createdFiles: [], environmentRevisionId: "environment",
+      environmentVariables: { SCIENCE_AGENT_RUNNER_TOKEN: "runner-secret" },
+      executionId: "job", exitCode: 0, finishedAt: "2026-10-30T09:20:41.285Z",
+      kernelId: "ephemeral:job", kernelMode: "ephemeral" as const, language: "shell" as const,
+      modifiedFiles: [], networkPolicy: "none" as const, runnerVersion: "test",
+      sandbox: "bubblewrap" as const, startedAt: "2026-10-30T09:20:40.755Z",
+      stderr: "large stderr", stdout: "large stdout", workingDirectory: "/workspace",
+    },
+  } satisfies import("@sciencediscovery/schema").AgentShellExecution;
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
     executeShell: async () => { throw new Error("legacy endpoint must not run"); },
