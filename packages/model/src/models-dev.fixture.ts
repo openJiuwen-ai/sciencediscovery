@@ -134,6 +134,33 @@ export const MODELS_DEV_FIXTURE: ModelsDevPayload = {
       },
     },
   },
+  // Another reseller, this one stating its `api`, so the host check has to
+  // agree with the preset before its prices are shown.
+  requesty: {
+    api: "https://router.requesty.ai/v1",
+    doc: "https://requesty.ai/solution/llm-routing/models",
+    id: "requesty",
+    models: {
+      "deepseek-v4-pro": {
+        cost: { cache_read: 0.044, input: 1.32, output: 3.96 },
+        id: "deepseek-v4-pro",
+        limit: { context: 1_000_000, output: 131_072 },
+        modalities: { input: ["text"], output: ["text"] },
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "max"] }, { type: "budget_tokens" }],
+      },
+      "gpt-5.5": {
+        cost: { cache_read: 0.55, input: 5.5, output: 33 },
+        id: "gpt-5.5",
+        limit: { context: 1_050_000, output: 128_000 },
+        modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+        name: "GPT-5.5",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "max"] }, { type: "budget_tokens" }],
+      },
+    },
+  },
   // The two Zhipu hosts bill separately; `api` is what tells them apart.
   zhipuai: {
     api: "https://open.bigmodel.cn/api/paas/v4",
