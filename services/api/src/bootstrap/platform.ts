@@ -48,6 +48,7 @@ import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import { confirmEvolveSearch } from "../evolution/confirmation.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
@@ -413,9 +414,17 @@ export function createPlatformServices(
    */
   const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => !evolveAvailability.ready ? undefined : ({
     approvalMode: turn.approvalMode,
-    createEvolveRun: async (input: EvolveRunProposal) => {
+    createEvolveRun: async (input: EvolveRunProposal, _signal, toolCallId) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
+      // A search spends real budget (mutations + sandboxed evaluations), so no
+      // path may start one without explicit user confirmation. The permission
+      // gate does exactly that: always_allow short-circuits, ask mode raises a
+      // `permission.required` card and blocks the run until the user decides.
+      const confirmation = await confirmEvolveSearch(turn, input, toolCallId);
+      if (!confirmation.confirmed) {
+        return { refusedBecause: confirmation.refusedBecause };
+      }
       // The probe runs real evaluations in the sandbox — two or three, each
       // with the candidate timeout as its ceiling. That is minutes, and the
       // agent's idle clock is four: without pausing it the turn dies with "no

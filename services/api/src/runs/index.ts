@@ -200,6 +200,7 @@ import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { EvolveRunProposal } from "@sciencediscovery/schema";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolutionStore } from "../evolution/store.js";
+import type { RequestEvolveConfirmation } from "../evolution/confirmation.js";
 import { createRequestExecutionContext } from "../agent-run/request-execution.js";
 import { createWorkspaceExecutionBindings } from "../agent-run/workspace-bindings.js";
 import { prepareSkillSandbox, skillPackageSetHash } from "../skill-sandbox.js";
@@ -568,6 +569,22 @@ export interface EvolveTurnContext {
   beginExternalWait?: () => (() => void);
   modelId: string;
   sessionId: string;
+  /**
+   * Asks the user to confirm before a budget-spending search starts. Returns
+   * true when the user allowed it, false when denied. In always_allow mode the
+   * underlying permission runtime short-circuits to allowed without asking; in
+   * ask mode it raises a `permission.required` card and blocks the run until
+   * the user decides. Every path that starts `create_evolve_run` must go
+   * through this, because a search spends real budget (mutations + sandboxed
+   * evaluations) and must never start without explicit user confirmation.
+   *
+   * Required, not optional: it used to be optional and the gate fell back to
+   * "the session allows everything, so start", which silence no one notices —
+   * a new evolve construction site that forgot it would spend budget with no
+   * card and no error. Now forgetting it is a compile error, and the gate
+   * itself refuses when it is missing at runtime (see `confirmEvolveSearch`).
+   */
+  requestConfirmation: RequestEvolveConfirmation;
 }
 
 export function skillAuthoringCommandPrompt(content: string): string | undefined {
@@ -1598,6 +1615,38 @@ async function executeAgentRun(
         emit,
         modelId: selectedModel.id,
         sessionId,
+        requestConfirmation: async ({ resource, summary, toolCallId }) => {
+          // The same permission gate the rest of the product uses: in
+          // always_allow mode the runtime authorizes immediately, in ask mode
+          // it raises a `permission.required` card and blocks the run until
+          // the user decides. With the JiuwenSwarm backend its permission
+          // engine decides first, mirroring requestApproval above. A search
+          // spends real budget, so this must never be skipped.
+          const check = approvalsByJiuwenSwarm
+            ? await store.authorizeByJiuwenSwarm(sessionId, "code", resource, { executionId: runId, ...(toolCallId ? { toolCallId } : {}) })
+            : await store.requestPermission(sessionId, "code", resource, summary, {
+                executionId: runId,
+                ...(toolCallId ? { toolCallId } : {}),
+              });
+          if (check.allowed) return true;
+          // The confirmation card is an external wait: the user may take
+          // minutes to decide, and the run must not idle-timeout while the
+          // card is up. This mirrors permission-runtime's beginExternalWait.
+          const releaseWait = turnExecution?.beginExternalWait();
+          responseSink.emit({ request: check.request, type: "permission.required" });
+          try {
+            const decided = await waitForPermissionDecision(
+              store,
+              check.request,
+              timeoutSettings.permissionWaitTimeoutMs,
+              requestAbortController.signal,
+              { emit, runId, sessionId },
+            );
+            return decided.state === "allowed";
+          } finally {
+            releaseWait?.();
+          }
+        },
       });
       return runtime ? { evolve: runtime } : {};
     })(),

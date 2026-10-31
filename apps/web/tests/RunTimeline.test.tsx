@@ -1381,3 +1381,29 @@ for (const [locale, allowLabel] of [["en", "Allow these hosts for this run"], ["
     assert.ok(html.includes(">Allow once</button>") || html.includes(">仅允许一次</button>"));
   });
 }
+
+test("an evolution search permission keeps its per-attempt resource out of the timeline", () => {
+  const entries = apply([{
+    request: {
+      action: "code",
+      createdAt: "2026-10-30T00:00:00.000Z",
+      id: "permission-evolve",
+      resource: "evolve-search:session-1:5f0f3c1e-8a4b-4d6f-9c2a-7b1d0e4a6c33",
+      sessionId: "session-1",
+      state: "pending",
+      summary: "Start an evolution search? It runs mutations and sandboxed evaluations and spends budget.",
+    },
+    type: "permission.required",
+  }]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    isRunning: true,
+    onPermissionDecision: async () => undefined,
+    onToggle: () => undefined,
+  }));
+  assert.match(html, /Confirm evolution search/);
+  assert.match(html, /<dt>Resource<\/dt><dd><code>this evolution search only<\/code><\/dd>/);
+  assert.doesNotMatch(html, /evolve-search:/);
+  assert.doesNotMatch(html, /Allow same type/);
+  assert.equal(html.match(/class="secondary-button"/g)?.length, 1);
+});
