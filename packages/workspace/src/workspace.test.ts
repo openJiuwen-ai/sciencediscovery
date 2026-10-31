@@ -77,7 +77,13 @@ test("run_shell describes the target-specific Windows shell contract", () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
     executeShell: async () => ({}) as ShellExecutionResult,
-    runnerReadiness: { check: async () => ({ ready: true }), wait: async () => ({ action: "cancel" }) },
+    runnerReadiness: {
+      check: async () => ({
+        checkedAt: "2026-10-31T00:00:00.000Z", connected: true, ready: true,
+        reason: "ready", runnerId: "local", suggestions: [],
+      }),
+      wait: async () => ({ action: "cancel" }),
+    },
   });
   const shell = tools.find((tool) => tool.name === "run_shell")!;
   assert.match(shell.description, /check_runner capability is authoritative/);
