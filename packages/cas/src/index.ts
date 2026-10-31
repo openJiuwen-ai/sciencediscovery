@@ -76,7 +76,8 @@ export class CasStore implements ContentStore {
       await this.read(hash);
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      // A corrupt object is not usable, so has() answers as verify() does: absent.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as Error).message === "CAS integrity failure") return false;
       throw error;
     }
   }

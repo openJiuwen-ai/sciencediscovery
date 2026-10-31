@@ -58,6 +58,18 @@ test("putFile streams bytes into the same address space", async () => {
   });
 });
 
+test("a corrupted object is absent for has() and verify(), and read() still rejects it", async () => {
+  await withStore(async (store, root) => {
+    const object = await store.put("hello world");
+    const blob = resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash);
+    await writeFile(blob, "HELLO WORLD");
+
+    assert.equal(await store.verify(object.hash), false);
+    assert.equal(await store.has(object.hash), false);
+    await assert.rejects(store.read(object.hash), /CAS integrity failure/);
+  });
+});
+
 test("invalid hashes are rejected and missing objects do not verify", async () => {
   await withStore(async (store) => {
     await assert.rejects(store.read("../escape"), /Invalid CAS hash/);
