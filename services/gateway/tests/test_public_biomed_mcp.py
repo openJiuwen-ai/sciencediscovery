@@ -39,6 +39,7 @@ import httpx
 
 from sciencediscovery_gateway.public_biomed_mcp import (
     SERVER,
+    _arxiv_get_paper,
     _arxiv_search,
     _get_text,
     _pdb_entry,
@@ -557,7 +558,7 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_registers_the_complete_manifest_tool_set(self) -> None:
         actual = {tool.name for tool in await SERVER.list_tools()}
         self.assertEqual(actual, {
-            "arxiv_prepare_paper_download", "arxiv_search",
+            "arxiv_get_paper", "arxiv_prepare_paper_download", "arxiv_search",
             "biorxiv_lookup_doi", "biorxiv_prepare_paper_download", "biorxiv_search_preprints",
             "chembl_search_activities", "chembl_search_molecules", "chembl_search_targets",
             "chembl_similarity_search",
@@ -651,7 +652,8 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_arxiv_fixture_becomes_a_canonical_record(self) -> None:
         atom = """<?xml version="1.0"?>
-        <feed xmlns="http://www.w3.org/2005/Atom">
+        <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+          <opensearch:totalResults>8</opensearch:totalResults>
           <entry>
             <id>https://arxiv.org/abs/2101.00001v1</id>
             <title>Example preprint</title>
@@ -665,13 +667,56 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             "sciencediscovery_gateway.public_biomed_mcp._get_text",
             new=AsyncMock(return_value=atom),
         ):
-            result = await _arxiv_search("example", 5)
+            result = await _arxiv_search("example", 1, 3)
         self.assertEqual(result["sourceId"], "arxiv")
         self.assertEqual(result["records"][0]["identifier"], "2101.00001v1")
         self.assertEqual(
             result["records"][0]["primaryCitation"]["markdown"],
             "[Arxiv:2101.00001v1](https://arxiv.org/abs/2101.00001v1)",
         )
+        self.assertEqual(result["records"][0]["peerReviewStatus"], "preprint")
+        self.assertEqual(result["records"][0]["warnings"], [])
+        self.assertEqual(result["warnings"], [
+            "arXiv records are preprints or e-prints; preserve the submitted version."
+        ])
+        self.assertEqual(result["data"], {
+            "hasMore": True,
+            "nextOffset": 4,
+            "offset": 3,
+            "query": "example",
+            "returned": 1,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+            "total": 8,
+        })
+
+    async def test_arxiv_get_paper_uses_identifier_lookup_and_returns_one_complete_record(self) -> None:
+        atom = """<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>https://arxiv.org/abs/2101.00001v1</id>
+            <title>Example preprint</title>
+            <summary>Complete abstract text.</summary>
+            <published>2021-01-01T00:00:00Z</published>
+            <updated>2021-01-02T00:00:00Z</updated>
+            <author><name>A. Author</name></author>
+          </entry>
+        </feed>"""
+        request_params = []
+
+        async def get_text(_url, *, params, **_kwargs):
+            request_params.append(params)
+            return atom
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_text",
+            new=get_text,
+        ):
+            result = await _arxiv_get_paper("2101.00001v1")
+        self.assertEqual(request_params, [{"id_list": "2101.00001v1", "max_results": 1}])
+        self.assertEqual(result["toolId"], "get_paper")
+        self.assertEqual(result["data"], {"requestedIdentifier": "2101.00001v1", "returned": 1})
+        self.assertEqual(result["records"][0]["abstract"], "Complete abstract text.")
 
     async def test_arxiv_enables_tls_post_handshake_auth_without_changing_other_sources(self) -> None:
         atom = '<feed xmlns="http://www.w3.org/2005/Atom" />'

@@ -38,7 +38,12 @@ test("public biomedical MCP manifests register every requested source and operat
       "search_preprints",
     ]);
   }
-  for (const sourceId of ["arxiv", "pubmed", "europe-pmc"]) {
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "arxiv")!.manifest.tools).sort(), [
+    "get_paper",
+    "prepare_paper_download",
+    "search",
+  ]);
+  for (const sourceId of ["pubmed", "europe-pmc"]) {
     assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === sourceId)!.manifest.tools).sort(), [
       "prepare_paper_download",
       "search",
