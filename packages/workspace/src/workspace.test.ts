@@ -35,6 +35,7 @@ import {
 
 import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
+import { MCP_MODEL_RESULT_MAX_BYTES } from "./mcp-result-view.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -1248,6 +1249,70 @@ test("MCP tools marked parallel-safe opt into concurrent dispatch", () => {
   });
 
   assert.equal(tools.find((tool) => tool.name === "mcp__pubmed__search")?.isConcurrencySafe?.({}), true);
+});
+
+test("MCP evidence results keep canonical details but expose a compact bounded model view", async () => {
+  const citation = {
+    identifier: "2407.21787v3", identifierType: "arxiv identifier",
+    label: "Arxiv 2407.21787v3: Example", markdown: "[Arxiv:2407.21787v3](https://arxiv.org/abs/2407.21787v3)",
+    role: "preprint", source: "arxiv", url: "https://arxiv.org/abs/2407.21787v3",
+  };
+  const canonical = {
+    attribution: "Cornell University arXiv", license: "provider terms", invocationId: "invocation-1",
+    sourceId: "arxiv", toolId: "search", retrievedAt: "2026-10-31T00:00:00Z", untrusted: true,
+    data: { query: "inference scaling", returned: 25, total: 200, offset: 0, hasMore: true, nextOffset: 25,
+      sortBy: "relevance", sortOrder: "descending" },
+    warnings: ["arXiv records are preprints."],
+    records: Array.from({ length: 25 }, (_, index) => ({
+      abstract: `Abstract ${index} ${"α".repeat(20_000)}`,
+      authors: Array.from({ length: 20 }, (_unused, author) => `Author ${author} ${"x".repeat(200)}`),
+      citations: [citation], contentScope: "abstract", crossReferences: [], fullTextRetrieved: false,
+      identifier: `${2407 + index}.21787v3`, identifierType: "arxiv identifier", primaryCitation: citation,
+      source: "arxiv", structuredData: { published: "2024-01-01", updated: "2024-02-01" },
+      title: `Paper ${index}`, url: `https://arxiv.org/abs/${2407 + index}.21787v3`,
+      warnings: ["arXiv records are preprints."], year: "2024",
+    })),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Search arXiv", displayName: "arXiv search", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__arxiv__search", parallelSafe: true,
+      routing: { keywords: ["arxiv"], mode: "prefer", priority: 90 }, sourceId: "arxiv", toolId: "search",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__arxiv__search")!.execute("call", {});
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  const view = JSON.parse(text) as Record<string, unknown>;
+
+  assert.equal(response.bounded, true);
+  assert.equal(response.details, canonical, "audit and governed follow-up operations retain the canonical result");
+  assert.ok(Buffer.byteLength(text, "utf8") <= MCP_MODEL_RESULT_MAX_BYTES);
+  assert.equal(view.invocationId, "invocation-1");
+  assert.equal(view.total, 200);
+  assert.equal(view.hasMore, true);
+  assert.match(String(view.instruction), /nextOffset/);
+  assert.equal((view.warnings as string[]).length, 1, "record-level duplicate warnings are lifted once");
+  assert.ok(Array.isArray(view.papers));
+  assert.doesNotMatch(text, /primaryCitation|citations|crossReferences|fullTextRetrieved|identifierType|structuredData|retrievedAt|untrusted/);
+  assert.match(text, /abstractTruncated|recordsOmitted|authorsTruncated/);
+});
+
+test("opaque MCP results remain valid bounded JSON when their provider payload is huge", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Custom search", displayName: "Custom search",
+      execute: async () => ({ rows: Array.from({ length: 100 }, () => ({ body: "z".repeat(20_000) })) }),
+      inputSchema: { type: "object" }, name: "mcp__custom__search",
+      routing: { keywords: ["custom"], mode: "prefer", priority: 50 }, sourceId: "custom", toolId: "search",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__custom__search")!.execute("call", {});
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  assert.doesNotThrow(() => JSON.parse(text));
+  assert.ok(Buffer.byteLength(text, "utf8") <= MCP_MODEL_RESULT_MAX_BYTES);
+  assert.match(text, /truncated/);
 });
 
 test("all scientific environment tools forward runner_id and setup retries are explicit", async () => {
