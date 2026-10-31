@@ -1625,8 +1625,9 @@ async function waitForRunStatus(
   sessionId: string,
   runId: string,
   status: SessionRun["status"],
+  attempts = 100,
 ): Promise<SessionRun> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const runs = await jsonRequest<SessionRun[]>(`${origin}/api/sessions/${sessionId}/runs`, { headers: authorization });
     const run = runs.body.find((candidate) => candidate.id === runId);
     if (run?.status === status) return run;
@@ -2830,9 +2831,9 @@ test("native MCP literature flow produces an audited cited summary", { tags: ["s
     method: "POST",
   });
   assert.deepEqual(session.body.enabledConnectorIds, ["pubmed"]);
-  // With the JiuwenSwarm backend a Session's skills are not a selection: every installed skill is
-  // available everywhere, so the store resolves "all",
-  // not the one Skill this test configured.
+  // Explicit Project/Session selections remain in the application settings. A shared
+  // JiuwenSwarm catalog is not a request-scoped visibility boundary; that limitation is
+  // reported through the configuration capability surface.
   assert.deepEqual(session.body.enabledSkillIds, ["life-science-evidence-brief"]);
 
   const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
@@ -3084,7 +3085,10 @@ test("running sessions accept queued runs and start them after the active run co
 
   modelServer.release();
   await waitForRunStatus(origin, session.body.id, first.body.id, "completed");
-  await waitForRunStatus(origin, session.body.id, second.body.id, "completed");
+  // A real shared Swarm adapter can still be releasing the first stream after its
+  // completed status is persisted. Keep the native adapter's fast budget, while
+  // allowing the real adapter enough time to schedule the already-queued run.
+  await waitForRunStatus(origin, session.body.id, second.body.id, "completed", onJiuwenSwarm ? 600 : 100);
   assert.deepEqual((await listRunEvents(origin, session.body.id, second.body.id)).map((event) => event.event.type).slice(0, 3), [
     "run.queued",
     "run.status",

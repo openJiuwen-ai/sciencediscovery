@@ -507,6 +507,9 @@ export class SessionStore {
   private secretKey?: Buffer;
   private skillIds = new Set<string>(BUNDLED_SKILL_IDS);
   private connectorIds = knownConnectorIdSet();
+  // A shared JiuwenSwarm catalog cannot enforce a Project/Session Skill selection.
+  // The HTTP composition root sets this false for server deployments.
+  private skillSelectionAvailable = true;
 
   private readonly initialTimeoutSettings: SystemTimeoutSettings;
   private readonly initialQuotaSettings: SystemQuotaSettings;
@@ -1855,9 +1858,13 @@ export class SessionStore {
 
   setConfigurationSkillLibrarySource(source: () => SkillLibrary[]): void { this.configurationSkillLibrarySource = source; }
 
+  setSkillSelectionAvailable(available: boolean): void {
+    this.skillSelectionAvailable = available;
+  }
+
   /** Read-only catalog facts for scoped discovery, without collecting unrelated secrets or version hashes. */
   configurationSkillResources(): { ids: string[]; libraries: SkillLibrary[]; selectionAvailable: boolean } {
-    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: true };
+    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
@@ -1967,7 +1974,7 @@ export class SessionStore {
         projectEffective: structuredClone(this.getProjectSettings(project.id).effective),
         installedSkillIds: [...this.skillIds].sort(),
         skillLibraries: structuredClone(this.configurationSkillLibrarySource()),
-        skillSelectionAvailable: true,
+        skillSelectionAvailable: this.skillSelectionAvailable,
         effectiveModel: structuredClone(this.getModel(settings.effective.modelId)),
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,

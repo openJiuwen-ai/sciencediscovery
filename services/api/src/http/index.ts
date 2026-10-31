@@ -705,6 +705,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // With the JiuwenSwarm backend its web search is configured from the web settings: pushed once the store has
   // loaded (a few tries, the adapter may still be starting) and again on every change.
   const jiuwenSwarm = jiuwenSwarmConfigFromEnv();
+  store.setSkillSelectionAvailable(!jiuwenSwarm || jiuwenSwarm.skillSelection === "desktop");
   const webBackend = jiuwenSwarm ? "jiuwenswarm" as const : "native" as const;
   // The UI's language as JiuwenSwarm's; remembered so that each page load does not rewrite JiuwenSwarm's config.
   let jiuwenSwarmLanguage: "en" | "zh" | undefined;
