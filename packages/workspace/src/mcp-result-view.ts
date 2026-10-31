@@ -58,13 +58,13 @@ function citationText(record: JsonObject): string | undefined {
   return undefined;
 }
 
-function compactRecord(record: JsonObject): JsonObject {
+function compactRecord(record: JsonObject, abstractMaxBytes = MCP_MODEL_STRING_MAX_BYTES): JsonObject {
   const rawAuthors = Array.isArray(record.authors)
     ? record.authors.filter((author): author is string => typeof author === "string")
     : [];
   const authors = rawAuthors.slice(0, 8).map((author) => truncateUtf8(author, 160).text);
   const abstract = typeof record.abstract === "string"
-    ? truncateUtf8(record.abstract, MCP_MODEL_STRING_MAX_BYTES)
+    ? truncateUtf8(record.abstract, abstractMaxBytes)
     : undefined;
   return {
     id: record.identifier,
@@ -121,9 +121,10 @@ function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records"): Js
   const recordsTruncated = records.some((record) => record.abstractTruncated === true || record.authorsTruncated === true);
   if (recordsTruncated) view.truncated = true;
   if (view.truncated === true) {
+    const detail = view.sourceId === "arxiv" ? " Use get_paper with an arXiv identifier when a full abstract is needed." : "";
     view.instruction = view.hasMore === true
-      ? "Use nextOffset to request the next result page. Use get_paper with an arXiv identifier when a full abstract is needed."
-      : "Refine the query or lower the result limit. Use get_paper with an arXiv identifier when a full abstract is needed.";
+      ? `Use nextOffset to request the next result page.${detail}`
+      : `Refine the query or lower the result limit.${detail}`;
   }
   if (utf8Bytes(view) <= MCP_MODEL_RESULT_MAX_BYTES) return view;
   return {
@@ -148,7 +149,7 @@ function evidenceView(result: JsonObject, sourceId: string, toolId: string): Jso
     ...searchMetadata(result),
     returned: object(result.data)?.returned ?? recordObjects.length,
     warnings: uniqueStrings(result.warnings, recordWarnings),
-    [recordsKey]: recordObjects.map((record) => compactRecord(record!)),
+    [recordsKey]: recordObjects.map((record) => compactRecord(record!, sourceId === "arxiv" && toolId === "get_paper" ? 24_000 : undefined)),
   };
   if (view.hasMore === true && !view.instruction) {
     view.instruction = "Use nextOffset to request the next result page.";

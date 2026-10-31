@@ -58,6 +58,7 @@ test("ready literature sources expose every declared MCP tool", async () => {
   assert.deepEqual(names, options.registry.list().flatMap(({ manifest }) =>
     Object.keys(manifest.tools).map((id) => `mcp__${manifest.id}__${id}`)));
   assert.ok(names.includes("mcp__arxiv__search"));
+  assert.ok(names.includes("mcp__arxiv__get_paper"), `mounted tools: ${names.join(", ")}`);
   assert.ok(names.includes("mcp__pubmed__search"));
   assert.equal(tools.find((tool) => tool.name === "mcp__pubmed__search")?.parallelSafe, true);
 });

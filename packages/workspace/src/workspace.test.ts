@@ -1315,6 +1315,35 @@ test("opaque MCP results remain valid bounded JSON when their provider payload i
   assert.match(text, /truncated/);
 });
 
+test("arXiv get_paper preserves a complete ordinary abstract in the model view", async () => {
+  const abstract = `Complete abstract ${"evidence ".repeat(1_500)}`;
+  const canonical = {
+    sourceId: "arxiv", toolId: "get_paper", invocationId: "paper-invocation", warnings: [],
+    records: [{
+      abstract, authors: ["A. Author"], citations: [], contentScope: "abstract", crossReferences: [],
+      fullTextRetrieved: false, identifier: "2407.21787v3", identifierType: "arxiv identifier",
+      peerReviewStatus: "preprint", primaryCitation: {
+        markdown: "[Arxiv:2407.21787v3](https://arxiv.org/abs/2407.21787v3)",
+      }, source: "arxiv", structuredData: {}, title: "Complete paper",
+      url: "https://arxiv.org/abs/2407.21787v3", warnings: [], year: "2024",
+    }],
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Get arXiv paper", displayName: "arXiv paper", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__arxiv__get_paper", parallelSafe: true,
+      routing: { keywords: ["arxiv"], mode: "prefer", priority: 95 }, sourceId: "arxiv", toolId: "get_paper",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__arxiv__get_paper")!.execute("call", {});
+  const view = JSON.parse(response.content[0]?.type === "text" ? response.content[0].text : "{}") as {
+    papers: Array<{ abstract: string; abstractTruncated?: boolean }>;
+  };
+  assert.equal(view.papers[0]?.abstract, abstract);
+  assert.equal(view.papers[0]?.abstractTruncated, undefined);
+});
+
 test("all scientific environment tools forward runner_id and setup retries are explicit", async () => {
   const calls: Array<{ operation: string; runnerId?: string; input?: unknown }> = [];
   const environments: Environment[] = [];

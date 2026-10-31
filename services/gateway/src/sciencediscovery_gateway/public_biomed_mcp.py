@@ -154,6 +154,7 @@ def _record(
     authors: list[str] | None = None,
     role: str = "database-record",
     scope: str = "structured-record",
+    peer_review_status: str | None = None,
     warnings: list[str] | None = None,
     year: str | None = None,
 ) -> dict[str, Any]:
@@ -167,6 +168,7 @@ def _record(
         "fullTextRetrieved": False,
         "identifier": identifier,
         "identifierType": citation["identifierType"],
+        **({"peerReviewStatus": peer_review_status} if peer_review_status else {}),
         "primaryCitation": citation,
         "source": source.lower(),
         "structuredData": data,
@@ -207,7 +209,7 @@ def _clean(value: Any, limit: int = 4_000) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
-async def _arxiv_search(query: str, limit: int) -> dict[str, Any]:
+async def _arxiv_feed(params: dict[str, Any]) -> ET.Element:
     # arXiv's edge rejects cold requests from the default httpx TLS handshake
     # with HTTP 406. Advertising post-handshake auth restores the origin path;
     # it does not disable certificate verification or present a client cert.
@@ -215,16 +217,15 @@ async def _arxiv_search(query: str, limit: int) -> dict[str, Any]:
     ssl_context.post_handshake_auth = True
     payload = await _get_text(
         external_url("data_sources.arxiv.api_query"),
-        params={
-            "max_results": max(1, min(limit, 25)),
-            "search_query": query if ":" in query else f"all:{query}",
-            "start": 0,
-        },
+        params=params,
         accept="application/atom+xml",
         ssl_context=ssl_context,
         arxiv_diagnostics=True,
     )
-    root = ET.fromstring(payload)
+    return ET.fromstring(payload)
+
+
+def _arxiv_records(root: ET.Element) -> list[dict[str, Any]]:
     atom = {"atom": "http://www.w3.org/2005/Atom"}
     records: list[dict[str, Any]] = []
     for entry in root.findall("atom:entry", atom):
@@ -250,10 +251,63 @@ async def _arxiv_search(query: str, limit: int) -> dict[str, Any]:
             authors=[author for author in authors if author],
             role="preprint",
             scope="abstract" if abstract else "metadata",
-            warnings=["arXiv records are preprints or e-prints; preserve the submitted version."],
+            peer_review_status="preprint",
             year=published[:4] if re.match(r"\d{4}", published) else None,
         ))
-    return _result("arxiv", "search", records)
+    return records
+
+
+def _arxiv_total(root: ET.Element, returned: int) -> int:
+    namespace = {"opensearch": "http://a9.com/-/spec/opensearch/1.1/"}
+    raw = _clean(root.findtext("opensearch:totalResults", default="", namespaces=namespace), 32)
+    return int(raw) if raw.isdigit() else returned
+
+
+async def _arxiv_search(query: str, limit: int, offset: int = 0) -> dict[str, Any]:
+    normalized_query = query if ":" in query else f"all:{query}"
+    bounded_limit = max(1, min(limit, 25))
+    bounded_offset = max(0, min(offset, 10_000))
+    root = await _arxiv_feed({
+        "max_results": bounded_limit,
+        "search_query": normalized_query,
+        "sortBy": "relevance",
+        "sortOrder": "descending",
+        "start": bounded_offset,
+    })
+    records = _arxiv_records(root)
+    total = _arxiv_total(root, len(records))
+    returned = len(records)
+    next_offset = bounded_offset + returned
+    has_more = returned > 0 and next_offset < total
+    return _result(
+        "arxiv", "search", records,
+        data={
+            "hasMore": has_more,
+            "nextOffset": next_offset if has_more else None,
+            "offset": bounded_offset,
+            "query": query,
+            "returned": returned,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+            "total": total,
+        },
+        warnings=["arXiv records are preprints or e-prints; preserve the submitted version."],
+    )
+
+
+async def _arxiv_get_paper(identifier: str) -> dict[str, Any]:
+    normalized = identifier.strip()
+    if not re.fullmatch(r"(?:\d{4}\.\d{4,5}|[A-Za-z.-]+/\d{7})(?:v\d+)?", normalized):
+        raise ValueError("Invalid arXiv identifier")
+    root = await _arxiv_feed({"id_list": normalized, "max_results": 1})
+    records = _arxiv_records(root)
+    if not records:
+        raise ValueError(f"arXiv record {normalized} was not found")
+    return _result(
+        "arxiv", "get_paper", records[:1],
+        data={"requestedIdentifier": normalized, "returned": 1},
+        warnings=["arXiv records are preprints or e-prints; preserve the submitted version."],
+    )
 
 
 async def _pubmed_search(query: str, limit: int) -> dict[str, Any]:
@@ -377,9 +431,15 @@ async def _pmc_pdf_candidate(source: str, identifier: str) -> dict[str, Any]:
 
 
 @SERVER.tool()
-async def arxiv_search(query: str, limit: int = 5) -> dict[str, Any]:
+async def arxiv_search(query: str, limit: int = 5, offset: int = 0) -> dict[str, Any]:
     """Search arXiv metadata and abstracts."""
-    return await _arxiv_search(query, limit)
+    return await _arxiv_search(query, limit, offset)
+
+
+@SERVER.tool()
+async def arxiv_get_paper(identifier: str) -> dict[str, Any]:
+    """Get complete arXiv metadata and abstract for one versioned identifier."""
+    return await _arxiv_get_paper(identifier)
 
 
 @SERVER.tool()
