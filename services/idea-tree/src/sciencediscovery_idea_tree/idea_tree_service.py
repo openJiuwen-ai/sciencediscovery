@@ -14,7 +14,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from ...auth import require_internal_token
+from .auth import require_internal_token
+from .storage import data_root
 from .idea_tree import IdeaTree, IdeaTreeError, digest, now, require, text
 
 
@@ -187,7 +188,7 @@ def command(request: TreeCommand) -> dict[str, Any]:
         raise HTTPException(409, detail=dict(code="LEGACY_TREE_READ_ONLY", message="Legacy trees are read-only. Start a new research in the Idea Tree panel."))
     global _store
     if _store is None:
-        _store = IdeaTreeStore(Path(os.environ.get("SCIENCE_AGENT_DATA_DIR", ".sciencediscovery-data")) / "idea-trees")
+        _store = IdeaTreeStore(data_root() / "idea-trees")
     try:
         result = _store.call(request.projectId, request.sessionId, request.operation, request.params,
                              request.runId, request.settings, request.expectedExecutorFingerprint)

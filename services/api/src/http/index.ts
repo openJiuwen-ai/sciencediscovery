@@ -959,8 +959,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (url.pathname === "/api/evolve/init" && request.method === "POST") {
         return sendJson(response, 200, await evolveAvailability.refresh(true));
       }
-      if ((url.pathname.startsWith("/api/evolve/") || /^\/api\/sessions\/[^/]+\/idea-tree(?:\/|$)/.test(url.pathname))
-          && (await evolveAvailability.refresh()).state !== "ready") {
+      if (url.pathname.startsWith("/api/evolve/") && (await evolveAvailability.refresh()).state !== "ready") {
         return sendError(response, 503, "Evolve is not initialized or unavailable. Select Init Evolve or check the configured service.");
       }
 
@@ -1384,12 +1383,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (url.pathname === "/api/settings/idea-tree" && request.method === "GET") {
-        sendJson(response, 200, store.getIdeaTreeSettingsDetails() satisfies IdeaTreeSettingsDetails);
+        sendJson(response, 200, await ideaResearch.settings() satisfies IdeaTreeSettingsDetails);
         return;
       }
       if (url.pathname === "/api/settings/idea-tree" && request.method === "PUT") {
         const body = await readJson<UpdateIdeaTreeSettingsRequest>(request);
-        const updated = await store.updateIdeaTreeSettings(body);
+        const updated = await ideaResearch.settings(body);
         sendJson(response, 200, updated satisfies IdeaTreeSettingsDetails);
         return;
       }
@@ -1900,7 +1899,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact = store.getSkillDeletionImpact(skillId);
         const ideaTreeReferences = skill.ideaTreeExecutor
-          ? await ideaTreeSkillDeletionReferences(store, skillId)
+          ? await ideaTreeSkillDeletionReferences(store, skillId, ideaResearch.references)
           : [];
         impact.references = [...new Map([...impact.references, ...ideaTreeReferences]
           .map((reference) => [`${reference.scope}:${reference.id}`, reference])).values()];
@@ -1960,7 +1959,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact: SkillDeletionImpact = store.getSkillDeletionImpact(skillId);
         const ideaTreeReferences = skill.ideaTreeExecutor
-          ? await ideaTreeSkillDeletionReferences(store, skillId)
+          ? await ideaTreeSkillDeletionReferences(store, skillId, ideaResearch.references)
           : [];
         impact.references = [...new Map([...impact.references, ...ideaTreeReferences]
           .map((reference) => [`${reference.scope}:${reference.id}`, reference])).values()];

@@ -172,6 +172,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       uv sync --project services/evolve --frozen --no-install-project --extra candidates \
         --python "${PYTHON_VERSION}"
 
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=services/idea-tree/pyproject.toml,target=/app/services/idea-tree/pyproject.toml \
+    --mount=type=bind,source=services/idea-tree/uv.lock,target=/app/services/idea-tree/uv.lock \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/idea-tree \
+      uv sync --project services/idea-tree --frozen --no-install-project --python "${PYTHON_VERSION}"
+
 # JiuwenSwarm itself: not our code and not a workspace project, so it has no
 # lockfile to sync against here — installed straight from its PyPI release
 # ("workswarm") into its own venv, at the same path scripts/jiuwenswarm.sh
@@ -214,7 +220,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
  && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/memory-graph \
       uv sync --project services/memory-graph --locked --python "${PYTHON_VERSION}" \
  && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/evolve \
-      uv sync --project services/evolve --locked --extra candidates --python "${PYTHON_VERSION}"
+      uv sync --project services/evolve --locked --extra candidates --python "${PYTHON_VERSION}" \
+ && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/idea-tree \
+      uv sync --project services/idea-tree --locked --python "${PYTHON_VERSION}"
 
 # ---------------------------------------------------------------- runtime ---
 FROM ${NODE_RUNTIME_IMAGE} AS runtime
@@ -254,6 +262,7 @@ ENV NODE_ENV=production \
     SCIENCE_AGENT_ADAPTER_PYTHON_PATH=/opt/sciencediscovery/envs/adapter/bin/python \
     SCIENCE_AGENT_MEMORY_GRAPH_PYTHON_PATH=/opt/sciencediscovery/envs/memory-graph/bin/python \
     SCIENCE_AGENT_EVOLVE_PYTHON_PATH=/opt/sciencediscovery/envs/evolve/bin/python \
+    SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH=/opt/sciencediscovery/envs/idea-tree/bin/python \
     JIUWENSWARM_SRC=/opt/sciencediscovery/jiuwenswarm/src
 
 COPY --from=builder /opt/sciencediscovery /opt/sciencediscovery

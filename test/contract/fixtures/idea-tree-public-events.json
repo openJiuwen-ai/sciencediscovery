@@ -1,0 +1,4 @@
+{
+  "researchEvent": { "status": "completed", "candidateScored": true },
+  "chatMessages": ["user", "assistant"]
+}

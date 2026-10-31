@@ -1,6 +1,6 @@
 # Idea Tree autonomous-research engine
 
-Idea Tree runs inside the existing evolve Python service through an ASGI worker. The
+Idea Tree runs in an independent Python service with one ASGI worker. The
 API handles session authentication, model proxying, and usage recording; Python runs
 the research loop; and the existing Web tree panel starts, observes, and controls it.
 The chat Agent does not run the tree workflow, create an execution plan, or dispatch
@@ -38,25 +38,24 @@ results, and cannot be reversed by resuming.
 
 ## Implementation and state
 
-- `vendor/idea_tree/research.py`: ideation, design, independent assessment,
+- `services/idea-tree/src/sciencediscovery_idea_tree/research.py`: ideation, design, independent assessment,
   aggregation, and level-by-level propagation. It saves each completed stage and runs
   only unfinished stages after recovery.
-- `vendor/idea_tree/research_tree.py`: reuses node and ancestor queries from the root
-  `tree.py`.
-- `vendor/idea_tree/prompts.py`: role instructions and scoring criteria.
-- `vendor/idea_tree/research_service.py`: create, query, pause, resume, and stop. It
+- `services/idea-tree/src/sciencediscovery_idea_tree/research_tree.py`: reuses node and ancestor queries from the service package’s `tree.py`.
+- `services/idea-tree/src/sciencediscovery_idea_tree/prompts.py`: role instructions and scoring criteria.
+- `services/idea-tree/src/sciencediscovery_idea_tree/research_service.py`: create, query, pause, resume, and stop. It
   ensures that each session runs at most one research job in a process.
 - `services/api/src/idea-tree/research.ts`: research HTTP client and temporary model
   proxy credentials.
 - `apps/web/src/IdeaResearchPanel.tsx`: research controls in the existing tree panel.
 
-The only persistent state is
-`$SCIENCE_AGENT_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json` in
+Research state is
+`$SCIENCE_AGENT_IDEA_TREE_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json` in
 the Python service, saved through atomic replacement. It includes materials, budget,
 nodes, stage results, and usage, but not model credentials. This path does not use
 external revisions, leases, `childDigest`, SHA verification, or result handles. The old
 tree remains viewable through its existing read API. Its write operations return a
-read-only error and its prior execution state is not migrated automatically.
+read-only error. Legacy records are copied on first startup.
 
 The public endpoint is `POST /api/sessions/:sessionId/idea-tree/research`, where
 `operation` accepts `create`, `get`, `list`, `pause`, `continue`, `end`, and `defaults`.
