@@ -26,6 +26,7 @@ import { createZstdDecompress } from "node:zlib";
 
 import { parseEnvFile, parseInvocation, USAGE } from "./cli-options.js";
 import { migrateLegacyDirectory } from "./directory-migration.js";
+import { engineCommand } from "./engine-commands.js";
 import { readPayloadLocator } from "./payload-container.js";
 import { resolvePayload } from "./payload-store.js";
 import { runCommand } from "./run.js";
@@ -95,6 +96,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   if (invocation.command === "run") {
     const { exitCode } = await runCommand(
       { settings: invocation.settings, runSettings: invocation.runSettings!, baseEnv: process.env },
+      write,
+    );
+    return exitCode;
+  }
+
+  if (invocation.command === "evolve" || invocation.command === "idea") {
+    // parseInvocation sets engineSettings whenever it accepts an action; check
+    // rather than assert, so a missing one is a usage error, not a TypeError.
+    const { engineSettings } = invocation;
+    if (!engineSettings) throw new Error(`${invocation.command} requires an action\n\n${USAGE}`);
+    const { exitCode } = await engineCommand(
+      { settings: invocation.settings, engineSettings, baseEnv: process.env },
       write,
     );
     return exitCode;

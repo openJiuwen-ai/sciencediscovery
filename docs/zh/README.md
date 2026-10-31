@@ -33,7 +33,7 @@
 ## Reference（参考）
 
 - [Agent 后端](reference/agent-backends.md) — JiuwenSwarm 默认行为、native 切换、工具、规划、技能和子代理。
-- [CLI](reference/cli.md) — `serve`、`run`、`extract`、`version` 的命令与行为。
+- [CLI](reference/cli.md) — `serve`、`run`、`evolve`、`idea`、`extract`、`version` 的命令与行为。
 - [执行与工作区](reference/execution-workspaces.md)
 - [预置科研能力](reference/builtin-research-capabilities.md)
 - [配置、端口与存储](reference/configuration.md)
