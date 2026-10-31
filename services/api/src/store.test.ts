@@ -4965,7 +4965,7 @@ test("Runner selections treat local and remote alike and preserve legacy default
   await assert.rejects(reloaded.registerRemoteHost({ id: "local", alias: "reserved" }), /reserved/);
 });
 
-test("with every skill everywhere (the JiuwenSwarm backend) a Session's skill selection does not narrow its skills", async (context) => {
+test("new installed skills do not widen a Session's explicit selection", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `every-skill-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));
   const store = new SessionStore(root); await store.load();
@@ -4974,10 +4974,10 @@ test("with every skill everywhere (the JiuwenSwarm backend) a Session's skill se
   const session = await store.createSession(project.id, "Skills", {}, {}, { allowUnconfiguredModel: true });
   await store.replaceSessionSettings(session.id, { enabledSkillIds: ["code-engineer"], skillSelectionMode: "selected" });
   assert.deepEqual(store.getSessionSettings(session.id).effective.enabledSkillIds, ["code-engineer"]);
-  store.useEverySkillEverywhere();
+  store.setAvailableSkillIds(["evolve-design", "code-engineer", "new-skill"]);
   const effective = store.getSessionSettings(session.id).effective;
-  assert.equal(effective.skillSelectionMode, "all");
-  assert.deepEqual([...effective.enabledSkillIds].sort(), ["code-engineer", "evolve-design"]);
+  assert.equal(effective.skillSelectionMode, "selected");
+  assert.deepEqual(effective.enabledSkillIds, ["code-engineer"]);
 });
 
 test("an action JiuwenSwarm's permission engine let through is allowed and recorded as its decision", async (context) => {

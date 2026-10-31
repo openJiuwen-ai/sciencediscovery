@@ -2833,7 +2833,7 @@ test("native MCP literature flow produces an audited cited summary", { tags: ["s
   // With the JiuwenSwarm backend a Session's skills are not a selection: every installed skill is
   // available everywhere, so the store resolves "all",
   // not the one Skill this test configured.
-  if (!onJiuwenSwarm) assert.deepEqual(session.body.enabledSkillIds, ["life-science-evidence-brief"]);
+  assert.deepEqual(session.body.enabledSkillIds, ["life-science-evidence-brief"]);
 
   const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
     body: JSON.stringify({ content: "Research TP53 apoptosis and summarize the literature with verifiable citations." }),
@@ -3672,8 +3672,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
-  // With the JiuwenSwarm backend every installed Skill is available in every Session (see above).
-  if (!onJiuwenSwarm) assert.deepEqual(session.body.enabledSkillIds, [created.body.id]);
+  assert.deepEqual(session.body.enabledSkillIds, [created.body.id]);
   const standardSession = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
     body: JSON.stringify({}),
     headers: { ...authorization, "content-type": "application/json" },
@@ -3683,33 +3682,21 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   const impact = await jsonRequest<SkillDeletionImpact>(`${origin}/api/skills/${created.body.id}/deletion-impact`, {
     headers: authorization,
   });
-  // Deletion impact only reports a Project/Session whose skillSelectionMode is "selected" (a stored selection
-  // that is actually honoured); useEverySkillEverywhere resolves every one of them to "all" (see the note
-  // above), so there is truthfully nothing uniquely depending on this one skill id to warn about.
-  assert.deepEqual(impact.body.references.map((item) => item.scope), onJiuwenSwarm ? [] : ["project"]);
-  if (onJiuwenSwarm) {
-    // No reference means no impact to warn about (see the comment above), so nothing blocks deletion here
-    // the way a "selected" Project reference would under the built-in loop: it succeeds on the first try.
-    assert.equal((await fetch(`${origin}/api/skills/${created.body.id}`, {
-      headers: authorization,
-      method: "DELETE",
-    })).status, 200);
-  } else {
-    assert.equal((await fetch(`${origin}/api/skills/${created.body.id}`, {
-      headers: authorization,
-      method: "DELETE",
-    })).status, 409);
+  assert.deepEqual(impact.body.references.map((item) => item.scope), ["project"]);
+  assert.equal((await fetch(`${origin}/api/skills/${created.body.id}`, {
+    headers: authorization,
+    method: "DELETE",
+  })).status, 409);
 
-    await jsonRequest(`${origin}/api/projects/${project.body.id}/settings`, {
-      body: JSON.stringify({ enabledSkillIds: [], modelId: model.id }),
-      headers: { ...authorization, "content-type": "application/json" },
-      method: "PUT",
-    });
-    assert.equal((await fetch(`${origin}/api/skills/${created.body.id}`, {
-      headers: authorization,
-      method: "DELETE",
-    })).status, 200);
-  }
+  await jsonRequest(`${origin}/api/projects/${project.body.id}/settings`, {
+    body: JSON.stringify({ enabledSkillIds: [], modelId: model.id }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  assert.equal((await fetch(`${origin}/api/skills/${created.body.id}`, {
+    headers: authorization,
+    method: "DELETE",
+  })).status, 200);
   assert.equal((await fetch(`${origin}/api/skills/life-science-evidence-brief`, {
     headers: authorization,
     method: "DELETE",
