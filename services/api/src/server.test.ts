@@ -3084,10 +3084,9 @@ test("running sessions accept queued runs and start them after the active run co
   assert.deepEqual(duringFirst?.messages.map((message) => message.content), ["Hold the first response."]);
 
   modelServer.release();
-  await waitForRunStatus(origin, session.body.id, first.body.id, "completed");
-  // A real shared Swarm adapter can still be releasing the first stream after its
-  // completed status is persisted. Keep the native adapter's fast budget, while
-  // allowing the real adapter enough time to schedule the already-queued run.
+  // Both runs execute through the real adapter; its startup also counts toward
+  // the first run's completion budget, not only the queued run's budget.
+  await waitForRunStatus(origin, session.body.id, first.body.id, "completed", onJiuwenSwarm ? 600 : 100);
   await waitForRunStatus(origin, session.body.id, second.body.id, "completed", onJiuwenSwarm ? 600 : 100);
   assert.deepEqual((await listRunEvents(origin, session.body.id, second.body.id)).map((event) => event.event.type).slice(0, 3), [
     "run.queued",
