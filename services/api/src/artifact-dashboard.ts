@@ -254,7 +254,12 @@ async function readCasText(recorder: ProvenanceRecorder, hash: string): Promise<
  * field over the whole file: built character by character that is quadratic
  * string garbage on a preview request, and it stays linear here.
  */
-function splitDelimited(source: string, delimiter: string): string[][] {
+function splitDelimited(rawSource: string, delimiter: string): string[][] {
+  // Excel writes "CSV UTF-8" and "TSV UTF-8" with a leading byte-order mark. It
+  // is an encoding marker, not part of the first header cell, so a client that
+  // matches columns by name must never see it. Strip exactly one U+FEFF, and
+  // only at the start of the file: a U+FEFF anywhere else is ordinary data.
+  const source = rawSource.startsWith("\uFEFF") ? rawSource.slice(1) : rawSource;
   const records: string[][] = [];
   let record: string[] = [];
   // Completed spans of the field being read; `spanStart` opens the one still
