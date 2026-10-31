@@ -820,6 +820,10 @@ jobs:
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -850,3 +854,41 @@ jobs:
           CI_PROFILE: ${{ needs.policy.outputs.profile }}
           CI_JOB_RESULTS: ${{ toJSON(needs) }}
         run: node .ci/tier-policy.mjs gate
+      - name: Read CLA inputs
+        id: cla
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { mergeGroupPullRequestNumber } = await import(process.env.GITHUB_WORKSPACE + '/.ci/tier-policy.mjs');
+            const { owner, repo } = context.repo;
+            const result = { user: context.payload.pull_request?.user ?? null };
+            const sha = context.payload.pull_request?.head.sha ?? context.payload.merge_group?.head_sha;
+            if (context.eventName === 'merge_group') {
+              const pull_number = mergeGroupPullRequestNumber(context.payload.merge_group?.head_ref);
+              if (pull_number) {
+                try {
+                  const { data } = await github.rest.pulls.get({ owner, repo, pull_number });
+                  result.user = data.user;
+                } catch (error) {
+                  core.warning(`Could not read PR #${pull_number} author; no Bot exemption: ${error.message}`);
+                }
+              } else {
+                core.warning('Could not parse merge_group PR number; no Bot exemption');
+              }
+            }
+            try {
+              if (!sha) throw new Error('Missing head SHA');
+              core.info(`Reading commit statuses at ${sha}`);
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner, repo, ref: sha, per_page: 100,
+              });
+              result.statuses = statuses.map(({ context, state }) => ({ context, state }));
+            } catch (error) {
+              result.error = error.message;
+            }
+            return result;
+      - name: Require CLA policy
+        env:
+          CI_CLA_RESULT: ${{ steps.cla.outputs.result }}
+        run: node .ci/tier-policy.mjs cla
