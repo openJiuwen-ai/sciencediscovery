@@ -435,6 +435,22 @@ test("the passthrough sandbox resolves its stable Python path through the host P
 
 const testApiOrigins = new Map<string, { origin: string; close(): Promise<void> }>();
 
+/** A delete commits the catalog and returns; the tree is reclaimed behind the
+ * Session fence afterwards. A test that looks at the filesystem waits for it. */
+async function waitForRemoval(path: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { await stat(path); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return;
+      throw error;
+    }
+    if (Date.now() >= deadline) assert.fail(`${path} was not reclaimed within ${timeoutMs}ms`);
+    await new Promise((done) => setTimeout(done, 25));
+  }
+}
+
 async function removeTestRoot(root: string): Promise<void> {
   const api = testApiOrigins.get(root);
   if (api) {
@@ -6439,7 +6455,7 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   });
   assert.equal(deletedSession.status, 200);
   assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}`, { headers: authorization })).status, 404);
-  await assert.rejects(stat(sessionRoot), { code: "ENOENT" });
+  await waitForRemoval(sessionRoot);
 
   const activeChild = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
     body: JSON.stringify({ title: "Active child" }),
@@ -6469,7 +6485,7 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   });
   assert.equal(deletedProject.status, 200);
   assert.equal((await fetch(`${origin}/api/projects/${project.body.id}/settings`, { headers: authorization })).status, 404);
-  await assert.rejects(stat(resolve(tempRoot, "projects", project.body.id)), { code: "ENOENT" });
+  await waitForRemoval(resolve(tempRoot, "projects", project.body.id));
 });
 
 test("deleting a session/project mirrors the cleanup to the memory-graph sidecar", async (context) => {

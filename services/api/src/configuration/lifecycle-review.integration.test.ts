@@ -22,6 +22,9 @@ async function fixture(context: { after(work: () => Promise<void>): void }) {
   context.after(async () => {
     for (const item of stores) {
       item.close();
+      // A delete answers before it has reclaimed the tree; removing the data
+      // root now would race with the work it queued.
+      await item.whenDeletionsSettle();
     }
     await rm(root, { recursive: true, force: true });
   });

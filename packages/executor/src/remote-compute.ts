@@ -258,6 +258,7 @@ export class RemoteComputeClient {
   }>();
   private readonly runnerStatuses = new Map<string, RemoteRunnerStatus>();
   private readonly reachabilityChecks = new Map<string, RemoteHostReachability>();
+  private readonly reachabilityProbes = new Map<string, Promise<RemoteHostReachability>>();
   private readonly connectLogs = new Map<string, RemoteConnectLogEntry[]>();
 
   /** The connection story so far for one host, oldest first. */
@@ -403,34 +404,82 @@ export class RemoteComputeClient {
   async reachability(host: RemoteHostTarget, now: number = Date.now()): Promise<RemoteHostReachability> {
     const cached = this.reachabilityChecks.get(host.id);
     if (cached && now - Date.parse(cached.checkedAt) < REACHABILITY_TTL_MS) return { ...cached };
+    return { ...await this.refreshReachability(host, now) };
+  }
+
+  /**
+   * What a list reads: the last answer, or `checking` while the ask behind it
+   * runs. A page that names every machine must not be held for the length of a
+   * connect timeout by the one machine that cannot answer; the fresh answer
+   * lands in the cache and the next read picks it up.
+   */
+  reachabilityNow(host: RemoteHostTarget, now: number = Date.now()): RemoteHostReachability {
+    const cached = this.reachabilityChecks.get(host.id);
+    if (!cached || now - Date.parse(cached.checkedAt) >= REACHABILITY_TTL_MS) {
+      void this.refreshReachability(host, now).catch(() => undefined);
+    }
+    return cached ? { ...cached } : { checkedAt: new Date(now).toISOString(), state: "checking" };
+  }
+
+  /** Ask now, or join the ask already in flight, and cache the answer. */
+  refreshReachability(host: RemoteHostTarget, now: number = Date.now()): Promise<RemoteHostReachability> {
+    const inFlight = this.reachabilityProbes.get(host.id);
+    if (inFlight) return inFlight;
+    const probe = this.probeReachability(host, now)
+      .then((result) => {
+        this.reachabilityChecks.set(host.id, result);
+        return { ...result };
+      })
+      .finally(() => { this.reachabilityProbes.delete(host.id); });
+    this.reachabilityProbes.set(host.id, probe);
+    return probe;
+  }
+
+  /** One ask, bounded end to end: a handshake that hangs never reaches the command timeout. */
+  private async probeReachability(host: RemoteHostTarget, now: number): Promise<RemoteHostReachability> {
     const checkedAt = new Date(now).toISOString();
-    let result: RemoteHostReachability;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (host.connectionKind === "direct") {
-        const endpoint = host.endpoint;
-        if (!endpoint) throw new Error("This self-deployed Runner has no endpoint");
-        const response = await fetch(`${endpoint.protocol}://${endpoint.host.includes(":") ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}/health`, {
-          signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
-        });
-        // Any answer proves the machine is up; the token is a separate question.
-        result = { checkedAt, state: response.status < 500 ? "online" : "offline" };
-      } else {
-        const access = await this.resolveAccess(host.id);
-        const probe = await this.transport.run(access, "true\n", REACHABILITY_TIMEOUT_MS);
-        result = probe.exitCode === 0
-          ? { checkedAt, state: "online" }
-          : { checkedAt, error: probe.stderr.trim() || `SSH exited ${probe.exitCode}`, state: "offline" };
-      }
+      const probe = host.connectionKind === "direct"
+        ? this.probeDirectReachability(host, checkedAt)
+        : this.probeShellReachability(host, checkedAt);
+      // A lost race abandons the probe, not its cleanup: it must still settle.
+      void probe.catch(() => undefined);
+      const budget = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`The machine did not answer within ${Math.round(REACHABILITY_TIMEOUT_MS / 1_000)} s`)),
+          REACHABILITY_TIMEOUT_MS,
+        );
+      });
+      return await Promise.race([probe, budget]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // No stored credentials is not the machine being down; saying "offline"
       // would send an operator to check a machine that is probably fine.
-      result = /no stored SSH credentials|has no endpoint/u.test(message)
+      return /no stored SSH credentials|has no endpoint/u.test(message)
         ? { checkedAt, state: "unknown" }
         : { checkedAt, error: message, state: "offline" };
+    } finally {
+      clearTimeout(timer);
     }
-    this.reachabilityChecks.set(host.id, result);
-    return { ...result };
+  }
+
+  private async probeDirectReachability(host: RemoteHostTarget, checkedAt: string): Promise<RemoteHostReachability> {
+    const endpoint = host.endpoint;
+    if (!endpoint) throw new Error("This self-deployed Runner has no endpoint");
+    const response = await fetch(`${endpoint.protocol}://${endpoint.host.includes(":") ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}/health`, {
+      signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+    });
+    // Any answer proves the machine is up; the token is a separate question.
+    return { checkedAt, state: response.status < 500 ? "online" : "offline" };
+  }
+
+  private async probeShellReachability(host: RemoteHostTarget, checkedAt: string): Promise<RemoteHostReachability> {
+    const access = await this.resolveAccess(host.id);
+    const probe = await this.transport.run(access, "true\n", REACHABILITY_TIMEOUT_MS);
+    return probe.exitCode === 0
+      ? { checkedAt, state: "online" }
+      : { checkedAt, error: probe.stderr.trim() || `SSH exited ${probe.exitCode}`, state: "offline" };
   }
 
   /** Drop a machine's cached answer, so the next read asks the machine again. */

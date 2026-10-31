@@ -9,13 +9,24 @@ import type { SessionStore } from "./store.js";
 import { resolveEnvironmentInstallRequest } from "./environment-sources.js";
 import { remoteWorkspaceKey } from "./remote-runner.js";
 
-/** The built-in endpoint and registered endpoints share one observable catalog. */
-export async function runnerTarget(store: SessionStore, local: RunnerClient, remote: RemoteComputeClient, id: string): Promise<RunnerTarget> {
+/**
+ * The built-in endpoint and registered endpoints share one observable catalog.
+ *
+ * `reachability: "now"` is for the reads that paint a page: it answers with the
+ * last known state (or `checking`) and refreshes behind the answer, so one
+ * unreachable machine cannot hold the whole catalog for a connect timeout.
+ */
+export async function runnerTarget(
+  store: SessionStore, local: RunnerClient, remote: RemoteComputeClient, id: string,
+  options: { reachability?: "await" | "now" } = {},
+): Promise<RunnerTarget> {
   if (id !== "local") {
     const host = store.getRemoteHost(id);
     if (!host) throw new Error("Runner not found");
     const status = await remote.runnerStatusWithResources(id);
-    const reachability = status.state === "ready" ? undefined : await remote.reachability(host);
+    const reachability = status.state === "ready"
+      ? undefined
+      : options.reachability === "now" ? remote.reachabilityNow(host) : await remote.reachability(host);
     return { ...host, location: "remote", runnerStatus: status, workspaceRoot: status.resources?.workspaceDisk?.path,
       ...(reachability ? { reachability } : {}) };
   }

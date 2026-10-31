@@ -118,6 +118,30 @@ export async function committedWorkspaceSnapshot(versions: VersionStore, root: s
   }, undefined, previous), undefined, previous);
 }
 
+/** Record a tree that is already fenced off from every writer, without taking
+ *  the Workspace lease again.
+ *
+ *  Deletion closes admission before it commits and the fence outlives the
+ *  operation, so `withWorkspaceMutation` cannot follow it: the same fence that
+ *  makes this safe would refuse it. The work is the same — baseline, snapshot,
+ *  commit; what is dropped is a lock nobody is waiting on, because no writer
+ *  was admitted after the retirement took the roots. */
+export async function checkpointRetiredWorkspace(versions: VersionStore, root: string, kind: string): Promise<void> {
+  await ensureWorkspaceBaseline(versions, root);
+  const workspace = await snapshotWorkspace(versions, root);
+  const version = await versions.putRecord("WorkspaceMutation", { kind, workspace, status: "completed" });
+  const refs = await RefStore.open(versions);
+  try {
+    const name = workspaceHeadName(await realpath(root));
+    const head = refs.head(name);
+    if (head) {
+      const record = await versions.readRecord<{ workspace: AgentStateRef }>(head);
+      if (record.value.workspace?.digest === workspace.digest) return;
+    }
+    await refs.commit(versions, name, head, version);
+  } finally { refs.close(); }
+}
+
 /** Acquire both sides of a local copy in canonical order; opposite-direction
  * copies must never each hold one root while waiting for the other. */
 export async function withWorkspaceLeases<T>(roots: string[], operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {

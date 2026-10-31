@@ -267,6 +267,22 @@ function errorMessage(reason: unknown): string {
   return TEXT.errors.generic;
 }
 
+/** How many Sessions' transcripts and replays stay in memory for an instant
+ *  switch back. Beyond this the least recently viewed is dropped. */
+const SESSION_CACHE_LIMIT = 8;
+
+/** Remember one per-Session value under a size cap. Map keeps insertion order,
+ *  so rewriting a key moves it to the end and the first key is the coldest. */
+function rememberBounded<T>(cache: Map<string, T>, key: string, value: T): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > SESSION_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) return;
+    cache.delete(oldest);
+  }
+}
+
 /** A rebuilt set of run replays, stamped with the session epoch it was read in
  *  so a batch that outlived its session cannot be committed. */
 interface ReplayBatch {
@@ -352,7 +368,18 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const runningRef = useRef(false);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const runRef = useRef<RunStreamState>(emptyRunStream());
-  const replaysRef = useRef<RunReplay[]>([]);
+  /** Rebuilt runs, per Session. A finished run's events never change, and
+   *  reading them is one request per run: a Session the user comes back to
+   *  keeps the ones it already rebuilt instead of paying for them again. The
+   *  map is bounded — the transcript of a Session left long ago is not worth
+   *  holding — with the oldest entry dropped first. */
+  const replaysBySession = useRef(new Map<string, RunReplay[]>());
+  /** Session details already shown, for the same reason: a switch paints the
+   *  transcript it had and lets the re-read land behind it. */
+  const detailsBySession = useRef(new Map<string, SessionDetail>());
+  /** The workspace listing each Session last showed, so the panel is populated
+   *  from the moment the Session opens rather than when `/files` answers. */
+  const panelFilesBySession = useRef(new Map<string, WorkspaceFile[]>());
   /** Bumped every time the open session goes away. Reading a session's runs is
    *  a batch of requests, and one can still be in flight when another session
    *  is opened; only the batch belonging to the current epoch may be committed. */
@@ -433,7 +460,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const buildReplays = useCallback(
     async (target: string, runs: SessionRun[]): Promise<ReplayBatch> => {
       const epoch = replayEpoch.current;
-      const held = new Map(replaysRef.current.map((replay) => [replay.runId, replay]));
+      const held = new Map((replaysBySession.current.get(target) ?? [])
+        .map((replay) => [replay.runId, replay]));
       const missing = runs.filter((entry) => isTerminalRunStatus(entry.status) && !held.has(entry.id));
       if (missing.length > 0) {
         const rebuilt = await Promise.all(
@@ -456,8 +484,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** Land a rebuilt batch — unless the session it was read for is already gone,
    *  in which case the reads were wasted but harmless. */
   const commitReplays = useCallback((target: string, batch: ReplayBatch) => {
+    // The batch belongs to `target` whether or not it is still on screen, so
+    // it is worth keeping either way; only the state write is gated.
+    rememberBounded(replaysBySession.current, target, batch.replays);
     if (batch.epoch !== replayEpoch.current || sessionRef.current !== target) return;
-    replaysRef.current = batch.replays;
     setReplays(batch.replays);
   }, []);
 
@@ -690,7 +720,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         if (viewEpoch.current === epoch) {
           setSessionId(created.id);
           sessionRef.current = created.id;
-          setDetail({ ...created, messages: [] });
+          const fresh = { ...created, messages: [] };
+          rememberBounded(detailsBySession.current, created.id, fresh);
+          setDetail(fresh);
         }
         await refreshSessionLists();
         return created.id;
@@ -776,6 +808,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (files.status === "rejected") return;
       const previous = panelListing.current?.sessionId === target ? panelListing.current.files : [];
       panelListing.current = { files: files.value, sessionId: target };
+      rememberBounded(panelFilesBySession.current, target, files.value);
       setPanelFiles(files.value);
       reloadOpenFiles(target, changedFiles(previous, files.value));
     },
@@ -980,6 +1013,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // Session over the one now on screen. The list below is shared and
         // stays worth refreshing either way.
         commitReplays(target, batch);
+        rememberBounded(detailsBySession.current, target, fresh);
         if (sessionRef.current === target) {
           setDetail(fresh);
           resetRun();
@@ -1145,9 +1179,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     setRunning(false);
     setDetail(undefined);
     setPendingMessage(undefined);
-    // Any batch still being read belongs to the session being left behind.
+    // Any batch still being read belongs to the session being left behind. What
+    // it rebuilt stays in `replaysBySession`, so coming back needs no re-read.
     replayEpoch.current += 1;
-    replaysRef.current = [];
     setReplays([]);
     // Open documents belong to the session's workspace, so leaving the session
     // takes them with it rather than showing another session's file contents.
@@ -1229,6 +1263,20 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       clearSession();
       setSessionId(id);
       sessionRef.current = id;
+      // A Session this window has already shown paints at once; the read below
+      // replaces it as soon as the server answers. The cached copy is only a
+      // head start, never the last word — `settle` writes back a coarse one.
+      const cached = detailsBySession.current.get(id);
+      if (cached) setDetail(cached);
+      const cachedReplays = replaysBySession.current.get(id);
+      if (cachedReplays) setReplays(cachedReplays);
+      const cachedFiles = panelFilesBySession.current.get(id);
+      if (cachedFiles) {
+        // Seed the comparison baseline as well: the refresh below then only
+        // reloads documents whose file actually moved.
+        panelListing.current = { files: cachedFiles, sessionId: id };
+        setPanelFiles(cachedFiles);
+      }
       setLoadingSession(true);
       try {
         const [fresh, runs] = await Promise.all([getSession(client, id), listRuns(client, id)]);
@@ -1236,6 +1284,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // while these were in flight. The reads are then wasted, and writing
         // them would show one Session's transcript under another's name.
         if (sessionRef.current !== id) return;
+        rememberBounded(detailsBySession.current, id, fresh);
         setDetail(fresh);
         // The listing the row came from is not proof: the Session's own record
         // is what says which Project it is in.
@@ -1343,7 +1392,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (!target) return;
       try {
         await updateSession(client, target, { modelId });
-        setDetail((current) => (current ? { ...current, modelId } : current));
+        setDetail((current) => {
+          if (!current) return current;
+          const next = { ...current, modelId };
+          rememberBounded(detailsBySession.current, target, next);
+          return next;
+        });
       } catch (reason) {
         report(reason);
       }
@@ -1366,7 +1420,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (!target) return;
       try {
         const updated = await updateSession(client, target, { approvalMode: mode });
-        setDetail((current) => (current ? { ...current, approvalMode: updated.approvalMode } : current));
+        setDetail((current) => {
+          if (!current) return current;
+          const next = { ...current, approvalMode: updated.approvalMode };
+          rememberBounded(detailsBySession.current, target, next);
+          return next;
+        });
       } catch (reason) {
         report(reason);
       }
@@ -1387,7 +1446,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (!target) return;
       try {
         const updated = await updateSession(client, target, { specialistId: specialistId ?? null });
-        setDetail((current) => (current ? { ...current, specialistId: updated.specialistId } : current));
+        setDetail((current) => {
+          if (!current) return current;
+          const next = { ...current, specialistId: updated.specialistId };
+          rememberBounded(detailsBySession.current, target, next);
+          return next;
+        });
       } catch (reason) {
         report(reason);
       }

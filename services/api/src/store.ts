@@ -26,7 +26,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
 import { PluginControl } from "./plugins/control.js";
-import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
+import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement, checkpointRetiredWorkspace } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -465,6 +465,76 @@ function retainAddedById<T extends { id: string }>(restored: T[], live: T[]): T[
   return added.length ? [...restored, ...added] : restored;
 }
 
+/** The catalog fields that stay in the `catalog_state` row.
+ *
+ *  File provenance and subagent history were once part of that row, and they
+ *  were what made every save cost a second: 71k file records, 73k revisions
+ *  and 19 MB of subagent steps all rode along with a settings change. They are
+ *  rows of their own now (`workspace_files`, `workspace_file_revisions`,
+ *  `subagents`), and this projection is what the catalog write serializes. */
+type PersistedCatalog = Omit<Catalog, "subagents" | "workspaceFileRecords" | "workspaceFileRevisions">;
+
+/** The in-memory state a failed catalog write has to put back. The three large
+ *  collections are kept by reference: the mutating callbacks replace those
+ *  arrays (filter/map) or append to them, so restoring the array is enough and
+ *  avoids a deep clone of 90 MB on every delete. */
+interface CatalogRollback {
+  /** Deletions staged by the mutating callback; restored with the catalog so a
+   *  failed delete is not replayed by the next flush. */
+  deletedSubagents: string[];
+  deletedWorkspaceFiles: string[];
+  deletedWorkspaceRevisions: string[];
+  persisted: PersistedCatalog;
+  subagents: Subagent[];
+  workspaceFileRecords: WorkspaceFileRecord[];
+  workspaceFileRevisions: WorkspaceFileRevision[];
+}
+
+/** Lookup tables over the file provenance arrays.
+ *
+ *  `reconcileWorkspaceFiles` used to search the 71k-record array once per
+ *  scanned file, which is 2.6 seconds for a 500-file workspace — and it runs on
+ *  every panel refresh. Built in one pass and dropped on the next mutation. */
+interface WorkspaceProvenanceIndex {
+  liveByPath: Map<string, WorkspaceFileRecord>;
+  liveBySession: Map<string, WorkspaceFileRecord[]>;
+  recordsById: Map<string, WorkspaceFileRecord>;
+  revisionsById: Map<string, WorkspaceFileRevision>;
+  revisionsByFile: Map<string, WorkspaceFileRevision[]>;
+}
+
+function workspaceFilePathKey(sessionId: string, path: string): string {
+  return `${sessionId}\0${path}`;
+}
+
+function buildWorkspaceProvenanceIndex(
+  records: readonly WorkspaceFileRecord[],
+  revisions: readonly WorkspaceFileRevision[],
+): WorkspaceProvenanceIndex {
+  const index: WorkspaceProvenanceIndex = {
+    liveByPath: new Map(),
+    liveBySession: new Map(),
+    recordsById: new Map(),
+    revisionsById: new Map(),
+    revisionsByFile: new Map(),
+  };
+  for (const record of records) {
+    index.recordsById.set(record.id, record);
+    if (record.deletedAt) continue;
+    index.liveByPath.set(workspaceFilePathKey(record.sessionId, record.path), record);
+    const session = index.liveBySession.get(record.sessionId);
+    if (session) session.push(record);
+    else index.liveBySession.set(record.sessionId, [record]);
+  }
+  for (const revision of revisions) {
+    index.revisionsById.set(revision.id, revision);
+    const file = index.revisionsByFile.get(revision.fileId);
+    if (file) file.push(revision);
+    else index.revisionsByFile.set(revision.fileId, [revision]);
+  }
+  return index;
+}
+
 export class SessionStoreHttpError extends Error {
   constructor(message: string, readonly statusCode: 400 | 404 | 409) {
     super(message);
@@ -503,6 +573,20 @@ export class SessionStore {
   private transferStore?: WorkspaceTransfers;
   private loaded = false;
   private saveQueue = Promise.resolve();
+  /** Physical reclamation outlives the request that asked for it; deletes queue
+   *  here so two large Workspaces are never hashed at the same time. */
+  private deletionWork: Promise<void> = Promise.resolve();
+  /** Side-table rows whose in-memory value has not reached disk yet. They are
+   *  written by `saveCatalog` in the same transaction as the catalog row, so a
+   *  reader never sees a catalog naming a file whose row is missing. */
+  private readonly pendingWorkspaceFiles = new Map<string, WorkspaceFileRecord>();
+  private readonly pendingWorkspaceRevisions = new Map<string, WorkspaceFileRevision>();
+  private readonly pendingSubagents = new Map<string, Subagent>();
+  private readonly deletedWorkspaceFiles = new Set<string>();
+  private readonly deletedWorkspaceRevisions = new Set<string>();
+  private readonly deletedSubagents = new Set<string>();
+  /** Rebuilt on demand after a mutation; see `WorkspaceProvenanceIndex`. */
+  private workspaceProvenanceCache?: WorkspaceProvenanceIndex;
   private settingsMutationQueue: Promise<void> = Promise.resolve();
   private secretKey?: Buffer;
   private skillIds = new Set<string>(BUNDLED_SKILL_IDS);
@@ -667,6 +751,33 @@ export class SessionStore {
       );
       CREATE INDEX IF NOT EXISTS connector_configuration_requests_session
         ON connector_configuration_requests(session_id);
+      -- The three large collections live in their own rows. They used to ride
+      -- inside catalog_state, which is rewritten whole on every mutation.
+      CREATE TABLE IF NOT EXISTS workspace_files (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        deleted_at TEXT,
+        record_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS workspace_files_session ON workspace_files(session_id);
+      CREATE INDEX IF NOT EXISTS workspace_files_project ON workspace_files(project_id);
+      CREATE TABLE IF NOT EXISTS workspace_file_revisions (
+        id TEXT PRIMARY KEY,
+        file_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        revision_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS workspace_file_revisions_file ON workspace_file_revisions(file_id);
+      CREATE INDEX IF NOT EXISTS workspace_file_revisions_session ON workspace_file_revisions(session_id);
+      CREATE INDEX IF NOT EXISTS workspace_file_revisions_project ON workspace_file_revisions(project_id);
+      CREATE TABLE IF NOT EXISTS subagents (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        subagent_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS subagents_session ON subagents(session_id);
     `);
     if (!(this.database.prepare("PRAGMA table_info(connector_configuration_requests)").all() as Array<{ name: string }>).some(column => column.name === "next_check_at"))
       this.database.exec("ALTER TABLE connector_configuration_requests ADD COLUMN next_check_at TEXT");
@@ -953,15 +1064,29 @@ export class SessionStore {
     ];
     const migratedSpecialists = JSON.stringify(specialists) !== JSON.stringify(savedSpecialists);
     const specialistIds = new Set(specialists.map((specialist) => specialist.id));
-    const savedSubagents = Array.isArray(saved.subagents)
-      ? saved.subagents
-      : Array.isArray(saved.delegationTracks) ? saved.delegationTracks : [];
-    const subagents = savedSubagents.flatMap((subagent) => {
+    // A catalog written by a newer build keeps these three collections in rows
+    // of their own; the JSON only carries the flag saying so. An older one
+    // still has them inline, and they are moved once at the end of this method.
+    const sideTablesSeeded = saved.sideTablesSeeded === true;
+    const rawStoredSubagents = sideTablesSeeded ? this.readSubagentsTable() : undefined;
+    // Rows are normalized on every load, not just when they arrive from the
+    // legacy JSON: a `running` row means a previous API died mid-task, and this
+    // is where that becomes the placeholder a continuation may replace.
+    const storedSubagents = rawStoredSubagents?.flatMap((subagent) => {
       const normalized = normalizePersistedSubagent(subagent);
       return normalized ? [normalized] : [];
     });
-    const migratedSubagents = !Array.isArray(saved.subagents)
-      || JSON.stringify(subagents) !== JSON.stringify(savedSubagents);
+    const savedSubagents = Array.isArray(saved.subagents)
+      ? saved.subagents
+      : Array.isArray(saved.delegationTracks) ? saved.delegationTracks : [];
+    const subagents = storedSubagents ?? savedSubagents.flatMap((subagent) => {
+      const normalized = normalizePersistedSubagent(subagent);
+      return normalized ? [normalized] : [];
+    });
+    const migratedSubagents = storedSubagents === undefined
+      && (!Array.isArray(saved.subagents) || JSON.stringify(subagents) !== JSON.stringify(savedSubagents));
+    const recoveredStoredSubagents = rawStoredSubagents !== undefined
+      && JSON.stringify(storedSubagents) !== JSON.stringify(rawStoredSubagents);
     const savedRemoteHosts = Array.isArray(saved.remoteHosts) ? saved.remoteHosts : [];
     const remoteHosts = savedRemoteHosts.map(normalizePersistedRemoteHost);
     const migratedRemoteHosts = JSON.stringify(remoteHosts) !== JSON.stringify(savedRemoteHosts);
@@ -1085,15 +1210,19 @@ export class SessionStore {
       .flatMap((value) => savedWorkspaceFileRevision(value) ?? [])
       .filter((revision) => workspaceFileProjects.get(revision.fileId) === revision.projectId);
     const workspaceFileRevisionIds = new Set(normalizedWorkspaceFileRevisions.map((revision) => revision.id));
-    const workspaceFileRecords = normalizedWorkspaceFileRecords
+    const jsonWorkspaceFileRecords = normalizedWorkspaceFileRecords
       .filter((record) => workspaceFileRevisionIds.has(record.currentRevisionId));
-    const retainedWorkspaceFileRecordIds = new Set(workspaceFileRecords.map((record) => record.id));
-    const workspaceFileRevisions = normalizedWorkspaceFileRevisions
+    const retainedWorkspaceFileRecordIds = new Set(jsonWorkspaceFileRecords.map((record) => record.id));
+    const jsonWorkspaceFileRevisions = normalizedWorkspaceFileRevisions
       .filter((revision) => retainedWorkspaceFileRecordIds.has(revision.fileId));
-    const migratedWorkspaceFileProvenance = !Array.isArray(saved.workspaceFileRecords)
-      || !Array.isArray(saved.workspaceFileRevisions)
-      || JSON.stringify(workspaceFileRecords) !== JSON.stringify(savedWorkspaceFileRecords)
-      || JSON.stringify(workspaceFileRevisions) !== JSON.stringify(savedWorkspaceFileRevisions);
+    const storedWorkspaceProvenance = sideTablesSeeded ? this.readWorkspaceProvenanceTables() : undefined;
+    const workspaceFileRecords = storedWorkspaceProvenance?.records ?? jsonWorkspaceFileRecords;
+    const workspaceFileRevisions = storedWorkspaceProvenance?.revisions ?? jsonWorkspaceFileRevisions;
+    const migratedWorkspaceFileProvenance = storedWorkspaceProvenance === undefined
+      && (!Array.isArray(saved.workspaceFileRecords)
+        || !Array.isArray(saved.workspaceFileRevisions)
+        || JSON.stringify(jsonWorkspaceFileRecords) !== JSON.stringify(savedWorkspaceFileRecords)
+        || JSON.stringify(jsonWorkspaceFileRevisions) !== JSON.stringify(savedWorkspaceFileRevisions));
     const savedVersionsByArtifactId = new Map<string, ScientificArtifactVersion[]>();
     for (const version of savedArtifactVersions) {
       const values = savedVersionsByArtifactId.get(version.artifactId) ?? [];
@@ -1218,11 +1347,22 @@ export class SessionStore {
       webSettings,
       workspaceFileRecords,
       workspaceFileRevisions,
+      sideTablesSeeded: true,
       webConnectorMigrated: true,
     };
+    // Move an older catalog's inline collections into their tables once, before
+    // the catalog row is rewritten without them.
+    if (!sideTablesSeeded) this.seedSideTables(subagents, workspaceFileRecords, workspaceFileRevisions);
+    if (recoveredStoredSubagents) {
+      const rawById = new Map(rawStoredSubagents.map((subagent) => [subagent.id, subagent]));
+      for (const subagent of subagents) {
+        if (JSON.stringify(rawById.get(subagent.id)) !== JSON.stringify(subagent)) this.stageSubagent(subagent);
+      }
+    }
     for (const session of sessions) this.syncSessionCompatibility(session);
     const migratedSessionOverrides = JSON.stringify(sessions) !== JSON.stringify(savedSessions);
-    if (!Array.isArray(saved.models)
+    if (sideTablesSeeded === false
+      || !Array.isArray(saved.models)
       || !Array.isArray(saved.providers)
       || migratedProviders
       || !Array.isArray(saved.artifacts)
@@ -1233,7 +1373,6 @@ export class SessionStore {
       || !Array.isArray(saved.permissionEpochs)
       || !Array.isArray(saved.permissionGrants)
       || !Array.isArray(saved.permissionRequests)
-      || !Array.isArray(saved.subagents)
       || !Array.isArray(saved.remoteHosts)
       || !Array.isArray(saved.remoteJobs)
       || !Array.isArray(saved.remoteWorkspaceSyncs)
@@ -1255,6 +1394,7 @@ export class SessionStore {
       || migratedSessionAssignments
       || migratedSessionOverrides
       || migratedSubagents
+      || recoveredStoredSubagents
       || migratedPermissionGrants
       || migratedReviewerSpecialistLevel
       || migratedReviewerFeedbackPolicy
@@ -1277,6 +1417,10 @@ export class SessionStore {
     this.database?.close();
     this.database = undefined;
     this.secretKey = undefined;
+    // Rows staged against the closed connection can never be flushed; keeping
+    // them would smear one database's writes into the next `load`.
+    this.clearPendingSideTables();
+    this.dropWorkspaceProvenanceCache();
     this.loaded = false;
   }
 
@@ -1288,13 +1432,27 @@ export class SessionStore {
    */
   private async saveCatalog(mutate?: () => void): Promise<void> {
     const apply = () => {
-      const previous = mutate ? structuredClone(this.catalog) : undefined;
+      const previous = mutate ? this.snapshotCatalogForRollback() : undefined;
       try {
         mutate?.();
-        if (!this.database) throw new Error("Catalog database is not initialized");
-        this.database.prepare("INSERT INTO catalog_state (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json").run(JSON.stringify(this.catalog));
+        const database = this.database;
+        if (!database) throw new Error("Catalog database is not initialized");
+        // One transaction for the catalog row and the side-table rows staged
+        // since the last save: a reader must never observe a catalog that names
+        // a file whose row is not there yet.
+        database.exec("BEGIN IMMEDIATE");
+        try {
+          database.prepare("INSERT INTO catalog_state (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json")
+            .run(JSON.stringify(this.persistedCatalog()));
+          this.flushSideTables(database);
+          database.exec("COMMIT");
+        } catch (error) {
+          database.exec("ROLLBACK");
+          throw error;
+        }
+        this.clearPendingSideTables();
       } catch (error) {
-        if (previous) this.catalog = previous;
+        if (previous) this.restoreCatalog(previous);
         throw error;
       }
     };
@@ -1347,6 +1505,205 @@ export class SessionStore {
 
 
 
+  /** What the catalog row holds: everything but the three collections that are
+   *  rows of their own. Building this projection is cheap — it copies the
+   *  catalog's own keys, not the arrays. */
+  private persistedCatalog(): PersistedCatalog {
+    const { subagents: _subagents, workspaceFileRecords: _records, workspaceFileRevisions: _revisions, ...persisted } = this.catalog;
+    return persisted;
+  }
+
+  private snapshotCatalogForRollback(): CatalogRollback {
+    return {
+      deletedSubagents: [...this.deletedSubagents],
+      deletedWorkspaceFiles: [...this.deletedWorkspaceFiles],
+      deletedWorkspaceRevisions: [...this.deletedWorkspaceRevisions],
+      persisted: structuredClone(this.persistedCatalog()),
+      subagents: [...this.catalog.subagents],
+      workspaceFileRecords: [...this.catalog.workspaceFileRecords],
+      workspaceFileRevisions: [...this.catalog.workspaceFileRevisions],
+    };
+  }
+
+  private restoreCatalog(snapshot: CatalogRollback): void {
+    this.catalog = {
+      ...snapshot.persisted,
+      subagents: snapshot.subagents,
+      workspaceFileRecords: snapshot.workspaceFileRecords,
+      workspaceFileRevisions: snapshot.workspaceFileRevisions,
+    };
+    // A rolled-back delete must not leave its rows queued for the next flush,
+    // which would remove them from disk while they are back in memory.
+    this.deletedSubagents.clear();
+    for (const id of snapshot.deletedSubagents) this.deletedSubagents.add(id);
+    this.deletedWorkspaceFiles.clear();
+    for (const id of snapshot.deletedWorkspaceFiles) this.deletedWorkspaceFiles.add(id);
+    this.deletedWorkspaceRevisions.clear();
+    for (const id of snapshot.deletedWorkspaceRevisions) this.deletedWorkspaceRevisions.add(id);
+    this.dropWorkspaceProvenanceCache();
+  }
+
+  /** Write the side-table rows staged since the last save. Called inside the
+   *  catalog transaction; `clearPendingSideTables` runs only once it commits. */
+  private flushSideTables(database: DatabaseSync): void {
+    const upsertFile = database.prepare(`
+      INSERT INTO workspace_files (id, session_id, project_id, deleted_at, record_json)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        session_id = excluded.session_id,
+        project_id = excluded.project_id,
+        deleted_at = excluded.deleted_at,
+        record_json = excluded.record_json
+    `);
+    for (const record of this.pendingWorkspaceFiles.values()) {
+      upsertFile.run(record.id, record.sessionId, record.projectId, record.deletedAt ?? null, JSON.stringify(record));
+    }
+    for (const id of this.deletedWorkspaceFiles) database.prepare("DELETE FROM workspace_files WHERE id = ?").run(id);
+
+    const upsertRevision = database.prepare(`
+      INSERT INTO workspace_file_revisions (id, file_id, session_id, project_id, revision_json)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        file_id = excluded.file_id,
+        session_id = excluded.session_id,
+        project_id = excluded.project_id,
+        revision_json = excluded.revision_json
+    `);
+    for (const revision of this.pendingWorkspaceRevisions.values()) {
+      upsertRevision.run(revision.id, revision.fileId, revision.sessionId, revision.projectId, JSON.stringify(revision));
+    }
+    for (const id of this.deletedWorkspaceRevisions) database.prepare("DELETE FROM workspace_file_revisions WHERE id = ?").run(id);
+
+    const upsertSubagent = database.prepare(`
+      INSERT INTO subagents (id, session_id, subagent_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        session_id = excluded.session_id,
+        subagent_json = excluded.subagent_json
+    `);
+    for (const subagent of this.pendingSubagents.values()) {
+      upsertSubagent.run(subagent.id, subagent.sessionId, JSON.stringify(subagent));
+    }
+    for (const id of this.deletedSubagents) database.prepare("DELETE FROM subagents WHERE id = ?").run(id);
+  }
+
+  private clearPendingSideTables(): void {
+    this.pendingWorkspaceFiles.clear();
+    this.pendingWorkspaceRevisions.clear();
+    this.pendingSubagents.clear();
+    this.deletedWorkspaceFiles.clear();
+    this.deletedWorkspaceRevisions.clear();
+    this.deletedSubagents.clear();
+  }
+
+  private stageWorkspaceFile(record: WorkspaceFileRecord): void {
+    this.deletedWorkspaceFiles.delete(record.id);
+    this.pendingWorkspaceFiles.set(record.id, record);
+    this.dropWorkspaceProvenanceCache();
+  }
+
+  private stageWorkspaceRevision(revision: WorkspaceFileRevision): void {
+    this.deletedWorkspaceRevisions.delete(revision.id);
+    this.pendingWorkspaceRevisions.set(revision.id, revision);
+    this.dropWorkspaceProvenanceCache();
+  }
+
+  private stageSubagent(subagent: Subagent): void {
+    this.deletedSubagents.delete(subagent.id);
+    this.pendingSubagents.set(subagent.id, subagent);
+  }
+
+  /** Stage a Session's subagent rows for deletion, and drop the copies staged
+   *  for it — otherwise the flush would put them back. Workspace file provenance
+   *  deliberately outlives the Session (its records keep the title so lineage
+   *  stays readable), so only the subagents go. Callers remove the same
+   *  subagents from `catalog.subagents`; the deletes reach disk inside the same
+   *  transaction as that catalog write. */
+  private forgetSessionSubagents(sessionId: string): void {
+    for (const subagent of this.catalog.subagents) {
+      if (subagent.sessionId !== sessionId) continue;
+      this.pendingSubagents.delete(subagent.id);
+      this.deletedSubagents.add(subagent.id);
+    }
+  }
+
+  private forgetProjectSideRows(projectId: string, sessionIds: readonly string[]): void {
+    const sessionIdSet = new Set(sessionIds);
+    for (const record of this.catalog.workspaceFileRecords) {
+      if (record.projectId !== projectId) continue;
+      this.pendingWorkspaceFiles.delete(record.id);
+      this.deletedWorkspaceFiles.add(record.id);
+    }
+    for (const revision of this.catalog.workspaceFileRevisions) {
+      if (revision.projectId !== projectId) continue;
+      this.pendingWorkspaceRevisions.delete(revision.id);
+      this.deletedWorkspaceRevisions.add(revision.id);
+    }
+    for (const subagent of this.catalog.subagents) {
+      if (!sessionIdSet.has(subagent.sessionId)) continue;
+      this.pendingSubagents.delete(subagent.id);
+      this.deletedSubagents.add(subagent.id);
+    }
+    this.dropWorkspaceProvenanceCache();
+  }
+
+  private readSubagentsTable(): Subagent[] | undefined {
+    const database = this.database;
+    if (!database) return undefined;
+    const rows = database.prepare("SELECT subagent_json FROM subagents").all() as Array<{ subagent_json: string }>;
+    return rows.map((row) => JSON.parse(row.subagent_json) as Subagent);
+  }
+
+  private readWorkspaceProvenanceTables(): { records: WorkspaceFileRecord[]; revisions: WorkspaceFileRevision[] } | undefined {
+    const database = this.database;
+    if (!database) return undefined;
+    const records = (database.prepare("SELECT record_json FROM workspace_files").all() as Array<{ record_json: string }>)
+      .map((row) => JSON.parse(row.record_json) as WorkspaceFileRecord);
+    const revisions = (database.prepare("SELECT revision_json FROM workspace_file_revisions").all() as Array<{ revision_json: string }>)
+      .map((row) => JSON.parse(row.revision_json) as WorkspaceFileRevision);
+    return { records, revisions };
+  }
+
+  /** Move an older catalog's inline collections into their tables. Runs once,
+   *  during `load`, inside a transaction so 140k rows do not cost 140k fsyncs. */
+  private seedSideTables(
+    subagents: readonly Subagent[],
+    records: readonly WorkspaceFileRecord[],
+    revisions: readonly WorkspaceFileRevision[],
+  ): void {
+    const database = this.database;
+    if (!database) throw new Error("Catalog database is not initialized");
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const insertFile = database.prepare("INSERT OR REPLACE INTO workspace_files (id, session_id, project_id, deleted_at, record_json) VALUES (?, ?, ?, ?, ?)");
+      for (const record of records) {
+        insertFile.run(record.id, record.sessionId, record.projectId, record.deletedAt ?? null, JSON.stringify(record));
+      }
+      const insertRevision = database.prepare("INSERT OR REPLACE INTO workspace_file_revisions (id, file_id, session_id, project_id, revision_json) VALUES (?, ?, ?, ?, ?)");
+      for (const revision of revisions) {
+        insertRevision.run(revision.id, revision.fileId, revision.sessionId, revision.projectId, JSON.stringify(revision));
+      }
+      const insertSubagent = database.prepare("INSERT OR REPLACE INTO subagents (id, session_id, subagent_json) VALUES (?, ?, ?)");
+      for (const subagent of subagents) insertSubagent.run(subagent.id, subagent.sessionId, JSON.stringify(subagent));
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private dropWorkspaceProvenanceCache(): void {
+    this.workspaceProvenanceCache = undefined;
+  }
+
+  /** Read-only lookups over file provenance, rebuilt after each mutation. */
+  private workspaceProvenance(): WorkspaceProvenanceIndex {
+    this.workspaceProvenanceCache ??= buildWorkspaceProvenanceIndex(
+      this.catalog.workspaceFileRecords,
+      this.catalog.workspaceFileRevisions,
+    );
+    return this.workspaceProvenanceCache;
+  }
 
   private async withSubagentMutation<T>(subagentId: string, mutation: () => Promise<T>): Promise<T> {
     const previous = this.subagentMutationQueues.get(subagentId) ?? Promise.resolve();
@@ -1394,7 +1751,7 @@ export class SessionStore {
       try {
         this.database.prepare(
           "INSERT INTO catalog_state (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json",
-        ).run(JSON.stringify(this.catalog));
+        ).run(JSON.stringify(this.persistedCatalog()));
         const insert = this.database.prepare(`
           INSERT INTO permission_authorizations
             (id, session_id, project_id, execution_id, created_at, record_json)
@@ -1410,7 +1767,9 @@ export class SessionStore {
             JSON.stringify(authorization),
           );
         }
+        this.flushSideTables(this.database);
         this.database.exec("COMMIT");
+        this.clearPendingSideTables();
       } catch (error) {
         this.database.exec("ROLLBACK");
         throw error;
@@ -1602,7 +1961,7 @@ export class SessionStore {
   }
 
   private async withDeletionBoundary<T>(paths: () => string[], sessionIds: () => string[], scopes: string[],
-    action: (operation: StagedDeletion) => Promise<T>, projectId?: string): Promise<T> {
+    action: (operation: StagedDeletion, roots: string[]) => Promise<T>, projectId?: string): Promise<T> {
     const root = resolve(this.dataDir, ".trash", randomUUID());
     const operation: StagedDeletion = { entries: [], root, sessionIds: sessionIds(), scopes, projectId };
     // The recovery journal must exist before admission closes, including a crash
@@ -1626,10 +1985,10 @@ export class SessionStore {
           }
           await writeFile(resolve(root, "operation.next.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
           await rename(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
-          for (const workspace of roots) {
-            if (await this.pathExists(workspace)) await this.mutateWorkspace(workspace, "pre-deletion", async () => {});
-          }
-          return await action(operation);
+          // The final Workspace snapshot and the move into `.trash` are not part
+          // of the request: they run behind the fence this retirement installs,
+          // which keeps the data unreachable for as long as they take.
+          return await action(operation, roots);
         } catch (error) {
           if (operation.committed) throw error;
           try { await this.rollbackStagedDeletion(operation); }
@@ -1644,11 +2003,43 @@ export class SessionStore {
     }
   }
 
+  /** Rename into the journal's staging area. A source that is already gone was
+   *  reclaimed by an earlier attempt, so the operation converges instead of
+   *  failing on its own history. */
   private async stageDeletion(operation: StagedDeletion): Promise<void> {
     for (const entry of operation.entries) {
+      if (!await this.pathExists(entry.source)) continue;
       await mkdir(dirname(entry.staged), { recursive: true });
       await rename(entry.source, entry.staged);
     }
+  }
+
+  /** Record the last tree, then move the data aside and destroy it.
+   *
+   *  This runs after the catalog commit, so the request that asked for the
+   *  deletion has already returned. The fence installed by the retirement is
+   *  permanent (state `retired`, released only by a rollback), so no writer is
+   *  admitted while this runs — which is why the snapshot may commit without
+   *  taking the Workspace lease a second time. A failure leaves the journal in
+   *  `.trash`, and recovery finishes the same operation at the next start. */
+  private retireDeletedData(operation: StagedDeletion, roots: string[]): void {
+    this.deletionWork = this.deletionWork.then(async () => {
+      try {
+        const versions = new VersionStore(this.dataDir);
+        for (const workspace of roots) {
+          if (await this.pathExists(workspace)) await checkpointRetiredWorkspace(versions, workspace, "pre-deletion");
+        }
+        await this.stageDeletion(operation);
+        await this.finishStagedDeletion(operation);
+      } catch (error) {
+        console.warn(`Could not reclaim deleted data ${operation.root}; recovery will retry it:`, error);
+      }
+    });
+  }
+
+  /** Resolves once every deletion queued so far has been reclaimed physically. */
+  async whenDeletionsSettle(): Promise<void> {
+    await this.deletionWork;
   }
 
   private async finishStagedDeletion(operation: StagedDeletion): Promise<void> {
@@ -1683,11 +2074,20 @@ export class SessionStore {
         operation.root = root;
         const scopes = operation.scopes ?? operation.entries.map((entry) => entry.source);
         if (!scopes.every((scope) => resolve(scope).startsWith(`${this.dataDir}/`))) throw new Error("Invalid deletion scope");
-        await withWorkspaceRetirement(new VersionStore(this.dataDir), scopes, root, async (_roots, reopen) => {
+        await withWorkspaceRetirement(new VersionStore(this.dataDir), scopes, root, async (roots, reopen) => {
           const catalogStillReferencesData = operation.sessionIds.some((id) => Boolean(this.getSession(id)))
             || Boolean(operation.projectId && this.getProject(operation.projectId));
           if (catalogStillReferencesData) { await this.rollbackStagedDeletion(operation); reopen(); }
-          else await this.finishStagedDeletion(operation);
+          else {
+            // The operation was cut short between the catalog commit and the
+            // move; finish it here so the data is neither reachable nor orphaned.
+            const versions = new VersionStore(this.dataDir);
+            for (const workspace of roots) {
+              if (await this.pathExists(workspace)) await checkpointRetiredWorkspace(versions, workspace, "pre-deletion");
+            }
+            await this.stageDeletion(operation);
+            await this.finishStagedDeletion(operation);
+          }
         }, () => this.deletionWorkspaceRoots(scopes));
         await this.finishStagedDeletion(operation);
       } catch (error) {
@@ -1885,7 +2285,7 @@ export class SessionStore {
       await this.saveQueue;
       const session = this.assertSessionWritable(sessionId);
       const database = this.getConfigurationDatabase();
-      const previous = structuredClone(this.catalog);
+      const previous = this.snapshotCatalogForRollback();
       const secretRows = () => this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all() as Array<{ model_id: string; encrypted_token: string }>;
       const previousSecrets = secretRows();
       const pluginRevisions = (secrets: typeof previousSecrets) => new Map(this.catalog.sessions.map(item => {
@@ -1904,19 +2304,28 @@ export class SessionStore {
           throw new Error("Configuration transactions must be synchronous");
         }
         database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
-          .run(JSON.stringify(this.catalog));
+          .run(JSON.stringify(this.persistedCatalog()));
+        this.flushSideTables(database);
         database.exec("COMMIT");
+        this.clearPendingSideTables();
       } catch (error) {
         database.exec("ROLLBACK");
-        this.catalog = previous;
+        this.restoreCatalog(previous);
         throw error;
       }
       const afterSecrets = secretRows();
-      if (canonicalConfiguration(previous) !== canonicalConfiguration(this.catalog) || canonicalConfiguration(previousSecrets) !== canonicalConfiguration(afterSecrets)) {
+      if (canonicalConfiguration(previous.persisted) !== canonicalConfiguration(this.persistedCatalog()) || canonicalConfiguration(previousSecrets) !== canonicalConfiguration(afterSecrets)) {
         const committed = this.catalog;
         let beforePlugins: Map<string, string>;
-        try { this.catalog = previous; beforePlugins = pluginRevisions(previousSecrets); }
-        finally { this.catalog = committed; }
+        try {
+          this.catalog = {
+            ...previous.persisted,
+            subagents: previous.subagents,
+            workspaceFileRecords: previous.workspaceFileRecords,
+            workspaceFileRevisions: previous.workspaceFileRevisions,
+          };
+          beforePlugins = pluginRevisions(previousSecrets);
+        } finally { this.catalog = committed; }
         for (const [affectedId, revision] of pluginRevisions(afterSecrets)) {
           if (beforePlugins.get(affectedId) !== revision) {
             const affected = this.getSession(affectedId);
@@ -2732,7 +3141,7 @@ export class SessionStore {
       try {
         if (proposal.state === "applied") {
           this.database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
-            .run(JSON.stringify(this.catalog));
+            .run(JSON.stringify(this.persistedCatalog()));
         }
         this.database.prepare("UPDATE connector_configuration_requests SET state = ?, record_json = ? WHERE id = ?")
           .run(proposal.state, JSON.stringify(proposal), proposal.id);
@@ -2921,25 +3330,27 @@ export class SessionStore {
       assertCurrent();
       const project = this.getProject(projectId);
       if (!project || !this.database) throw new Error("Project or catalog unavailable");
-      const previous = structuredClone(this.catalog);
+      const previous = this.snapshotCatalogForRollback();
       this.database.exec("BEGIN IMMEDIATE");
       try {
         project.settingsOverrides = normalized;
         this.syncSessionCompatibilityForProject(projectId);
         this.database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
-          .run(JSON.stringify(this.catalog));
+          .run(JSON.stringify(this.persistedCatalog()));
+        this.flushSideTables(this.database);
         receipt();
         this.database.exec("COMMIT");
+        this.clearPendingSideTables();
       } catch (error) {
         this.database.exec("ROLLBACK");
         const live = this.catalog;
-        this.catalog = previous;
-        // The clone predates anything inserted while the transaction ran.
+        this.restoreCatalog(previous);
+        // The snapshot predates anything inserted while the transaction ran.
         // Put those rows back; the failed settings edit itself stays rolled back.
-        this.catalog.sessions = retainAddedById(previous.sessions, live.sessions);
+        this.catalog.sessions = retainAddedById(previous.persisted.sessions, live.sessions);
         this.catalog.subagents = retainAddedById(previous.subagents, live.subagents);
-        this.catalog.projects = retainAddedById(previous.projects, live.projects);
-        this.catalog.permissionEpochs = retainAddedById(previous.permissionEpochs, live.permissionEpochs);
+        this.catalog.projects = retainAddedById(previous.persisted.projects, live.projects);
+        this.catalog.permissionEpochs = retainAddedById(previous.persisted.permissionEpochs, live.permissionEpochs);
         throw error;
       }
       this.pluginControl?.changed(projectId);
@@ -3860,6 +4271,7 @@ export class SessionStore {
       turnCount: 0,
     };
     this.catalog.subagents.push(subagent);
+    this.stageSubagent(subagent);
     await this.saveCatalog();
     return structuredClone(subagent);
   }
@@ -3868,6 +4280,9 @@ export class SessionStore {
     const index = this.catalog.subagents.findIndex((candidate) => candidate.id === subagent.id);
     if (index < 0) throw new Error("Subagent not found");
     this.catalog.subagents[index] = structuredClone(subagent);
+    // One row, not the whole catalog: a step arrives on every model turn, and
+    // rewriting every session's record with it made a single step cost a second.
+    this.stageSubagent(this.catalog.subagents[index]!);
     await this.saveCatalog();
     return structuredClone(subagent);
   }
@@ -3886,7 +4301,9 @@ export class SessionStore {
     let added = false;
     for (const subagent of subagents) {
       if (this.catalog.subagents.some((candidate) => candidate.id === subagent.id)) continue;
-      this.catalog.subagents.push(structuredClone(subagent));
+      const restored = structuredClone(subagent);
+      this.catalog.subagents.push(restored);
+      this.stageSubagent(restored);
       added = true;
     }
     if (added) await this.saveCatalog();
@@ -3936,6 +4353,7 @@ export class SessionStore {
       };
       const index = this.catalog.subagents.findIndex((candidate) => candidate.id === updated.id);
       this.catalog.subagents[index] = structuredClone(updated);
+      this.stageSubagent(this.catalog.subagents[index]!);
       await this.saveCatalog();
       return structuredClone(updated);
     });
@@ -3960,15 +4378,21 @@ export class SessionStore {
       const scannedPaths = new Set(normalizedFiles.map((file) => file.path));
       const now = new Date().toISOString();
       let changed = false;
+      // One pass to index, rather than one search of the 71k-record array per
+      // scanned file: a 500-file workspace used to spend ~2.6s here and this
+      // runs on every panel refresh.
+      const index = buildWorkspaceProvenanceIndex(
+        this.catalog.workspaceFileRecords,
+        this.catalog.workspaceFileRevisions,
+      );
 
       if (options.scanComplete !== false) {
-        for (const record of this.catalog.workspaceFileRecords) {
-          if (record.sessionId === sessionId
-            && !record.deletedAt
-            && reconciliationBaseline.get(record.path) === record.currentRevisionId
+        for (const record of index.liveBySession.get(sessionId) ?? []) {
+          if (reconciliationBaseline.get(record.path) === record.currentRevisionId
             && !scannedPaths.has(record.path)) {
             record.deletedAt = now;
             record.updatedAt = now;
+            this.stageWorkspaceFile(record);
             changed = true;
           }
         }
@@ -3976,11 +4400,9 @@ export class SessionStore {
 
       const summaries = new Map<string, WorkspaceFileProvenanceSummary>();
       for (const file of normalizedFiles) {
-        let record = this.catalog.workspaceFileRecords.find((candidate) =>
-          candidate.sessionId === sessionId && candidate.path === file.path && !candidate.deletedAt);
-        let revision = record
-          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === record!.currentRevisionId)
-          : undefined;
+        const key = workspaceFilePathKey(sessionId, file.path);
+        let record = index.liveByPath.get(key);
+        let revision = record ? index.revisionsById.get(record.currentRevisionId) : undefined;
         if (!record || !revision) {
           const fileId = randomUUID();
           revision = {
@@ -4007,6 +4429,12 @@ export class SessionStore {
           };
           this.catalog.workspaceFileRevisions.push(revision);
           this.catalog.workspaceFileRecords.push(record);
+          index.liveByPath.set(key, record);
+          index.recordsById.set(record.id, record);
+          index.revisionsById.set(revision.id, revision);
+          index.revisionsByFile.set(revision.fileId, [...(index.revisionsByFile.get(revision.fileId) ?? []), revision]);
+          this.stageWorkspaceFile(record);
+          this.stageWorkspaceRevision(revision);
           changed = true;
         } else if (reconciliationBaseline.get(file.path) === revision.id
           && (revision.modifiedAt !== file.modifiedAt || revision.size !== file.size)) {
@@ -4023,9 +4451,13 @@ export class SessionStore {
             size: file.size,
           };
           this.catalog.workspaceFileRevisions.push(revision);
+          index.revisionsById.set(revision.id, revision);
+          index.revisionsByFile.set(revision.fileId, [...(index.revisionsByFile.get(revision.fileId) ?? []), revision]);
           record.currentRevisionId = revision.id;
           record.sessionTitle = session.title;
           record.updatedAt = now;
+          this.stageWorkspaceFile(record);
+          this.stageWorkspaceRevision(revision);
           changed = true;
         }
         summaries.set(file.path, {
@@ -4042,8 +4474,7 @@ export class SessionStore {
 
   snapshotWorkspaceFileRevisions(sessionId: string): Map<string, string> {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
-    return new Map(this.catalog.workspaceFileRecords
-      .filter((record) => record.sessionId === sessionId && !record.deletedAt)
+    return new Map((this.workspaceProvenance().liveBySession.get(sessionId) ?? [])
       .map((record) => [record.path, record.currentRevisionId]));
   }
 
@@ -4074,9 +4505,15 @@ export class SessionStore {
     return await this.withWorkspaceFileMutation(sessionId, async () => {
       const session = this.getSession(sessionId);
       if (!session) throw new Error("Session not found");
+      // A tool that writes a batch of files used to search both arrays once per
+      // file; the index is built once here and kept current as rows are added.
+      const index = buildWorkspaceProvenanceIndex(
+        this.catalog.workspaceFileRecords,
+        this.catalog.workspaceFileRevisions,
+      );
       for (const { input } of prepared) {
-        if (input.parentRevisionId && !this.catalog.workspaceFileRevisions.some((candidate) =>
-          candidate.id === input.parentRevisionId && candidate.projectId === session.projectId)) {
+        const parentRevision = input.parentRevisionId ? index.revisionsById.get(input.parentRevisionId) : undefined;
+        if (input.parentRevisionId && parentRevision?.projectId !== session.projectId) {
           throw new Error("Workspace file parent revision must belong to the same Project");
         }
         if (input.artifactVersionId && !this.catalog.artifactVersions.some((candidate) =>
@@ -4121,13 +4558,11 @@ export class SessionStore {
           continue;
         }
         const parent = input.parentRevisionId
-          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === input.parentRevisionId)
+          ? index.revisionsById.get(input.parentRevisionId)
           : undefined;
-        let record = this.catalog.workspaceFileRecords.find((candidate) =>
-          candidate.sessionId === sessionId && candidate.path === path && !candidate.deletedAt);
-        const current = record
-          ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === record!.currentRevisionId)
-          : undefined;
+        const key = workspaceFilePathKey(sessionId, path);
+        let record = index.liveByPath.get(key);
+        const current = record ? index.revisionsById.get(record.currentRevisionId) : undefined;
         const sameObservedState = current
           && current.size === input.size
           && current.modifiedAt === input.modifiedAt
@@ -4138,13 +4573,18 @@ export class SessionStore {
           continue;
         }
         if (current && input.mode === "link" && sameObservedState) {
+          let revised = false;
           if (input.contentHash && !current.contentHash) {
             current.contentHash = input.contentHash;
-            catalogChanged = true;
+            revised = true;
           }
           if (input.artifactVersionId && !current.artifactVersionIds.includes(input.artifactVersionId)) {
             current.artifactVersionIds.push(input.artifactVersionId);
+            revised = true;
+          }
+          if (revised) {
             catalogChanged = true;
+            this.stageWorkspaceRevision(current);
           }
           revisions.push(structuredClone(current));
           continue;
@@ -4175,6 +4615,9 @@ export class SessionStore {
           ...(input.toolName ? { toolName: input.toolName } : {}),
         };
         this.catalog.workspaceFileRevisions.push(revision);
+        index.revisionsById.set(revision.id, revision);
+        index.revisionsByFile.set(revision.fileId, [...(index.revisionsByFile.get(revision.fileId) ?? []), revision]);
+        this.stageWorkspaceRevision(revision);
         if (!record) {
           record = {
             createdAt: now,
@@ -4187,10 +4630,14 @@ export class SessionStore {
             updatedAt: now,
           };
           this.catalog.workspaceFileRecords.push(record);
+          index.liveByPath.set(key, record);
+          index.recordsById.set(record.id, record);
+          this.stageWorkspaceFile(record);
         } else if (!input.publicationVersion || !current || (publicationSequences.get(input)! > (current.publicationSequence ?? -1))) {
           record.currentRevisionId = revision.id;
           record.sessionTitle = session.title;
           record.updatedAt = now;
+          this.stageWorkspaceFile(record);
         }
         catalogChanged = true;
         revisions.push(structuredClone(revision));
@@ -4204,14 +4651,12 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) return undefined;
     const path = normalizeWorkspaceRelativePath(this.workspacePath(sessionId), pathInput);
-    const file = this.catalog.workspaceFileRecords.find((candidate) =>
-      candidate.sessionId === sessionId && candidate.path === path && !candidate.deletedAt);
+    const index = this.workspaceProvenance();
+    const file = index.liveByPath.get(workspaceFilePathKey(sessionId, path));
     if (!file) return undefined;
-    const currentRevision = this.catalog.workspaceFileRevisions.find((candidate) =>
-      candidate.id === file.currentRevisionId && candidate.fileId === file.id);
-    if (!currentRevision) return undefined;
-    const revisions = this.catalog.workspaceFileRevisions
-      .filter((candidate) => candidate.fileId === file.id)
+    const currentRevision = index.revisionsById.get(file.currentRevisionId);
+    if (!currentRevision || currentRevision.fileId !== file.id) return undefined;
+    const revisions = (index.revisionsByFile.get(file.id) ?? [])
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
     const sourceSessionFor = (record: WorkspaceFileRecord) => {
       const liveSession = this.catalog.sessions.find((candidate) => candidate.id === record.sessionId);
@@ -4226,10 +4671,9 @@ export class SessionStore {
     let parentRevisionId = currentRevision.parentRevisionId;
     while (parentRevisionId && lineage.length < 20 && !visited.has(parentRevisionId)) {
       visited.add(parentRevisionId);
-      const parentRevision = this.catalog.workspaceFileRevisions.find((candidate) =>
-        candidate.id === parentRevisionId && candidate.projectId === session.projectId);
-      if (!parentRevision) break;
-      const parentFile = this.catalog.workspaceFileRecords.find((candidate) => candidate.id === parentRevision.fileId);
+      const parentRevision = index.revisionsById.get(parentRevisionId);
+      if (!parentRevision || parentRevision.projectId !== session.projectId) break;
+      const parentFile = index.recordsById.get(parentRevision.fileId);
       if (!parentFile) break;
       lineage.push({
         fileId: parentFile.id,
@@ -5115,8 +5559,7 @@ export class SessionStore {
     if (!session) throw new Error("Session not found");
     if (confirmationId !== session.id) throw new Error("Session deletion confirmation does not match the target");
     return this.withDeletionBoundary(() => this.knownSessionDataPaths(session), () => [session.id],
-      [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation) => {
-    await this.stageDeletion(operation);
+      [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation, roots) => {
     try {
       // Unpublish only inside the catalog write. Until that callback runs, the
       // open Session page can still read the session it is showing.
@@ -5129,10 +5572,17 @@ export class SessionStore {
         this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.sessionId !== current.id);
         this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.sessionId !== current.id
           && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
+        this.forgetSessionSubagents(current.id);
         this.catalog.subagents = this.catalog.subagents.filter((subagent) => subagent.sessionId !== current.id);
         this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== current.id);
-        this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
-          record.sessionId === current.id ? { ...record, sessionTitle: current.title } : record);
+        // Provenance rows outlive the Session; freeze the title onto them so
+        // lineage can still name where a file came from.
+        this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) => {
+          if (record.sessionId !== current.id) return record;
+          const renamed = { ...record, sessionTitle: current.title };
+          this.stageWorkspaceFile(renamed);
+          return renamed;
+        });
         this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId !== current.id);
       });
       operation.committed = true;
@@ -5145,7 +5595,7 @@ export class SessionStore {
     this.database?.prepare("DELETE FROM connector_configuration_requests WHERE session_id = ?").run(session.id);
     this.cleanupConfigurationSession(session.id);
     this.notifications.deleteSession(session.id);
-    await this.finishStagedDeletion(operation);
+    this.retireDeletedData(operation, roots);
     });
   }
 
@@ -5159,8 +5609,7 @@ export class SessionStore {
       sessions = this.listSessions(projectId, "all");
       return [...sessions.flatMap((session) => this.knownSessionDataPaths(session)), resolve(this.dataDir, "projects", projectId)];
     }, () => sessions.map((session) => session.id),
-      [resolve(this.dataDir, "projects", projectId)], async (operation) => {
-    await this.stageDeletion(operation);
+      [resolve(this.dataDir, "projects", projectId)], async (operation, roots) => {
     try {
       await this.saveCatalog(() => {
         if (!this.getProject(projectId)) throw new Error("Project not found");
@@ -5181,6 +5630,7 @@ export class SessionStore {
         this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.projectId !== projectId
           && (!grant.sessionId || !sessionIds.has(grant.sessionId))
           && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
+        this.forgetProjectSideRows(projectId, [...sessionIds]);
         this.catalog.subagents = this.catalog.subagents.filter((subagent) => !sessionIds.has(subagent.sessionId));
         this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => !sessionIds.has(job.sessionId));
         this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => !sessionIds.has(record.sessionId));
@@ -5202,7 +5652,7 @@ export class SessionStore {
       this.cleanupConfigurationSession(session.id);
       this.notifications.deleteSession(session.id);
     }
-    await this.finishStagedDeletion(operation);
+    this.retireDeletedData(operation, roots);
     }, projectId);
   }
 

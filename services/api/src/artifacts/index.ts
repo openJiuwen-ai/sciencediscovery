@@ -69,7 +69,39 @@ async function workspaceFileMetadata(workspaceRoot: string, path: string): Promi
   return fileMetadata;
 }
 
-export async function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
+/** Scans already running, so that calls arriving while one is in flight share
+ *  it. The run stream asks for the file list on every event and the panel polls
+ *  it on a timer; without this each caller walked the workspace and reconciled
+ *  provenance on its own, then raced the others into the same catalog write.
+ *
+ *  A pair is only shared while it is young: a scan reads the workspace at the
+ *  moment it starts, so a caller that arrives long after — the end of a run,
+ *  whose whole point is the file it just wrote — would be handed a listing the
+ *  write is not in. */
+const inflightWorkspaceListings = new WeakMap<
+  SessionStore,
+  Map<string, { listing: Promise<WorkspaceFile[]>; startedAt: number }>
+>();
+const MAX_SHARED_LISTING_AGE_MS = 1_000;
+
+export function listWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
+  let bySession = inflightWorkspaceListings.get(store);
+  if (!bySession) {
+    bySession = new Map();
+    inflightWorkspaceListings.set(store, bySession);
+  }
+  const now = Date.now();
+  const inflight = bySession.get(sessionId);
+  if (inflight && now - inflight.startedAt < MAX_SHARED_LISTING_AGE_MS) return inflight.listing;
+  const entry = { listing: readWorkspaceFiles(store, sessionId), startedAt: now };
+  bySession.set(sessionId, entry);
+  void entry.listing.catch(() => {}).finally(() => {
+    if (bySession.get(sessionId) === entry) bySession.delete(sessionId);
+  });
+  return entry.listing;
+}
+
+async function readWorkspaceFiles(store: SessionStore, sessionId: string): Promise<WorkspaceFile[]> {
   const baseline = store.snapshotWorkspaceFileRevisions(sessionId);
   const scan = await scanWorkspaceWithStatus(store.workspacePath(sessionId));
   const provenance = await store.reconcileWorkspaceFiles(

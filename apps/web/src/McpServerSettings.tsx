@@ -21,6 +21,7 @@ import { MarkdownRenderer } from "./Markdown.js";
 import { Bug } from "lucide-react";
 import { McpInspector } from "./McpInspector.js";
 import { McpAuthorization, type McpAuthorizationClient } from "./McpAuthorization.js";
+import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
 
 type SecretRow = { key: string; value: string | null; originalKey?: string };
 type Draft = Omit<CustomMcpServerInput, "env" | "headers" | "args"> & { argsText: string; envRows: SecretRow[]; headerRows: SecretRow[] };
@@ -72,8 +73,11 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
   onChanged: () => Promise<void>;
 }) {
   const { t } = useLocale();
-  const [servers, setServers] = useState<CustomMcpServerDetails[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Reopening the pane paints the list it showed last time and refreshes it;
+  // only a pane that has never loaded shows a spinner.
+  const cachedServers = readSettingsCache<CustomMcpServerDetails[]>(client, "mcp-servers");
+  const [servers, setServers] = useState<CustomMcpServerDetails[]>(() => cachedServers ?? []);
+  const [loading, setLoading] = useState(cachedServers === undefined);
   const [tab, setTab] = useState<"custom" | "builtin">("custom");
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<{ id?: string; draft: Draft }>();
@@ -89,7 +93,10 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
 
   useEffect(() => {
     let active = true;
-    void client.listMcpServers().then((items) => { if (active) setServers(items); }).catch((reason) => { if (active) setError(String(reason)); }).finally(() => { if (active) setLoading(false); });
+    void client.listMcpServers().then((items) => {
+      writeSettingsCache(client, "mcp-servers", items);
+      if (active) setServers(items);
+    }).catch((reason) => { if (active) setError(String(reason)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [client]);
 
@@ -113,7 +120,9 @@ export function McpServerSettings({ client, sources, sessionId, sessionTitle, on
   }
 
   async function refresh(): Promise<void> {
-    setServers(await client.listMcpServers());
+    const items = await client.listMcpServers();
+    writeSettingsCache(client, "mcp-servers", items);
+    setServers(items);
     await onChanged();
   }
 

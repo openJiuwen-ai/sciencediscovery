@@ -124,11 +124,74 @@ export class VersionStore {
       const source = await this.unchangedWorkspaceBytes(file, before, cached.ref);
       if (source) { this.workspaceFiles.set(key, { source, ref: cached.ref }); return cached.ref; }
     }
-    const ref = await this.putStream("data", file.createReadStream({ autoClose: false, start: 0 }));
+    const ref = await this.publishWorkspaceFile(file);
     const after = await file.stat({ bigint: true });
     if (!this.sameIdentity(before, after)) throw new Error("Workspace changed during snapshot");
     this.workspaceFiles.set(key, { source: after, ref });
     return ref;
+  }
+
+  /**
+   * Hash the source first, and copy it only if the store does not already hold
+   * those bytes. A snapshot mostly re-reads content this store published long
+   * ago; streaming that straight into a temporary object made every unchanged
+   * file pay for a full copy, an fsync of it, and a second read to verify it —
+   * tens of milliseconds per thousand files that are not changing at all. The
+   * digest decides now: a present object is verified once per instance, an
+   * absent one is copied from a second pass over the same handle.
+   */
+  private async publishWorkspaceFile(file: FileHandle): Promise<DataRef> {
+    await this.initialize();
+    const digest = createHash("sha256");
+    let size = 0;
+    for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) {
+      const bytes = chunk as Buffer; digest.update(bytes); size += bytes.length;
+    }
+    const ref: DataRef = { pool: "data", digest: `sha256:${digest.digest("hex")}`, size, mediaType: "application/octet-stream" };
+    if (await this.objectExists(ref)) {
+      if (!this.admitted.has(admissionKey(ref))) {
+        await this.verifyRef(ref);
+        this.admitted.set(admissionKey(ref), false); // verified here as a non-record; `checked` revokes it on any integrity failure
+      }
+      return ref;
+    }
+    await this.publishWorkspaceObject(file, ref);
+    return ref;
+  }
+
+  /** Copy the source into a temporary object and link it under its digest. */
+  private async publishWorkspaceObject(file: FileHandle, ref: DataRef): Promise<void> {
+    const directory = resolve(this.poolRoot("data"), "blobs", "sha256");
+    const temporary = resolve(directory, `${randomUUID()}.tmp`);
+    try {
+      const output = await open(temporary, "wx", 0o600);
+      try {
+        const digest = createHash("sha256");
+        for await (const chunk of file.createReadStream({ autoClose: false, start: 0 })) {
+          const bytes = chunk as Buffer;
+          digest.update(bytes);
+          await output.writeFile(bytes);
+        }
+        // The name came from an earlier pass over the same handle, and a
+        // same-size rewrite in place keeps every stat field of its tick: only
+        // the bytes actually written can say the object is what it claims.
+        if (`sha256:${digest.digest("hex")}` !== ref.digest) throw new Error("Workspace changed during snapshot");
+        await output.sync();
+      } finally { await output.close(); }
+      try { await link(temporary, this.objectPath(ref)); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        await this.verifyRef(ref);
+      }
+      await syncDirectory(directory);
+    } finally { await rm(temporary, { force: true }); }
+  }
+
+  /** A missing entry, a directory or a symlink is not an object: the caller
+   *  republishes, and `link` then fails closed on bytes that do not match. */
+  private async objectExists(ref: ObjectRef): Promise<boolean> {
+    try { return (await lstat(this.objectPath(ref))).isFile(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
   }
 
   /**
@@ -188,6 +251,17 @@ export class VersionStore {
     await this.initialize();
     const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
     const ref: ObjectRef<P> = { pool, digest: `sha256:${hash(bytes)}`, size: bytes.length, mediaType };
+    // Publish only what is missing. A snapshot re-emits the same directory
+    // records on every pass, and rewriting them cost a copy, an fsync and a
+    // read-back each time for bytes that were already there.
+    if (await this.objectExists(ref)) {
+      const key = admissionKey(ref);
+      // A record's admission also claims its dependency closure was verified,
+      // which itself did not happen here, so only data objects are admitted.
+      if (!this.admitted.has(key)) await this.verifyRef(ref);
+      if (pool === "data" && !this.admitted.has(key)) this.admitted.set(key, false);
+      return ref;
+    }
     await this.checked(ref, () => publish(this.objectPath(ref), bytes));
     return ref;
   }

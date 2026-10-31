@@ -33,7 +33,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -2357,4 +2357,25 @@ test("Shell progress observation failures and aborts preserve execution semantic
   const withoutObserver = await tool.execute("plain", { command: "search" });
   assert.equal(withoutObserver.isError, false);
   assert.equal(logs, 1, "ordinary calls do not read live logs");
+});
+
+test("the workspace scan skips tooling directories so its budget goes to the Agent's own files", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `workspace-scan-${process.pid}-${Date.now()}`);
+  context.after(() => rm(root, { force: true, recursive: true }));
+  for (const directory of [".venv/lib/site-packages", "node_modules/pkg", "__pycache__", ".git", "results"]) {
+    await mkdir(resolve(root, directory), { recursive: true });
+  }
+  for (const file of [
+    ".venv/lib/site-packages/numpy.py",
+    "node_modules/pkg/index.js",
+    "__pycache__/module.pyc",
+    ".git/config",
+    "results/figure.png",
+  ]) {
+    await writeFile(resolve(root, file), "x", "utf8");
+  }
+
+  const scan = await scanWorkspaceWithStatus(root);
+  assert.deepEqual(scan.files.map((file) => file.path), ["results/figure.png"]);
+  assert.equal(scan.truncated, false);
 });

@@ -6,6 +6,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { renderToStaticMarkup } from "react-dom/server";
 import { ExecutionBlockCards, RunnerReadinessPanel } from "../src/ExecutionReadiness.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import type { ApiClient } from "../src/api/client.js";
@@ -39,6 +40,22 @@ test("Runner settings refresh probes the selected Runner instead of the API host
     await act(async () => renderer.root.findByType("button").props.onClick());
     assert.deepEqual(probes, [["lab", false], ["lab", true]]);
   } finally { await act(async () => renderer.unmount()); }
+});
+
+test("a reopened Runner settings card shows its last answer instead of an empty check", async () => {
+  const client = { getRunnerExecutionCapability: async () => ({
+    connected: true, capability: { ready: true, sandbox: "bubblewrap", checkedAt: "2026-10-30T00:00:00.000Z" },
+  }) } as unknown as ApiClient;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(RunnerReadinessPanel, { client, runnerId: "cache-lab" })); });
+  try {
+    assert.match(JSON.stringify(renderer.toJSON()), /Connected; sandbox available/);
+  } finally { await act(async () => renderer.unmount()); }
+  // The reopening paints from the last answer; only the first visit waits.
+  assert.match(
+    renderToStaticMarkup(createElement(RunnerReadinessPanel, { client, runnerId: "cache-lab" })),
+    /Connected; sandbox available/,
+  );
 });
 
 test("MCP repair card shows source diagnostics and rechecks without a Runner switch", async () => {

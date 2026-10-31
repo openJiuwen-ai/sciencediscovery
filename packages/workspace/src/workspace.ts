@@ -601,6 +601,24 @@ function summarizeSpecialistsForTaskTool(
 
 const MAX_WORKSPACE_SCAN_FILES = 500;
 
+/** Directories that hold tooling state, never the Agent's own outputs. A
+ *  workspace with a virtualenv or a dependency tree otherwise spends its whole
+ *  file budget inside one of them, and the UI lists site-packages instead of the
+ *  data the task produced. */
+const IGNORED_WORKSPACE_DIRECTORIES = new Set([
+  ".cache",
+  ".git",
+  ".hg",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".svn",
+  ".venv",
+  "__pycache__",
+  "node_modules",
+  "site-packages",
+  "venv",
+]);
+
 export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<WorkspaceScanResult> {
   await mkdir(workspaceRoot, { recursive: true });
   const files: WorkspaceFileInfo[] = [];
@@ -613,7 +631,7 @@ export async function scanWorkspaceWithStatus(workspaceRoot: string): Promise<Wo
       const fullPath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        await visit(fullPath);
+        if (!IGNORED_WORKSPACE_DIRECTORIES.has(entry.name)) await visit(fullPath);
         continue;
       }
       if (!entry.isFile()) continue;

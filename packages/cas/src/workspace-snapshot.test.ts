@@ -3,12 +3,13 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { watch } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 
-import { VersionStore, type WorkspaceTree } from "./versioning.js";
+import { snapshotWorkspace, VersionStore, type WorkspaceTree } from "./versioning.js";
 import { committedWorkspaceSnapshot, withWorkspaceMutation } from "./workspace-lease.js";
 import { materializeWorkspaceSnapshot, streamSnapshotFile, workspaceSnapshotFiles } from "./workspace-snapshot.js";
 
@@ -19,6 +20,28 @@ async function fixture(t: TestContext) {
   return { workspace, versions: new VersionStore(root) };
 }
 function latch() { let release!: () => void; const promise = new Promise<void>((done) => { release = done; }); return { promise, release }; }
+
+test("a repeat snapshot reuses stored objects instead of republishing them", async (t) => {
+  const { workspace, versions } = await fixture(t);
+  await mkdir(join(workspace, "data"));
+  for (let index = 0; index < 20; index += 1) await writeFile(join(workspace, "data", `file-${index}`), `body ${index}`);
+  await writeFile(join(workspace, "empty"), "");
+  const first = await snapshotWorkspace(versions, workspace);
+  // Storing an object starts with a temporary file in one of these
+  // directories, so a pass that only reuses what is already there touches
+  // neither. A fresh instance has no admission cache, which is the case that
+  // used to re-publish every object.
+  const directories = [join(versions.poolRoot("data"), "blobs", "sha256"),
+    join(versions.poolRoot("agent-state"), "blobs", "sha256")];
+  const published: string[] = [];
+  const watchers = directories.map((directory) =>
+    watch(directory, (_event, name) => published.push(join(directory, String(name ?? "")))));
+  t.after(() => { for (const watcher of watchers) watcher.close(); });
+  const second = await snapshotWorkspace(new VersionStore(versions.dataDir), workspace);
+  await new Promise((done) => setTimeout(done, 100));
+  assert.deepEqual(second, first);
+  assert.deepEqual(published, []);
+});
 
 test("observers read the committed baseline while a writer changes live files, without waiting", async (t) => {
   const { workspace, versions } = await fixture(t);

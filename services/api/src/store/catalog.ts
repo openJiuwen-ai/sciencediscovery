@@ -104,6 +104,10 @@ export interface Catalog {
   webSettings: WebSettings;
   workspaceFileRecords: WorkspaceFileRecord[];
   workspaceFileRevisions: WorkspaceFileRevision[];
+  /** One-time migration flag: the file provenance and subagent collections
+   *  were moved out of this row into tables of their own. Absent means the
+   *  arrays in the saved JSON are still the source and must be seeded. */
+  sideTablesSeeded?: boolean;
   /** One-time migration flag: set once the "web" connector id is seeded into
    *  globalSettings.enabledConnectorIds so that the seed never repeats after a
    *  user explicitly removes it. */

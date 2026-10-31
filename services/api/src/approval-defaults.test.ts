@@ -12,7 +12,9 @@ import { normalizeRuntimeSettings } from './store/settings.js';
 test('approval defaults resolve only at creation, persist, and never follow sibling activity', async t => {
   const root = await mkdtemp(join(tmpdir(), 'approval-defaults-'));
   const store = new SessionStore(root);
-  t.after(async () => { store.close(); await rm(root, {recursive:true, force:true}); });
+  // Physical reclamation outlives the delete request, so it has to settle
+  // before the root is removed or the two race over the same directories.
+  t.after(async () => { await store.whenDeletionsSettle(); store.close(); await rm(root, {recursive:true, force:true}); });
   await store.load();
   const project = await store.createProject('Explicit defaults');
   const other = await store.createProject('Independent project');
@@ -61,7 +63,9 @@ test('approval defaults resolve only at creation, persist, and never follow sibl
 test('plugin experiment sessions retain explicit Ask under permissive saved defaults', async t => {
   const root = await mkdtemp(join(tmpdir(), 'approval-experiment-'));
   const store = new SessionStore(root);
-  t.after(async () => { store.close(); await rm(root, {recursive:true, force:true}); });
+  // Physical reclamation outlives the delete request, so it has to settle
+  // before the root is removed or the two race over the same directories.
+  t.after(async () => { await store.whenDeletionsSettle(); store.close(); await rm(root, {recursive:true, force:true}); });
   await store.load();
   await store.replaceGlobalSettings({defaultApprovalMode:'always_allow'});
   const project = await store.createProject('Experiment');
@@ -82,7 +86,9 @@ test('plugin experiment sessions retain explicit Ask under permissive saved defa
 test('failed plugin candidate creation cleans up its explicit-Ask baseline under permissive defaults', async t => {
   const root = await mkdtemp(join(tmpdir(), 'approval-experiment-failure-'));
   const store = new SessionStore(root);
-  t.after(async () => { store.close(); await rm(root, {recursive:true, force:true}); });
+  // Physical reclamation outlives the delete request, so it has to settle
+  // before the root is removed or the two race over the same directories.
+  t.after(async () => { await store.whenDeletionsSettle(); store.close(); await rm(root, {recursive:true, force:true}); });
   await store.load();
   store.setAvailableSkillIds([]);
   await store.replaceGlobalSettings({defaultApprovalMode:'always_allow'});
