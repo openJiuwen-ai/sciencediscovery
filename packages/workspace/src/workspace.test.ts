@@ -1303,7 +1303,7 @@ test("opaque MCP results remain valid bounded JSON when their provider payload i
     enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
     mcpTools: [{
       description: "Custom search", displayName: "Custom search",
-      execute: async () => ({ rows: Array.from({ length: 100 }, () => ({ body: "z".repeat(20_000) })) }),
+      execute: async () => ({ rows: Array.from({ length: 100 }, () => ({ body: `\"\\${"z".repeat(20_000)}\n` })) }),
       inputSchema: { type: "object" }, name: "mcp__custom__search",
       routing: { keywords: ["custom"], mode: "prefer", priority: 50 }, sourceId: "custom", toolId: "search",
     }],
@@ -1313,6 +1313,34 @@ test("opaque MCP results remain valid bounded JSON when their provider payload i
   assert.doesNotThrow(() => JSON.parse(text));
   assert.ok(Buffer.byteLength(text, "utf8") <= MCP_MODEL_RESULT_MAX_BYTES);
   assert.match(text, /truncated/);
+});
+
+test("MCP artifact plans retain the identifiers needed for governed download", async () => {
+  const canonical = {
+    sourceId: "arxiv", toolId: "prepare_paper_download", invocationId: "invocation-download",
+    records: [], warnings: ["The PDF is a candidate and has not been read."],
+    artifacts: [{
+      attribution: "arXiv", format: "pdf", id: "arxiv:2407.21787v3:pdf", kind: "paper",
+      license: "provider terms", logicalName: "arxiv-2407.21787v3.pdf", mimeType: "application/pdf",
+      sourceId: "arxiv", sourceRecordId: "2407.21787v3", sourceUrl: "https://arxiv.org/pdf/2407.21787v3",
+    }],
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{
+      description: "Prepare paper", displayName: "Prepare paper", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__arxiv__prepare_paper_download",
+      routing: { keywords: ["paper"], mode: "prefer", priority: 98 }, sourceId: "arxiv", toolId: "prepare_paper_download",
+    }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__arxiv__prepare_paper_download")!.execute("call", {});
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  const view = JSON.parse(text) as { invocationId: string; candidates: Array<{ candidateId: string }> };
+  assert.equal(response.details, canonical);
+  assert.equal(view.invocationId, "invocation-download");
+  assert.equal(view.candidates[0]?.candidateId, "arxiv:2407.21787v3:pdf");
+  assert.match(text, /artifact_download/);
+  assert.doesNotMatch(text, /sourceUrl|attribution|license/);
 });
 
 test("arXiv get_paper preserves a complete ordinary abstract in the model view", async () => {

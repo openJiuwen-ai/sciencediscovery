@@ -87,6 +87,36 @@ function searchMetadata(result: JsonObject): JsonObject {
   return Object.fromEntries(keys.filter((key) => data[key] !== undefined).map((key) => [key, data[key]]));
 }
 
+function artifactView(result: JsonObject, sourceId: string, toolId: string): JsonObject | undefined {
+  if (!Array.isArray(result.artifacts) || result.artifacts.length === 0) return undefined;
+  const candidates = result.artifacts.map(object);
+  if (candidates.some((candidate) => !candidate)) return undefined;
+  const view: JsonObject = {
+    sourceId,
+    toolId,
+    ...(typeof result.invocationId === "string" ? { invocationId: result.invocationId } : {}),
+    warnings: uniqueStrings(result.warnings),
+    candidates: candidates.slice(0, MCP_MODEL_ARRAY_MAX_ITEMS).map((candidate) => ({
+      candidateId: candidate!.id,
+      logicalName: candidate!.logicalName,
+      kind: candidate!.kind,
+      format: candidate!.format,
+      mimeType: candidate!.mimeType,
+      sourceId: candidate!.sourceId,
+      sourceRecordId: candidate!.sourceRecordId,
+    })),
+    ...(candidates.length > MCP_MODEL_ARRAY_MAX_ITEMS
+      ? { candidatesOmitted: candidates.length - MCP_MODEL_ARRAY_MAX_ITEMS, truncated: true } : {}),
+    instruction: "Use artifact_download with invocationId and candidateId to download a selected candidate. A candidate has not been downloaded or read yet.",
+  };
+  return utf8Bytes(view) <= MCP_MODEL_RESULT_MAX_BYTES ? view : {
+    sourceId, toolId,
+    ...(typeof result.invocationId === "string" ? { invocationId: result.invocationId } : {}),
+    truncated: true,
+    instruction: "Artifact candidates exceeded the model-view budget. Request fewer candidates.",
+  };
+}
+
 function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records"): JsonObject {
   const records = view[recordsKey] as JsonObject[];
   let omitted = 0;
@@ -181,16 +211,23 @@ function compactUnknown(value: unknown, depth = 0): unknown {
  * untouched for details, CAS, audit and governed follow-up operations. */
 export function mcpModelResultView(result: unknown, sourceId: string, toolId: string): JsonObject {
   const canonical = object(result);
+  const artifacts = canonical ? artifactView(canonical, sourceId, toolId) : undefined;
+  if (artifacts) return artifacts;
   const evidence = canonical ? evidenceView(canonical, sourceId, toolId) : undefined;
   if (evidence) return evidence;
   const compacted = compactUnknown(result);
   if (utf8Bytes(compacted) <= MCP_MODEL_RESULT_MAX_BYTES) return object(compacted) ?? { result: compacted };
-  const preview = truncateUtf8(JSON.stringify(compacted), MCP_MODEL_RESULT_MAX_BYTES - 1_024).text;
-  return {
+  let preview = truncateUtf8(JSON.stringify(compacted), MCP_MODEL_RESULT_MAX_BYTES - 1_024).text;
+  let fallback: JsonObject = {
     sourceId,
     toolId,
     truncated: true,
     preview,
     instruction: "The MCP result exceeded the model-view budget. Refine the request or lower its result limit.",
   };
+  while (utf8Bytes(fallback) > MCP_MODEL_RESULT_MAX_BYTES && Buffer.byteLength(preview, "utf8") > 256) {
+    preview = truncateUtf8(preview.replace(/\.\.\.$/, ""), Math.floor(Buffer.byteLength(preview, "utf8") / 2)).text;
+    fallback = { ...fallback, preview };
+  }
+  return fallback;
 }
