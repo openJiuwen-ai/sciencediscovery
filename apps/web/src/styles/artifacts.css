@@ -65,7 +65,7 @@
 .dataset-table-wrapper { overflow: auto; max-height: 460px; border-radius: 8px; border: 1px solid var(--border); }
 .dataset-table { width: 100%; border-collapse: collapse; font: 12px/1.5 var(--font-stack); }
 .dataset-table th { position: sticky; top: 0; background: var(--surface-sunk); border-bottom: 2px solid var(--border); padding: 6px 10px; text-align: left; font-weight: 600; white-space: nowrap; }
-.dataset-table td { border-bottom: 1px solid var(--border); padding: 4px 10px; white-space: nowrap; }
+.dataset-table td { border-bottom: 1px solid var(--border); padding: 4px 10px; text-align: left; white-space: nowrap; }
 .dataset-table tbody tr:hover { background: var(--surface-sunk); }
 .dataset-table-meta { padding: 4px 10px; font: 11px/1.4 var(--font-stack); color: var(--text-muted); }
 .notebook-cells { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow: auto; }
