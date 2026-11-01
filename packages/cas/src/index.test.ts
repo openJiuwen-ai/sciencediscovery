@@ -143,3 +143,53 @@ test("a hash that was never stored keeps the ENOENT shape", async () => {
     });
   });
 });
+
+test("stream() does not hand out a corrupt pool copy when the legacy copy is intact", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of store.stream(object.hash)) chunks.push(chunk as Buffer);
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  });
+});
+
+test("stream() emits no bytes when every copy is corrupt", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, "corrupted legacy copy");
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    let delivered = 0;
+    await assert.rejects(async () => {
+      for await (const chunk of store.stream(object.hash)) delivered += (chunk as Buffer).length;
+    }, /CAS integrity failure/);
+    assert.equal(delivered, 0);
+  });
+});
+
+test("retain() promotes the intact legacy copy instead of giving up on the corrupted pool copy", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    const promoted = await store.retain({ hash: object.hash, size: bytes.length }, "data");
+    assert.equal(promoted.digest, `sha256:${object.hash}`);
+    assert.equal(promoted.size, bytes.length);
+  });
+});

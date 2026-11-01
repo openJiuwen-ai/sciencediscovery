@@ -125,7 +125,12 @@ export class CasStore implements ContentStore {
 
   /** Stream immutable content without placing large artifacts in memory. */
   async *stream(hash: string): AsyncGenerator<Buffer> {
+    let corrupted = false;
     for (const path of this.readPaths(hash)) {
+      // Verify the candidate before the first byte leaves the store: a corrupt copy
+      // must fall through to the next layout instead of reaching the caller.
+      try { if ((await sha256File(path)) !== hash) { corrupted = true; continue; } }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
       let file;
       try { file = await open(path, "r"); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
@@ -135,24 +140,33 @@ export class CasStore implements ContentStore {
           digest.update(chunk as Buffer);
           yield chunk as Buffer;
         }
-        if (digest.digest("hex") !== hash) throw new Error("CAS integrity failure");
+        // Second guard: the file could have been replaced between the check and the read.
+        if (digest.digest("hex") !== hash) throw new CasIntegrityError();
       } finally { await file.close(); }
       return;
     }
+    if (corrupted) throw new CasIntegrityError();
     throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
   }
 
   /** Promote a legacy reference into a typed pool without buffering large historical files. */
   async retain<P extends Pool>(reference: CasObjectRef, pool: P): Promise<ObjectRef<P>> {
+    let corrupted = false;
     for (const path of this.readPaths(reference.hash)) {
       try {
         const target = await new VersionStore(this.dataDir).putFile(pool, path);
-        if (target.digest !== `sha256:${reference.hash}` || target.size !== reference.size) throw new Error("Legacy reference integrity failure");
+        if (target.digest !== `sha256:${reference.hash}` || target.size !== reference.size) {
+          corrupted = true;
+          continue;
+        }
         return target;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        // A corrupt copy in one layout must not hide an intact copy in the next one.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
       }
     }
+    if (corrupted) throw new Error("Legacy reference integrity failure");
     throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
   }
 
