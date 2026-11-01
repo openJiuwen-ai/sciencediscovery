@@ -155,6 +155,29 @@ test("a later turn's text is not folded into turn 1 when its response.started ar
   assert.equal(second?.responses[0]?.content, "HELLO WORLD");
 });
 
+test("text for an unknown response waits for its turn even after a tool event opened that turn", () => {
+  // Turn 2 exists here (its thinking and its tool call arrived) but the answer
+  // frame still overtakes `assistant.response.started`, so the text must wait
+  // rather than join the newest turn that happens to be turn 1 or 2.
+  const beforeStart = fold([
+    responseStarted("r1"),
+    delta("first turn", "r1"),
+    { responseId: "r1", type: "assistant.response.settled" } as RunStreamEvent,
+    { delta: "planning the second turn", turn: 2, type: "assistant.thinking.delta" } as RunStreamEvent,
+    toolStarted("t1", "read_file"),
+    delta("HELLO", "r2"),
+  ]);
+  assert.deepEqual(
+    beforeStart.turns.map((turn) => turn.responses.map((response) => response.content)),
+    [["first turn"], []],
+  );
+
+  const state = fold([responseStarted("r2", 2), delta(" WORLD", "r2")], beforeStart);
+  assert.deepEqual(state.turns[0]!.responses.map((response) => response.content), ["first turn"]);
+  assert.deepEqual(state.turns[1]!.responses.map((response) => response.content), ["HELLO WORLD"]);
+  assert.deepEqual(state.turns[1]!.tools.map((tool) => tool.id), ["t1"]);
+});
+
 test("the persisted answer outranks the assembled deltas", () => {
   const state = fold([
     responseStarted("r1"),
