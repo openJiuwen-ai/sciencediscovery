@@ -80,3 +80,27 @@ test("a corrupt pool copy falls back to the intact legacy layout", async () => {
     assert.deepEqual(await store.read(object.hash), bytes);
   });
 });
+
+test("every copy corrupt still reports corruption, not a missing object", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, "corrupted legacy copy");
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    await assert.rejects(store.read(object.hash), /CAS integrity failure/);
+  });
+});
+
+test("a hash that was never stored keeps the ENOENT shape", async () => {
+  await withStore(async (store) => {
+    await assert.rejects(store.read("0".repeat(64)), (error: NodeJS.ErrnoException) => {
+      assert.equal(error.code, "ENOENT");
+      assert.equal(error.message, "CAS object not found");
+      return true;
+    });
+  });
+});
