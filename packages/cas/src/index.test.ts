@@ -193,3 +193,18 @@ test("retain() promotes the intact legacy copy instead of giving up on the corru
     assert.equal(promoted.size, bytes.length);
   });
 });
+
+test("stream() leaves an intact first layout untouched across several chunks", async () => {
+  await withStore(async (store, root) => {
+    // Larger than one pipe chunk, so the generator yields a sequence rather than
+    // a single buffer: the pre-check must not change what a healthy object looks
+    // like on the wire (#708 probe c).
+    const bytes = Buffer.from(Array.from({ length: 400_000 }, (_, index) => index % 251));
+    const object = await store.put(bytes);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of store.stream(object.hash)) chunks.push(chunk as Buffer);
+    assert.equal(chunks.length > 1, true, "a 400KB object is expected to arrive in several chunks");
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  });
+});
