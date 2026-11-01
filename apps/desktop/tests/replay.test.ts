@@ -109,6 +109,19 @@ test("folding reads the log in sequence order, not in the order it arrived", () 
   assert.equal(state.turns[0]?.responses[0]?.content, "Hello world");
 });
 
+test("a replay whose start frame was lost still shows the text that buffered", () => {
+  // The stream advanced its cursor past an unreadable
+  // `assistant.response.started`, so the log holds the deltas and nothing that
+  // names their turn. Replay ends in `closeRunStream`, which places whatever is
+  // still buffered: the answer is delayed, never dropped.
+  const state = foldRunRecords([record(1, delta("答案", "r9"))]);
+  assert.deepEqual(
+    state.turns.map((turn) => turn.responses.map((response) => response.content)),
+    [["答案"]],
+  );
+  assert.equal(state.turns[0]!.responses[0]!.settled, true);
+});
+
 test("a replay is closed, so nothing in it is still streaming", () => {
   const state = foldRunRecords([record(1, responseStarted("r1")), record(2, delta("done", "r1"))]);
   // No `assistant.response.settled` in this log, and no `run.status`: the state
