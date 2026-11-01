@@ -64,3 +64,19 @@ test("invalid hashes are rejected and missing objects do not verify", async () =
     assert.equal(await store.verify("0".repeat(64)), false);
   });
 });
+
+test("a corrupt pool copy falls back to the intact legacy layout", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    // An older writer left the intact copy in the legacy bare-hash layout.
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    // The copy this store reads first was corrupted in place.
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    assert.deepEqual(await store.read(object.hash), bytes);
+  });
+});
