@@ -367,11 +367,17 @@ function withSubagent(state: RunStreamState, event: SubagentEvent): RunStreamSta
  * before it. Here the buffered block is moved onto the named turn whole, text,
  * truncation and settlement intact; a frame whose block already sits there is a
  * no-op, so a redelivered frame changes nothing.
+ *
+ * Either way the buffer settles the question: a block is pending or placed,
+ * never both. A state that somehow holds both loses the pending copy here,
+ * because the placed block is the one the frame just named.
  */
 function withStartedResponse(state: RunStreamState, responseId: string, turn: number): RunStreamState {
-  const target = turnFor(state, turn);
-  if (target.responses.some((response) => response.responseId === responseId)) return state;
   const { [responseId]: buffered, ...stillPending } = state.pendingResponses;
+  const target = turnFor(state, turn);
+  if (target.responses.some((response) => response.responseId === responseId)) {
+    return buffered === undefined ? state : { ...state, pendingResponses: stillPending };
+  }
   return {
     ...state,
     pendingResponses: stillPending,
