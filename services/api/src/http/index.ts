@@ -2965,10 +2965,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // Step 2: read the body from the data pool (same pool the broker /
           // recorder dataCas write into).
           const dataCas = new CasStore(store.dataDir, "data");
-          if (!(await dataCas.has(contentHash))) {
-            return sendError(response, 404, "CAS blob missing for this content_hash");
+          // Read once and branch on the failure, never on has(): has() answers a
+          // boolean, so "corrupted" and "never stored" collapse into one 404 the
+          // moment has() stops throwing (#680). A missing object is a 404; a
+          // corrupt one must stay the loud 500 + warn the catch below logs.
+          let bytes: Buffer;
+          try {
+            bytes = await dataCas.read(contentHash);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              return sendError(response, 404, "CAS blob missing for this content_hash");
+            }
+            throw error;
           }
-          const bytes = await dataCas.read(contentHash);
           // CAS blobs are content-addressed and immutable by construction, so
           // a long-lived cache hit is safe — set the immutable header via a
           // direct writeHead so it overrides the no-store default in

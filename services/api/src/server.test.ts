@@ -8077,10 +8077,16 @@ test("WPC-002 GET /api/sessions/<sid>/web-pages/<id>/content returns 404 for eve
   await expect("wp-bad-hash", /WebPage not found or has no content_hash/);
 
   // CAS blob physically missing: delete the file, the endpoint must still
-  // refuse rather than silently 500. The session-scoped CAS read in
-  // dataCas.has() returns false on ENOENT.
+  // refuse rather than silently 500. The route reads the blob once, so a
+  // missing object surfaces as ENOENT and becomes this 404.
   await rm(blobPath);
   await expect("wp-hash", /CAS blob missing for this content_hash/);
+
+  // A corrupt copy is not a missing one: it must stay the loud 500 + warn the
+  // route logs, never collapse into the same 404. This is the guard for the
+  // composition with #680, where has() answers false instead of throwing.
+  await writeFile(blobPath, "corrupted data pool copy", "utf8");
+  await expect("wp-hash", /WebPage content read failed/, 500);
 });
 
 test("WPC-003 the web-page content endpoint requires auth like the rest of /api", async (context) => {

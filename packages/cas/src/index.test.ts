@@ -78,6 +78,45 @@ test("a corrupt pool copy falls back to the intact legacy layout", async () => {
     await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
 
     assert.deepEqual(await store.read(object.hash), bytes);
+    // The fallback must leave the two public predicates right for this layout
+    // too: has() used to throw and verify() to answer false, and a later
+    // cleanup of has() (see #680) must not undo half of it unnoticed.
+    assert.equal(await store.has(object.hash), true);
+    assert.equal(await store.verify(object.hash), true);
+  });
+});
+
+test("the other pool's layout is a fallback candidate too", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("artifact only the other pool kept intact");
+    const object = await store.put(bytes);
+
+    // This store reads its own pool first; that copy is corrupt, the legacy
+    // layout is absent, and only versioning/data still holds the real bytes.
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+    const otherPool = resolve(root, "versioning", "data", "blobs", "sha256", object.hash);
+    await mkdir(resolve(otherPool, ".."), { recursive: true });
+    await writeFile(otherPool, bytes);
+
+    assert.deepEqual(await store.read(object.hash), bytes);
+  });
+});
+
+test("a non-ENOENT filesystem failure is not reported as corruption", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("artifact behind an unreadable path");
+    const object = await store.put(bytes);
+
+    // A directory where the blob should be makes readFile fail with EISDIR:
+    // that is an I/O error, not a corrupt copy, so it must surface as-is.
+    await rm(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash));
+    await mkdir(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), { recursive: true });
+
+    await assert.rejects(store.read(object.hash), (error: NodeJS.ErrnoException) => {
+      assert.notEqual(error.code, "ENOENT");
+      assert.notEqual(error.message, "CAS integrity failure");
+      return true;
+    });
   });
 });
 

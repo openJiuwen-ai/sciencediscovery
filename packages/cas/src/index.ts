@@ -46,6 +46,14 @@ export async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/** Raised when every copy of an object is present but none matches its hash. */
+class CasIntegrityError extends Error {
+  constructor() {
+    super("CAS integrity failure");
+    this.name = "CasIntegrityError";
+  }
+}
+
 /** Legacy hash facade: dual-pool writes, compatible reads of the old mixed layout. */
 export class CasStore implements ContentStore {
   constructor(private readonly dataDir: string, private readonly pool: Pool = "agent-state") {}
@@ -86,7 +94,7 @@ export class CasStore implements ContentStore {
     try {
       return this.hash(await this.read(hash)) === hash;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as Error).message === "CAS integrity failure") return false;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof CasIntegrityError) return false;
       throw error;
     }
   }
@@ -94,21 +102,24 @@ export class CasStore implements ContentStore {
   async read(hash: string): Promise<Buffer> {
     let corrupted = false;
     for (const path of this.readPaths(hash)) {
+      let bytes: Buffer;
       try {
-        const bytes = await readFile(path);
-        if (sha256(bytes) !== hash) throw new Error("CAS integrity failure");
-        return bytes;
+        bytes = await readFile(path);
       } catch (error) {
-        // A corrupt copy in one layout must not hide an intact copy in the next one.
-        if ((error as Error).message === "CAS integrity failure") {
-          corrupted = true;
-          continue;
-        }
+        // Only a missing copy falls through to the next layout; any other
+        // filesystem failure is this store's problem, not the object's.
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        continue;
       }
+      // A corrupt copy in one layout must not hide an intact copy in the next one.
+      if (sha256(bytes) !== hash) {
+        corrupted = true;
+        continue;
+      }
+      return bytes;
     }
     // Every copy we found is corrupt: report corruption, not a missing object.
-    if (corrupted) throw new Error("CAS integrity failure");
+    if (corrupted) throw new CasIntegrityError();
     throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
   }
 
