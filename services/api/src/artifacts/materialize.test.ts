@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CasStore } from "@sciencediscovery/cas";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 import { SessionStore } from "../store.js";
@@ -60,8 +60,27 @@ for (const binary of [false, true]) test(`immutable artifact edit roundtrip, bin
   const otherSession = await store.createSession(other.id, "other", {}, {}, { allowUnconfiguredModel: true });
   await assert.rejects(materializeArtifact(store, { ...input, sessionId: otherSession.id }), /not found/);
   await assert.rejects(store.createArtifactVersion({ ...publish, sessionId: otherSession.id }), /not found/);
-  // A corrupt backing blob must never publish a partial destination.
-  await writeFile(join(root, "versioning/agent-state/blobs/sha256", first.version.content.hash), "corrupt");
-  await assert.rejects(materializeArtifact(store, { ...input, path: "corrupt.dat" }), /integrity|checksum|size/);
-  await assert.rejects(readFile(join(childRoot, "corrupt.dat")), /ENOENT/);
+  // Contract change (#708): a corrupt pool copy no longer fails the request —
+  // the intact mirror in the next layout is served instead, whole.
+  const corruptHash = first.version.content.hash;
+  const poolCopies = [
+    `versioning/agent-state/blobs/sha256/${corruptHash}`,
+    `versioning/data/blobs/sha256/${corruptHash}`,
+  ];
+  const legacyCopy = `cas/sha256/${corruptHash.slice(0, 2)}/${corruptHash}`;
+  await writeFile(join(root, poolCopies[0]!), "corrupt");
+  const served = await materializeArtifact(store, { ...input, path: "corrupt.dat" });
+  assert.equal(served.sha256, corruptHash, "the intact copy is what gets published");
+  assert.deepEqual(await readFile(join(childRoot, "corrupt.dat")), original, "the whole object, never the corrupt bytes");
+  // With every copy corrupt there is nothing to serve, and the destination must
+  // not be left behind. Which layer names the corruption is not the contract.
+  await writeFile(join(root, poolCopies[1]!), "corrupt");
+  await mkdir(dirname(join(root, legacyCopy)), { recursive: true });
+  await writeFile(join(root, legacyCopy), "corrupt");
+  const integrityShaped = (error: unknown) => {
+    const seen = [String((error as Error)?.message ?? ""), String((error as Error & { cause?: Error })?.cause?.message ?? "")];
+    return seen.some((text) => /integrity|checksum|size/i.test(text));
+  };
+  await assert.rejects(materializeArtifact(store, { ...input, path: "corrupt-again.dat" }), integrityShaped);
+  await assert.rejects(readFile(join(childRoot, "corrupt-again.dat")), /ENOENT/);
 });
