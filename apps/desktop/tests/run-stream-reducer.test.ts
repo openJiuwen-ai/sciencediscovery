@@ -141,6 +141,20 @@ test("text arriving before its response.started opens a block instead of vanishi
   assert.equal(state.turns[0]!.responses[0]!.content, "orphan text");
 });
 
+test("a later turn's text is not folded into turn 1 when its response.started arrives late", () => {
+  const state = fold([
+    responseStarted("r1"),
+    delta("first turn", "r1"),
+    { responseId: "r1", type: "assistant.response.settled" } as RunStreamEvent,
+    delta("HELLO", "r2"),
+    responseStarted("r2", 2),
+    delta(" WORLD", "r2"),
+  ]);
+  const second = state.turns.find((turn) => turn.turn === 2);
+  assert.deepEqual(state.turns[0]!.responses.map((response) => response.content), ["first turn"]);
+  assert.equal(second?.responses[0]?.content, "HELLO WORLD");
+});
+
 test("the persisted answer outranks the assembled deltas", () => {
   const state = fold([
     responseStarted("r1"),
