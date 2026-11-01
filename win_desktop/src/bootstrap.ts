@@ -356,6 +356,10 @@ export async function bootstrapPackaged(
 ): Promise<BootstrapResult> {
   const bootstrapStarted = Date.now();
   log("[perf] bootstrapPackaged start");
+  const perfB = (event: string, extra = ""): void => {
+    log(`[perf] bootstrap ${event} +${Date.now() - bootstrapStarted}ms${extra ? ` ${extra}` : ""}`);
+  };
+  perfB("enter");
   // Optionally run venvs straight from the read-only payload.
   // Packaged mode never mutates venvs at runtime, so copying them into the
   // data directory is pure overhead on first start.
@@ -374,6 +378,7 @@ export async function bootstrapPackaged(
     if (existsSync(join(jwVenv, "pyvenv.cfg"))) {
       await fixVenvHome(jwVenv, paths.python, log);
     }
+    perfB("short-circuit", `unpackNeeded=false`);
     log(`[perf] bootstrapPackaged short-circuit elapsed=${Date.now() - bootstrapStarted}ms`);
     return { unpacked: false, jwFixed: false, precompiled: 0 };
   }
@@ -395,6 +400,7 @@ export async function bootstrapPackaged(
     await fixVenvHome(jwVenv, paths.python, log);
     log("first run: pointed the bundled JiuwenSwarm venv at the bundled interpreter");
   }
+  perfB("jw-venv-fix-done");
 
   // In-place path — skip the expensive copy and just fix the bundled
   // venvs in their read-only template. The payload normally ships
@@ -402,6 +408,7 @@ export async function bootstrapPackaged(
   // cache-less so one bad payload cannot tax every launch.
   if (inPlaceEnvs) {
     const inPlaceFixStarted = Date.now();
+    perfB("in-place-fix-enter");
     for (const name of paths.venvNames) {
       await fixVenvHome(join(envsDir, name), paths.python, log);
       await fixEditablePths(join(envsDir, name), paths.backend, log);
@@ -409,6 +416,7 @@ export async function bootstrapPackaged(
     // Second pass catches any venv that was missed because the directory did not
     // exist during the first pass above.
     await fixVenvLaunchers(paths, envsDir, log);
+    perfB("in-place-fix-done", `self=${Date.now() - inPlaceFixStarted}ms`);
     log(`[perf] in-place venv fix elapsed=${Date.now() - inPlaceFixStarted}ms`);
 
     // Bytecode fallback: this branch used to return with precompiled: 0 no
@@ -416,9 +424,10 @@ export async function bootstrapPackaged(
     // the resources here, so every target applies (stdlib, the five template
     // venvs, the jiuwenswarm venv).
     const compileStarted = Date.now();
+    perfB("in-place-bytecode-fallback-enter");
     const results = await Promise.all(precompileTargets(paths, envsDir)
       .map((t) => compileIfCacheless(t, compileEnv, log)));
-    log(`[perf] in-place bytecode fallback elapsed=${Date.now() - compileStarted}ms`);
+    perfB("in-place-bytecode-fallback-done", `self=${Date.now() - compileStarted}ms precompiled=${results.filter(Boolean).length}`);
 
     const stamp: UnpackStamp = { installRoot: paths.resourcesPath, at: new Date().toISOString() };
     // The stamp still lives under <dataDir>\envs even when venvs are in-place,
@@ -440,6 +449,7 @@ export async function bootstrapPackaged(
 
   log(`first run: unpacking bundled Python environments into ${envsDir}`);
   const unpackStarted = Date.now();
+  perfB("unpack-enter");
   await rm(envsDir, { recursive: true, force: true });
   await mkdir(dataDir, { recursive: true });
   let lastReportedPct = -1;
@@ -452,14 +462,17 @@ export async function bootstrapPackaged(
       }
     },
   });
+  perfB("unpack-done", `self=${Date.now() - unpackStarted}ms`);
   log(`[perf] copyTreeConcurrent elapsed=${Date.now() - unpackStarted}ms`);
   log("first run: unpack complete");
 
   const fixStarted = Date.now();
+  perfB("venv-fix-enter");
   for (const name of paths.venvNames) {
     await fixVenvHome(join(envsDir, name), paths.python, log);
     await fixEditablePths(join(envsDir, name), paths.backend, log);
   }
+  perfB("venv-fix-done", `self=${Date.now() - fixStarted}ms`);
   log(`[perf] fixVenvHome/fixEditablePths elapsed=${Date.now() - fixStarted}ms`);
   // The freshly copied envs may still come from a pre-fix payload —
   // replace their trampolines (+ runtime DLLs) before the unpacked-phase
@@ -472,6 +485,7 @@ export async function bootstrapPackaged(
   // when the copy arrived cache-less (old payload / dev tree) as a fallback.
   let precompiled = 0;
   const compileStarted = Date.now();
+  perfB("precompile-phase-enter");
   if (await treeHasPycache(envsDir)) {
     log("first run: bytecode precompiled at build time; skipping the compile step");
     // Template-phase fallbacks kicked off before the copy may still be in
@@ -485,6 +499,7 @@ export async function bootstrapPackaged(
     const results = await Promise.all([...unpackedRuns, ...templateRuns]);
     precompiled = results.filter(Boolean).length;
   }
+  perfB("precompile-phase-done", `self=${Date.now() - compileStarted}ms precompiled=${precompiled}`);
   log(`[perf] precompile/fallback elapsed=${Date.now() - compileStarted}ms`);
 
   const stamp: UnpackStamp = { installRoot: paths.resourcesPath, at: new Date().toISOString() };

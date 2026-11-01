@@ -51,6 +51,13 @@ const say = message => process.stderr.write(`${message}\n`);
 const fail = message => { say(message); process.exit(1); };
 const stackStarted = Date.now();
 
+// [SD-PERF instrumentation] start-stack 进程内的统一毫秒打点。stderr 经
+// spawnStack 的 "[stack:err]" 前缀回流 shell.log，与 shell/jw 两侧的
+// [SD-PERF] 行拼成同一时间线。移除打点时 git checkout 本文件即可。
+const perf = (event, extra = "") =>
+  say(`[SD-PERF] stack ${event} +${Date.now() - stackStarted}ms${extra ? ` ${extra}` : ""}`);
+perf("script-enter");
+
 // ---------------------------------------------------------------------------
 // Argument parsing (same shape and validation as the bash version)
 
@@ -410,6 +417,7 @@ for (const { name, host, port } of portsToCheck) {
   const result = await portAvailability(host, port);
   if (!result.ok) portFailures.push({ name, host, port, code: result.code });
 }
+perf("port-preflight-done", `checked=${portsToCheck.length} failures=${portFailures.length}`);
 if (portFailures.length) {
   say("Cannot bind the ports this stack needs:");
   for (const { name, host, port, code } of portFailures) {
@@ -448,10 +456,12 @@ const runnerUrl = process.env.SCIENCE_AGENT_RUNNER_URL ?? `http://${runnerHost}:
 
 try {
   say("Starting the sandbox runner daemon...");
+  perf("runner-spawn");
   children.push(spawnService(process.execPath, [join("services", "runner", "dist", "server.js")], { env: runnerEnv }));
   if (!await waitHealthy("runner", `${runnerUrl}/health`, { timeoutSeconds: healthTimeoutSeconds })) {
     say("WARNING: local compute is unavailable; the workbench will remain accessible. Configure a remote Runner or repair local execution.");
   }
+  perf("runner-healthy");
 
   // [windows-desktop] Service start-order optimization: sidecars/JiuwenSwarm
   // and the control API start in parallel instead of the API waiting for
@@ -478,6 +488,7 @@ try {
   let adapterChild = null;
   function startAdapter(extraEnv = {}) {
     say(`Starting the adapter on port ${publicPort} (legacy API on ${legacyPort})...`);
+    perf("adapter-spawn");
     adapterChild = spawnService(adapterPython, ["-m", "sciencediscovery_adapter.server"], {
       env: { SCIENCE_AGENT_LEGACY_PORT: String(legacyPort), ...extraEnv },
     });
@@ -491,6 +502,7 @@ try {
   if (process.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE !== "0" && memoryGraphPython) {
     sidecarPromises.push((async () => {
       say("Starting the memory-graph service...");
+      perf("memory-graph-spawn");
       children.push(spawnService(memoryGraphPython, ["-m", "sciencediscovery_memory_graph.server"], {
         env: {
           SCIENCE_AGENT_DATA_DIR: dataDir,
@@ -501,11 +513,13 @@ try {
       if (!await waitHealthy("memory-graph", `http://127.0.0.1:${memoryGraphPort}/health`, { timeoutSeconds: healthTimeoutSeconds })) {
         throw new Error("memory-graph sidecar failed to start; stopping the stack.");
       }
+      perf("memory-graph-healthy");
     })());
   }
   if (evolvePython) {
     sidecarPromises.push((async () => {
       say("Starting the evolve service...");
+      perf("evolve-spawn");
       children.push(spawnService(evolvePython, ["-m", "sciencediscovery_evolve.server"], {
         env: {
           SCIENCE_AGENT_DATA_DIR: dataDir,
@@ -515,6 +529,7 @@ try {
       if (!await waitHealthy("evolve", `http://127.0.0.1:${evolvePort}/health`, { timeoutSeconds: healthTimeoutSeconds })) {
         throw new Error("evolve sidecar failed to start; stopping the stack.");
       }
+      perf("evolve-healthy");
     })());
   }
 
@@ -550,7 +565,9 @@ try {
         try {
           if (!await jwIsUp(cfg)) {
             say("JiuwenSwarm is not running; starting it in the background (node scripts/jiuwenswarm.mjs start)...");
+            perf("jw-bg-start-enter");
             await jwStart(cfg);
+            perf("jw-bg-start-settled");
           }
           const env = await jwEnv(cfg).catch(() => null);
           if (env) Object.assign(process.env, env);
@@ -604,6 +621,7 @@ try {
   // API: start as soon as the runner is healthy, before sidecars finish.
   process.env.SCIENCE_AGENT_ADAPTER_URL ??= `http://127.0.0.1:${publicPort}`;
   say(`[perf] start-stack pre-API elapsed=${Date.now() - stackStarted}ms`);
+  perf("api-spawn");
   say("Starting the control API...");
   const apiEntry = process.env.SCIENCE_AGENT_API_ENTRYPOINT ?? join(repositoryRoot, "services", "api", "dist", "server.js");
   if (process.env.SCIENCE_AGENT_API_ENTRYPOINT && !existsSync(process.env.SCIENCE_AGENT_API_ENTRYPOINT)) {
@@ -616,6 +634,9 @@ try {
       : { SCIENCE_AGENT_PORT: String(publicPort) },
   });
   children.push(apiChild);
+  // [SD-PERF instrumentation] API 的 stdout("ScienceDiscovery listening on…")
+  // 走 inherit 直通本进程 stderr 无法拦截，改用健康口首次 200 时刻代替
+  // listen 时刻 —— 由 shell 侧的 health-200 打点承担（shell.log 可见）。
 
   // Adapter: in lazy mode it is started from the JiuwenSwarm background
   // promise once we know the real JiuwenSwarm ports. In non-lazy mode keep
