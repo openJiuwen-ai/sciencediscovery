@@ -109,6 +109,17 @@ export interface RunStreamState {
   modelName?: string;
   /** Every authorization request this run raised, oldest first. */
   permissions: PermissionEntry[];
+  /**
+   * Text that arrived before the frame naming its turn, keyed by `responseId`.
+   *
+   * A delta or snapshot can precede its `assistant.response.started` — the
+   * stream drops a frame it cannot read and older records omit some — and until
+   * that frame arrives nothing says which turn the text answers. Keeping it
+   * here rather than in the newest turn is what stops a later turn's answer
+   * from being drawn under the turn before it; `closeRunStream` places anything
+   * left over so a stream that never names it still shows the text.
+   */
+  pendingResponses: Record<string, AssistantResponse>;
   runId?: string;
   startedAt?: number;
   status?: SessionRunStatus;
@@ -120,7 +131,14 @@ export interface RunStreamState {
 }
 
 export function emptyRunStream(): RunStreamState {
-  return { droppedEvents: 0, permissions: [], terminal: false, turns: [], unknownEvents: 0 };
+  return {
+    droppedEvents: 0,
+    pendingResponses: {},
+    permissions: [],
+    terminal: false,
+    turns: [],
+    unknownEvents: 0,
+  };
 }
 
 const TERMINAL_STATUSES: readonly SessionRunStatus[] = [

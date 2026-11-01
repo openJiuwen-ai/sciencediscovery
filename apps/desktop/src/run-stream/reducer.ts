@@ -105,10 +105,7 @@ export function reduceRunStream(
       return { ...advanced, modelName: event.model.name, runId: event.runId, status: "running" };
 
     case "assistant.response.started":
-      return withTurn(advanced, event.turn, (turn) =>
-        turn.responses.some((response) => response.responseId === event.responseId)
-          ? turn
-          : { ...turn, responses: [...turn.responses, blankResponse(event.responseId)] });
+      return withStartedResponse(advanced, event.responseId, event.turn);
 
     case "assistant.delta":
       return withResponse(advanced, event.responseId, (response) => ({
@@ -216,15 +213,19 @@ export function reduceRunStream(
         terminal: advanced.terminal || isTerminalRunStatus(event.status),
       };
 
-    case "run.completed":
+    case "run.completed": {
       // The persisted message, not the assembled deltas, is the answer of
-      // record: a truncated snapshot may have left the buffer short.
+      // record: a truncated snapshot may have left the buffer short. Text
+      // still waiting for a start frame is placed first, so sealing below
+      // covers it too.
+      const finished = flushPendingResponses(advanced);
       return {
-        ...advanced,
+        ...finished,
         finalContent: event.message.content,
         status: "completed",
-        turns: sealOpenResponses(advanced.turns),
+        turns: sealOpenResponses(finished.turns),
       };
+    }
 
     case "run.failed":
       return { ...advanced, error: { code: event.errorCode, message: event.error } };
@@ -298,7 +299,8 @@ function completeTrace(started: ToolTrace, completed: ToolTrace): ToolTrace {
 
 /** The stream ended. Anything still open was cut off rather than settled. */
 export function closeRunStream(state: RunStreamState): RunStreamState {
-  return { ...state, terminal: true, turns: sealOpenResponses(state.turns) };
+  const placed = flushPendingResponses(state);
+  return { ...placed, terminal: true, turns: sealOpenResponses(placed.turns) };
 }
 
 function blankResponse(responseId?: string): AssistantResponse {
@@ -355,20 +357,58 @@ function withSubagent(state: RunStreamState, event: SubagentEvent): RunStreamSta
 }
 
 /**
- * Route a text frame to its response.
+ * Open the block for a response on the turn its start frame names.
  *
- * `responseId` is the reliable key and is preferred. Older records omit it, so
- * an unidentified frame lands on the newest response of the newest turn — the
- * place it would have landed had the identity existed. A frame that arrives
- * before its `assistant.response.started`, or with no open response at all,
- * opens a block rather than dropping the text.
+ * The frame can arrive after the text it belongs to: the stream skips a frame
+ * it cannot read (its cursor still advances past it), and older records omit
+ * some frames entirely. The text waiting for it is on `pendingResponses`,
+ * because until this frame arrives nothing says which turn it answers — placing
+ * it on the newest turn is how a later turn's answer ended up under the turn
+ * before it. Here the buffered block is moved onto the named turn whole, text,
+ * truncation and settlement intact; a frame whose block already sits there is a
+ * no-op, so a redelivered frame changes nothing.
+ */
+function withStartedResponse(state: RunStreamState, responseId: string, turn: number): RunStreamState {
+  const target = turnFor(state, turn);
+  if (target.responses.some((response) => response.responseId === responseId)) return state;
+  const { [responseId]: buffered, ...stillPending } = state.pendingResponses;
+  return {
+    ...state,
+    pendingResponses: stillPending,
+    turns: replaceTurn(state.turns, turn, {
+      ...target,
+      responses: [...target.responses, buffered ?? blankResponse(responseId)],
+    }),
+  };
+}
+
+/**
+ * Router for text frames.
+ *
+ * `responseId` is the reliable key and is preferred. A frame whose id no turn
+ * owns yet waits on `pendingResponses`: the turn it answers is not known until
+ * `assistant.response.started` names it, and the newest turn at that moment may
+ * still be the previous one. `closeRunStream` flushes whatever a stream never
+ * named onto the newest turn, so text is delayed, never dropped.
+ *
+ * Older records omit `responseId` on text frames. Such a frame keeps routing to
+ * the newest response of the newest turn — the place it would have landed had
+ * the identity existed — and opens a block there when there is none.
  */
 function withResponse(
   state: RunStreamState,
   responseId: string | undefined,
   update: (current: AssistantResponse) => AssistantResponse,
 ): RunStreamState {
-  const turn = locateTurn(state, responseId);
+  const owner = responseId === undefined ? undefined : turnOwning(state, responseId);
+  if (responseId !== undefined && owner === undefined) {
+    const current = state.pendingResponses[responseId] ?? blankResponse(responseId);
+    return {
+      ...state,
+      pendingResponses: { ...state.pendingResponses, [responseId]: update(current) },
+    };
+  }
+  const turn = owner ?? state.turns.at(-1);
   if (!turn) {
     const created: AssistantTurn = {
       responses: [update(blankResponse(responseId))],
@@ -401,13 +441,38 @@ function withResponse(
   };
 }
 
-function locateTurn(state: RunStreamState, responseId: string | undefined): AssistantTurn | undefined {
-  if (responseId !== undefined) {
-    const owner = state.turns.find((turn) =>
-      turn.responses.some((response) => response.responseId === responseId));
-    if (owner) return owner;
+/** The turn that already holds a block for this response id, or undefined. */
+function turnOwning(state: RunStreamState, responseId: string): AssistantTurn | undefined {
+  // Newest first. A response id belongs to one turn, but a transcript built
+  // from a stream that lost a frame can hold two blocks for it; the later
+  // frame is the one still being written, so every following delta has to
+  // follow it instead of pinning back to the block an earlier turn kept.
+  for (let position = state.turns.length - 1; position >= 0; position -= 1) {
+    const turn = state.turns[position]!;
+    if (turn.responses.some((response) => response.responseId === responseId)) return turn;
   }
-  return state.turns.at(-1);
+  return undefined;
+}
+
+/**
+ * Place the blocks a stream never named onto the newest turn.
+ *
+ * A response whose `assistant.response.started` never arrives — the frame was
+ * unreadable, the record is old, the run was cut off before it — has no turn to
+ * go to. Dropping its text would be a worse transcript than putting it where it
+ * would have landed before the turn could be known: the newest turn, or turn 1
+ * when nothing else arrived. Blocks keep the order they were buffered in.
+ */
+function flushPendingResponses(state: RunStreamState): RunStreamState {
+  const pending = Object.values(state.pendingResponses);
+  if (pending.length === 0) return state;
+  const turn = newestTurn(state);
+  const target = turnFor(state, turn);
+  return {
+    ...state,
+    pendingResponses: {},
+    turns: replaceTurn(state.turns, turn, { ...target, responses: [...target.responses, ...pending] }),
+  };
 }
 
 function responseIndex(turn: AssistantTurn, responseId: string | undefined): number {
