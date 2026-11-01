@@ -92,15 +92,23 @@ export class CasStore implements ContentStore {
   }
 
   async read(hash: string): Promise<Buffer> {
+    let corrupted = false;
     for (const path of this.readPaths(hash)) {
       try {
         const bytes = await readFile(path);
         if (sha256(bytes) !== hash) throw new Error("CAS integrity failure");
         return bytes;
       } catch (error) {
+        // A corrupt copy in one layout must not hide an intact copy in the next one.
+        if ((error as Error).message === "CAS integrity failure") {
+          corrupted = true;
+          continue;
+        }
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+    // Every copy we found is corrupt: report corruption, not a missing object.
+    if (corrupted) throw new Error("CAS integrity failure");
     throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
   }
 
