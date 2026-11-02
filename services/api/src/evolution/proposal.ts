@@ -67,6 +67,11 @@ export interface ProposalDeps {
   modelId: string;
   orchestrator: EvolveOrchestrator;
   sessionId: string;
+  /** Whether the run's model can be told to stop thinking. False when its API
+   *  variant has no thinking-control field: the request is accepted and
+   *  ignored, and the quiet ceiling then pays for reasoning nobody sees.
+   *  Absent means the caller could not tell, so the proposal's setting stands. */
+  thinkingSupported?: boolean;
 }
 
 /** The gate is what every candidate's score is measured on — the number the
@@ -160,6 +165,7 @@ export async function startProposedRun(
     goal,
     model: deps.model?.(goal.modelId) as never,
     sandbox: await deps.orchestrator.sandboxCapability(),
+    thinkingSupported: deps.thinkingSupported,
   });
   if (issues.length) return { refusedBecause: describe(issues) };
 
@@ -325,7 +331,16 @@ async function assembleGoal(
   // the right default on its merits: with thinking on, one whole-program rewrite
   // has been measured taking longer than the proxy's ceiling and returning
   // nothing at all.
-  const thinking = proposal.thinking ?? "disabled";
+  const requestedThinking = proposal.thinking ?? "disabled";
+  // "Off" is a budget plan only if the endpoint carries the request. A model on
+  // a dialect with no thinking-control field ignores it and reasons anyway, and
+  // the ceiling is then spent on hidden tokens: a custom gateway returned
+  // exactly at 16k with no content on every expansion. Record what will
+  // actually happen, so the ceiling and pre-flight's floor agree with the
+  // model's behaviour rather than with the setting it was asked for.
+  const thinking = requestedThinking === "disabled" && deps.thinkingSupported === false
+    ? "enabled"
+    : requestedThinking;
 
   const startCas = proposal.mode === "test_gate"
     ? ""
