@@ -6,7 +6,7 @@ export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
   fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
-  activation: "next_run" | "same_run_if_bound";
+  activation: "next_run" | "next_request" | "same_run_if_bound";
   diagnostics: readonly string[];
 }
 const id = { kind: "string", maxLength: 200 } as const;
@@ -14,6 +14,7 @@ const ids = { kind: "ids" } as const;
 const boolean = { kind: "boolean" } as const;
 /** Trusted finite descriptions. Each domain adds its fields here once; tools are generated from them. */
 export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, ConfigurationAgentDescriptor> = {
+  "memory.enable": { label: "Enable or disable workbench memory graph", whenNeeded: "The user explicitly requests the deployment-wide MemoryGraph participation switch. This is not every Agent memory. Enabling permits later research-memory operations to use the configured backend/credentials; disabling retains stored data and does not cancel in-flight work. No backend change, installation or readiness verification. Omit scope; no automatic task resume.", fields: { enabled: boolean }, activation: "next_request", diagnostics: [] },
   "model.select": { label: "Choose an existing model", whenNeeded: "An explicit model choice or no usable task model. Do not replace a usable inherited default without a requirement.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_NOT_SELECTED"] },
   "model.connect": { label: "Connect a model service", whenNeeded: "A new model service is needed. The user supplies credentials only in the secure card.", fields: { name: { ...id, maxLength: 200 }, baseUrl: { kind: "string", maxLength: 2048 }, model: { ...id, maxLength: 512 }, apiProtocol: { kind: "string", choices: ["openai-chat-completions", "openai-responses", "anthropic-messages"] }, apiVariant: { ...id, maxLength: 80 }, tokenOptional: boolean }, activation: "next_run", diagnostics: [] },
   "model.repair_credential": { label: "Repair a model credential", whenNeeded: "A structured authentication diagnosis identifies this exact model. A network failure, timeout or rate limit is not authentication evidence.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_CREDENTIAL_MISSING", "MODEL_AUTHENTICATION_REJECTED"] },
@@ -36,6 +37,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "memory.enable"] as const;
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })
