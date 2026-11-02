@@ -76,6 +76,10 @@ test("CFG-X10a: validation and concurrent epoch/configuration changes cannot reu
   await h.store.createSession(h.session.projectId, "Newly affected", {}, {}, { allowUnconfiguredModel: true });
   await assert.rejects(consent(h.framework, card), { code: "RESOURCE_VERSION_CONFLICT" });
   await assert.rejects(h.framework.decide(h.session.id, card.id, approval(card)), { code: "RESOURCE_VERSION_CONFLICT" });
+  const dismissedPreview = await h.framework.preview(h.session.id, card.id, { expectedRevision: card.revision, values: {}, selectedOptionId: "dismiss" });
+  const applyingAgain = await h.framework.preview(h.session.id, card.id, { expectedRevision: dismissedPreview.revision, values: { mode: "open" }, selectedOptionId: "persist" });
+  assert.equal(applyingAgain.securityConsent?.status, "required", "Returning from dismissal must rebuild the security target against the new CAS vector");
+  await assert.rejects(h.framework.decide(h.session.id, card.id, approval(applyingAgain)), { code: "SECURITY_CONSENT_REQUIRED" });
   assert.equal(h.store.getSandboxNetworkSettings().mode, "none");
 });
 

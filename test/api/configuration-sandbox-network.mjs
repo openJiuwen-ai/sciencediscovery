@@ -101,8 +101,10 @@ try {
     assert.deepEqual(await api("/api/sandbox-network-settings"), baseline);
   });
   await step("6. Refusal needs no security consent and does not change permissions", async () => {
-    // The stale request is still the active target. Replan that card rather than opening a duplicate.
-    card = await api(path(card, "preview"), { expectedRevision: card.revision, values: { mode: "open" }, selectedOptionId: "dismiss" }, "POST", 200);
+    // Rebuild an applying preview first: dismissal intentionally preserves its cached candidate.
+    card = await api(path(card, "preview"), { expectedRevision: card.revision, values: { mode: "open" }, selectedOptionId: "persist" }, "POST", 200);
+    assert.equal(card.securityConsent.status, "required");
+    card = await api(path(card, "preview"), { expectedRevision: card.revision, values: {}, selectedOptionId: "dismiss" }, "POST", 200);
     assert.equal(card.securityConsent.status, "required");
     const result = await api(path(card, "decision"), { ...decision(card), decision: "dismiss", selectedOptionId: "dismiss" }, "POST", 200);
     assert.equal(result.state, "dismissed"); assert.deepEqual(await api("/api/sandbox-network-settings"), baseline);
