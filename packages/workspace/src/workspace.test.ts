@@ -2435,7 +2435,11 @@ test("run_shell exposes a compact model result without execution internals or en
       instruction: "Request the complete host set before a new execution",
     },
   });
-  assert.equal(response.details, execution, "canonical details remain complete for audit and trajectory persistence");
+  assert.deepEqual(response.details, {
+    ...modelResult, id: "execution-visible", agentId: "agent-internal", runnerId: "runner-internal",
+    workspaceId: "workspace-internal", startedAt: "2026-10-30T09:20:40.755Z", finishedAt: "2026-10-30T09:20:41.285Z",
+  });
+  assert.doesNotMatch(JSON.stringify(response.details), /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
   assert.doesNotMatch(text, /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
 });
 
@@ -2455,7 +2459,7 @@ test("run_shell compact output keeps pending and unknown recovery instructions",
     assert.equal(modelResult.executionId, `execution-${state}`);
     assert.equal(modelResult.state, state);
     assert.match(modelResult.instruction, state === "unknown" ? /outcome is unconfirmed/ : /still running or queued/);
-    assert.equal(response.details, execution, "canonical execution remains available outside model content");
+    assert.deepEqual(response.details, { ...modelResult, id: `execution-${state}` });
     assert.deepEqual(Object.keys(modelResult).sort(), ["executionId", "instruction", "state"]);
   }
 });
