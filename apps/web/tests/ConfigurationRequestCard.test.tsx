@@ -25,6 +25,9 @@ test("CFG-X03a: MCP metadata uses its own localized labels rather than provider-
   const labels = renderer.root.findAllByType("label").map(label => label.children.join(""));
   assert.ok(labels.some(label => label.includes("MCP 服务名称"))); assert.ok(labels.some(label => label.includes("MCP 服务描述"))); assert.ok(!labels.some(label => label.includes("服务商名称")));
   assert.ok(renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "MCP 服务名称"));
+  assert.equal(renderer.root.findByProps({ name: "description" }).type, "textarea");
+  await act(async () => renderer.root.findByProps({ name: "description" }).props.onChange({ target: { value: "Owned metadata\nSecond line" } }));
+  assert.equal(renderer.root.findByProps({ name: "description" }).props.value, "Owned metadata\nSecond line");
   await act(async () => renderer.unmount());
 });
 

@@ -387,7 +387,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
               placeholder={field.status === "provided" ? m.providedPlaceholder : field.placeholder}
               onChange={(event) => edit(field, event.target.value)} /> : <p>{authorization?.classification === "public_http" ? m.endpointBlocked : m.endpointRequired}</p>}
             <p id={descriptionId}>{m.credential[field.status]} · {m.credentialNote}{field.description ? ` ${field.description}` : ""}</p>
-          </> : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
+          </> : field.kind === "text" && request.capabilityId === "mcp.metadata" && field.id === "description" ? <textarea {...common} rows={4}
+            value={String(values[field.id] ?? "")} placeholder={field.placeholder} onChange={(event) => edit(field, event.target.value)} />
+          : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
             onChange={(event) => edit(field, Array.from(event.target.selectedOptions, option => option.value))}>
             {field.choices?.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>
