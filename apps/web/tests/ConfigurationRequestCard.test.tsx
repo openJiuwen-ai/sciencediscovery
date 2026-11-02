@@ -775,3 +775,18 @@ test("Jiuwen live-wait card is actionable while its original run remains running
     await act(async () => renderer.unmount());
   }
 });
+
+test("shared model metadata labels identify profile edits rather than task-model selection or provider renaming", async () => {
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: "zh" }, createElement(ConfigurationRequestCard, {
+    request: request({ capabilityId: "model.metadata", scope: { kind: "global" }, fields: [
+      { id: "modelId", label: "Existing shared model", kind: "enum", required: true, choices: [{ id: "a", label: "Model A" }], value: "a" },
+      { id: "name", label: "Model profile name", kind: "text", required: false, value: "Model A" },
+    ] }), actions: actions(), onUpdate: () => undefined,
+  }))); });
+  const labels = renderer.root.findAllByType("label").map(label => label.children.filter(child => typeof child === "string").join(""));
+  assert.ok(labels.some(label => label.includes("共享模型档案")));
+  assert.ok(labels.some(label => label.includes("模型档案名称")));
+  assert.ok(labels.every(label => !label.includes("任务模型") && !label.includes("服务商名称")));
+  await act(async () => renderer.unmount());
+});

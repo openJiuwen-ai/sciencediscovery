@@ -14,6 +14,11 @@ const ids = { kind: "ids" } as const;
 const boolean = { kind: "boolean" } as const;
 /** Trusted finite descriptions. Each domain adds its fields here once; tools are generated from them. */
 export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, ConfigurationAgentDescriptor> = {
+  "model.metadata": { label: "Edit existing model metadata", whenNeeded: "Only explicit user edits to an existing shared model profile name, vision flag or user-stated context/output/thinking/price facts. operation update patches only supplied fields; clear_facts clears all user fact overrides and preserves name/vision. Decimal prices are strings per million tokens; a new price needs currency/input/output. No endpoint, protocol, API model identifier, key, route, default selection, probe or model call. Omit scope: global manual v3 confirmation.", fields: {
+    modelId: id, operation: { kind: "string", choices: ["update", "clear_facts"] }, name: id, vision: boolean,
+    contextWindow: { kind: "integer", minimum: 1 }, maxOutputTokens: { kind: "integer", minimum: 1 }, thinkingSupported: boolean, thinkingEfforts: ids,
+    priceCurrency: { kind: "string", choices: ["USD", "CNY"] }, priceInput: { kind: "string", maxLength: 40 }, priceOutput: { kind: "string", maxLength: 40 }, priceCachedInput: { kind: "string", maxLength: 40 }, priceCacheWriteInput: { kind: "string", maxLength: 40 },
+  }, activation: "next_run", diagnostics: [] },
   "model.select": { label: "Choose an existing model", whenNeeded: "An explicit model choice or no usable task model. Do not replace a usable inherited default without a requirement.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_NOT_SELECTED"] },
   "model.connect": { label: "Connect a model service", whenNeeded: "A new model service is needed. The user supplies credentials only in the secure card.", fields: { name: { ...id, maxLength: 200 }, baseUrl: { kind: "string", maxLength: 2048 }, model: { ...id, maxLength: 512 }, apiProtocol: { kind: "string", choices: ["openai-chat-completions", "openai-responses", "anthropic-messages"] }, apiVariant: { ...id, maxLength: 80 }, tokenOptional: boolean }, activation: "next_run", diagnostics: [] },
   "model.repair_credential": { label: "Repair a model credential", whenNeeded: "A structured authentication diagnosis identifies this exact model. A network failure, timeout or rate limit is not authentication evidence.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_CREDENTIAL_MISSING", "MODEL_AUTHENTICATION_REJECTED"] },
@@ -36,6 +41,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "model.metadata"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })

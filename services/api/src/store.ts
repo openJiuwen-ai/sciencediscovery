@@ -2404,6 +2404,10 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "model.metadata") {
+      const credentialIds = new Set([target, ...(provider ? [providerSecretKey(provider.id)] : [])]);
+      systemVersions = { modelMetadata: version([model, provider, secretRows.filter(row => credentialIds.has(String(row.model_id))), model ? lookupModelCatalog(model.model) : null]) };
+    }
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -3584,6 +3588,51 @@ export class SessionStore {
     catch { throw new SessionStoreHttpError("A provided LLM API token must be a non-empty string of at most 16384 characters", 400); }
   }
 
+  configurationModelMetadataCandidate(profile: ModelProfile, values: ConfigurationValues) {
+    let facts = structuredClone(profile.facts ?? {});
+    if (values.operation === "clear_facts") facts = {};
+    else {
+      if (values.contextWindow !== undefined) facts.contextWindow = Number(values.contextWindow);
+      if (values.maxOutputTokens !== undefined) facts.maxOutputTokens = Number(values.maxOutputTokens);
+      if (values.thinkingSupported !== undefined) facts.thinkingSupported = values.thinkingSupported === true;
+      if (values.thinkingEfforts !== undefined) facts.thinkingEfforts = values.thinkingEfforts as ModelThinkingEffort[];
+      if (["priceCurrency", "priceInput", "priceOutput", "priceCachedInput", "priceCacheWriteInput"].some(field => values[field] !== undefined)) {
+        const before = facts.pricing;
+        const currency = values.priceCurrency ?? before?.currency;
+        const input = values.priceInput === undefined ? before?.input : Number(values.priceInput);
+        const output = values.priceOutput === undefined ? before?.output : Number(values.priceOutput);
+        if (currency !== "USD" && currency !== "CNY" || input === undefined || output === undefined) {
+          throw new Error("A model price needs currency, input and output rates");
+        }
+        facts.pricing = {
+          currency, input, output,
+          ...(before?.cachedInput === undefined && values.priceCachedInput === undefined ? {} : { cachedInput: values.priceCachedInput === undefined ? before?.cachedInput : Number(values.priceCachedInput) }),
+          ...(before?.cacheWriteInput === undefined && values.priceCacheWriteInput === undefined ? {} : { cacheWriteInput: values.priceCacheWriteInput === undefined ? before?.cacheWriteInput : Number(values.priceCacheWriteInput) }),
+        };
+      }
+    }
+    const requestedFacts = normalizeModelFactOverrides(facts);
+    const clear = values.operation === "clear_facts";
+    const normalized = validateLiveModel({ ...profile, name: !clear && typeof values.name === "string" ? values.name : profile.name,
+      vision: !clear && typeof values.vision === "boolean" ? values.vision : profile.vision,
+      facts: requestedFacts ?? null });
+    return { name: normalized.name, vision: normalized.vision, thinkingMode: normalized.thinkingMode, thinkingEffort: normalized.thinkingEffort, facts: normalized.facts };
+  }
+
+  private applyModelMetadataSync(profile: ModelProfile, metadata: Pick<ModelProfile, "name" | "vision" | "thinkingMode" | "thinkingEffort" | "facts">, clearFacts: boolean): void {
+    Object.assign(profile, { name: metadata.name, vision: metadata.vision, thinkingMode: metadata.thinkingMode, thinkingEffort: metadata.thinkingEffort, updatedAt: new Date().toISOString() });
+    if (clearFacts) delete profile.facts;
+    else if (metadata.facts) profile.facts = structuredClone(metadata.facts);
+  }
+
+  applyModelMetadataConfigurationSync(modelId: string, values: ConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Model metadata configuration requires the shared transaction");
+    const profile = this.getModel(modelId);
+    if (!profile) throw new Error("Model not found");
+    const metadata = this.configurationModelMetadataCandidate(profile, values);
+    this.applyModelMetadataSync(profile, metadata, !metadata.facts);
+  }
+
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
@@ -3595,10 +3644,9 @@ export class SessionStore {
     // Validate the complete candidate before touching the live connection object.
     const proxyPolicy = input.proxyPolicy === undefined ? profile.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
     const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
-    Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
-    // `null` is an explicit "drop my overrides" so the listing and the catalog
-    // answer again; an absent key keeps whatever was saved.
-    if (input.facts === null) delete profile.facts;
+    const { name, vision, thinkingMode, thinkingEffort, facts, ...connection } = normalized;
+    Object.assign(profile, connection);
+    this.applyModelMetadataSync(profile, { name, vision, thinkingMode, thinkingEffort, facts }, input.facts === null);
     if (input.proxyPolicy !== undefined) {
       profile.proxyPolicy = proxyPolicy;
     }
