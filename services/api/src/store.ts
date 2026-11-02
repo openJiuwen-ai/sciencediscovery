@@ -2699,7 +2699,7 @@ export class SessionStore {
     if (!policy.startsWith("proxy:")) return;
     const serverId = policy.slice("proxy:".length);
     if (!this.getProxyServer(serverId)) {
-      throw new Error(`${field} references an unknown proxy server`);
+      throw new SessionStoreHttpError(`${field} references an unknown proxy server`, 400);
     }
   }
 
@@ -3579,6 +3579,11 @@ export class SessionStore {
     }
   }
 
+  private normalizeConnectionUpdateToken(value: string | null | undefined): string | undefined {
+    try { return normalizeApiToken(value); }
+    catch { throw new SessionStoreHttpError("A provided LLM API token must be a non-empty string of at most 16384 characters", 400); }
+  }
+
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
@@ -3589,7 +3594,7 @@ export class SessionStore {
     }
     // Validate the complete candidate before touching the live connection object.
     const proxyPolicy = input.proxyPolicy === undefined ? profile.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
-    const apiToken = normalizeApiToken(input.apiToken);
+    const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
     Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
     // `null` is an explicit "drop my overrides" so the listing and the catalog
     // answer again; an absent key keeps whatever was saved.
@@ -3698,7 +3703,7 @@ export class SessionStore {
     });
     // Validate the complete candidate before touching the live connection object.
     const proxyPolicy = input.proxyPolicy === undefined ? provider.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
-    const apiToken = normalizeApiToken(input.apiToken);
+    const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
     Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
     if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
     if (input.proxyPolicy !== undefined) {
