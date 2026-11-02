@@ -120,8 +120,14 @@ def process(mode, target, tag, patch_dir=None):
         # can succeed (each later patch invalidates its predecessors'
         # reverse context). This covers both source checkouts and tag-less
         # scratch trees (patch tests).
+        # The receipt may come from another tree form: a wheel build exports
+        # the manifest of the SOURCE checkout it patched, and the wheel's
+        # site-packages legitimately lacks optional (tests/) paths. Absent
+        # optional paths do not disqualify the digest short-circuit — only
+        # present-but-mismatching digests do.
         skip_apply = previous is not None and previous.get("patches") == expected["patches"] and all(
-            (target / name).is_file() and digest(target / name) == recorded
+            (not (target / name).is_file() and is_optional(name))
+            or (digest(target / name) == recorded if (target / name).is_file() else False)
             for name, recorded in previous.get("files", {}).items()
         ) and all((target / name).is_file() for name in paths
                   if not is_optional(name))
