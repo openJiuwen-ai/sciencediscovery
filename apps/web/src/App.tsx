@@ -5034,8 +5034,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       : configurationReceipt.continuation === "submitting" ? "configuration.card.submitting"
                         : configurationReceipt.continuation === "submitted" ? "configuration.card.submitted" : configurationReceipt.continuation === "waiting_configuration" ? "configuration.card.waitingConfiguration" : "configuration.card.continuationFailed")}</span>
                   </div> : null}
-                  {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
+                {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
                   {evolveCommandBlocked ? <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} /> : null}
