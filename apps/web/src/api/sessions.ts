@@ -87,6 +87,12 @@ export class SessionsApiClient extends ProjectsApiClient {
     });
   }
 
+  consentConfigurationSecurity(sessionId: string, requestId: string, input: { revision: number; targetDigest: string; acknowledged: true }, idempotencyKey: string): Promise<ConfigurationRequestView> {
+    return this.request(this.configurationRequestPath(sessionId, requestId, "security-consent"), {
+      method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
+    });
+  }
+
   /** Credentials use a separate authenticated channel, never message/run input. */
   submitConfigurationCredential(sessionId: string, requestId: string, input: ConfigurationCredentialInput, idempotencyKey: string): Promise<ConfigurationCredentialDraftView> {
     return this.request(this.configurationRequestPath(sessionId, requestId, "credentials"), {

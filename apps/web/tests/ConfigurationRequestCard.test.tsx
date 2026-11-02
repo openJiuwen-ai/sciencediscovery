@@ -56,6 +56,52 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
 
+test("CFG-X10a: security changes require a separate checked acknowledgement before ordinary confirmation", async () => {
+  const submitted: unknown[] = [];
+  const view = request({ runId: undefined, capabilityId: "security.network", scope: { kind: "global" }, protocolVersion: 3,
+    options: [{ id: "persist", kind: "persisted_apply", label: "Apply", description: "Save", available: true }, { id: "dismiss", kind: "dismiss", label: "Not now", description: "Decline", available: true }], selectedOptionId: "persist",
+    fields: [{ id: "mode", label: "Mode", kind: "enum", required: false, value: "open", choices: [{ id: "none", label: "none" }, { id: "open", label: "open" }] }],
+    securityConsent: { revision: 2, targetDigest: "sha256:policy-target", statement: "All deployment sessions may lose persistent state.", status: "required" },
+    activation: { mode: "next_execution", state: "not_requested" } });
+  const confirmed = { ...view, securityConsent: { ...view.securityConsent!, status: "confirmed" as const } };
+  const api = actions({ securityConsent: async input => { submitted.push(input); return confirmed; } });
+  const renderer = await mount(view, api);
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true);
+  const independent = () => button(renderer, "Independently approve this exact security policy");
+  assert.equal(independent().props.disabled, true);
+  const checkbox = renderer.root.findAllByType("input").find(input => input.props.type === "checkbox")!;
+  await act(async () => { checkbox.props.onChange({ target: { checked: true } }); });
+  assert.equal(independent().props.disabled, false);
+  await act(async () => { independent().props.onClick(); });
+  assert.deepEqual(submitted, [{ revision: 2, targetDigest: "sha256:policy-target", acknowledged: true }]);
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true, "The parent must supply the confirmed server snapshot");
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, false);
+  await act(async () => { renderer.root.findByType("select").props.onChange({ target: { value: "none" } }); });
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true);
+  await act(async () => { renderer.unmount(); });
+});
+
+test("CFG-X10a: a stale security acknowledgement never enables Apply and Chinese risk controls remain reachable", async () => {
+  const view = request({ runId: undefined, capabilityId: "security.network", revision: 3, fields: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:old-policy", statement: "部署中所有未归档会话都可能失去持久内存。", status: "confirmed" } });
+  const renderer = await mount(view, actions(), () => undefined, "zh");
+  assert.equal(button(renderer, "确认此项变更").props.disabled, true);
+  assert.match(JSON.stringify(renderer.toJSON()), /独立确认安全策略/);
+  assert.match(JSON.stringify(renderer.toJSON()), /部署中所有未归档会话/);
+  await act(async () => { renderer.unmount(); });
+});
+
+test("CFG-X10a: a saved security record retains the independent acknowledgement and exact execution boundary", async () => {
+  const renderer = await mount(request({ runId: undefined, capabilityId: "security.network", state: "applied", fields: [], allowedActions: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:policy", statement: "All sessions were reviewed.", status: "confirmed" },
+    activation: { mode: "next_execution", state: "active" } }));
+  const text = JSON.stringify(renderer.toJSON());
+  assert.match(text, /independently confirmed/); assert.match(text, /Next execution under the new Permission Epoch/);
+  assert.equal(renderer.root.findAllByType("input").length, 0);
+  await act(async () => { renderer.unmount(); });
+});
+
 test("CFG generic renderer requires a new preview after edits and binds approval to the exact revision and digest", async () => {
   const decisions: unknown[] = [];
   const previews: unknown[] = [];

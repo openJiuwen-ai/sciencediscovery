@@ -1511,6 +1511,7 @@ export class SessionStore {
     if (exists("configuration_native_runs_v3")) this.database.prepare("DELETE FROM configuration_native_runs_v3 WHERE session_id=?").run(sessionId);
     if (exists("configuration_credential_drafts")) new ConfigurationCredentialBridge(this.database, this.configurationSecretCipher()).clearSession(sessionId);
     if (exists("configuration_endpoint_consents")) this.database.prepare("DELETE FROM configuration_endpoint_consents WHERE session_id=?").run(sessionId);
+    if (exists("configuration_security_consents")) this.database.prepare("DELETE FROM configuration_security_consents WHERE session_id=?").run(sessionId);
   }
 
 
@@ -2404,6 +2405,11 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "security.network") systemVersions = { securityNetwork: version([
+      this.catalog.sandboxNetworkSettings, this.catalog.sessions.filter(session => !session.archivedAt).map(session => [session.id, session.permissionEpochId]),
+      this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+      this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all(),
+    ]) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2436,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "security.network" ? { securityNetwork: this.configurationSecurityNetwork() } : {}),
       },
     };
   }
@@ -2470,6 +2477,22 @@ export class SessionStore {
     rotatedSessionIds: string[];
     settings: SandboxNetworkSettings;
   }> {
+    const result = this.applySandboxNetworkPolicy(value);
+    await this.saveCatalog();
+    return { rotatedSessionIds: result.rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
+  }
+
+  configurationSecurityNetwork() {
+    return { settings: this.getSandboxNetworkSettings(), writableSessionCount: this.catalog.sessions.filter(session => !session.archivedAt).length,
+      proxyPolicies: ["inherit", "none", ...this.catalog.proxyServers.map(server => `proxy:${server.id}`)] };
+  }
+
+  applySecurityNetworkConfigurationSync(value: unknown): { rotatedSessionIds: string[]; retiredPermissionEpochIds: string[] } {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    return this.applySandboxNetworkPolicy(value);
+  }
+
+  private applySandboxNetworkPolicy(value: unknown): { rotatedSessionIds: string[]; retiredPermissionEpochIds: string[] } {
     const settings = normalizeSandboxNetworkSettings(value);
     // Same guard the other policy surfaces use: reject a dangling reference at
     // save time rather than letting every later execution fail closed on it.
@@ -2477,10 +2500,12 @@ export class SessionStore {
     this.catalog.sandboxNetworkSettings = settings;
     const access = this.currentSandboxNetworkAccess();
     const rotatedSessionIds: string[] = [];
+    const retiredPermissionEpochIds: string[] = [];
     for (const session of this.catalog.sessions) {
       if (session.archivedAt) continue;
       const current = this.getPermissionEpoch(session.permissionEpochId);
       if (current && epochSandboxNetworkAccess(current).revision === access.revision) continue;
+      if (current) retiredPermissionEpochIds.push(current.id);
       const epoch = createPermissionEpoch(
         session.id,
         "Sandbox network access policy changed",
@@ -2493,8 +2518,7 @@ export class SessionStore {
       session.updatedAt = epoch.createdAt;
       rotatedSessionIds.push(session.id);
     }
-    await this.saveCatalog();
-    return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
+    return { rotatedSessionIds, retiredPermissionEpochIds };
   }
 
   /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */

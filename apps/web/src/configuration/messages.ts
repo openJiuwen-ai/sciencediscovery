@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 const en = {
+  securityActive: "Policy saved and epoch fence installed; reported retired local kernels cleaned. Network connectivity was not tested.", securityCleanupFailed: "Policy saved and epochs rotated; old-kernel cleanup remains unverified.",
+  securityTitle: "Independent security policy confirmation", securityAcknowledge: "I have reviewed the deployment-wide access changes and possible loss of persistent kernel/shell state.", securityConfirm: "Independently approve this exact security policy", securityConfirmed: "This exact security policy was independently confirmed. Review the changes, then confirm the configuration.", securityRequired: "A separate human security acknowledgement is required. Ordinary Apply and tool Always allow do not authorize this change.",
   destinationChanged: "The credential destination changed during preview. Review the new destination and enter the key again.",
   webSearchAlternative: "Use existing Web search",
   credentialRetry: "Credential upload failed. Your input is retained on this device; refresh the proposed changes to retry.",
@@ -41,12 +43,12 @@ const en = {
   waitingChoice: "Task paused · waiting for your configuration choice",
   waitingNextRun: "Waiting for a subsequent run",
   choiceKind: { persisted_apply: "Save configuration", run_overlay: "Use only for this task", alternative: "Use an available alternative", dismiss: "Do not configure" },
-  capability: { "model.select": "Choose a task model", "model.connect": "Connect a model", "model.repair_credential": "Repair model credentials", "connector.enable": "Enable a connector",
+  capability: { "security.network": "Configure sandbox network security", "model.select": "Choose a task model", "model.connect": "Connect a model", "model.repair_credential": "Repair model credentials", "connector.enable": "Enable a connector",
     "skill.select": "Select installed skills", "thinking.configure": "Configure thinking", "review.configure": "Configure session review",
     "timeouts.configure": "Configure timeouts", "quotas.configure": "Configure quotas", "idea_tree.configure": "Configure Idea Tree limits" } as Record<string, string>,
   scope: { session: "This session", project: "This project", global: "Global settings" },
   credential: { missing: "Credential required", provided: "Credential provided", expired: "Credential expired" },
-  field: { connectorId: "Connector", modelId: "Task model", name: "Provider name", baseUrl: "API base URL", model: "Model ID", apiProtocol: "API protocol", apiVariant: "API variant", tokenOptional: "Endpoint accepts requests without an API key", apiToken: "API key",
+  field: { mode: "Sandbox network mode", allowedDomainsText: "Allowed domains (comma or newline separated)", allowPrivateNetwork: "Allow private-network destinations", egressProxyPolicy: "Sandbox egress proxy policy", connectorId: "Connector", modelId: "Task model", name: "Provider name", baseUrl: "API base URL", model: "Model ID", apiProtocol: "API protocol", apiVariant: "API variant", tokenOptional: "Endpoint accepts requests without an API key", apiToken: "API key",
     skillSelectionMode: "Skill selection", enabledSkillIds: "Installed skills", enabledSkillLibraryIds: "Skill libraries", thinkingMode: "Thinking mode", thinkingEffort: "Thinking effort",
     reviewModelId: "Review model", semanticReviewEnabled: "Semantic review", automaticReviewEnabled: "Automatic review", level: "Review level",
     gatewayIdleTimeoutMs: "Gateway idle timeout (ms)", gatewayTurnTimeoutMs: "Gateway turn timeout (ms)", kernelIdleTimeoutMs: "Kernel idle timeout (ms)", permissionWaitTimeoutMs: "Permission wait timeout (ms)", runnerExecTimeoutMs: "Runner execution timeout (ms)",
@@ -54,12 +56,14 @@ const en = {
     explorationIntensity: "Exploration intensity", scoreDirection: "Score direction", maxRounds: "Maximum rounds", candidatesPerRound: "Candidates per round", maxTokensPerCall: "Tokens per call", maxDepth: "Maximum depth", maxNodes: "Maximum nodes", maxSearchRounds: "Maximum search rounds" } as Record<string, string>,
   state: { collecting_input: "Input needed", awaiting_confirmation: "Waiting for confirmation", validating: "Verifying", applying: "Saving",
     applied: "Saved", needs_fix: "Needs correction", stale: "Preview changed", failed: "Save failed", dismissed: "Declined", cancelled: "Cancelled", expired: "Expired" },
-  mode: { before_first_run: "Before the first run", same_run: "Resume this run after activation", next_run: "Applies to subsequent runs", requires_restart: "Restart required" },
+  mode: { before_first_run: "Before the first run", same_run: "Resume this run after activation", next_run: "Applies to subsequent runs", next_execution: "Next execution under the new Permission Epoch", requires_restart: "Restart required" },
   activation: { not_requested: "Not requested", pending: "Activation pending", active: "Verified active", failed: "Activation failed", suppressed: "Activation stopped", needs_user_action: "User action required" },
   resumption: { not_requested: "No task to resume", pending: "Continuation pending", queued: "Queued for continuation", started: "Original task running", completed: "Original task completed", failed: "Continuation failed", suppressed: "Continuation stopped", needs_user_action: "User action required" },
 };
 
 const zh: typeof en = {
+  securityActive: "策略已保存且新权限代次已建立；已清理本机 Runner 报告的旧 kernel。未验证真实网络连接。", securityCleanupFailed: "策略已保存且权限代次已轮换；旧 kernel 清理尚未核实。",
+  securityTitle: "独立确认安全策略", securityAcknowledge: "我已核对整个部署的访问权限变化，以及持久 kernel／shell 内存可能丢失的影响。", securityConfirm: "独立确认此精确安全策略", securityConfirmed: "此精确安全策略已独立确认。请核对修改内容，再确认配置。", securityRequired: "必须先由人工独立确认安全影响。普通 Apply 或工具的 Always allow 不构成本次授权。",
   destinationChanged: "预览期间凭据发送目标发生变化。请核对新目标后重新输入密钥。",
   webSearchAlternative: "使用现有网页检索",
   credentialRetry: "凭据上传失败，输入仍仅保存在此设备内存中。可直接刷新修改方案重试。",
@@ -99,12 +103,12 @@ const zh: typeof en = {
   waitingChoice: "原任务已暂停，正在等待本次配置选择",
   waitingNextRun: "等待后续运行",
   choiceKind: { persisted_apply: "保存配置后继续", run_overlay: "仅本次任务使用", alternative: "改用可用的替代路径", dismiss: "暂不配置" },
-  capability: { "model.select": "选择任务模型", "model.connect": "连接模型", "model.repair_credential": "修复模型凭据", "connector.enable": "启用连接器",
+  capability: { "security.network": "设置沙箱网络安全策略", "model.select": "选择任务模型", "model.connect": "连接模型", "model.repair_credential": "修复模型凭据", "connector.enable": "启用连接器",
     "skill.select": "选择已安装的 Skill", "thinking.configure": "调整思考配置", "review.configure": "调整会话审阅",
     "timeouts.configure": "调整超时", "quotas.configure": "调整配额", "idea_tree.configure": "调整探索树限制" },
   scope: { session: "当前会话", project: "当前项目", global: "全局设置" },
   credential: { missing: "需要凭据", provided: "已提供凭据", expired: "凭据已过期" },
-  field: { connectorId: "连接器", modelId: "任务模型", name: "服务商名称", baseUrl: "API 地址", model: "模型 ID", apiProtocol: "API 协议", apiVariant: "API 协议变体", tokenOptional: "服务支持不使用 API Key", apiToken: "API Key",
+  field: { mode: "沙箱网络模式", allowedDomainsText: "允许的域名（逗号或换行分隔）", allowPrivateNetwork: "允许私网目标", egressProxyPolicy: "沙箱出站代理策略", connectorId: "连接器", modelId: "任务模型", name: "服务商名称", baseUrl: "API 地址", model: "模型 ID", apiProtocol: "API 协议", apiVariant: "API 协议变体", tokenOptional: "服务支持不使用 API Key", apiToken: "API Key",
     skillSelectionMode: "Skill 选择方式", enabledSkillIds: "已安装的 Skill", enabledSkillLibraryIds: "Skill 库", thinkingMode: "思考模式", thinkingEffort: "思考强度",
     reviewModelId: "审阅模型", semanticReviewEnabled: "语义审阅", automaticReviewEnabled: "自动审阅", level: "审阅级别",
     gatewayIdleTimeoutMs: "网关空闲超时（毫秒）", gatewayTurnTimeoutMs: "网关单轮超时（毫秒）", kernelIdleTimeoutMs: "内核空闲超时（毫秒）", permissionWaitTimeoutMs: "权限等待超时（毫秒）", runnerExecTimeoutMs: "Runner 执行超时（毫秒）",
@@ -112,7 +116,7 @@ const zh: typeof en = {
     explorationIntensity: "探索强度", scoreDirection: "评分方向", maxRounds: "最大轮次", candidatesPerRound: "每轮候选数", maxTokensPerCall: "单次 token 上限", maxDepth: "最大深度", maxNodes: "最大节点数", maxSearchRounds: "最大检索轮次" },
   state: { collecting_input: "待补充信息", awaiting_confirmation: "等待确认", validating: "验证中", applying: "保存中",
     applied: "已保存", needs_fix: "需要修正", stale: "预览已变化", failed: "保存失败", dismissed: "已拒绝", cancelled: "已取消", expired: "已过期" },
-  mode: { before_first_run: "首次运行前生效", same_run: "生效后接续当前运行", next_run: "后续运行生效", requires_restart: "需要重启" },
+  mode: { before_first_run: "首次运行前生效", same_run: "生效后接续当前运行", next_run: "后续运行生效", next_execution: "新权限代次下的后续执行生效", requires_restart: "需要重启" },
   activation: { not_requested: "未请求生效", pending: "等待生效", active: "已核对生效", failed: "生效失败", suppressed: "已停止生效", needs_user_action: "需要用户处理" },
   resumption: { not_requested: "无待接续任务", pending: "等待接续", queued: "已排队接续", started: "原任务继续运行中", completed: "原任务已完成", failed: "接续失败", suppressed: "已停止接续", needs_user_action: "需要用户处理" },
 };

@@ -435,3 +435,6 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .configuration-endpoint bdi, .configuration-endpoint code { overflow-wrap: anywhere; word-break: break-word; }
 .configuration-endpoint p { margin: 0; }
 .configuration-endpoint button { justify-self: start; max-width: 100%; white-space: normal; }
+.configuration-security-ack { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.configuration-security-ack input { flex: 0 0 auto; width: auto; margin-top: 3px; }
+.configuration-security-ack span { min-width: 0; overflow-wrap: anywhere; }

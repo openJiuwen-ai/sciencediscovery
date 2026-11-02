@@ -11,6 +11,7 @@ import { ProcessRecord } from "../ProcessRecord.js";
 import { configurationMessages } from "./messages.js";
 
 export interface ConfigurationRequestActions {
+  securityConsent?(input: { revision: number; targetDigest: string; acknowledged: true }, key: string): Promise<ConfigurationRequestView>;
   consent?(input: { revision: number; endpointTarget: string }, key: string): Promise<ConfigurationRequestView>;
   preview(input: ConfigurationPreviewInput, key: string): Promise<ConfigurationRequestView>;
   credential(input: ConfigurationCredentialInput, key: string): Promise<ConfigurationCredentialDraftView>;
@@ -48,6 +49,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const [selectedOptionId, setSelectedOptionId] = useState(request.selectedOptionId);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
+  const [securityAcknowledged, setSecurityAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [refreshRequired, setRefreshRequired] = useState(false);
@@ -90,6 +92,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [request.autoApplyAt, request.state]);
+  useEffect(() => { setSecurityAcknowledged(false); }, [request.id, request.revision, request.securityConsent?.targetDigest]);
   const hasAction = (action: ConfigurationAction) => request.allowedActions.includes(action);
   const choices = request.protocolVersion === 3 ? request.options ?? [] : [];
   const visibleChoices = choices.filter(option => option.kind !== "dismiss");
@@ -103,10 +106,12 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
+  const securityConsent = request.securityConsent;
+  const securityReady = request.capabilityId !== "security.network" || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
-    && endpointReady && Boolean(request.previewDigest) && !dirty && !refreshRequired && !runActive && !readOnly && !mutationsBlocked
+    && endpointReady && securityReady && Boolean(request.previewDigest) && !dirty && !refreshRequired && !runActive && !readOnly && !mutationsBlocked
     && (!submittedPreview.current || (submittedPreview.current.revision === request.revision && submittedPreview.current.digest === request.previewDigest))
     && (request.protocolVersion !== 3 || (selectedOption && selectedOption.kind !== "dismiss" && selectedOption.id === request.selectedOptionId));
   const scheduledAt = !readOnly && !mutationsBlocked && request.state === "awaiting_confirmation" && request.autoApplyAt && Number.isFinite(Date.parse(request.autoApplyAt))
@@ -133,6 +138,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     return targetChanged;
   }
   function edit(field: ConfigurationFieldView, value: ConfigurationScalar | string[]) {
+    setSecurityAcknowledged(false);
     setDirty(true);
     setError(undefined);
     setErrorField(undefined);
@@ -278,8 +284,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
-  const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
-    ? m.waitingNextRun : m.activation[request.activation.state];
+  const activationLabel = request.capabilityId === "security.network" && request.activation.state === "active" ? m.securityActive
+    : request.capabilityId === "security.network" && request.state === "applied" && request.activation.state === "failed" ? m.securityCleanupFailed
+    : savedForNextRun && request.activation.state === "needs_user_action" ? m.waitingNextRun : m.activation[request.activation.state];
   const details = <>
     <p>{reasonText}</p>
     <dl className="configuration-impact">
@@ -304,6 +311,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       <dt>{m.activationLabel}</dt><dd>{activationLabel}</dd>
       <dt>{m.resumptionLabel}</dt><dd>{resumptionLabel}</dd>
       {request.decisionSource ? <><dt>{m.decisionSourceLabel}</dt><dd>{m.decisionSource[request.decisionSource]}</dd></> : null}
+      {terminal && securityConsent ? <><dt>{m.securityTitle}</dt><dd>{securityReady ? m.securityConfirmed : m.securityRequired}</dd></> : null}
       <dt>{m.updatedAt}</dt><dd><time dateTime={request.updatedAt}>{formattedTime(request.updatedAt)}</time></dd>
     </dl>
     {request.error ? <p className="conversation-configuration-error" role="alert">{request.error.message} <span>({request.error.code})</span></p> : null}
@@ -344,6 +352,20 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
         title={m.closeAndReturn} disabled={busy || runActive || readOnly || mutationsBlocked} onClick={dismiss}>×</button> : null}
     </div>
     {details}
+    {securityConsent ? <section className="configuration-endpoint" aria-label={m.securityTitle}>
+      <strong>{m.securityTitle}</strong><p>{securityConsent.statement}</p>
+      <p role="status">{securityReady && !dirty ? m.securityConfirmed : m.securityRequired}</p>
+      {(!securityReady || securityConsent.status !== "confirmed") && actions.securityConsent ? <>
+        <label className="configuration-security-ack" htmlFor={`${id}-security-ack`}>
+          <input id={`${id}-security-ack`} type="checkbox" checked={securityAcknowledged}
+            disabled={!editable || dirty || runActive || request.state !== "awaiting_confirmation"}
+            onChange={event => setSecurityAcknowledged(event.target.checked)} />
+          <span>{m.securityAcknowledge}</span>
+        </label>
+        <button type="button" className="secondary-button" disabled={!editable || !securityAcknowledged || dirty || runActive || request.state !== "awaiting_confirmation"}
+          onClick={() => void perform(() => actions.securityConsent!({ revision: request.revision, targetDigest: securityConsent.targetDigest, acknowledged: true }, operationKey(`security:${request.revision}:${securityConsent.targetDigest}`)))}>{m.securityConfirm}</button>
+      </> : null}
+    </section> : null}
     {scheduledAt && remainingSeconds !== undefined ? <div className="configuration-auto-apply" role="status">
       <p>{remainingSeconds > 0 ? m.autoCountdown(remainingSeconds) : m.autoDue}</p>
       <p>{m.scheduledAt}: <time dateTime={scheduledAt}>{formattedTime(scheduledAt)}</time></p>
