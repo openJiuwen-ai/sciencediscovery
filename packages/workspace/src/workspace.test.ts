@@ -1336,6 +1336,22 @@ test("opaque MCP results remain valid bounded JSON when their provider payload i
   assert.match(text, /truncated/);
 });
 
+test("generic MCP envelopes with empty records retain their actionable data", async () => {
+  const marker = "SPECIALIST-MCP-MARKER";
+  const canonical = { sourceId: "custom", toolId: "echo", records: [], warnings: [], data: {
+    content: [{ type: "text", text: marker }], structuredContent: { echoed: marker },
+  } };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    mcpTools: [{ description: "Echo", displayName: "Echo", execute: async () => canonical,
+      inputSchema: { type: "object" }, name: "mcp__custom__echo", routing: { keywords: [], mode: "off", priority: 0 },
+      sourceId: "custom", toolId: "echo" }],
+  });
+  const response = await tools.find((tool) => tool.name === "mcp__custom__echo")!.execute("call", {});
+  assert.match(response.content[0]!.text, new RegExp(marker));
+  assert.equal(response.details, canonical);
+});
+
 test("MCP artifact plans retain the identifiers needed for governed download", async () => {
   const canonical = {
     sourceId: "arxiv", toolId: "prepare_paper_download", invocationId: "invocation-download",
