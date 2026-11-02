@@ -61,7 +61,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "apiModel"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -100,7 +100,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential", "model.api_identity"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -380,7 +380,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{m.fieldsByCapability[request.capabilityId]?.[field.id] ?? (locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}

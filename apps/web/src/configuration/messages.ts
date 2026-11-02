@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 const en = {
+  fieldsByCapability: { "model.api_identity": { modelId: "Existing model profile", apiModel: "API model identifier", apiVariant: "API variant under the existing protocol" } } as Record<string, Record<string, string>>,
   destinationChanged: "The credential destination changed during preview. Review the new destination and enter the key again.",
   webSearchAlternative: "Use existing Web search",
   credentialRetry: "Credential upload failed. Your input is retained on this device; refresh the proposed changes to retry.",
@@ -41,12 +42,12 @@ const en = {
   waitingChoice: "Task paused · waiting for your configuration choice",
   waitingNextRun: "Waiting for a subsequent run",
   choiceKind: { persisted_apply: "Save configuration", run_overlay: "Use only for this task", alternative: "Use an available alternative", dismiss: "Do not configure" },
-  capability: { "model.select": "Choose a task model", "model.connect": "Connect a model", "model.repair_credential": "Repair model credentials", "connector.enable": "Enable a connector",
+  capability: { "model.api_identity": "Edit model API identity", "model.select": "Choose a task model", "model.connect": "Connect a model", "model.repair_credential": "Repair model credentials", "connector.enable": "Enable a connector",
     "skill.select": "Select installed skills", "thinking.configure": "Configure thinking", "review.configure": "Configure session review",
     "timeouts.configure": "Configure timeouts", "quotas.configure": "Configure quotas", "idea_tree.configure": "Configure Idea Tree limits" } as Record<string, string>,
   scope: { session: "This session", project: "This project", global: "Global settings" },
   credential: { missing: "Credential required", provided: "Credential provided", expired: "Credential expired" },
-  field: { connectorId: "Connector", modelId: "Task model", name: "Provider name", baseUrl: "API base URL", model: "Model ID", apiProtocol: "API protocol", apiVariant: "API variant", tokenOptional: "Endpoint accepts requests without an API key", apiToken: "API key",
+  field: { apiModel: "API model identifier", connectorId: "Connector", modelId: "Task model", name: "Provider name", baseUrl: "API base URL", model: "Model ID", apiProtocol: "API protocol", apiVariant: "API variant", tokenOptional: "Endpoint accepts requests without an API key", apiToken: "API key",
     skillSelectionMode: "Skill selection", enabledSkillIds: "Installed skills", enabledSkillLibraryIds: "Skill libraries", thinkingMode: "Thinking mode", thinkingEffort: "Thinking effort",
     reviewModelId: "Review model", semanticReviewEnabled: "Semantic review", automaticReviewEnabled: "Automatic review", level: "Review level",
     gatewayIdleTimeoutMs: "Gateway idle timeout (ms)", gatewayTurnTimeoutMs: "Gateway turn timeout (ms)", kernelIdleTimeoutMs: "Kernel idle timeout (ms)", permissionWaitTimeoutMs: "Permission wait timeout (ms)", runnerExecTimeoutMs: "Runner execution timeout (ms)",
@@ -60,6 +61,7 @@ const en = {
 };
 
 const zh: typeof en = {
+  fieldsByCapability: { "model.api_identity": { modelId: "已有模型档案", apiModel: "API 模型标识", apiVariant: "当前协议下的 API 变体" } },
   destinationChanged: "预览期间凭据发送目标发生变化。请核对新目标后重新输入密钥。",
   webSearchAlternative: "使用现有网页检索",
   credentialRetry: "凭据上传失败，输入仍仅保存在此设备内存中。可直接刷新修改方案重试。",
@@ -99,12 +101,12 @@ const zh: typeof en = {
   waitingChoice: "原任务已暂停，正在等待本次配置选择",
   waitingNextRun: "等待后续运行",
   choiceKind: { persisted_apply: "保存配置后继续", run_overlay: "仅本次任务使用", alternative: "改用可用的替代路径", dismiss: "暂不配置" },
-  capability: { "model.select": "选择任务模型", "model.connect": "连接模型", "model.repair_credential": "修复模型凭据", "connector.enable": "启用连接器",
+  capability: { "model.api_identity": "修改模型 API 标识", "model.select": "选择任务模型", "model.connect": "连接模型", "model.repair_credential": "修复模型凭据", "connector.enable": "启用连接器",
     "skill.select": "选择已安装的 Skill", "thinking.configure": "调整思考配置", "review.configure": "调整会话审阅",
     "timeouts.configure": "调整超时", "quotas.configure": "调整配额", "idea_tree.configure": "调整探索树限制" },
   scope: { session: "当前会话", project: "当前项目", global: "全局设置" },
   credential: { missing: "需要凭据", provided: "已提供凭据", expired: "凭据已过期" },
-  field: { connectorId: "连接器", modelId: "任务模型", name: "服务商名称", baseUrl: "API 地址", model: "模型 ID", apiProtocol: "API 协议", apiVariant: "API 协议变体", tokenOptional: "服务支持不使用 API Key", apiToken: "API Key",
+  field: { apiModel: "API 模型标识", connectorId: "连接器", modelId: "任务模型", name: "服务商名称", baseUrl: "API 地址", model: "模型 ID", apiProtocol: "API 协议", apiVariant: "API 协议变体", tokenOptional: "服务支持不使用 API Key", apiToken: "API Key",
     skillSelectionMode: "Skill 选择方式", enabledSkillIds: "已安装的 Skill", enabledSkillLibraryIds: "Skill 库", thinkingMode: "思考模式", thinkingEffort: "思考强度",
     reviewModelId: "审阅模型", semanticReviewEnabled: "语义审阅", automaticReviewEnabled: "自动审阅", level: "审阅级别",
     gatewayIdleTimeoutMs: "网关空闲超时（毫秒）", gatewayTurnTimeoutMs: "网关单轮超时（毫秒）", kernelIdleTimeoutMs: "内核空闲超时（毫秒）", permissionWaitTimeoutMs: "权限等待超时（毫秒）", runnerExecTimeoutMs: "Runner 执行超时（毫秒）",

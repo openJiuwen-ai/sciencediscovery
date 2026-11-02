@@ -2404,6 +2404,8 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "model.api_identity") systemVersions = { modelApiIdentity: version([model ?? null, provider ?? null,
+      secretRows.filter(row => row.model_id === target || model?.providerId && row.model_id === providerSecretKey(model.providerId))]) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -3584,6 +3586,23 @@ export class SessionStore {
     catch { throw new SessionStoreHttpError("A provided LLM API token must be a non-empty string of at most 16384 characters", 400); }
   }
 
+  configurationModelApiIdentityCandidate(profile: ModelProfile, values: ConfigurationValues) {
+    return validateLiveModel({ ...structuredClone(profile), model: values.apiModel === undefined ? profile.model : String(values.apiModel),
+      apiVariant: values.apiVariant === undefined ? profile.apiVariant : values.apiVariant as ModelProfile["apiVariant"] });
+  }
+
+  private applyModelApiIdentitySync(profile: ModelProfile, candidate: Pick<ModelProfile, "model" | "apiVariant" | "thinkingMode" | "thinkingEffort">): void {
+    Object.assign(profile, { model: candidate.model, apiVariant: candidate.apiVariant, thinkingMode: candidate.thinkingMode,
+      thinkingEffort: candidate.thinkingEffort, updatedAt: new Date().toISOString() });
+  }
+
+  applyModelApiIdentityConfigurationSync(modelId: string, values: ConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Model API identity writes require the shared transaction");
+    const profile = this.getModel(modelId);
+    if (!profile) throw new Error("Model not found");
+    this.applyModelApiIdentitySync(profile, this.configurationModelApiIdentityCandidate(profile, values));
+  }
+
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
@@ -3595,7 +3614,9 @@ export class SessionStore {
     // Validate the complete candidate before touching the live connection object.
     const proxyPolicy = input.proxyPolicy === undefined ? profile.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
     const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
-    Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
+    const { model: _model, apiVariant: _variant, thinkingMode: _mode, thinkingEffort: _effort, ...metadata } = normalized;
+    Object.assign(profile, metadata);
+    this.applyModelApiIdentitySync(profile, normalized);
     // `null` is an explicit "drop my overrides" so the listing and the catalog
     // answer again; an absent key keeps whatever was saved.
     if (input.facts === null) delete profile.facts;

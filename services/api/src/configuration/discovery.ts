@@ -14,6 +14,7 @@ import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "model.api_identity": "model api identifier protocol variant 模型 API 标识 模型名 协议变体",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
@@ -90,7 +91,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" }));
   const resources = async (id: ConfigurationCapabilityId): Promise<Row[]> => {
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
-    if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
+    if (["model.select", "model.repair_credential", "model.api_identity", "review.configure"].includes(id)) return models();
     if (id === "skill.select") {
       const catalog = skills();
       return [...catalog.ids.map(id => ({ id, kind: "skill", name: text(id), enabled: settings.effective.skillSelectionMode === "all" || settings.effective.enabledSkillIds.includes(id) })),
@@ -141,6 +142,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     const all = await connectors();
     current = { runtimeEnabled: preview(all.filter(row => row.runtimeEnabled).map(row => row.id)), sessionSaved: preview(effective.enabledConnectorIds), runtimeStateKnown: all.some(row => row.runtimeStateKnown) };
   } else if (id === "skill.select") current = { skillSelectionMode: effective.skillSelectionMode, enabledSkills: preview(effective.enabledSkillIds), enabledLibraries: preview(effective.enabledSkillLibraries.map(item => item.libraryId)) };
+  else if (id === "model.api_identity") { const profile = input.targetId ? store.getModel(input.targetId) : undefined; current = profile ? { modelId: profile.id, apiModel: profile.model, apiProtocol: profile.apiProtocol, apiVariant: profile.apiVariant, name: text(profile.name), credential: profile.hasApiToken ? "provided" : "missing" } : { selectExistingModel: true }; }
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
@@ -156,7 +158,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    scopes: descriptor.scopes.filter(scope => id === "model.api_identity" || (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
     instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },

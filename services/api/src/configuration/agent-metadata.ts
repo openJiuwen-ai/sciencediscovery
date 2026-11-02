@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { Type, type TSchema } from "typebox";
-import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
+import { MODEL_API_VARIANTS, type ConfigurationCapabilityId } from "@sciencediscovery/schema";
 export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
@@ -14,6 +14,7 @@ const ids = { kind: "ids" } as const;
 const boolean = { kind: "boolean" } as const;
 /** Trusted finite descriptions. Each domain adds its fields here once; tools are generated from them. */
 export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, ConfigurationAgentDescriptor> = {
+  "model.api_identity": { label: "Edit an existing model API identity", whenNeeded: "An explicit request to change an existing shared model API identifier or its current-protocol variant. Describe and select the existing profile. Exact wire destination confirmation is required before reusing its stored key; no key read or model probe is performed. This cannot edit endpoint/protocol family/provider/key/route/default selection or certify real capability/cost. Frozen task settings remain unchanged, while an existing bound configuration wait may continue normally.", fields: { modelId: id, apiModel: { ...id, maxLength: 512 }, apiVariant: { kind: "string", choices: [...new Set(Object.values(MODEL_API_VARIANTS).flat())] } }, activation: "next_run", diagnostics: [] },
   "model.select": { label: "Choose an existing model", whenNeeded: "An explicit model choice or no usable task model. Do not replace a usable inherited default without a requirement.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_NOT_SELECTED"] },
   "model.connect": { label: "Connect a model service", whenNeeded: "A new model service is needed. The user supplies credentials only in the secure card.", fields: { name: { ...id, maxLength: 200 }, baseUrl: { kind: "string", maxLength: 2048 }, model: { ...id, maxLength: 512 }, apiProtocol: { kind: "string", choices: ["openai-chat-completions", "openai-responses", "anthropic-messages"] }, apiVariant: { ...id, maxLength: 80 }, tokenOptional: boolean }, activation: "next_run", diagnostics: [] },
   "model.repair_credential": { label: "Repair a model credential", whenNeeded: "A structured authentication diagnosis identifies this exact model. A network failure, timeout or rate limit is not authentication evidence.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_CREDENTIAL_MISSING", "MODEL_AUTHENTICATION_REJECTED"] },

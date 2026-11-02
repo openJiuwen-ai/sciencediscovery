@@ -16,6 +16,19 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X02d: existing model identity cannot save before exact endpoint consent and edits fence the old consent", async () => {
+  const view = request({ capabilityId: "model.api_identity", fields: [{ id: "apiModel", label: "API model identifier", kind: "text", required: true, value: "owned-model" }],
+    endpointAuthorization: { endpointTarget: "owned-exact-target", host: "owned.invalid", classification: "public_https", revision: 2, status: "required" } });
+  const api = actions(), renderer = await mount(view, api);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  const confirmed = { ...view, endpointAuthorization: { ...view.endpointAuthorization!, status: "confirmed" as const } };
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => { renderer.root.findByProps({ name: "apiModel" }).props.onChange({ target: { value: "edited-api" } }); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => { renderer.unmount(); });
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
