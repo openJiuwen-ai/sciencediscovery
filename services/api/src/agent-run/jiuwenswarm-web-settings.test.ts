@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 
 import { DEFAULT_WEB_SETTINGS } from "@sciencediscovery/schema";
 
@@ -52,6 +52,25 @@ test("a failure is reported, not thrown", async () => {
   const result = await syncWebSettingsToJiuwenSwarm({ adapterUrl: "http://adapter", fetch: refuse }, DEFAULT_WEB_SETTINGS, () => undefined);
   assert.equal(result.ok, false);
   assert.match(result.error!, /502/);
+});
+
+test("adapter bodies, transport exceptions and credential-callback errors cannot echo secrets", async () => {
+  const secret = "synthetic-credential-must-not-reach-diagnostics";
+  const logs: string[] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+  try {
+    const rejected = await syncWebSettingsToJiuwenSwarm({ adapterUrl: "http://adapter", adapterToken: secret,
+      fetch: (async () => new Response(secret, { status: 401 })) as typeof fetch }, DEFAULT_WEB_SETTINGS, () => secret);
+    assert.deepEqual(rejected, { ok: false, error: "HTTP 401" });
+    const transport = await syncWebSettingsToJiuwenSwarm({ adapterUrl: "http://adapter",
+      fetch: (async () => { throw new Error(secret); }) as typeof fetch }, DEFAULT_WEB_SETTINGS, () => secret);
+    assert.deepEqual(transport, { ok: false, error: "Web settings synchronization failed" });
+    const credential = await syncWebSettingsToJiuwenSwarm({ adapterUrl: "http://adapter" }, DEFAULT_WEB_SETTINGS, () => { throw new Error(secret); });
+    assert.deepEqual(credential, { ok: false, error: "Web settings synchronization failed" });
+    assert.equal(logs.length, 3);
+    assert.ok(!JSON.stringify({ logs, rejected, transport, credential }).includes(secret));
+  } finally { console.warn = warn; }
 });
 
 import { jiuwenSwarmWebResult } from "./jiuwenswarm-web-settings.js";
