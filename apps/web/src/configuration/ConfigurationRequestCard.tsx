@@ -140,9 +140,13 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     credentialDraft.current = undefined;
     if (field.kind === "credential") {
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
-    } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => ({ ...current, [field.id]: value,
-      ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
-        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) })); }
+    } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => {
+      const next = { ...current, [field.id]: value,
+        ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
+          ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) };
+      if (request.capabilityId === "mcp.remove_header" && field.id === "serverId" && current.serverId !== value) delete next.headerName;
+      return next;
+    }); }
   }
   async function selectOption(optionId: string) {
     if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
@@ -376,7 +380,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {request.fields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
-        const common = { id: inputId, name: field.id, disabled: !editable, required: field.required,
+        const loadingHeader = request.capabilityId === "mcp.remove_header" && field.id === "headerName" && values.serverId !== fieldValues(request).serverId;
+        const common = { id: inputId, name: field.id, disabled: !editable || loadingHeader, required: field.required && !loadingHeader,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>

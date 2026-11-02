@@ -16,6 +16,20 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03d: changing the server clears and unlocks the dependent header selection", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "headerName", label: "Saved header name to remove", kind: "enum", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization" }] },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } }));
+    const header = renderer.root.findByProps({ name: "headerName" }); assert.equal(header.props.value, ""); assert.equal(header.props.required, false); assert.equal(header.props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
 test("CFG-X03d: saved MCP header removal labels names, without a credential value input", async () => {
   const renderer = await mount(request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "headerName", before: "authorization · 2 names; values hidden", after: "Removed" }], fields: [
     { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
