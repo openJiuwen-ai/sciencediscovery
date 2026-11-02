@@ -293,6 +293,10 @@ export class CustomMcpServers {
     return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["timeoutSeconds"]);
   }
 
+  submitConfigurationAvailability(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["enabled"]);
+  }
+
   private submitConfigurationFields(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown, fields: readonly string[]): Promise<ConfigurationExternalOutcome> {
     return this.mutate(async () => {
       const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
@@ -302,6 +306,7 @@ export class CustomMcpServers {
       if (this.configurationMetadataRevision(serverId) !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
       if (!object(values) || !Object.keys(values).length || Object.keys(values).some(key => !fields.includes(key))) return reject("INVALID_CONFIGURATION_INPUT");
       if (fields.includes("timeoutSeconds") && (typeof values.timeoutSeconds !== "number" || !Number.isInteger(values.timeoutSeconds) || values.timeoutSeconds < 1 || values.timeoutSeconds > 600)) return reject("INVALID_CONFIGURATION_INPUT");
+      if (fields.includes("enabled") && typeof values.enabled !== "boolean") return reject("INVALID_CONFIGURATION_INPUT");
       let candidate: CustomMcpServerConfig;
       try { candidate = normalizeCustomMcpConfig({ ...previous, ...values }, previous); } catch { return reject("INVALID_CONFIGURATION_INPUT"); }
       if (Object.entries(this.configs).some(([id, item]) => id !== serverId && item.name.toLowerCase() === candidate.name.toLowerCase())) return reject("MCP_METADATA_NAME_CONFLICT");

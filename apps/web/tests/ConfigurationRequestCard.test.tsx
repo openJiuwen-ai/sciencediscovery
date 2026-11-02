@@ -16,6 +16,15 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03c: MCP availability uses its own global boolean label and manual impact", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.availability", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "enabled", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP · http" }] },
+    { id: "enabled", label: "Available globally", kind: "boolean", required: true, value: true },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Available globally/u); assert.match(text, /Set shared MCP availability/u); assert.equal(renderer.root.findByProps({ name: "enabled" }).props.type, "checkbox"); assert.equal(renderer.root.findByProps({ name: "enabled" }).props.checked, true);
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-X03b: MCP timeout labels disclose seconds and subsequent-call timing", async () => {
   const renderer = await mount(request({ capabilityId: "mcp.timeout", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "timeoutSeconds", before: "37", after: "81" }], fields: [
     { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },

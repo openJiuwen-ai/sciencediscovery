@@ -2309,6 +2309,10 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpAvailabilitySource?: (id: string) => import("./configuration/mcp-availability-adapter.js").McpAvailabilitySnapshot;
+  setConfigurationMcpAvailabilitySource(source: (id: string) => import("./configuration/mcp-availability-adapter.js").McpAvailabilitySnapshot): void { this.configurationMcpAvailabilitySource = source; }
+  configurationMcpAvailability(id: string) { return this.configurationMcpAvailabilitySource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
   private configurationMcpTimeoutSource?: (id: string) => import("./configuration/mcp-timeout-adapter.js").McpTimeoutSnapshot;
   setConfigurationMcpTimeoutSource(source: (id: string) => import("./configuration/mcp-timeout-adapter.js").McpTimeoutSnapshot): void { this.configurationMcpTimeoutSource = source; }
   configurationMcpTimeout(id: string) { return this.configurationMcpTimeoutSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
@@ -2408,7 +2412,7 @@ export class SessionStore {
     const timeoutSettings = this.getTimeoutSettings();
     const quotaSettings = this.getQuotaSettings();
     const ideaTreeSettings = this.getIdeaTreeSettings();
-    const mcpMetadata = capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : capabilityId === "mcp.timeout" ? this.configurationMcpTimeout(target) : undefined;
+    const mcpMetadata = capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : capabilityId === "mcp.timeout" ? this.configurationMcpTimeout(target) : capabilityId === "mcp.availability" ? this.configurationMcpAvailability(target) : undefined;
     let systemVersions: Record<string, string> | undefined;
     if (mcpMetadata) systemVersions = { mcpMetadata: mcpMetadata.version ?? version([target, null]) };
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
