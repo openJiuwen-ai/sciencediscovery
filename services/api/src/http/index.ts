@@ -1328,7 +1328,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const password = store.getMemoryGraphNeo4jPassword();
           if (password) {
             mgLog.info("GET /api/memory/settings: auto-repushing stored password (health=%s)", health);
-            await memoryGraphClient.pushNeo4jPassword(password).catch((error: unknown) => {
+            await memoryGraphClient.pushNeo4jPassword(password, {
+              httpUri: details.neo4jHttp, user: details.neo4jUser,
+            }).catch((error: unknown) => {
               mgLog.warn("GET /api/memory/settings: auto-repush failed (non-fatal): %s",
                 error instanceof Error ? error.message : String(error));
             });
@@ -1365,8 +1367,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           if (passwordChanged || password !== null) {
             await memoryGraphClient
               .pushNeo4jPassword(password, {
-                httpUri: connectionChanged ? details.neo4jHttp : undefined,
-                user: connectionChanged ? details.neo4jUser : undefined,
+                httpUri: details.neo4jHttp,
+                user: details.neo4jUser,
               })
               .catch((error: unknown) => {
                 mgLog.warn("PUT /api/memory/settings: credential push failed (non-fatal): %s",
