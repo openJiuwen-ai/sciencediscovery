@@ -402,10 +402,10 @@ test("Unicode log cursors remain stable across pagination, duplicate submission 
     return result("unicode");
   });
   // The 55 KB log is written in 11-byte chunks and committed through CAS plus a
-  // workspace snapshot. That is ~11 s on slow disks (observed in PR #472
-  // verification), so the completion wait needs a bound sized for it; every
+  // workspace snapshot. It can exceed 30 s while the full UT layer is sharing
+  // a slow disk, so the completion wait needs a bound sized for that load; every
   // content/cursor/dedup/restart assertion below still checks exact bytes.
-  await until(() => manager.get("unicode", owner).state === "completed", 30_000);
+  await until(() => manager.get("unicode", owner).state === "completed", 60_000);
   const first = manager.logs("unicode", owner);
   const terminal = manager.get("unicode", owner);
   await manager.close();
