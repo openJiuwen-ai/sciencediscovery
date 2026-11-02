@@ -51,6 +51,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
+import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
@@ -367,19 +368,22 @@ async function assembleGoal(
     weight: 1,
   };
 
+  const algorithm = proposal.algorithm ?? "puct";
   return {
-    algorithm: proposal.algorithm ?? "puct",
+    algorithm,
     baselineProgramCas: startCas,
     budget: {
       candidateTimeoutSeconds: 180,
       expansions: proposal.expansions,
       maxCostCents: 0,
-      maxSeconds: 7_200,
-      maxTokens: 600_000,
+      maxSeconds: DEFAULT_MAX_SECONDS,
+      maxTokens: DEFAULT_MAX_TOKENS,
       // Enough for a reasoning model to think *and* answer when thinking is on;
       // a ceiling below that produced whole runs of hidden reasoning and no
-      // program, which read as a model that could not write code.
-      maxTokensPerCall: thinking === "enabled" ? 96_000 : 16_000,
+      // program, which read as a model that could not write code. Keyed on the
+      // algorithm because OpenEvolve's floor is higher than PUCT's — written as
+      // one number once, the path refused its own default.
+      maxTokensPerCall: perCallCeiling(algorithm, thinking),
       workers: proposal.workers,
     },
     frozen: scoringCas ? [scoringCas] : [],

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * `/evolve-design` as a capability package: the two LLM tools and nothing else.
+ * `/evolve-design` as a capability package: the LLM tools and nothing else.
  *
  * Registered the way `plan` is — the composition root builds the runtime
  * and hands it over once; a deployment that does not build one simply gets no
@@ -22,7 +22,7 @@
  * fields by hand, and `EvolveToolDeps` was threaded through `executeAgentRun`,
  * `scheduleSessionRuns` and `streamAgentRun`. Five places had to agree, and
  * when one of them silently did not — an upstream route added a
- * `scheduleSessionRuns` call site without the deps — both tools vanished from
+ * `scheduleSessionRuns` call site without the deps — the tools vanished from
  * that path with no type error and no failing behaviour, only a missing
  * capability. Four of those five places are gone; the fifth — one factory,
  * still positional through the run layer — is declared required-but-nullable
@@ -35,16 +35,22 @@
 
 import { Type } from "typebox";
 
-import type { EvolveRunProposal, EvolveRunProposalResult, EvolveRunSummary } from "@sciencediscovery/schema";
+import type {
+  EvolveBudgetPlan, EvolveRunProposal, EvolveRunProposalResult, EvolveRunSummary,
+} from "@sciencediscovery/schema";
 import type { AgentTool } from "@sciencediscovery/tools";
 
-/** What the two tools need from the turn that is running them. */
+/** What the tools need from the turn that is running them. */
 export interface EvolveToolRuntime {
   /** Shapes one sentence of the create tool's description; the approval card
    *  is the user's, so the tool has to say which one they will see. */
   approvalMode?: "always_allow" | "ask_for_dangerous";
   /** Validate the proposal, run the discrimination probe, start the run. */
   createEvolveRun(input: EvolveRunProposal, signal?: AbortSignal): Promise<EvolveRunProposalResult>;
+  /** The numbers `createEvolveRun` will apply for this session's model. Read
+   *  before the spend checkpoint, not after: a ceiling the user was never told
+   *  about is the difference between an approved budget and an accident. */
+  getEvolveBudget(input: { thinking?: "enabled" | "disabled" }): Promise<EvolveBudgetPlan>;
   /** Read one finished or running search back into the conversation. */
   getEvolveRun(runId?: string): Promise<EvolveRunSummary>;
   getIdeaResearch?(researchId?: string): Promise<unknown>;
@@ -103,6 +109,44 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     parameters: getEvolveParameters,
   };
   tools.push(getEvolveRun);
+  const budgetParameters = Type.Object({
+    thinking: Type.Optional(Type.Union([Type.Literal("enabled"), Type.Literal("disabled")], {
+      description: "The thinking setting you plan to propose. Default disabled, which is the proposal "
+        + "default. On an endpoint that cannot stop thinking both answers give the same ceiling, and "
+        + "the reply says why.",
+    })),
+  });
+  const getEvolveBudget: AgentTool<typeof budgetParameters> = {
+    description:
+      "Read the budget a search on this session's model will actually get, before the checkpoint that "
+      + "asks the user to spend. Returns the thinking setting the run will record, the per-call token "
+      + "ceiling for each algorithm, the run's total token cap and its wall-clock cap. Call it when you "
+      + "present the run shape: the user is approving a budget, and the per-call ceiling times the "
+      + "expansion count is what decides whether the search can finish. Do not estimate these from the "
+      + "model name, and do not carry over numbers from a previous run on a different model.",
+    execute: async (_toolCallId, params) => {
+      const plan = await runtime.getEvolveBudget({ thinking: params.thinking });
+      const ceilings = Object.entries(plan.perCallCeiling).sort(([a], [b]) => a.localeCompare(b))
+        .map(([algorithm, ceiling]) => `${algorithm} ${ceiling}`).join(", ");
+      const text = [
+        `Model: ${plan.model ?? "(none on this session)"}`,
+        `Thinking the run will record: ${plan.thinking.effective}${
+          plan.thinking.note ? ` — ${plan.thinking.note}` : ""}`,
+        `Per-call ceiling: ${ceilings} tokens`,
+        `Run total: ${plan.totalTokenCap} tokens, ${plan.maxSeconds}s`,
+        // The checkpoint is the money gate. These numbers exist to be said out
+        // loud there, not to be read and dropped.
+        "Put the ceiling you will actually get, the expansion count and the total cap in the "
+        + "checkpoint that asks the user to spend. If thinking cannot be turned off, say so there "
+        + "instead of promising it.",
+      ];
+      return { content: [{ type: "text", text: text.join("\n") }], details: plan };
+    },
+    label: "Read evolution budget",
+    name: "get_evolve_budget",
+    parameters: budgetParameters,
+  };
+  tools.push(getEvolveBudget);
   const evolveParameters = Type.Object({
     algorithm: Type.Optional(Type.Union([Type.Literal("puct"), Type.Literal("openevolve")], {
       description: "The search algorithm the user chose (`/evolve-design --algorithm …`). Default puct.",
