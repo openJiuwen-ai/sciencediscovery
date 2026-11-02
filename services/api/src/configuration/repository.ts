@@ -85,8 +85,8 @@ export class ConfigurationRepository {
     this.database.prepare("DELETE FROM configuration_work_v3 WHERE request_id=?").run(requestId);
   }
   pendingOutbox(now = Date.now(), limit = 100): ConfigurationOutboxRecord[] {
-    return (this.database.prepare("SELECT record_json FROM configuration_outbox_v2 WHERE kind IN ('activate','resume') AND (state='pending' OR (state='claimed' AND COALESCE(json_extract(record_json,'$.payload.leaseUntil'),0)<=?)) ORDER BY json_extract(record_json,'$.updatedAt'),id LIMIT ?")
-      .all(now, Math.max(1, Math.min(limit, 100))) as unknown as JsonRow[]).map(row => JSON.parse(row.record_json) as ConfigurationOutboxRecord);
+    return (this.database.prepare("SELECT record_json FROM configuration_outbox_v2 WHERE kind IN ('activate','resume','external_submit') AND COALESCE(json_extract(record_json,'$.payload.nextAttemptAt'),0)<=? AND (state='pending' OR (state='claimed' AND COALESCE(json_extract(record_json,'$.payload.leaseUntil'),0)<=?)) ORDER BY json_extract(record_json,'$.updatedAt'),id LIMIT ?")
+      .all(now, now, Math.max(1, Math.min(limit, 100))) as unknown as JsonRow[]).map(row => JSON.parse(row.record_json) as ConfigurationOutboxRecord);
   }
   pendingNotices(limit = 100): Array<{ request_id: string; session_id: string; state_version: number }> {
     return this.database.prepare("SELECT request_id,session_id,state_version FROM configuration_timeline_v3 ORDER BY rowid LIMIT ?").all(Math.max(1, Math.min(limit, 100))) as Array<{ request_id: string; session_id: string; state_version: number }>;

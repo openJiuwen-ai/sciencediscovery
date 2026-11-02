@@ -61,7 +61,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "serverId"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -290,7 +290,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{m.fieldsByCapability[request.capabilityId]?.[change.field] ?? change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -380,7 +380,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{m.fieldsByCapability[request.capabilityId]?.[field.id] ?? (locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}

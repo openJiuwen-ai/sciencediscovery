@@ -16,6 +16,18 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03a: MCP metadata uses its own localized labels rather than provider-name wording", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.metadata", scope: { kind: "global" }, changes: [{ field: "name", before: "Old", after: "Owned MCP" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "name", label: "MCP server name", kind: "text", required: true, value: "Owned MCP" },
+    { id: "description", label: "MCP server description", kind: "text", required: false, value: "Owned metadata" },
+  ] }), actions(), () => undefined, "zh");
+  const labels = renderer.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(labels.some(label => label.includes("MCP 服务名称"))); assert.ok(labels.some(label => label.includes("MCP 服务描述"))); assert.ok(!labels.some(label => label.includes("服务商名称")));
+  assert.ok(renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "MCP 服务名称"));
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);

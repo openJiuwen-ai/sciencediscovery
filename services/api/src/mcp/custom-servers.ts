@@ -16,6 +16,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CustomMcpServerConfig, CustomMcpServerDetails, McpCatalog, McpCatalogTool } from "@sciencediscovery/schema";
+import type { ConfigurationExternalOperation, ConfigurationExternalOutcome } from "../configuration/types.js";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
@@ -117,6 +118,7 @@ function entry(config: CustomMcpServerConfig): McpServerEntry {
 export class CustomMcpServers {
   readonly oauth: McpOAuthManager;
   private configs: Record<string, CustomMcpServerConfig> = {};
+  private configurationOperations: Record<string, ConfigurationExternalOutcome> = {};
   private readonly checks = new Map<string, { checkedAt: string; tools: McpCatalogTool[]; error?: string; durationMs?: number }>();
   private key?: Buffer;
   private queue: Promise<unknown> = Promise.resolve();
@@ -140,7 +142,20 @@ export class CustomMcpServers {
       const encrypted = await readFile(this.path, "utf8");
       const saved: unknown = JSON.parse(decryptSecretValue(this.key, "custom-mcp-servers", encrypted));
       if (!object(saved)) throw new Error("Invalid saved MCP configuration");
-      for (const [id, value] of Object.entries(saved)) {
+      const envelope = saved.format === "sciencediscovery-custom-mcp-v2" ? saved : undefined;
+      const servers = envelope ? envelope.servers : saved;
+      if (!object(servers) || envelope && !object(envelope.operations)) throw new Error("Invalid saved MCP configuration envelope");
+      if (envelope) for (const [operationId, value] of Object.entries(envelope.operations as Record<string, unknown>)) {
+        if (!object(value)) throw new Error("Invalid saved MCP operation");
+        this.validateConfigurationOperation({ operationId, bindingDigest: String(value.bindingDigest) });
+        if (value.operationId !== operationId || !(value.status === "rejected" && typeof value.code === "string" && /^[A-Z][A-Z0-9_]{2,99}$/.test(value.code)
+          || value.status === "applied" && object(value.resourceVersions) && Object.keys(value.resourceVersions).length === 1 && typeof value.resourceVersions.mcpMetadata === "string" && /^[a-f0-9]{64}$/.test(value.resourceVersions.mcpMetadata))) throw new Error("Invalid saved MCP operation outcome");
+        this.configurationOperations[operationId] = value.status === "rejected"
+          ? { operationId, bindingDigest: String(value.bindingDigest), status: "rejected", code: String(value.code) }
+          : { operationId, bindingDigest: String(value.bindingDigest), status: "applied", resourceVersions: { mcpMetadata: String((value.resourceVersions as Record<string, unknown>).mcpMetadata) } };
+      }
+      if (Object.keys(this.configurationOperations).length > 10_000) throw new Error("MCP configuration operation journal exceeds capacity");
+      for (const [id, value] of Object.entries(servers)) {
         if (!/^custom-[a-f0-9]{12}$/.test(id)) throw new Error("Invalid saved MCP server id");
         this.configs[id] = normalizeCustomMcpConfig(value);
       }
@@ -224,13 +239,69 @@ export class CustomMcpServers {
     return result;
   }
 
-  private async persist(next: Record<string, CustomMcpServerConfig>): Promise<void> {
+  private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations): Promise<void> {
     if (!this.key) throw new Error("MCP storage is not initialized");
     const temporary = `${this.path}.tmp`;
-    await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(next)), { mode: 0o600 });
+    const payload = Object.keys(operations).length ? { format: "sciencediscovery-custom-mcp-v2", servers: next, operations } : next;
+    await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(payload)), { mode: 0o600 });
     await rename(temporary, this.path);
     this.configs = next;
+    this.configurationOperations = operations;
     this.sync();
+  }
+
+
+  /** Finite safe catalog; transport values and credentials never leave this service. */
+  configurationMetadata(serverId?: string) {
+    const items = Object.entries(this.configs).map(([id, config]) => ({ id, name: config.name, description: config.description, transport: config.transport, enabled: config.enabled }));
+    return { items, current: items.find(item => item.id === serverId), version: serverId ? this.configurationMetadataRevision(serverId) : undefined };
+  }
+
+  private configurationMetadataRevision(serverId: string, config = this.configs[serverId]): string {
+    if (!this.key) throw new Error("MCP storage is not initialized");
+    return createHmac("sha256", this.key).update(JSON.stringify([serverId, config ?? null, this.oauth.configurationRevision([serverId])])).digest("hex");
+  }
+
+  private validateConfigurationOperation(operation: ConfigurationExternalOperation): void {
+    if (!/^[a-f0-9-]{36}:[1-9][0-9]{0,15}:external_submit$/.test(operation.operationId) || !/^sha256:[a-f0-9]{64}$/.test(operation.bindingDigest)) throw new Error("Invalid MCP configuration operation identity");
+  }
+
+  private operationOutcome(operation: ConfigurationExternalOperation): ConfigurationExternalOutcome | undefined {
+    this.validateConfigurationOperation(operation);
+    const prior = this.configurationOperations[operation.operationId];
+    if (prior && prior.bindingDigest !== operation.bindingDigest) throw new Error("MCP configuration operation binding mismatch");
+    return prior ? structuredClone(prior) : undefined;
+  }
+
+  private async recordConfigurationOutcome(outcome: ConfigurationExternalOutcome, configs = this.configs): Promise<ConfigurationExternalOutcome> {
+    if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
+    await this.persist(configs, { ...this.configurationOperations, [outcome.operationId]: outcome });
+    return structuredClone(outcome);
+  }
+
+  submitConfigurationMetadata(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code });
+      const previous = /^custom-[a-f0-9]{12}$/.test(serverId) && Object.hasOwn(this.configs, serverId) ? this.configs[serverId] : undefined;
+      if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      if (this.configurationMetadataRevision(serverId) !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
+      if (!object(values) || Object.keys(values).some(key => !["name", "description"].includes(key))) return reject("INVALID_CONFIGURATION_INPUT");
+      let candidate: CustomMcpServerConfig;
+      try { candidate = normalizeCustomMcpConfig({ ...previous, ...values }, previous); } catch { return reject("INVALID_CONFIGURATION_INPUT"); }
+      if (Object.entries(this.configs).some(([id, item]) => id !== serverId && item.name.toLowerCase() === candidate.name.toLowerCase())) return reject("MCP_METADATA_NAME_CONFLICT");
+      const next = { ...this.configs, [serverId]: candidate };
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationMetadataRevision(serverId, candidate) } }, next);
+    });
+  }
+
+  /** Absence becomes a durable tombstone, fencing a delayed old submit. */
+  resolveConfigurationMetadata(operation: ConfigurationExternalOperation): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation);
+      if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "EXTERNAL_OPERATION_NOT_SAVED" });
+    });
   }
 
   save(value: unknown, id?: string): Promise<CustomMcpServerDetails> {

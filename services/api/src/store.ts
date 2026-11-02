@@ -2309,6 +2309,10 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpMetadataSource?: (id: string) => import("./configuration/mcp-metadata-adapter.js").McpMetadataSnapshot;
+  setConfigurationMcpMetadataSource(source: (id: string) => import("./configuration/mcp-metadata-adapter.js").McpMetadataSnapshot): void { this.configurationMcpMetadataSource = source; }
+  configurationMcpMetadata(id: string) { return this.configurationMcpMetadataSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
 
   setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
@@ -2400,7 +2404,9 @@ export class SessionStore {
     const timeoutSettings = this.getTimeoutSettings();
     const quotaSettings = this.getQuotaSettings();
     const ideaTreeSettings = this.getIdeaTreeSettings();
+    const mcpMetadata = capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : undefined;
     let systemVersions: Record<string, string> | undefined;
+    if (mcpMetadata) systemVersions = { mcpMetadata: mcpMetadata.version ?? version([target, null]) };
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
@@ -2415,6 +2421,7 @@ export class SessionStore {
         autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
       } : resourceVersions),
       data: {
+        ...(mcpMetadata ? { mcpMetadata } : {}),
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
