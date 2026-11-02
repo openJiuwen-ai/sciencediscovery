@@ -23,7 +23,7 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "review.configure": "review reviewer semantic 审阅 审查 自动审查",
   "timeouts.configure": "timeout timeouts 超时 等待 时限",
   "quotas.configure": "quota quotas 配额 并发 上传 容量",
-  "idea_tree.configure": "idea tree 探索树 深度 轮次",
+  "idea_tree.configure": "idea tree research template 模板 探索树 深度 轮次",
 };
 const domainAliases: Record<string, string> = { proxy: "代理", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
 type Row = Record<string, unknown>;
@@ -148,7 +148,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
-    current = { explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
+    current = { templateId: idea.templateId, explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
       maxTokensPerCall: idea.maxTokensPerCall, maxDepth: idea.maxDepth, maxNodes: idea.maxNodes };
   } else current = { modelId: effective.modelId ?? null };
   const selected = (await resources(id)).filter(row => (!input.targetId || row.id === input.targetId) && (!query || matches(query, `${row.id} ${row.name} ${row.model ?? ""}`)));
