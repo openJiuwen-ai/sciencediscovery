@@ -28,6 +28,7 @@ import {
   parseConflictPolicy,
   readMultipartUploads,
   sanitizeUploadFilename,
+  uploadWorkspaceParts,
   writeWorkspaceUpload,
   type WorkspaceUploadLimits,
 } from "./workspace-upload.js";
@@ -181,4 +182,88 @@ test("writeWorkspaceUpload enforces file and workspace quotas", async (context) 
   );
   assert.equal(await measureWorkspaceBytes(workspace), 1_000);
   assert.equal((await readFile(resolve(workspace, "a.bin"))).length, 1_000);
+});
+
+function multipartUpload(
+  boundary: string,
+  parts: Array<{ content: string; headers: string[] }>,
+): IncomingMessage {
+  const lines: string[] = [];
+  for (const part of parts) {
+    lines.push(`--${boundary}`, ...part.headers, "", part.content);
+  }
+  lines.push(`--${boundary}--`, "");
+  const request = Readable.from([Buffer.from(lines.join("\r\n"))]) as IncomingMessage;
+  request.headers = { "content-type": `multipart/form-data; boundary=${boundary}` };
+  return request;
+}
+
+test("readMultipartUploads keeps a quoted filename that contains a semicolon", async () => {
+  const parts = await readMultipartUploads(multipartUpload("----sa-quoted-name", [
+    {
+      content: "a,b",
+      headers: ['Content-Disposition: form-data; name="files"; filename="trial;phase2.csv"', "Content-Type: text/csv"],
+    },
+    {
+      content: "c,d",
+      headers: ['Content-Disposition: form-data; name="files"; filename="plain.csv"', "Content-Type: text/csv"],
+    },
+  ]), limits.maxRequestBytes);
+  assert.deepEqual(parts.map((part) => part.filename), ["trial;phase2.csv", "plain.csv"]);
+});
+
+test("readMultipartUploads uses a plain filename verbatim instead of percent-decoding it", async () => {
+  const parts = await readMultipartUploads(multipartUpload("----sa-plain-name", [
+    {
+      content: "100%",
+      headers: ['Content-Disposition: form-data; name="files"; filename="100%25.txt"'],
+    },
+    {
+      content: "b",
+      headers: ['Content-Disposition: form-data; name="files"; filename="a%2Fb.csv"'],
+    },
+  ]), limits.maxRequestBytes);
+  // RFC 7578 4.2: only filename* is percent-encoded, so a plain filename is verbatim.
+  assert.deepEqual(parts.map((part) => part.filename), ["100%25.txt", "a%2Fb.csv"]);
+});
+
+test("readMultipartUploads decodes an RFC 5987 filename* exactly once", async () => {
+  const parts = await readMultipartUploads(multipartUpload("----sa-extended-name", [
+    {
+      content: "a,b",
+      headers: ["Content-Disposition: form-data; name=\"files\"; filename*=UTF-8''trial%3Bphase2.csv"],
+    },
+    {
+      content: "c,d",
+      headers: [
+        "Content-Disposition: form-data; name=\"files\"; filename=\"fallback.csv\"; filename*=UTF-8''100%2525.txt",
+      ],
+    },
+  ]), limits.maxRequestBytes);
+  // Decoded once: %3B becomes ';' and %2525 becomes '%25' (not '%' from a second decode).
+  assert.deepEqual(parts.map((part) => part.filename), ["trial;phase2.csv", "100%25.txt"]);
+});
+
+test("a percent-looking plain filename does not fail the other files in the batch", async (context) => {
+  const workspace = await tempWorkspace(context, "percent-name");
+  const parts = await readMultipartUploads(multipartUpload("----sa-percent-batch", [
+    {
+      content: "x,y",
+      headers: ['Content-Disposition: form-data; name="files"; filename="a%2Fb.csv"'],
+    },
+    {
+      content: "c,d",
+      headers: ['Content-Disposition: form-data; name="files"; filename="trial;phase2.csv"'],
+    },
+  ]), limits.maxRequestBytes);
+  const result = await uploadWorkspaceParts({
+    conflict: "rename",
+    limits,
+    listFiles: async () => [],
+    parts,
+    workspaceRoot: workspace,
+  });
+  assert.deepEqual(result.uploaded.map((item) => item.path).sort(), ["a%2Fb.csv", "trial;phase2.csv"]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual((await readFile(resolve(workspace, "trial;phase2.csv"))).toString(), "c,d");
 });

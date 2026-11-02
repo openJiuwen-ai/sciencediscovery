@@ -123,13 +123,18 @@ export async function readMultipartUploads(
     if (headerEnd < 0) throw new Error("Workspace upload multipart headers are malformed");
     const headers = body.subarray(headerStart, headerEnd).toString("utf8");
     const contentDisposition = headers.split("\r\n").find((line) => /^content-disposition:/i.test(line));
-    const fieldName = contentDisposition?.match(/\bname="([^"]+)"/i)?.[1] ?? "";
-    const rawFilename = contentDisposition?.match(/\bfilename\*?=(?:UTF-8''|")?([^";]+)"?/i)?.[1];
+    const parameters = contentDisposition ? contentDispositionParameters(contentDisposition) : new Map<string, string>();
+    const fieldName = parameters.get("name") ?? "";
+    // RFC 7578 4.2: only `filename*` is percent-encoded; a plain `filename`
+    // is sent verbatim (browsers escape only quote, CR and LF).
+    const extendedFilename = parameters.get("filename*");
+    const filename = extendedFilename === undefined
+      ? parameters.get("filename")
+      : decodeExtendedFilename(extendedFilename);
     const contentStart = headerEnd + 4;
     const contentEnd = body.indexOf(nextDelimiter, contentStart);
     if (contentEnd < 0) throw new Error("Workspace upload multipart body has no closing boundary");
-    if ((fieldName === "file" || fieldName === "files") && rawFilename) {
-      const filename = decodeUploadFilename(rawFilename);
+    if ((fieldName === "file" || fieldName === "files") && filename) {
       const bytes = Buffer.from(body.subarray(contentStart, contentEnd));
       // Keep 0-byte parts: empty templates/placeholders are valid uploads.
       parts.push({ bytes, fieldName, filename });
@@ -140,11 +145,54 @@ export async function readMultipartUploads(
   return parts;
 }
 
-function decodeUploadFilename(raw: string): string {
+/**
+ * Split `Content-Disposition` parameters the way a multipart part is written:
+ * `;` separates parameters only outside a quoted-string, and a quoted value
+ * runs to its closing quote, where a backslash escapes the next character.
+ * The disposition type before the first `;` is not a parameter.
+ */
+function contentDispositionParameters(header: string): Map<string, string> {
+  const parameters = new Map<string, string>();
+  const value = header.slice(header.indexOf(":") + 1);
+  let index = value.indexOf(";");
+  while (index >= 0 && index < value.length) {
+    while (index < value.length && (value[index] === ";" || /\s/.test(value[index]!))) index += 1;
+    if (index >= value.length) break;
+    const equals = value.indexOf("=", index);
+    if (equals < 0) break;
+    const separator = value.indexOf(";", index);
+    if (separator >= 0 && separator < equals) {
+      index = separator + 1;
+      continue;
+    }
+    const name = value.slice(index, equals).trim().toLowerCase();
+    index = equals + 1;
+    let parsed = "";
+    if (value[index] === '"') {
+      index += 1;
+      while (index < value.length && value[index] !== '"') {
+        if (value[index] === "\\" && index + 1 < value.length) index += 1;
+        parsed += value[index];
+        index += 1;
+      }
+      if (value[index] === '"') index += 1;
+    } else {
+      const end = value.indexOf(";", index);
+      parsed = (end < 0 ? value.slice(index) : value.slice(index, end)).trim();
+      index = end < 0 ? value.length : end;
+    }
+    if (name && !parameters.has(name)) parameters.set(name, parsed);
+  }
+  return parameters;
+}
+
+/** RFC 5987 value (`charset'lang'percent-encoded`), decoded exactly once. */
+function decodeExtendedFilename(value: string): string {
+  const encoded = /^[^']*'[^']*'(.*)$/.exec(value)?.[1] ?? value;
   try {
-    return decodeURIComponent(raw.trim());
+    return decodeURIComponent(encoded.trim());
   } catch {
-    return raw.trim();
+    return encoded.trim();
   }
 }
 
