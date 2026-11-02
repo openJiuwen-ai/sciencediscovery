@@ -168,6 +168,12 @@ function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records"): Js
 
 function evidenceView(result: JsonObject, sourceId: string, toolId: string): JsonObject | undefined {
   if (!Array.isArray(result.records)) return undefined;
+  const data = object(result.data);
+  // Generic MCP broker envelopes also carry an empty records array. Their
+  // actionable content lives in data and must not be mistaken for an empty
+  // literature/search result.
+  if (result.records.length === 0 && data?.returned === undefined
+    && (data?.content !== undefined || data?.structuredContent !== undefined)) return undefined;
   const recordObjects = result.records.map(object);
   if (recordObjects.some((record) => !record)) return undefined;
   const recordsKey = sourceId === "arxiv" ? "papers" : "records";
