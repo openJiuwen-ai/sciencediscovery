@@ -14,6 +14,7 @@ import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "plugin.json_viewer": "json artifact preview viewer plugin JSON 预览 插件 文件 展示",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
@@ -144,6 +145,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
+  else if (id === "plugin.json_viewer") current = { ...store.configurationJsonViewerSettings(sessionId) };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
   else if (id === "idea_tree.configure") {
@@ -156,8 +158,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || id === "plugin.json_viewer" || scope !== "global"), current, sources,
+    instruction: id === "plugin.json_viewer" ? "Only the bundled optional JSON viewer: mode enabled/disabled/inherit. Omit scope for this Session, or explicitly choose its Project or Global. inherit removes only this layer override. Generic source previews remain available. Do not supply arbitrary plugin IDs/config or claim all clients have refreshed." : (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);

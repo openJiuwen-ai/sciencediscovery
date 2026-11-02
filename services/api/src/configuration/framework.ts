@@ -11,6 +11,7 @@ import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
+import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
@@ -112,7 +113,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createJsonViewerAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");

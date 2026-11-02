@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure";
+export type ConfigurationCapabilityId = "plugin.json_viewer" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
