@@ -107,7 +107,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const securityConsent = request.securityConsent;
-  const securityReady = request.capabilityId !== "security.network" || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
+  const securityReady = !["security.network", "security.automatic_configuration"].includes(request.capabilityId) || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
@@ -280,9 +280,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
   const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
-  const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
+  const savedForNextRun = request.state === "applied" && ["next_run", "next_request"].includes(request.activation.mode) && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = request.capabilityId === "security.network" && request.activation.state === "active" ? m.securityActive
     : request.capabilityId === "security.network" && request.state === "applied" && request.activation.state === "failed" ? m.securityCleanupFailed
@@ -360,7 +360,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           <input id={`${id}-security-ack`} type="checkbox" checked={securityAcknowledged}
             disabled={!editable || dirty || runActive || request.state !== "awaiting_confirmation"}
             onChange={event => setSecurityAcknowledged(event.target.checked)} />
-          <span>{m.securityAcknowledge}</span>
+          <span>{request.capabilityId === "security.automatic_configuration" ? m.automaticConfigurationAcknowledge : m.securityAcknowledge}</span>
         </label>
         <button type="button" className="secondary-button" disabled={!editable || !securityAcknowledged || dirty || runActive || request.state !== "awaiting_confirmation"}
           onClick={() => void perform(() => actions.securityConsent!({ revision: request.revision, targetDigest: securityConsent.targetDigest, acknowledged: true }, operationKey(`security:${request.revision}:${securityConsent.targetDigest}`)))}>{m.securityConfirm}</button>

@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "security.network";
+export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "security.network" | "security.automatic_configuration";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -104,7 +104,7 @@ export interface ConfigurationRequestView {
   verificationPlan: { targets: string[]; actions: string[]; maxRequests: number; mayCharge: boolean };
   previewDigest?: string;
   activation: {
-    mode: "before_first_run" | "same_run" | "next_run" | "next_execution" | "requires_restart";
+    mode: "before_first_run" | "same_run" | "next_run" | "next_request" | "next_execution" | "requires_restart";
     state: "not_requested" | "pending" | "active" | "failed" | "suppressed" | "needs_user_action";
     effectiveRevision?: string;
   };

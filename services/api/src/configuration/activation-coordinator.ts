@@ -24,7 +24,7 @@ export class ConfigurationActivationCoordinator {
       await this.host.saveActivation(record.view.id, { state: "suppressed", code: "activation_baseline_changed" });
       return "suppressed";
     }
-    if (record.plan.activationMode === "next_run" || record.plan.activationMode === "requires_restart" || record.plan.activationMode === "next_execution") {
+    if (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "requires_restart" || record.plan.activationMode === "next_execution") {
       try {
         if (record.plan.activationMode === "next_execution" && !this.host.prepareDeferredActivation) throw new Error("Execution policy activation requires a host preparation adapter");
         await this.host.prepareDeferredActivation?.(record, receipt);

@@ -21,7 +21,7 @@ export class ConfigurationSecurityAuthorizer {
     return { ...consent, revision: record.view.revision, status: confirmed ? "confirmed" : "required" };
   }
   assert(record: ConfigurationRecord, source = record.view.decisionSource): void {
-    if (record.view.capabilityId !== "security.network") return;
+    if (!["security.network", "security.automatic_configuration"].includes(record.view.capabilityId)) return;
     if (this.view(record)?.status !== "confirmed") throw new ConfigurationError("SECURITY_CONSENT_REQUIRED", "Independently confirm the exact security policy before applying it", 409);
     if (source !== "user") throw new ConfigurationError("SECURITY_MANUAL_CONFIRMATION_REQUIRED", "Security policy changes require a separate human decision", 409);
   }

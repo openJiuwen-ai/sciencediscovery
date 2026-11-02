@@ -2405,6 +2405,7 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "security.automatic_configuration") systemVersions = { automaticConfiguration: version(session.autoApplyLowRiskConfiguration === true) };
     if (capabilityId === "security.network") systemVersions = { securityNetwork: version([
       this.catalog.sandboxNetworkSettings, this.catalog.sessions.filter(session => !session.archivedAt).map(session => [session.id, session.permissionEpochId]),
       this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
@@ -2422,6 +2423,7 @@ export class SessionStore {
       } : resourceVersions),
       data: {
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        automaticConfiguration: session.autoApplyLowRiskConfiguration === true,
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
@@ -2446,6 +2448,26 @@ export class SessionStore {
       encrypt: (id, secret) => this.encryptModelApiToken(id, secret),
       decrypt: (id, ciphertext) => this.decryptModelApiToken(id, ciphertext),
     };
+  }
+
+  applyAutomaticConfigurationSync(sessionId: string, enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Automatic configuration requires the shared transaction");
+    if (typeof enabled !== "boolean") throw new Error("Invalid automatic configuration policy");
+    this.applyAutomaticConfigurationPolicySync(sessionId, enabled);
+  }
+
+  private applyAutomaticConfigurationPolicySync(sessionId: string, enabled: boolean): void {
+    const session = this.assertSessionWritable(sessionId);
+    session.autoApplyLowRiskConfiguration = enabled;
+    if (!enabled && this.database) {
+      const pending = this.listConnectorConfigurationRequests(sessionId).filter(request => request.state === "awaiting_confirmation" && request.autoApplyAt);
+      for (const request of pending) {
+        delete request.autoApplyAt;
+        this.database.prepare("UPDATE connector_configuration_requests SET record_json=? WHERE id=?").run(JSON.stringify(request), request.id);
+      }
+      if (this.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuration_requests_v2'").get())
+        new ConfigurationRepository(this.database).withdrawAutoApply(sessionId);
+    }
   }
 
   getGlobalSettings(): RuntimeSettingsDetails {
@@ -5756,20 +5778,7 @@ export class SessionStore {
       session.settingsOverrides = nextSettings;
       if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
-      if (autoApplyLowRiskConfiguration !== undefined) {
-        session.autoApplyLowRiskConfiguration = autoApplyLowRiskConfiguration;
-        if (!autoApplyLowRiskConfiguration && this.database) {
-          const pending = this.listConnectorConfigurationRequests(sessionId).filter((request) =>
-            request.state === "awaiting_confirmation" && request.autoApplyAt);
-          for (const request of pending) {
-            delete request.autoApplyAt;
-            this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ?")
-              .run(JSON.stringify(request), request.id);
-          }
-          if (this.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuration_requests_v2'").get())
-            new ConfigurationRepository(this.database).withdrawAutoApply(sessionId);
-        }
-      }
+      if (autoApplyLowRiskConfiguration !== undefined) this.applyAutomaticConfigurationPolicySync(sessionId, autoApplyLowRiskConfiguration);
       if (reviewMode) session.reviewMode = reviewMode;
       if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
       if (specialistId === null) delete session.specialistId;

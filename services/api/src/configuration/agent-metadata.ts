@@ -6,7 +6,7 @@ export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
   fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
-  activation: "next_run" | "next_execution" | "same_run_if_bound";
+  activation: "next_run" | "next_request" | "next_execution" | "same_run_if_bound";
   diagnostics: readonly string[];
 }
 const id = { kind: "string", maxLength: 200 } as const;
@@ -29,6 +29,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     maxConcurrentSubagents: { kind: "integer", minimum: 1, maximum: 10 }, runnerMaxOutputBytes: { kind: "integer", minimum: 0 }, runnerMaxWorkspaceBytes: { kind: "integer", minimum: 0 },
     uploadMaxFileBytes: { kind: "integer", minimum: 0 }, uploadMaxRequestBytes: { kind: "integer", minimum: 0 },
   }, activation: "next_run", diagnostics: [] },
+  "security.automatic_configuration": { label: "Authorize low-risk configuration automation", whenNeeded: "Only an explicit user request to change this Session low-risk configuration automation. Independent human security acknowledgement and manual confirmation are required. This is not tool Always allow; only existing eligible ready-connector compatibility proposals may use their cancellation window. v3 choices and security/credential changes remain manual.", fields: { autoApplyLowRiskConfiguration: boolean }, activation: "next_request", diagnostics: [] },
   "security.network": { label: "Configure sandbox network policy", whenNeeded: "Only an explicit user request to change deployment sandbox network access. This is a security decision: a separate user-only acknowledgement and manual confirmation are mandatory. Ordinary tool Always allow never authorizes it. All writable sessions can rotate Permission Epochs and lose persistent kernel/shell state. Describe first; never automatically widen access after a failed tool call.", fields: { mode: { kind: "string", choices: ["none", "domain-allowlist", "open"] }, allowedDomainsText: { kind: "string", maxLength: 4096 }, allowPrivateNetwork: boolean, egressProxyPolicy: id }, activation: "next_execution", diagnostics: [] },
   "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree intensity, score direction, or a bounded token, depth, or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
     explorationIntensity: { kind: "string", choices: ["quick", "standard", "deep"] }, scoreDirection: { kind: "string", choices: ["maximize", "minimize"] },

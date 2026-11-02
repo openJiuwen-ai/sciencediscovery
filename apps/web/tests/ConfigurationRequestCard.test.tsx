@@ -821,3 +821,24 @@ test("Jiuwen live-wait card is actionable while its original run remains running
     await act(async () => renderer.unmount());
   }
 });
+
+test("CFG-X10c: automation needs separate acknowledgement after editing and never uses the network memory-loss disclosure", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    let latest = request({ capabilityId: "security.automatic_configuration", scope: { kind: "session", id: "s1" }, fields: [{ id: "autoApplyLowRiskConfiguration", label: "Automatic configuration", kind: "boolean", value: false }],
+      securityConsent: { targetDigest: "sha256:automatic-2", statement: "Eligible connector cancellation windows only", revision: 2, status: "required" } });
+    let renderer!: ReactTestRenderer; const acknowledgements: unknown[] = [];
+    const api = actions({ preview: async input => { assert.deepEqual(input.values, { autoApplyLowRiskConfiguration: true }); return { ...latest, revision: 3, previewDigest: "sha256:preview-3", fields: [{ ...latest.fields[0]!, value: true }], securityConsent: { ...latest.securityConsent!, revision: 3, targetDigest: "sha256:automatic-3" } }; },
+      securityConsent: async input => { acknowledgements.push(input); return { ...latest, stateVersion: latest.stateVersion + 1, securityConsent: { ...latest.securityConsent!, status: "confirmed" } }; } });
+    const draw = () => createElement(LocaleProvider, { initialLocale: locale }, createElement(ConfigurationRequestCard, { request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } }));
+    await act(async () => { renderer = create(draw()); });
+    const confirm = () => button(renderer, locale === "zh" ? "确认此项变更" : "Confirm this change"), independent = () => button(renderer, locale === "zh" ? "独立确认此精确安全策略" : "Independently approve this exact security policy");
+    assert.equal(confirm().props.disabled, true); assert.match(JSON.stringify(renderer.toJSON()), locale === "zh" ? /取消窗口/ : /cancellation window/); assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /possible loss of persistent|持久 kernel／shell 内存可能丢失/);
+    await act(async () => renderer.root.findByProps({ name: "autoApplyLowRiskConfiguration" }).props.onChange({ target: { checked: true } }));
+    assert.equal(independent().props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    assert.equal(confirm().props.disabled, true);
+    await act(async () => renderer.root.findByProps({ className: "configuration-security-ack" }).findByType("input").props.onChange({ target: { checked: true } }));
+    await act(async () => independent().props.onClick()); assert.deepEqual(acknowledgements, [{ revision: 3, targetDigest: "sha256:automatic-3", acknowledged: true }]); assert.equal(confirm().props.disabled, false);
+    await act(async () => renderer.unmount());
+  }
+});
