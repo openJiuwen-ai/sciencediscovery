@@ -2404,6 +2404,13 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "proxy.provider") {
+      const selected = this.getProvider(target), children = this.catalog.models.filter(model => model.providerId === target);
+      const credentialIds = new Set([providerSecretKey(target), ...children.map(model => model.id)]);
+      systemVersions = { providerProxy: version([selected, children, secretRows.filter(row => credentialIds.has(String(row.model_id))),
+        this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+        this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]) };
+    }
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2437,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "proxy.provider" ? { providerProxySettings: this.configurationProviderProxySettings() } : {}),
       },
     };
   }
@@ -3688,7 +3696,7 @@ export class SessionStore {
     return provider;
   }
 
-  async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
+  private applyProviderUpdateSync(providerId: string, input: UpdateModelProviderRequest): ModelProvider {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
     const previousProtocol = provider.apiProtocol;
@@ -3717,8 +3725,25 @@ export class SessionStore {
       provider.hasApiToken = true;
     }
     this.syncProviderModels(provider, previousProtocol);
+    return provider;
+  }
+
+  async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
+    const provider = this.applyProviderUpdateSync(providerId, input);
     await this.saveCatalog();
     return provider;
+  }
+
+  applyProviderProxyConfigurationSync(providerId: string, proxyPolicy: ProxyPolicy): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider proxy configuration requires the shared transaction");
+    this.applyProviderUpdateSync(providerId, { proxyPolicy });
+  }
+
+  configurationProviderProxySettings() {
+    return { defaultPolicy: this.catalog.proxyDefaultPolicy,
+      providers: this.listProviders().map(provider => ({ id: provider.id, name: provider.name, proxyPolicy: provider.proxyPolicy,
+        modelCount: this.catalog.models.filter(model => model.providerId === provider.id).length })),
+      servers: this.catalog.proxyServers.map(server => ({ id: server.id, name: server.name, kind: server.kind })) };
   }
 
   async deleteProvider(providerId: string): Promise<void> {
