@@ -78,6 +78,8 @@ export class ConfigurationExternalCommitCoordinator {
       const current = this.repository.get(requestId, sessionId), lease = this.repository.getOutbox(job.id);
       if (!current || current.view.state !== "applying" || current.view.revision !== record.view.revision || current.approvedDigest !== record.approvedDigest
         || !lease || lease.state !== "claimed" || lease.payload.leaseToken !== job.payload.leaseToken) return;
+      const approvedDigest = current.approvedDigest;
+      if (!approvedDigest) return;
       const version = current.view.stateVersion, stopped = current.stopGeneration !== this.store.notifications.generation(sessionId), expired = Boolean(current.view.expiresAt && Date.parse(current.view.expiresAt) <= Date.now());
       const now = new Date().toISOString();
       if (!valid || !outcome) {
@@ -89,7 +91,7 @@ export class ConfigurationExternalCommitCoordinator {
         current.view.error = { code: outcome.code, message: "The external authority confirmed that this operation was not saved. Refresh the preview and confirm a new revision if still needed.", retryable: false };
         lease.state = "done";
       } else {
-        this.repository.saveReceipt({ id: randomUUID(), requestId, revision: current.view.revision, previewDigest: current.approvedDigest!, capabilityId: current.view.capabilityId,
+        this.repository.saveReceipt({ id: randomUUID(), requestId, revision: current.view.revision, previewDigest: approvedDigest, capabilityId: current.view.capabilityId,
           sessionId, stopGeneration: current.stopGeneration, result: { resourceRevision: digest(outcome.resourceVersions), summary: "The external authority confirmed the saved configuration." }, resourceVersions: outcome.resourceVersions, createdAt: now });
         current.view.state = "applied"; if (selectedChoice(current)) current.view.choiceReceipt = makeChoiceReceipt(current);
         current.view.activation.state = stopped || expired ? "suppressed" : "pending";

@@ -20,8 +20,8 @@ async function harness(context: { after(action: () => Promise<void>): void }) {
   const snapshot = store.configurationSnapshot.bind(store); store.configurationSnapshot = (sid, capability, target) => { const value = snapshot(sid, capability, target); return capability === "model.select" ? { ...value, resourceVersions: { external: state.version } } : value; };
   const framework = configurationFramework(store, { nativeExecutor: true, connector: () => undefined }), adapter = framework.service.registry.get("model.select"), preview = adapter.preview;
   const authority: ConfigurationExternalControl = {
-    submit: async operation => { const old = journal.get(operation.operationId); if (old) return old; state.writes++; state.version = digest(state.writes); const result = { ...operation, status: "applied" as const, resourceVersions: { external: state.version } }; journal.set(operation.operationId, result); return result; },
-    resolve: async operation => { const old = journal.get(operation.operationId); if (old) return old; const result = { ...operation, status: "rejected" as const, code: "EXTERNAL_OPERATION_NOT_SAVED" }; journal.set(operation.operationId, result); return result; },
+    submit: async operation => { const old = journal.get(operation.operationId); if (old) { return old; } state.writes++; state.version = digest(state.writes); const result = { ...operation, status: "applied" as const, resourceVersions: { external: state.version } }; journal.set(operation.operationId, result); return result; },
+    resolve: async operation => { const old = journal.get(operation.operationId); if (old) { return old; } const result = { ...operation, status: "rejected" as const, code: "EXTERNAL_OPERATION_NOT_SAVED" }; journal.set(operation.operationId, result); return result; },
   };
   Object.assign(adapter, { persistence: "external_control", apply: undefined,
     preview: (...args: Parameters<typeof preview>) => ({ ...preview(...args), activationMode: "next_run" }),
