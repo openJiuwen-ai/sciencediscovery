@@ -2309,6 +2309,25 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpProxySource: () => Array<{ id: string; name: string; connectorIds: string[] }> = () => [];
+
+  setConfigurationMcpProxySource(source: () => Array<{ id: string; name: string; connectorIds: string[] }>): void {
+    this.configurationMcpProxySource = source;
+  }
+
+  /** Only safe catalog facts: never resolve/decrypt proxy URLs or MCP credentials. */
+  configurationMcpProxySettings() {
+    return { defaultPolicy: this.catalog.proxyDefaultPolicy,
+      services: this.configurationMcpProxySource().map(service => ({ ...structuredClone(service), proxyPolicy: this.mcpProxyPolicy(service.id) })).sort((a,b) => a.id.localeCompare(b.id)),
+      servers: this.catalog.proxyServers.map(server => ({ id: server.id, name: server.name, kind: server.kind })) };
+  }
+
+  applyMcpProxyConfigurationSync(serverId: string, proxyPolicy: ProxyPolicy): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("MCP proxy configuration requires the shared transaction");
+    if (!this.configurationMcpProxySource().some(service => service.id === serverId)) throw new Error("The selected MCP server is no longer registered");
+    this.applyMcpProxyPoliciesSync({ policies: { ...this.catalog.mcpProxyPolicies, [serverId]: proxyPolicy } });
+  }
+
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
 
   setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
@@ -2404,6 +2423,12 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "proxy.mcp") {
+      const selected = this.configurationMcpProxySettings().services.find(service => service.id === target);
+      systemVersions = { mcpProxy: version([selected, selected ? this.configurationConnectorRevisionSource?.(selected.connectorIds) ?? "not_attached" : "unavailable",
+        this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+        this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]) };
+    }
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2455,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "proxy.mcp" ? { mcpProxySettings: this.configurationMcpProxySettings() } : {}),
       },
     };
   }
@@ -2875,14 +2901,19 @@ export class SessionStore {
     return this.catalog.mcpProxyPolicies[serverId] ?? "inherit";
   }
 
-  async updateMcpProxyPolicies(input: UpdateMcpProxyPoliciesRequest): Promise<McpProxyPolicies> {
+  private applyMcpProxyPoliciesSync(input: UpdateMcpProxyPoliciesRequest): McpProxyPolicies {
     const policies = normalizeMcpProxyPolicies(isRecord(input) ? input.policies : undefined);
     for (const [serverId, policy] of Object.entries(policies)) {
       this.assertProxyPolicyKnown(policy, `policies.${serverId}`);
     }
     this.catalog.mcpProxyPolicies = policies;
-    await this.saveCatalog();
     return this.getMcpProxyPolicies();
+  }
+
+  async updateMcpProxyPolicies(input: UpdateMcpProxyPoliciesRequest): Promise<McpProxyPolicies> {
+    const policies = this.applyMcpProxyPoliciesSync(input);
+    await this.saveCatalog();
+    return policies;
   }
 
   async replaceTimeoutSettings(value: unknown): Promise<SystemTimeoutSettings> {

@@ -8,12 +8,13 @@ import { nativeRuntimeConnectorIds } from "./native-choices.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { CONFIGURATION_SETTINGS_INVENTORY } from "./settings-catalog.js";
-import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
+import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationError, digest, invalid, string } from "./validation.js";
 import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "proxy.mcp": "mcp server proxy route shared service MCP 服务 连接器 代理 路由",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
@@ -89,6 +90,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const models = () => modelCache ??= store.listModels().map(model => ({ id: model.id, name: text(model.name), model: model.model,
     credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" }));
   const resources = async (id: ConfigurationCapabilityId): Promise<Row[]> => {
+    if (id === "proxy.mcp") return store.configurationMcpProxySettings().services.map(service => ({ ...service, kind: "mcp_server" }));
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
     if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
     if (id === "skill.select") {
@@ -144,6 +146,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
+  else if (id === "proxy.mcp") current = { defaultPolicy: store.configurationMcpProxySettings().defaultPolicy, serverCount: store.configurationMcpProxySettings().services.length };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
   else if (id === "idea_tree.configure") {
@@ -156,8 +159,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    scopes: descriptor.scopes.filter(scope => (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    instruction: id === "proxy.mcp" ? "Choose an existing MCP server ID from the safe resource page, not a connector ID. Omit scope. Only inherit, none or an existing proxy ID may be saved. All connectors sharing this server are affected. No URL/key/header/env/command fields, probes, reconnects or tool calls. Saving does not prove actual transport routing or grant network/tool permissions." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);
