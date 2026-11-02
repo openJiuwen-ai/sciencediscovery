@@ -3927,6 +3927,9 @@ export class SessionStore {
     }
     const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
     const description = normalizeProjectDescription(changes.description);
+    // Validate the full request before changing Runner admission in memory.
+    // A rejected rename must not leave an allocation for a later save to persist.
+    if (name !== undefined) this.assertProjectNameFree(name, project.id);
     if (changes.runnerIds !== undefined) {
       const ids = this.validateRunnerIds(changes.runnerIds);
       project.runnerIds = ids;
@@ -3937,8 +3940,6 @@ export class SessionStore {
       project.remoteRunnerHostIds = ids;
     }
     if (name !== undefined) {
-      // A rename is the same collision as a create: the name is the handle.
-      this.assertProjectNameFree(name, project.id);
       project.name = name;
     }
     if (changes.description !== undefined) {
