@@ -3,7 +3,7 @@
 
 const en = {
   securityActive: "Policy saved and epoch fence installed; reported retired local kernels cleaned. Network connectivity was not tested.", securityCleanupFailed: "Policy saved and epochs rotated; old-kernel cleanup remains unverified.",
-  automaticConfigurationAcknowledge: "I authorize eligible low-risk configuration proposals in this Session to use their cancellation window; tool execution and v3/security/credential changes remain separately authorized.",
+  automaticConfigurationAcknowledge: "I authorize supported low-risk connector proposals in this Session to use the cancellation window. Tool execution, credentials, security settings and explicit configuration choices still require their own authorization.",
   securityTitle: "Independent security policy confirmation", securityAcknowledge: "I have reviewed the deployment-wide access changes and possible loss of persistent kernel/shell state.", securityConfirm: "Independently approve this exact security policy", securityConfirmed: "This exact security policy was independently confirmed. Review the changes, then confirm the configuration.", securityRequired: "A separate human security acknowledgement is required. Ordinary Apply and tool Always allow do not authorize this change.",
   destinationChanged: "The credential destination changed during preview. Review the new destination and enter the key again.",
   webSearchAlternative: "Use existing Web search",
@@ -64,7 +64,7 @@ const en = {
 
 const zh: typeof en = {
   securityActive: "策略已保存且新权限代次已建立；已清理本机 Runner 报告的旧 kernel。未验证真实网络连接。", securityCleanupFailed: "策略已保存且权限代次已轮换；旧 kernel 清理尚未核实。",
-  automaticConfigurationAcknowledge: "我允许本会话的合格低风险配置提案使用原有取消窗口；工具执行及 v3／安全／凭据变更仍须分别授权。",
+  automaticConfigurationAcknowledge: "我允许本会话支持的低风险连接器提案使用取消窗口。工具执行、凭据、安全设置以及需明确选择的配置仍须分别授权。",
   securityTitle: "独立确认安全策略", securityAcknowledge: "我已核对整个部署的访问权限变化，以及持久 kernel／shell 内存可能丢失的影响。", securityConfirm: "独立确认此精确安全策略", securityConfirmed: "此精确安全策略已独立确认。请核对修改内容，再确认配置。", securityRequired: "必须先由人工独立确认安全影响。普通 Apply 或工具的 Always allow 不构成本次授权。",
   destinationChanged: "预览期间凭据发送目标发生变化。请核对新目标后重新输入密钥。",
   webSearchAlternative: "使用现有网页检索",
