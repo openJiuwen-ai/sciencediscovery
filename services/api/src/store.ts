@@ -3587,18 +3587,21 @@ export class SessionStore {
     if (provider && (normalized.baseUrl !== provider.baseUrl || normalized.apiProtocol !== provider.apiProtocol)) {
       throw new Error("The base URL and API protocol of a provider model cannot be changed here; edit the provider instead");
     }
+    // Validate the complete candidate before touching the live connection object.
+    const proxyPolicy = input.proxyPolicy === undefined ? profile.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
+    const apiToken = normalizeApiToken(input.apiToken);
     Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
     // `null` is an explicit "drop my overrides" so the listing and the catalog
     // answer again; an absent key keeps whatever was saved.
     if (input.facts === null) delete profile.facts;
     if (input.proxyPolicy !== undefined) {
-      profile.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+      profile.proxyPolicy = proxyPolicy;
     }
     if (input.apiToken === null) {
       this.setModelApiToken(modelId, undefined);
       profile.hasApiToken = provider?.hasApiToken === true;
     } else if (input.apiToken !== undefined) {
-      this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
+      this.setModelApiToken(modelId, apiToken);
       profile.hasApiToken = true;
     }
     // Heals catalogs from before auto-defaulting existed: re-saving a usable
@@ -3693,16 +3696,19 @@ export class SessionStore {
       name: input.name ?? provider.name,
       presetId: provider.presetId,
     });
+    // Validate the complete candidate before touching the live connection object.
+    const proxyPolicy = input.proxyPolicy === undefined ? provider.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
+    const apiToken = normalizeApiToken(input.apiToken);
     Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
     if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
     if (input.proxyPolicy !== undefined) {
-      provider.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+      provider.proxyPolicy = proxyPolicy;
     }
     if (input.apiToken === null) {
       this.setProviderApiToken(providerId, undefined);
       provider.hasApiToken = false;
     } else if (input.apiToken !== undefined) {
-      this.setProviderApiToken(providerId, normalizeApiToken(input.apiToken));
+      this.setProviderApiToken(providerId, apiToken);
       provider.hasApiToken = true;
     }
     this.syncProviderModels(provider, previousProtocol);
