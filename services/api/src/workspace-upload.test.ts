@@ -287,3 +287,57 @@ test("a percent-looking plain filename does not fail the other files in the batc
   assert.deepEqual(result.errors, []);
   assert.deepEqual((await readFile(resolve(workspace, "trial;phase2.csv"))).toString(), "c,d");
 });
+
+test("an unusable name fails only its own entry in a mixed batch", async (context) => {
+  const workspace = await tempWorkspace(context, "invalid-name-batch");
+  const parts = await readMultipartUploads(multipartUpload("----sa-invalid-batch", [
+    {
+      content: "owned",
+      headers: ['Content-Disposition: form-data; name="files"; filename="../evil.csv"'],
+    },
+    {
+      content: "nested",
+      headers: ["Content-Disposition: form-data; name=\"files\"; filename*=UTF-8''a%2Fb.csv"],
+    },
+    {
+      content: "c,d",
+      headers: ['Content-Disposition: form-data; name="files"; filename="trial;phase2.csv"'],
+    },
+  ]), limits.maxRequestBytes);
+  const result = await uploadWorkspaceParts({
+    conflict: "rename",
+    limits,
+    listFiles: async () => [],
+    parts,
+    workspaceRoot: workspace,
+  });
+  // #713 acceptance: the good file lands, the two unusable names are reported
+  // against their own entries instead of aborting the whole upload.
+  assert.deepEqual(result.uploaded.map((item) => item.status).sort(), ["created", "failed", "failed"]);
+  assert.deepEqual(result.uploaded.filter((item) => item.status === "failed").map((item) => item.originalName), [
+    "../evil.csv",
+    "a/b.csv",
+  ]);
+  assert.equal(result.errors.length, 2);
+  assert.deepEqual((await readFile(resolve(workspace, "trial;phase2.csv"))).toString(), "c,d");
+  await assert.rejects(stat(resolve(workspace, "..", "evil.csv")), { code: "ENOENT" });
+});
+
+test("a batch of nothing but unusable names is still rejected as a bad request", async (context) => {
+  const workspace = await tempWorkspace(context, "invalid-name-only");
+  const parts = await readMultipartUploads(multipartUpload("----sa-invalid-only", [
+    {
+      content: "owned",
+      headers: ['Content-Disposition: form-data; name="files"; filename="../evil.csv"'],
+    },
+  ]), limits.maxRequestBytes);
+  // WSP-003 keeps its 400: with no usable entry there is no partial upload to answer with.
+  await assert.rejects(uploadWorkspaceParts({
+    conflict: "rename",
+    limits,
+    listFiles: async () => [],
+    parts,
+    workspaceRoot: workspace,
+  }), { code: "INVALID_UPLOAD_PATH" });
+  await assert.rejects(stat(resolve(workspace, "..", "evil.csv")), { code: "ENOENT" });
+});
