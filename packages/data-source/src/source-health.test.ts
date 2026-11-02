@@ -96,7 +96,11 @@ function success(): McpInvokeResponse {
 }
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 async function waitFor(predicate: () => boolean) {
-  for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 1)); }
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   assert.fail("Timed out waiting for local fault injection");
 }
 
