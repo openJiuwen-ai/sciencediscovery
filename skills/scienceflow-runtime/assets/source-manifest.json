@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/science-learner/ScienceFlow",
+  "input_sha256": "9dc434d727102ff7ae48282d5c63db313f0cd7a0cb152ee7be6a457b9cc73a47",
+  "sanitized_archive_sha256": "f8f6be887962d487192b9d15085fbbe696e978c1cad7abc1ea9b485a11c6da1a",
+  "upstream_version": "0.2.0",
+  "file_count": 1318,
+  "removed_private_files": "Excluded .env*, models.json, private keys, caches and VCS metadata",
+  "upstream_ref": "unverified (provide --upstream-ref)"
+}
