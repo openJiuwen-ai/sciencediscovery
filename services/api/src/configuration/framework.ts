@@ -369,7 +369,10 @@ export class ConversationalConfigurationFramework {
     const result = await this.service.decide(sessionId, id, input, key);
     if (result.state === "applied" || result.state === "dismissed") {
       this.credentials.clearRequest(id);
-      await this.settle(sessionId, id);
+      // Retrying a failed security cleanup needs its explicit Continue action,
+      // not a replay of the already-committed configuration confirmation.
+      if (!(deciding.view.capabilityId === "security.network" && deciding.view.state === "applied" && deciding.view.activation.state === "failed"))
+        await this.settle(sessionId, id);
     }
     if (result.state === "expired" || result.state === "cancelled") await this.reconcileLifecycle(sessionId, id);
     return this.service.get(sessionId, id);
@@ -592,6 +595,9 @@ export class ConversationalConfigurationFramework {
         this.repository.updateOutbox({ ...item, state: "suppressed", updatedAt: new Date().toISOString() }, item.state);
         continue;
       }
+      // The approved request budget is per explicit attempt. A failed cleanup
+      // remains visible and retryable by the user, without background redispatch.
+      if (record.view.capabilityId === "security.network" && record.view.activation.state === "failed") continue;
       try { await this.settle(item.sessionId, item.requestId); } catch { /* Keep durable receipts for retry. */ }
     }
     for (const pending of this.repository.dueRequests()) {

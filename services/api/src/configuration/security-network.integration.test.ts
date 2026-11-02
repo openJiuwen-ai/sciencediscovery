@@ -97,14 +97,17 @@ test("CFG-X10a: dismissal, Stop and audit rollback cannot change the policy or e
 });
 
 test("CFG-X10a: failed runtime cleanup remains distinct from saved policy and retries without rotating again", async context => {
-  const h = await harness(context); let unavailable = true;
-  h.framework.options.securityNetworkCleanup = async () => { if (unavailable) throw new Error("synthetic runtime failure"); };
+  const h = await harness(context); let unavailable = true, attempts = 0;
+  h.framework.options.securityNetworkCleanup = async () => { attempts++; if (unavailable) throw new Error("synthetic runtime failure"); };
   const card = await h.propose({ mode: "open" }); await consent(h.framework, card);
   const applied = await h.framework.decide(h.session.id, card.id, approval(card));
   assert.equal(applied.state, "applied"); assert.equal(applied.activation.state, "failed"); assert.equal(h.store.getSandboxNetworkSettings().mode, "open");
   assert.ok(applied.allowedActions.includes("continue"), "A standalone policy must offer a runtime cleanup retry");
   const epoch = h.store.getSession(h.session.id)!.permissionEpochId;
+  await h.framework.tick(); await h.framework.decide(h.session.id, card.id, approval(card));
+  assert.equal(attempts, 1, "Background polling and confirmation replay cannot redispatch a failed cleanup");
   unavailable = false; const settled = await h.framework.settle(h.session.id, card.id);
+  assert.equal(attempts, 2, "The user may explicitly retry the bounded cleanup");
   assert.equal(settled.activation.state, "active"); assert.equal(h.store.getSession(h.session.id)!.permissionEpochId, epoch);
 });
 

@@ -47,7 +47,7 @@ export function createSecurityNetworkAdapter(store: SessionStore, cleanupAvailab
       ], changes, impact: { resourceLocation: "Deployment sandbox network policy", effectiveScope: `All ${source.writableSessionCount} writable sessions in this deployment`,
         message: `${statement} Saving rotates affected epochs immediately; later executions cannot reuse old-epoch kernels. In-flight work can retain its startup policy. Only old-epoch kernels reported by the configured local Runner are retired; no unreported remote process cleanup or real network connectivity is certified. Approval mode, execution grants and automatic configuration authorization stay unchanged.` },
         securityConsent: { targetDigest: digest([next, scope, snapshot.resourceVersions]), statement },
-        verificationPlan: { targets: [], actions: ["After commit: one configured-Runner kernel listing and at most eight exact old-epoch kernel retirements; incomplete cleanup is reported separately. No connectivity test or model call."], maxRequests: 9, mayCharge: false },
+        verificationPlan: { targets: [], actions: ["Each explicit attempt after commit: one configured-Runner kernel listing and at most eight exact old-epoch kernel retirements. Failed cleanup requires the user's Continue action; background polling and repeated Apply do not retry it. No connectivity test or model call."], maxRequests: 9, mayCharge: false },
         activationMode: "next_execution", disposition: !Object.keys(input).length ? "missing_input" : changes.length ? "change" : "no_change", ready: changes.length > 0,
         data: { settings: next } };
     },
