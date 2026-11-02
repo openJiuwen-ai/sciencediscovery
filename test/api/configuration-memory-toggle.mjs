@@ -8,7 +8,8 @@
  * Credentials: generated synthetic API/sidecar tokens, excluded from reports/logs.
  * CostSideEffects: only owned Memory settings/Project, restored in finally; owned server and stub closed.
  * Run: E2E_MEMORY_TOGGLE_ISOLATED=1 node test/api/configuration-memory-toggle.mjs
- * This proves the public API gate, not real Neo4j persistence/readiness, browser interaction or model-language selection.
+ * Optional browser: E2E_MEMORY_TOGGLE_BROWSER=1 with the repository-pinned .e2e Chromium cache.
+ * This proves the public API gate and optionally the user card, not real Neo4j persistence/readiness or model-language selection.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -134,6 +135,7 @@ try {
     const deadline = Date.now() + 5000; let saved;
     do { saved = await formal(); if (saved.enabled) break; await new Promise(done => setTimeout(done, 100)); } while (Date.now() < deadline);
     assert.equal(saved.enabled, true); assert.equal(saved.backend, baseline.backend);
+    await panel.getByText("Saved", { exact: true }).first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: resolve(directory, "memory-saved.png"), fullPage: true, animations: "disabled", caret: "hide" });
   });
   featureGraphQueries = graphQueries; featureGraphDeletes = graphDeletes; outcome = "PASS";
