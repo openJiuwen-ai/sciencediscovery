@@ -2404,6 +2404,7 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    else if (capabilityId === "memory.connection") systemVersions = { memoryGraph: version(this.catalog.memoryGraphSettings), memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2431,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "memory.connection" ? { memoryConnectionSettings: this.getMemoryGraphSettings() } : {}),
       },
     };
   }
@@ -2917,7 +2919,13 @@ export class SessionStore {
     return row ? this.decryptModelApiToken("memory-graph:neo4j", row.encrypted_password) : undefined;
   }
 
-  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+  applyMemoryConnectionConfigurationSync(input: Pick<UpdateMemoryGraphSettingsRequest, "neo4jHttp" | "neo4jUser">): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    if (Object.keys(input).some(key => key !== "neo4jHttp" && key !== "neo4jUser")) throw new Error("Unsupported Memory connection field");
+    this.applyMemoryGraphSettingsSync(input);
+  }
+
+  private applyMemoryGraphSettingsSync(input: UpdateMemoryGraphSettingsRequest): void {
     const { neo4jPassword, ...settingsInput } = input;
     // 2B: fields are independent — only the keys present in the payload move.
     // Overlay provided fields on the current settings, then normalize. The
@@ -2944,6 +2952,10 @@ export class SessionStore {
       }
     }
     this.catalog.memoryGraphSettings = next;
+  }
+
+  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+    this.applyMemoryGraphSettingsSync(input);
     await this.saveCatalog();
     return this.getMemoryGraphSettings();
   }

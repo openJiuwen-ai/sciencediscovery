@@ -61,7 +61,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "neo4jHttp", "neo4jUser"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -100,7 +100,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential", "memory.connection"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -276,7 +276,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+  const savedForRestart = request.state === "applied" && request.activation.mode === "requires_restart"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const summary = savedForNextRun || savedForRestart ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];

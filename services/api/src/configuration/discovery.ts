@@ -8,12 +8,14 @@ import { nativeRuntimeConnectorIds } from "./native-choices.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { CONFIGURATION_SETTINGS_INVENTORY } from "./settings-catalog.js";
-import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
+import { memoryConnectionMetadata } from "./memory-connection-adapter.js";
+import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationError, digest, invalid, string } from "./validation.js";
 import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "memory.connection": "neo4j memory connection origin address username 记忆 图谱 连接 地址 用户名",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
@@ -144,6 +146,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
+  else if (id === "memory.connection") current = { ...memoryConnectionMetadata(store.getMemoryGraphSettings()), readinessVerified: false };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
   else if (id === "idea_tree.configure") {
@@ -156,8 +159,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    scopes: descriptor.scopes.filter(scope => (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    instruction: id === "memory.connection" ? "Only neo4jHttp/root origin and neo4jUser may be proposed. Omit scope. Passwords are not ordinary values. Existing credentials may be reused at the new recipient; the user must separately approve it. No probe, restart, data migration or verified activation." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);
