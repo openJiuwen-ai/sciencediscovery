@@ -2049,7 +2049,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return [request, ...items.filter((item) => item.id !== request.id)];
     });
     if (request.state === "applied" || request.state === "dismissed") void refreshSession(request.sessionId).catch(() => undefined);
-    if (request.state === "applied" && (request.capabilityId.startsWith("model.") || request.capabilityId === "provider.connection")) {
+    if (request.state === "applied" && (request.capabilityId.startsWith("model.") || ["provider.connection", "provider.credential"].includes(request.capabilityId))) {
       void Promise.all([client.listModels(), client.listProviders(), client.getGlobalSettings()]).then(([modelItems, registry, settings]) => {
         setModels(modelItems);
         setModelProviders(registry.providers);

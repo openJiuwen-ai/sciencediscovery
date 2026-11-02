@@ -16,6 +16,26 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X02f: shared provider key stays unavailable until separate destination confirmation and is never an ordinary value", async () => {
+  const view = request({ capabilityId: "provider.credential", scope: { kind: "global" }, state: "collecting_input", allowedActions: ["preview", "dismiss"], fields: [
+    { id: "providerId", label: "Provider", kind: "enum", required: true, value: "owned", choices: [{ id: "owned", label: "Owned provider" }] },
+    { id: "apiToken", label: "Replacement", kind: "credential", required: true, status: "missing" },
+  ], endpointAuthorization: { endpointTarget: "opaque-recipient-digest", host: "owned.invalid", classification: "public_https", status: "required", revision: 2,
+    destinations: [{ label: "Model requests", url: "https://owned.invalid/v1/chat/completions" }, { label: "Discovery", url: "https://owned.invalid/v1/models" }] } });
+  const previews: unknown[] = [], uploads: unknown[] = [], confirmed = { ...view, endpointAuthorization: { ...view.endpointAuthorization!, status: "confirmed" as const } };
+  const api = actions({ preview: async input => { previews.push(input); return { ...confirmed, revision: input.expectedRevision + 1 }; }, credential: async input => { uploads.push(input); return { handle: "owned-draft", expiresAt: "2099-01-01T00:00:00Z" }; } });
+  const renderer = await mount(view, api);
+  assert.equal(renderer.root.findAllByType("input").filter(input => input.props.type === "password").length, 0);
+  assert.match(JSON.stringify(renderer.toJSON()), /https:\/\/owned.invalid\/v1\/models/u);
+  await act(async () => renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate() {} }))));
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-provider-input" } }));
+  await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(uploads.length, 1); assert.doesNotMatch(JSON.stringify(previews), /synthetic-provider-input/u);
+  assert.deepEqual(previews, [{ expectedRevision: 2, values: { providerId: "owned" } }, { expectedRevision: 3, values: { providerId: "owned" }, credentialHandle: "owned-draft" }]);
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-X02e: shared-provider consent displays every recipient and protocol edits choose matching finite defaults", async () => {
   const view = request({ capabilityId: "provider.connection", scope: { kind: "global" }, fields: [
     { id: "apiProtocol", label: "Protocol", kind: "enum", required: true, value: "openai-chat-completions", choices: Object.keys(MODEL_API_VARIANTS).map(id => ({ id, label: id })) },

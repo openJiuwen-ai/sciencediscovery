@@ -201,7 +201,7 @@ export class ConfigurationRequestService {
   private async proposeInternal(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>, trustedReversal = false): Promise<ConfigurationRequestView> {
     const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
-    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "provider.connection"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "provider.connection", "provider.credential"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);

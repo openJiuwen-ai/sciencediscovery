@@ -100,7 +100,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential", "provider.connection"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential", "provider.connection", "provider.credential"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -142,7 +142,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
     } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => ({ ...current, [field.id]: value,
       ...(["model.connect", "provider.connection"].includes(request.capabilityId) && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
-        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol], ...(request.capabilityId === "provider.connection" ? { modelDiscovery: DEFAULT_MODEL_DISCOVERY[value as ModelApiProtocol] } : {}) } : {}) })); }
+        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol], ...(["provider.connection", "provider.credential"].includes(request.capabilityId) ? { modelDiscovery: DEFAULT_MODEL_DISCOVERY[value as ModelApiProtocol] } : {}) } : {}) })); }
   }
   async function selectOption(optionId: string) {
     if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
@@ -353,8 +353,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {authorization.destinations?.length ? <ul>{authorization.destinations.map(destination => <li key={destination.url}><strong>{destination.label}</strong><p><code>{destination.url}</code></p></li>)}</ul> : <p><code>{authorization.endpointTarget}</code></p>}
       {["loopback", "private_network"].includes(authorization.classification) ? <p>{m.endpointLocal}</p> : null}
       <p role="status">{authorization.status === "blocked" ? m.endpointBlocked : endpointReady
-        ? request.capabilityId === "provider.connection" ? m.providerEndpointConfirmed : m.endpointConfirmed
-        : request.capabilityId === "provider.connection" ? m.providerEndpointRequired : m.endpointRequired}</p>
+        ? ["provider.connection", "provider.credential"].includes(request.capabilityId) ? m.providerEndpointConfirmed : m.endpointConfirmed
+        : ["provider.connection", "provider.credential"].includes(request.capabilityId) ? m.providerEndpointRequired : m.endpointRequired}</p>
       {authorization.status === "required" && !targetEdited && actions.consent ? <button type="button" className="secondary-button" disabled={busy || readOnly || runActive} onClick={() => void perform(() => actions.consent!({ revision: request.revision, endpointTarget: authorization.endpointTarget }, operationKey(`consent:${request.revision}:${authorization.endpointTarget}`)))}>{m.endpointConsent}</button> : null}
     </section> : null}
     <form className="configuration-fields" onSubmit={(event) => void preview(event)}>

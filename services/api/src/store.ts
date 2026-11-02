@@ -2384,7 +2384,7 @@ export class SessionStore {
     const settings = this.getSessionSettings(sessionId);
     const project = this.getProject(session.projectId)!;
     const model = this.getModel(target);
-    const provider = this.getProvider(capabilityId === "provider.connection" ? target : model?.providerId);
+    const provider = this.getProvider(["provider.connection", "provider.credential"].includes(capabilityId) ? target : model?.providerId);
     const version = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
     // Ciphertext generations, never plaintext token hashes, invalidate old approvals.
     const secretRows = this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all();
@@ -2404,7 +2404,7 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
-    if (capabilityId === "provider.connection") {
+    if (["provider.connection", "provider.credential"].includes(capabilityId)) {
       const children = this.catalog.models.filter(model => model.providerId === target);
       const keys = new Set([providerSecretKey(target), ...children.map(model => model.id)]);
       systemVersions = { providerConnection: version([provider ?? null, children, this.providerDiscoveryRevision(target) ?? null,
@@ -2425,7 +2425,7 @@ export class SessionStore {
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
-        ...(capabilityId === "provider.connection" ? { providerConnection: this.configurationProviderConnectionSource(target), providers: structuredClone(this.listProviders()) } : {}),
+        ...(["provider.connection", "provider.credential"].includes(capabilityId) ? { providerConnection: this.configurationProviderConnectionSource(target), providers: structuredClone(this.listProviders()) } : {}),
         installedConnectorIds: [...this.connectorIds], inheritedConnectorIds: [...this.getProjectSettings(project.id).effective.enabledConnectorIds],
         sources: structuredClone(settings.sources),
         projectOverrides: structuredClone(project.settingsOverrides),
@@ -3744,6 +3744,26 @@ export class SessionStore {
     this.syncProviderModels(provider, previousProtocol);
   }
 
+  /** Shared by formal settings and the transactional conversational credential adapter. */
+  private applyProviderCredentialSync(provider: ModelProvider, apiToken: string | undefined): void {
+    this.setProviderApiToken(provider.id, apiToken);
+    provider.hasApiToken = Boolean(apiToken);
+    provider.updatedAt = new Date().toISOString();
+    for (const profile of this.catalog.models) if (profile.providerId === provider.id) {
+      profile.hasApiToken = this.profileHasOwnToken(profile.id) || provider.hasApiToken;
+      profile.updatedAt = provider.updatedAt;
+    }
+  }
+
+  applyProviderCredentialConfigurationSync(providerId: string, apiToken: string): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider credential writes require the shared transaction");
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const normalized = this.normalizeConnectionUpdateToken(apiToken);
+    if (!normalized) throw new Error("A replacement credential is required");
+    this.applyProviderCredentialSync(provider, normalized);
+  }
+
   async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
@@ -3757,13 +3777,7 @@ export class SessionStore {
     if (input.proxyPolicy !== undefined) {
       provider.proxyPolicy = proxyPolicy;
     }
-    if (input.apiToken === null) {
-      this.setProviderApiToken(providerId, undefined);
-      provider.hasApiToken = false;
-    } else if (input.apiToken !== undefined) {
-      this.setProviderApiToken(providerId, apiToken);
-      provider.hasApiToken = true;
-    }
+    if (input.apiToken !== undefined) this.applyProviderCredentialSync(provider, apiToken);
     this.syncProviderModels(provider, previousProtocol);
     await this.saveCatalog();
     return provider;
