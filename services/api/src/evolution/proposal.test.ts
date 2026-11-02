@@ -26,7 +26,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { EvolveRunProposal } from "@sciencediscovery/schema";
+import type { EvolveGoal, EvolveRunProposal } from "@sciencediscovery/schema";
 
 import { EvolveSidecarError } from "./sidecar.js";
 import { startProposedRun, summariseRun, type ProposalDeps } from "./proposal.js";
@@ -81,6 +81,39 @@ test("a coherent proposal becomes a run, and the probe's numbers come back with 
   assert.equal(result.run?.id, "run-1");
   assert.equal(result.probe?.baseline, 0.4);
   assert.equal(result.refusedBecause, undefined);
+});
+
+test("a model with no thinking control is budgeted as a thinking model", async () => {
+  // The proposal's default asks for thinking off, and the ceiling follows that
+  // setting. On a dialect with no thinking-control field the request is
+  // ignored: the model reasons anyway and spends the quiet ceiling on it, which
+  // is a whole run of empty replies. Record what will happen and budget for it.
+  const startWith = async (thinkingSupported: boolean) => {
+    let started: EvolveGoal | undefined;
+    const { deps: d } = deps({
+      thinkingSupported,
+      orchestrator: {
+        probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
+        sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+        start: async (input: { goal: EvolveGoal }) => {
+          started = input.goal;
+          return { id: "run-1", status: "running" };
+        },
+      } as never,
+    });
+    const result = await startProposedRun(proposal(), d);
+    assert.equal(result.refusedBecause, undefined);
+    return started;
+  };
+
+  const quiet = await startWith(true);
+  assert.equal(quiet?.thinking, "disabled");
+  assert.equal(quiet?.budget.maxTokensPerCall, 16_000);
+
+  const loud = await startWith(false);
+  assert.equal(loud?.thinking, "enabled");
+  assert.ok((loud?.budget.maxTokensPerCall ?? 0) >= 96_000,
+    "the ceiling has to hold the reasoning and the program when thinking cannot be turned off");
 });
 
 test("the probe's own verdict reaches the agent unwrapped", async () => {

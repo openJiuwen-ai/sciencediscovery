@@ -47,6 +47,12 @@ export interface PreflightInput {
   goal: EvolveGoal;
   model: ModelProfile | undefined;
   sandbox: EvolveSandboxCapability;
+  /** Whether this endpoint can actually be told to stop thinking. A dialect
+   *  with no thinking-control field accepts the setting and ignores it, so the
+   *  quiet floor would under-budget every call while the run reports that
+   *  thinking is off. Absent means the caller could not tell, and the goal's
+   *  own setting stands. */
+  thinkingSupported?: boolean;
 }
 
 /**
@@ -100,18 +106,30 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   }
 
   const floors = MIN_TOKENS_PER_CALL[input.goal.algorithm] ?? MIN_TOKENS_PER_CALL.puct!;
-  const quiet = input.goal.thinking === "disabled";
+  // Asking for thinking off only lowers the floor when the endpoint can carry
+  // the request. On a dialect with no thinking-control field the model reasons
+  // anyway — observed on a custom gateway, where every call returned exactly at
+  // the quiet ceiling with no content at all — so the thinking floor applies
+  // whatever the goal declares.
+  const canTurnThinkingOff = input.thinkingSupported !== false;
+  const quiet = input.goal.thinking === "disabled" && canTurnThinkingOff;
   const floor = quiet ? floors.quiet : floors.thinking;
   if (budget.maxTokensPerCall < floor) {
     issues.push({
       code: "max_tokens_too_low",
       fix: quiet
         ? `raise the per-call ceiling above ${floor}`
-        : `raise the per-call ceiling above ${floor}, or turn thinking off (which lowers the floor to ${floors.quiet})`,
+        : canTurnThinkingOff
+          ? `raise the per-call ceiling above ${floor}, or turn thinking off (which lowers the floor to ${floors.quiet})`
+          : `raise the per-call ceiling above ${floor}; this endpoint has no thinking control, so the model reasons no matter what the run asks for`,
       // The failure is silent: the reply comes back empty, the node is recorded
       // as failed, and the run looks like a search that could not find anything.
       message: `the per-call ceiling ${budget.maxTokensPerCall} is below the ${floor} floor `
         + `for ${input.goal.algorithm}${quiet ? "" : " with thinking on"}; `
+        + (input.goal.thinking === "disabled" && !canTurnThinkingOff
+          ? "this model's API variant has no thinking-control field, so asking it to stop "
+            + "thinking is ignored and the budget goes to hidden reasoning; "
+          : "")
         + "the model spends the budget on hidden thinking and returns an empty reply, "
         + "and an empty reply is recorded as a failed candidate",
     });

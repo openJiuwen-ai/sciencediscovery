@@ -76,12 +76,14 @@ async function codes(overrides: Partial<EvolveGoal> = {}, extra: {
   casHas?: (hash: string) => Promise<boolean>;
   model?: ModelProfile | undefined;
   sandbox?: EvolveSandboxCapability;
+  thinkingSupported?: boolean;
 } = {}): Promise<string[]> {
   const issues = await preflight({
     casHas: extra.casHas ?? (async () => true),
     goal: goal(overrides),
     model: "model" in extra ? extra.model : MODEL,
     sandbox: extra.sandbox ?? SANDBOX,
+    thinkingSupported: extra.thinkingSupported,
   });
   return issues.map((issue) => issue.code);
 }
@@ -121,6 +123,29 @@ test("the token floor follows the thinking setting, not just the algorithm", asy
   // OpenEvolve rewrites the whole genome, so its floors are higher again.
   assert.ok((await codes({ algorithm: "openevolve", budget: at(96_000) }))
     .includes("max_tokens_too_low"));
+});
+
+test("an endpoint with no thinking control cannot lower the floor by being asked", async () => {
+  // The quiet floor assumes the endpoint carries the request. A plain OpenAI
+  // dialect accepts "thinking off" and reasons anyway — measured on a custom
+  // gateway, every call returned exactly at the 16k quiet ceiling with no
+  // content at all — so the setting must not buy the lower floor there.
+  const quiet = { budget: { ...goal().budget, maxTokensPerCall: 16_000 }, thinking: "disabled" as const };
+  assert.deepEqual(await codes(quiet), []);
+  assert.deepEqual(await codes(quiet, { thinkingSupported: false }), ["max_tokens_too_low"]);
+
+  const issues = await preflight({
+    casHas: async () => true,
+    goal: goal(quiet),
+    model: MODEL,
+    sandbox: SANDBOX,
+    thinkingSupported: false,
+  });
+  const issue = issues.find((candidate) => candidate.code === "max_tokens_too_low");
+  assert.match(issue?.message ?? "", /no thinking-control field/);
+  // Offering the setting as a way out would send the user to a knob this
+  // endpoint ignores.
+  assert.doesNotMatch(issue?.fix ?? "", /turn thinking off/);
 });
 
 test("a refused ceiling offers turning thinking off as the other way out", async () => {
