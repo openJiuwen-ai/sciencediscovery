@@ -5742,6 +5742,8 @@ export class SessionStore {
             this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ?")
               .run(JSON.stringify(request), request.id);
           }
+          if (this.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuration_requests_v2'").get())
+            new ConfigurationRepository(this.database).withdrawAutoApply(sessionId);
         }
       }
       if (reviewMode) session.reviewMode = reviewMode;

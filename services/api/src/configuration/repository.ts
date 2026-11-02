@@ -70,6 +70,22 @@ export class ConfigurationRepository {
     this.database.prepare("INSERT INTO configuration_timeline_v3(request_id,session_id,state_version) VALUES(?,?,?) ON CONFLICT(request_id) DO UPDATE SET state_version=excluded.state_version")
       .run(view.id, view.sessionId, view.stateVersion);
   }
+  /** Revocation is durable before a later policy enable can reuse an old countdown. */
+  withdrawAutoApply(sessionId: string): number {
+    return this.transaction(() => {
+      const rows = this.database.prepare("SELECT record_json FROM configuration_requests_v2 WHERE session_id=? AND state='awaiting_confirmation' AND json_extract(record_json,'$.view.autoApplyAt') IS NOT NULL").all(sessionId) as unknown as JsonRow[];
+      let withdrawn = 0;
+      for (const row of rows) {
+        const record = JSON.parse(row.record_json) as ConfigurationRecord;
+        if (record.view.capabilityId !== "connector.enable") continue;
+        const version = record.view.stateVersion;
+        delete record.view.autoApplyAt;
+        record.view.stateVersion++; record.view.updatedAt = new Date().toISOString();
+        this.save(record, version); withdrawn++;
+      }
+      return withdrawn;
+    });
+  }
   scheduleWork(record: ConfigurationRecord, dueAt = Date.now()): void {
     const view = record.view;
     if (["collecting_input","awaiting_confirmation","needs_fix","validating","applying","failed","stale"].includes(view.state)
