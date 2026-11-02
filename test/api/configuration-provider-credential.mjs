@@ -33,7 +33,7 @@ try{
 
  const providerCurrent=async()=>{const value=(await api('/api/providers')).providers.find(item=>item.id===provider.id);assert.ok(value);return value;};
  const consent=card=>api(path(card,'endpoint-consent'),{revision:card.revision,endpointTarget:card.endpointAuthorization.endpointTarget},'POST',200);
- const draft=card=>api(path(card,'credential'),{expectedRevision:card.revision,fieldId:'apiToken',secret:keys[1]},'POST',200);
+ const draft=card=>api(path(card,'credentials'),{expectedRevision:card.revision,fieldId:'apiToken',secret:keys[1]},'POST',200);
  const preview=(card,extra={})=>api(path(card,'preview'),{expectedRevision:card.revision,values:{providerId:provider.id},selectedOptionId:'persist',...extra},'POST',200);
  const prepared=async card=>{await consent(card);const uploaded=await draft(card);return preview(card,{credentialHandle:uploaded.handle});};
  const refuse=async card=>{card=await preview(card,{selectedOptionId:'dismiss'});return decide(card,'dismiss');};
@@ -44,7 +44,7 @@ try{
   assert.equal(beforeModels.find(item=>item.id===children[0].id).hasApiToken,true);assert.equal(beforeModels.find(item=>item.id===children[1].id).hasApiToken,false);
   for(const values of [{providerId:provider.id,apiToken:keys[1]},{providerId:provider.id,tokenOptional:true}])assert.equal((await api(path(),{protocolVersion:3,capabilityId:'provider.credential',values},'POST',400)).code,'INVALID_CONFIGURATION_INPUT');
   card=await propose({providerId:provider.id});assert.equal(card.endpointAuthorization.status,'required');assert.equal(card.verificationPlan.maxRequests,0);assert.equal(card.scope.kind,'global');
-  assert.equal((await api(path(card,'credential'),{expectedRevision:card.revision,fieldId:'apiToken',secret:keys[1]},'POST',409)).code,'ENDPOINT_CONSENT_REQUIRED');assert.equal((await providerCurrent()).hasApiToken,false);
+  assert.equal((await api(path(card,'credentials'),{expectedRevision:card.revision,fieldId:'apiToken',secret:keys[1]},'POST',409)).code,'ENDPOINT_CONSENT_REQUIRED');assert.equal((await providerCurrent()).hasApiToken,false);
  });
  await step('3. Manual secure rotation and replay update inherited readiness while preserving child overrides and every other setting',async()=>{
   card=await prepared(card);assert.equal(card.endpointAuthorization.status,'confirmed');assert.equal((await providerCurrent()).hasApiToken,false);assert.equal(canaryCalls.length,0);
@@ -70,7 +70,7 @@ try{
   const browserRequests=[];page.on('request',request=>{if(request.method()==='POST'&&request.url().includes('/configuration-requests/'))browserRequests.push({path:new URL(request.url()).pathname,body:request.postData()??''});});
   for(const viewport of [{width:1280,height:800},{width:900,height:650},{width:390,height:844}]){await page.setViewportSize(viewport);await password.scrollIntoViewIfNeeded();const geometry=await password.evaluate(element=>{const box=element.getBoundingClientRect();return {left:box.left,right:box.right};});assert.ok(geometry.left>=-1&&geometry.right<=viewport.width+1);await page.screenshot({path:resolve(directory,'provider-key-'+viewport.width+'x'+viewport.height+'.png'),fullPage:true,animations:'disabled',caret:'hide'});}
   await panel.getByRole('button',{name:'Refresh proposed changes',exact:true}).click();await password.waitFor({state:'visible'});const confirm=panel.getByRole('button',{name:'Confirm choice and continue',exact:true});await confirm.click();await panel.waitFor({state:'detached'});
-  assert.equal(browserRequests.filter(request=>request.body.includes(keys[1])).length,1);assert.ok(browserRequests.every(request=>!request.body.includes(keys[1])||request.path.endsWith('/credential')));assert.equal((await providerCurrent()).hasApiToken,true);assert.equal(canaryCalls.length,0);
+  assert.equal(browserRequests.filter(request=>request.body.includes(keys[1])).length,1);assert.ok(browserRequests.every(request=>!request.body.includes(keys[1])||request.path.endsWith('/credentials')));assert.equal((await providerCurrent()).hasApiToken,true);assert.equal(canaryCalls.length,0);
   const record=page.locator('.conversation-configuration-record').filter({hasText:'Replace shared provider API key'}).last();await record.scrollIntoViewIfNeeded();await record.locator('summary').first().click();assert.match(await record.innerText(),/Saved/);await page.screenshot({path:resolve(directory,'provider-key-saved.png'),fullPage:true,animations:'disabled',caret:'hide'});
  });assert.equal(canaryCalls.length,0);outcome='PASS';
 }catch(error){outcome=error instanceof Blocked?'BLOCKED':'FAIL';process.exitCode=1;}
