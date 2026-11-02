@@ -12,6 +12,7 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
+import { createDefaultApprovalAdapter } from "./default-approval-adapter.js";
 import { createSecurityNetworkAdapter } from "./security-network-adapter.js";
 import { ConfigurationSecurityAuthorizer } from "./security-consent.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
@@ -117,8 +118,8 @@ export class ConversationalConfigurationFramework {
     this.security = new ConfigurationSecurityAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
-      if (adapter.id === "security.network") {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), createDefaultApprovalAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      if (["security.network", "security.default_approval"].includes(adapter.id)) {
         const apply = adapter.apply;
         if (!apply) throw new Error("Security policy adapters require a synchronous domain apply");
         adapter.apply = context => {
@@ -212,7 +213,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "This setting applies to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || input.capabilityId === "security.default_approval" || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {

@@ -107,7 +107,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const securityConsent = request.securityConsent;
-  const securityReady = request.capabilityId !== "security.network" || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
+  const securityReady = !["security.network", "security.default_approval"].includes(request.capabilityId) || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
@@ -360,7 +360,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           <input id={`${id}-security-ack`} type="checkbox" checked={securityAcknowledged}
             disabled={!editable || dirty || runActive || request.state !== "awaiting_confirmation"}
             onChange={event => setSecurityAcknowledged(event.target.checked)} />
-          <span>{m.securityAcknowledge}</span>
+          <span>{request.capabilityId === "security.default_approval" ? m.approvalDefaultAcknowledge : m.securityAcknowledge}</span>
         </label>
         <button type="button" className="secondary-button" disabled={!editable || !securityAcknowledged || dirty || runActive || request.state !== "awaiting_confirmation"}
           onClick={() => void perform(() => actions.securityConsent!({ revision: request.revision, targetDigest: securityConsent.targetDigest, acknowledged: true }, operationKey(`security:${request.revision}:${securityConsent.targetDigest}`)))}>{m.securityConfirm}</button>

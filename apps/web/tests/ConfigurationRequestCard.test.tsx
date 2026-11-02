@@ -821,3 +821,20 @@ test("Jiuwen live-wait card is actionable while its original run remains running
     await act(async () => renderer.unmount());
   }
 });
+
+test("CFG-X10b: default-approval card requires independent acknowledgement and discloses new-session scope", async () => {
+  let latest = request({ capabilityId: "security.default_approval", scope: { kind: "global" }, fields: [{ id: "defaultApprovalMode", label: "New-session tool approval", kind: "enum", value: "always_allow", choices: [{ id: "always_allow", label: "Always allow eligible tools" }] }],
+    securityConsent: { targetDigest: "sha256:defaults", statement: "Only new sessions; pending tools remain unchanged", revision: 2, status: "required" } });
+  let renderer!: ReactTestRenderer; const acknowledgements: unknown[] = [];
+  const api = actions({ securityConsent: async input => { acknowledgements.push(input); return { ...latest, stateVersion: latest.stateVersion + 1, securityConsent: { ...latest.securityConsent!, status: "confirmed" } }; } });
+  const draw = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } }));
+  await act(async () => { renderer = create(draw()); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  assert.equal(button(renderer, "Independently approve this exact security policy").props.disabled, true);
+  assert.match(JSON.stringify(renderer.toJSON()), /newly created sessions/); assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /possible loss of persistent/);
+  await act(async () => renderer.root.findByProps({ type: "checkbox" }).props.onChange({ target: { checked: true } }));
+  await act(async () => button(renderer, "Independently approve this exact security policy").props.onClick());
+  assert.deepEqual(acknowledgements, [{ revision: 2, targetDigest: "sha256:defaults", acknowledged: true }]);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => renderer.unmount());
+});

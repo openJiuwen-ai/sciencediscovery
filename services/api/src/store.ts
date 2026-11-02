@@ -2405,6 +2405,7 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "security.default_approval") systemVersions = { approvalDefaults: version([this.catalog.globalSettings.defaultApprovalMode, project.settingsOverrides.defaultApprovalMode]) };
     if (capabilityId === "security.network") systemVersions = { securityNetwork: version([
       this.catalog.sandboxNetworkSettings, this.catalog.sessions.filter(session => !session.archivedAt).map(session => [session.id, session.permissionEpochId]),
       this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
@@ -2422,6 +2423,7 @@ export class SessionStore {
       } : resourceVersions),
       data: {
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        defaultApproval: { global: this.catalog.globalSettings.defaultApprovalMode ?? "inherit", project: project.settingsOverrides.defaultApprovalMode ?? "inherit" },
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
@@ -2446,6 +2448,18 @@ export class SessionStore {
       encrypt: (id, secret) => this.encryptModelApiToken(id, secret),
       decrypt: (id, ciphertext) => this.decryptModelApiToken(id, ciphertext),
     };
+  }
+
+  applyDefaultApprovalConfigurationSync(sessionId: string, scope: ConfigurationScope, mode: "inherit" | "always_allow" | "ask_for_dangerous"): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Approval defaults require the shared transaction");
+    if (!["inherit", "always_allow", "ask_for_dangerous"].includes(mode)) throw new Error("Invalid approval default");
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    if (scope.kind !== "global" && (scope.kind !== "project" || scope.id !== project.id)) throw new Error("Invalid approval-default scope");
+    const next = { ...(scope.kind === "global" ? this.catalog.globalSettings : project.settingsOverrides) };
+    if (mode === "inherit") delete next.defaultApprovalMode; else next.defaultApprovalMode = mode;
+    const normalized = this.normalizeSettings(next);
+    if (scope.kind === "global") this.catalog.globalSettings = normalized; else project.settingsOverrides = normalized;
+    this.syncSessionCompatibilityForProject(scope.kind === "project" ? project.id : undefined);
   }
 
   getGlobalSettings(): RuntimeSettingsDetails {
