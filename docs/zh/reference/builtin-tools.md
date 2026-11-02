@@ -95,6 +95,7 @@
 |---|---|---|
 | `run_npu_job` | Runner 启用 `SCIENCE_AGENT_NPU_BROKER=1` 且加载到 NPU workload 白名单 | `operation=list_workloads\|submit\|status\|logs\|result\|cancel`；`workload_id` 来自白名单，`config_path` 为 Workspace 相对路径；`environment_id` 选择环境最新版，省略时使用 Session 所选环境；内置 workload 为 `npu.smoke_test` 与 `antibody.protenix.v1` |
 | `create_evolve_run` | 部署注册了演进能力 | 提交搜索方案 —— 起点、打分模式、分片划分、预算与算法（`puct` 或 `openevolve`）。服务端负责校验、跑判别力探针并掌握预算；Agent 只负责提交。启动前会弹出审批卡片，搜索随后运行数分钟到数小时，并有自己的实时面板 |
+| `get_evolve_budget` | 部署注册了演进能力 | 读取当前 Session 模型上一次搜索实际会拿到的预算 —— run 将记录的 thinking 设置、每种算法的单次调用上限、以及整次 run 的 token 与时长上限。应在向用户请求花钱的 checkpoint 之前读取，使用户批准的是上限与总量，而不是被请求的设置 |
 | `get_evolve_run` | 部署注册了演进能力 | 读取某次搜索的状态与结果。不是等待机制 —— 面板会自行流式显示进度，轮询它只会花掉搜索需要的预算 |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |

@@ -28,6 +28,7 @@
 
 import type { EvolveGoal, ModelProfile } from "@sciencediscovery/schema";
 
+import { MIN_TOKENS_PER_CALL } from "./call-budget.js";
 import { casHash, needsData, validateSplit } from "./dataset.js";
 import { hasBlockingIssue, validateScorecard } from "./scorecard.js";
 import type { EvolveSandboxCapability } from "./sandbox.js";
@@ -54,28 +55,6 @@ export interface PreflightInput {
    *  own setting stands. */
   thinkingSupported?: boolean;
 }
-
-/**
- * Floor for one mutation call, which depends on the *thinking* setting far more
- * than on the algorithm.
- *
- * Measured, not guessed, on GLM5.2 rewriting a small program:
- *
- * * thinking on, 16k ceiling: 16001 output tokens, **no content at all**, six
- *   expansions in a row — every one recorded as a candidate that would not run.
- * * thinking on, 64k ceiling: 11k–64k per call, and **two of eight still hit
- *   the cap**. So 64k is not comfortable either.
- * * thinking off: ~1.2k per call.
- *
- * Hence the two columns. With thinking on the budget must hold the reasoning
- * *and* the program, and the observed spread says six figures; with it off, a
- * few thousand is plenty and demanding more would refuse runs that work.
- */
-const MIN_TOKENS_PER_CALL: Record<string, { thinking: number; quiet: number }> = {
-  puct: { quiet: 8_000, thinking: 96_000 },
-  // OpenEvolve rewrites the whole genome rather than editing it.
-  openevolve: { quiet: 16_000, thinking: 128_000 },
-};
 
 /** Below this the held-out set is too small for the acceptance gate to say
  *  anything: four shards is the floor the split design settles on. */

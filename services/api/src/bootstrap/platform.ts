@@ -47,6 +47,7 @@ import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
+import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
@@ -414,6 +415,10 @@ export function createPlatformServices(
    */
   const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => !evolveAvailability.ready ? undefined : ({
     approvalMode: turn.approvalMode,
+    // Read before the spend checkpoint. The same function that prices the run
+    // answers here, so the number the agent shows the user is the number the
+    // run gets — including the thinking setting an endpoint cannot honor.
+    getEvolveBudget: async ({ thinking }) => describeEvolveBudget(store.getModel(turn.modelId), thinking),
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);

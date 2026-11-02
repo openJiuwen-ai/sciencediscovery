@@ -139,9 +139,15 @@ does. Set one only for a reason you can give in a line:
 
 > **Checkpoint 3.** Show the shape in a few lines: what one unit is, how much is held out, how
 > many expansions with how many workers, and roughly what that costs in time and model calls.
-> Mention `search` only if you set it, in one line saying why; otherwise leave it out. This is the
-> last point before real money is spent — say so plainly, and default to the smaller option when
-> unsure.
+> Call `get_evolve_budget` first and read the money line off it — the per-call token ceiling you
+> will actually get, times the expansion count, against the run's total token cap. Call it rather
+> than guessing: the ceiling depends on whether this endpoint can turn thinking off at all, and
+> an endpoint that cannot is priced as a thinking run (96k per call for puct, 128k for
+> openevolve) however the run is configured. If the reply says thinking is `enabled` with a note,
+> say that to the user in the checkpoint instead of promising "thinking off" — they are approving
+> the budget, not the setting. Mention `search` only if you set it, in one line saying why;
+> otherwise leave it out. This is the last point before real money is spent — say so plainly, and
+> default to the smaller option when unsure.
 
 ## Step 4 — Start it, then report
 

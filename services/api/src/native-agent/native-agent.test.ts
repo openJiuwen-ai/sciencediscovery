@@ -1101,6 +1101,11 @@ test("evolve tools appear on the first model step only when a runtime is registe
   // does not report a missing tool; it hand-rolls a search instead.
   const runtime = {
     createEvolveRun: async () => ({ refusedBecause: "probe" }),
+    getEvolveBudget: async () => ({
+      maxSeconds: 7_200, model: "test-model",
+      perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+      thinking: { effective: "enabled" }, totalTokenCap: 600_000,
+    }),
     getEvolveRun: async () => ({
       baselineScore: null, bestScore: null, bestTestScore: null,
       candidates: 0, id: "run-1", status: "running" as const, tokens: 0,
@@ -1111,6 +1116,7 @@ test("evolve tools appear on the first model step only when a runtime is registe
     const { streamer } = scriptStreamer([
       (call) => {
         assert.equal(call.tools.some((tool) => tool.name === "create_evolve_run"), expected);
+        assert.equal(call.tools.some((tool) => tool.name === "get_evolve_budget"), expected);
         assert.equal(call.tools.some((tool) => tool.name === "get_evolve_run"), expected);
         return textTurn("done");
       },

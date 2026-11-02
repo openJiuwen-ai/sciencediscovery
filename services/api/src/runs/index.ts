@@ -551,7 +551,7 @@ export function splitArtifactVersionSuffix(raw: string): { id: string; version: 
  * Declared `| undefined` rather than `?` on purpose. It still travels through
  * `executeAgentRun`, `scheduleSessionRuns` and `streamAgentRun` as a positional
  * parameter, and while it was optional a new route could be added without it
- * and lose both tools with no type error — silently, because the model does not
+ * and lose the tools with no type error — silently, because the model does not
  * report a missing tool, it hand-rolls a search instead. Required-but-nullable
  * makes that omission a compile error while still letting a deployment without
  * the evolve sidecar pass `undefined` and offer nothing.
