@@ -104,8 +104,19 @@ const jwInstalled = cfg => existsSync(resolveVenvEntry(venvDir(cfg), "jiuwenswar
 //      阶段/耗时/退出码落 startup-diagnostics.log（新机器卡住时取回即可定位）。
 const EXEC_TIMEOUT_MS = 180_000;   // 单条子命令（python）的墙钟上限
 const PROBE_DEADLINE_MS = 240_000; // 等待 jw 就绪的总墙钟上限
-const PROBE_INTERVAL_MS = 2_000;
+// [windows-desktop] 0015 两段节奏：spawn 后的最初 10s 是 gateway 绑定端口
+// 的高发窗口（dev 实测 listen 在 spawn 后 ~6-9s），250ms 密集探测把这层
+// 延迟压到 1/8；之后端口仍静默说明 python import 期长，退到 1s 粗扫即可
+// （每次探测是毫秒级 TCP connect，CPU 代价可忽略）。旧固定 2s 在"就绪
+// 时刻 0-2s 均匀分布"假设下平均多等 ~1s，两段化后热区平均 <0.3s。
+const PROBE_FAST_INTERVAL_MS = 250;
+const PROBE_FAST_WINDOW_MS = 10_000;
+const PROBE_INTERVAL_MS = 1_000;
 const PROBE_PROGRESS_MS = 15_000;  // 打点间隔（stderr → shell.log → loading 页文案）
+
+function probeIntervalMs(loopStartedAt) {
+  return Date.now() - loopStartedAt < PROBE_FAST_WINDOW_MS ? PROBE_FAST_INTERVAL_MS : PROBE_INTERVAL_MS;
+}
 
 /** 诊断日志路径：随 jw root 落盘（打包模式 = %LOCALAPPDATA%\ScienceDiscovery\jiuwenswarm\）。 */
 export function startupDiagPath(cfg) {
@@ -197,7 +208,13 @@ export async function instanceStatus(cfg) {
  *  with bare TCP (no python spawn — a cold `jiuwenswarm-start --status` is a
  *  full jw import, 30-60s on cold machines); the python status check only
  *  runs when the ports don't all answer (to tell "still starting" from
- *  "another process squatted the port"). */
+ *  "another process squatted the port").
+ *  [windows-desktop] 0015 note: when the bootstrap .env carries the full
+ *  port set, the python status fallback returns exactly the same ports the
+ *  TCP probes just failed on — re-probing them via a cold python adds ~2.6s
+ *  (dev measurement) with zero new information, and it fires on every
+ *  still-starting poll round. Fast-fail in that case; keep the fallback only
+ *  for the no/partial-.env situation where it is the sole port source. */
 export async function isUp(cfg) {
   try {
     const ports = await readInstancePorts(cfg);
@@ -207,7 +224,8 @@ export async function isUp(cfg) {
         probeTcp("127.0.0.1", ports.web),
         probeTcp("127.0.0.1", ports.agentServer),
       ]);
-      if (answers.every(Boolean)) return true;
+      // Full .env port set: the probes are authoritative — no python spawn.
+      return answers.every(Boolean);
     }
     const status = await instanceStatus(cfg);
     if (!status.running || !status.ports.gateway) return false;
@@ -480,7 +498,7 @@ export async function cmdStart(cfg = jwConfig()) {
         }
         if (!settled) {
           await diag(cfg, `probe #${attempt}: gateway answered but web/agent_server did not settle in 30s; continuing`);
-          await delay(PROBE_INTERVAL_MS);
+          await delay(probeIntervalMs(loopStartedAt));
           continue;
         }
         let httpOk = true;
@@ -505,11 +523,31 @@ export async function cmdStart(cfg = jwConfig()) {
           await diag(cfg, `probe #${attempt}: gateway ${ports?.gateway ?? "?"} not listening after ${elapsedSec}s`);
         }
       }
-      await delay(PROBE_INTERVAL_MS);
+      await delay(probeIntervalMs(loopStartedAt));
+    }
+    // (review follow-up) one bounded --status read at the deadline, not per
+    // round: inside the loop the TCP probes are authoritative while the
+    // .env ports match the running instance (the normal case), but a stale
+    // .env / hand-edited .env / squatter turns the probes blind. A single
+    // status reading at failure time says which one it was (real ports vs
+    // probed ports vs nothing running) without taxing normal starts.
+    let deadlineStatus = "";
+    try {
+      const status = await instanceStatus(cfg);
+      const sp = status?.ports ?? {};
+      if (sp.gateway || sp.web || sp.agent_server) {
+        deadlineStatus = `; deadline status: gateway=${sp.gateway ?? "?"} web=${sp.web ?? "?"} agent=${sp.agent_server ?? "?"}` +
+          ` (probed .env ports: gateway=${ports?.gateway ?? "?"} web=${ports?.web ?? "?"} agent=${ports?.agentServer ?? "?"} — mismatch means a stale .env or a squatter)`;
+      } else {
+        deadlineStatus = `; deadline status: ${status?.running ? "running" : "not running"} (no ports reported)`;
+      }
+    } catch {
+      deadlineStatus = "; deadline status: unavailable (instance not reporting)";
     }
     throw new Error(
-      `JiuwenSwarm did not come up within ${PROBE_DEADLINE_MS / 1000}s (probes: ${attempt}); ` +
-      `diagnostics: ${startupDiagPath(cfg)}; instance log: ${cfg.logFile}`,
+      `JiuwenSwarm did not come up within ${PROBE_DEADLINE_MS / 1000}s (probes: ${attempt})` +
+      deadlineStatus +
+      `; diagnostics: ${startupDiagPath(cfg)}; instance log: ${cfg.logFile}`,
     );
   } finally {
     await diag(cfg, `──── start end: total=${((Date.now() - startedAt) / 1000).toFixed(1)}s`);

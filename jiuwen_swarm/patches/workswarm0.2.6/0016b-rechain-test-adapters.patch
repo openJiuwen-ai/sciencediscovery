@@ -1,0 +1,85 @@
+diff --git a/tests/unit_tests/agentserver/test_agentserver_acp.py b/tests/unit_tests/agentserver/test_agentserver_acp.py
+index 2299903..6215b40 100644
+--- a/tests/unit_tests/agentserver/test_agentserver_acp.py
++++ b/tests/unit_tests/agentserver/test_agentserver_acp.py
+@@ -73,6 +73,11 @@ class FakeAgentManager:
+     def get_client_capabilities(self, channel_id=""):
+         return dict(self.client_capabilities)
+ 
++    def set_heartbeat_service(self, service):
++        # (SD-patch 0016) AgentWebSocketServer wires the lazy heartbeat
++        # runtime into the manager on materialization; the fake accepts it.
++        self.heartbeat_service = service
++
+     def get_agent_nowait(self, channel_id=""):
+         return None
+ 
+@@ -3091,6 +3096,10 @@ async def test_handle_session_delete_drains_runtime_before_kvc_and_checkpoint_cl
+         def get_agent_nowait(self, *args, **kwargs):
+             return None
+ 
++        def set_heartbeat_service(self, service):
++            # (SD-patch 0016) lazy heartbeat runtime wiring touch point.
++            pass
++
+         async def cleanup_session_runtime(self, *, channel_id="", session_id: str):
+             events.append(("runtime", channel_id, session_id))
+             return True
+@@ -3161,6 +3170,10 @@ async def test_handle_session_delete_keeps_state_when_runtime_drain_fails(
+     release_calls = []
+ 
+     class BusyRuntimeManager:
++        def set_heartbeat_service(self, service):
++            # (SD-patch 0016) lazy heartbeat runtime wiring touch point.
++            pass
++
+         async def cleanup_session_runtime(self, *, channel_id="", session_id: str):
+             raise RuntimeError("session runtime is still active")
+ 
+diff --git a/tests/unit_tests/gateway/test_app_web_handlers.py b/tests/unit_tests/gateway/test_app_web_handlers.py
+index 83384ad..fa90dd9 100644
+--- a/tests/unit_tests/gateway/test_app_web_handlers.py
++++ b/tests/unit_tests/gateway/test_app_web_handlers.py
+@@ -970,8 +970,16 @@ async def test_openai_account_models_list_returns_refreshed_auth_status(
+     del cleared_openai_account_login_jobs
+     FakeOpenAIAccountAuthManager.reset()
+     FakeOpenAIAccountAuthManager.needs_refresh = True
+-    monkeypatch.setattr(app_web_handlers, "OpenAIAccountAuthManager", FakeOpenAIAccountAuthManager)
+-    monkeypatch.setattr(app_web_handlers, "OpenAIAccountModelCatalog", FakeOpenAIAccountModelCatalog)
++    # (SD-patch 0016) classes moved behind lazy imports in app_web_handlers;
++    # patch the source modules so the request-time imports pick up the fakes.
++    monkeypatch.setattr(
++        "openjiuwen.extensions.external_provider.openai_auth.openai_account_auth.OpenAIAccountAuthManager",
++        FakeOpenAIAccountAuthManager,
++    )
++    monkeypatch.setattr(
++        "openjiuwen.extensions.external_provider.openai_auth.openai_account_models.OpenAIAccountModelCatalog",
++        FakeOpenAIAccountModelCatalog,
++    )
+     channel = FakeWebChannel()
+     _register_web_handlers(WebHandlersBindParams(channel=channel))
+ 
+@@ -1020,7 +1028,10 @@ async def test_openai_account_logout_clears_pending_login_jobs(
+     del cleared_openai_account_login_jobs
+     FakeOpenAIAccountAuthManager.reset()
+     FakeOpenAIAccountAuthManager.authenticated = True
+-    monkeypatch.setattr(app_web_handlers, "OpenAIAccountAuthManager", FakeOpenAIAccountAuthManager)
++    monkeypatch.setattr(
++        "openjiuwen.extensions.external_provider.openai_auth.openai_account_auth.OpenAIAccountAuthManager",
++        FakeOpenAIAccountAuthManager,
++    )
+     app_web_handlers._store_openai_account_login_job(
+         "login-1",
+         app_web_handlers._OpenAIAccountLoginJob(
+@@ -1045,7 +1056,10 @@ async def test_openai_account_logout_wins_against_inflight_poll(
+ ):
+     del cleared_openai_account_login_jobs
+     FakeOpenAIAccountAuthManager.reset()
+-    monkeypatch.setattr(app_web_handlers, "OpenAIAccountAuthManager", FakeOpenAIAccountAuthManager)
++    monkeypatch.setattr(
++        "openjiuwen.extensions.external_provider.openai_auth.openai_account_auth.OpenAIAccountAuthManager",
++        FakeOpenAIAccountAuthManager,
++    )
+     app_web_handlers._store_openai_account_login_job(
+         "login-1",
+         app_web_handlers._OpenAIAccountLoginJob(

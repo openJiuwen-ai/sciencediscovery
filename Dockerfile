@@ -196,10 +196,15 @@ RUN pnpm build && pnpm runner:binary
 
 # Patch the actual installed package, not the virtualenv's parent directory.
 # A mismatch with the pinned Git sources fails the build, never container boot.
+# The wheel is already fully patched; its apply receipt (exported beside the
+# wheel by build-swarm-wheel.sh) is dropped into site-packages so the apply
+# step recognizes the patched state via the digest short-circuit instead of
+# dying in per-patch reverse checks (later patches rewrite earlier hunks).
 RUN bash scripts/build-swarm-wheel.sh /tmp/swarm-wheels "$JIUWENSWARM_TAG" \
  && swarm_python=/opt/sciencediscovery/jiuwenswarm/src/.venv/bin/python \
  && uv pip install --python "$swarm_python" --no-deps --reinstall /tmp/swarm-wheels/*.whl \
  && swarm_package_root="$("$swarm_python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("jiuwenswarm").origin).parent.parent)')" \
+ && cp /tmp/swarm-wheels/jiuwenswarm-patches-manifest.json "$swarm_package_root/.sciencediscovery-patches.json" \
  && "$swarm_python" scripts/swarm-patches.py apply "$swarm_package_root" "$JIUWENSWARM_TAG" \
  && "$swarm_python" scripts/swarm-patches.py verify "$swarm_package_root" "$JIUWENSWARM_TAG"
 
