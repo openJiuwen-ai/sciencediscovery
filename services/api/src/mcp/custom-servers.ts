@@ -257,6 +257,12 @@ export class CustomMcpServers {
     return { items, current: items.find(item => item.id === serverId), version: serverId ? this.configurationMetadataRevision(serverId) : undefined };
   }
 
+  configurationTimeout(serverId?: string) {
+    const source = this.configurationMetadata(serverId);
+    const items = source.items.map(item => ({ ...item, timeoutSeconds: this.configs[item.id]?.timeoutSeconds ?? 60 }));
+    return { items, current: items.find(item => item.id === serverId), version: source.version };
+  }
+
   private configurationMetadataRevision(serverId: string, config = this.configs[serverId]): string {
     if (!this.key) throw new Error("MCP storage is not initialized");
     return createHmac("sha256", this.key).update(JSON.stringify([serverId, config ?? null, this.oauth.configurationRevision([serverId])])).digest("hex");
@@ -280,13 +286,22 @@ export class CustomMcpServers {
   }
 
   submitConfigurationMetadata(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["name", "description"]);
+  }
+
+  submitConfigurationTimeout(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["timeoutSeconds"]);
+  }
+
+  private submitConfigurationFields(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown, fields: readonly string[]): Promise<ConfigurationExternalOutcome> {
     return this.mutate(async () => {
       const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
       const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code });
       const previous = /^custom-[a-f0-9]{12}$/.test(serverId) && Object.hasOwn(this.configs, serverId) ? this.configs[serverId] : undefined;
       if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
       if (this.configurationMetadataRevision(serverId) !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
-      if (!object(values) || Object.keys(values).some(key => !["name", "description"].includes(key))) return reject("INVALID_CONFIGURATION_INPUT");
+      if (!object(values) || !Object.keys(values).length || Object.keys(values).some(key => !fields.includes(key))) return reject("INVALID_CONFIGURATION_INPUT");
+      if (fields.includes("timeoutSeconds") && (typeof values.timeoutSeconds !== "number" || !Number.isInteger(values.timeoutSeconds) || values.timeoutSeconds < 1 || values.timeoutSeconds > 600)) return reject("INVALID_CONFIGURATION_INPUT");
       let candidate: CustomMcpServerConfig;
       try { candidate = normalizeCustomMcpConfig({ ...previous, ...values }, previous); } catch { return reject("INVALID_CONFIGURATION_INPUT"); }
       if (Object.entries(this.configs).some(([id, item]) => id !== serverId && item.name.toLowerCase() === candidate.name.toLowerCase())) return reject("MCP_METADATA_NAME_CONFLICT");

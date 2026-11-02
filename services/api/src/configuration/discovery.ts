@@ -14,6 +14,7 @@ import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "mcp.timeout": "mcp custom server timeout seconds 调用 超时 秒",
   "mcp.metadata": "mcp custom server name description 自定义 MCP 名称 描述 元数据",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
@@ -90,6 +91,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const models = () => modelCache ??= store.listModels().map(model => ({ id: model.id, name: text(model.name), model: model.model,
     credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" }));
   const resources = async (id: ConfigurationCapabilityId): Promise<Row[]> => {
+    if (id === "mcp.timeout") return store.configurationMcpTimeout("").items.map(item => ({ id: item.id, name: text(item.name), transport: item.transport, enabled: item.enabled, timeoutSeconds: item.timeoutSeconds }));
     if (id === "mcp.metadata") return store.configurationMcpMetadata("").items.map(item => ({ id: item.id, name: text(item.name), transport: item.transport, enabled: item.enabled }));
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
     if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
@@ -142,7 +144,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   if (id === "connector.enable") {
     const all = await connectors();
     current = { runtimeEnabled: preview(all.filter(row => row.runtimeEnabled).map(row => row.id)), sessionSaved: preview(effective.enabledConnectorIds), runtimeStateKnown: all.some(row => row.runtimeStateKnown) };
-  } else if (id === "mcp.metadata") { const source = store.configurationMcpMetadata(input.targetId ?? ""); current = source.current ? { serverId: source.current.id, name: text(source.current.name), transport: source.current.transport, enabled: source.current.enabled, noRefreshOrNetwork: true } : { selectExistingCustomMcpServer: true }; }
+  } else if (id === "mcp.timeout") { const source = store.configurationMcpTimeout(input.targetId ?? ""); current = source.current ? { serverId: source.current.id, name: text(source.current.name), timeoutSeconds: source.current.timeoutSeconds, noRefreshOrNetwork: true } : { selectExistingCustomMcpServer: true }; }
+  else if (id === "mcp.metadata") { const source = store.configurationMcpMetadata(input.targetId ?? ""); current = source.current ? { serverId: source.current.id, name: text(source.current.name), transport: source.current.transport, enabled: source.current.enabled, noRefreshOrNetwork: true } : { selectExistingCustomMcpServer: true }; }
   else if (id === "skill.select") current = { skillSelectionMode: effective.skillSelectionMode, enabledSkills: preview(effective.enabledSkillIds), enabledLibraries: preview(effective.enabledSkillLibraries.map(item => item.libraryId)) };
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
@@ -159,7 +162,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => id === "mcp.metadata" || (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    scopes: descriptor.scopes.filter(scope => ["mcp.metadata", "mcp.timeout"].includes(id) || (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
     instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },

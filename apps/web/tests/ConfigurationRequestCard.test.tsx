@@ -16,6 +16,15 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03b: MCP timeout labels disclose seconds and subsequent-call timing", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.timeout", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "timeoutSeconds", before: "37", after: "81" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "timeoutSeconds", label: "Call timeout (seconds)", kind: "number", required: true, value: 81 },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Call timeout \(seconds\)/u); assert.match(text, /Applies to subsequent MCP calls/u); assert.equal(renderer.root.findByProps({ name: "timeoutSeconds" }).props.type, "number");
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-X03a: MCP metadata uses its own localized labels rather than provider-name wording", async () => {
   const renderer = await mount(request({ capabilityId: "mcp.metadata", scope: { kind: "global" }, changes: [{ field: "name", before: "Old", after: "Owned MCP" }], fields: [
     { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },

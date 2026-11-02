@@ -409,6 +409,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     return configurationFramework(store, {
     nativeExecutor: !jiuwenSwarmConfigFromEnv(),
     mcpMetadata: platform.customMcpServers,
+    mcpTimeout: platform.customMcpServers,
     jiuwenLiveWait: Boolean(jiuwenSwarmConfigFromEnv()),
     connectors: () => mcpRegistry.listManifests().map(manifest => {
       const status = mcpCatalog.getStatus(manifest.id);

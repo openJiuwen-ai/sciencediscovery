@@ -6,7 +6,7 @@ export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
   fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
-  activation: "next_run" | "same_run_if_bound";
+  activation: "next_run" | "next_invocation" | "same_run_if_bound";
   diagnostics: readonly string[];
 }
 const id = { kind: "string", maxLength: 200 } as const;
@@ -14,6 +14,7 @@ const ids = { kind: "ids" } as const;
 const boolean = { kind: "boolean" } as const;
 /** Trusted finite descriptions. Each domain adds its fields here once; tools are generated from them. */
 export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, ConfigurationAgentDescriptor> = {
+  "mcp.timeout": { label: "Configure custom MCP call timeout", whenNeeded: "Only an explicit user request to change the shared call timeout of one existing custom MCP server. Do not widen it because one call timed out. Manual v3 review is required. Only serverId and integer timeoutSeconds 1–600 are accepted; no network, discovery, process, permissions or credential operation. Subsequent MCP invocations read the new cap; already admitted calls retain limits they read, and an earlier broker cap may remain stricter. A bound original configuration wait may continue normally.", fields: { serverId: { kind: "string", maxLength: 100 }, timeoutSeconds: { kind: "integer", minimum: 1, maximum: 600 } }, activation: "next_invocation", diagnostics: [] },
   "mcp.metadata": { label: "Edit custom MCP metadata", whenNeeded: "Only an explicit user request to edit an existing custom MCP display name or description. This shared metadata change needs a manually reviewed v3 configuration card. No transport/enabled/URL/headers/env/STDIO/timeout/OAuth/credential field is accepted. No catalog refresh, process or network request starts. An external authority journal proves save/rejection; unknown outcomes are only reconciled, never resubmitted. Frozen task records stay unchanged; a bound original wait may continue normally.", fields: { serverId: { kind: "string", maxLength: 100 }, name: { kind: "string", maxLength: 100 }, description: { kind: "string", maxLength: 2000 } }, activation: "next_run", diagnostics: [] },
   "model.select": { label: "Choose an existing model", whenNeeded: "An explicit model choice or no usable task model. Do not replace a usable inherited default without a requirement.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_NOT_SELECTED"] },
   "model.connect": { label: "Connect a model service", whenNeeded: "A new model service is needed. The user supplies credentials only in the secure card.", fields: { name: { ...id, maxLength: 200 }, baseUrl: { kind: "string", maxLength: 2048 }, model: { ...id, maxLength: 512 }, apiProtocol: { kind: "string", choices: ["openai-chat-completions", "openai-responses", "anthropic-messages"] }, apiVariant: { ...id, maxLength: 80 }, tokenOptional: boolean }, activation: "next_run", diagnostics: [] },

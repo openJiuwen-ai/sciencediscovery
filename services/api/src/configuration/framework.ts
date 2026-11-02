@@ -11,6 +11,7 @@ import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
+import { createMcpTimeoutAdapter, type McpTimeoutPort } from "./mcp-timeout-adapter.js";
 import { createMcpMetadataAdapter, type McpMetadataPort } from "./mcp-metadata-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
@@ -28,6 +29,7 @@ import type { ConfigurationConnectorRegistration } from "./connector-directory.j
 
 export interface ConfigurationFrameworkOptions {
   mcpMetadata?: McpMetadataPort;
+  mcpTimeout?: McpTimeoutPort;
   connectors?(sessionId: string): readonly ConfigurationConnectorRegistration[];
   connector(sessionId: string, connectorId: string): { name: string; ready: boolean } | undefined;
   nativeExecutor: boolean;
@@ -182,11 +184,16 @@ export class ConversationalConfigurationFramework {
   }
 
   configure(options: ConfigurationFrameworkOptions): void {
-    this.options = { ...options, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata };
+    this.options = { ...options, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout };
     this.attachMcpMetadata();
   }
 
   private attachMcpMetadata(): void {
+    const timeout = this.options.mcpTimeout;
+    if (timeout && !this.service.registry.list().some(adapter => adapter.id === "mcp.timeout")) {
+      this.store.setConfigurationMcpTimeoutSource(id => timeout.configurationTimeout(id));
+      this.service.registry.register(createMcpTimeoutAdapter(timeout));
+    }
     const port = this.options.mcpMetadata;
     if (!port || this.service.registry.list().some(adapter => adapter.id === "mcp.metadata")) return;
     // Pin one authority to the framework lifetime; option refreshes cannot move
@@ -212,7 +219,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "Timeouts, quotas and Idea Tree settings apply to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || input.capabilityId === "mcp.metadata" || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || ["mcp.metadata", "mcp.timeout"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {
