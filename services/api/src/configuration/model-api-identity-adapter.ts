@@ -31,7 +31,7 @@ export function createModelApiIdentityAdapter(store: SessionStore, destinations:
         .map(field => ({ field: field === "model" ? "apiModel" : field, before: String(profile[field] ?? "model_default"), after: String(candidate[field] ?? "model_default") })) : [];
       return {
         fields: [
-          { id: "modelId", label: "Existing model profile", kind: "enum", required: true, value: String(input.modelId ?? ""), choices: (snapshot.data.models as ModelProfile[]).map(item => ({ id: item.id, label: `${item.name} · ${item.id}` })) },
+          { id: "modelId", label: "Existing model profile", kind: "enum", required: true, ...(input.modelId ? { value: String(input.modelId) } : {}), choices: (snapshot.data.models as ModelProfile[]).map(item => ({ id: item.id, label: `${item.name} · ${item.id}` })) },
           { id: "apiModel", label: "API model identifier", kind: "text", required: true, ...(candidate ? { value: candidate.model } : {}) },
           { id: "apiVariant", label: "API variant under the existing protocol", kind: "enum", required: true, ...(candidate ? { value: candidate.apiVariant } : {}),
             choices: profile ? MODEL_API_VARIANTS[profile.apiProtocol ?? "openai-chat-completions"].map(id => ({ id, label: id })) : [] },
