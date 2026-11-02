@@ -44,6 +44,7 @@ class PatchInstallationTests(unittest.TestCase):
     def test_clean_install_and_repeated_start_are_idempotent(self):
         repo = Path(__file__).resolve().parents[2]
         source = Path(os.environ.get("JIUWENSWARM_SRC", str(repo / ".sciencediscovery-data/jiuwenswarm/src")))
+        helper = repo / "scripts/swarm-patches.py"
         patches = sorted((repo / "jiuwen_swarm/patches/workswarm0.2.6").glob("*.patch"))
         self.assertTrue(patches)
         paths = sorted({path for patch in patches for path in
@@ -54,21 +55,32 @@ class PatchInstallationTests(unittest.TestCase):
             with tarfile.open(fileobj=io.BytesIO(archive)) as contents:
                 contents.extractall(directory, filter="data")
             subprocess.run(["git", "init", "-q", directory], check=True, capture_output=True)
-            applied = []
-            for attempt in range(2):
-                for patch in patches:
-                    reverse = subprocess.run(["git", "-C", directory, "apply", "--reverse", "--check", str(patch)],
-                                             capture_output=True)
-                    if reverse.returncode == 0:
-                        continue
-                    self.assertEqual(attempt, 0, f"Second start tries to reapply {patch.name}: {reverse.stderr.decode()}")
-                    result = subprocess.run(["git", "-C", directory, "apply", str(patch)], capture_output=True)
-                    self.assertEqual(result.returncode, 0, f"{patch.name}: {result.stderr.decode()}")
-                    applied.append(patch.name)
-            self.assertEqual(applied, [p.name for p in patches])
+            # [windows-desktop] 0015: the loop below used to re-implement the
+            # apply/skip cycle with bare `git apply --reverse --check` per patch
+            # and asserted a second pass finds every patch reversible. 0015
+            # legitimately removes a call site 0001 added (deferred import),
+            # so reverse-checking 0001 over the fully patched tree can never
+            # match again — the idempotency contract moved into
+            # swarm-patches.py (restore_pinned + full replay for git
+            # checkouts; forward apply skips for fresh package trees). Drive
+            # the real helper the way cmdSetup/cmdStart do, twice, and assert
+            # both the exit codes and the final file states.
+            command = [sys.executable, str(helper)]
+            for attempt in (1, 2):
+                for mode in ("apply", "verify"):
+                    result = subprocess.run(command + [mode, str(directory), "workswarm0.2.6"],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0,
+                                     f"pass {attempt} {mode} failed: {result.stderr}")
+            manifest = Path(directory) / ".sciencediscovery-patches.json"
+            self.assertTrue(manifest.is_file())
             actual = Path(directory) / "jiuwenswarm/server/runtime/mcp/sci_http_client.py"
             installed = source / "jiuwenswarm/server/runtime/mcp/sci_http_client.py"
             self.assertEqual(actual.read_text(), installed.read_text(), "Tests must exercise exactly the shipped client")
+            # The manifest must record every shipped patch.
+            import json
+            recorded = json.loads(manifest.read_text())["patches"]
+            self.assertEqual(sorted(recorded), [p.name for p in patches])
 
 
     def test_setup_upgrades_a_source_checkout_whose_patches_were_revised_in_place(self):

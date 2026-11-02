@@ -1,0 +1,982 @@
+diff --git a/jiuwenswarm/gateway/app_gateway.py b/jiuwenswarm/gateway/app_gateway.py
+index 1c8eef1..abd7084 100644
+--- a/jiuwenswarm/gateway/app_gateway.py
++++ b/jiuwenswarm/gateway/app_gateway.py
+@@ -1698,7 +1698,13 @@ async def _run(
+     from jiuwenswarm.extensions.manager import ExtensionManager
+     from jiuwenswarm.extensions.registry import ExtensionRegistry
+     from jiuwenswarm.common.updater import UpdaterService
+-    from openjiuwen.core.runner import Runner
++    # [windows-desktop] reason (SD-patch 0016): ``from openjiuwen.core.runner
++    # import Runner`` pulls the whole runner/session/workflow/context_engine
++    # chain (~7s warm) but Gateway only consumes Runner.callback_framework.
++    # The callback package imports standalone (~0.7s) and its framework is
++    # plain instance state; the desktop extension set registers only typed
++    # extensions (agent_server_client / third_agent) without event hooks, so
++    # a standalone instance preserves every behaviour the Gateway depends on.
+ 
+     logger.info("[App] Gateway starting, connecting AgentServer: %s", agent_server_url)
+     for import_stage, marked_at in _STARTUP_IMPORT_PHASES:
+@@ -1721,7 +1727,10 @@ async def _run(
+     log_startup_stage("run_entered")
+     restart_request = GatewayRestartRequest()
+ 
+-    callback_framework = Runner.callback_framework
++    # (SD-patch 0016) standalone callback framework; see the import-block note.
++    from openjiuwen.core.runner.callback import AsyncCallbackFramework
++
++    callback_framework = AsyncCallbackFramework()
+     extension_registry = ExtensionRegistry.create_instance(
+         callback_framework=callback_framework,
+         config={},
+diff --git a/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py b/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py
+index b9df780..8bbdd51 100644
+--- a/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py
++++ b/jiuwenswarm/gateway/channel_manager/web/app_web_handlers.py
+@@ -32,18 +32,14 @@ except ImportError:
+     _psutil = None  # type: ignore[assignment]
+     _HAS_PSUTIL = False
+ from openjiuwen.core.common.logging import LogManager
+-from openjiuwen.core.foundation.llm import Model, ProviderType
+-from openjiuwen.core.foundation.llm.schema.config import ModelClientConfig, ModelRequestConfig
+-from openjiuwen.core.foundation.llm.utils.provider_utils import is_openai_account_provider
+-from openjiuwen.extensions.external_provider.openai_auth.openai_account_auth import (
+-    OpenAIAccountAuthError,
+-    OpenAIAccountAuthManager,
+-    OpenAIAccountDeviceCode,
+-)
+-from openjiuwen.extensions.external_provider.openai_auth.openai_account_models import (
+-    OpenAIAccountModelCatalog,
+-    OpenAIAccountModelListError,
+-)
++# [windows-desktop] reason (SD-patch 0016): the openjiuwen imports that used to
++# sit here (foundation.llm Model/ProviderType/ModelClientConfig/ModelRequestConfig,
++# provider_utils.is_openai_account_provider, openai_auth managers) pull the
++# foundation.llm model-client chain (foundation.tool/mcp/openai SDK/redis,
++# ~3.8s warm) onto the Gateway's pre-listen import path -- this module is
++# imported by app_gateway._run() before the web port listens. Every symbol is
++# only referenced inside request-time handlers (config get/set/test-model and
++# openai-account payload builders), so each import moved to its use sites.
+ 
+ from jiuwenswarm.common.config import (
+     DEFAULT_SWARMFLOW_ENABLED,
+@@ -91,11 +87,6 @@ from jiuwenswarm.common.kv_cache_affinity_config import (
+     parse_bool as parse_kvc_bool,
+     set_default_model_provider_in_entries,
+ )
+-from jiuwenswarm.server.runtime.a2ui.integration import (
+-    get_a2ui_config_payload,
+-    get_default_a2ui_config_payload,
+-    validate_a2ui_config_update,
+-)
+ from jiuwenswarm.common.reasoning_config import (
+     effective_endpoint_profile,
+     validate_reasoning_level_for_model,
+@@ -104,7 +95,6 @@ from jiuwenswarm.common.reasoning_injector import (
+     build_reasoning_model_request_kwargs,
+     core_has_context_window_field,
+ )
+-from jiuwenswarm.common.context_window import resolve_context_window_tokens
+ from jiuwenswarm.common.updater import DEFAULT_SOURCE_CONFIG, UpdaterService
+ from jiuwenswarm.common.utils import (
+     get_env_file,
+@@ -283,6 +273,46 @@ _OPENAI_ACCOUNT_AUTH_OPERATION_LOCK = threading.RLock()
+ _OPENAI_ACCOUNT_LOCAL_ERRORS = (OSError, TypeError, ValueError)
+ 
+ 
++def _openai_account_auth_classes() -> tuple[Any, ...]:
++    """(SD-patch 0016) lazy openai-auth import; the manager/catalog classes
++    sit behind the openjiuwen openai_auth chain that used to load at module
++    import time. Called at request time only."""
++    from openjiuwen.extensions.external_provider.openai_auth.openai_account_auth import (
++        OpenAIAccountAuthError,
++        OpenAIAccountAuthManager,
++        OpenAIAccountDeviceCode,
++    )
++    from openjiuwen.extensions.external_provider.openai_auth.openai_account_models import (
++        OpenAIAccountModelCatalog,
++        OpenAIAccountModelListError,
++    )
++    return OpenAIAccountAuthError, OpenAIAccountAuthManager, OpenAIAccountDeviceCode, OpenAIAccountModelCatalog, OpenAIAccountModelListError
++
++
++def _openai_account_auth_manager() -> Any:
++    return _openai_account_auth_classes()[1]()
++
++
++# (SD-patch 0016) lazy a2ui payload helpers; the integration module is
++# request-time-only and previously sat in the module import block.
++def _a2ui_payload_impl(raw: Any) -> dict[str, Any]:
++    from jiuwenswarm.server.runtime.a2ui.integration import get_a2ui_config_payload
++
++    return get_a2ui_config_payload(raw)
++
++
++def _a2ui_default_payload_impl() -> dict[str, Any]:
++    from jiuwenswarm.server.runtime.a2ui.integration import get_default_a2ui_config_payload
++
++    return get_default_a2ui_config_payload()
++
++
++def _a2ui_validate_impl(param_key: str, val: Any) -> tuple[Any, Any, Any]:
++    from jiuwenswarm.server.runtime.a2ui.integration import validate_a2ui_config_update
++
++    return validate_a2ui_config_update(param_key, val)
++
++
+ @dataclass
+ class _OpenAIAccountLoginJob:
+     device_code: OpenAIAccountDeviceCode
+@@ -345,10 +375,10 @@ def _clear_openai_account_login_jobs() -> None:
+ 
+ 
+ def _openai_account_auth_status_payload(
+-        manager: OpenAIAccountAuthManager | None = None,
++        manager: Any | None = None,
+ ) -> dict[str, Any]:
+     with _OPENAI_ACCOUNT_AUTH_OPERATION_LOCK:
+-        auth_manager = manager or OpenAIAccountAuthManager()
++        auth_manager = manager or _openai_account_auth_manager()
+         status = auth_manager.status()
+         return {
+             "authenticated": status.authenticated,
+@@ -364,7 +394,7 @@ def _openai_account_auth_status_payload(
+ def _openai_account_login_payload(
+         login_id: str,
+         job: "_OpenAIAccountLoginJob",
+-        manager: OpenAIAccountAuthManager | None = None,
++        manager: Any | None = None,
+         now: float | None = None,
+ ) -> dict[str, Any]:
+     current = time.time() if now is None else now
+@@ -382,7 +412,7 @@ def _openai_account_login_payload(
+ 
+ 
+ def _openai_account_pending_login_payload(
+-        manager: OpenAIAccountAuthManager | None = None,
++        manager: Any | None = None,
+ ) -> dict[str, Any]:
+     with _OPENAI_ACCOUNT_AUTH_OPERATION_LOCK:
+         current = time.time()
+@@ -398,7 +428,7 @@ def _openai_account_pending_login_payload(
+ 
+ def _openai_account_start_login_payload() -> dict[str, Any]:
+     with _OPENAI_ACCOUNT_AUTH_OPERATION_LOCK:
+-        manager = OpenAIAccountAuthManager()
++        manager = _openai_account_auth_manager()
+         now = time.time()
+         latest_job = _latest_openai_account_login_job(now)
+         if latest_job is not None:
+@@ -427,10 +457,10 @@ def _openai_account_poll_login_payload(login_id: str) -> dict[str, Any]:
+         if job is None:
+             return {"status": "expired", "authenticated": False}
+ 
+-        manager = OpenAIAccountAuthManager()
++        manager = _openai_account_auth_manager()
+         try:
+             tokens = manager.poll_device_login(job.device_code)
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             if exc.relogin_required:
+                 _remove_openai_account_login_job(login_id)
+             raise
+@@ -451,7 +481,7 @@ def _openai_account_poll_login_payload(login_id: str) -> dict[str, Any]:
+ 
+ def _openai_account_logout_payload() -> dict[str, Any]:
+     with _OPENAI_ACCOUNT_AUTH_OPERATION_LOCK:
+-        manager = OpenAIAccountAuthManager()
++        manager = _openai_account_auth_manager()
+         _clear_openai_account_login_jobs()
+         logged_out = manager.logout()
+         return {
+@@ -462,8 +492,9 @@ def _openai_account_logout_payload() -> dict[str, Any]:
+ 
+ def _openai_account_models_payload() -> dict[str, Any]:
+     with _OPENAI_ACCOUNT_AUTH_OPERATION_LOCK:
+-        manager = OpenAIAccountAuthManager()
+-        catalog = OpenAIAccountModelCatalog(base_url=manager.base_url)
++        manager = _openai_account_auth_manager()
++        _err, _mgr, _code, catalog_cls, _list_err = _openai_account_auth_classes()
++        catalog = catalog_cls(base_url=manager.base_url)
+         models = catalog.list_model_ids(auth_manager=manager)
+         return {
+             "models": models,
+@@ -472,7 +503,7 @@ def _openai_account_models_payload() -> dict[str, Any]:
+         }
+ 
+ 
+-def _openai_account_auth_error_payload(exc: OpenAIAccountAuthError) -> dict[str, Any]:
++def _openai_account_auth_error_payload(exc: Any) -> dict[str, Any]:
+     return {
+         "status": "error",
+         "error": str(exc),
+@@ -2595,6 +2626,11 @@ def _normalize_provider_value(value: str) -> str:
+     导致同一份配置（例如历史数据里 model_provider 大小写不规范）在 TUI 能正常识别，
+     但 Web 的"测试"/"保存"因大小写敏感的精确匹配而被误判为非法值。
+     """
++    # (SD-patch 0016) lazy import: ProviderType sits on the foundation.llm
++    # chain (see module-top note); this helper runs only inside request-time
++    # config get/set/test handlers.
++    from openjiuwen.core.foundation.llm import ProviderType
++
+     normalized = value.strip()
+     if not normalized:
+         return normalized
+@@ -3113,7 +3149,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+             payload["memory_forbidden_enabled"] = "true" if memory_cfg.get("enabled", False) else "false"
+             memory_desc = memory_cfg.get("description") or {}
+             payload["memory_forbidden_description"] = memory_desc
+-            payload.update(get_a2ui_config_payload(raw))
++            payload.update(_a2ui_payload_impl(raw))
+             trajectory_cfg = raw.get("trajectory_ui") or {}
+             payload["trajectory_ui_enabled"] = (
+                 "true" if trajectory_cfg.get("enabled", False) else "false"
+@@ -3147,7 +3183,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+             payload.setdefault("memory_forbidden_enabled", "false")
+             payload.setdefault("memory_forbidden_description", "")
+             payload.setdefault("swarmflow_enabled", "true" if DEFAULT_SWARMFLOW_ENABLED else "false")
+-            for key, value in get_default_a2ui_config_payload().items():
++            for key, value in _a2ui_default_payload_impl().items():
+                 payload.setdefault(key, value)
+             payload.setdefault("trajectory_ui_enabled", "false")
+             for key, (_, value_type, default) in {
+@@ -3309,6 +3345,9 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+ 
+     def _apply_config_payload(params: dict[str, Any]) -> _ConfigApplyResult:
+         """Apply config.set-style payload to .env/config.yaml without triggering reload."""
++        # (SD-patch 0016) lazy import: see module-top note.
++        from openjiuwen.core.foundation.llm import ProviderType
++
+         params = _encrypt_config_params(params)
+         env_updates: dict[str, str] = {}
+         yaml_updated: list[str] = []
+@@ -3415,7 +3454,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 elif param_key == "skill_evolution":
+                     update_skill_evolution_enabled_in_config(parsed)
+                 elif param_key.startswith("a2ui_"):
+-                    ok, update, error = validate_a2ui_config_update(param_key, val)
++                    ok, update, error = _a2ui_validate_impl(param_key, val)
+                     if not ok:
+                         raise _ConfigBadRequest(error or "invalid A2UI config")
+                     update_a2ui_in_config(update)
+@@ -3514,6 +3553,10 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+         if not isinstance(raw_models, list) or not raw_models:
+             raise _ConfigBadRequest("models must be a non-empty list")
+ 
++        # (SD-patch 0016) lazy import: see module-top note.
++        from openjiuwen.core.foundation.llm import ProviderType
++        from openjiuwen.core.foundation.llm.utils.provider_utils import is_openai_account_provider
++
+         available_model_providers = [p.value for p in ProviderType]
+         parsed: list[dict] = []
+         aliases_seen: dict[str, int] = {}
+@@ -3694,6 +3737,12 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+         Tries ``max_tokens=infimum_max_tokens`` first to limit cost; if the API rejects it (e.g. minimum output length),
+         retries with ``max_tokens=supremum_max_tokens``.
+         """
++        # (SD-patch 0016) lazy imports: see module-top note. This handler runs
++        # only when the user tests a model from the web settings page.
++        from openjiuwen.core.foundation.llm import Model, ProviderType
++        from openjiuwen.core.foundation.llm.schema.config import ModelClientConfig, ModelRequestConfig
++        from openjiuwen.core.foundation.llm.utils.provider_utils import is_openai_account_provider
++
+         if max_tokens_bounds is None:
+             max_tokens_bounds = {
+                 "infimum_max_tokens": 3,
+@@ -3880,6 +3929,13 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 is_default = entry.get("is_default", False)
+                 model_name = mcc.get("model_name", "")
+                 try:
++                    # (SD-patch 0016) lazy import: context_window pulls the
++                    # openjiuwen context_engine -> session.agent ->
++                    # checkpointer chain (~2.8s warm); request-time only.
++                    from jiuwenswarm.common.context_window import (
++                        resolve_context_window_tokens,
++                    )
++
+                     context_window_tokens = resolve_context_window_tokens(
+                         model_name=model_name,
+                         context_engine_config=(config.get("react", {}) or {}),
+@@ -4289,7 +4345,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+         try:
+             payload = await asyncio.to_thread(_openai_account_auth_status_payload)
+             await channel.send_response(ws, req_id, ok=True, payload=payload)
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             logger.warning("[openai_account.auth.status] %s", exc)
+             await channel.send_response(
+                 ws,
+@@ -4313,7 +4369,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 ok=True,
+                 payload=payload,
+             )
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             logger.warning("[openai_account.auth.start_login] %s", exc)
+             await channel.send_response(
+                 ws,
+@@ -4332,7 +4388,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+         try:
+             payload = await asyncio.to_thread(_openai_account_pending_login_payload)
+             await channel.send_response(ws, req_id, ok=True, payload=payload)
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             logger.warning("[openai_account.auth.pending_login] %s", exc)
+             await channel.send_response(
+                 ws,
+@@ -4363,7 +4419,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 ok=True,
+                 payload=payload,
+             )
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             logger.warning("[openai_account.auth.poll_login] %s", exc)
+             await channel.send_response(
+                 ws,
+@@ -4387,7 +4443,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 ok=True,
+                 payload=payload,
+             )
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             logger.warning("[openai_account.auth.logout] %s", exc)
+             await channel.send_response(
+                 ws,
+@@ -4411,7 +4467,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 ok=True,
+                 payload=payload,
+             )
+-        except OpenAIAccountAuthError as exc:
++        except _openai_account_auth_classes()[0] as exc:
+             logger.warning("[openai_account.models.list] %s", exc)
+             await channel.send_response(
+                 ws,
+@@ -4421,7 +4477,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
+                 code=exc.code,
+                 payload=_openai_account_auth_error_payload(exc),
+             )
+-        except OpenAIAccountModelListError as exc:
++        except _openai_account_auth_classes()[4] as exc:
+             logger.warning("[openai_account.models.list] %s", exc)
+             await channel.send_response(ws, req_id, ok=False, error=str(exc), code="MODEL_LIST_ERROR")
+         except _OPENAI_ACCOUNT_LOCAL_ERRORS as exc:
+diff --git a/jiuwenswarm/server/agent_ws_server.py b/jiuwenswarm/server/agent_ws_server.py
+index a2057b1..56ef037 100644
+--- a/jiuwenswarm/server/agent_ws_server.py
++++ b/jiuwenswarm/server/agent_ws_server.py
+@@ -172,6 +172,28 @@ from jiuwenswarm.common.log_preview import preview_text
+ logger = logging.getLogger(__name__)
+ 
+ 
++# (SD-patch 0016) PEP 562 re-exports: the tag's module level imported the
++# gateway_adapter names (AdapterRegistry and friends) at import time; tests
++# and any external code may still ``from jiuwenswarm.server.agent_ws_server
++# import AdapterRegistry``. These resolve lazily so the heavy
++# gateway_adapter chain stays off this module's import path.
++def __getattr__(name: str):
++    if name in {
++        "AdapterRegistry",
++        "ConfigAdapter",
++        "HarmonyOSAdapter",
++        "MemoryAdapter",
++        "ProjectAdapter",
++        "SessionAdapter",
++        "WorkspaceFileAdapter",
++    }:
++        import importlib
++
++        module = importlib.import_module("jiuwenswarm.server.runtime.gateway_adapter")
++        return getattr(module, name)
++    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
++
++
+ # (SD-patch 0015) lazy-import caches — populated on first runtime use.
+ # Each proxy below keeps the original module-level name working for every
+ # post-listen caller while moving the heavy chain off the import path:
+@@ -1390,39 +1412,30 @@ class AgentWebSocketServer:
+         # supplied by the composition root once it is available.
+         self._rsi_harness_provider: Any = None
+         # [windows-desktop] reason (SD-patch 0015): heavy import deferred from
+-        # module top (see the comment there); this constructor runs after the
+-        # module has been fully imported, so the ~8.7s rails chain now loads
+-        # here at worst, off the pre-listen critical path (in practice the
+-        # constructor is reached via app_agentserver._run after a cheap import
+-        # tail, and the ws port opens before any of this chain is needed).
+-        from jiuwenswarm.agents.harness.code.rails.heartbeat.runtime import HeartbeatRailRuntime
+-        self._heartbeat_runtime = HeartbeatRailRuntime(self)
+-        self._agent_manager.set_heartbeat_service(self._heartbeat_runtime)
+-        # Gateway user-business RPCs execute in the current AgentServer's
+-        # injected data directory.  Register the adapters once per server;
+-        # request dispatch occurs before the legacy handler chain below.
+-        # (SD-patch 0015) lazy import: the gateway_adapter memory-rpc chain
+-        # (~20.2s) must stay off the pre-listen path.
+-        from jiuwenswarm.server.runtime.gateway_adapter import (
+-            AdapterRegistry,
+-            ConfigAdapter,
+-            HarmonyOSAdapter,
+-            MemoryAdapter,
+-            ProjectAdapter,
+-            SessionAdapter,
+-            WorkspaceFileAdapter,
+-        )
+-
+-        self._adapter_registry = AdapterRegistry()
+-        for adapter in (
+-            SessionAdapter(),
+-            WorkspaceFileAdapter(),
+-            MemoryAdapter(),
+-            ProjectAdapter(),
+-            HarmonyOSAdapter(),
+-            ConfigAdapter(),
+-        ):
+-            self._adapter_registry.register(adapter)
++        # module top (see the comment there). (SD-patch 0016): the constructor
++        # itself no longer pays for the rails chain either. The three heavy
++        # members (HeartbeatRailRuntime / AdapterRegistry / personal-context
++        # host) became lazy properties materialized on first use; start()
++        # fires a post-listen worker-thread warmup that constructs all three
++        # off the event loop. The only synchronous pre-warmup consumers are
++        # (a) the connection.ack frame, whose heartbeat_job_* fields are
++        # decorative constants until the runtime materializes (no Gateway
++        # consumer reads them -- verified), and (b) chat dispatch paths, all
++        # of which run after the first connection, i.e. after the warmup had
++        # its chance; AgentManager.get_agent() enforces the same-order
++        # guarantee by materializing the runtime before creating any agent.
++        self._heartbeat_runtime: Any | None = None
++        self._heartbeat_runtime_init_lock = asyncio.Lock()
++        # (SD-patch 0016) gateway adapters: the memory-rpc chain (~2.2s warm)
++        # moved behind a lazy property; the dispatch site checks getattr(None)
++        # so requests racing the warmup simply fall through to the legacy
++        # handler chain until the registry materializes.
++        self._adapter_registry: Any | None = None
++        # (SD-patch 0016) personal-context host: same lazy treatment; start()
++        # schedules its background start task after the warmup materializes
++        # it (the old constructor ran the cheap constructor eagerly and start()
++        # still owns the start task).
++        self._personal_context_host: Any | None = None
+         # AgentServer-side tokenizer cache/download service. The Gateway only
+         # persists model profiles and notifies this process to refresh them.
+         self._tokenizer_service = TokenizerService()
+@@ -1444,12 +1457,6 @@ class AgentWebSocketServer:
+         self._default_model: Optional[Any] = None
+         # 本地 jiuwenbox 子进程管理器 (lazy 启动, 在 /sandbox enable 时 ensure_running)
+         self._jiuwenbox_runner = JiuwenBoxRunner.instance()
+-        # AgentServer 内唯一持有的进程内 PersonalContext Host；Context Rail 使用同一固定目录。
+-        # (SD-patch 0015) lazy import keeps the openjiuwen personal_context
+-        # chain off the pre-listen path.
+-        self._personal_context_host = _personal_context_host_api_cls()(
+-            home=Path.home() / ".jiuwenswarm" / ".personal_context",
+-        )
+         self._personal_context_start_task: asyncio.Task[None] | None = None
+         # checkpointer 后台预热任务 (start() 里 fire-and-forget, stop() 时 cancel)
+         self._checkpointer_warmup_task: Optional[asyncio.Task] = None
+@@ -1464,6 +1471,8 @@ class AgentWebSocketServer:
+         # the loop after the Gateway is already connected.
+         self._first_gateway_connection: asyncio.Event = asyncio.Event()
+         self._tools_prewarm_task: Optional[asyncio.Task] = None
++        # (SD-patch 0016) post-listen warmup slot for the lazy heavy members.
++        self._heavy_members_warmup_task: Optional[asyncio.Task] = None
+         # MCP 连接缓存预热任务 (同上, 建 Runner.resource_mgr 供首轮对话命中)
+         self._mcp_prewarm_task: Optional[asyncio.Task] = None
+         # 图像模态探针重探任务 (模型配置变更时拉起, stop() 时 cancel)
+@@ -1474,6 +1483,104 @@ class AgentWebSocketServer:
+             lambda msg: asyncio.create_task(self.send_push(msg))
+         )
+ 
++    # ---------- (SD-patch 0016) lazy heavy members ------------------------------
++
++    def _materialize_heartbeat_runtime(self) -> Any:
++        """Construct HeartbeatRailRuntime on first use (thread-safe).
++
++        The rails import chain (~8-12s cold) and the runtime constructor run
++        at most once per process; start()'s post-listen warmup normally pays
++        this cost off the event loop, and this accessor is the synchronous
++        backstop for any caller that arrives earlier.
++        """
++        # (SD-patch 0016) getattr tolerance, same rationale as the adapter
++        # registry materializer below.
++        runtime = getattr(self, "_heartbeat_runtime", None)
++        if runtime is not None:
++            return runtime
++        from jiuwenswarm.agents.harness.code.rails.heartbeat.runtime import (
++            HeartbeatRailRuntime,
++        )
++
++        runtime = HeartbeatRailRuntime(self)
++        self._heartbeat_runtime = runtime
++        self._agent_manager.set_heartbeat_service(runtime)
++        return runtime
++
++    @property
++    def _heartbeat_runtime_or_none(self) -> Any | None:
++        return self._heartbeat_runtime
++
++    def _materialize_adapter_registry(self) -> Any:
++        """Construct the gateway adapter registry on first use."""
++        # (SD-patch 0016) getattr keeps the pre-0016 tolerance for
++        # partially-constructed instances (tests and embedding harnesses
++        # bypass __init__ via __new__; HEAD used the same getattr pattern).
++        registry = getattr(self, "_adapter_registry", None)
++        if registry is not None:
++            return registry
++        # Gateway user-business RPCs execute in the current AgentServer's
++        # injected data directory; request dispatch checks the registry before
++        # the legacy handler chain. (SD-patch 0015 note applies to the import
++        # site; the chain stays off the pre-listen path.)
++        from jiuwenswarm.server.runtime.gateway_adapter import (
++            AdapterRegistry,
++            ConfigAdapter,
++            HarmonyOSAdapter,
++            MemoryAdapter,
++            ProjectAdapter,
++            SessionAdapter,
++            WorkspaceFileAdapter,
++        )
++
++        registry = AdapterRegistry()
++        for adapter in (
++            SessionAdapter(),
++            WorkspaceFileAdapter(),
++            MemoryAdapter(),
++            ProjectAdapter(),
++            HarmonyOSAdapter(),
++            ConfigAdapter(),
++        ):
++            registry.register(adapter)
++        self._adapter_registry = registry
++        return registry
++
++    def _materialize_personal_context_host(self) -> Any:
++        """Construct the in-process PersonalContext Host on first use."""
++        # (SD-patch 0016) getattr tolerance, same rationale as the adapter
++        # registry materializer above.
++        host = getattr(self, "_personal_context_host", None)
++        if host is not None:
++            return host
++        self._personal_context_host = _personal_context_host_api_cls()(
++            home=Path.home() / ".jiuwenswarm" / ".personal_context",
++        )
++        return self._personal_context_host
++
++    async def _warmup_heavy_members(self) -> None:
++        """Post-listen warmup: build the lazy members off the event loop.
++
++        Runs in a worker thread (imports + constructors are synchronous and
++        multi-second). The heartbeat runtime is the only member other coros
++        touch; the asyncio.Lock in its constructor is created off-loop here,
++        which is safe because no coroutine can observe a half-built runtime
++        (readers see None until the assignment completes).
++        """
++        def _build() -> None:
++            self._materialize_heartbeat_runtime()
++            self._materialize_adapter_registry()
++            self._materialize_personal_context_host()
++
++        try:
++            await asyncio.to_thread(_build)
++        except Exception as exc:  # noqa: BLE001
++            logger.warning(
++                "[AgentWebSocketServer] heavy member warmup failed; lazy "
++                "backstops will retry on first use: %s",
++                exc,
++            )
++
+     def set_proactive_engine(self, engine: Any) -> None:
+         """Store the proactive engine instance for debug trigger interface."""
+         self._proactive_engine = engine
+@@ -1636,6 +1743,15 @@ class AgentWebSocketServer:
+         # if this task has not completed when the first context is created.
+         self._schedule_tokenizer_warmup(get_config(), reason="startup")
+ 
++        # (SD-patch 0016) heavy-member warmup: build the lazy members
++        # (heartbeat rails runtime / gateway adapter registry /
++        # personal-context host) in a worker thread now that the port listens.
++        # The first Gateway connection and any chat dispatch materialize them
++        # synchronously as a backstop if they win the race.
++        self._heavy_members_warmup_task = asyncio.create_task(
++            self._warmup_heavy_members(), name="heavy-members-warmup"
++        )
++
+         # 端口已 listen, 后台预热 checkpointer, 不阻塞启动与握手.
+         # _checkpointer_warmup_task 供 shutdown 时 cancel, 避免任务悬挂.
+         # [windows-desktop] reason: interface_deep's import chain (image_tools
+@@ -1674,11 +1790,11 @@ class AgentWebSocketServer:
+             await self._await_first_connection()
+ 
+             retry_delay = 1.0
+-            while not self._heartbeat_runtime.is_available:
++            while not self._materialize_heartbeat_runtime().is_available:
+                 try:
+                     ensure = await asyncio.to_thread(_import_ensure_checkpointer)
+                     await ensure()
+-                    await self._heartbeat_runtime.start()
++                    await self._materialize_heartbeat_runtime().start()
+                     return
+                 except Exception as exc:  # noqa: BLE001
+                     logger.warning(
+@@ -1863,7 +1979,10 @@ class AgentWebSocketServer:
+         await self._await_first_connection()
+         start_cancelled: asyncio.CancelledError | None = None
+         try:
+-            await self._personal_context_host.start()
++            # (SD-patch 0016) lazy member: materialize on first start (runs
++            # post-first-connection, after the warmup task had its chance).
++            host = self._materialize_personal_context_host()
++            await host.start()
+         except asyncio.CancelledError as exc:
+             start_cancelled = exc
+         except Exception as exc:  # noqa: BLE001
+@@ -2135,8 +2254,11 @@ class AgentWebSocketServer:
+                     type(exc).__name__,
+                 )
+         stop_cancelled: asyncio.CancelledError | None = None
++        # (SD-patch 0016) lazy member: never materialize during shutdown.
++        host = self._personal_context_host
+         try:
+-            await self._personal_context_host.stop()
++            if host is not None:
++                await host.stop()
+         except asyncio.CancelledError as exc:
+             stop_cancelled = exc
+         except Exception as exc:  # noqa: BLE001
+@@ -2156,6 +2278,22 @@ class AgentWebSocketServer:
+ 
+     async def _stop_main_services(self) -> None:
+         """Run the unchanged AgentServer shutdown before optional PersonalContext cleanup."""
++        # (SD-patch 0016) cancel the lazy-member warmup first; its to_thread
++        # body cannot be interrupted mid-import, so also tolerate it finishing
++        # after cancel when the process is already shutting down.
++        heavy_warmup = self._heavy_members_warmup_task
++        self._heavy_members_warmup_task = None
++        if heavy_warmup is not None and not heavy_warmup.done():
++            heavy_warmup.cancel()
++            try:
++                await heavy_warmup
++            except asyncio.CancelledError:
++                pass
++            except Exception as exc:  # noqa: BLE001
++                logger.warning(
++                    "[AgentWebSocketServer] heavy member warmup cancel failed: %s",
++                    exc,
++                )
+         tokenizer_tasks = tuple(self._tokenizer_warmup_tasks)
+         self._tokenizer_warmup_tasks.clear()
+         for task in tokenizer_tasks:
+@@ -2174,7 +2312,10 @@ class AgentWebSocketServer:
+                 pass
+             except Exception as exc:  # noqa: BLE001
+                 logger.warning("[AgentWebSocketServer] checkpointer warmup cancel failed: %s", exc)
+-        await self._heartbeat_runtime.stop()
++        # (SD-patch 0016) lazy member: never materialize during shutdown.
++        heartbeat = self._heartbeat_runtime
++        if heartbeat is not None:
++            await heartbeat.stop()
+         # 同理取消 tools 工具链后台预热任务.
+         tools_prewarm = self._tools_prewarm_task
+         self._tools_prewarm_task = None
+@@ -2244,14 +2385,19 @@ class AgentWebSocketServer:
+ 
+         # 发送 connection.ack 事件，通知 Gateway 服务端已就绪
+         try:
++            # (SD-patch 0016) ack heartbeat metadata is decorative (no
++            # consumer reads it -- verified across gateway/frontend); do not
++            # materialize the rails chain on the handshake path. The lazy
++            # members are warming in a worker thread since listen.
++            heartbeat = self._heartbeat_runtime
+             ack_frame = {
+                 "type": "event",
+                 "event": "connection.ack",
+                 "payload": {
+                     "status": "ready",
+                     "heartbeat_job_owner": "agentserver",
+-                    "heartbeat_job_protocol": self._heartbeat_runtime.protocol_version,
+-                    "heartbeat_job_ready": self._heartbeat_runtime.is_available,
++                    "heartbeat_job_protocol": getattr(heartbeat, "protocol_version", 1),
++                    "heartbeat_job_ready": bool(getattr(heartbeat, "is_available", False)),
+                 },
+             }
+             await send_wire_payload(ws, ack_frame)
+@@ -2303,7 +2449,7 @@ class AgentWebSocketServer:
+                         await self._agent_manager.cancel_all_inflight_work(
+                             reason=f"[gateway ws closed {remote}] ",
+                             exclude_session_ids=(
+-                                self._heartbeat_runtime.execution.active_session_ids()
++                                self._materialize_heartbeat_runtime().execution.active_session_ids()
+                             ),
+                         )
+                     except Exception:
+@@ -2321,7 +2467,7 @@ class AgentWebSocketServer:
+                         await cancel_all_team_stream_tasks_across_managers(
+                             reason=f"[gateway ws closed {remote}] ",
+                             exclude_session_ids=(
+-                                self._heartbeat_runtime.execution.active_session_ids()
++                                self._materialize_heartbeat_runtime().execution.active_session_ids()
+                             ),
+                         )
+                     except Exception:
+@@ -2346,9 +2492,9 @@ class AgentWebSocketServer:
+         """
+         if request.req_method is None or request.req_method in _GATEWAY_ADAPTER_LEGACY_METHODS:
+             return False
+-        registry = getattr(self, "_adapter_registry", None)
+-        if registry is None:
+-            return False
++        # (SD-patch 0016) lazy member: materialize on first dispatch; the
++        # post-listen warmup usually won the race, making this a no-op.
++        registry = self._materialize_adapter_registry()
+         adapter = registry.get(request.req_method.value)
+         if adapter is None:
+             return False
+@@ -2503,7 +2649,8 @@ class AgentWebSocketServer:
+                     manager, "set_personal_context_runtime_enabled", None
+                 )
+                 await _pc_handler(
+-                    self._personal_context_host,
++                    # (SD-patch 0016) lazy member: materialize on first RPC.
++                    self._materialize_personal_context_host(),
+                     ws,
+                     request,
+                     send_lock,
+@@ -3995,7 +4142,7 @@ class AgentWebSocketServer:
+         if admitted and interrupt_resume:
+             admitted = self._should_admit_interrupt_resume(request)
+         if admitted:
+-            await self._heartbeat_runtime.admission.begin_user(session_id)
++            await self._materialize_heartbeat_runtime().admission.begin_user(session_id)
+         if interrupt_resume:
+             await self._clear_pending_interaction(
+                 session_id,
+@@ -4006,7 +4153,7 @@ class AgentWebSocketServer:
+             kvc_task_succeeded = True
+         finally:
+             if admitted:
+-                await self._heartbeat_runtime.admission.end_user(session_id)
++                await self._materialize_heartbeat_runtime().admission.end_user(session_id)
+             if foreground:
+                 await manager.end_foreground_chat()
+             if tracks_kvc_task:
+@@ -4134,7 +4281,7 @@ class AgentWebSocketServer:
+         if admitted and interrupt_resume:
+             admitted = self._should_admit_interrupt_resume(request)
+         if admitted:
+-            await self._heartbeat_runtime.admission.begin_user(session_id)
++            await self._materialize_heartbeat_runtime().admission.begin_user(session_id)
+         if interrupt_resume:
+             await self._clear_pending_interaction(
+                 session_id,
+@@ -4146,7 +4293,7 @@ class AgentWebSocketServer:
+             nonlocal admission_released
+             if not admitted or admission_released:
+                 return
+-            await self._heartbeat_runtime.admission.end_user(session_id)
++            await self._materialize_heartbeat_runtime().admission.end_user(session_id)
+             admission_released = True
+ 
+         try:
+@@ -4188,7 +4335,7 @@ class AgentWebSocketServer:
+                 (get_session_metadata(request.session_id) or {}).get("user_id") or ""
+             ).strip()
+         try:
+-            result = await self._heartbeat_runtime.handle_operation(
++            result = await self._materialize_heartbeat_runtime().handle_operation(
+                 action,
+                 data,
+                 channel_id=request.channel_id or "web",
+@@ -4267,7 +4414,7 @@ class AgentWebSocketServer:
+             request,
+             channel_id,
+         )
+-        self._heartbeat_runtime.retain_agent(request.session_id or "default", agent)
++        self._materialize_heartbeat_runtime().retain_agent(request.session_id or "default", agent)
+         restored_plan = await self._ensure_code_mode_state(
+             request,
+             mode,
+@@ -4987,10 +5134,10 @@ class AgentWebSocketServer:
+ 
+     async def _try_start_heartbeat_runtime(self) -> bool:
+         """Best-effort idempotent recovery after checkpointer readiness."""
+-        if self._heartbeat_runtime.is_available:
++        if self._materialize_heartbeat_runtime().is_available:
+             return True
+         try:
+-            await self._heartbeat_runtime.start()
++            await self._materialize_heartbeat_runtime().start()
+             return True
+         except Exception as exc:  # noqa: BLE001
+             logger.warning(
+@@ -5762,7 +5909,7 @@ class AgentWebSocketServer:
+ 
+                             begin_trajectory_session_delete(target)
+                             trajectory_delete_prepared = True
+-                        await self._heartbeat_runtime.begin_session_delete(target)
++                        await self._materialize_heartbeat_runtime().begin_session_delete(target)
+                         heartbeat_delete_prepared = True
+                         if is_team_session:
+                             team_manager = get_team_manager(channel_id)
+@@ -5827,7 +5974,7 @@ class AgentWebSocketServer:
+                                 )
+                         if heartbeat_delete_prepared:
+                             try:
+-                                await self._heartbeat_runtime.abort_session_delete(
++                                await self._materialize_heartbeat_runtime().abort_session_delete(
+                                     target,
+                                     channel_id=channel_id or "",
+                                 )
+@@ -5874,7 +6021,7 @@ class AgentWebSocketServer:
+                                     exc,
+                                 )
+                         try:
+-                            await self._heartbeat_runtime.commit_session_delete(target)
++                            await self._materialize_heartbeat_runtime().commit_session_delete(target)
+                         except Exception as exc:  # noqa: BLE001
+                             # The product Session is already gone. Resume the
+                             # scheduler so its missing-session path retries the
+diff --git a/jiuwenswarm/server/app_agentserver.py b/jiuwenswarm/server/app_agentserver.py
+index 4675d3b..6416ffe 100644
+--- a/jiuwenswarm/server/app_agentserver.py
++++ b/jiuwenswarm/server/app_agentserver.py
+@@ -174,13 +174,21 @@ _mark_startup_import_phase("runtime_environment_applied")
+ # synchronously at AgentManager.get_agent() -- the single entry point for
+ # agent creation -- so no bash tool can run before the hooks are in place.
+ 
+-# Normalize known provider compatibility gaps before any runtime Model is built.
+-from jiuwenswarm.llm_provider_compat_patch import apply_provider_compat_patches
+-
+-apply_provider_compat_patches()
++# [windows-desktop] reason (SD-patch 0016): apply_provider_compat_patches()'s
++# function-body import pulls the openjiuwen foundation.llm model-client chain
++# (anthropic_model_client + openai_model_client -> foundation.tool/mcp/openai
++# SDK/redis, ~3.1s warm on this tree). Calling it here at module top put that
++# whole chain on the pre-listen critical path (same pattern as the
++# apply_mcp_call_timeout_patch miss fixed by 0015). The call is now (a) made by
++# the post-listen warmup task in AgentWebSocketServer.start() and (b) enforced
++# idempotently at AgentManager.get_agent() -- the single entry point for agent
++# creation -- so no runtime Model is built before the patches are in place.
+ 
+ # 兼容 SSE-only 网关：让非流式 invoke()（subagent / 心跳等）能解析 text/event-stream 响应
+ # 仅当 channels.xiaoyi.mode == xiaoyi_claw 时才打补丁（该网关以 SSE-only 方式返回非流式响应）。
++# [windows-desktop] reason (SD-patch 0016): this top-level conditional also
++# eagerly reads config through jiuwenswarm.common.config; moved the whole
++# decision into _run() so the import phase reads no user config.
+ from jiuwenswarm.llm_sse_patch import apply_openai_sse_invoke_patch
+ 
+ 
+@@ -205,8 +213,6 @@ def _should_apply_sse_invoke_patch() -> bool:
+     return str(mode or "").strip() == "xiaoyi_claw"
+ 
+ 
+-if _should_apply_sse_invoke_patch():
+-    apply_openai_sse_invoke_patch()
+ _mark_startup_import_phase("entry_module_ready")
+ 
+ # ``TaskTool`` 的 /debug 跟踪补丁按首个开启 subagent trace 的请求再加载。
+@@ -214,12 +220,25 @@ _mark_startup_import_phase("entry_module_ready")
+ 
+ 
+ async def _run(host: str, port: int) -> None:
+-    from openjiuwen.core.runner import Runner
++    # [windows-desktop] reason (SD-patch 0016): ``from openjiuwen.core.runner
++    # import Runner`` pulls the runner/session/workflow/context_engine chain
++    # (~7s warm) but this process only consumes Runner.callback_framework.
++    # The callback package imports standalone (~0.7s); a standalone framework
++    # instance is safe here for the same reasons as the Gateway side (see the
++    # app_gateway note): the desktop extension set registers only typed
++    # extensions, and jiuwenswarm's own ExtensionRegistry.trigger calls go to
++    # the instance the registry holds. openjiuwen-internal events (model/tool
++    # hooks) trigger on GLOBAL_RUNNER's framework inside the openjiuwen
++    # runtime itself and never expect jiuwenswarm extension handlers, which
++    # register only on the registry's framework either way.
++    from openjiuwen.core.runner.callback import AsyncCallbackFramework
+     from jiuwenswarm.server.agent_ws_server import AgentWebSocketServer
+-    from jiuwenswarm.agents.harness.team.remote_member_bootstrap import run_teammate_bootstrap_daemon
+     from jiuwenswarm.extensions.manager import ExtensionManager
+     from jiuwenswarm.extensions.registry import ExtensionRegistry
+     from jiuwenswarm.common.config import get_config
++    # [windows-desktop] reason (SD-patch 0016): run_teammate_bootstrap_daemon's
++    # import chain (harness team -> rails) costs ~3s warm; only needed by the
++    # listen-later daemon spawn below, so it moved to that call site.
+ 
+     # 阶段耗时基准:冻结 EXE 排查启动超时要用各阶段时间戳对齐 Desktop 日志。
+     startup_t0 = time.monotonic()
+@@ -242,7 +261,8 @@ async def _run(host: str, port: int) -> None:
+     log_startup_stage("run_entered")
+ 
+     # ---------- 扩展系统初始化 ----------
+-    callback_framework = Runner.callback_framework
++    # (SD-patch 0016) standalone callback framework; see the import-block note.
++    callback_framework = AsyncCallbackFramework()
+     extension_registry = ExtensionRegistry.create_instance(
+         callback_framework=callback_framework,
+         config={},
+@@ -277,6 +297,37 @@ async def _run(host: str, port: int) -> None:
+     )
+     log_startup_stage("agent_ws_listening")
+ 
++    # [windows-desktop] reason (SD-patch 0016): provider compat patches moved
++    # here from module import time (see comment at the former call site). The
++    # port is already listening; the patches are enforced before any runtime
++    # Model can be built via the idempotent get_agent() backstop, and the
++    # first chat request pays nothing because the warmup below runs in a
++    # worker thread while the loop keeps serving handshakes.
++    async def _apply_provider_compat_warmup() -> None:
++        def _apply() -> None:
++            from jiuwenswarm.llm_provider_compat_patch import apply_provider_compat_patches
++
++            apply_provider_compat_patches()
++
++        try:
++            await asyncio.to_thread(_apply)
++        except Exception as exc:  # noqa: BLE001
++            logger.warning(
++                "[AgentServer] provider compat warmup failed; get_agent() backstop will retry: %s",
++                exc,
++            )
++
++    _provider_compat_task = asyncio.create_task(
++        _apply_provider_compat_warmup(), name="provider-compat-warmup"
++    )
++
++    # [windows-desktop] reason (SD-patch 0016): the SSE invoke patch decision
++    # (config read) also moved here from module import time; it only mutates
++    # response parsing for the xiaoyi_claw gateway and no request can be
++    # dispatched before _run reaches this point.
++    if _should_apply_sse_invoke_patch():
++        apply_openai_sse_invoke_patch()
++
+     # 观测 hook 只会在后续创建子 Agent 时生效，不是首页 RPC 的前置条件。
+     # 延后其依赖导入可让冻结进程先开放 AgentServer 端口；在事件循环处理首个
+     # 请求前仍会同步安装完成，保持所有执行路径的 span 归属不变。
+@@ -352,6 +403,11 @@ async def _run(host: str, port: int) -> None:
+ 
+     # Distributed teammate can receive bootstrap before any team-mode request arrives.
+     # Keep a lightweight daemon alive so remote member bootstrap is consumed proactively.
++    # [windows-desktop] (SD-patch 0016): the import moved here from _run()'s top.
++    from jiuwenswarm.agents.harness.team.remote_member_bootstrap import (
++        run_teammate_bootstrap_daemon,
++    )
++
+     teammate_bootstrap_task = asyncio.create_task(
+         run_teammate_bootstrap_daemon(stop_event=stop_event)
+     )
+diff --git a/jiuwenswarm/server/runtime/agent_manager.py b/jiuwenswarm/server/runtime/agent_manager.py
+index ebe9788..b986cec 100644
+--- a/jiuwenswarm/server/runtime/agent_manager.py
++++ b/jiuwenswarm/server/runtime/agent_manager.py
+@@ -991,6 +991,17 @@ class AgentManager:
+             )
+             _install_shell_tool_safety_hooks = _hooks_impl
+         _install_shell_tool_safety_hooks()
++        # (SD-patch 0016): provider compat patches are applied after listen by
++        # a warmup task; this synchronous, idempotent guard closes the race
++        # window for any agent created before that task finishes
++        # (apply_provider_compat_patches is itself cached via
++        # _PROVIDER_PATCHES_APPLIED). It runs in a worker thread so the first
++        # call's heavy import (foundation.llm chain) never blocks the loop.
++        from jiuwenswarm.llm_provider_compat_patch import (
++            apply_provider_compat_patches as _provider_patches_impl,
++        )
++
++        await asyncio.to_thread(_provider_patches_impl)
+         channel_key = _normalize_channel_id(channel_id)
+         mode_key = _normalize_mode(mode)
+         sub_mode_key = collapse_plan_sub_mode(mode_key, sub_mode)
