@@ -89,7 +89,7 @@ try {
   });
   await step("6. Disable preserves the independent global feedback policy and session preferences", async () => {
     assert.deepEqual(await formal(), { enabled: false, feedbackPolicy: "explain" }); assert.deepEqual(await preferences(), sessionBefore);
-    assert.equal((await api(path())).filter(card => card.state === "applied").length, 2);
+    assert.equal((await api(path())).items.filter(card => card.state === "applied").length, 2);
   });
   if (browserRequested) await step("7. Inspect and manually confirm the actual global Reviewer card in an isolated browser", async () => {
     execFileSync(process.execPath, ["test/sync-e2e.mjs", "--check"]);
@@ -141,7 +141,7 @@ finally {
   if (product && product.exitCode === null && product.signalCode === null) { outcome = "FAIL"; process.exitCode = 1; }
   await writeFile(resolve(directory, "startup.log"), logs);
   await writeFile(resolve(directory, "report.json"), JSON.stringify({ outcome, sha, startup: "node services/api/dist/server.js; fresh owned data/ephemeral loopback port/native; no model or review executed", steps, requests,
-    browser: browserRequested ? "Pinned Chromium; new empty context; 1280x800/900x650/390x844 DPR1; only owned HTTP origin allowed" : "not exercised", realLLM: false, actualReviewExecution: "not exercised by this driver; separate coordinator integration coverage", serverExit: { code: product?.exitCode, signal: product?.signalCode, pid: product?.pid } }, null, 2));
+    browser: browserContext ? "Pinned Chromium attempted; see step 7 outcome; new empty context; 1280x800/900x650/390x844 DPR1; only owned HTTP origin allowed" : "not exercised", realLLM: false, actualReviewExecution: "not exercised by this driver; separate coordinator integration coverage", serverExit: { code: product?.exitCode, signal: product?.signalCode, pid: product?.pid } }, null, 2));
   await writeFile(resolve(directory, "report.md"), `# Global Reviewer participation: ${outcome}\n\nCommit: ${sha ?? "unknown"}\n\n${steps.map(item => `- ${item.name}: ${item.status}${item.error ? ` — ${item.error}` : ""}`).join("\n")}\n`);
   console.log(JSON.stringify({ outcome, sha, report: resolve(directory, "report.md") }));
 }
