@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 /** E2E-META
  * Purpose: formal password changes and self-heal forward the current saved Neo4j target with the credential.
- * Steps: immutable owned API/stub; configure target; password-only PUT; degraded GET self-heal; clear; confirm no later credential push.
+ * Steps: immutable owned API/stub; configure target; password-only PUT; GET self-heal; concurrent GET/PUT barriers; clear; no later push.
  * Environment: actual compiled Native product, fresh owned data and two ephemeral loopback ports.
  * Type: owned MemoryGraph HTTP stub only, never a real database, LLM, Runner execution or paid request.
  * Credentials: synthetic owned API, sidecar and Neo4j values; only presence/equality booleans enter evidence.
@@ -19,9 +19,16 @@ import { resolve } from "node:path";
 const directory = resolve(".tmp", `memory-destination-${randomUUID()}`); await mkdir(directory, { recursive: true });
 const token = `owned-api-${randomUUID()}`, sidecarToken = `owned-sidecar-${randomUUID()}`, password = `synthetic-neo4j-${randomUUID()}`;
 const httpUri = "https://owned-graph.invalid:7474", user = "owned-neo4j-user";
+const rotatedPassword = `synthetic-rotated-${randomUUID()}`, rotatedUri = "https://rotated-graph.invalid:7474", rotatedUser = "rotated-owned-user";
 const steps = [], requests = [], pushes = []; let outcome = "BLOCKED", sha, product, stub, origin, baseline, logs = "", backend = "local", featurePushes;
+let heldHealth, heldBackend; const releases = [];
+function hold(kind) {
+  let enter, release; const entered = new Promise(done => { enter = done; }), wait = new Promise(done => { release = done; });
+  if (kind === "health") heldHealth = { enter, wait }; else heldBackend = { enter, wait };
+  releases.push(release); return { entered, release };
+}
 class Blocked extends Error {}
-const redact = value => [token, sidecarToken, password].reduce((text, secret) => text.replaceAll(secret, "[owned-secret]"), String(value));
+const redact = value => [token, sidecarToken, password, rotatedPassword].reduce((text, secret) => text.replaceAll(secret, "[owned-secret]"), String(value));
 async function listen(server) { await new Promise(done => server.listen(0, "127.0.0.1", done)); return server.address().port; }
 async function api(path, body, method = body === undefined ? "GET" : "PUT") {
   const response = await fetch(origin + path, { method, redirect: "error", signal: AbortSignal.timeout(15000),
@@ -32,11 +39,10 @@ async function step(name, work) {
   try { await work(); steps.push({ name, status: "PASS" }); }
   catch (error) { steps.push({ name, status: error instanceof Blocked ? "BLOCKED" : "FAIL", error: redact(error.message) }); throw error; }
 }
-function bound(push, clear = false) {
+function bound(push, clear = false, slot = "initial") {
   assert.ok(push, "The sidecar must receive the owned credential control request");
-  assert.equal(push.httpUriMatches, true, "Credential push must carry the current formal HTTP destination");
-  assert.equal(push.userMatches, true, "Credential push must carry the current formal username");
-  assert.equal(clear ? push.cleared : push.passwordMatches, true);
+  assert.equal(slot === "initial" ? push.matchesInitial : push.matchesRotated, true, "Credential push must carry its associated formal HTTP destination and username");
+  assert.equal(clear ? push.cleared : push.passwordSlot === slot, true);
 }
 try {
   await step("1. Start the immutable owned product and a degraded MemoryGraph HTTP stub", async () => {
@@ -46,12 +52,21 @@ try {
     stub = createServer(async (request, response) => {
       let raw = ""; for await (const part of request) raw += part;
       response.setHeader("content-type", "application/json");
-      if (request.url === "/health") return response.end(JSON.stringify({ status: "degraded", backend }));
+      if (request.url === "/health") {
+        const barrier = heldHealth; heldHealth = undefined;
+        if (barrier) { barrier.enter(); await barrier.wait; }
+        return response.end(JSON.stringify({ status: "degraded", backend }));
+      }
       if (request.headers.authorization !== `Bearer ${sidecarToken}`) { response.statusCode = 401; return response.end("{}"); }
       const body = JSON.parse(raw || "{}");
-      if (request.url === "/internal/backend") backend = body.backend;
-      if (request.url === "/internal/neo4j-password") pushes.push({ httpUriMatches: body.http_uri === httpUri, userMatches: body.user === user,
-        passwordMatches: body.password === password, cleared: body.password === null, hasHttpUri: Object.hasOwn(body, "http_uri"), hasUser: Object.hasOwn(body, "user") });
+      if (request.url === "/internal/backend") {
+        backend = body.backend; const barrier = heldBackend; heldBackend = undefined;
+        if (barrier) { barrier.enter(); await barrier.wait; }
+      }
+      if (request.url === "/internal/neo4j-password") pushes.push({ matchesInitial: body.http_uri === httpUri && body.user === user,
+        matchesRotated: body.http_uri === rotatedUri && body.user === rotatedUser,
+        passwordSlot: body.password === password ? "initial" : body.password === rotatedPassword ? "rotated" : body.password === null ? "cleared" : "unexpected",
+        cleared: body.password === null, hasHttpUri: Object.hasOwn(body, "http_uri"), hasUser: Object.hasOwn(body, "user") });
       return response.end(JSON.stringify({ ok: true }));
     });
     const sidecarPort = await listen(stub), reservation = createServer(), port = await listen(reservation); await new Promise(done => reservation.close(done));
@@ -80,16 +95,34 @@ try {
     const saved = await api("/api/memory/settings"); assert.equal(saved.memoryGraphStatus, "degraded");
     assert.equal(pushes.length, before + 1); bound(pushes.at(-1));
   });
-  await step("5. Clearing a password sends null together with the current formal connection", async () => {
-    const saved = await api("/api/memory/settings", { neo4jPassword: null }); assert.equal(saved.hasNeo4jPassword, false); bound(pushes.at(-1), true);
+  await step("5. A concurrent target/key change during GET health never pairs the new key with the old target", async () => {
+    const barrier = hold("health"), pending = api("/api/memory/settings"); await barrier.entered;
+    const before = pushes.length;
+    try { await api("/api/memory/settings", { neo4jHttp: rotatedUri, neo4jUser: rotatedUser, neo4jPassword: rotatedPassword }); }
+    finally { barrier.release(); }
+    await pending;
+    for (const push of pushes.slice(before)) bound(push, false, "rotated");
   });
-  await step("6. A later degraded GET cannot re-push the cleared credential", async () => {
+  await step("6. A concurrent rotation during backend push never pairs the stored replacement with a previous target", async () => {
+    await api("/api/memory/settings", { neo4jHttp: httpUri, neo4jUser: user, neo4jPassword: password });
+    const barrier = hold("backend"), pending = api("/api/memory/settings", { backend: "neo4j", neo4jUser: user }); await barrier.entered;
+    const before = pushes.length;
+    try { await api("/api/memory/settings", { neo4jHttp: rotatedUri, neo4jUser: rotatedUser, neo4jPassword: rotatedPassword }); }
+    finally { barrier.release(); }
+    await pending;
+    for (const push of pushes.slice(before)) { assert.ok(["initial", "rotated"].includes(push.passwordSlot)); bound(push, false, push.passwordSlot); }
+  });
+  await step("7. Clearing a password sends null together with the current formal connection", async () => {
+    const saved = await api("/api/memory/settings", { neo4jPassword: null }); assert.equal(saved.hasNeo4jPassword, false); bound(pushes.at(-1), true, "rotated");
+  });
+  await step("8. A later degraded GET cannot re-push the cleared credential", async () => {
     const before = pushes.length, saved = await api("/api/memory/settings"); assert.equal(saved.hasNeo4jPassword, false);
-    assert.equal(saved.neo4jHttp, httpUri); assert.equal(saved.neo4jUser, user); assert.equal(pushes.length, before);
+    assert.equal(saved.neo4jHttp, rotatedUri); assert.equal(saved.neo4jUser, rotatedUser); assert.equal(pushes.length, before);
   });
   featurePushes = structuredClone(pushes); outcome = "PASS";
 } catch (error) { outcome = error instanceof Blocked ? "BLOCKED" : "FAIL"; process.exitCode = 1; }
 finally {
+  for (const release of releases) release();
   try { if (baseline) await api("/api/memory/settings", { enabled: baseline.enabled, backend: baseline.backend, neo4jHttp: baseline.neo4jHttp, neo4jUser: baseline.neo4jUser, neo4jPassword: null }); }
   catch { outcome = "FAIL"; process.exitCode = 1; steps.push({ name: "Restore owned baseline", status: "FAIL" }); }
   if (product && product.exitCode === null && product.signalCode === null) { product.kill(); await Promise.race([new Promise(done => product.once("exit", done)), new Promise(done => setTimeout(done, 5000))]); }
