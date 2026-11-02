@@ -25,7 +25,7 @@ export function createSecurityNetworkAdapter(store: SessionStore, cleanupAvailab
         if (name === "allowPrivateNetwork") { if (typeof value !== "boolean") invalid("Expected a boolean", name); }
         else if (typeof value !== "string" || value.length > (name === "allowedDomainsText" ? 4096 : 200) || /[\u0000-\u0009\u000b-\u000c\u000e-\u001f]/u.test(value)) invalid("Invalid registered security field", name);
         if (name === "mode" && !["none", "domain-allowlist", "open"].includes(String(value))) invalid("Select a registered network mode", name);
-        output[name] = value as string | boolean;
+        output[name] = value;
       }
       return output;
     },
