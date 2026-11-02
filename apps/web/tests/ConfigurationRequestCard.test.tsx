@@ -16,6 +16,15 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03d: saved MCP header removal labels names, without a credential value input", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "headerName", before: "authorization · 2 names; values hidden", after: "Removed" }], fields: [
+    { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "headerName", label: "Saved header name to remove", kind: "enum", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization · 2 names" }] },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Saved header name to remove/u); assert.match(text, /values hidden/u); assert.equal(renderer.root.findByProps({ name: "headerName" }).type, "select"); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-X03b: MCP timeout labels disclose seconds and subsequent-call timing", async () => {
   const renderer = await mount(request({ capabilityId: "mcp.timeout", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "timeoutSeconds", before: "37", after: "81" }], fields: [
     { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },

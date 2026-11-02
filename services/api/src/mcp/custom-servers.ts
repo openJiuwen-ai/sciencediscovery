@@ -239,13 +239,14 @@ export class CustomMcpServers {
     return result;
   }
 
-  private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations): Promise<void> {
+  private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations, invalidateChecks: readonly string[] = []): Promise<void> {
     if (!this.key) throw new Error("MCP storage is not initialized");
     const temporary = `${this.path}.tmp`;
     const payload = Object.keys(operations).length ? { format: "sciencediscovery-custom-mcp-v2", servers: next, operations } : next;
     await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(payload)), { mode: 0o600 });
     await rename(temporary, this.path);
     this.configs = next;
+    for (const id of invalidateChecks) { this.checks.delete(id); }
     this.configurationOperations = operations;
     this.sync();
   }
@@ -261,6 +262,34 @@ export class CustomMcpServers {
     const source = this.configurationMetadata(serverId);
     const items = source.items.map(item => ({ ...item, timeoutSeconds: this.configs[item.id]?.timeoutSeconds ?? 60 }));
     return { items, current: items.find(item => item.id === serverId), version: source.version };
+  }
+
+  /** Header names/counts only. Values and endpoint/execution details never leave the authority. */
+  configurationHeaderRemoval(target = "") {
+    let serverId = "", headerName = "";
+    if (target) {
+      try { const parsed: unknown = JSON.parse(target); if (Array.isArray(parsed) && parsed.length === 2 && parsed.every(value => typeof value === "string")) { serverId = String(parsed[0]); headerName = String(parsed[1]).toLowerCase(); } } catch { /* Unbound discovery has no selected header. */ }
+    }
+    const items = Object.entries(this.configs).filter(([, config]) => config.transport !== "stdio").map(([id, config]) => {
+      const counts = new Map<string, number>(); for (const name of Object.keys(config.headers)) { counts.set(name.toLowerCase(), (counts.get(name.toLowerCase()) ?? 0) + 1); }
+      return { id, name: config.name, transport: config.transport, enabled: config.enabled, headers: [...counts].filter(([name]) => name.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(name)).map(([name, aliases]) => ({ name, aliases })).sort((a, b) => a.name.localeCompare(b.name)) };
+    });
+    const current = items.find(item => item.id === serverId);
+    return { items, current, header: current?.headers.find(item => item.name === headerName), version: serverId ? this.configurationMetadataRevision(serverId) : undefined };
+  }
+
+  submitConfigurationHeaderRemoval(operation: ConfigurationExternalOperation, target: string, expectedVersion: string): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code });
+      const source = this.configurationHeaderRemoval(target), selected = source.current;
+      if (!selected || !source.header) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      if (source.version !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
+      const previous = this.configs[selected.id]; if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      const selectedName = source.header.name;
+      const candidate = normalizeCustomMcpConfig({ ...previous, headers: Object.fromEntries(Object.entries(previous.headers).filter(([name]) => name.toLowerCase() !== selectedName)) }, previous);
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationMetadataRevision(selected.id, candidate) } }, { ...this.configs, [selected.id]: candidate }, [selected.id]);
+    });
   }
 
   private configurationMetadataRevision(serverId: string, config = this.configs[serverId]): string {
@@ -279,9 +308,9 @@ export class CustomMcpServers {
     return prior ? structuredClone(prior) : undefined;
   }
 
-  private async recordConfigurationOutcome(outcome: ConfigurationExternalOutcome, configs = this.configs): Promise<ConfigurationExternalOutcome> {
+  private async recordConfigurationOutcome(outcome: ConfigurationExternalOutcome, configs = this.configs, invalidateChecks: readonly string[] = []): Promise<ConfigurationExternalOutcome> {
     if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
-    await this.persist(configs, { ...this.configurationOperations, [outcome.operationId]: outcome });
+    await this.persist(configs, { ...this.configurationOperations, [outcome.operationId]: outcome }, invalidateChecks);
     return structuredClone(outcome);
   }
 
