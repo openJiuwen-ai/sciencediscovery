@@ -184,12 +184,14 @@ test("returned tool failures keep their result, metadata, and error flag through
   assert.equal(result.content, content);
   assert.deepEqual(result.details, sanitizedDetails);
   assert.equal(result.message.content, content);
-  for (const results of [recorded, observed]) {
-    assert.equal(results.length, 1);
-    assert.equal(results[0]?.isError, true);
-    assert.equal(results[0]?.content, content);
-    assert.deepEqual(results[0]?.details, sanitizedDetails);
-  }
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.isError, true);
+  assert.equal(recorded[0]?.content, content);
+  assert.equal(recorded[0]?.details, details, "the audit recorder keeps canonical details");
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0]?.isError, true);
+  assert.equal(observed[0]?.content, content);
+  assert.deepEqual(observed[0]?.details, sanitizedDetails);
 });
 
 test("error-looking output is successful unless the tool marks it as a failure", async () => {
