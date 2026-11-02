@@ -389,8 +389,10 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         }
       }
     }
+    // The append-only audit recorder receives the canonical result. Interactive
+    // observers and return values still receive a bounded, redacted view.
+    if (this.options.recordResult) await this.options.recordResult({ call, content, ...(details !== undefined ? { details } : {}), isError, sequence });
     const boundedDetails = details === undefined ? undefined : sanitizeToolDetails(details);
-    if (this.options.recordResult) await this.options.recordResult({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });
     if (this.options.outputGuard) {
       const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded);
       content = guarded.content;
