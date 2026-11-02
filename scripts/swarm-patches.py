@@ -12,6 +12,18 @@ import subprocess
 
 PATCH_ENCODING = "utf-8"
 
+# Dev/test assets a wheel install never ships. A source checkout carries
+# tests/ and every patch applies; a wheel install (site-packages) omits them,
+# so a patch whose targets are all optional-and-absent is skipped there, and a
+# mixed patch applies with --exclude for its absent optional targets. Without
+# this, the required-paths check below hard-fails on the wheel form the
+# moment any patch touches tests/ (0016b ships test-side adapters).
+OPTIONAL_PATH_PREFIXES = ("tests/",)
+
+
+def is_optional(name):
+    return any(name.startswith(prefix) for prefix in OPTIONAL_PATH_PREFIXES)
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -50,9 +62,16 @@ def process(mode, target, tag, patch_dir=None):
             raise ValueError(f"Unsafe patch path: {name}")
     # New files have a +++ header too, but are intentionally absent before the
     # patch. Only the old-side headers name files a patch must find in the
-    # checked-out JiuwenSwarm source.
+    # checked-out JiuwenSwarm source. Optional paths (tests/) may be absent
+    # in a wheel install (site-packages); they are excluded from the required
+    # set, and every git apply invocation below passes --exclude for the
+    # absent ones, so a tests-only patch (0016b) becomes a no-op there while
+    # mixed patches still apply their product-code hunks. A source checkout
+    # (and the shipped installer payload, which carries the whole src tree)
+    # has tests/ and applies everything.
     required_paths = patch_paths(patches, "---")
-    missing = [name for name in required_paths if not (target / name).is_file()]
+    missing = [name for name in required_paths
+               if not (target / name).is_file() and not is_optional(name)]
     if missing:
         expected = tag
         if (target / ".git").exists():
@@ -90,7 +109,8 @@ def process(mode, target, tag, patch_dir=None):
         skip_apply = previous is not None and previous.get("patches") == expected["patches"] and all(
             (target / name).is_file() and digest(target / name) == recorded
             for name, recorded in previous.get("files", {}).items()
-        ) and all((target / name).is_file() for name in paths)
+        ) and all((target / name).is_file() for name in paths
+                  if not is_optional(name))
         if previous and previous.get("patches") != expected["patches"] and (target / ".git").exists():
             restore_pinned(target, tag, set(paths) | set(previous.get("files", {})), env)
         # A source checkout with the tag available replays from the pinned
@@ -103,18 +123,27 @@ def process(mode, target, tag, patch_dir=None):
             capture_output=True).returncode == 0:
             restore_pinned(target, tag, set(paths) | set(previous.get("files", {}) if previous else {}), env)
         if not skip_apply:
+            # Wheel form: pass --exclude for every optional path the tree does
+            # not carry, so tests-only patches no-op and mixed patches apply
+            # just their product-code hunks. Source form: excludes are empty.
+            excludes = [arg for name in required_paths
+                        if is_optional(name) and not (target / name).is_file()
+                        for arg in ("--exclude", name)]
             for patch in patches:
-                command = ["git", "-C", str(target), "apply"]
+                command = ["git", "-C", str(target), "apply"] + excludes
                 if subprocess.run(command + ["--reverse", "--check", str(patch)],
                                   env=env, capture_output=True).returncode == 0:
                     continue
                 subprocess.run(command + ["--check", str(patch)], env=env, check=True)
                 subprocess.run(command + [str(patch)], env=env, check=True)
-        expected["files"] = {name: digest(target / name) for name in paths}
+        expected["files"] = {name: digest(target / name) for name in paths
+                             if (target / name).is_file()}
         manifest.write_text(json.dumps(expected, indent=2) + "\n")
     else:
         actual = json.loads(manifest.read_text())
-        expected["files"] = {name: digest(target / name) for name in paths}
+        # Mirror the wheel form: absent optional paths are not recorded.
+        expected["files"] = {name: digest(target / name) for name in paths
+                             if (target / name).is_file()}
         if actual != expected:
             raise ValueError("Swarm patch verification failed; rebuild or run setup before starting")
 
