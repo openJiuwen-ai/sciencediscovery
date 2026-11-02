@@ -18,7 +18,7 @@ async function harness(context: { after(action: () => Promise<void>): void }) {
   const parent = resolve(process.cwd(), ".tmp"); const root = resolve(parent, `configuration-p1-${randomUUID()}`);
   const store = new SessionStore(root); await store.load();
   const cleanup: Array<() => Promise<unknown>> = [];
-  context.after(async () => { for (const action of cleanup) await action(); store.close(); assert.ok(root.startsWith(`${parent}${sep}`)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }); });
+  context.after(async () => { for (const action of cleanup.toReversed()) await action(); store.close(); assert.ok(root.startsWith(`${parent}${sep}`)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }); });
   store.setAvailableSkillIds(["literature", "statistics"]);
   const libraries: SkillLibrary[] = [{ id: "methods", name: "Methods library", headVersionId: "version-1", createdAt: "2026-01-01", updatedAt: "2026-01-01" }];
   store.setConfigurationSkillLibrarySource(() => libraries);

@@ -209,26 +209,28 @@ for (const recovery of ["restart", "stop"] as const) {
     });
     // This durable task + still-running card is the crash window before the
     // final checkpoint write, not a fake executed ArtifactReviewRun.
-    const restored = new SessionStore(f.root); await restored.load();
-    context.after(() => restored.close());
-    let executions = 0;
-    const recovered = new ReviewerAuditCoordinator(restored, { run: async () => { executions++; return []; } });
-    if (recovery === "restart") await recovered.resume();
-    else await recovered.cancelSession(f.session.id);
-    for (const status of ["queued", "running", "completed", "failed", "superseded"] as const) {
-      const late = await restored.updateReviewerAuditTask(f.session.id, task.id, { status, errorSummary: "late", reviewIds: ["invented"] });
-      assert.equal(late.status, "skipped"); assert.equal(late.skipReason, "specialist_disabled");
-      assert.equal(late.errorSummary, undefined); assert.equal(late.reviewIds, undefined);
-    }
-    const checkpoint = await restored.updateReviewerCheckpointMessage(f.session.id, task.checkpointMessageId, {
-      content: "late completion", status: "completed",
-    });
-    assert.equal(checkpoint.reviewerCheckpoint?.status, "skipped");
-    assert.equal(checkpoint.reviewerCheckpoint?.skipReason, "specialist_disabled");
-    assert.notEqual(checkpoint.content, "late completion");
-    assert.equal(executions, 0);
-    assert.deepEqual(await restored.listArtifactReviews(f.session.id), []);
-    assert.deepEqual(await restored.listReviewFeedback(f.session.id), []);
+    const restored = new SessionStore(f.root);
+    try {
+      await restored.load();
+      let executions = 0;
+      const recovered = new ReviewerAuditCoordinator(restored, { run: async () => { executions++; return []; } });
+      if (recovery === "restart") await recovered.resume();
+      else await recovered.cancelSession(f.session.id);
+      for (const status of ["queued", "running", "completed", "failed", "superseded"] as const) {
+        const late = await restored.updateReviewerAuditTask(f.session.id, task.id, { status, errorSummary: "late", reviewIds: ["invented"] });
+        assert.equal(late.status, "skipped"); assert.equal(late.skipReason, "specialist_disabled");
+        assert.equal(late.errorSummary, undefined); assert.equal(late.reviewIds, undefined);
+      }
+      const checkpoint = await restored.updateReviewerCheckpointMessage(f.session.id, task.checkpointMessageId, {
+        content: "late completion", status: "completed",
+      });
+      assert.equal(checkpoint.reviewerCheckpoint?.status, "skipped");
+      assert.equal(checkpoint.reviewerCheckpoint?.skipReason, "specialist_disabled");
+      assert.notEqual(checkpoint.content, "late completion");
+      assert.equal(executions, 0);
+      assert.deepEqual(await restored.listArtifactReviews(f.session.id), []);
+      assert.deepEqual(await restored.listReviewFeedback(f.session.id), []);
+    } finally { restored.close(); }
   });
 }
 
