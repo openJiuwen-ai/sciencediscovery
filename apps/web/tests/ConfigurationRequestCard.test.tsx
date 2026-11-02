@@ -842,3 +842,8 @@ test("CFG-X10c: automation needs separate acknowledgement after editing and neve
     await act(async () => renderer.unmount());
   }
 });
+
+test("CFG-X10c: saved next-request policy names subsequent requests without claiming a subsequent Run or verified activation", async () => {
+  const renderer = await mount(request({ capabilityId: "security.automatic_configuration", runId: undefined, state: "applied", fields: [], activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }));
+  const value = JSON.stringify(renderer.toJSON()); assert.match(value, /Saved for subsequent requests/); assert.doesNotMatch(value, /Waiting for a subsequent run|Verified active/); await act(async () => renderer.unmount());
+});

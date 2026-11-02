@@ -79,7 +79,7 @@ try {
       await page.screenshot({path:resolve(directory,'automatic-'+viewport.width+'x'+viewport.height+'.png'),fullPage:true,animations:'disabled',caret:'hide'});assert.equal(state.reachable,true,JSON.stringify(state));
     }
     await confirm.click();await panel.waitFor({state:'detached'});const saved=await formal();assert.equal(saved.autoApplyLowRiskConfiguration,true);assert.equal(saved.approvalMode,baseline.approvalMode);assert.equal(saved.permissionEpochId,baseline.permissionEpochId);assert.equal((await api('/api/sessions/'+other.id)).autoApplyLowRiskConfiguration,false);
-    const record=page.locator('.conversation-configuration-record').filter({hasText:'Authorize low-risk configuration automation'}).last(),summary=record.locator('summary').first();assert.match(await summary.innerText(),/Saved/);await summary.click();await record.getByText('Saved',{exact:true}).first().scrollIntoViewIfNeeded();await page.screenshot({path:resolve(directory,'automatic-saved.png'),fullPage:true,animations:'disabled',caret:'hide'});
+    const record=page.locator('.conversation-configuration-record').filter({hasText:'Authorize low-risk configuration automation'}).last(),summary=record.locator('summary').first();assert.match(await summary.innerText(),/Saved/);await summary.click();await record.getByText('Saved',{exact:true}).first().scrollIntoViewIfNeeded();assert.match(await record.innerText(),/Saved for subsequent requests/);await page.screenshot({path:resolve(directory,'automatic-saved.png'),fullPage:true,animations:'disabled',caret:'hide'});
   }); outcome='PASS';
 } catch (error) { outcome = error instanceof Blocked ? "BLOCKED" : "FAIL"; process.exitCode = 1; }
 finally {

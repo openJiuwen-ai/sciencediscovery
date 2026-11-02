@@ -286,7 +286,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = request.capabilityId === "security.network" && request.activation.state === "active" ? m.securityActive
     : request.capabilityId === "security.network" && request.state === "applied" && request.activation.state === "failed" ? m.securityCleanupFailed
-    : savedForNextRun && request.activation.state === "needs_user_action" ? m.waitingNextRun : m.activation[request.activation.state];
+    : request.activation.mode === "next_request" && request.activation.state === "needs_user_action" ? m.waitingNextRequest
+    : savedForNextRun && request.activation.mode === "next_run" && request.activation.state === "needs_user_action" ? m.waitingNextRun : m.activation[request.activation.state];
   const details = <>
     <p>{reasonText}</p>
     <dl className="configuration-impact">
