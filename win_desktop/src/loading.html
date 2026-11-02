@@ -27,10 +27,9 @@
   .wizard-pane { display: flex; flex-direction: column; min-width: 0; height: 100vh; background: #fff; }
   .wizard-brand { flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 40px clamp(32px, 6.25vw, 120px) 0; }
   .wizard-brand-mark {
-    width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 7px; background: linear-gradient(135deg, #449aff 0%, #1476ff 52%, #3589ff 100%); color: #fff;
+    width: 32px; height: 32px; flex: 0 0 32px;
+    background: url("app-mark.png") center / 32px 32px no-repeat;
   }
-  .wizard-brand-mark svg { width: 18px; height: 18px; }
   .wizard-brand-name { color: var(--wizard-ink); font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: .1px; }
   .wizard-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 clamp(32px, 6.25vw, 120px); }
   .wizard-content { width: 100%; max-width: 544px; padding-top: clamp(72px, 12.2vh, 132px); padding-bottom: 64px; }
@@ -105,13 +104,7 @@
   <div class="wizard-page">
     <main class="wizard-pane">
       <header class="wizard-brand">
-        <span class="wizard-brand-mark" aria-hidden="true">
-          <svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewBox="0 0 24 24">
-            <path d="M9 3h6" />
-            <path d="M10 3v5.2L5.2 17a2.4 2.4 0 0 0 2.1 3.6h9.4a2.4 2.4 0 0 0 2.1-3.6L14 8.2V3" />
-            <path d="M7.5 15h9" />
-          </svg>
-        </span>
+        <span class="wizard-brand-mark" aria-hidden="true"></span>
         <span class="wizard-brand-name">ScienceDiscovery</span>
       </header>
 
