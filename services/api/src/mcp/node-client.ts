@@ -277,7 +277,9 @@ export class McpNodeClient {
     }
     const existing = this.sessions.get(serverId);
     const proxySignature = this.proxySignature(serverId);
-    const configSignature = JSON.stringify(server);
+    // Display edits do not alter a wire connection or justify aborting its
+    // in-flight requests. Retain every other field, including auth extensions.
+    const configSignature = JSON.stringify(Object.fromEntries(Object.entries(server).filter(([field]) => field !== "name" && field !== "description")));
     if (existing && existing.proxySignature === proxySignature && existing.configSignature === configSignature) return existing.client;
     const connection = this.connectSession(serverId, server, proxySignature, configSignature);
     this.connecting.set(serverId, connection);
