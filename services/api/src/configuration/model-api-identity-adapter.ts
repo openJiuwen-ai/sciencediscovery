@@ -32,8 +32,8 @@ export function createModelApiIdentityAdapter(store: SessionStore, destinations:
       return {
         fields: [
           { id: "modelId", label: "Existing model profile", kind: "enum", required: true, ...(input.modelId ? { value: String(input.modelId) } : {}), choices: (snapshot.data.models as ModelProfile[]).map(item => ({ id: item.id, label: `${item.name} · ${item.id}` })) },
-          { id: "apiModel", label: "API model identifier", kind: "text", required: true, ...(candidate ? { value: candidate.model } : {}) },
-          { id: "apiVariant", label: "API variant under the existing protocol", kind: "enum", required: true, ...(candidate ? { value: candidate.apiVariant } : {}),
+          { id: "apiModel", label: "API model identifier", kind: "text", required: Boolean(profile), ...(candidate ? { value: candidate.model } : {}) },
+          { id: "apiVariant", label: "API variant under the existing protocol", kind: "enum", required: Boolean(profile), ...(candidate ? { value: candidate.apiVariant } : {}),
             choices: profile ? MODEL_API_VARIANTS[profile.apiProtocol ?? "openai-chat-completions"].map(id => ({ id, label: id })) : [] },
         ], changes, impact: { resourceLocation: "Shared model profile API identity", effectiveScope: "Every later task that reads this model profile",
           message: "The API model identifier and registered protocol variant change. Formal catalog normalization may also constrain the displayed default thinking mode/effort. The existing endpoint, protocol family, provider, key, proxy route, display name, fact/price overrides and model selection stay unchanged. The exact wire destination must be reviewed before reusing the stored key. No key is read and no connectivity/model request is sent. Later tasks can have different capability or cost; this preview does not certify them. Frozen task settings stay frozen; a bound original configuration wait may continue through the existing framework." },

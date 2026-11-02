@@ -72,6 +72,7 @@ test("CFG-X02d: unsupported variants, fields, model IDs and scopes fail without 
   const card = await h.propose({}); assert.equal(card.state, "collecting_input");
   const empty = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "model.api_identity", values: {} });
   assert.equal(empty.state, "collecting_input"); assert.equal(empty.fields.find(field => field.id === "modelId")?.kind, "enum");
+  assert.equal(empty.fields.find(field => field.id === "apiModel")?.required, false, "Browser validation must permit loading the selected profile before editing its identity");
   assert.deepEqual(h.store.getModel(h.model.id), before);
 });
 
