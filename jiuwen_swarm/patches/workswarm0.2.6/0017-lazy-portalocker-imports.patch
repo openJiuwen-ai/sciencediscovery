@@ -1,0 +1,106 @@
+diff --git a/jiuwenswarm/common/config.py b/jiuwenswarm/common/config.py
+index d500588..a1b8cc1 100644
+--- a/jiuwenswarm/common/config.py
++++ b/jiuwenswarm/common/config.py
+@@ -15,7 +15,6 @@ from typing import Any, Optional
+ from ruamel.yaml import YAML
+ from ruamel.yaml.scalarstring import DoubleQuotedScalarString, PlainScalarString
+ import yaml
+-import portalocker
+ 
+ from jiuwenswarm.common.kv_cache_affinity_config import (
+     ASCEND_AFFINITY_PROVIDER,
+@@ -457,6 +456,13 @@ def update_config(mutator, *, lock_timeout: float = 10.0) -> Any:
+     否则同进程二次获取锁将死锁。如需在写盘后读取展示数据，请在 update_config
+     返回后另起一次独立调用（此时锁已释放，安全）。
+     """
++    # (SD-patch 0017) portalocker is imported lazily here: its module import
++    # unconditionally pulls portalocker.redis -> the whole redis asyncio stack
++    # (~1.0s cold), which used to tax every process importing
++    # jiuwenswarm.common.config (the all-entry import). update_config is a
++    # rare write path, so the lock dependency only pays on first write.
++    import portalocker
++
+     with _CONFIG_WRITE_LOCK:
+         with portalocker.Lock(
+             str(_config_lock_path(CONFIG_YAML_PATH)),
+diff --git a/jiuwenswarm/common/media_capability_config.py b/jiuwenswarm/common/media_capability_config.py
+index e343f7d..79b3fbd 100644
+--- a/jiuwenswarm/common/media_capability_config.py
++++ b/jiuwenswarm/common/media_capability_config.py
+@@ -8,7 +8,6 @@ import stat
+ from collections.abc import MutableMapping
+ from pathlib import Path
+ 
+-import portalocker
+ from dotenv import dotenv_values
+ 
+ 
+@@ -75,12 +74,41 @@ def migrate_media_capability_switches(
+     Existing explicit switches are never overwritten. A legacy capability is
+     enabled only when its API base, API key, model name, and provider are all
+     non-empty; otherwise the new explicit switch is persisted as disabled.
++
++    A fully-exported environment is treated as already-migrated: when every
++    explicit switch is present in ``environ``/``os.environ``, this function
++    returns ``{}`` without touching the lock or the file. In the shipped
++    desktop form the entry parses the instance ``.env`` via ``--dotenv``
++    before this import chain, so the environment is a superset of the file
++    and the skip is exact; in env-injecting deployments (compose, systemd)
++    the injection is itself the durable source, so no persistence is needed.
++    No caller reads the return value (all three call sites call it bare at
++    module load).
+     """
+     target = Path(env_path)
+-    target.parent.mkdir(parents=True, exist_ok=True)
+     runtime_env = os.environ if environ is None else environ
++
++    # (SD-patch 0017) fast path: this migration runs at module load of every
++    # jw process (app_agentserver / app_gateway / app), yet after the first
++    # run the .env already carries all explicit switches and os.environ has
++    # them exported, so the locked read-modify-write below is a no-op. Skip
++    # it (and the lazy portalocker import it would trigger) when there is
++    # provably nothing to migrate. This is read-only: the first cold run (or
++    # a .env missing switches) still takes the locked path below.
++    all_keys = set(MEDIA_CAPABILITY_ENV_FIELDS)
++    if all(key in runtime_env for key in all_keys):
++        return {}
++
++    target.parent.mkdir(parents=True, exist_ok=True)
+     lock_path = target.with_name(f"{target.name}.media-capability.lock")
+ 
++    # (SD-patch 0017) lazy portalocker: module-level import pulled
++    # portalocker.redis -> redis asyncio stack (~1.0s cold) onto the startup
++    # critical path of every jw process (this function is called at module
++    # load from app_agentserver/app_gateway/app). The import only pays on
++    # the rare locked-migration path.
++    import portalocker
++
+     with portalocker.Lock(str(lock_path), timeout=lock_timeout):
+         persisted = dict(dotenv_values(target)) if target.is_file() else {}
+         updates: dict[str, str] = {}
+diff --git a/jiuwenswarm/gateway/cron/store.py b/jiuwenswarm/gateway/cron/store.py
+index 799ff2e..b2202fd 100644
+--- a/jiuwenswarm/gateway/cron/store.py
++++ b/jiuwenswarm/gateway/cron/store.py
+@@ -10,8 +10,6 @@ from dataclasses import replace
+ from pathlib import Path
+ from typing import Any, TypeVar
+ 
+-import portalocker
+-
+ from jiuwenswarm.gateway.cron.models import (
+     CronJob,
+     CronTarget,
+@@ -142,6 +140,11 @@ class CronJobStore:
+ 
+         须在进程内 ``asyncio.Lock`` 之内、经 ``to_thread`` 调用，避免阻塞事件循环。
+         """
++        # (SD-patch 0017) lazy portalocker: module-level import pulled
++        # portalocker.redis -> redis asyncio stack (~1.0s cold) into every
++        # Gateway start (this store is constructed in _run before listening).
++        import portalocker
++
+         self._path.parent.mkdir(parents=True, exist_ok=True)
+         lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+         with portalocker.Lock(str(lock_path), timeout=self._file_lock_timeout):

@@ -434,6 +434,12 @@ swarm_wheels="$(mktemp -d)"
 bash "$repository_root/scripts/build-swarm-wheel.sh" "$swarm_wheels" "$jiuwenswarm_tag"
 uv pip install --target "$output/jiuwenswarm/site-packages" --no-deps --reinstall \
   --python-platform "$python_platform" --python 3.12 "$swarm_wheels"/*.whl
+# The wheel is already fully patched; drop its apply receipt (exported by
+# build-swarm-wheel.sh next to the wheel) into site-packages so the apply
+# below recognizes the patched state via the digest short-circuit instead
+# of dying in per-patch reverse checks (later patches rewrite earlier hunks).
+cp "$swarm_wheels/jiuwenswarm-patches-manifest.json" \
+  "$output/jiuwenswarm/site-packages/.sciencediscovery-patches.json"
 python3 "$repository_root/scripts/swarm-patches.py" apply "$output/jiuwenswarm/site-packages" "$jiuwenswarm_tag"
 python3 "$repository_root/scripts/swarm-patches.py" verify "$output/jiuwenswarm/site-packages" "$jiuwenswarm_tag"
 find "$output/jiuwenswarm/site-packages" -maxdepth 1 -name bin -type d -exec rm -rf -- {} +

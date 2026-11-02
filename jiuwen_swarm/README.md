@@ -77,6 +77,33 @@ For `workswarm0.2.6`:
   blocks the loop; moving its sync sections off-loop is deferred to upstream)
   are documented in the patch header itself.
 
+  Follow-up startup-latency patches (Windows desktop line, measured A/B on
+  gateway/AgentServer startup stage logs; `0011`–`0014` were the numbers of a
+  superseded local-only chain retired when #700 consolidated seven changes
+  into `0010` — no patches are missing):
+
+  - `0015-desktop-coldstart-imports.patch` — the remaining cold-start import
+    chains moved off the critical path (agent_ws_server heartbeat/todo/sysop/
+    permissions chains, channel-manager lazy re-exports, image-modality probe
+    to a thread). agent_ws_server import 24.5s -> 3.46s.
+  - `0016-agentserver-construction-rechain.patch` — AgentServer's heavy
+    construction (heartbeat rails runtime, gateway adapter registry,
+    personal-context host) moved behind listen as lazy materializers with a
+    post-listen worker-thread warmup and a cross-thread double-checked lock;
+    AgentServer listen 13.95s -> ~1.5-2.1s.
+  - `0016b-rechain-test-adapters.patch` — test-side adapters for 0016 (fake
+    managers accept `set_heartbeat_service`; monkeypatch targets moved to the
+    lazy source modules). Targets live under `tests/`, which a wheel install
+    (site-packages) never carries: there this patch is a no-op (`--exclude`),
+    while source checkouts and the installer payload apply it fully.
+  - `0017-lazy-portalocker-imports.patch` — `portalocker`'s import pulls
+    `portalocker.redis` -> the redis asyncio stack (~1.0s cold) into every
+    process importing `jiuwenswarm.common.config`; the three lock call sites
+    import it lazily, and the media-capability migration short-circuits when
+    the environment already carries every explicit switch (a fully-exported
+    environment is treated as already-migrated; see the docstring). First
+    start net 33.3s -> 28.1s (combined with 0016). See issue #719.
+
 Set `SCIENCE_AGENT_TRACE_TOOLS=1` on the adapter to log `[tool-contract]`
 records containing expected, incoming Swarm, and outgoing LLM tool names.
 Calls with no tools can be model capability probes, not agent reasoning
