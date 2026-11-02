@@ -11,8 +11,9 @@ import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
+import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
-import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
+import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
 import type { ConfigurationApplyReceipt, ConfigurationLiveActivation, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
@@ -112,7 +113,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -132,7 +133,7 @@ export class ConversationalConfigurationFramework {
         executionDependencies: record => nativeExecutionDependencies(store, record),
         afterCommit: () => this.flushNotices(),
         projectEndpointAuthorization: record => this.destinations.view(record),
-        snapshot: (sessionId, capabilityId, target) => store.configurationSnapshot(sessionId, capabilityId, target),
+        snapshot: (sessionId, capabilityId, target) => this.snapshot(sessionId, capabilityId, target),
         choiceOptions: input => input.capabilityId === "connector.enable" && input.runId && this.options.nativeExecutor
           ? nativeConnectorChoiceOptions({ store, sessionId: input.sessionId, runId: input.runId,
             ready: this.options.connector(input.sessionId, String(input.input.connectorId))?.ready === true }) : [
@@ -177,6 +178,12 @@ export class ConversationalConfigurationFramework {
       } });
   }
 
+  private snapshot(sessionId: string, capabilityId: import("@sciencediscovery/schema").ConfigurationCapabilityId, target: string) {
+    const snapshot = this.store.configurationSnapshot(sessionId, capabilityId, target);
+    if (capabilityId === "web.configure") snapshot.resourceVersions.webBackend = this.options.nativeExecutor ? "native" : "jiuwenswarm";
+    return snapshot;
+  }
+
   async propose(sessionId: string, input: ConfigurationProposalInput, key?: string): Promise<ConfigurationRequestView> {
     const previous = this.proposalQueues.get(sessionId) ?? Promise.resolve();
     const work = previous.catch(() => undefined).then(() => this.proposeSerial(sessionId, input, key));
@@ -191,9 +198,9 @@ export class ConversationalConfigurationFramework {
       throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "No configuration interaction adapter is installed", 409);
     await this.reconcileLifecycle(sessionId);
     if (Object.keys(input.values).some(name => name.startsWith("restore"))) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Restoration fields are reserved for receipt-based reversal", 400);
-    const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
+    const systemCapability = (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
-      throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "Timeouts, quotas and Idea Tree settings apply to the whole deployment", 400);
+      throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "This setting applies to the whole deployment", 400);
     const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
@@ -205,7 +212,7 @@ export class ConversationalConfigurationFramework {
         const adapter = this.service.registry.get(input.capabilityId);
         const normalized = adapter.normalize(input.values);
         const target = adapter.target(normalized);
-        const baseline = this.store.configurationSnapshot(sessionId, input.capabilityId, target);
+        const baseline = this.snapshot(sessionId, input.capabilityId, target);
         const needKey = configurationNeedKey({ runId: input.runId, capabilityId: input.capabilityId, target, snapshot: baseline });
         const prior = this.repository.list(sessionId).find(record => record.view.runId === input.runId && record.view.needKey === needKey
           && record.view.state === "dismissed" && ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? ""));
@@ -456,8 +463,10 @@ export class ConversationalConfigurationFramework {
           && !this.store.executionBlocks.configurationWait(this.waitOwner(source))) return false;
         const latest = this.repository.get(id, sessionId);
         if (!latest || latest.view.state !== "applied" || latest.approvedRevision !== saved.revision || latest.approvedDigest !== saved.previewDigest) return false;
-        const snapshot = this.store.configurationSnapshot(sessionId, source.view.capabilityId, source.target);
-        return snapshot.stopGeneration === source.stopGeneration && nativeExecutionDependenciesCurrent(this.store, source, saved);
+        const snapshot = this.snapshot(sessionId, source.view.capabilityId, source.target);
+        return snapshot.stopGeneration === source.stopGeneration && (source.view.capabilityId === "web.configure"
+          ? canonical(snapshot.resourceVersions) === canonical(saved.resourceVersions)
+          : nativeExecutionDependenciesCurrent(this.store, source, saved));
       },
       activate: async (source, saved) => {
         if (!this.options.nativeExecutor && source.view.runId) {

@@ -2404,6 +2404,11 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "web.configure") systemVersions = {
+      web: version(this.catalog.webSettings),
+      webCredentials: version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all()),
+      webProxy: version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers, this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]),
+    };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2435,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "web.configure" ? { webSettings: this.getWebSettings(), webProxyPolicies: this.configurationWebProxyPolicies() } : {}),
       },
     };
   }
@@ -2660,7 +2666,17 @@ export class SessionStore {
     return row ? this.decryptModelApiToken(`web:${provider}`, row.encrypted_token) : undefined;
   }
 
-  async updateWebSettings(input: UpdateWebSettingsRequest): Promise<WebSettingsDetails> {
+  configurationWebProxyPolicies(): string[] {
+    return ["inherit", "none", ...this.catalog.proxyServers.map(server => `proxy:${server.id}`)];
+  }
+
+  /** Non-credential Web edits use the same formal normalizer and shared audit transaction. */
+  applyWebConfigurationSync(input: Omit<UpdateWebSettingsRequest, "providerApiKeys">): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    this.applyWebSettingsPatch(input);
+  }
+
+  private applyWebSettingsPatch(input: UpdateWebSettingsRequest): void {
     const { providerApiKeys, ...settingsInput } = input;
     const nextSettings = normalizeWebSettings({ ...this.catalog.webSettings, ...settingsInput });
     this.assertProxyPolicyKnown(nextSettings.proxyPolicy, "proxyPolicy");
@@ -2684,6 +2700,10 @@ export class SessionStore {
         ).run(provider, encrypted);
       }
     }
+  }
+
+  async updateWebSettings(input: UpdateWebSettingsRequest): Promise<WebSettingsDetails> {
+    this.applyWebSettingsPatch(input);
     await this.saveCatalog();
     return this.getWebSettings();
   }

@@ -29,6 +29,10 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     maxConcurrentSubagents: { kind: "integer", minimum: 1, maximum: 10 }, runnerMaxOutputBytes: { kind: "integer", minimum: 0 }, runnerMaxWorkspaceBytes: { kind: "integer", minimum: 0 },
     uploadMaxFileBytes: { kind: "integer", minimum: 0 }, uploadMaxRequestBytes: { kind: "integer", minimum: 0 },
   }, activation: "next_run", diagnostics: [] },
+  "web.configure": { label: "Configure Web search and fetching", whenNeeded: "The user explicitly requests deployment Web search engines, provider selection, cache TTLs or an existing proxy policy. Describe first: the backend determines supported fields. Keys use separate secure configuration and are never accepted here. Saved choices do not verify connectivity; paid providers can charge when later used.", fields: {
+    deepseekEnabled: boolean, fetchProvider: { kind: "string", choices: ["jina", "tavily", "exa", "deepseek"] }, freeSearchEngines: ids, paidSearchProviders: ids,
+    searchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, fetchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, proxyPolicy: id,
+  }, activation: "next_run", diagnostics: [] },
   "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree intensity, score direction, or a bounded token, depth, or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
     explorationIntensity: { kind: "string", choices: ["quick", "standard", "deep"] }, scoreDirection: { kind: "string", choices: ["maximize", "minimize"] },
     maxTokensPerCall: { kind: "integer", minimum: 256, maximum: 32768 }, maxDepth: { kind: "integer", minimum: 1, maximum: 20 },
@@ -36,6 +40,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "web.configure"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })
