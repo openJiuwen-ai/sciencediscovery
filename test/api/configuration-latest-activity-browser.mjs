@@ -97,7 +97,11 @@ try {
   await step("3. Latest activity stays outside the transcript and returns to the bottom", async () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     const messages = page.locator(".messages");
-    await messages.evaluate(element => element.scrollTo({ top: 0, behavior: "instant" }));
+    await messages.evaluate(element => element.scrollTo({ top: element.scrollHeight, behavior: "instant" }));
+    await page.waitForTimeout(100);
+    const range = await messages.evaluate(element => element.scrollHeight - element.clientHeight);
+    assert.ok(range > 96, "The fixture needs an overflowing transcript");
+    await messages.hover(); await page.mouse.wheel(0, -10000);
     const jump = page.getByRole("button", { name: "Latest activity", exact: true });
     await jump.waitFor({ state: "visible", timeout: 10000 });
     const transcript = await messages.boundingBox(), dock = await jump.boundingBox();
