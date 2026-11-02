@@ -159,8 +159,10 @@ export class VersionStore {
     return ref;
   }
 
-  /** Copy the source into a temporary object and link it under its digest. */
-  private async publishWorkspaceObject(file: FileHandle, ref: DataRef): Promise<void> {
+  /** Copy the source into a temporary object and link it under its digest.
+   *  Public like the rest of this class's pipeline steps: the snapshot tests
+   *  count it to tell a reused object from a copied one. */
+  async publishWorkspaceObject(file: FileHandle, ref: DataRef): Promise<void> {
     const directory = resolve(this.poolRoot("data"), "blobs", "sha256");
     const temporary = resolve(directory, `${randomUUID()}.tmp`);
     try {
