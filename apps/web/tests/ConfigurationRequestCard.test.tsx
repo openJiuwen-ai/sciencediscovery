@@ -56,6 +56,46 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
 
+function memoryPasswordRequest(overrides: Partial<ConfigurationRequestView> = {}) {
+  return request({ capabilityId: "memory.credential", runId: undefined, scope: { kind: "global" },
+    fields: [{ id: "operation", label: "Password operation", kind: "enum", required: true, value: "replace",
+      choices: [{ id: "replace", label: "Replace stored password" }, { id: "clear", label: "Clear stored password" }] },
+      { id: "apiToken", label: "Neo4j password", kind: "credential", required: true, status: "missing" }],
+    endpointAuthorization: { endpointTarget: "neo4j-http|https://owned.invalid|account-one", host: "owned.invalid", classification: "public_https", status: "confirmed", revision: 2 },
+    activation: { mode: "requires_restart", state: "not_requested" }, ...overrides });
+}
+
+test("CFG-X04c: Neo4j secure input uses its password label and an operation change clears local plaintext", async () => {
+  const renderer = await mount(memoryPasswordRequest(), actions(), () => undefined, "zh");
+  assert.match(JSON.stringify(renderer.toJSON()), /Neo4j 密码/); assert.match(JSON.stringify(renderer.toJSON()), /密码操作/);
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-local-password" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "synthetic-local-password");
+  await act(async () => renderer.root.findByProps({ name: "operation" }).props.onChange({ target: { value: "clear" } }));
+  assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => renderer.root.findByProps({ name: "operation" }).props.onChange({ target: { value: "replace" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, ""); await act(async () => renderer.unmount());
+});
+
+test("CFG-X04c: missing or changed Neo4j destination cannot retain or collect a secure draft", async () => {
+  let latest = memoryPasswordRequest(); let renderer: ReactTestRenderer;
+  const render = () => createElement(ConfigurationRequestCard, { request: latest, actions: actions(), onUpdate() {} });
+  await act(async () => { renderer = create(render()); });
+  await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-local-password" } }));
+  await act(async () => { latest = memoryPasswordRequest({ revision: 3, endpointAuthorization: { ...latest.endpointAuthorization!, revision: 3,
+    endpointTarget: "neo4j-http|https://owned.invalid|account-two", status: "required" } }); renderer!.update(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => { latest = { ...latest, endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; renderer!.update(render()); });
+  assert.equal(renderer!.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => { latest = memoryPasswordRequest({ revision: 4, endpointAuthorization: undefined }); renderer!.update(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0); await act(async () => renderer!.unmount());
+});
+
+test("CFG-X04c: a saved password reports restart required without verified runtime activation", async () => {
+  const renderer = await mount(memoryPasswordRequest({ state: "applied", allowedActions: [], activation: { mode: "requires_restart", state: "needs_user_action" } }));
+  assert.match(JSON.stringify(renderer.toJSON()), /Configure Neo4j password · Saved · Restart required/);
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Verified active/); await act(async () => renderer.unmount());
+});
+
 test("CFG generic renderer requires a new preview after edits and binds approval to the exact revision and digest", async () => {
   const decisions: unknown[] = [];
   const previews: unknown[] = [];
