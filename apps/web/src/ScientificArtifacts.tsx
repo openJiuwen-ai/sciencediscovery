@@ -47,6 +47,9 @@ const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((
 
 // Stable identity so the panel never sees a fresh callback on a parent render.
 const NOOP = () => undefined;
+// "Nothing is stacked above this panel", reported when it unmounts under an
+// open CSV/Mol* window.
+const NO_NESTED_WINDOWS = { csvWindowOpen: false, molstarOpen: false };
 
 export function ArtifactDownloadButton({
   busy,
@@ -421,6 +424,7 @@ export function ArtifactModal({
   onNavigateCode,
   onChipClick,
   onError,
+  onNestedWindowChange,
   onOpenEvolveRun,
   onPendingAnnotation,
   refreshKey,
@@ -454,6 +458,13 @@ export function ArtifactModal({
     * Absent in standalone mode → code header renders as plain text. */
   onNavigateCode?: (runId: string) => void;
   onChipClick?: (reference: ComposerReference) => void;
+  /**
+   * Embedded mode only (MemoryGraphExplorer): reports the nested windows this
+   * panel has open. The explorer binds its own window-level Escape, and in
+   * embedded mode this panel's guard (below) returns early — without being told
+   * what is open above it, the explorer closes itself under the window.
+   */
+  onNestedWindowChange?: (windows: { csvWindowOpen: boolean; molstarOpen: boolean }) => void;
   onError: (reason: string | Error) => void;
   onPendingAnnotation: (annotation: ArtifactAnnotation) => void;
   refreshKey?: string;
@@ -724,6 +735,17 @@ export function ArtifactModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [csvWindowOpen, embedded, molstarOpen, onClose]);
+
+  // The handler above is skipped in embedded mode, where the explorer binds the
+  // window-level Escape instead. Tell it what is open above this panel, so it
+  // closes the nested window's layer rather than the whole explorer.
+  useEffect(() => {
+    onNestedWindowChange?.({ csvWindowOpen, molstarOpen });
+  }, [csvWindowOpen, molstarOpen, onNestedWindowChange]);
+  // This panel can unmount with a window still open — the user selects a node
+  // that has no artifact — taking the window with it. The explorer must not go
+  // on believing something is stacked above it, or its Escape dies with it.
+  useEffect(() => () => onNestedWindowChange?.(NO_NESTED_WINDOWS), [onNestedWindowChange]);
 
   function choosePoint(event: MouseEvent<HTMLImageElement>): void {
     const bounds = event.currentTarget.getBoundingClientRect();
