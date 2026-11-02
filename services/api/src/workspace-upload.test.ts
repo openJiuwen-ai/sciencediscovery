@@ -244,6 +244,26 @@ test("readMultipartUploads decodes an RFC 5987 filename* exactly once", async ()
   assert.deepEqual(parts.map((part) => part.filename), ["trial;phase2.csv", "100%25.txt"]);
 });
 
+test("an unusable filename* falls back to the plain filename", async () => {
+  // RFC 6266 4.3: a `filename*` that is empty or cannot be decoded is ignored,
+  // and the `filename` parameter is used instead.
+  const parts = await readMultipartUploads(multipartUpload("----sa-extended-fallback", [
+    {
+      content: "a",
+      headers: ["Content-Disposition: form-data; name=\"files\"; filename=\"empty-extended.csv\"; filename*=UTF-8''"],
+    },
+    {
+      content: "b",
+      headers: ["Content-Disposition: form-data; name=\"files\"; filename=\"undecodable.csv\"; filename*=UTF-8''100%ZZ.csv"],
+    },
+    {
+      content: "c",
+      headers: ["Content-Disposition: form-data; name=\"files\"; filename=\"decoded.csv\"; filename*=UTF-8''100%2525.csv"],
+    },
+  ]), limits.maxRequestBytes);
+  assert.deepEqual(parts.map((part) => part.filename), ["empty-extended.csv", "undecodable.csv", "100%25.csv"]);
+});
+
 test("a percent-looking plain filename does not fail the other files in the batch", async (context) => {
   const workspace = await tempWorkspace(context, "percent-name");
   const parts = await readMultipartUploads(multipartUpload("----sa-percent-batch", [

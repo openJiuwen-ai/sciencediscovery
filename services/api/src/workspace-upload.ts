@@ -127,10 +127,11 @@ export async function readMultipartUploads(
     const fieldName = parameters.get("name") ?? "";
     // RFC 7578 4.2: only `filename*` is percent-encoded; a plain `filename`
     // is sent verbatim (browsers escape only quote, CR and LF).
+    // RFC 6266 4.3: prefer `filename*`, but an unusable one (empty or not
+    // decodable) must not shadow a usable plain `filename`.
     const extendedFilename = parameters.get("filename*");
-    const filename = extendedFilename === undefined
-      ? parameters.get("filename")
-      : decodeExtendedFilename(extendedFilename);
+    const filename = (extendedFilename === undefined ? undefined : decodeExtendedFilename(extendedFilename))
+      ?? parameters.get("filename");
     const contentStart = headerEnd + 4;
     const contentEnd = body.indexOf(nextDelimiter, contentStart);
     if (contentEnd < 0) throw new Error("Workspace upload multipart body has no closing boundary");
@@ -186,13 +187,19 @@ function contentDispositionParameters(header: string): Map<string, string> {
   return parameters;
 }
 
-/** RFC 5987 value (`charset'lang'percent-encoded`), decoded exactly once. */
-function decodeExtendedFilename(value: string): string {
+/**
+ * RFC 5987 value (`charset'lang'percent-encoded`), decoded exactly once.
+ * Returns `undefined` when the value carries no usable name (empty, empty after
+ * decoding, or not percent-decodable) so the caller can fall back to `filename`.
+ */
+function decodeExtendedFilename(value: string): string | undefined {
   const encoded = /^[^']*'[^']*'(.*)$/.exec(value)?.[1] ?? value;
+  const trimmed = encoded.trim();
+  if (!trimmed) return undefined;
   try {
-    return decodeURIComponent(encoded.trim());
+    return decodeURIComponent(trimmed).trim() || undefined;
   } catch {
-    return encoded.trim();
+    return undefined;
   }
 }
 
