@@ -109,7 +109,7 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
       }
       const current = id === "timeouts.configure" ? currentTimeouts(snapshot) : id === "quotas.configure" ? currentQuotas(snapshot) : currentIdeaTree(snapshot);
       const changes = changed(input, current);
-      return { fields, changes, impact: { resourceLocation: "Deployment system settings", effectiveScope: "Every session in this deployment", message },
+      return { fields, changes, impact: { resourceLocation: "Deployment system settings", effectiveScope: "Every session in this deployment", message: message + " Saving does not schedule an unrelated task. An original configuration task already bound to this request may continue through the normal framework with its frozen task settings; this is separate from when the changed setting becomes effective." },
         verificationPlan: noProbe, activationMode: "next_run", disposition: !Object.keys(input).length ? "missing_input" : changes.length ? "change" : "no_change", ready: changes.length > 0 };
     },
     apply: context => {
