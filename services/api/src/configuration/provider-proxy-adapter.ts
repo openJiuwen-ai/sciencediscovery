@@ -9,8 +9,18 @@ export function createProviderProxyAdapter(store: SessionStore): ConfigurationAd
     id: "proxy.provider", version: 1, schemaVersion: 1, scopes: ["global"], persistence: "local_transaction",
     normalize: (raw): ConfigurationValues => {
       const input=object(raw,["providerId","proxyPolicy"],"values"),output:ConfigurationValues={};
-      if(input.providerId!==undefined){if(typeof input.providerId!=="string"||!input.providerId.trim()||input.providerId.length>200)invalid("Select an existing provider","providerId");output.providerId=input.providerId.trim();}
-      if(input.proxyPolicy!==undefined){if(typeof input.proxyPolicy!=="string"||!["inherit","none",...store.configurationProviderProxySettings().servers.map(server=>`proxy:${server.id}`)].includes(input.proxyPolicy))invalid("Choose inherit, none or an existing registered proxy","proxyPolicy");output.proxyPolicy=input.proxyPolicy;}
+      if (input.providerId !== undefined) {
+        if (typeof input.providerId !== "string" || !input.providerId.trim() || input.providerId.length > 200) {
+          invalid("Select an existing provider", "providerId");
+        }
+        output.providerId = input.providerId.trim();
+      }
+      if (input.proxyPolicy !== undefined) {
+        if (typeof input.proxyPolicy !== "string" || !["inherit", "none", ...store.configurationProviderProxySettings().servers.map(server => `proxy:${server.id}`)].includes(input.proxyPolicy)) {
+          invalid("Choose inherit, none or an existing registered proxy", "proxyPolicy");
+        }
+        output.proxyPolicy = input.proxyPolicy;
+      }
       return output;
     }, target: input=>String(input.providerId??""),
     preview: (input,snapshot)=>{
