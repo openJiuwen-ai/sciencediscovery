@@ -453,20 +453,7 @@ export function SetupWizard({
     <div className="wizard-page">
       <main className="wizard-pane">
         <header className="wizard-brand">
-          <span className="wizard-brand-mark" aria-hidden="true">
-            <svg
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="1.7"
-              viewBox="0 0 24 24"
-            >
-              <path d="M9 3h6" />
-              <path d="M10 3v5.2L5.2 17a2.4 2.4 0 0 0 2.1 3.6h9.4a2.4 2.4 0 0 0 2.1-3.6L14 8.2V3" />
-              <path d="M7.5 15h9" />
-            </svg>
-          </span>
+          <span className="wizard-brand-mark" aria-hidden="true" />
           <span className="wizard-brand-name">{TEXT.appName}</span>
         </header>
 
