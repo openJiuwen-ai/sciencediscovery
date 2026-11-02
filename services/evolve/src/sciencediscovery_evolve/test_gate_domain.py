@@ -143,6 +143,11 @@ def test_gate_domain(
             criterion["id"]: rate,
             "cases": len(selected),
             "failed": len(failed),
+            # The per-case outcome, keyed by test id. A rate is one number, and
+            # "did this candidate improve *this case*" is the pairing a paired
+            # test needs; `selected` already holds it, so carrying it out costs
+            # nothing and dropping it is what made the score unverifiable.
+            "caseResults": dict(selected),
             SCORE_KEY: scored.reward,
         }
 

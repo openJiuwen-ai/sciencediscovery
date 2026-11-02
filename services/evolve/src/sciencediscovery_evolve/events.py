@@ -40,7 +40,7 @@ import json
 import math
 import threading
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 #: What the sidecar hands its engines: one call per event.
 Emit = Callable[[dict[str, Any]], None]
@@ -296,6 +296,7 @@ def search_finished(
     candidates: int,
     *,
     best_test_score: float | None = None,
+    gate_evidence: Mapping[str, Any] | None = None,
     stop_reason: str = "",
     expansions_planned: int | None = None,
 ) -> dict[str, Any]:
@@ -307,6 +308,13 @@ def search_finished(
     }
     if best_test_score is not None:
         event["bestTestScore"] = round(best_test_score, 6)
+    # The point estimate above is one evaluation of one candidate. This is the
+    # baseline measured on the same cases, paired and tested, so a reader can
+    # tell "improved" from "scored higher on an easier split". Absent whenever
+    # the gate could not supply it -- never zero-filled, because "no evidence"
+    # and "evidence of no improvement" are different answers.
+    if gate_evidence is not None:
+        event["gateEvidence"] = dict(gate_evidence)
     # Recorded even when it is the dull one. Whether a run that planned 20
     # expansions and made 8 hit its iteration cap, lost its workers or timed
     # out is answerable only from here, and only if it is written down while
