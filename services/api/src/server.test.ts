@@ -4293,6 +4293,23 @@ test("API runs one observable subagent through task and keeps nested task denied
       enabled: true,
       id: "biomed",
       tools: [{
+        description: "get paper",
+        inputSchema: {
+          additionalProperties: false,
+          properties: {
+            identifier: {
+              maxLength: 80,
+              minLength: 1,
+              pattern: "^(?:\\d{4}\\.\\d{4,5}|[A-Za-z.-]+/\\d{7})(?:v\\d+)?$",
+              type: "string",
+            },
+          },
+          required: ["identifier"],
+          type: "object",
+        },
+        name: "arxiv_get_paper",
+        schemaHash: "get_paper",
+      }, {
         description: "prepare",
         inputSchema: {
           additionalProperties: false,
@@ -4315,6 +4332,7 @@ test("API runs one observable subagent through task and keeps nested task denied
           additionalProperties: false,
           properties: {
             limit: { default: 5, maximum: 25, minimum: 1, type: "integer" },
+            offset: { default: 0, maximum: 10000, minimum: 0, type: "integer" },
             query: { maxLength: 500, minLength: 1, type: "string" },
           },
           required: ["query"],
@@ -4365,7 +4383,7 @@ test("API runs one observable subagent through task and keeps nested task denied
     { headers: authorization },
   );
   assert.equal(arxivStatus.body.status, "ready");
-  assert.deepEqual(arxivStatus.body.availableTools.toSorted(), ["prepare_paper_download", "search"]);
+  assert.deepEqual(arxivStatus.body.availableTools.toSorted(), ["get_paper", "prepare_paper_download", "search"]);
 
   const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
     body: JSON.stringify({ content: "Delegate workspace inspection." }),
@@ -6065,9 +6083,9 @@ test("failed subagent tool steps retain raw input and the full error result", { 
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
   assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
-  const execution = JSON.parse(toolStep?.content ?? "{}");
-  assert.equal(execution.state, "failed");
-  assert.equal(execution.result?.exitCode, 1);
+  const execution = toolStep?.details as { state?: string; exitCode?: number } | undefined;
+  assert.equal(execution?.state, "failed");
+  assert.equal(execution?.exitCode, 1);
   assert.equal(toolStep?.status, "failed", "Failed Shell result must remain failed in the subagent timeline");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /RuntimeError/);
