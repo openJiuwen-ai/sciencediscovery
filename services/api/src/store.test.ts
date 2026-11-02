@@ -3425,6 +3425,51 @@ test("a saved catalog keeps subagents and file provenance out of its JSON row an
   assert.deepEqual(remaining, { files: 0, revisions: 0, subagents: 0 }, "the Project's rows go with it");
 });
 
+test("a catalog written by an older build is merged into the side tables, not trusted to replace them", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-downgrade-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "downgrade-token",
+    baseUrl: "https://models.example.test/v1",
+    model: "science-model",
+    name: "Downgrade model",
+  });
+  const project = await store.createProject("Downgrade", { modelId: model.id, reviewModelId: model.id });
+  const session = await store.createSession(project.id, "Session");
+  await store.recordWorkspaceFileRevision(session.id, {
+    mode: "write",
+    modifiedAt: new Date().toISOString(),
+    origin: "agent",
+    path: "kept.md",
+    size: 4,
+  });
+  store.close();
+
+  // A build from before the tables knows neither them nor the flag, so the row
+  // it writes carries only its own view: the collections inline, no flag, and
+  // nothing of what the newer build had already moved out of the row.
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const row = JSON.parse((database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string }).json) as Record<string, unknown>;
+  const record = JSON.parse((database.prepare("SELECT record_json FROM workspace_files").get() as { record_json: string }).record_json) as Record<string, unknown>;
+  const revision = JSON.parse((database.prepare("SELECT revision_json FROM workspace_file_revisions").get() as { revision_json: string }).revision_json) as Record<string, unknown>;
+  delete row.sideTablesSeeded;
+  row.workspaceFileRecords = [{ ...record, currentRevisionId: "older-revision", id: "older-record", path: "older.md" }];
+  row.workspaceFileRevisions = [{ ...revision, fileId: "older-record", id: "older-revision" }];
+  row.subagents = [];
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(row));
+  database.close();
+
+  const loaded = new SessionStore(tempRoot);
+  await loaded.load();
+  assert.equal(loaded.getWorkspaceFileProvenance(session.id, "kept.md")?.file.path, "kept.md",
+    "a row the older build never loaded survives the migration");
+  assert.equal(loaded.getWorkspaceFileProvenance(session.id, "older.md")?.file.path, "older.md",
+    "and what it did write is imported");
+});
+
 test("SessionStore gates privileged actions with Session-scoped matching grants and per-action authorizations", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
