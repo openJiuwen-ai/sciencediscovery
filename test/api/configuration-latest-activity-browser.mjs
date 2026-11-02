@@ -80,7 +80,8 @@ try {
         await control.scrollIntoViewIfNeeded(); assert.equal(await control.isVisible(), true);
         const reachability = () => control.evaluate(element => {
           const box = element.getBoundingClientRect(), hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-          return { reachable: box.x >= 0 && box.right <= innerWidth && box.y >= 0 && box.bottom <= innerHeight && (hit === element || element.contains(hit)),
+          const rounding = 1 / devicePixelRatio;
+          return { reachable: box.x >= -rounding && box.right <= innerWidth + rounding && box.y >= -rounding && box.bottom <= innerHeight + rounding && (hit === element || element.contains(hit)),
             field: element.getAttribute("name") ?? element.tagName, box: { x: box.x, y: box.y, width: box.width, height: box.height },
             hit: { tag: hit?.tagName, className: hit?.className }, viewport: { width: innerWidth, height: innerHeight } };
         });
