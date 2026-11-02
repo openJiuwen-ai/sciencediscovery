@@ -3641,6 +3641,20 @@ export class SessionStore {
     return this.catalog.providers.find((provider) => provider.id === providerId);
   }
 
+  /** Internal discovery-cache identity. Credential generations are ciphertext, never plaintext key hashes. */
+  providerDiscoveryRevision(providerId: string): string | undefined {
+    const provider = this.getProvider(providerId);
+    if (!provider) return undefined;
+    const database = this.getConfigurationDatabase();
+    const policy = provider.proxyPolicy === "inherit" ? this.catalog.proxyDefaultPolicy : provider.proxyPolicy;
+    const proxyId = policy.startsWith("proxy:") ? policy.slice(6) : undefined;
+    return createHash("sha256").update(canonicalConfiguration([
+      provider, database.prepare("SELECT encrypted_token FROM model_secrets WHERE model_id=?").get(providerSecretKey(providerId)) ?? null,
+      policy, proxyId ? this.catalog.proxyServers.find(server => server.id === proxyId) ?? null : null,
+      proxyId ? database.prepare("SELECT encrypted_url FROM proxy_server_secrets WHERE server_id=?").get(proxyId) ?? null : null,
+    ])).digest("hex");
+  }
+
   private setProviderApiToken(providerId: string, apiToken: string | undefined): void {
     this.setModelApiToken(providerSecretKey(providerId), apiToken);
   }
