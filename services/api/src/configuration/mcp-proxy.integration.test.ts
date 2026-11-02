@@ -67,7 +67,12 @@ test("CFG-X03e: receipt failure rolls map back with ciphertext unchanged", async
 test("CFG-X03e: safe discovery includes shared connectors; refusal and Stop leave policies unchanged", async context => {
   const h = await fixture(context); h.store.getProxySettings = () => { throw Error("Full proxy view forbidden"); };
   const described = await discoverConfiguration(h.store, h.session.id, "owned-no-run", "describe", { capabilityId: "proxy.mcp", targetId: "shared-server" }); const raw = JSON.stringify(described);
-  for (const expected of ["shared-server", "literature", "papers"]) assert.ok(raw.includes(expected)); for (const forbidden of ["synthetic-proxy", "owned-user", "http://127.0.0.1"]) assert.ok(!raw.includes(forbidden));
+  for (const expected of ["shared-server", "literature", "papers"]) {
+    assert.ok(raw.includes(expected));
+  }
+  for (const forbidden of ["synthetic-proxy", "owned-user", "http://127.0.0.1"]) {
+    assert.ok(!raw.includes(forbidden));
+  }
   let card = await h.propose({ mcpServerId: "shared-server", proxyPolicy: "none" }); card = await h.framework.preview(h.session.id, card.id, { expectedRevision: card.revision, values: {}, selectedOptionId: "dismiss" });
   assert.equal((await h.framework.decide(h.session.id, card.id, { ...h.approval(card), selectedOptionId: "dismiss", decision: "dismiss" })).state, "dismissed");
   card = await h.propose({ mcpServerId: "shared-server", proxyPolicy: "none" }); h.store.notifications.stop(h.session.id); await assert.rejects(h.framework.decide(h.session.id, card.id, h.approval(card))); assert.equal(h.store.mcpProxyPolicy("shared-server"), "inherit");
