@@ -56,6 +56,15 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
 
+test("CFG-X04b: a saved Memory backend states restart required without implying verified activation", async () => {
+  const renderer = await mount(request({ capabilityId: "memory.backend", state: "applied", runId: undefined,
+    activation: { mode: "requires_restart", state: "needs_user_action" }, allowedActions: [] }));
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /Choose memory graph backend · Saved · Restart required/);
+  assert.match(content, /User action required/); assert.doesNotMatch(content, /Verified active/);
+  await act(async () => renderer.unmount());
+});
+
 test("CFG generic renderer requires a new preview after edits and binds approval to the exact revision and digest", async () => {
   const decisions: unknown[] = [];
   const previews: unknown[] = [];

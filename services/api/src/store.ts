@@ -2404,6 +2404,10 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    else if (capabilityId === "memory.backend") systemVersions = {
+      memoryGraph: version(this.catalog.memoryGraphSettings),
+      memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()),
+    };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2434,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "memory.backend" ? { memoryGraph: this.configurationMemoryGraph() } : {}),
       },
     };
   }
@@ -2917,7 +2922,21 @@ export class SessionStore {
     return row ? this.decryptModelApiToken("memory-graph:neo4j", row.encrypted_password) : undefined;
   }
 
-  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+  /** Safe metadata for a backend choice: never decrypt credentials or project full URLs. */
+  configurationMemoryGraph(): { enabled: boolean; backend: "local" | "neo4j"; destinationHost: string } {
+    const settings = this.catalog.memoryGraphSettings;
+    let destinationHost = "Unreviewed destination";
+    try { destinationHost = new URL(settings.neo4jHttp).host || destinationHost; } catch { /* Preserve the explicit unreviewed state. */ }
+    return { enabled: settings.enabled, backend: settings.backend, destinationHost };
+  }
+
+  applyMemoryGraphBackendSync(backend: "local" | "neo4j"): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    if (backend !== "local" && backend !== "neo4j") throw new Error("Invalid memory backend");
+    this.applyMemoryGraphSettingsSync({ backend });
+  }
+
+  private applyMemoryGraphSettingsSync(input: UpdateMemoryGraphSettingsRequest): void {
     const { neo4jPassword, ...settingsInput } = input;
     // 2B: fields are independent — only the keys present in the payload move.
     // Overlay provided fields on the current settings, then normalize. The
@@ -2944,6 +2963,10 @@ export class SessionStore {
       }
     }
     this.catalog.memoryGraphSettings = next;
+  }
+
+  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+    this.applyMemoryGraphSettingsSync(input);
     await this.saveCatalog();
     return this.getMemoryGraphSettings();
   }
