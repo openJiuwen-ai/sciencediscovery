@@ -368,6 +368,8 @@ export async function uploadWorkspaceParts(options: {
 }): Promise<WorkspaceUploadResult> {
   const uploaded: WorkspaceUploadItemResult[] = [];
   const errors: Array<{ error: string; name: string }> = [];
+  let invalidNameFailures = 0;
+  let firstInvalidName: (Error & { code?: string }) | undefined;
   let workspaceBytes = await measureWorkspaceBytes(options.workspaceRoot);
   for (const part of options.parts) {
     try {
@@ -400,7 +402,13 @@ export async function uploadWorkspaceParts(options: {
         status: written.status,
       });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "INVALID_UPLOAD_PATH") throw error;
+      // An unusable name fails only its own entry; the rest of the batch still
+      // lands. A batch with no usable entry at all is rejected after the loop,
+      // so a traversal attempt never looks like a partial success.
+      if ((error as NodeJS.ErrnoException).code === "INVALID_UPLOAD_PATH") {
+        invalidNameFailures += 1;
+        firstInvalidName ??= error as Error & { code?: string };
+      }
       const message = error instanceof Error ? error.message : "Upload failed";
       const name = (() => {
         try {
@@ -413,6 +421,9 @@ export async function uploadWorkspaceParts(options: {
       errors.push({ error: message, name });
     }
   }
+  // Every entry was rejected for its name: there is nothing to report as a
+  // partial upload, so keep WSP-003's "bad request, nothing written" answer.
+  if (uploaded.length > 0 && invalidNameFailures === uploaded.length && firstInvalidName) throw firstInvalidName;
   return {
     errors,
     files: await options.listFiles(),
