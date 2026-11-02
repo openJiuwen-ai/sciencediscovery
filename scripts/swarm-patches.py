@@ -38,15 +38,29 @@ def restore_pinned(target, tag, paths, env):
     """Return patched paths to the pinned tag, so that patches revised in place apply again.
 
     Only a source checkout can do this: its Git history has the unpatched files. A
-    path the tag does not have was created by a patch and is removed.
+    path the tag does not have was created by a patch and is removed. Restored
+    paths are printed, so a manual edit inside a patched file that is about to
+    be discarded is visible rather than silent.
     """
+    restored = []
     for name in sorted(paths):
+        # A wheel-form tree legitimately lacks optional (tests/) paths; do not
+        # resurrect them from the tag — restore_pinned must return the tree to
+        # ITS pre-patch shape, not the source checkout's.
+        if is_optional(name) and not (target / name).is_file():
+            continue
         pinned = subprocess.run(["git", "-C", str(target), "cat-file", "-e", f"{tag}:{name}"],
                                 env=env, capture_output=True).returncode == 0
         if pinned:
+            restored.append(name)
             subprocess.run(["git", "-C", str(target), "checkout", tag, "--", name], env=env, check=True)
         else:
+            restored.append(f"{name} (added by a patch; removed)")
             (target / name).unlink(missing_ok=True)
+    if restored:
+        print("swarm-patches: restoring pinned state (any local edits to these files are discarded):")
+        for name in restored:
+            print(f"  - {name}")
 
 
 def process(mode, target, tag, patch_dir=None):

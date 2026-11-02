@@ -36,8 +36,20 @@ index e343f7d..79b3fbd 100644
  from dotenv import dotenv_values
  
  
-@@ -77,10 +76,29 @@ def migrate_media_capability_switches(
+@@ -75,12 +74,41 @@ def migrate_media_capability_switches(
+     Existing explicit switches are never overwritten. A legacy capability is
+     enabled only when its API base, API key, model name, and provider are all
      non-empty; otherwise the new explicit switch is persisted as disabled.
++
++    A fully-exported environment is treated as already-migrated: when every
++    explicit switch is present in ``environ``/``os.environ``, this function
++    returns ``{}`` without touching the lock or the file. In the shipped
++    desktop form the entry parses the instance ``.env`` via ``--dotenv``
++    before this import chain, so the environment is a superset of the file
++    and the skip is exact; in env-injecting deployments (compose, systemd)
++    the injection is itself the durable source, so no persistence is needed.
++    No caller reads the return value (all three call sites call it bare at
++    module load).
      """
      target = Path(env_path)
 -    target.parent.mkdir(parents=True, exist_ok=True)

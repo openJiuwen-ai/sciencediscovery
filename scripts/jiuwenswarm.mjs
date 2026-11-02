@@ -552,9 +552,29 @@ export async function cmdStart(cfg = jwConfig()) {
       }
       await delay(probeIntervalMs(loopStartedAt));
     }
+    // (review follow-up) one bounded --status read at the deadline, not per
+    // round: inside the loop the TCP probes are authoritative while the
+    // .env ports match the running instance (the normal case), but a stale
+    // .env / hand-edited .env / squatter turns the probes blind. A single
+    // status reading at failure time says which one it was (real ports vs
+    // probed ports vs nothing running) without taxing normal starts.
+    let deadlineStatus = "";
+    try {
+      const status = await instanceStatus(cfg);
+      const sp = status?.ports ?? {};
+      if (sp.gateway || sp.web || sp.agent_server) {
+        deadlineStatus = `; deadline status: gateway=${sp.gateway ?? "?"} web=${sp.web ?? "?"} agent=${sp.agent_server ?? "?"}` +
+          ` (probed .env ports: gateway=${ports?.gateway ?? "?"} web=${ports?.web ?? "?"} agent=${ports?.agentServer ?? "?"} — mismatch means a stale .env or a squatter)`;
+      } else {
+        deadlineStatus = `; deadline status: ${status?.running ? "running" : "not running"} (no ports reported)`;
+      }
+    } catch {
+      deadlineStatus = "; deadline status: unavailable (instance not reporting)";
+    }
     throw new Error(
-      `JiuwenSwarm did not come up within ${PROBE_DEADLINE_MS / 1000}s (probes: ${attempt}); ` +
-      `diagnostics: ${startupDiagPath(cfg)}; instance log: ${cfg.logFile}`,
+      `JiuwenSwarm did not come up within ${PROBE_DEADLINE_MS / 1000}s (probes: ${attempt})` +
+      deadlineStatus +
+      `; diagnostics: ${startupDiagPath(cfg)}; instance log: ${cfg.logFile}`,
     );
   } finally {
     await perfMark(cfg, "cmdStart-exit", startedAt);

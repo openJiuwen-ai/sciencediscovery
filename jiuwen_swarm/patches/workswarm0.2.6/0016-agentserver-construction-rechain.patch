@@ -364,10 +364,27 @@ diff --git a/jiuwenswarm/server/agent_ws_server.py b/jiuwenswarm/server/agent_ws
 index a2057b1..56ef037 100644
 --- a/jiuwenswarm/server/agent_ws_server.py
 +++ b/jiuwenswarm/server/agent_ws_server.py
-@@ -172,6 +172,28 @@ from jiuwenswarm.common.log_preview import preview_text
+@@ -13,6 +13,7 @@ import math
+ import os
+ import shutil
+ import sys
++import threading
+ from pathlib import Path
+ from typing import Any, Awaitable, Callable, ClassVar, NamedTuple, Optional
+ from weakref import WeakValueDictionary
+@@ -171,6 +172,36 @@ from jiuwenswarm.common.log_preview import preview_text
+ 
  logger = logging.getLogger(__name__)
  
- 
++# (SD-patch 0016, review follow-up) fallback lock for instances that bypass
++# __init__ (tests and embedding harnesses use __new__): the per-instance lock
++# is created in __init__, so a partially-constructed instance falls back to
++# this module-level lock instead of raising. Any lock works for correctness
++# here — the guarantee needed is mutual exclusion between the warmup worker
++# and the event-loop backstop, not a per-instance one.
++_HEAVY_MEMBER_INIT_LOCK = threading.Lock()
++
++
 +# (SD-patch 0016) PEP 562 re-exports: the tag's module level imported the
 +# gateway_adapter names (AdapterRegistry and friends) at import time; tests
 +# and any external code may still ``from jiuwenswarm.server.agent_ws_server
@@ -389,11 +406,10 @@ index a2057b1..56ef037 100644
 +        return getattr(module, name)
 +    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 +
-+
+ 
  # (SD-patch 0015) lazy-import caches — populated on first runtime use.
  # Each proxy below keeps the original module-level name working for every
- # post-listen caller while moving the heavy chain off the import path:
-@@ -1390,39 +1412,30 @@ class AgentWebSocketServer:
+@@ -1390,39 +1421,39 @@ class AgentWebSocketServer:
          # supplied by the composition root once it is available.
          self._rsi_harness_provider: Any = None
          # [windows-desktop] reason (SD-patch 0015): heavy import deferred from
@@ -443,7 +459,16 @@ index a2057b1..56ef037 100644
 +        # its chance; AgentManager.get_agent() enforces the same-order
 +        # guarantee by materializing the runtime before creating any agent.
 +        self._heartbeat_runtime: Any | None = None
-+        self._heartbeat_runtime_init_lock = asyncio.Lock()
++        # (SD-patch 0016, review follow-up) threading.Lock — NOT asyncio.Lock:
++        # the materializers are synchronous and are invoked from two thread
++        # contexts (the post-listen warmup worker via asyncio.to_thread, and
++        # request/handshake paths on the event loop as a synchronous
++        # backstop). A threading.Lock gives the double-checked build exactly
++        # one construction and one set_heartbeat_service call across both
++        # writers; an asyncio.Lock can never guard a sync method across
++        # threads (and the previous asyncio.Lock here was created and never
++        # acquired — dead).
++        self._heartbeat_runtime_init_lock = threading.Lock()
 +        # (SD-patch 0016) gateway adapters: the memory-rpc chain (~2.2s warm)
 +        # moved behind a lazy property; the dispatch site checks getattr(None)
 +        # so requests racing the warmup simply fall through to the legacy
@@ -457,7 +482,7 @@ index a2057b1..56ef037 100644
          # AgentServer-side tokenizer cache/download service. The Gateway only
          # persists model profiles and notifies this process to refresh them.
          self._tokenizer_service = TokenizerService()
-@@ -1444,12 +1457,6 @@ class AgentWebSocketServer:
+@@ -1444,12 +1475,6 @@ class AgentWebSocketServer:
          self._default_model: Optional[Any] = None
          # 本地 jiuwenbox 子进程管理器 (lazy 启动, 在 /sandbox enable 时 ensure_running)
          self._jiuwenbox_runner = JiuwenBoxRunner.instance()
@@ -470,7 +495,7 @@ index a2057b1..56ef037 100644
          self._personal_context_start_task: asyncio.Task[None] | None = None
          # checkpointer 后台预热任务 (start() 里 fire-and-forget, stop() 时 cancel)
          self._checkpointer_warmup_task: Optional[asyncio.Task] = None
-@@ -1464,6 +1471,8 @@ class AgentWebSocketServer:
+@@ -1464,6 +1489,8 @@ class AgentWebSocketServer:
          # the loop after the Gateway is already connected.
          self._first_gateway_connection: asyncio.Event = asyncio.Event()
          self._tools_prewarm_task: Optional[asyncio.Task] = None
@@ -479,33 +504,46 @@ index a2057b1..56ef037 100644
          # MCP 连接缓存预热任务 (同上, 建 Runner.resource_mgr 供首轮对话命中)
          self._mcp_prewarm_task: Optional[asyncio.Task] = None
          # 图像模态探针重探任务 (模型配置变更时拉起, stop() 时 cancel)
-@@ -1474,6 +1483,104 @@ class AgentWebSocketServer:
+@@ -1474,6 +1501,130 @@ class AgentWebSocketServer:
              lambda msg: asyncio.create_task(self.send_push(msg))
          )
  
 +    # ---------- (SD-patch 0016) lazy heavy members ------------------------------
 +
 +    def _materialize_heartbeat_runtime(self) -> Any:
-+        """Construct HeartbeatRailRuntime on first use (thread-safe).
++        """Construct HeartbeatRailRuntime on first use (cross-thread safe).
 +
 +        The rails import chain (~8-12s cold) and the runtime constructor run
-+        at most once per process; start()'s post-listen warmup normally pays
-+        this cost off the event loop, and this accessor is the synchronous
-+        backstop for any caller that arrives earlier.
++        at most once per process. start()'s post-listen warmup normally pays
++        this cost off the event loop; this accessor is the synchronous
++        backstop for any caller that arrives earlier, so it must be safe
++        against two concurrent writers (warmup worker thread vs event-loop
++        backstop). A caller that arrives while the warmup build is in flight
++        blocks for the remainder of that build — inherent to a synchronous
++        backstop and bounded by the warmup duration — but exactly one
++        runtime is constructed and set_heartbeat_service runs once.
 +        """
 +        # (SD-patch 0016) getattr tolerance, same rationale as the adapter
 +        # registry materializer below.
 +        runtime = getattr(self, "_heartbeat_runtime", None)
 +        if runtime is not None:
 +            return runtime
-+        from jiuwenswarm.agents.harness.code.rails.heartbeat.runtime import (
-+            HeartbeatRailRuntime,
-+        )
++        # (SD-patch 0016, review follow-up) double-checked locking: the
++        # second writer re-checks under the lock and reuses the first
++        # writer's instance instead of building a second runtime (and
++        # re-firing the 8-12s import on the event loop).
++        with getattr(self, "_heartbeat_runtime_init_lock", _HEAVY_MEMBER_INIT_LOCK):
++            runtime = getattr(self, "_heartbeat_runtime", None)
++            if runtime is not None:
++                return runtime
++            from jiuwenswarm.agents.harness.code.rails.heartbeat.runtime import (
++                HeartbeatRailRuntime,
++            )
 +
-+        runtime = HeartbeatRailRuntime(self)
-+        self._heartbeat_runtime = runtime
-+        self._agent_manager.set_heartbeat_service(runtime)
-+        return runtime
++            runtime = HeartbeatRailRuntime(self)
++            self._heartbeat_runtime = runtime
++            self._agent_manager.set_heartbeat_service(runtime)
++            return runtime
 +
 +    @property
 +    def _heartbeat_runtime_or_none(self) -> Any | None:
@@ -519,32 +557,39 @@ index a2057b1..56ef037 100644
 +        registry = getattr(self, "_adapter_registry", None)
 +        if registry is not None:
 +            return registry
-+        # Gateway user-business RPCs execute in the current AgentServer's
-+        # injected data directory; request dispatch checks the registry before
-+        # the legacy handler chain. (SD-patch 0015 note applies to the import
-+        # site; the chain stays off the pre-listen path.)
-+        from jiuwenswarm.server.runtime.gateway_adapter import (
-+            AdapterRegistry,
-+            ConfigAdapter,
-+            HarmonyOSAdapter,
-+            MemoryAdapter,
-+            ProjectAdapter,
-+            SessionAdapter,
-+            WorkspaceFileAdapter,
-+        )
++        # (SD-patch 0016, review follow-up) same cross-thread double-checked
++        # locking as the heartbeat materializer: warmup worker vs event-loop
++        # backstop, exactly one registry.
++        with getattr(self, "_heartbeat_runtime_init_lock", _HEAVY_MEMBER_INIT_LOCK):
++            registry = getattr(self, "_adapter_registry", None)
++            if registry is not None:
++                return registry
++            # Gateway user-business RPCs execute in the current AgentServer's
++            # injected data directory; request dispatch checks the registry before
++            # the legacy handler chain. (SD-patch 0015 note applies to the import
++            # site; the chain stays off the pre-listen path.)
++            from jiuwenswarm.server.runtime.gateway_adapter import (
++                AdapterRegistry,
++                ConfigAdapter,
++                HarmonyOSAdapter,
++                MemoryAdapter,
++                ProjectAdapter,
++                SessionAdapter,
++                WorkspaceFileAdapter,
++            )
 +
-+        registry = AdapterRegistry()
-+        for adapter in (
-+            SessionAdapter(),
-+            WorkspaceFileAdapter(),
-+            MemoryAdapter(),
-+            ProjectAdapter(),
-+            HarmonyOSAdapter(),
-+            ConfigAdapter(),
-+        ):
-+            registry.register(adapter)
-+        self._adapter_registry = registry
-+        return registry
++            registry = AdapterRegistry()
++            for adapter in (
++                SessionAdapter(),
++                WorkspaceFileAdapter(),
++                MemoryAdapter(),
++                ProjectAdapter(),
++                HarmonyOSAdapter(),
++                ConfigAdapter(),
++            ):
++                registry.register(adapter)
++            self._adapter_registry = registry
++            return registry
 +
 +    def _materialize_personal_context_host(self) -> Any:
 +        """Construct the in-process PersonalContext Host on first use."""
@@ -553,19 +598,25 @@ index a2057b1..56ef037 100644
 +        host = getattr(self, "_personal_context_host", None)
 +        if host is not None:
 +            return host
-+        self._personal_context_host = _personal_context_host_api_cls()(
-+            home=Path.home() / ".jiuwenswarm" / ".personal_context",
-+        )
-+        return self._personal_context_host
++        # (SD-patch 0016, review follow-up) same cross-thread double-checked
++        # locking as the sibling materializers.
++        with getattr(self, "_heartbeat_runtime_init_lock", _HEAVY_MEMBER_INIT_LOCK):
++            host = getattr(self, "_personal_context_host", None)
++            if host is not None:
++                return host
++            self._personal_context_host = _personal_context_host_api_cls()(
++                home=Path.home() / ".jiuwenswarm" / ".personal_context",
++            )
++            return self._personal_context_host
 +
 +    async def _warmup_heavy_members(self) -> None:
 +        """Post-listen warmup: build the lazy members off the event loop.
 +
 +        Runs in a worker thread (imports + constructors are synchronous and
-+        multi-second). The heartbeat runtime is the only member other coros
-+        touch; the asyncio.Lock in its constructor is created off-loop here,
-+        which is safe because no coroutine can observe a half-built runtime
-+        (readers see None until the assignment completes).
++        multi-second). Each materializer is guarded by a cross-thread
++        double-checked lock, so if an event-loop backstop caller races this
++        worker, it blocks on the lock and reuses the winner's instance —
++        exactly one construction per member either way.
 +        """
 +        def _build() -> None:
 +            self._materialize_heartbeat_runtime()
@@ -584,7 +635,7 @@ index a2057b1..56ef037 100644
      def set_proactive_engine(self, engine: Any) -> None:
          """Store the proactive engine instance for debug trigger interface."""
          self._proactive_engine = engine
-@@ -1636,6 +1743,15 @@ class AgentWebSocketServer:
+@@ -1636,6 +1787,15 @@ class AgentWebSocketServer:
          # if this task has not completed when the first context is created.
          self._schedule_tokenizer_warmup(get_config(), reason="startup")
  
@@ -600,7 +651,7 @@ index a2057b1..56ef037 100644
          # 端口已 listen, 后台预热 checkpointer, 不阻塞启动与握手.
          # _checkpointer_warmup_task 供 shutdown 时 cancel, 避免任务悬挂.
          # [windows-desktop] reason: interface_deep's import chain (image_tools
-@@ -1674,11 +1790,11 @@ class AgentWebSocketServer:
+@@ -1674,11 +1834,11 @@ class AgentWebSocketServer:
              await self._await_first_connection()
  
              retry_delay = 1.0
@@ -614,7 +665,7 @@ index a2057b1..56ef037 100644
                      return
                  except Exception as exc:  # noqa: BLE001
                      logger.warning(
-@@ -1863,7 +1979,10 @@ class AgentWebSocketServer:
+@@ -1863,7 +2023,10 @@ class AgentWebSocketServer:
          await self._await_first_connection()
          start_cancelled: asyncio.CancelledError | None = None
          try:
@@ -626,7 +677,7 @@ index a2057b1..56ef037 100644
          except asyncio.CancelledError as exc:
              start_cancelled = exc
          except Exception as exc:  # noqa: BLE001
-@@ -2135,8 +2254,11 @@ class AgentWebSocketServer:
+@@ -2135,8 +2298,11 @@ class AgentWebSocketServer:
                      type(exc).__name__,
                  )
          stop_cancelled: asyncio.CancelledError | None = None
@@ -639,7 +690,7 @@ index a2057b1..56ef037 100644
          except asyncio.CancelledError as exc:
              stop_cancelled = exc
          except Exception as exc:  # noqa: BLE001
-@@ -2156,6 +2278,22 @@ class AgentWebSocketServer:
+@@ -2156,6 +2322,22 @@ class AgentWebSocketServer:
  
      async def _stop_main_services(self) -> None:
          """Run the unchanged AgentServer shutdown before optional PersonalContext cleanup."""
@@ -662,7 +713,7 @@ index a2057b1..56ef037 100644
          tokenizer_tasks = tuple(self._tokenizer_warmup_tasks)
          self._tokenizer_warmup_tasks.clear()
          for task in tokenizer_tasks:
-@@ -2174,7 +2312,10 @@ class AgentWebSocketServer:
+@@ -2174,7 +2356,10 @@ class AgentWebSocketServer:
                  pass
              except Exception as exc:  # noqa: BLE001
                  logger.warning("[AgentWebSocketServer] checkpointer warmup cancel failed: %s", exc)
@@ -674,7 +725,7 @@ index a2057b1..56ef037 100644
          # 同理取消 tools 工具链后台预热任务.
          tools_prewarm = self._tools_prewarm_task
          self._tools_prewarm_task = None
-@@ -2244,14 +2385,19 @@ class AgentWebSocketServer:
+@@ -2244,14 +2429,19 @@ class AgentWebSocketServer:
  
          # 发送 connection.ack 事件，通知 Gateway 服务端已就绪
          try:
@@ -696,7 +747,7 @@ index a2057b1..56ef037 100644
                  },
              }
              await send_wire_payload(ws, ack_frame)
-@@ -2303,7 +2449,7 @@ class AgentWebSocketServer:
+@@ -2303,7 +2493,7 @@ class AgentWebSocketServer:
                          await self._agent_manager.cancel_all_inflight_work(
                              reason=f"[gateway ws closed {remote}] ",
                              exclude_session_ids=(
@@ -705,7 +756,7 @@ index a2057b1..56ef037 100644
                              ),
                          )
                      except Exception:
-@@ -2321,7 +2467,7 @@ class AgentWebSocketServer:
+@@ -2321,7 +2511,7 @@ class AgentWebSocketServer:
                          await cancel_all_team_stream_tasks_across_managers(
                              reason=f"[gateway ws closed {remote}] ",
                              exclude_session_ids=(
@@ -714,7 +765,7 @@ index a2057b1..56ef037 100644
                              ),
                          )
                      except Exception:
-@@ -2346,9 +2492,9 @@ class AgentWebSocketServer:
+@@ -2346,9 +2536,9 @@ class AgentWebSocketServer:
          """
          if request.req_method is None or request.req_method in _GATEWAY_ADAPTER_LEGACY_METHODS:
              return False
@@ -727,7 +778,7 @@ index a2057b1..56ef037 100644
          adapter = registry.get(request.req_method.value)
          if adapter is None:
              return False
-@@ -2503,7 +2649,8 @@ class AgentWebSocketServer:
+@@ -2503,7 +2693,8 @@ class AgentWebSocketServer:
                      manager, "set_personal_context_runtime_enabled", None
                  )
                  await _pc_handler(
@@ -737,7 +788,7 @@ index a2057b1..56ef037 100644
                      ws,
                      request,
                      send_lock,
-@@ -3995,7 +4142,7 @@ class AgentWebSocketServer:
+@@ -3995,7 +4186,7 @@ class AgentWebSocketServer:
          if admitted and interrupt_resume:
              admitted = self._should_admit_interrupt_resume(request)
          if admitted:
@@ -746,7 +797,7 @@ index a2057b1..56ef037 100644
          if interrupt_resume:
              await self._clear_pending_interaction(
                  session_id,
-@@ -4006,7 +4153,7 @@ class AgentWebSocketServer:
+@@ -4006,7 +4197,7 @@ class AgentWebSocketServer:
              kvc_task_succeeded = True
          finally:
              if admitted:
@@ -755,7 +806,7 @@ index a2057b1..56ef037 100644
              if foreground:
                  await manager.end_foreground_chat()
              if tracks_kvc_task:
-@@ -4134,7 +4281,7 @@ class AgentWebSocketServer:
+@@ -4134,7 +4325,7 @@ class AgentWebSocketServer:
          if admitted and interrupt_resume:
              admitted = self._should_admit_interrupt_resume(request)
          if admitted:
@@ -764,7 +815,7 @@ index a2057b1..56ef037 100644
          if interrupt_resume:
              await self._clear_pending_interaction(
                  session_id,
-@@ -4146,7 +4293,7 @@ class AgentWebSocketServer:
+@@ -4146,7 +4337,7 @@ class AgentWebSocketServer:
              nonlocal admission_released
              if not admitted or admission_released:
                  return
@@ -773,7 +824,7 @@ index a2057b1..56ef037 100644
              admission_released = True
  
          try:
-@@ -4188,7 +4335,7 @@ class AgentWebSocketServer:
+@@ -4188,7 +4379,7 @@ class AgentWebSocketServer:
                  (get_session_metadata(request.session_id) or {}).get("user_id") or ""
              ).strip()
          try:
@@ -782,7 +833,7 @@ index a2057b1..56ef037 100644
                  action,
                  data,
                  channel_id=request.channel_id or "web",
-@@ -4267,7 +4414,7 @@ class AgentWebSocketServer:
+@@ -4267,7 +4458,7 @@ class AgentWebSocketServer:
              request,
              channel_id,
          )
@@ -791,7 +842,7 @@ index a2057b1..56ef037 100644
          restored_plan = await self._ensure_code_mode_state(
              request,
              mode,
-@@ -4987,10 +5134,10 @@ class AgentWebSocketServer:
+@@ -4987,10 +5178,10 @@ class AgentWebSocketServer:
  
      async def _try_start_heartbeat_runtime(self) -> bool:
          """Best-effort idempotent recovery after checkpointer readiness."""
@@ -804,7 +855,7 @@ index a2057b1..56ef037 100644
              return True
          except Exception as exc:  # noqa: BLE001
              logger.warning(
-@@ -5762,7 +5909,7 @@ class AgentWebSocketServer:
+@@ -5762,7 +5953,7 @@ class AgentWebSocketServer:
  
                              begin_trajectory_session_delete(target)
                              trajectory_delete_prepared = True
@@ -813,7 +864,7 @@ index a2057b1..56ef037 100644
                          heartbeat_delete_prepared = True
                          if is_team_session:
                              team_manager = get_team_manager(channel_id)
-@@ -5827,7 +5974,7 @@ class AgentWebSocketServer:
+@@ -5827,7 +6018,7 @@ class AgentWebSocketServer:
                                  )
                          if heartbeat_delete_prepared:
                              try:
@@ -822,7 +873,7 @@ index a2057b1..56ef037 100644
                                      target,
                                      channel_id=channel_id or "",
                                  )
-@@ -5874,7 +6021,7 @@ class AgentWebSocketServer:
+@@ -5874,7 +6065,7 @@ class AgentWebSocketServer:
                                      exc,
                                  )
                          try:
