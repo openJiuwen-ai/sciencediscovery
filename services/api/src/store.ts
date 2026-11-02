@@ -2404,6 +2404,7 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    else if (capabilityId === "reviewer.enable") systemVersions = { globalReviewer: version([this.getReviewerSpecialistSettings(), this.catalog.reviewerSpecialistDefaultOnMigrated]) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2431,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "reviewer.enable" ? { globalReviewer: this.getReviewerSpecialistSettings() } : {}),
       },
     };
   }
@@ -2602,7 +2604,12 @@ export class SessionStore {
     };
   }
 
-  async updateReviewerSpecialistSettings(value: unknown): Promise<ReviewerSpecialistSettings> {
+  applyReviewerParticipationSync(enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Reviewer configuration requires the shared transaction");
+    this.applyReviewerSpecialistSettingsSync({ enabled });
+  }
+
+  private applyReviewerSpecialistSettingsSync(value: unknown): void {
     if (!isRecord(value) || typeof value.enabled !== "boolean") {
       throw new Error("Reviewer Specialist enabled must be a boolean");
     }
@@ -2614,6 +2621,10 @@ export class SessionStore {
     // Record that the user (or API) chose a value so the default-on migration
     // will not override an intentional opt-out on the next load.
     this.catalog.reviewerSpecialistDefaultOnMigrated = true;
+  }
+
+  async updateReviewerSpecialistSettings(value: unknown): Promise<ReviewerSpecialistSettings> {
+    this.applyReviewerSpecialistSettingsSync(value);
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
   }

@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import assert from "node:assert/strict";
+import { configurationFramework } from "../configuration/framework.js";
 import { createHash, randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
@@ -131,6 +132,26 @@ test("CFG-T33 a live global Reviewer off switch suppresses a previously queued f
   assert.equal(checkpoint?.reviewerCheckpoint?.status, "skipped");
   assert.equal(checkpoint?.reviewerCheckpoint?.error, undefined);
   assert.equal(f.executions.length, 0);
+});
+
+test("CFG-X09a conversational global-off suppresses a queued audit at its real admission boundary", async context => {
+  const f = await fixture(context); let entered!: () => void, release!: () => void;
+  const atAdmission = new Promise<void>(done => { entered = done; }), continueAdmission = new Promise<void>(done => { release = done; });
+  const worker = f.coordinator({ deepBatchQuietMs: 0, isMainAgentBusy: async () => { entered(); await continueAdmission; return false; } });
+  const run = await f.run({ automaticReviewEnabled: true, level: "deep" });
+  const task = await f.enqueue(worker, await f.report("conversation-global-switch", run.id)); assert.ok(task);
+  await atAdmission;
+  try {
+    const framework = configurationFramework(f.store, { nativeExecutor: true, connector: () => undefined });
+    const card = await framework.propose(f.session.id, { protocolVersion: 3, capabilityId: "reviewer.enable", values: { enabled: false } });
+    const saved = await framework.decide(f.session.id, card.id, { revision: card.revision, previewDigest: card.previewDigest!, decision: "apply", selectedOptionId: "persist" });
+    assert.equal(saved.state, "applied"); assert.equal(saved.resumption.state, "not_requested");
+  } finally { release(); }
+  const settled = await f.waitTerminal(task.id);
+  assert.equal(settled.status, "skipped"); assert.equal(settled.skipReason, "specialist_disabled");
+  assert.equal(f.executions.length, 0); assert.equal(settled.errorSummary, undefined);
+  assert.equal(f.store.getSessionReviewerSpecialistSettings(f.session.id).automaticReviewEnabled, true);
+  await f.waitCheckpoint(task.checkpointMessageId);
 });
 
 test("CFG-T33 a global-off decision during asynchronous Deep admission is checked again before execution", async context => {
