@@ -775,3 +775,34 @@ test("Jiuwen live-wait card is actionable while its original run remains running
     await act(async () => renderer.unmount());
   }
 });
+
+test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after exact new consent", async () => {
+  let latest = request({ capabilityId: "model.connect", fields: [{ id: "baseUrl", label: "URL", kind: "url", required: true, value: "https://old-owned.example" }],
+    endpointAuthorization: { endpointTarget: "old-target", host: "old-owned.example", classification: "public_https", status: "confirmed", revision: 2 } });
+  let renderer!: ReactTestRenderer;
+  const decisions: unknown[] = [], updates: ConfigurationRequestView[] = [];
+  const api = actions({
+    preview: async input => { assert.deepEqual(input.values, { baseUrl: "https://new-owned.example" }); return { ...latest, revision: 3, stateVersion: 4,
+      previewDigest: "sha256:new-target", fields: [{ ...latest.fields[0]!, value: "https://new-owned.example" }],
+      endpointAuthorization: { endpointTarget: "new-target", host: "new-owned.example", classification: "public_https", status: "required", revision: 3 } }; },
+    consent: async input => { assert.deepEqual(input, { revision: 3, endpointTarget: "new-target" }); return { ...latest, stateVersion: 5,
+      endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; },
+    decide: async input => { decisions.push(input); return { ...latest, state: "applied", allowedActions: [] }; },
+  });
+  const draw = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, {
+    request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { updates.push(next); },
+  }));
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => renderer.root.findByProps({ name: "baseUrl" }).props.onChange({ target: { value: "https://new-owned.example" } }));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true, "The parent still supplies the old preview");
+  latest = updates.shift()!; await act(async () => renderer.update(draw()));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true, "The new recipient is not independently approved");
+  await act(async () => button(renderer, "Allow this exact endpoint").props.onClick());
+  latest = updates.shift()!; await act(async () => renderer.update(draw()));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false, "A fresh explicit preview survives exact recipient consent");
+  await act(async () => button(renderer, "Confirm this change").props.onClick());
+  assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
+  await act(async () => renderer.unmount());
+});
