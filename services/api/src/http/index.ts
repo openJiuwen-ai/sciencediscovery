@@ -1310,7 +1310,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // sidecar is not healthy, best-effort re-push it once (self-heal the
         // "password saved but sidecar never received it" case — e.g. the
         // sidecar restarted after the API). Toggle off → disabled, no push.
-        const details = store.getMemoryGraphSettings();
+        let details = store.getMemoryGraphSettings();
         let health = details.enabled
           ? await memoryGraphClient.health().catch(() => "degraded")
           : "disabled";
@@ -1324,6 +1324,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             health = await memoryGraphClient.health().catch(() => "degraded");
           }
         }
+        // Health/backend checks awaited remote work. Capture the current target
+        // and password together before the next await; a concurrent settings
+        // update must not pair a new password with this GET's earlier target.
+        details = store.getMemoryGraphSettings();
+        if (!details.enabled) health = "disabled";
         if (details.enabled && details.backend === "neo4j" && details.hasNeo4jPassword && health !== "healthy") {
           const password = store.getMemoryGraphNeo4jPassword();
           if (password) {
@@ -1342,7 +1347,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (url.pathname === "/api/memory/settings" && request.method === "PUT") {
         const body = await readJson<UpdateMemoryGraphSettingsRequest>(request);
-        const details = await store.updateMemoryGraphSettings(body);
+        await store.updateMemoryGraphSettings(body);
+        const details = store.getMemoryGraphSettings();
+        const passwordChanged = body.neo4jPassword !== undefined;
+        const connectionChanged = body.neo4jHttp !== undefined || body.neo4jUser !== undefined;
+        // Resolve one stored target/credential pair synchronously, before any
+        // backend push can yield to another settings update. Do not combine a
+        // request-body password with a different generation of saved settings.
+        const password = passwordChanged || connectionChanged ? store.getMemoryGraphNeo4jPassword() ?? null : null;
         // 2B: storing the password does NOT flip enabled; the user toggles it
         // explicitly. Push to the sidecar when the password changed OR the
         // HTTP/user connection changed — either rebuilds the driver. The store
@@ -1354,15 +1366,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               error instanceof Error ? error.message : String(error));
           });
         }
-        const passwordChanged = body.neo4jPassword !== undefined;
-        const connectionChanged = body.neo4jHttp !== undefined || body.neo4jUser !== undefined;
         if (passwordChanged || connectionChanged) {
-          // Resolve the password to push: the new value if provided (incl. null
-          // = clear), else the stored one so a connection-only change rebuilds
-          // the driver from the existing credential.
-          const password: string | null = body.neo4jPassword !== undefined
-            ? (body.neo4jPassword === null ? null : (body.neo4jPassword as string).trim() || null)
-            : store.getMemoryGraphNeo4jPassword() ?? null;
           // Skip when there's nothing to push (no stored password and none set).
           if (passwordChanged || password !== null) {
             await memoryGraphClient

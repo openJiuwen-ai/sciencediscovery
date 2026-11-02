@@ -23,9 +23,11 @@ const rotatedPassword = `synthetic-rotated-${randomUUID()}`, rotatedUri = "https
 const steps = [], requests = [], pushes = []; let outcome = "BLOCKED", sha, product, stub, origin, baseline, logs = "", backend = "local", featurePushes;
 let heldHealth, heldBackend; const releases = [];
 function hold(kind) {
-  let enter, release; const entered = new Promise(done => { enter = done; }), wait = new Promise(done => { release = done; });
+  let enter, release, timer;
+  const entered = new Promise((done, reject) => { timer = setTimeout(() => reject(new Error(`Owned ${kind} barrier was not reached`)), 10000); enter = () => { clearTimeout(timer); done(); }; });
+  const wait = new Promise(done => { release = done; });
   if (kind === "health") heldHealth = { enter, wait }; else heldBackend = { enter, wait };
-  releases.push(release); return { entered, release };
+  releases.push(() => { clearTimeout(timer); release(); }); return { entered, release };
 }
 class Blocked extends Error {}
 const redact = value => [token, sidecarToken, password, rotatedPassword].reduce((text, secret) => text.replaceAll(secret, "[owned-secret]"), String(value));
@@ -96,7 +98,7 @@ try {
     assert.equal(pushes.length, before + 1); bound(pushes.at(-1));
   });
   await step("5. A concurrent target/key change during GET health never pairs the new key with the old target", async () => {
-    const barrier = hold("health"), pending = api("/api/memory/settings"); await barrier.entered;
+    const barrier = hold("health"), pending = api("/api/memory/settings"); void pending.catch(() => undefined); await barrier.entered;
     const before = pushes.length;
     try { await api("/api/memory/settings", { neo4jHttp: rotatedUri, neo4jUser: rotatedUser, neo4jPassword: rotatedPassword }); }
     finally { barrier.release(); }
@@ -105,7 +107,7 @@ try {
   });
   await step("6. A concurrent rotation during backend push never pairs the stored replacement with a previous target", async () => {
     await api("/api/memory/settings", { neo4jHttp: httpUri, neo4jUser: user, neo4jPassword: password });
-    const barrier = hold("backend"), pending = api("/api/memory/settings", { backend: "neo4j", neo4jUser: user }); await barrier.entered;
+    const barrier = hold("backend"), pending = api("/api/memory/settings", { backend: "neo4j", neo4jUser: user }); void pending.catch(() => undefined); await barrier.entered;
     const before = pushes.length;
     try { await api("/api/memory/settings", { neo4jHttp: rotatedUri, neo4jUser: rotatedUser, neo4jPassword: rotatedPassword }); }
     finally { barrier.release(); }
