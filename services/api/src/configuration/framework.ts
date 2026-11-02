@@ -11,6 +11,7 @@ import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
+import { createProviderConnectionAdapter } from "./provider-connection-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
@@ -112,7 +113,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createProviderConnectionAdapter(store, this.destinations), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -194,7 +195,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "Timeouts, quotas and Idea Tree settings apply to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || input.capabilityId === "provider.connection" || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {
@@ -317,6 +318,7 @@ export class ConversationalConfigurationFramework {
     await this.reconcileLifecycle(sessionId, id);
     if (source === "auto") this.assertAutoAuthorized(this.service.getRecord(sessionId, id));
     const deciding = this.service.getRecord(sessionId, id);
+    if (input.decision === "apply" && deciding.view.capabilityId === "provider.connection") this.destinations.assert(deciding, true);
     if (!this.options.nativeExecutor && deciding.view.runId && !["applied", "dismissed"].includes(deciding.view.state)
       && !this.liveWaitRunId(sessionId, id))
       throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting; do not replay this proposal", 409);

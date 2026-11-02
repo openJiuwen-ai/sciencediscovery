@@ -16,6 +16,25 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X02e: shared-provider consent displays every recipient and protocol edits choose matching finite defaults", async () => {
+  const view = request({ capabilityId: "provider.connection", scope: { kind: "global" }, fields: [
+    { id: "apiProtocol", label: "Protocol", kind: "enum", required: true, value: "openai-chat-completions", choices: Object.keys(MODEL_API_VARIANTS).map(id => ({ id, label: id })) },
+    { id: "apiVariant", label: "Default variant", kind: "enum", required: true, value: "openai", choices: [{ id: "openai", label: "openai" }] },
+    { id: "modelDiscovery", label: "Discovery", kind: "enum", required: true, value: "openai-models", choices: ["openai-models", "anthropic-models"].map(id => ({ id, label: id })) },
+  ], endpointAuthorization: { endpointTarget: "opaque-provider-consent-digest", host: "owned.invalid", classification: "public_https", revision: 2, status: "required",
+    destinations: [{ label: "Model requests", url: "https://owned.invalid/v1/chat/completions" }, { label: "Model discovery", url: "https://owned.invalid/v1/models" }] } });
+  const confirmed = { ...view, endpointAuthorization: { ...view.endpointAuthorization!, status: "confirmed" as const } }, api = actions({ consent: async () => confirmed });
+  const renderer = await mount(view, api), shown = JSON.stringify(renderer.toJSON());
+  assert.match(shown, /https:\/\/owned.invalid\/v1\/chat\/completions/u); assert.match(shown, /https:\/\/owned.invalid\/v1\/models/u); assert.doesNotMatch(shown, /opaque-provider-consent-digest/u);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => { renderer.root.findByProps({ name: "apiProtocol" }).props.onChange({ target: { value: "anthropic-messages" } }); });
+  assert.equal(renderer.root.findByProps({ name: "apiVariant" }).props.value, "anthropic-adaptive"); assert.equal(renderer.root.findByProps({ name: "modelDiscovery" }).props.value, "anthropic-models");
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => { renderer.unmount(); });
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);

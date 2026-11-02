@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure";
+export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "provider.connection";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -132,6 +132,8 @@ export interface ConfigurationCredentialInput {
 export interface ConfigurationCredentialDraftView { handle: string; expiresAt: string; }
 export interface ConfigurationEndpointAuthorization {
   endpointTarget: string;
+  /** Server-derived recipients shown together for a shared-resource acknowledgement. */
+  destinations?: Array<{ label: string; url: string }>;
   host: string;
   classification: "trusted_preset" | "public_https" | "loopback" | "private_network" | "public_http";
   status: "required" | "confirmed" | "trusted" | "blocked";

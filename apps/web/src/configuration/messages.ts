@@ -2,6 +2,9 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 const en = {
+  providerEndpointRequired: "Review every listed destination before allowing the existing provider and model-profile keys to be used there. Then confirm the configuration. This card sends no request.",
+  providerEndpointConfirmed: "All listed provider destinations approved. Review the changes, then confirm the configuration.",
+  fieldsByCapability: { "provider.connection": { providerId: "Existing shared provider", name: "Provider display name", baseUrl: "Provider API base URL", apiProtocol: "Provider API protocol", apiVariant: "Default protocol variant for new provider models", modelDiscovery: "Provider model discovery format" } } as Record<string, Record<string, string>>,
   destinationChanged: "The credential destination changed during preview. Review the new destination and enter the key again.",
   webSearchAlternative: "Use existing Web search",
   credentialRetry: "Credential upload failed. Your input is retained on this device; refresh the proposed changes to retry.",
@@ -41,7 +44,7 @@ const en = {
   waitingChoice: "Task paused · waiting for your configuration choice",
   waitingNextRun: "Waiting for a subsequent run",
   choiceKind: { persisted_apply: "Save configuration", run_overlay: "Use only for this task", alternative: "Use an available alternative", dismiss: "Do not configure" },
-  capability: { "model.select": "Choose a task model", "model.connect": "Connect a model", "model.repair_credential": "Repair model credentials", "connector.enable": "Enable a connector",
+  capability: { "provider.connection": "Edit shared provider connection", "model.select": "Choose a task model", "model.connect": "Connect a model", "model.repair_credential": "Repair model credentials", "connector.enable": "Enable a connector",
     "skill.select": "Select installed skills", "thinking.configure": "Configure thinking", "review.configure": "Configure session review",
     "timeouts.configure": "Configure timeouts", "quotas.configure": "Configure quotas", "idea_tree.configure": "Configure Idea Tree limits" } as Record<string, string>,
   scope: { session: "This session", project: "This project", global: "Global settings" },
@@ -60,6 +63,9 @@ const en = {
 };
 
 const zh: typeof en = {
+  providerEndpointRequired: "请逐条核对目标地址，再允许既有服务商及模型档案密钥用于这些地址，随后确认配置。此卡片不会发送请求。",
+  providerEndpointConfirmed: "列出的服务商目标地址均已获准。请核对变更，再确认配置。",
+  fieldsByCapability: { "provider.connection": { providerId: "已有共享服务商", name: "服务商显示名称", baseUrl: "服务商 API 地址", apiProtocol: "服务商 API 协议", apiVariant: "新增模型的默认协议变体", modelDiscovery: "服务商模型发现格式" } },
   destinationChanged: "预览期间凭据发送目标发生变化。请核对新目标后重新输入密钥。",
   webSearchAlternative: "使用现有网页检索",
   credentialRetry: "凭据上传失败，输入仍仅保存在此设备内存中。可直接刷新修改方案重试。",
@@ -99,7 +105,7 @@ const zh: typeof en = {
   waitingChoice: "原任务已暂停，正在等待本次配置选择",
   waitingNextRun: "等待后续运行",
   choiceKind: { persisted_apply: "保存配置后继续", run_overlay: "仅本次任务使用", alternative: "改用可用的替代路径", dismiss: "暂不配置" },
-  capability: { "model.select": "选择任务模型", "model.connect": "连接模型", "model.repair_credential": "修复模型凭据", "connector.enable": "启用连接器",
+  capability: { "provider.connection": "修改共享服务商连接", "model.select": "选择任务模型", "model.connect": "连接模型", "model.repair_credential": "修复模型凭据", "connector.enable": "启用连接器",
     "skill.select": "选择已安装的 Skill", "thinking.configure": "调整思考配置", "review.configure": "调整会话审阅",
     "timeouts.configure": "调整超时", "quotas.configure": "调整配额", "idea_tree.configure": "调整探索树限制" },
   scope: { session: "当前会话", project: "当前项目", global: "全局设置" },

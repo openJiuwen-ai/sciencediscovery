@@ -66,7 +66,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function modelsUrl(endpoint: ModelDiscoveryEndpoint): string {
+export function modelDiscoveryUrl(endpoint: Pick<ModelDiscoveryEndpoint, "baseUrl" | "discovery">): string {
   const root = endpointRoot(endpoint.baseUrl);
   if (endpoint.discovery === "anthropic-models") {
     return root.endsWith("/v1") ? `${root}/models` : `${root}/v1/models`;
@@ -152,7 +152,7 @@ export async function listProviderModels(
   options: { timeoutMs?: number } = {},
 ): Promise<DiscoveredModel[]> {
   const dispatcher = proxyDispatcher(endpoint.proxy);
-  const url = modelsUrl(endpoint);
+  const url = modelDiscoveryUrl(endpoint);
   let statusCode: number;
   let bodyText: string;
   try {

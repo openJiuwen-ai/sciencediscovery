@@ -18,7 +18,7 @@ import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
 import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValues } from "@sciencediscovery/schema";
-import { effectiveRunnerIds } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
@@ -2384,7 +2384,7 @@ export class SessionStore {
     const settings = this.getSessionSettings(sessionId);
     const project = this.getProject(session.projectId)!;
     const model = this.getModel(target);
-    const provider = this.getProvider(model?.providerId);
+    const provider = this.getProvider(capabilityId === "provider.connection" ? target : model?.providerId);
     const version = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
     // Ciphertext generations, never plaintext token hashes, invalidate old approvals.
     const secretRows = this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all();
@@ -2404,6 +2404,12 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "provider.connection") {
+      const children = this.catalog.models.filter(model => model.providerId === target);
+      const keys = new Set([providerSecretKey(target), ...children.map(model => model.id)]);
+      systemVersions = { providerConnection: version([provider ?? null, children, this.providerDiscoveryRevision(target) ?? null,
+        secretRows.filter(row => keys.has(String(row.model_id)))]) };
+    }
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2419,6 +2425,7 @@ export class SessionStore {
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
+        ...(capabilityId === "provider.connection" ? { providerConnection: this.configurationProviderConnectionSource(target), providers: structuredClone(this.listProviders()) } : {}),
         installedConnectorIds: [...this.connectorIds], inheritedConnectorIds: [...this.getProjectSettings(project.id).effective.enabledConnectorIds],
         sources: structuredClone(settings.sources),
         projectOverrides: structuredClone(project.settingsOverrides),
@@ -3702,23 +3709,50 @@ export class SessionStore {
     return provider;
   }
 
+  configurationProviderConnectionSource(providerId: string) {
+    const provider = this.getProvider(providerId);
+    return { provider: provider ? structuredClone(provider) : undefined,
+      children: this.catalog.models.filter(model => model.providerId === providerId).map(model => structuredClone(model)) };
+  }
+
+  private normalizeProviderConnection(provider: ModelProvider, input: UpdateModelProviderRequest) {
+    return validateLiveProvider({ apiProtocol: input.apiProtocol ?? provider.apiProtocol,
+      apiVariant: input.apiVariant ?? (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol ? undefined : provider.apiVariant),
+      baseUrl: input.baseUrl ?? provider.baseUrl, modelDiscovery: input.modelDiscovery ?? provider.modelDiscovery,
+      name: input.name ?? provider.name, presetId: provider.presetId });
+  }
+
+  configurationProviderConnectionCandidate(provider: ModelProvider, values: ConfigurationValues) {
+    const input = { ...values } as UpdateModelProviderRequest;
+    if (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol) {
+      input.apiVariant ??= DEFAULT_MODEL_API_VARIANT[input.apiProtocol];
+      input.modelDiscovery ??= DEFAULT_MODEL_DISCOVERY[input.apiProtocol];
+    }
+    return this.normalizeProviderConnection(provider, input);
+  }
+
+  private applyProviderConnectionSync(provider: ModelProvider, connection: ReturnType<SessionStore["normalizeProviderConnection"]>): void {
+    Object.assign(provider, connection, { updatedAt: new Date().toISOString() });
+  }
+
+  applyProviderConnectionConfigurationSync(providerId: string, values: ConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider connection writes require the shared transaction");
+    const provider = this.getProvider(providerId);
+    if (!provider) throw new Error("Provider not found");
+    const previousProtocol = provider.apiProtocol;
+    this.applyProviderConnectionSync(provider, this.configurationProviderConnectionCandidate(provider, values));
+    this.syncProviderModels(provider, previousProtocol);
+  }
+
   async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
     const previousProtocol = provider.apiProtocol;
-    const normalized = validateLiveProvider({
-      apiProtocol: input.apiProtocol ?? provider.apiProtocol,
-      apiVariant: input.apiVariant
-        ?? (input.apiProtocol !== undefined && input.apiProtocol !== provider.apiProtocol ? undefined : provider.apiVariant),
-      baseUrl: input.baseUrl ?? provider.baseUrl,
-      modelDiscovery: input.modelDiscovery ?? provider.modelDiscovery,
-      name: input.name ?? provider.name,
-      presetId: provider.presetId,
-    });
+    const normalized = this.normalizeProviderConnection(provider, input);
     // Validate the complete candidate before touching the live connection object.
     const proxyPolicy = input.proxyPolicy === undefined ? provider.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
     const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
-    Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
+    this.applyProviderConnectionSync(provider, normalized);
     if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
     if (input.proxyPolicy !== undefined) {
       provider.proxyPolicy = proxyPolicy;

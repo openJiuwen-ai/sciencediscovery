@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, DEFAULT_MODEL_DISCOVERY, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
 import type { ConfigurationAction, ConfigurationCredentialDraftView, ConfigurationCredentialInput, ConfigurationDecisionInput,
   ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../api/auth.js";
@@ -61,7 +61,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "providerId", "modelDiscovery"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -100,7 +100,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential", "provider.connection"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -141,8 +141,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     if (field.kind === "credential") {
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
     } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => ({ ...current, [field.id]: value,
-      ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
-        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) })); }
+      ...(["model.connect", "provider.connection"].includes(request.capabilityId) && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
+        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol], ...(request.capabilityId === "provider.connection" ? { modelDiscovery: DEFAULT_MODEL_DISCOVERY[value as ModelApiProtocol] } : {}) } : {}) })); }
   }
   async function selectOption(optionId: string) {
     if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
@@ -350,9 +350,11 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     </div> : null}
     {authorization ? <section className="configuration-endpoint" aria-label={m.endpoint}>
       <strong>{m.endpoint}: <bdi>{authorization.host}</bdi></strong>
-      <p><code>{authorization.endpointTarget}</code></p>
+      {authorization.destinations?.length ? <ul>{authorization.destinations.map(destination => <li key={destination.url}><strong>{destination.label}</strong><p><code>{destination.url}</code></p></li>)}</ul> : <p><code>{authorization.endpointTarget}</code></p>}
       {["loopback", "private_network"].includes(authorization.classification) ? <p>{m.endpointLocal}</p> : null}
-      <p role="status">{authorization.status === "blocked" ? m.endpointBlocked : endpointReady ? m.endpointConfirmed : m.endpointRequired}</p>
+      <p role="status">{authorization.status === "blocked" ? m.endpointBlocked : endpointReady
+        ? request.capabilityId === "provider.connection" ? m.providerEndpointConfirmed : m.endpointConfirmed
+        : request.capabilityId === "provider.connection" ? m.providerEndpointRequired : m.endpointRequired}</p>
       {authorization.status === "required" && !targetEdited && actions.consent ? <button type="button" className="secondary-button" disabled={busy || readOnly || runActive} onClick={() => void perform(() => actions.consent!({ revision: request.revision, endpointTarget: authorization.endpointTarget }, operationKey(`consent:${request.revision}:${authorization.endpointTarget}`)))}>{m.endpointConsent}</button> : null}
     </section> : null}
     <form className="configuration-fields" onSubmit={(event) => void preview(event)}>
@@ -380,7 +382,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{m.fieldsByCapability[request.capabilityId]?.[field.id] ?? (locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
@@ -392,7 +394,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             {field.choices?.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>
             <option value="">{m.choose}</option>
-            {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
+            {(["model.connect", "provider.connection"].includes(request.capabilityId) && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
               ?.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select> : field.kind === "boolean" ? <input {...common} required={false} type="checkbox" checked={values[field.id] === true} onChange={(event) => edit(field, event.target.checked)} />
