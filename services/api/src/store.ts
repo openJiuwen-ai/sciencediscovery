@@ -418,6 +418,16 @@ function savedWorkspaceFileRecord(value: unknown): WorkspaceFileRecord | undefin
   };
 }
 
+/** Union two persisted collections by id, with `preferred` winning a collision.
+ *  Used when a catalog row arrives from a build that predates the side tables:
+ *  its inline collections and the rows it never saw are both part of the
+ *  catalog, and the row it wrote last is the newer statement about a shared id. */
+function mergePersistedRows<T extends { id: string }>(stored: readonly T[], preferred: readonly T[]): T[] {
+  const merged = new Map(stored.map((row) => [row.id, row]));
+  for (const row of preferred) merged.set(row.id, row);
+  return [...merged.values()];
+}
+
 function savedWorkspaceFileRevision(value: unknown): WorkspaceFileRevision | undefined {
   if (!isRecord(value) || !WORKSPACE_FILE_ORIGINS.has(value.origin as WorkspaceFileRevision["origin"])) return undefined;
   const required = ["createdAt", "fileId", "id", "modifiedAt", "path", "projectId", "sessionId"];
@@ -1065,10 +1075,12 @@ export class SessionStore {
     const migratedSpecialists = JSON.stringify(specialists) !== JSON.stringify(savedSpecialists);
     const specialistIds = new Set(specialists.map((specialist) => specialist.id));
     // A catalog written by a newer build keeps these three collections in rows
-    // of their own; the JSON only carries the flag saying so. An older one
-    // still has them inline, and they are moved once at the end of this method.
+    // of their own; the JSON only carries the flag saying so. An older one still
+    // has them inline — and after a downgrade it also arrives without the flag,
+    // while the tables still hold what the newer build wrote. Both views are
+    // read, and merged instead of one replacing the other.
     const sideTablesSeeded = saved.sideTablesSeeded === true;
-    const rawStoredSubagents = sideTablesSeeded ? this.readSubagentsTable() : undefined;
+    const rawStoredSubagents = this.readSubagentsTable();
     // Rows are normalized on every load, not just when they arrive from the
     // legacy JSON: a `running` row means a previous API died mid-task, and this
     // is where that becomes the placeholder a continuation may replace.
@@ -1079,10 +1091,13 @@ export class SessionStore {
     const savedSubagents = Array.isArray(saved.subagents)
       ? saved.subagents
       : Array.isArray(saved.delegationTracks) ? saved.delegationTracks : [];
-    const subagents = storedSubagents ?? savedSubagents.flatMap((subagent) => {
+    const jsonSubagents = savedSubagents.flatMap((subagent) => {
       const normalized = normalizePersistedSubagent(subagent);
       return normalized ? [normalized] : [];
     });
+    const subagents = storedSubagents === undefined
+      ? jsonSubagents
+      : sideTablesSeeded ? storedSubagents : mergePersistedRows(storedSubagents, jsonSubagents);
     const migratedSubagents = storedSubagents === undefined
       && (!Array.isArray(saved.subagents) || JSON.stringify(subagents) !== JSON.stringify(savedSubagents));
     const recoveredStoredSubagents = rawStoredSubagents !== undefined
@@ -1215,9 +1230,17 @@ export class SessionStore {
     const retainedWorkspaceFileRecordIds = new Set(jsonWorkspaceFileRecords.map((record) => record.id));
     const jsonWorkspaceFileRevisions = normalizedWorkspaceFileRevisions
       .filter((revision) => retainedWorkspaceFileRecordIds.has(revision.fileId));
-    const storedWorkspaceProvenance = sideTablesSeeded ? this.readWorkspaceProvenanceTables() : undefined;
-    const workspaceFileRecords = storedWorkspaceProvenance?.records ?? jsonWorkspaceFileRecords;
-    const workspaceFileRevisions = storedWorkspaceProvenance?.revisions ?? jsonWorkspaceFileRevisions;
+    const storedWorkspaceProvenance = this.readWorkspaceProvenanceTables();
+    const workspaceFileRecords = storedWorkspaceProvenance === undefined
+      ? jsonWorkspaceFileRecords
+      : sideTablesSeeded
+        ? storedWorkspaceProvenance.records
+        : mergePersistedRows(storedWorkspaceProvenance.records, jsonWorkspaceFileRecords);
+    const workspaceFileRevisions = storedWorkspaceProvenance === undefined
+      ? jsonWorkspaceFileRevisions
+      : sideTablesSeeded
+        ? storedWorkspaceProvenance.revisions
+        : mergePersistedRows(storedWorkspaceProvenance.revisions, jsonWorkspaceFileRevisions);
     const migratedWorkspaceFileProvenance = storedWorkspaceProvenance === undefined
       && (!Array.isArray(saved.workspaceFileRecords)
         || !Array.isArray(saved.workspaceFileRevisions)
@@ -1351,8 +1374,17 @@ export class SessionStore {
       webConnectorMigrated: true,
     };
     // Move an older catalog's inline collections into their tables once, before
-    // the catalog row is rewritten without them.
-    if (!sideTablesSeeded) this.seedSideTables(subagents, workspaceFileRecords, workspaceFileRevisions);
+    // the catalog row is rewritten without them. No flag can also mean a build
+    // from before these tables wrote the row after a downgrade: it does not
+    // preserve the flag, and its arrays are its whole view of the data. Both
+    // views were merged above, so the rows this build already held and the
+    // older one never saw stay in the catalog; here they are written back
+    // (`INSERT OR REPLACE`, never a delete).
+    if (!sideTablesSeeded) {
+      const retained = this.countSideTableRows();
+      if (retained > 0) console.warn(`catalog_side_tables_seeded_again: ${retained} rows kept from a newer build`);
+      this.seedSideTables(subagents, workspaceFileRecords, workspaceFileRevisions);
+    }
     if (recoveredStoredSubagents) {
       const rawById = new Map(rawStoredSubagents.map((subagent) => [subagent.id, subagent]));
       for (const subagent of subagents) {
@@ -1662,6 +1694,16 @@ export class SessionStore {
     const revisions = (database.prepare("SELECT revision_json FROM workspace_file_revisions").all() as Array<{ revision_json: string }>)
       .map((row) => JSON.parse(row.revision_json) as WorkspaceFileRevision);
     return { records, revisions };
+  }
+
+  /** How much this build already holds outside the catalog row, so a row that
+   *  arrives without the flag can say whether it is a first migration or a
+   *  downgrade. */
+  private countSideTableRows(): number {
+    if (!this.database) return 0;
+    const database = this.database;
+    return (["workspace_files", "workspace_file_revisions", "subagents"] as const).reduce((total, table) =>
+      total + Number((database.prepare(`SELECT count(*) AS total FROM ${table}`).get() as { total: number }).total), 0);
   }
 
   /** Move an older catalog's inline collections into their tables. Runs once,
