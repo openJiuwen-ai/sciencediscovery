@@ -13,7 +13,7 @@ async function fixture(context: { after(action: () => Promise<void>): void }) {
   const http = createServer(async (request, response) => {
     if (request.method === "DELETE") { state.deletes++; response.writeHead(200); response.end(); return; }
     if (request.method !== "POST") { response.writeHead(405); response.end(); return; }
-    let text = ""; for await (const part of request) text += String(part); const rpc = JSON.parse(text);
+    let text = ""; for await (const part of request) { text += String(part); } const rpc = JSON.parse(text);
     if (rpc.id === undefined) { response.writeHead(202); response.end(); return; }
     let result: unknown;
     if (rpc.method === "initialize") { state.initializations++; state.authorizedWithSecondKey = request.headers.authorization === "Bearer synthetic-second"; result = { protocolVersion: rpc.params?.protocolVersion ?? "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "Owned fixture", version: "1" } }; }
