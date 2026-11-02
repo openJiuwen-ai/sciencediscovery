@@ -20,6 +20,7 @@ import type { ConfigurationExternalOperation, ConfigurationExternalOutcome } fro
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
+import { canonicalMcpEnvironmentName, mcpEnvironmentRemovalEffect } from "./runtime-environment.js";
 import { customMcpAdapter } from "./custom-adapter.js";
 import { loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
 import { McpOAuthManager, validateOAuthUrl } from "./oauth.js";
@@ -289,6 +290,37 @@ export class CustomMcpServers {
       const selectedName = source.header.name;
       const candidate = normalizeCustomMcpConfig({ ...previous, headers: Object.fromEntries(Object.entries(previous.headers).filter(([name]) => name.toLowerCase() !== selectedName)) }, previous);
       return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationMetadataRevision(selected.id, candidate) } }, { ...this.configs, [selected.id]: candidate }, [selected.id]);
+    });
+  }
+
+  configurationEnvironmentRemoval(target = "") {
+    let serverId = "", envName = "";
+    if (target) {
+      try { const parsed: unknown = JSON.parse(target); if (Array.isArray(parsed) && parsed.length === 2 && parsed.every(value => typeof value === "string")) { serverId = String(parsed[0]); envName = canonicalMcpEnvironmentName(String(parsed[1])); } } catch { /* No selected stored variable. */ }
+    }
+    const items = Object.entries(this.configs).filter(([, config]) => config.transport === "stdio").map(([id, config]) => {
+      const counts = new Map<string, number>(); for (const key of Object.keys(config.env)) { if (/^[A-Za-z_][A-Za-z0-9_]{0,255}$/u.test(key)) { const name = canonicalMcpEnvironmentName(key); counts.set(name, (counts.get(name) ?? 0) + 1); } }
+      return { id, name: config.name, transport: config.transport, enabled: config.enabled, variables: [...counts].map(([name, aliases]) => ({ name, aliases, effect: mcpEnvironmentRemovalEffect(name) })).sort((a, b) => a.name.localeCompare(b.name)) };
+    });
+    const current = items.find(item => item.id === serverId);
+    return { items, current, variable: current?.variables.find(item => item.name === envName), caseSensitive: process.platform !== "win32", version: serverId ? this.configurationEnvironmentRevision(serverId) : undefined };
+  }
+
+  private configurationEnvironmentRevision(serverId: string, config = this.configs[serverId]): string {
+    if (!this.key) throw new Error("MCP storage is not initialized");
+    return createHmac("sha256", this.key).update(JSON.stringify(["mcp-env-removal-v1", process.platform, this.configurationMetadataRevision(serverId, config)])).digest("hex");
+  }
+
+  submitConfigurationEnvironmentRemoval(operation: ConfigurationExternalOperation, target: string, expectedVersion: string): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code }), source = this.configurationEnvironmentRemoval(target), selected = source.current;
+      if (!selected || !source.variable) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      if (source.version !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
+      const previous = this.configs[selected.id]; if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      const selectedName = source.variable.name;
+      const candidate = normalizeCustomMcpConfig({ ...previous, env: Object.fromEntries(Object.entries(previous.env).filter(([name]) => canonicalMcpEnvironmentName(name) !== selectedName)) }, previous);
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationEnvironmentRevision(selected.id, candidate) } }, { ...this.configs, [selected.id]: candidate }, [selected.id]);
     });
   }
 

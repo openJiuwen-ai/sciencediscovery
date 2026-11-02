@@ -16,6 +16,19 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03e: changing a STDIO target clears its saved environment name without a secret input", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_env", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing STDIO custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "envName", label: "Saved environment override to remove", kind: "enum", required: true, value: "OWNED_TOKEN", choices: [{ id: "OWNED_TOKEN", label: "OWNED_TOKEN" }] },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    assert.match(JSON.stringify(renderer.toJSON()), /Saved environment override to remove/u); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } })); const field = renderer.root.findByProps({ name: "envName" }); assert.equal(field.props.value, ""); assert.equal(field.props.disabled, true); assert.equal(field.props.required, false);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} })); assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
 test("CFG-X03d: changing the server clears and unlocks the dependent header selection", async () => {
   const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, fields: [
     { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },

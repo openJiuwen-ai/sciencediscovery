@@ -11,6 +11,7 @@ import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
+import { createMcpEnvironmentRemovalAdapter, type McpEnvironmentRemovalPort } from "./mcp-env-removal-adapter.js";
 import { createMcpHeaderRemovalAdapter, type McpHeaderRemovalPort } from "./mcp-header-removal-adapter.js";
 import { createMcpTimeoutAdapter, type McpTimeoutPort } from "./mcp-timeout-adapter.js";
 import { createMcpMetadataAdapter, type McpMetadataPort } from "./mcp-metadata-adapter.js";
@@ -32,6 +33,7 @@ export interface ConfigurationFrameworkOptions {
   mcpMetadata?: McpMetadataPort;
   mcpTimeout?: McpTimeoutPort;
   mcpHeaderRemoval?: McpHeaderRemovalPort;
+  mcpEnvironmentRemoval?: McpEnvironmentRemovalPort;
   connectors?(sessionId: string): readonly ConfigurationConnectorRegistration[];
   connector(sessionId: string, connectorId: string): { name: string; ready: boolean } | undefined;
   nativeExecutor: boolean;
@@ -186,11 +188,16 @@ export class ConversationalConfigurationFramework {
   }
 
   configure(options: ConfigurationFrameworkOptions): void {
-    this.options = { ...options, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout, mcpHeaderRemoval: options.mcpHeaderRemoval ?? this.options.mcpHeaderRemoval };
+    this.options = { ...options, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout, mcpHeaderRemoval: options.mcpHeaderRemoval ?? this.options.mcpHeaderRemoval, mcpEnvironmentRemoval: options.mcpEnvironmentRemoval ?? this.options.mcpEnvironmentRemoval };
     this.attachMcpMetadata();
   }
 
   private attachMcpMetadata(): void {
+    const environment = this.options.mcpEnvironmentRemoval;
+    if (environment && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_env")) {
+      this.store.setConfigurationMcpEnvironmentRemovalSource(target => environment.configurationEnvironmentRemoval(target));
+      this.service.registry.register(createMcpEnvironmentRemovalAdapter(environment));
+    }
     const headers = this.options.mcpHeaderRemoval;
     if (headers && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_header")) {
       this.store.setConfigurationMcpHeaderRemovalSource(target => headers.configurationHeaderRemoval(target));
@@ -226,7 +233,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "Timeouts, quotas and Idea Tree settings apply to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || ["mcp.metadata", "mcp.timeout", "mcp.remove_header"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || ["mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {

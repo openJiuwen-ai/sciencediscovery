@@ -54,11 +54,8 @@ import type {
 import { effectiveRouting, loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
 import type { McpOAuthManager } from "./oauth.js";
 import { apiLog } from "../logging.js";
+import { MCP_PROXY_ENV_VARS as PROXY_ENV_VARS } from "./runtime-environment.js";
 
-const PROXY_ENV_VARS = [
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-  "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-] as const;
 const URL_PROXY_ENV_VARS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] as const;
 const STDERR_TAIL_LIMIT = 4_000;
 

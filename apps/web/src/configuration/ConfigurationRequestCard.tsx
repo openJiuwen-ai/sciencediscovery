@@ -62,6 +62,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const mounted = useRef(true);
   const latestRequest = useRef(request);
   const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "serverId"];
+  const dependentRemovalField = request.capabilityId === "mcp.remove_header" ? "headerName" : request.capabilityId === "mcp.remove_env" ? "envName" : undefined;
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -141,10 +142,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     if (field.kind === "credential") {
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
     } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => {
-      const next = { ...current, [field.id]: value,
+      const next: ConfigurationValues = { ...current, [field.id]: value,
         ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
           ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) };
-      if (request.capabilityId === "mcp.remove_header" && field.id === "serverId" && current.serverId !== value) delete next.headerName;
+      if (dependentRemovalField && field.id === "serverId" && current.serverId !== value) delete next[dependentRemovalField];
       return next;
     }); }
   }
@@ -380,8 +381,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {request.fields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
-        const loadingHeader = request.capabilityId === "mcp.remove_header" && field.id === "headerName" && values.serverId !== fieldValues(request).serverId;
-        const common = { id: inputId, name: field.id, disabled: !editable || loadingHeader, required: field.required && !loadingHeader,
+        const loadingRemovalName = field.id === dependentRemovalField && values.serverId !== fieldValues(request).serverId;
+        const common = { id: inputId, name: field.id, disabled: !editable || loadingRemovalName, required: field.required && !loadingRemovalName,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
