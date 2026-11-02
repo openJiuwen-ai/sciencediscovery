@@ -197,10 +197,12 @@ test("run_shell selects the latest environment by ID and preserves its execution
   const result = await tool.execute("tool-call", { command: "python -m sample", runner_id: "runner-test", environment_id: "env-test", cwd: "analysis" });
   assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
-  assert.deepEqual(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : ""), {
-    executionId: "execution", state: "completed", exitCode: 0, stdout: "ok", stderr: "",
+  const modelText = result.content[0]?.type === "text" ? result.content[0].text : "";
+  assert.deepEqual(JSON.parse(modelText.split("\nstdout:\n", 1)[0]!), {
+    executionId: "execution", state: "completed", exitCode: 0,
     createdFiles: [], modifiedFiles: [],
   });
+  assert.match(modelText, /\nstdout:\nok\nstderr:\n$/);
 });
 
 test("a command written with the workspace's host path uses the sandbox's /workspace instead", () => {
@@ -2415,7 +2417,8 @@ test("run_shell exposes a compact model result without execution internals or en
   const response = await tools.find((tool) => tool.name === "run_shell")!
     .execute("shell", { command: "test command" });
   const text = response.content[0]!.text;
-  const modelResult = JSON.parse(text);
+  const [metadata, stdout, stderr] = text.split("\nstdout:\n").flatMap((part, index) => index === 0 ? [part] : part.split("\nstderr:\n"));
+  const modelResult = { ...JSON.parse(metadata!), stdout, stderr };
   assert.deepEqual(modelResult, {
     executionId: "execution-visible",
     state: "failed",
@@ -2432,16 +2435,7 @@ test("run_shell exposes a compact model result without execution internals or en
       instruction: "Request the complete host set before a new execution",
     },
   });
-  assert.deepEqual(response.details, {
-    ...modelResult,
-    id: "execution-visible",
-    agentId: "agent-internal",
-    runnerId: "runner-internal",
-    workspaceId: "workspace-internal",
-    startedAt: "2026-10-30T09:20:40.755Z",
-    finishedAt: "2026-10-30T09:20:41.285Z",
-  });
-  assert.doesNotMatch(JSON.stringify(response.details), /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
+  assert.equal(response.details, execution, "canonical details remain complete for audit and trajectory persistence");
   assert.doesNotMatch(text, /runner-secret|proxy-secret|spent-network-token|environmentVariables|workspaceSnapshot|session-internal/);
 });
 
@@ -2461,7 +2455,7 @@ test("run_shell compact output keeps pending and unknown recovery instructions",
     assert.equal(modelResult.executionId, `execution-${state}`);
     assert.equal(modelResult.state, state);
     assert.match(modelResult.instruction, state === "unknown" ? /outcome is unconfirmed/ : /still running or queued/);
-    assert.deepEqual(response.details, { ...modelResult, id: `execution-${state}` });
+    assert.equal(response.details, execution, "canonical execution remains available outside model content");
     assert.deepEqual(Object.keys(modelResult).sort(), ["executionId", "instruction", "state"]);
   }
 });

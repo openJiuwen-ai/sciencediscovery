@@ -155,18 +155,15 @@ function shellExecutionModelView(execution: Pick<AgentShellExecution,
   };
 }
 
-/** Operational metadata is available to product traces without copying the
- * credential-bearing Runner result into those traces. */
-function shellExecutionDetailsView(execution: AgentShellExecution, modelView: Record<string, unknown>): Record<string, unknown> {
-  return {
-    ...modelView,
-    id: execution.id,
-    ...(execution.agentId ? { agentId: execution.agentId } : {}),
-    ...(execution.runnerId ? { runnerId: execution.runnerId } : {}),
-    ...(execution.workspaceId ? { workspaceId: execution.workspaceId } : {}),
-    ...(execution.startedAt ? { startedAt: execution.startedAt } : {}),
-    ...(execution.finishedAt ? { finishedAt: execution.finishedAt } : {}),
-  };
+/** Keep streams as real lines so the shared output bounder can count, preview,
+ * retain and page them accurately instead of seeing one JSON-escaped line. */
+function shellExecutionModelText(view: Record<string, unknown>): string {
+  const { stdout, stderr, ...metadata } = view;
+  return [
+    JSON.stringify(metadata),
+    ...(stdout !== undefined ? ["stdout:", String(stdout)] : []),
+    ...(stderr !== undefined ? ["stderr:", String(stderr)] : []),
+  ].join("\n");
 }
 
 /** Status and cancellation responses point callers at execution_logs instead
@@ -1677,8 +1674,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           const modelView = shellExecutionModelView(execution);
           return {
             isError: ["failed", "cancelled", "unknown"].includes(execution.state) || Boolean(execution.result?.networkDeniedHosts?.length),
-            content: [{ type: "text", text: JSON.stringify(modelView) }],
-            details: shellExecutionDetailsView(execution, modelView),
+            content: [{ type: "text", text: shellExecutionModelText(modelView) }],
+            details: execution,
           };
         }
         if (params.background || params.wait_ms !== undefined || params.recovery_context || params.recovery_metadata_path) throw new Error("Managed Shell Execution is unavailable on this runtime");
@@ -1692,8 +1689,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         });
         return {
           isError: result.exitCode !== 0 || Boolean(result.networkDeniedHosts?.length),
-          content: [{ type: "text", text: JSON.stringify(modelView) }],
-          details: modelView,
+          content: [{ type: "text", text: shellExecutionModelText(modelView) }],
+          details: result,
         };
       },
       label: "Run shell",
@@ -1749,10 +1746,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           : manager.list();
         if (Array.isArray(value)) {
           const executions = value.map((execution) => shellExecutionStatusView(execution));
-          return { content: [{ type: "text", text: JSON.stringify({ executions }) }], details: { executions } };
+          return { content: [{ type: "text", text: JSON.stringify({ executions }) }], details: value };
         }
         const modelView = shellExecutionStatusView(value);
-        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: shellExecutionDetailsView(value, modelView) };
+        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: value };
       },
     };
     tools.push(statusTool);
@@ -1775,7 +1772,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       execute: async (_id, params) => {
         const value = await manager.cancel(params.execution_id);
         const modelView = shellExecutionStatusView(value);
-        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: shellExecutionDetailsView(value, modelView) };
+        return { content: [{ type: "text", text: JSON.stringify(modelView) }], details: value };
       },
     };
     tools.push(cancelTool);

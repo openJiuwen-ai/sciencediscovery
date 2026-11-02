@@ -123,8 +123,12 @@ test("production AgentRun records exact contexts, complete observations, sequent
     assert.equal(state.transcript.length, 5);
     assert.equal(state.transcript.at(-1)?.provider_extension, "preserved");
     assert.equal(state.observations.length, 2);
-    const observation = (await store.readRecord<{ content: import("@sciencediscovery/cas").AgentStateRef }>(state.observations[0]!)).value;
-    assert.equal(JSON.parse((await store.readState(observation.content)).toString()), largeResult);
+    const observation = (await store.readRecord<{ content: import("@sciencediscovery/cas").AgentStateRef; details: unknown }>(state.observations[0]!)).value;
+    assert.deepEqual(observation.details, largeResult, "canonical details retain the complete MCP observation");
+    const modelObservation = JSON.parse((await store.readState(observation.content)).toString()) as { text: string; truncated: boolean };
+    assert.equal(modelObservation.truncated, true);
+    assert.equal(largeResult.startsWith(modelObservation.text.replace(/\.\.\.$/, "")), true);
+    assert.ok(Buffer.byteLength(JSON.stringify(modelObservation), "utf8") <= 48 * 1024);
     const tree = (await store.readRecord<WorkspaceTree>(state.workspace)).value;
     const entry = tree.entries.find((item) => Buffer.from(item.name, "base64url").toString() === "result.txt")!;
     assert.equal(entry.type, "file");
