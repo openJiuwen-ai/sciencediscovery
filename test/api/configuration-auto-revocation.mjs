@@ -73,7 +73,7 @@ try {
   });outcome='PASS';
 } catch(error){outcome=error instanceof Blocked?'BLOCKED':'FAIL';process.exitCode=1;}
 finally {
-  try{if(product&&project)await api('/api/projects/'+project.id,{confirmationId:project.id},'DELETE');}catch{outcome='FAIL';process.exitCode=1;steps.push({name:'Delete exact owned Project',status:'FAIL'});}
+  try{if(product&&project){for(const fixture of fixtures){await api('/api/sessions/'+fixture.sessionId+'/runs/'+fixture.runId+'/cancel',{},'POST');const deadline=Date.now()+5000;let run;do{run=await api('/api/sessions/'+fixture.sessionId+'/runs/'+fixture.runId);if(['completed','failed','cancelled','interrupted'].includes(run.status))break;await new Promise(done=>setTimeout(done,100));}while(Date.now()<deadline);assert.ok(['completed','failed','cancelled','interrupted'].includes(run.status),'Owned Run must be terminal before Project deletion');}await api('/api/projects/'+project.id,{confirmationId:project.id},'DELETE');}}catch{outcome='FAIL';process.exitCode=1;steps.push({name:'Delete exact owned Project',status:'FAIL'});}
   try{await stop();}catch{outcome='FAIL';process.exitCode=1;}
   await writeFile(resolve(directory,'startup.log'),logs);await writeFile(resolve(directory,'report.json'),JSON.stringify({outcome,sha,steps,requests,fixtures,processExits,boundary:'Seeded ready-connector fixture; actual compiled API policy/countdown persistence; no real connector/model/Runner or browser'},null,2));await writeFile(resolve(directory,'report.md'),`# Automatic configuration revocation: ${outcome}\n\nCommit: ${sha??'unknown'}\n\n${steps.map(step=>`- ${step.name}: ${step.status}${step.error?' — '+step.error:''}`).join('\n')}\n`);console.log(JSON.stringify({outcome,sha,report:resolve(directory,'report.md')}));
 }
