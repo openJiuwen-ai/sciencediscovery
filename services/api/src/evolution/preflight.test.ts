@@ -27,6 +27,8 @@ import assert from "node:assert/strict";
 
 import type { EvolveGoal, ModelProfile, ScorecardCriterion } from "@sciencediscovery/schema";
 
+import { describeEvolveBudget, perCallCeiling } from "./call-budget.js";
+import { endpointCanDisableThinking } from "./model-thinking.js";
 import { preflight } from "./preflight.js";
 import type { EvolveSandboxCapability } from "./sandbox.js";
 
@@ -159,6 +161,43 @@ test("a refused ceiling offers turning thinking off as the other way out", async
   // Two knobs solve this, and naming only one sends the user to the expensive
   // side of a forty-times token difference.
   assert.match(issue?.fix ?? "", /thinking off/);
+});
+
+test("the ceiling the checkpoint shows is the one this gate accepts", async () => {
+  // The checkpoint asks the user to spend and states per-call ceiling ×
+  // expansions. Two ways that sentence can be false: the number shown sits
+  // below the floor enforced here, so the user approves a run that refuses
+  // itself; or it is the quiet figure on an endpoint that ignores "thinking
+  // off", so every call spends the ceiling on hidden reasoning and returns
+  // nothing. Both algorithms, both kinds of endpoint, because the two numbers
+  // are written in two places.
+  for (const algorithm of ["puct", "openevolve"] as const) {
+    for (const apiVariant of [undefined, "openai", "deepseek"] as const) {
+      const where = `${algorithm} on ${apiVariant ?? "the default variant"}`;
+      const model: ModelProfile = { ...MODEL, apiVariant, model: "some-gateway-model" };
+      const thinkingSupported = endpointCanDisableThinking(model);
+      const plan = describeEvolveBudget(model);
+      const shown = plan.perCallCeiling[algorithm];
+      const accepted = goal({
+        algorithm,
+        budget: { ...goal().budget, maxTokensPerCall: shown },
+        thinking: plan.thinking.effective,
+      });
+      assert.deepEqual(await codes(accepted, { model, thinkingSupported }), [],
+        `${where}: the ceiling the checkpoint shows has to pass this gate`);
+
+      if (!thinkingSupported) {
+        // What the run would have been given if the request had been believed.
+        const asAsked = {
+          ...accepted,
+          budget: { ...accepted.budget, maxTokensPerCall: perCallCeiling(algorithm, "disabled") },
+          thinking: "disabled" as const,
+        };
+        assert.ok((await codes(asAsked, { model, thinkingSupported })).includes("max_tokens_too_low"),
+          `${where}: the quiet ceiling cannot be what the user is shown, because this gate refuses it`);
+      }
+    }
+  }
 });
 
 test("expansions that do not divide by workers are refused", async () => {
