@@ -623,6 +623,20 @@ export type EvolveEvent =
     candidates: number;
     /** What the run planned, next to the `candidates` it actually produced. */
     expansionsPlanned?: number;
+    /** The winner against the starting program on the same held-out cases,
+     *  paired and tested — so a reader can tell "improved" from "scored higher
+     *  on an easier split". Optional, and absent rather than zero-filled when
+     *  the gate could not supply it: "no evidence" is not "evidence of no
+     *  improvement". */
+    gateEvidence?: {
+      wins: number;
+      losses: number;
+      ties: number;
+      n: number;
+      pValue: number;
+      alpha: number;
+      verdict: string;
+    };
     status: EvolveRunStatus;
     /** The framework's own word for why the search stopped — `max_iters`,
      * `patience`, `max_seconds`. Recorded even when it is the ordinary one:
