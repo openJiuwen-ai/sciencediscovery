@@ -8,7 +8,7 @@ import { nativeRuntimeConnectorIds } from "./native-choices.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { CONFIGURATION_SETTINGS_INVENTORY } from "./settings-catalog.js";
-import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
+import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationError, digest, invalid, string } from "./validation.js";
 import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
@@ -23,9 +23,10 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "review.configure": "review reviewer semantic 审阅 审查 自动审查",
   "timeouts.configure": "timeout timeouts 超时 等待 时限",
   "quotas.configure": "quota quotas 配额 并发 上传 容量",
+  "proxy.default": "proxy route default global 代理 默认 全局 路由 出站",
   "idea_tree.configure": "idea tree 探索树 深度 轮次",
 };
-const domainAliases: Record<string, string> = { proxy: "代理", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
+const domainAliases: Record<string, string> = { proxy: "代理", proxy_resources: "proxy 代理 资源", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
 type Row = Record<string, unknown>;
 export interface ConfigurationDiscoveryInput {
   query?: string; capabilityId?: string; targetId?: string; cursor?: string; limit?: number; diagnosticCode?: string;
@@ -89,6 +90,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const models = () => modelCache ??= store.listModels().map(model => ({ id: model.id, name: text(model.name), model: model.model,
     credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" }));
   const resources = async (id: ConfigurationCapabilityId): Promise<Row[]> => {
+    if (id === "proxy.default") return store.configurationProxyDefaults().servers.map(({ id, name, kind }) => ({ id: `proxy:${id}`, name: text(name), kind }));
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
     if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
     if (id === "skill.select") {
@@ -146,6 +148,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
+  else if (id === "proxy.default") current = { defaultPolicy: store.configurationProxyDefaults().defaultPolicy, connectivityVerified: false };
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
     current = { explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
@@ -156,8 +159,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    scopes: descriptor.scopes.filter(scope => (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    instruction: id === "proxy.default" ? "Deployment-wide: omit scope. Select defaultPolicy none or a registered proxy ID from the resources. Full proxy URLs and credentials are not fields. This manual configuration does not grant destination/private-network or tool-execution authorization and does not verify connectivity." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);

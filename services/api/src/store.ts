@@ -2404,6 +2404,10 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "proxy.default") systemVersions = { proxyDefaults: version([
+      this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+      this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all(),
+    ]) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2434,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "proxy.default" ? { proxyDefaults: this.configurationProxyDefaults() } : {}),
       },
     };
   }
@@ -2775,10 +2780,24 @@ export class SessionStore {
     return row ? this.decryptModelApiToken(`proxy:${serverId}`, row.encrypted_url) : undefined;
   }
 
-  async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
+  /** Safe selection metadata, without decrypting URLs or inspecting proxy environment values. */
+  configurationProxyDefaults() {
+    return { defaultPolicy: this.catalog.proxyDefaultPolicy, servers: this.catalog.proxyServers.map(({ id, name, kind }) => ({ id, name, kind })) };
+  }
+
+  applyProxyDefaultConfigurationSync(defaultPolicy: string): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    this.applyProxyDefaultPolicy({ defaultPolicy });
+  }
+
+  private applyProxyDefaultPolicy(input: unknown): void {
     const defaultPolicy = normalizeProxyDefaultPolicy(isRecord(input) ? input.defaultPolicy : undefined);
     this.assertProxyPolicyKnown(defaultPolicy, "defaultPolicy");
     this.catalog.proxyDefaultPolicy = defaultPolicy;
+  }
+
+  async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
+    this.applyProxyDefaultPolicy(input);
     await this.saveCatalog();
     return this.getProxySettings();
   }
