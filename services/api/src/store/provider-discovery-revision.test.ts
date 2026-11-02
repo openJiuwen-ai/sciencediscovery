@@ -13,7 +13,7 @@ test("CFG-XBUG-10: discovery cache identity uses credential generations without 
   const first = await store.createProvider({ name: "Owned first", baseUrl: "https://first.invalid/v1", apiToken: "synthetic-first-key" });
   const other = await store.createProvider({ name: "Owned other", baseUrl: "https://other.invalid/v1", apiToken: "synthetic-other-key" });
   store.getProviderApiToken = () => { throw new Error("Revision reads must not decrypt a saved key"); };
-  const version = store.providerDiscoveryRevision(first.id); assert.match(version!, /^[0-9a-f]{64}$/u);
+  const version = store.providerDiscoveryRevision(first.id); assert.ok(version !== undefined); assert.match(version, /^[0-9a-f]{64}$/u);
   await store.updateProvider(other.id, { name: "Unrelated renamed provider", apiToken: "synthetic-other-rotated" }); assert.equal(store.providerDiscoveryRevision(first.id), version);
   await store.updateProvider(first.id, { apiToken: "synthetic-first-rotated" }); const rotated = store.providerDiscoveryRevision(first.id); assert.notEqual(rotated, version);
   await store.updateProvider(first.id, { baseUrl: "https://new-first.invalid/v1" }); assert.notEqual(store.providerDiscoveryRevision(first.id), rotated);
