@@ -70,6 +70,9 @@ test("CFG-X03d: selected auth changes invalidate CAS while unrelated servers do 
 
 test("CFG-X03d: collection, absent names and STDIO cannot become arbitrary deletion targets", async context => {
   const h = await harness(context), empty = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "mcp.remove_header", values: {} }); assert.equal(empty.state, "collecting_input");
+  assert.equal(empty.fields.find(item => item.id === "headerName")?.required, false);
+  const bound = await h.framework.preview(h.session.id, empty.id, { expectedRevision: empty.revision, values: { serverId: h.server.id } }), dependent = bound.fields.find(item => item.id === "headerName"); assert.ok(dependent && dependent.kind === "enum"); assert.equal(dependent.required, true); assert.equal(dependent.choices?.length, 2); assert.equal(bound.state, "collecting_input");
+  const declined = await h.framework.preview(h.session.id, bound.id, { expectedRevision: bound.revision, values: {}, selectedOptionId: "dismiss" }); await h.framework.decide(h.session.id, declined.id, { ...approval(declined), decision: "dismiss", selectedOptionId: "dismiss" });
   await assert.rejects(h.propose({ headerName: "missing" }), { code: "CONFIGURATION_RESOURCE_UNAVAILABLE" }); const stdio = await h.manager.save({ name: "Owned STDIO", transport: "stdio", enabled: false, command: "owned-never-executed" }); await assert.rejects(h.propose({ serverId: stdio.id }), { code: "CONFIGURATION_RESOURCE_UNAVAILABLE" });
   const record = await h.propose({ headerName: "AUTHORIZATION" }), field = record.fields.find(item => item.id === "headerName"); assert.ok(field && field.kind === "enum"); assert.equal(field.value, "authorization");
 });
