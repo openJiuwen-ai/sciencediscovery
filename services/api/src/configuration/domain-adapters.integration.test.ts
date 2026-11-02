@@ -417,7 +417,7 @@ test("CFG-T20/21: revoking automatic authorization during verification prevents 
 
 test("CFG-01/02/14: finite adapters preserve inherited connectors, unrelated fields, and reversal restores absence", async context => {
   const h = await harness(context);
-  assert.deepEqual(h.framework.service.registry.list().map(adapter => adapter.id).sort(), ["connector.enable", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "quotas.configure", "review.configure", "skill.select", "thinking.configure", "timeouts.configure"]);
+  assert.deepEqual(h.framework.service.registry.list().map(adapter => adapter.id).sort(), ["connector.enable", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "quotas.configure", "review.configure", "runner.assign", "skill.select", "thinking.configure", "timeouts.configure"]);
   await h.store.replaceGlobalSettings({ enabledConnectorIds: ["uniprot"], semanticReviewEnabled: false });
   const view = await h.framework.propose(h.session.id, { capabilityId: "connector.enable", values: { connectorId: "pubmed" } });
   assert.deepEqual(h.store.getSessionSettings(h.session.id).effective.enabledConnectorIds, ["uniprot"]);

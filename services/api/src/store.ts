@@ -2404,6 +2404,10 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    if (capabilityId === "runner.assign") systemVersions = {
+      runnerSelection: version([project.runnerIds, project.remoteRunnerHostIds, session.runnerIds, session.remoteRunnerHostIds]),
+      registeredRunners: version([this.catalog.remoteHosts, this.getConfigurationDatabase().prepare("SELECT host_id, kind, encrypted_value FROM remote_host_credentials ORDER BY host_id, kind").all()]),
+    };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2430,6 +2434,7 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
       },
     };
   }
@@ -3927,15 +3932,7 @@ export class SessionStore {
     }
     const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
     const description = normalizeProjectDescription(changes.description);
-    if (changes.runnerIds !== undefined) {
-      const ids = this.validateRunnerIds(changes.runnerIds);
-      project.runnerIds = ids;
-      project.remoteRunnerHostIds = ids.filter((id) => id !== "local");
-    } else if (changes.remoteRunnerHostIds !== undefined) {
-      const ids = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
-      delete project.runnerIds;
-      project.remoteRunnerHostIds = ids;
-    }
+    this.applyProjectRunnerSelection(project, changes);
     if (name !== undefined) {
       // A rename is the same collision as a create: the name is the handle.
       this.assertProjectNameFree(name, project.id);
@@ -3947,6 +3944,18 @@ export class SessionStore {
     }
     await this.saveCatalog();
     return project;
+  }
+
+  private applyProjectRunnerSelection(project: Project, changes: Pick<UpdateProjectRequest, "runnerIds" | "remoteRunnerHostIds">): void {
+    if (changes.runnerIds !== undefined) {
+      const ids = this.validateRunnerIds(changes.runnerIds);
+      project.runnerIds = ids;
+      project.remoteRunnerHostIds = ids.filter((id) => id !== "local");
+    } else if (changes.remoteRunnerHostIds !== undefined) {
+      const ids = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
+      delete project.runnerIds;
+      project.remoteRunnerHostIds = ids;
+    }
   }
 
   private validateProjectRemoteRunnerHosts(hostIds: string[]): string[] {
@@ -3973,6 +3982,52 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     const project = session && this.getProject(session.projectId);
     return project && session ? effectiveRunnerIds(project, session) : [];
+  }
+
+  /** Selection discovery deliberately avoids the credential-decrypting host description API. */
+  configurationRunnerResources(): Array<{ id: string; name: string; available: boolean }> {
+    const tokenIds = new Set((this.getConfigurationDatabase().prepare("SELECT host_id FROM remote_host_credentials WHERE kind = 'token'").all() as Array<{ host_id: string }>).map(row => row.host_id));
+    return [{ id: "local", name: "Built-in local Runner", available: true }, ...this.catalog.remoteHosts.map(host => ({
+      id: host.id, name: (host.runnerName ?? host.id).slice(0, 180), available: !remoteRunnerUnusableReason({ ...host, hasToken: tokenIds.has(host.id) }),
+    }))];
+  }
+
+  configurationRunnerSelection(sessionId: string) {
+    const session = this.assertSessionWritable(sessionId);
+    const project = this.getProject(session.projectId)!;
+    const inherited = session.runnerIds === undefined && session.remoteRunnerHostIds === undefined;
+    return { projectRunnerIds: effectiveRunnerIds(project).sort(), selectionMode: inherited ? "inherit" as const : "selected" as const,
+      runnerIds: inherited ? [] : effectiveRunnerIds(project, session).sort(), effectiveRunnerIds: effectiveRunnerIds(project, session).sort() };
+  }
+
+  applyRunnerConfigurationSync(sessionId: string, scope: ConfigurationScope, selectionMode: "inherit" | "selected", runnerIds: string[]): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    if (scope.kind === "project" && scope.id === session.projectId && selectionMode === "selected") {
+      this.applyProjectRunnerSelection(this.getProject(session.projectId)!, { runnerIds });
+    } else if (scope.kind === "session" && scope.id === session.id) {
+      const patch = this.sessionRunnerSelectionPatch(session.projectId, { runnerIds: selectionMode === "inherit" ? null : runnerIds });
+      this.applySessionRunnerSelection(session, patch);
+      session.updatedAt = new Date().toISOString();
+    } else throw new Error("Unsupported Runner configuration scope");
+  }
+
+  private sessionRunnerSelectionPatch(projectId: string, changes: Pick<UpdateSessionRequest, "runnerIds" | "remoteRunnerHostIds">): Pick<Session, "runnerIds" | "remoteRunnerHostIds"> {
+    const { runnerIds, remoteRunnerHostIds } = changes;
+    // Validate every submitted list before mutating the Session, including legacy fields.
+    const ids = runnerIds == null ? undefined : this.validateRunnerIds(runnerIds);
+    const hosts = remoteRunnerHostIds == null ? undefined : this.validateSessionRemoteRunnerHosts(projectId, remoteRunnerHostIds);
+    if (runnerIds === null) return { runnerIds: undefined, remoteRunnerHostIds: undefined };
+    if (ids !== undefined) return { runnerIds: ids, remoteRunnerHostIds: ids.filter(id => id !== "local") };
+    if (remoteRunnerHostIds !== undefined) return { runnerIds: undefined, remoteRunnerHostIds: hosts };
+    return {};
+  }
+
+  private applySessionRunnerSelection(session: Session, patch: Pick<Session, "runnerIds" | "remoteRunnerHostIds">): void {
+    for (const name of ["runnerIds", "remoteRunnerHostIds"] as const) if (hasOwn(patch, name)) {
+      if (patch[name] === undefined) delete session[name];
+      else session[name] = patch[name];
+    }
   }
 
   assertSessionAllowsRunner(sessionId: string, runnerId: string): void {
@@ -5725,10 +5780,7 @@ export class SessionStore {
       }
       if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
       if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
-      const nextRunnerIds = runnerIds == null ? undefined : this.validateRunnerIds(runnerIds);
-      const nextRemoteRunnerHostIds = remoteRunnerHostIds === undefined || remoteRunnerHostIds === null
-        ? undefined
-        : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
+      const runnerSelection = this.sessionRunnerSelectionPatch(session.projectId, { runnerIds, remoteRunnerHostIds });
       session.settingsOverrides = nextSettings;
       if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
@@ -5750,17 +5802,7 @@ export class SessionStore {
       else if (specialistId !== undefined) session.specialistId = specialistId;
       // `null` drops the override so the Session follows the Project again; an
       // empty runnerIds array disables all Runner execution for this Session.
-      if (runnerIds === null) {
-        delete session.runnerIds;
-        delete session.remoteRunnerHostIds;
-      } else if (nextRunnerIds !== undefined) {
-        session.runnerIds = nextRunnerIds;
-        session.remoteRunnerHostIds = nextRunnerIds.filter((id) => id !== "local");
-      } else if (remoteRunnerHostIds !== undefined) {
-        delete session.runnerIds;
-        if (remoteRunnerHostIds === null) delete session.remoteRunnerHostIds;
-        else session.remoteRunnerHostIds = nextRemoteRunnerHostIds;
-      }
+      this.applySessionRunnerSelection(session, runnerSelection);
       session.updatedAt = new Date().toISOString();
       this.syncSessionCompatibility(session);
       await this.saveCatalog();
