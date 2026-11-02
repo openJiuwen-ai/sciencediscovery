@@ -135,7 +135,9 @@ try {
     const deadline = Date.now() + 5000; let saved;
     do { saved = await formal(); if (saved.enabled) break; await new Promise(done => setTimeout(done, 100)); } while (Date.now() < deadline);
     assert.equal(saved.enabled, true); assert.equal(saved.backend, baseline.backend);
-    await panel.getByText("Saved", { exact: true }).first().scrollIntoViewIfNeeded();
+    const savedRecord = page.locator(".conversation-configuration-record").filter({ hasText: "Configure workbench memory graph" }).last();
+    const summary = savedRecord.locator("summary").first(); await summary.scrollIntoViewIfNeeded();
+    assert.match(await summary.innerText(), /Saved/);
     await page.screenshot({ path: resolve(directory, "memory-saved.png"), fullPage: true, animations: "disabled", caret: "hide" });
   });
   featureGraphQueries = graphQueries; featureGraphDeletes = graphDeletes; outcome = "PASS";
