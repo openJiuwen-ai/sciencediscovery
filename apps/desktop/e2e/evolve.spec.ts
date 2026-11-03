@@ -196,3 +196,101 @@ test("a missing runtime is installed from the dialog before the form appears", a
     mock.calls.some((call) => call.method === "POST" && call.path === "/api/evolve/init"),
   ).toBe(true);
 });
+
+/** The answer the design skill writes at a checkpoint: one line of prose, then
+ *  the fenced block the desktop turns into a card. */
+function checkpointAnswer(over: Record<string, string | number> = {}): string {
+  const fields = {
+    pace: "confirm",
+    step: 1,
+    title: "什么算“更好”",
+    total: 4,
+    ...over,
+  };
+  return [
+    "评分卡已经定好，先停在这里。",
+    "",
+    "```evolve-checkpoint",
+    ...Object.entries(fields).map(([key, value]) => `${key}: ${value}`),
+    "---",
+    "**度量：** 压缩比",
+    "",
+    "**冻结：** 不许使用现成压缩库",
+    "```",
+  ].join("\n");
+}
+
+test("a checkpoint arrives as a card and its confirmation is sent as the reply", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    assistantAnswer: checkpointAnswer(),
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
+  await page.locator("#composer-textarea").press("Enter");
+
+  const card = page.locator(".evolve-checkpoint");
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute("data-step", "1");
+  await expect(card).toContainText("检查点 1/4");
+  await expect(card).toContainText("等待确认");
+  await expect(card).toContainText("什么算“更好”");
+  await expect(card).toContainText("压缩比");
+  // The fence is the card, not a code block printed above it.
+  await expect(page.locator("pre", { hasText: "evolve-checkpoint" })).toHaveCount(0);
+
+  await card.getByRole("button", { name: "确认，继续" }).click();
+  await expect.poll(() =>
+    mock.calls.some(
+      (call) =>
+        call.method === "POST" &&
+        call.path === "/api/sessions/session-1/messages" &&
+        call.body?.includes("确认，继续。") === true,
+    ),
+  ).toBe(true);
+});
+
+test("an automatic checkpoint is shown but asks for nothing", async ({ page }) => {
+  await installMockApi(page, {
+    assistantAnswer: checkpointAnswer({ pace: "auto", step: 3 }),
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  await page.locator("#composer-textarea").fill("/evolve-design --no-confirm 让压缩比更高");
+  await page.locator("#composer-textarea").press("Enter");
+
+  const card = page.locator(".evolve-checkpoint");
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute("data-pace", "auto");
+  await expect(card).toContainText("检查点 3/4");
+  await expect(card).toContainText("自动");
+  await expect(card.getByRole("button")).toHaveCount(0);
+});
+
+test("a checkpoint's change button fills the composer instead of sending", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    assistantAnswer: checkpointAnswer({ step: 2 }),
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
+  await page.locator("#composer-textarea").press("Enter");
+
+  const card = page.locator(".evolve-checkpoint");
+  await expect(card).toBeVisible();
+  // The buttons are live only once the reply that carries the card has ended.
+  const adjust = card.getByRole("button", { name: "需要调整" });
+  await expect(adjust).toBeEnabled();
+  await adjust.click();
+
+  await expect(page.locator("#composer-textarea")).toHaveValue("我想调整这一步：");
+  // A change is something the user is about to describe, so nothing was sent.
+  expect(
+    mock.calls.filter(
+      (call) => call.method === "POST" && call.path === "/api/sessions/session-1/messages",
+    ),
+  ).toHaveLength(1);
+});
