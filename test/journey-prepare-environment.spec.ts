@@ -115,7 +115,8 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
         timeout: 120_000,
       });
       await manager.getByRole("button", { name: "Create", exact: true }).click();
-      await createResponsePromise;
+      const createResponse = await createResponsePromise;
+      expect(createResponse.ok(), `environment creation failed: ${await createResponse.text()}`).toBe(true);
 
       const environmentCard = manager.locator(".environment-catalog article").filter({ hasText: environmentName });
       await expect(environmentCard).toBeVisible({ timeout: 60_000 });
