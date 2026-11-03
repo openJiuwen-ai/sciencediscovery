@@ -157,6 +157,7 @@ function aggregateProviderUsage(attempts: ProviderUsageBreakdown[]): ProviderUsa
       cacheWriteTokens: null,
       inputTokens: null,
       outputTokens: null,
+      reasoningTokens: null,
       totalTokens: null,
       usageStatus: "provider-not-reported",
     };
@@ -172,6 +173,7 @@ function aggregateProviderUsage(attempts: ProviderUsageBreakdown[]): ProviderUsa
     cacheWriteTokens: sum("cacheWriteTokens"),
     inputTokens: sum("inputTokens"),
     outputTokens: sum("outputTokens"),
+    reasoningTokens: sum("reasoningTokens"),
     totalTokens: sum("totalTokens"),
     usageStatus: "reported",
   };

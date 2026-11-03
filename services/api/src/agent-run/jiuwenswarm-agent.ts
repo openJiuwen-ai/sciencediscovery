@@ -871,7 +871,7 @@ class Transcript {
  * bridge reporter, so the Swarm event is their authoritative fallback.
  */
 class EventTranslator {
-  private total: { cacheReadTokens: number | null; cacheWriteTokens: number | null; inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
+  private total: { cacheReadTokens: number | null; cacheWriteTokens: number | null; inputTokens: number; outputTokens: number; reasoningTokens: number | null; totalTokens: number } | undefined;
 
   constructor(
     private readonly emit: Listener,
@@ -964,7 +964,8 @@ class EventTranslator {
         this.emit({ type: "response_settled", responseId: String(event.responseId), turn: Number(event.turn) });
         break;
       case "model.usage": {
-        const usage = event.usage as { cacheReadTokens?: number | null; cacheWriteTokens?: number | null; inputTokens: number; outputTokens: number; totalTokens: number };
+        const reported = event as unknown as { reasoningTokens?: number | null; usage: { cacheReadTokens?: number | null; cacheWriteTokens?: number | null; inputTokens: number; outputTokens: number; reasoningTokens?: number | null; totalTokens: number } };
+        const usage = { ...reported.usage, reasoningTokens: reported.reasoningTokens ?? reported.usage.reasoningTokens ?? null };
         this.emit({ type: "model_usage", usage, usageReported: true });
         this.add(usage);
         break;
@@ -975,13 +976,14 @@ class EventTranslator {
   }
 
   /** Sum of the model calls of the run; null stays null unless some call reported a number. */
-  private add(usage: { cacheReadTokens?: number | null; cacheWriteTokens?: number | null; inputTokens: number; outputTokens: number; totalTokens: number }): void {
+  private add(usage: { cacheReadTokens?: number | null; cacheWriteTokens?: number | null; inputTokens: number; outputTokens: number; reasoningTokens?: number | null; totalTokens: number }): void {
     const plus = (a: number | null, b: number | null | undefined) => (b === null || b === undefined ? a : (a ?? 0) + b);
-    const total = this.total ?? { cacheReadTokens: null, cacheWriteTokens: null, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    const total = this.total ?? { cacheReadTokens: null, cacheWriteTokens: null, inputTokens: 0, outputTokens: 0, reasoningTokens: null, totalTokens: 0 };
     // Key order matters: subagent summaries serialise this object into a tool result string.
     this.total = {
       inputTokens: total.inputTokens + usage.inputTokens,
       outputTokens: total.outputTokens + usage.outputTokens,
+      reasoningTokens: plus(total.reasoningTokens, usage.reasoningTokens),
       totalTokens: total.totalTokens + usage.totalTokens,
       cacheReadTokens: plus(total.cacheReadTokens, usage.cacheReadTokens),
       cacheWriteTokens: plus(total.cacheWriteTokens, usage.cacheWriteTokens),

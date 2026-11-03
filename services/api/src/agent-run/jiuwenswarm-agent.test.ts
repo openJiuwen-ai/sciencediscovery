@@ -320,12 +320,12 @@ test("reported token usage becomes model_usage events and one summed usage event
     assert.deepEqual(events.map((event) => event.type), ["model_usage", "model_usage", "usage"]);
     assert.deepEqual(events[0], {
       type: "model_usage", usageReported: true,
-      usage: { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null },
+      usage: { inputTokens: 700, outputTokens: 80, totalTokens: 780, cacheReadTokens: 0, cacheWriteTokens: null, reasoningTokens: 71 },
     });
     const summary = (events[2] as { usage: unknown }).usage;
-    assert.deepEqual(summary, { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 731, outputTokens: 87, totalTokens: 818 });
+    assert.deepEqual(summary, { cacheReadTokens: 10, cacheWriteTokens: null, inputTokens: 731, outputTokens: 87, reasoningTokens: 71, totalTokens: 818 });
     // The same key order the native agent's summary has: it is serialised into subagent results.
-    assert.deepEqual(Object.keys(summary as object), ["inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens"]);
+    assert.deepEqual(Object.keys(summary as object), ["inputTokens", "outputTokens", "reasoningTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens"]);
   } finally {
     await adapter.close();
   }
