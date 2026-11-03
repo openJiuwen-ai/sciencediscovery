@@ -204,7 +204,7 @@ export function LoadGate<T>({
   loaded: Loaded<T>;
 }) {
   if (loaded.error) {
-    return (
+    const failure = (
       <section className="settings-section">
         <div className="settings-empty is-error">
           <p>{loaded.error}</p>
@@ -213,6 +213,17 @@ export function LoadGate<T>({
           </button>
         </div>
       </section>
+    );
+    // A pane opened from its last answer keeps that answer when the refresh
+    // fails: a stale list under a visible failure is more useful than an empty
+    // page, and the retry sits right there. Without a value there is nothing
+    // to keep, so the failure is the whole page, exactly as before.
+    if (loaded.value === undefined) return failure;
+    return (
+      <>
+        {failure}
+        {children(loaded.value)}
+      </>
     );
   }
   if (loaded.value === undefined) {

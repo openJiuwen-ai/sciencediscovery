@@ -85,12 +85,13 @@ export function useLoaded<T>(load: () => Promise<T>, remember?: RememberedAnswer
         setState({ loading: false, value });
       },
       (reason: unknown) => {
-        if (!cancelled) {
-          setState({
-            error: reason instanceof Error ? reason.message : TEXT.errors.generic,
-            loading: false,
-          });
-        }
+        if (cancelled) return;
+        const error = reason instanceof Error ? reason.message : TEXT.errors.generic;
+        // Keep whatever is on screen. A pane opened from the cache has just
+        // painted the last answer; replacing it with the error section would
+        // throw that away exactly when it is most useful. `LoadGate` draws the
+        // failure above the stale content instead.
+        setState((current) => ({ error, loading: false, value: current.value }));
       },
     );
     return () => {
