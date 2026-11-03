@@ -2789,6 +2789,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           modelProfileId: run.modelId,
           modelProfileName: run.modelName,
           outputTokens: run.modelUsage?.outputTokens ?? null,
+          reasoningTokens: run.modelUsage?.reasoningTokens ?? null,
           ...(session?.projectId ? { projectId: session.projectId } : {}),
           sessionId: run.sessionId,
           startedAt,
