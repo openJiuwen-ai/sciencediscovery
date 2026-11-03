@@ -9,7 +9,7 @@ import { Type } from "typebox";
 
 import { ToolOutputGuard } from "./bounded-output.js";
 import { ToolLoopGuard } from "./loop-guard.js";
-import { sanitizeToolDetails, ToolRegistry } from "./registry.js";
+import { redactToolDetails, sanitizeToolDetails, ToolRegistry } from "./registry.js";
 import { ToolOutputStore } from "./tool-output-store.js";
 
 const resultMessage = (call: { id: string; name: string }, content: string, output?: { ref: string }) => ({
@@ -187,11 +187,65 @@ test("returned tool failures keep their result, metadata, and error flag through
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0]?.isError, true);
   assert.equal(recorded[0]?.content, content);
-  assert.equal(recorded[0]?.details, details, "the audit recorder keeps canonical details");
+  assert.deepEqual(recorded[0]?.details, { apiToken: "[redacted]", exitCode: 1, stderr: "[omitted]", stdout: "[omitted]" });
   assert.equal(observed.length, 1);
   assert.equal(observed[0]?.isError, true);
   assert.equal(observed[0]?.content, content);
   assert.deepEqual(observed[0]?.details, sanitizedDetails);
+});
+
+test("durable details redact nested credentials and payloads without truncating safe metadata", async () => {
+  const recorded: Array<{ details?: unknown }> = [];
+  const shared = { password: "nested-password", label: "shared" };
+  const details = {
+    token: "root-token",
+    records: Array.from({ length: 105 }, () => ({ metadata: "x".repeat(5_000), nested: [shared] })),
+    tail: { authorization: "header-secret", body: "private-payload" },
+    left: shared, right: shared,
+  };
+  const cyclic: Record<string, unknown> = { details };
+  cyclic.self = cyclic;
+  const registry = new ToolRegistry([{
+    name: "audit", label: "Audit", description: "Audit", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text", text: "done" }], details: cyclic }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(result); },
+  });
+  const result = await registry.execute({ id: "audit", name: "audit", args: {} }, new AbortController().signal);
+  const audit = recorded[0]?.details as { self: string; details: typeof details };
+  assert.equal(audit.self, "[circular]");
+  assert.equal(audit.details.records.length, 105);
+  assert.equal(audit.details.records[104]?.metadata.length, 5_000);
+  assert.equal(audit.details.records[104]?.nested[0]?.password, "[redacted]");
+  assert.deepEqual(audit.details.tail, { authorization: "[redacted]", body: "[omitted]" });
+  assert.deepEqual(audit.details.left, { password: "[redacted]", label: "shared" });
+  assert.deepEqual(audit.details.right, audit.details.left);
+  assert.doesNotMatch(JSON.stringify(audit), /root-token|nested-password|header-secret|private-payload/);
+  assert.equal(details.token, "root-token");
+  assert.equal(shared.password, "nested-password");
+  assert.equal(cyclic.self, cyclic);
+  assert.equal((result.details as { __detailsBoundary: { truncated: boolean } }).__detailsBoundary.truncated, true);
+});
+
+test("audit redaction preserves deep and wide metadata and normalizes non-JSON values", () => {
+  let nested: Record<string, unknown> = { token: "deep-secret", safe: "leaf" };
+  for (let index = 0; index < 12; index += 1) nested = { next: nested };
+  const wide = Object.fromEntries(Array.from({ length: 105 }, (_, index) => [`key${index}`, index]));
+  const ref = { pool: "data", digest: `sha256:${"a".repeat(64)}`, size: 1, mediaType: "text/plain" };
+  const result = redactToolDetails({ nested, wide, ref, date: new Date("2026-01-01Z"), invalid: new Date(NaN),
+    count: 42n, bytes: new Uint8Array(3), error: new Error("safe failure"), absent: undefined }) as Record<string, unknown>;
+  let leaf = result.nested as Record<string, unknown>;
+  for (let index = 0; index < 12; index += 1) leaf = leaf.next as Record<string, unknown>;
+  assert.deepEqual(leaf, { token: "[redacted]", safe: "leaf" });
+  assert.deepEqual(result.wide, wide);
+  assert.deepEqual(result.ref, ref);
+  assert.equal(result.date, "2026-01-01T00:00:00.000Z");
+  assert.equal(result.invalid, null);
+  assert.equal(result.count, "42");
+  assert.equal(result.bytes, "[binary:3]");
+  assert.deepEqual(result.error, { name: "Error", message: "safe failure" });
+  assert.equal(Object.hasOwn(result, "absent"), false);
 });
 
 test("error-looking output is successful unless the tool marks it as a failure", async () => {
