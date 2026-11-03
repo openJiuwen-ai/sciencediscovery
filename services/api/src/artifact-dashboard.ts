@@ -345,9 +345,21 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   const delimiter = subtype === ".csv" ? "," : "\t";
   const lines = splitDelimited(source, delimiter);
   if (!lines.length) return { columns: [], rows: [], totalRows: 0 };
+  const header = lines[0] ?? [];
+  const rows = lines.slice(1, maxRows + 1);
+  // The table is as wide as the header plus any extra cell a returned row
+  // carries: the renderer prints one <th> per column and one <td> per cell, so a
+  // short row is padded and an extra cell gets its own blank header instead of
+  // landing under the wrong one. Only the returned rows count, or a wide row
+  // beyond maxRows would add an empty column no returned row fills.
+  const width = rows.reduce((widest, row) => Math.max(widest, row.length), header.length);
   return {
-    columns: lines[0] ?? [],
-    rows: lines.slice(1, maxRows + 1),
+    columns: header.length === width
+      ? header
+      : [...header, ...Array.from({ length: width - header.length }, () => "")],
+    rows: rows.map((row) => (
+      row.length === width ? row : [...row, ...Array.from({ length: width - row.length }, () => "")]
+    )),
     totalRows: Math.max(0, lines.length - 1),
   };
 }
