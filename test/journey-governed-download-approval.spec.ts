@@ -156,7 +156,7 @@ test("researcher can allow a manual MCP download from its card", { tag: ["@mocke
   const stub = await scriptedModel([
     { arguments: { identifier: "2401.00001" }, tool: "mcp__arxiv__prepare_paper_download" },
     { text: "The candidate is ready; downloading it still needs your approval." },
-  ]);
+  ], { captureContext: true });
   // The connector call itself runs under "always allow" so the journey reaches
   // an unprepared candidate; consent is switched on afterwards, so the click
   // under test is the one that has to ask.
@@ -201,6 +201,13 @@ test("researcher can allow a manual MCP download from its card", { tag: ["@mocke
       expect(stub.calls[0]?.offeredTools ?? [], "the arXiv download tool must be offered to the run").toContain("mcp__arxiv__prepare_paper_download");
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 120_000);
       expect(terminal.status, terminal.error).toBe("completed");
+      const modelResults = stub.calls.flatMap((call) => call.toolResults ?? []);
+      const candidateResult = modelResults.find((result) => result.includes('"candidateId"'));
+      expect(candidateResult, "the model sees terms and estimated size before download consent").toBeDefined();
+      const modelView = JSON.parse(candidateResult!);
+      expect(modelView.candidates[0]).toMatchObject({ license: "CC0", attribution: "Offline fixture" });
+      expect(modelView.candidates[0].expectedBytes).toBeGreaterThan(0);
+      expect(candidateResult).not.toContain("sourceUrl");
       // An actionable card opens itself; the candidate's Prepare button is the
       // entry point the user is here for.
       await expect(prepare).toBeVisible();

@@ -228,6 +228,27 @@ test("durable details redact nested credentials and payloads without truncating 
   assert.equal((result.details as { __detailsBoundary: { truncated: boolean } }).__detailsBoundary.truncated, true);
 });
 
+test("pathologically deep tool details remain recordable without failing the turn", async () => {
+  const recorded: string[] = [];
+  let nested: unknown = { token: "deep-secret" };
+  for (let index = 0; index < 5_000; index += 1) nested = index % 2 ? { next: nested } : [nested];
+  const registry = new ToolRegistry([{
+    name: "deep", label: "Deep", description: "Deep", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text", text: "done" }], details: { nested, token: "root-secret", safe: "retained" } }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(JSON.stringify(result.details)); },
+  });
+  const result = await registry.execute({ id: "deep", name: "deep", args: {} }, new AbortController().signal);
+  assert.equal(result.isError, false);
+  assert.equal(result.content, "done");
+  assert.equal(recorded.length, 1);
+  assert.match(recorded[0]!, /\[max-depth\]/);
+  assert.match(recorded[0]!, /"safe":"retained"/);
+  assert.match(recorded[0]!, /"token":"\[redacted\]"/);
+  assert.doesNotMatch(recorded[0]!, /deep-secret|root-secret/);
+});
+
 test("audit redaction preserves deep and wide metadata and normalizes non-JSON values", () => {
   let nested: Record<string, unknown> = { token: "deep-secret", safe: "leaf" };
   for (let index = 0; index < 12; index += 1) nested = { next: nested };
