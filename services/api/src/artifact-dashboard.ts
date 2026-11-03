@@ -28,6 +28,8 @@ import type {
   Session,
 } from "@sciencediscovery/schema";
 
+import { randomUUID } from "node:crypto";
+
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { SessionStore } from "./store.js";
 
@@ -390,14 +392,23 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
  * JSON.parse rounds every integer beyond 2^53 to the nearest double, so a
  * document that stores a 64-bit identifier would preview with different digits
  * than it holds. Keep the stored literal: a linear scan rewrites exactly those
- * integer tokens to placeholder strings before parsing, and the renderers put
- * the digits back. Strings are copied verbatim, so a row that merely looks like
- * a big number is left alone.
+ * integer tokens to placeholders before parsing, and the renderers put the
+ * digits back. Strings are copied verbatim, so a row that merely looks like a
+ * big number is left alone.
+ *
+ * Each placeholder is minted for one document: a random uuid makes it
+ * unforgeable by text a user wrote, a counter keeps the placeholders inside one
+ * document distinct, and the surrounding U+0001/U+0002 controls cannot appear
+ * in a JSON string without an escape. The closing control also keeps one
+ * placeholder from being a prefix of another once the counter reaches 10.
  */
-const BIG_INTEGER_PLACEHOLDER = "sd-bigint:";
+export function createBigIntegerMarker(): string {
+  return `\u0001sd-bigint-${randomUUID()}:`;
+}
 
-function protectBigIntegers(source: string): { text: string; literals: Set<string> } {
-  const literals = new Set<string>();
+function protectBigIntegers(source: string): { text: string; placeholders: Map<string, string> } {
+  const marker = createBigIntegerMarker();
+  const placeholders = new Map<string, string>();
   let text = "";
   let index = 0;
   while (index < source.length) {
@@ -428,21 +439,37 @@ function protectBigIntegers(source: string): { text: string; literals: Set<strin
     const literal = number[0];
     const integer = !/[.eE]/.test(literal);
     if (integer && !Number.isSafeInteger(Number(literal))) {
-      literals.add(literal);
-      text += `"${BIG_INTEGER_PLACEHOLDER}${literal}"`;
+      const token = `${marker}${placeholders.size}\u0002`;
+      placeholders.set(token, literal);
+      // JSON.stringify adds the quotes and escapes the U+0001 prefix: an
+      // unescaped control character is not a valid JSON string.
+      text += JSON.stringify(token);
     } else {
       text += literal;
     }
     index += literal.length;
   }
-  return { text, literals };
+  return { text, placeholders };
 }
 
-/** Write the stored digits back over the placeholders a render path produced. */
-function restoreBigIntegers(text: string, literals: Set<string>): string {
-  if (literals.size === 0) return text;
-  return text.replace(/sd-bigint:(-?\d+)/g, (placeholder, digits: string) =>
-    literals.has(digits) ? digits : placeholder);
+/**
+ * Write the stored digits back over the placeholders a render path produced.
+ *
+ * A placeholder reaches the renderers in two shapes: `JSON.stringify` quotes it
+ * and escapes its U+0001 prefix (the raw JSON and source views), while the
+ * table renderer carries the bare string (String(value)). The quoted shape goes
+ * first so the digits become a JSON number again rather than a string holding
+ * the same digits. Only a placeholder this document minted is restored, and its
+ * exact text is known from the map, so user text is never rewritten.
+ */
+function restoreBigIntegers(text: string, placeholders: Map<string, string>): string {
+  if (placeholders.size === 0) return text;
+  let restored = text;
+  for (const [placeholder, literal] of placeholders) {
+    restored = restored.split(JSON.stringify(placeholder)).join(literal);
+    restored = restored.split(placeholder).join(literal);
+  }
+  return restored;
 }
 
 /** Apply the char budget to one text form of a JSON document. */
@@ -491,10 +518,12 @@ function buildJsonPreview(
         mode: "dataset-table",
         mediaSubtype: "json",
         ...table,
-        rows: table.rows.map((row) => row.map((cell) => restoreBigIntegers(cell, protectedJson.literals))),
+        rows: table.rows.map((row) => row.map((cell) => (
+          restoreBigIntegers(cell, protectedJson.placeholders)
+        ))),
         truncated: table.totalRows > maxRows,
         rawJson: jsonSourceOf(
-          restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.literals),
+          restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.placeholders),
           maxChars,
         ),
       };
@@ -505,7 +534,7 @@ function buildJsonPreview(
     kind: "json",
     mode: "json-source",
     ...jsonSourceOf(
-      valid ? restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.literals) : source,
+      valid ? restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.placeholders) : source,
       maxChars,
     ),
     parsed: valid,
