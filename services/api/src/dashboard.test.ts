@@ -1121,3 +1121,263 @@ test("json preview leaves safe numbers, strings and nested values unchanged", as
   assert.equal(nestedPreview.parsed, true);
   assert.equal(nestedPreview.source, JSON.stringify(nested, null, 2));
 });
+
+test("json preview keeps big integers as numbers in the raw and source views", async (context) => {
+  const fixture = await createFixture(context);
+  // JSON.stringify writes a placeholder back as a quoted string, so restoring
+  // only the bare shape would hand the client "9007199254740993" (a string)
+  // where the document holds 9007199254740993 (a number).
+  const tableVersion = await seedArtifact(fixture, {
+    content: '[{"sample_id":9007199254740993,"label":"x"}]',
+    kind: "json",
+    logicalName: "samples.json",
+    mediaType: "application/json",
+  });
+  const table = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, tableVersion,
+  );
+  if (table.mode !== "dataset-table") assert.fail(`unexpected mode: ${table.mode}`);
+  assert.deepEqual(table.rows, [["9007199254740993", "x"]], "the cell keeps the stored digits");
+  if (!table.rawJson) assert.fail("a json-backed table must carry rawJson");
+  assert.match(
+    table.rawJson.source,
+    /"sample_id": 9007199254740993/,
+    `rawJson must hold the number, not a string: ${table.rawJson.source}`,
+  );
+  assert.ok(
+    !table.rawJson.source.includes('"9007199254740993"'),
+    `rawJson must not quote the stored digits: ${table.rawJson.source}`,
+  );
+  // Compare the digit string itself: JSON.parse rounds both sides the same way,
+  // so only the text proves that the precise digits are the stored ones.
+  assert.equal(
+    /"sample_id":\s*(\d+)/.exec(table.rawJson.source)?.[1],
+    "9007199254740993",
+    `rawJson must carry the stored digit string: ${table.rawJson.source}`,
+  );
+
+  const objectVersion = await seedArtifact(fixture, {
+    content: '{"run_id":12345678901234567890}',
+    kind: "json",
+    logicalName: "run.json",
+    mediaType: "application/json",
+  });
+  const objectPreview = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, objectVersion,
+  );
+  if (objectPreview.mode !== "json-source") assert.fail(`unexpected mode: ${objectPreview.mode}`);
+  assert.equal(objectPreview.parsed, true);
+  assert.match(
+    objectPreview.source,
+    /"run_id": 12345678901234567890/,
+    `the source view must hold the number, not a string: ${objectPreview.source}`,
+  );
+  assert.ok(
+    !objectPreview.source.includes('"12345678901234567890"'),
+    `the source view must not quote the stored digits: ${objectPreview.source}`,
+  );
+  assert.equal(
+    /"run_id":\s*(\d+)/.exec(objectPreview.source)?.[1],
+    "12345678901234567890",
+    `the source view must carry the stored digit string: ${objectPreview.source}`,
+  );
+
+  // A scalar document has no surrounding syntax: the view is just the digits.
+  const bareVersion = await seedArtifact(fixture, {
+    content: "9007199254740993",
+    kind: "json",
+    logicalName: "scalar.json",
+    mediaType: "application/json",
+  });
+  const bare = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, bareVersion,
+  );
+  if (bare.mode !== "json-source") assert.fail(`unexpected mode: ${bare.mode}`);
+  assert.equal(bare.source, "9007199254740993", "a bare scalar must stay a bare number");
+  assert.equal(
+    /^(\d+)$/.exec(bare.source)?.[1],
+    "9007199254740993",
+    `a bare scalar is exactly the stored digits: ${bare.source}`,
+  );
+
+  const scalarArrayVersion = await seedArtifact(fixture, {
+    content: "[9007199254740993]",
+    kind: "json",
+    logicalName: "scalar-array.json",
+    mediaType: "application/json",
+  });
+  const scalarArray = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarArrayVersion,
+  );
+  if (scalarArray.mode !== "json-source") assert.fail(`unexpected mode: ${scalarArray.mode}`);
+  assert.equal(scalarArray.source, "[\n  9007199254740993\n]", "an array of one big integer stays numeric");
+  assert.equal(
+    /\[\s*(\d+)\s*\]/.exec(scalarArray.source)?.[1],
+    "9007199254740993",
+    `an array element is exactly the stored digits: ${scalarArray.source}`,
+  );
+});
+
+test("json preview leaves user text that spells an old placeholder untouched", async (context) => {
+  const fixture = await createFixture(context);
+  // `sd-bigint:` was an internal detail of an earlier revision; as far as a
+  // document is concerned it is ordinary text and must survive verbatim.
+  const textOnly = await seedArtifact(fixture, {
+    content: '{"note":"sd-bigint:9007199254740993"}',
+    kind: "json",
+    logicalName: "note.json",
+    mediaType: "application/json",
+  });
+  const noteOnly = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, textOnly,
+  );
+  if (noteOnly.mode !== "json-source") assert.fail(`unexpected mode: ${noteOnly.mode}`);
+  assert.match(
+    noteOnly.source,
+    /"note": "sd-bigint:9007199254740993"/,
+    `a note that spells the old prefix must not be rewritten: ${noteOnly.source}`,
+  );
+
+  // The same document beside a real big integer: restoring the number must not
+  // reach into the neighbouring string.
+  const mixed = await seedArtifact(fixture, {
+    content: '{"note":"sd-bigint:9007199254740993","id":9007199254740993}',
+    kind: "json",
+    logicalName: "mixed.json",
+    mediaType: "application/json",
+  });
+  const mixedPreview = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, mixed,
+  );
+  if (mixedPreview.mode !== "json-source") assert.fail(`unexpected mode: ${mixedPreview.mode}`);
+  assert.match(
+    mixedPreview.source,
+    /"note": "sd-bigint:9007199254740993"/,
+    `the note must keep every character: ${mixedPreview.source}`,
+  );
+  assert.match(
+    mixedPreview.source,
+    /"id": 9007199254740993/,
+    `the id must still be restored: ${mixedPreview.source}`,
+  );
+
+  // A document that writes the marker shape itself, with a token this call did
+  // not mint, is still ordinary text.
+  const fabricatedContent = '{"note":"\\u0001sd-bigint-00000000-0000-0000-0000-000000000000:0","id":9007199254740993}';
+  const fabricatedVersion = await seedArtifact(fixture, {
+    content: fabricatedContent,
+    kind: "json",
+    logicalName: "fabricated.json",
+    mediaType: "application/json",
+  });
+  const fabricated = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, fabricatedVersion,
+  );
+  if (fabricated.mode !== "json-source") assert.fail(`unexpected mode: ${fabricated.mode}`);
+  const fabricatedShown = JSON.parse(fabricated.source) as { id: number; note: string };
+  const fabricatedStored = JSON.parse(fabricatedContent) as { id: number; note: string };
+  assert.equal(fabricatedShown.note, fabricatedStored.note, "a token the call never minted must survive verbatim");
+  assert.match(fabricated.source, /"id": 9007199254740993/, `the real big integer is still restored: ${fabricated.source}`);
+});
+
+test("json preview round-trips a big integer document through JSON.parse", async (context) => {
+  const fixture = await createFixture(context);
+  // Parsing both sides pins the type of every value: digits rendered as a JSON
+  // string would compare as a string here, while the digits themselves survive
+  // the same double rounding on both sides.
+  const recordSource = '[{"sample_id":9007199254740993,"label":"x"}]';
+  const recordVersion = await seedArtifact(fixture, {
+    content: recordSource,
+    kind: "json",
+    logicalName: "round-trip.json",
+    mediaType: "application/json",
+  });
+  const record = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, recordVersion,
+  );
+  if (record.mode !== "dataset-table") assert.fail(`unexpected mode: ${record.mode}`);
+  if (!record.rawJson) assert.fail("a json-backed table must carry rawJson");
+  assert.deepEqual(
+    JSON.parse(record.rawJson.source),
+    JSON.parse(recordSource),
+    `rawJson must parse back to the stored document: ${record.rawJson.source}`,
+  );
+
+  const objectSource = '{"run_id":12345678901234567890,"nested":{"id":9007199254740993}}';
+  const objectVersion = await seedArtifact(fixture, {
+    content: objectSource,
+    kind: "json",
+    logicalName: "round-trip-object.json",
+    mediaType: "application/json",
+  });
+  const object = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, objectVersion,
+  );
+  if (object.mode !== "json-source") assert.fail(`unexpected mode: ${object.mode}`);
+  assert.deepEqual(
+    JSON.parse(object.source),
+    JSON.parse(objectSource),
+    `the source view must parse back to the stored document: ${object.source}`,
+  );
+
+  const scalarSource = "9007199254740993";
+  const scalarVersion = await seedArtifact(fixture, {
+    content: scalarSource,
+    kind: "json",
+    logicalName: "round-trip-scalar.json",
+    mediaType: "application/json",
+  });
+  const scalar = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarVersion,
+  );
+  if (scalar.mode !== "json-source") assert.fail(`unexpected mode: ${scalar.mode}`);
+  assert.deepEqual(JSON.parse(scalar.source), JSON.parse(scalarSource), "a bare scalar parses back as a number");
+});
+
+test("big integer placeholders are generated per document and are not the old prefix", async () => {
+  // The placeholder must be unpredictable: text a user wrote cannot be mistaken
+  // for a protected number, and two documents can never share one.
+  const dashboard = await import("./artifact-dashboard.js") as unknown as {
+    createBigIntegerMarker?: () => string;
+  };
+  assert.equal(
+    typeof dashboard.createBigIntegerMarker,
+    "function",
+    "artifact-dashboard must export createBigIntegerMarker so the contract is testable",
+  );
+  const first = dashboard.createBigIntegerMarker?.() ?? "";
+  const second = dashboard.createBigIntegerMarker?.() ?? "";
+  assert.notEqual(first, second, "each document must get its own placeholder");
+  assert.ok(!first.startsWith("sd-bigint:"), `the marker must not be the retired constant: ${first}`);
+  assert.ok(first.includes("\u0001"), `the marker must carry the U+0001 prefix: ${JSON.stringify(first)}`);
+});
+
+test("json preview keeps placeholders for many big integers apart", async (context) => {
+  const fixture = await createFixture(context);
+  // Twelve distinct literals make the placeholder counters share prefixes
+  // (1, 10, 11, 12): restoring one placeholder must never eat another.
+  const literals = Array.from({ length: 12 }, (_, index) => `900719925474${993 + index}`);
+  const source = `[${literals.map((value) => `{"id":${value}}`).join(",")}]`;
+  const version = await seedArtifact(fixture, {
+    content: source,
+    kind: "json",
+    logicalName: "many.json",
+    mediaType: "application/json",
+  });
+  const preview = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, version);
+  if (preview.mode !== "dataset-table") assert.fail(`unexpected mode: ${preview.mode}`);
+  assert.deepEqual(preview.rows, literals.map((value) => [value]), "every cell keeps its own digits");
+  if (!preview.rawJson) assert.fail("a json-backed table must carry rawJson");
+  for (const value of literals) {
+    assert.match(
+      preview.rawJson.source,
+      new RegExp(`"id": ${value}`),
+      `rawJson must keep ${value} as a number: ${preview.rawJson.source}`,
+    );
+  }
+  assert.deepEqual(
+    JSON.parse(preview.rawJson.source),
+    JSON.parse(source),
+    `rawJson must parse back to the stored document: ${preview.rawJson.source}`,
+  );
+});
