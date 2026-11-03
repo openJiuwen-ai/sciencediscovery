@@ -19,7 +19,7 @@ async function harness(context: { after(action: () => Promise<void>): void }) {
   const parent = resolve(process.cwd(), ".tmp"), root = resolve(parent, "mcp-delete-" + randomUUID()), store = new SessionStore(root); await store.load();
   context.after(async () => { store.close(); assert.ok(root.startsWith(parent + sep)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }); });
   const state = { refreshes: 0, cleanupAttempts: 0, failCleanup: false, submits: 0 }, registry = createMcpSourceRegistry();
-  const cleanup = async (id: string) => { state.cleanupAttempts++; if (state.failCleanup) throw new Error("synthetic local cleanup failure"); await store.removeCustomConnectorReferences(id); };
+  const cleanup = async (id: string) => { state.cleanupAttempts++; if (state.failCleanup) { throw new Error("synthetic local cleanup failure"); } await store.removeCustomConnectorReferences(id); };
   const manager = new CustomMcpServers(root, registry, ids => store.setCustomConnectorIds(ids), async () => { state.refreshes++; }, cleanup); await manager.load();
   const server = await manager.save({ name: "Owned deletion", transport: "http", enabled: true, url: "http://127.0.0.1:1/owned-never-called", headers: { Authorization: "synthetic-owned-secret" } });
   const other = await manager.save({ name: "Retained", transport: "stdio", enabled: false, command: "owned-never-executed", env: { SECRET: "synthetic-other-secret" } });
@@ -67,7 +67,7 @@ test("CFG-X03f: cleanup interruption is durable and load finishes cleanup withou
 
 test("CFG-X03f: lost response resolves one deletion; OAuth cleanup failure must be reconciled before applied", async context => {
   const h = await harness(context), clear = h.manager.oauth.clear.bind(h.manager.oauth); let failures = 1;
-  h.manager.oauth.clear = async id => { if (failures-- > 0) throw new Error("synthetic OAuth write failure"); await clear(id); };
+  h.manager.oauth.clear = async id => { if (failures-- > 0) { throw new Error("synthetic OAuth write failure"); } await clear(id); };
   const card = await h.propose(), saved = await h.framework.decide(h.session.id, card.id, approval(card)); assert.equal(saved.state, "applied"); assert.equal(h.state.submits, 1); assert.deepEqual(h.store.getSessionSettings(h.session.id).effective.enabledConnectorIds, [h.other.id]);
 });
 
