@@ -196,7 +196,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(tool).not.toHaveAttribute("open", "");
         await tool.locator(":scope > summary").click();
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
-        const output = tool.locator(".tool-io-section").filter({ hasText: "CARD_OK" }).filter({ hasNotText: "mkdir -p" });
+        const output = tool.locator(".tool-io-section > summary").filter({ hasText: /^stdout$/ }).locator("..");
         await output.locator(":scope > summary").click();
         await expect(output.locator("pre")).toContainText("CARD_OK");
         await expect(output.locator("pre")).toContainText("LIVE_EVIDENCE");
