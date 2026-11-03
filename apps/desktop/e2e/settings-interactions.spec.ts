@@ -528,6 +528,42 @@ test.describe("技能", () => {
     // is the one the package declared rather than the revision number.
     await expect(card.locator(".settings-detail")).toContainText("内置 · v1.0.0 · 4 个文件");
   });
+
+  test("switching back paints the remembered list before the refresh answers", async ({ page }) => {
+    const mock = await installMockApi(page, {
+      models: MODELS,
+      projectSettings: { effective: { enabledSkillIds: [] }, overrides: {}, sources: {} },
+      skills,
+    });
+    const dialog = await openSettings(page, "技能");
+    const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
+    await expect(card).toBeVisible();
+    const reads = () => mock.calls.filter((call) => call.method === "GET" && call.path === "/api/skills").length;
+    const before = reads();
+
+    // Hold the next read back. The pane is about to be remounted, and its
+    // answer must not be what puts the list on screen.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/skills", async (route) => {
+      await held;
+      await route.fallback();
+    });
+
+    await dialog.getByRole("button", { name: "专家", exact: true }).click();
+    await dialog.getByRole("button", { name: "技能", exact: true }).click();
+
+    // The last answer is painted at once; the loading frame a returning user
+    // used to read as "the app is slow" is not drawn.
+    await expect(card).toBeVisible();
+    await expect(dialog.getByText("正在读取…")).toHaveCount(0);
+
+    // And the read still went out behind it, so a remembered list is shown
+    // only until the server answers rather than instead of asking.
+    release();
+    await expect.poll(reads).toBeGreaterThan(before);
+    await expect(card).toBeVisible();
+  });
 });
 
 test.describe("模型", () => {
