@@ -139,6 +139,20 @@ test("anchors overlapping SubAgents independently and updates each in place", ()
   assert.doesNotMatch(html, /aria-expanded=/);
 });
 
+test("a reasoning-only SubAgent usage update is not discarded", () => {
+  const child = timelineSubagent("reasoning", "2026-01-01T00:00:01.000Z", {
+    usage: { inputTokens: 3, outputTokens: 4, reasoningTokens: null, totalTokens: 7 },
+  });
+  const entries = apply([
+    { subagent: child, type: "subagent.updated" },
+    { subagentId: child.id, type: "subagent.usage", usage: { inputTokens: 3, outputTokens: 4, reasoningTokens: 2, totalTokens: 7 } },
+  ]);
+
+  const group = entries.at(-1);
+  assert.equal(group?.type, "subagents");
+  assert.equal(group?.type === "subagents" && group.subagents[0]?.usage?.reasoningTokens, 2);
+});
+
 test("places non-overlapping SubAgents in separate timeline groups", () => {
   const laneA = timelineSubagent("lane-a", "2026-01-01T00:00:01.000Z");
   const completedA = {
