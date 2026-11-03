@@ -59,6 +59,7 @@ test("USG-011 usage formatting omits missing token fields instead of unreported"
   assert.equal(usageInOutLabel(bucket({ cacheReadTokens: 19_000 })), "in 10 · out 5");
   assert.doesNotMatch(usageInOutLabel(bucket({ cacheReadTokens: 19_000 })), /cache/);
   assert.equal(usageBreakdownLabel(bucket({ inputTokens: null, unreportedInvocationCount: 1 })), "out 5");
+  assert.match(usageBreakdownLabel(bucket({ reasoningTokens: 8 })), /reasoning 8/);
 });
 
 test("USG-012 usage page renders model drilldown, chart and inline/table usage", () => {

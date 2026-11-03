@@ -6716,6 +6716,7 @@ export class SessionStore {
       ...usage,
       cacheReadTokens: usage.cacheReadTokens ?? null,
       cacheWriteTokens: usage.cacheWriteTokens ?? null,
+      reasoningTokens: usage.reasoningTokens ?? null,
       outcome: usage.outcome ?? "completed",
       ...(usage.projectId || session?.projectId ? { projectId: usage.projectId ?? session?.projectId } : {}),
     };

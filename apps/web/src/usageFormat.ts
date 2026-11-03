@@ -44,20 +44,22 @@ export function usageInOutLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "
   return parts.join(" · ");
 }
 
-export function usageBreakdownLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "totalTokens" | "unreportedInvocationCount">): string {
+export function usageBreakdownLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "reasoningTokens" | "totalTokens" | "unreportedInvocationCount">): string {
   const parts: string[] = [];
   pushTokenPart(parts, "in", bucket.inputTokens);
   pushTokenPart(parts, "out", bucket.outputTokens);
+  pushTokenPart(parts, "reasoning", bucket.reasoningTokens);
   pushTokenPart(parts, "cache-read", bucket.cacheReadTokens);
   pushTokenPart(parts, "cache-write", bucket.cacheWriteTokens);
   return parts.join(" · ");
 }
 
 /** Per-message inline usage: omit fields the API did not return. */
-export function usageInlineLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "totalTokens" | "unreportedInvocationCount">): string {
+export function usageInlineLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "reasoningTokens" | "totalTokens" | "unreportedInvocationCount">): string {
   const parts: string[] = [];
   pushTokenPart(parts, "input", bucket.inputTokens);
   pushTokenPart(parts, "output", bucket.outputTokens);
+  pushTokenPart(parts, "reasoning", bucket.reasoningTokens);
   pushTokenPart(parts, "cache read", bucket.cacheReadTokens);
   pushTokenPart(parts, "cache write", bucket.cacheWriteTokens);
   return parts.join(" / ");
