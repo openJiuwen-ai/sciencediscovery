@@ -29,8 +29,11 @@
  * this host each flow measures in tens of milliseconds, so a budget of a second
  * is thirty times the observed cost. What it catches is an endpoint that starts
  * doing work proportional to the whole catalog, where the cost is seconds, not
- * milliseconds. Wall clocks differ between machines; the ratio guards in
- * `store-performance.test.ts` are what pin the marginal cost.
+ * milliseconds. Each flow is measured three times and the median is compared to
+ * the budget, because the UT layer runs four workers on one machine and a
+ * single GC pause must not decide a budget. Wall clocks still differ between
+ * machines; the ratio guards in `store-performance.test.ts` are what pin the
+ * marginal cost.
  */
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
@@ -119,11 +122,12 @@ interface Seeded {
 /** One Project whose first Session is the heavy one the tests switch to; a
  *  second, empty Session is the warm-up: the first request into a fresh API
  *  pays for lazy module loading, and that cost belongs to start-up, not to the
- *  switch being measured. */
+ *  switch being measured. `projects` exists so a deletion can be measured three
+ *  times on identical fixtures; it defaults to one. */
 async function seedFixture(
   context: TestContext,
   label: string,
-  plan: { messages: number; runs: number; files: number; sessions: number },
+  plan: { messages: number; runs: number; files: number; sessions: number; projects?: number },
 ): Promise<Seeded> {
   const root = resolve(process.cwd(), ".tmp", `performance-budget-${label}-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -135,17 +139,24 @@ async function seedFixture(
     model: "science-model",
     name: "Performance model",
   });
-  const project = await store.createProject("Performance", { modelId: model.id, reviewModelId: model.id });
-
   const now = new Date();
+  const projectIds: string[] = [];
   const sessionIds: string[] = [];
-  for (let index = 0; index < plan.sessions; index += 1) {
-    const session = await store.createSession(project.id, `Session ${index}`);
-    sessionIds.push(session.id);
-    await seedHistory(store, root, session.id, model, plan, now);
+  for (let projectIndex = 0; projectIndex < (plan.projects ?? 1); projectIndex += 1) {
+    // Project names are unique within the store, so more than one gets a suffix.
+    const project = await store.createProject(`Performance ${projectIndex + 1}`, {
+      modelId: model.id,
+      reviewModelId: model.id,
+    });
+    projectIds.push(project.id);
+    for (let index = 0; index < plan.sessions; index += 1) {
+      const session = await store.createSession(project.id, `Session ${index}`);
+      sessionIds.push(session.id);
+      await seedHistory(store, root, session.id, model, plan, now);
+    }
   }
   // The warm-up Session is outside the measured plan.
-  const warm = await store.createSession(project.id, "Warm");
+  const warm = await store.createSession(projectIds[0]!, "Warm");
   store.close();
 
   const runnerUrl = await startStubDeps(context);
@@ -227,12 +238,19 @@ async function seedHistory(
 
 /** The first request into a freshly started API pays for module loading and
  *  connection setup on this host (about 230 ms, whichever endpoint it is).
- *  A user switching Sessions has already paid it at start-up. */
+ *  A user switching Sessions has already paid it at start-up. Every endpoint a
+ *  budget measures is warmed here, so a case run on its own measures the flow
+ *  and not the lazy initialisation behind it. */
 async function warmUp(origin: string, sessionId: string): Promise<void> {
   await Promise.all([
     fetch(`${origin}/api/sessions/${sessionId}`, { headers: authorization }).then((response) => response.text()),
     fetch(`${origin}/api/sessions/${sessionId}/runs`, { headers: authorization }).then((response) => response.text()),
     fetch(`${origin}/api/sessions/${sessionId}/files`, { headers: authorization }).then((response) => response.text()),
+    fetch(`${origin}/api/skills`, { headers: authorization }).then((response) => response.text()),
+    fetch(`${origin}/api/mcp/sources`, { headers: authorization }).then((response) => response.text()),
+    fetch(`${origin}/api/specialists`, { headers: authorization }).then((response) => response.text()),
+    fetch(`${origin}/api/connectors`, { headers: authorization }).then((response) => response.text()),
+    fetch(`${origin}/api/settings`, { headers: authorization }).then((response) => response.text()),
   ]);
 }
 
@@ -240,6 +258,27 @@ async function timed(action: () => Promise<void>): Promise<number> {
   const started = process.hrtime.bigint();
   await action();
   return Number(process.hrtime.bigint() - started) / 1e6;
+}
+
+/** The median of three sequential attempts.
+ *
+ *  The UT layer runs up to four worker processes, so this file usually shares
+ *  the machine with three others; a single GC pause or IO stall would land
+ *  directly in the number and decide a budget on its own. Three warm round
+ *  trips cost milliseconds against a one-second budget, so the median is cheap
+ *  insurance — and it is a median rather than a minimum so that one lucky run
+ *  cannot hide a slow path either. The action must be repeatable: the deletion
+ *  cases seed three identical targets and measure each once. */
+async function medianTime(action: () => Promise<void>): Promise<number> {
+  const samples: number[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    samples.push(await timed(action));
+  }
+  return median(samples);
+}
+
+function median(samples: number[]): number {
+  return [...samples].sort((left, right) => left - right)[Math.floor(samples.length / 2)]!;
 }
 
 async function expectOk(response: Response): Promise<string> {
@@ -260,7 +299,7 @@ test("switching to a Session with a long history answers within a second", async
   let detail = "";
   let runs = "";
   let files = "";
-  const elapsed = await timed(async () => {
+  const elapsed = await medianTime(async () => {
     // The desktop reads all three at once when the user picks a Session.
     [detail, runs, files] = await Promise.all([
       fetch(`${origin}/api/sessions/${sessionId}`, { headers: authorization }).then(expectOk),
@@ -288,7 +327,7 @@ test("the Skills, MCP and specialists lists load within half a second", async (c
   let sources = "";
   let specialists = "";
   let connectors = "";
-  const elapsed = await timed(async () => {
+  const elapsed = await medianTime(async () => {
     // The settings page asks for these together.
     [skills, sources, specialists, connectors] = await Promise.all([
       fetch(`${origin}/api/skills`, { headers: authorization }).then(expectOk),
@@ -311,21 +350,26 @@ test("deleting a Session with a long history answers within a second", async (co
     files: FILES,
     messages: MESSAGES,
     runs: RUNS,
-    sessions: 1,
+    // Three identical Sessions: each is deleted once, and the median of the
+    // three is the measurement.
+    sessions: 3,
   });
-  const sessionId = sessionIds[0]!;
 
-  const elapsed = await timed(async () => {
-    await expectOk(await fetch(`${origin}/api/sessions/${sessionId}`, {
-      body: JSON.stringify({ confirmationId: sessionId }),
-      headers: { ...authorization, "content-type": "application/json" },
-      method: "DELETE",
+  const samples: number[] = [];
+  for (const sessionId of sessionIds) {
+    samples.push(await timed(async () => {
+      await expectOk(await fetch(`${origin}/api/sessions/${sessionId}`, {
+        body: JSON.stringify({ confirmationId: sessionId }),
+        headers: { ...authorization, "content-type": "application/json" },
+        method: "DELETE",
+      }));
     }));
-  });
-  assert.ok(elapsed < DELETE_BUDGET_MS, `deleting a Session took ${elapsed.toFixed(1)} ms`);
+    // The answer means the catalog committed, not merely that the request parsed.
+    assert.equal((await fetch(`${origin}/api/sessions/${sessionId}`, { headers: authorization })).status, 404);
+  }
 
-  // The answer means the catalog committed, not merely that the request parsed.
-  assert.equal((await fetch(`${origin}/api/sessions/${sessionId}`, { headers: authorization })).status, 404);
+  const elapsed = median(samples);
+  assert.ok(elapsed < DELETE_BUDGET_MS, `deleting a Session took ${elapsed.toFixed(1)} ms`);
 });
 
 test("deleting a Project with several heavy Sessions answers within a second and a half", async (context) => {
@@ -333,15 +377,21 @@ test("deleting a Project with several heavy Sessions answers within a second and
     files: 100,
     messages: 200,
     runs: 20,
+    // Three identical Projects, deleted one at a time: the median of the three
+    // is the measurement, as in the Session case above.
+    projects: 3,
     sessions: 6,
   });
-  const projects = await fetch(`${origin}/api/projects`, { headers: authorization })
+  const seeded = await fetch(`${origin}/api/projects`, { headers: authorization })
     .then((response) => expectOk(response))
     .then((body) => JSON.parse(body) as Array<{ id: string; name: string }>);
-  const project = projects.find((candidate) => candidate.name === "Performance");
-  assert.ok(project, "the seeded Project is listed");
+  const projects = seeded.filter((candidate) => candidate.name.startsWith("Performance"));
+  assert.equal(projects.length, 3, "the seeded Projects are listed");
 
-  const elapsed = await timed(async () => {
+  let deleted = 0;
+  const elapsed = await medianTime(async () => {
+    const project = projects[deleted]!;
+    deleted += 1;
     await expectOk(await fetch(`${origin}/api/projects/${project.id}`, {
       body: JSON.stringify({ confirmationId: project.id }),
       headers: { ...authorization, "content-type": "application/json" },
@@ -353,5 +403,7 @@ test("deleting a Project with several heavy Sessions answers within a second and
   const remaining = await fetch(`${origin}/api/projects`, { headers: authorization })
     .then((response) => expectOk(response))
     .then((body) => JSON.parse(body) as Array<{ id: string }>);
-  assert.ok(!remaining.some((candidate) => candidate.id === project.id), "the Project is gone");
+  for (const project of projects) {
+    assert.ok(!remaining.some((candidate) => candidate.id === project.id), "every seeded Project is gone");
+  }
 });
