@@ -64,8 +64,8 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
     const identifier = `2401.0000${scenario.endsWith("html") ? "2" : scenario.endsWith("broken") ? "3" : scenario.endsWith("forbidden") ? "4" : "1"}`;
     steps.push(tool("mcp__arxiv__prepare_paper_download", { identifier }), ({ results }) => {
       const response = find(results, "invocationId");
-      expect(response.artifacts).toHaveLength(1);
-      return tool("artifact_download", { mcpInvocationId: response.invocationId, candidateId: response.artifacts[0].id });
+      expect(response.candidates).toHaveLength(1);
+      return tool("artifact_download", { mcpInvocationId: response.invocationId, candidateId: response.candidates[0].candidateId });
     });
     steps.push(({ results }) => {
       const response = find(results, "planId");
@@ -106,10 +106,11 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
     steps.push(({ results }) => {
       expect(results.at(-1)).toContain("LR_SOURCE_B");
       if (scenario === "LR-14") {
-        const records = results.flatMap(objects).filter(o => o.identifier && o.primaryCitation);
-        expect(records.some(r => r.source === "arxiv" && r.structuredData?.effect === 1.25)).toBe(true);
-        expect(records.some(r => r.source === "pubmed" && r.structuredData?.effect === 0.8)).toBe(true);
-        for (const record of records) expect(record.primaryCitation.source).toBe(record.source);
+        const projections = results.flatMap(objects).filter(o => o.sourceId && (o.papers || o.records));
+        expect(projections.some(result => result.sourceId === "arxiv"
+          && result.papers?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_A")))).toBe(true);
+        expect(projections.some(result => result.sourceId === "pubmed"
+          && result.records?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_B")))).toBe(true);
       }
       return { text: scenario === "LR-09" ? "Alternative source returned synthetic evidence; failed source was not evidence." : "The same DOI has conflicting source estimates, 1.25 and 0.8. Preserve both citations; do not treat them as independent studies." };
     });
@@ -132,6 +133,16 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
     expect(stub.errors).toEqual([]);
     const invocations = await api(page, `/api/sessions/${fixture.session.id}/mcp/invocations`);
     expect(invocations.length).toBeGreaterThan(0);
+    if (scenario === "LR-14") {
+      const canonicalResults = await Promise.all(invocations
+        .map((invocation: Record<string, any>) => invocation.normalizedResult?.hash)
+        .filter((hash: unknown): hash is string => typeof hash === "string")
+        .map((hash: string) => api(page, `/api/cas/${hash}`)));
+      const records = objects(canonicalResults).filter(o => o.identifier && o.primaryCitation);
+      expect(records.some(r => r.source === "arxiv" && r.structuredData?.effect === 1.25)).toBe(true);
+      expect(records.some(r => r.source === "pubmed" && r.structuredData?.effect === 0.8)).toBe(true);
+      for (const record of records) expect(record.primaryCitation.source).toBe(record.source);
+    }
     await info.attach("source-audit", { body: JSON.stringify(invocations), contentType: "application/json" });
     if (pdf) {
       const jobs = await api(page, `/api/sessions/${fixture.session.id}/mcp/artifact-jobs`);
