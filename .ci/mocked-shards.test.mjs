@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
-import { mockedShards, assertMockedOrder, swarmChecks } from '../test/support/tagged/execution.mjs';
+import { mockedBatches, mockedShards, assertMockedOrder, swarmChecks } from '../test/support/tagged/execution.mjs';
 import { reconcileMocked } from './mocked-report.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
 const descriptor = (id, extra = []) => ({ id, source: `test/${id}.spec.ts`, sourceHash: 'a'.repeat(64), runner: 'playwright', tags: ['category:e2e', 'os:linux', 'arch:amd64', 'model:mock', ...extra] });
@@ -42,6 +42,20 @@ test('mocked partitions keep standard fixtures and select the same cases for eac
   assert.deepEqual(mockedShards(b).flatMap(s => s.checks), []);
   assert.throws(() => mockedShards(plan([descriptor('new')])), /MOCKED_ISOLATION_REQUIRED/);
   assert.throws(() => mockedShards(plan([descriptor('one', ['isolation:global']), { ...descriptor('two', ['isolation:session']), source: 'test/one.spec.ts' } ])), /SPLIT_MOCKED_FILE/);
+});
+
+test('the complete local run can execute every mocked partition serially', () => {
+  const p = plan(), batches = mockedBatches(p);
+  assert.deepEqual(batches.flatMap(batch => batch.entries.map(entry => entry.key)).sort(), p.entries.map(entry => entry.key).sort());
+  assert.equal(batches.filter(batch => batch.checks.length > 0).length, 1);
+  assert.deepEqual(batches.map(batch => batch.key), [
+    'mocked-literature', 'mocked-research', 'mocked-standard-config-fresh',
+    'mocked-standard-config-global', 'mocked-standard-journeys',
+  ]);
+  assert.ok(batches.find(batch => batch.key === 'mocked-standard-config-fresh').entries.every(entry => entry.tags.includes('isolation:fresh')));
+  assert.ok(batches.find(batch => batch.key === 'mocked-standard-config-global').entries.every(entry => entry.tags.includes('isolation:global')));
+  assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-config-global').checks, swarmChecks);
+  assert.deepEqual(batches.find(batch => batch.key === 'mocked-standard-journeys').checks, []);
 });
 
 test('fresh-library journeys precede global mutation and cannot run with multiple workers', () => {
