@@ -269,7 +269,10 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await viewer.locator(`.trajectory-event-list [data-entry-id="${target!.id}"]`).click();
       const output = viewer.locator(".trajectory-readable section").filter({ has: page.getByRole("heading", { name: "命令输出", exact: true }) }).locator("pre");
       await expect(output).toHaveText(`${target!.progress}\n\n---\n\n${target!.result}`);
-      expect(JSON.parse(target!.result)).toBeTruthy();
+      const [metadata, ...projectedOutput] = target!.result.split("\n");
+      expect(JSON.parse(metadata)).toMatchObject({ state: "completed", exitCode: 0 });
+      expect(projectedOutput.join("\n")).toContain("stdout:\nLIVE_EVIDENCE\nCARD_OK");
+      expect(projectedOutput.join("\n")).toContain("stderr:\nError: source unavailable, retrying");
       await viewer.getByRole("button", { name: "返回对话", exact: true }).click();
       await expect(viewer).toHaveCount(0);
       await expect(page.getByRole("button", { name: "轨迹", exact: true })).toBeVisible();

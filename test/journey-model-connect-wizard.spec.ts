@@ -251,12 +251,12 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(wizardSection).not.toContainText("推荐模型");
         await expect(wizardSection.locator(".wizard-model-preview")).toHaveCount(0);
 
-        // 「高级配置」单行完整显示：高度保持单行（折行会把按钮撑到两行高），宽度足以放下四个字
+        // 「高级配置」单行完整显示：高度保持单行，且内容没有被控件宽度裁切。
         const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
         const manualBox = await manualBtn.boundingBox();
         expect(manualBox).not.toBeNull();
         expect(manualBox!.height).toBeLessThanOrEqual(32);
-        expect(manualBox!.width).toBeGreaterThan(50);
+        expect(await manualBtn.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 
         // label 紧贴对应控件：API Key 与服务商的 label 下缘到输入框上缘的间距一眼能看出从属
         for (const controlId of ["wizard-api-key", "wizard-provider-select"]) {
