@@ -90,6 +90,7 @@ const REDACTED_DETAIL_KEY = /^(?:authorization|api[_-]?key|apikey|apiToken|authT
 const OMITTED_PAYLOAD_DETAIL_KEY = /^(?:stdout|stderr|raw[_-]?request|raw[_-]?response|raw[_-]?result|prompt|content|text|body|input|output|evaluatorSource)$/iu;
 
 interface DetailSanitizeState {
+  bounded: boolean;
   omitted: boolean;
   remainingChars: number;
   truncated: boolean;
@@ -110,6 +111,7 @@ function detailBoundary(state: DetailSanitizeState): Record<string, unknown> | u
 }
 
 function sanitizeStringDetail(value: string, state: DetailSanitizeState): string {
+  if (!state.bounded) return value;
   if (state.remainingChars <= 0) {
     state.truncated = true;
     return "[truncated]";
@@ -137,7 +139,7 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   if (typeof value === "string") return sanitizeStringDetail(value, state);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "symbol" || typeof value === "function" || value === undefined) return undefined;
-  if (depth >= MAX_DETAIL_DEPTH) {
+  if (state.bounded && depth >= MAX_DETAIL_DEPTH) {
     state.truncated = true;
     return "[max-depth]";
   }
@@ -153,7 +155,7 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
       && typeof ref.mediaType === "string" && ref.mediaType.length > 0
       && Object.keys(ref).length === 4) {
       const chars = ref.pool.length + ref.digest.length + ref.mediaType.length;
-      if (chars > state.remainingChars || ref.mediaType.length > MAX_DETAIL_STRING_CHARS) {
+      if (state.bounded && (chars > state.remainingChars || ref.mediaType.length > MAX_DETAIL_STRING_CHARS)) {
         state.truncated = true;
         return "[reference omitted: detail budget]";
       }
@@ -184,10 +186,10 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
     return `[binary:${value.byteLength}]`;
   }
   if (Array.isArray(value)) {
-    const values = value.slice(0, MAX_DETAIL_ARRAY_ITEMS)
+    const values = value.slice(0, state.bounded ? MAX_DETAIL_ARRAY_ITEMS : undefined)
       .map((item) => sanitizeDetailValue(item, state, depth + 1))
       .filter((item) => item !== undefined);
-    if (value.length > MAX_DETAIL_ARRAY_ITEMS) {
+    if (state.bounded && value.length > MAX_DETAIL_ARRAY_ITEMS) {
       state.truncated = true;
       values.push(`[${value.length - MAX_DETAIL_ARRAY_ITEMS} items omitted]`);
     }
@@ -196,11 +198,11 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   }
   const result: Record<string, unknown> = {};
   const entries = Object.entries(value as Record<string, unknown>);
-  for (const [entryKey, entryValue] of entries.slice(0, MAX_DETAIL_KEYS)) {
+  for (const [entryKey, entryValue] of entries.slice(0, state.bounded ? MAX_DETAIL_KEYS : undefined)) {
     const sanitized = sanitizeDetailValue(entryValue, state, depth + 1, entryKey);
     if (sanitized !== undefined) result[entryKey] = sanitized;
   }
-  if (entries.length > MAX_DETAIL_KEYS) {
+  if (state.bounded && entries.length > MAX_DETAIL_KEYS) {
     state.truncated = true;
     result.__omittedKeys = entries.length - MAX_DETAIL_KEYS;
   }
@@ -208,8 +210,17 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   return result;
 }
 
+/** Persist safe metadata without the interactive size limits. Raw payload
+ * fields remain omitted; full results belong in their governed source stores. */
+export function redactToolDetails(details: unknown): unknown {
+  return sanitizeDetailValue(details, {
+    bounded: false, omitted: false, remainingChars: Infinity, seen: new WeakSet<object>(), truncated: false,
+  }, 0);
+}
+
 export function sanitizeToolDetails(details: unknown): unknown {
   const state: DetailSanitizeState = {
+    bounded: true,
     omitted: false,
     remainingChars: MAX_DETAIL_TOTAL_CHARS,
     seen: new WeakSet<object>(),
@@ -389,9 +400,12 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         }
       }
     }
-    // The append-only audit recorder receives the canonical result. Interactive
-    // observers and return values still receive a bounded, redacted view.
-    if (this.options.recordResult) await this.options.recordResult({ call, content, ...(details !== undefined ? { details } : {}), isError, sequence });
+    // Audit records retain complete safe metadata, but must not persist raw
+    // credentials or payload fields. Interactive results also apply size limits.
+    if (this.options.recordResult) {
+      const auditDetails = details === undefined ? undefined : redactToolDetails(details);
+      await this.options.recordResult({ call, content, ...(auditDetails !== undefined ? { details: auditDetails } : {}), isError, sequence });
+    }
     const boundedDetails = details === undefined ? undefined : sanitizeToolDetails(details);
     if (this.options.outputGuard) {
       const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded);
