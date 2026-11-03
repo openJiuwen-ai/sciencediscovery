@@ -587,8 +587,8 @@ test("request errors after headers terminate the response without rejecting the 
   await mkdir(root, { recursive: true });
   const server = createApiServer(testConfig(root));
   context.after(async () => {
-    await closeApiServer(server);
     await removeTestRoot(root);
+    await closeApiServer(server);
   });
   // Capture escaped rejections so the unfixed handler fails an assertion instead
   // of crashing the test process with ERR_HTTP_HEADERS_SENT.
@@ -603,13 +603,20 @@ test("request errors after headers terminate the response without rejecting the 
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    headers: authorization, method: "POST", body: JSON.stringify({ name: "Streaming failure" }),
+  });
+  assert.equal(project.response.status, 201);
+  testApiOrigins.set(root, { origin, close: () => closeApiServer(server) });
   for (const code of [undefined, "ENOENT"]) {
     let writes = 0;
+    let contentType: string | number | string[] | undefined;
     server.prependOnceListener("request", (_request, response) => {
       const writeHead = response.writeHead.bind(response);
       context.mock.method(response, "writeHead", (...args: Parameters<typeof response.writeHead>) => {
         writes += 1;
         writeHead(...args);
+        contentType = response.getHeader("content-type");
         // Fault injection after a real response has committed its headers:
         // exercise both the unclassified and classified catch branches.
         response.flushHeaders();
@@ -617,10 +624,14 @@ test("request errors after headers terminate the response without rejecting the 
       });
     });
     await assert.rejects(async () => {
-      const response = await fetch(`${origin}/api/projects`, { headers: authorization, signal: AbortSignal.timeout(5_000) });
+      const response = await fetch(`${origin}/api/sessions/${project.body.firstSession.id}/messages`, {
+        headers: authorization, method: "POST", body: JSON.stringify({ content: "hello" }),
+        signal: AbortSignal.timeout(5_000),
+      });
       await response.text();
     });
     assert.deepEqual(escaped, [], "the async HTTP listener must not reject");
+    assert.match(String(contentType), /^text\/event-stream/, "inject the failure into the actual SSE response");
     assert.equal(writes, 1, "error handling must not write a second response header");
     const response = await fetch(`${origin}/api/projects`, { headers: authorization });
     assert.equal(response.status, 200, "the server must continue serving requests");
