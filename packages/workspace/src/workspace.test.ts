@@ -1352,7 +1352,7 @@ test("generic MCP envelopes with empty records retain their actionable data", as
   assert.equal(response.details, canonical);
 });
 
-test("MCP artifact plans retain the identifiers needed for governed download", async () => {
+test("MCP artifact plans retain download identifiers, terms and estimated size", async () => {
   const canonical = {
     sourceId: "arxiv", toolId: "prepare_paper_download", invocationId: "invocation-download",
     records: [], warnings: ["The PDF is a candidate and has not been read."],
@@ -1360,6 +1360,7 @@ test("MCP artifact plans retain the identifiers needed for governed download", a
       attribution: "arXiv", format: "pdf", id: "arxiv:2407.21787v3:pdf", kind: "paper",
       license: "provider terms", logicalName: "arxiv-2407.21787v3.pdf", mimeType: "application/pdf",
       sourceId: "arxiv", sourceRecordId: "2407.21787v3", sourceUrl: "https://arxiv.org/pdf/2407.21787v3",
+      expectedBytes: 240_000_000,
     }],
   };
   const tools = createWorkspaceTools(process.cwd(), {
@@ -1372,12 +1373,17 @@ test("MCP artifact plans retain the identifiers needed for governed download", a
   });
   const response = await tools.find((tool) => tool.name === "mcp__arxiv__prepare_paper_download")!.execute("call", {});
   const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-  const view = JSON.parse(text) as { invocationId: string; candidates: Array<{ candidateId: string }> };
+  const view = JSON.parse(text) as { invocationId: string; candidates: Array<{
+    candidateId: string; license: string; attribution: string; expectedBytes?: number;
+  }> };
   assert.equal(response.details, canonical);
   assert.equal(view.invocationId, "invocation-download");
   assert.equal(view.candidates[0]?.candidateId, "arxiv:2407.21787v3:pdf");
   assert.match(text, /artifact_download/);
-  assert.doesNotMatch(text, /sourceUrl|attribution|license/);
+  assert.equal(view.candidates[0]?.license, "provider terms");
+  assert.equal(view.candidates[0]?.attribution, "arXiv");
+  assert.equal(view.candidates[0]?.expectedBytes, 240_000_000);
+  assert.doesNotMatch(text, /sourceUrl|https:\/\/arxiv.org\/pdf/);
 });
 
 test("arXiv get_paper preserves a complete ordinary abstract in the model view", async () => {
