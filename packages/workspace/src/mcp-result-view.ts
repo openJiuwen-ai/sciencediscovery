@@ -90,24 +90,24 @@ function searchMetadata(result: JsonObject): JsonObject {
 function artifactView(result: JsonObject, sourceId: string, toolId: string): JsonObject | undefined {
   if (!Array.isArray(result.artifacts) || result.artifacts.length === 0) return undefined;
   const candidates = result.artifacts.map(object);
-  if (candidates.some((candidate) => !candidate)) return undefined;
+  if (!candidates.every((candidate): candidate is JsonObject => candidate !== undefined)) return undefined;
   const view: JsonObject = {
     sourceId,
     toolId,
     ...(typeof result.invocationId === "string" ? { invocationId: result.invocationId } : {}),
     warnings: uniqueStrings(result.warnings),
     candidates: candidates.slice(0, MCP_MODEL_ARRAY_MAX_ITEMS).map((candidate) => ({
-      candidateId: candidate!.id,
-      logicalName: candidate!.logicalName,
-      kind: candidate!.kind,
-      format: candidate!.format,
-      mimeType: candidate!.mimeType,
-      sourceId: candidate!.sourceId,
-      sourceRecordId: candidate!.sourceRecordId,
+      candidateId: candidate.id,
+      logicalName: candidate.logicalName,
+      kind: candidate.kind,
+      format: candidate.format,
+      mimeType: candidate.mimeType,
+      sourceId: candidate.sourceId,
+      sourceRecordId: candidate.sourceRecordId,
       // Preserve the terms and estimated cost needed before download consent.
-      license: candidate!.license,
-      attribution: candidate!.attribution,
-      ...(candidate!.expectedBytes !== undefined ? { expectedBytes: candidate!.expectedBytes } : {}),
+      license: candidate.license,
+      attribution: candidate.attribution,
+      ...(candidate.expectedBytes !== undefined ? { expectedBytes: candidate.expectedBytes } : {}),
     })),
     ...(candidates.length > MCP_MODEL_ARRAY_MAX_ITEMS
       ? { candidatesOmitted: candidates.length - MCP_MODEL_ARRAY_MAX_ITEMS, truncated: true } : {}),
@@ -179,9 +179,9 @@ function evidenceView(result: JsonObject, sourceId: string, toolId: string): Jso
   if (result.records.length === 0 && data?.returned === undefined
     && (data?.content !== undefined || data?.structuredContent !== undefined)) return undefined;
   const recordObjects = result.records.map(object);
-  if (recordObjects.some((record) => !record)) return undefined;
+  if (!recordObjects.every((record): record is JsonObject => record !== undefined)) return undefined;
   const recordsKey = sourceId === "arxiv" ? "papers" : "records";
-  const recordWarnings = recordObjects.flatMap((record) => record?.warnings ?? []);
+  const recordWarnings = recordObjects.flatMap((record) => record.warnings ?? []);
   const view: JsonObject = {
     sourceId,
     toolId,
@@ -189,7 +189,7 @@ function evidenceView(result: JsonObject, sourceId: string, toolId: string): Jso
     ...searchMetadata(result),
     returned: object(result.data)?.returned ?? recordObjects.length,
     warnings: uniqueStrings(result.warnings, recordWarnings),
-    [recordsKey]: recordObjects.map((record) => compactRecord(record!, sourceId === "arxiv" && toolId === "get_paper" ? 24_000 : undefined)),
+    [recordsKey]: recordObjects.map((record) => compactRecord(record, sourceId === "arxiv" && toolId === "get_paper" ? 24_000 : undefined)),
   };
   if (view.hasMore === true && !view.instruction) {
     view.instruction = "Use nextOffset to request the next result page.";
