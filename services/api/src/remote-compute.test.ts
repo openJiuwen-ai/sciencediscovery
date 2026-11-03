@@ -97,6 +97,20 @@ class SlowTransport implements RemoteTransport {
   }
 }
 
+/** A machine that takes the connection and then never answers. */
+class HangingTransport implements RemoteTransport {
+  calls = 0;
+
+  async open(): Promise<SshSession> {
+    throw new Error("Unexpected SSH connection");
+  }
+
+  async run(): Promise<RemoteCommandResult> {
+    this.calls += 1;
+    return await new Promise<RemoteCommandResult>(() => {});
+  }
+}
+
 const TRUSTED_KEY = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}` };
 
 /** Credentials the product holds itself; no ssh config, agent or known_hosts. */
@@ -522,6 +536,36 @@ test("a machine list answers before the machine does, and the answer lands behin
   await client.refreshReachability(sshHost);
   assert.equal(client.reachabilityNow(sshHost).state, "online", "the next render reads the landed answer");
   assert.equal(transport.calls.length, 1);
+});
+
+test("a machine that never answers is abandoned at the probe budget, not held forever", async (context) => {
+  const now = Date.parse("2026-09-12T00:00:00.000Z");
+  context.mock.timers.enable({ apis: ["setTimeout"], now });
+  const sshHost: RemoteHostTarget = {
+    alias: "hung-node", connectionKind: "ssh", createdAt: "2026-09-01T00:00:00.000Z",
+    id: "host-hung", runnerCommand: "sciencediscovery-runner", status: "ready",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+  const transport = new HangingTransport();
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
+
+  // The page render does not wait for the handshake, and neither does a second
+  // one: they read `checking` and join the one ask already in flight.
+  assert.equal(client.reachabilityNow(sshHost, now).state, "checking");
+  await Promise.resolve();
+  const inFlight = client.refreshReachability(sshHost, now);
+  assert.equal(client.reachabilityNow(sshHost, now).state, "checking");
+  assert.equal(transport.calls, 1, "a burst of renders opens one connection");
+
+  // One connect timeout must not become the page's timeout: the probe has its
+  // own budget, and it is the number the settings page waits at most.
+  context.mock.timers.tick(8_000);
+  const answer = await inFlight;
+  assert.equal(answer.state, "offline");
+  assert.match(answer.error ?? "", /did not answer within 8 s/u);
+  assert.equal(client.reachabilityNow(sshHost, now + 8_000).state, "offline",
+    "the next render reads the bounded answer instead of waiting again");
+  context.mock.timers.reset();
 });
 
 test("a machine this installation cannot reach at all is unknown, not offline", async () => {
