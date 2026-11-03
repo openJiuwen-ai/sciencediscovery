@@ -58,6 +58,16 @@ Push the branch to the operator's own fork, then open the pull request with
 
 ## Issues
 
+Always read the matching form under `.github/ISSUE_TEMPLATE/` before creating
+an issue, and use its title prefix and required body sections. `config.yml`
+is chooser configuration, not a form.
+
+`gh issue create` does not render a YAML issue form. The web form applies the
+template's labels and issue type, but through the API `--label` and `--type`
+require push access and are silently dropped without it. Pass them only when
+you have that access, and do not report them as applied unless the readback
+shows them.
+
 Search before creating. A duplicate title is not a new issue.
 
 ```bash
