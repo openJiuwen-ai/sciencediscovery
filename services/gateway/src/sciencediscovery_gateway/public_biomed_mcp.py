@@ -843,10 +843,17 @@ def _chembl_records(kind: str, items: list[dict[str, Any]]) -> list[dict[str, An
         identifier = str(item.get(f"{kind}_chembl_id") or item.get("activity_id") or item.get("molecule_chembl_id") or "")
         title = str(item.get("pref_name") or item.get("target_pref_name") or item.get("standard_type") or identifier)
         if identifier:
+            # ChEMBL retired explore/molecule; explore/compound is the live molecule page
+            # (compound_report_card is only a 301 hop to it).
+            template = (
+                "data_sources.chembl.molecule_template"
+                if kind == "molecule"
+                else "data_sources.chembl.explore_template"
+            )
             records.append(_record(
                 "chembl", identifier, title,
                 format_external_url(
-                    "data_sources.chembl.explore_template",
+                    template,
                     kind=kind,
                     identifier=identifier.removeprefix("CHEMBL"),
                 ),
