@@ -22,7 +22,7 @@ import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources, pythonPlugins } from './profiles.mjs';
 import { preflight } from './environment.mjs';
-import { executionConfig, realShards, mockedShards } from './execution.mjs';
+import { executionConfig, realShards, mockedShards, mockedBatches } from './execution.mjs';
 import { PROVIDER_FAULT, retryableProviderFaults, providerFaultRepeatFailed, providerFaultRepeatReportMissing } from './provider-fault.mjs';
 import { checks } from './checks.mjs';
 import { planGroups, schedule, utWorkers, SWARM, SWARM_TAG } from './scheduler.mjs';
@@ -368,11 +368,17 @@ export async function main(args=process.argv.slice(2)) {
       results.push({key:entry.key,outcome:code?'FAIL':'PASS',actualTarget:entry.target});
     }
     const batches=new Map();
-    for(const entry of plan.entries.filter(e=>e.runner==='playwright')) {
+    if(slice==='e2e'){
+      // The local unsharded entry point still owes the same isolation contract
+      // as the CI matrix. The standard-config job also has separate fresh and
+      // global execution batches because Playwright owns file collection order;
+      // a dedicated first stack is the enforceable pristine-library boundary.
+      for(const batch of mockedBatches(plan))batches.set(batch.key,batch);
+    } else for(const entry of plan.entries.filter(e=>e.runner==='playwright')) {
       const group=entry.tags.includes('model:real')?'real':'mocked';
       const fixture=entry.tags.find(tag=>tag.startsWith('fixture:'))?.split(':')[1]??'standard';
       const key=`${group}-${fixture}`;
-      const batch=batches.get(key)??{group,fixture,key,entries:[]};batch.entries.push(entry);batches.set(key,batch);
+      const batch=batches.get(key)??{group,fixture,key,entries:[],checks:[]};batch.entries.push(entry);batches.set(key,batch);
     }
     // One browser run of one batch. run-e2e.sh keeps writing its stack log,
     // journey reports and Playwright output where every reader already looks
@@ -384,7 +390,7 @@ export async function main(args=process.argv.slice(2)) {
         CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,instance),
         CI_RUNTIME_DIR:resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),batch.key),
         CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
-        ...(slice==='e2e'&&shard?{CI_E2E_SWARM_CHECKS:selectedShard.checks.length?'run':'off'}:{}),
+        ...(slice==='e2e'?{CI_E2E_SWARM_CHECKS:batch.checks.length?'run':'off'}:{}),
         SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath,
         E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
       return {code,data:existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined};

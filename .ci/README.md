@@ -149,8 +149,11 @@ checkout, service ports, runtime data, JiuwenSwarm home and reports; both
 standard workers still use the **standard fixture**, not a research fixture.
 Backend selection is independent and does not change the 70 browser identities.
 
-`pnpm ci:e2e -- --shard standard-config` runs one partition; without `--shard`,
-the local entry point retains the full serial suite and one supplemental pass.
+`pnpm ci:e2e -- --shard standard-config` runs one evidence partition. Its
+fresh-library cases execute first in a dedicated pristine stack, followed by
+the global configuration cases and the single supplemental pass in a second
+stack. Without `--shard`, the local entry point retains the full serial suite
+and the same isolation boundary.
 Concurrent local invocations must use prepared dependencies and distinct
 `CI_RESULTS_DIR`, `CI_RUNTIME_DIR`, API/legacy/Runner/evolve/memory-graph ports.
 On one host, let each JiuwenSwarm instance finish binding its automatically
