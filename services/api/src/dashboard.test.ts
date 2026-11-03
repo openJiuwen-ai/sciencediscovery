@@ -529,6 +529,64 @@ test("a json artifact of empty objects renders as JSON text, not an empty grid",
   }
 });
 
+// -- A leading UTF-8 BOM is an encoding marker in JSON too -------------------
+
+test("a JSON document saved with a UTF-8 BOM still previews as a table", async (context) => {
+  const fixture = await createFixture(context);
+  // Excel and several exporters write a byte-order mark in front of the payload.
+  // The delimited path strips exactly one leading U+FEFF as an encoding marker
+  // (splitDelimited), so a JSON document must be read under the same rule before
+  // JSON.parse: otherwise a valid document is reported as unparseable text.
+  const bom = "\uFEFF";
+  const shape = (payload: { mode: string; parsed?: boolean }): string =>
+    `BOM-JSON ${JSON.stringify({ mode: payload.mode, parsed: payload.parsed })}`;
+
+  const records = [
+    { name: "af3", value: 1 },
+    { name: "af3b", value: 2 },
+  ];
+  const tableVersion = await seedArtifact(fixture, {
+    content: bom + JSON.stringify(records),
+    kind: "json",
+    logicalName: "bom-records.json",
+    mediaType: "application/json",
+  });
+  const table = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, tableVersion,
+  );
+  if (table.mode !== "dataset-table") assert.fail(shape(table));
+  assert.deepEqual(table.columns, ["name", "value"]);
+  assert.deepEqual(table.rows, [["af3", "1"], ["af3b", "2"]]);
+
+  const scalarVersion = await seedArtifact(fixture, {
+    content: `${bom}{"name":"af3"}`,
+    kind: "json",
+    logicalName: "bom-scalar.json",
+    mediaType: "application/json",
+  });
+  const scalar = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarVersion,
+  );
+  if (scalar.mode !== "json-source") assert.fail(shape(scalar));
+  assert.equal(scalar.parsed, true, "a leading U+FEFF is an encoding marker, not part of the document");
+  assert.equal(scalar.source, JSON.stringify({ name: "af3" }, null, 2));
+  assert.equal(scalar.totalChars, scalar.source.length);
+
+  // Only the leading marker is syntax: a U+FEFF inside a string is ordinary data.
+  const interiorVersion = await seedArtifact(fixture, {
+    content: `${bom}${JSON.stringify({ note: "A\uFEFFB" })}`,
+    kind: "json",
+    logicalName: "bom-interior.json",
+    mediaType: "application/json",
+  });
+  const interior = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, interiorVersion,
+  );
+  if (interior.mode !== "json-source") assert.fail(shape(interior));
+  assert.equal(interior.parsed, true);
+  assert.ok(interior.source.includes("A\uFEFFB"), "a U+FEFF inside a string must survive the strip");
+});
+
 test("json preview keeps the table when record arrays carry keys", async (context) => {
   const fixture = await createFixture(context);
   const vid = await seedArtifact(fixture, {
