@@ -582,6 +582,55 @@ test("closing the API server drains active connections before closing the MCP tr
   assert.equal(closeCalls, 1);
 });
 
+test("request errors after headers terminate the response without rejecting the HTTP listener", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `sent-headers-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const server = createApiServer(testConfig(root));
+  context.after(async () => {
+    await closeApiServer(server);
+    await removeTestRoot(root);
+  });
+  // Capture escaped rejections so the unfixed handler fails an assertion instead
+  // of crashing the test process with ERR_HTTP_HEADERS_SENT.
+  const handler = server.listeners("request")[0]!;
+  const escaped: unknown[] = [];
+  server.removeListener("request", handler);
+  server.on("request", (request, response) => {
+    void Promise.resolve(handler(request, response)).catch((error) => {
+      escaped.push(error);
+      response.destroy();
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  for (const code of [undefined, "ENOENT"]) {
+    let writes = 0;
+    server.prependOnceListener("request", (_request, response) => {
+      const writeHead = response.writeHead.bind(response);
+      context.mock.method(response, "writeHead", (...args: Parameters<typeof response.writeHead>) => {
+        writes += 1;
+        writeHead(...args);
+        // Fault injection after a real response has committed its headers:
+        // exercise both the unclassified and classified catch branches.
+        response.flushHeaders();
+        throw Object.assign(new Error("injected streaming failure"), { code });
+      });
+    });
+    await assert.rejects(async () => {
+      const response = await fetch(`${origin}/api/projects`, { headers: authorization, signal: AbortSignal.timeout(5_000) });
+      await response.text();
+    });
+    assert.deepEqual(escaped, [], "the async HTTP listener must not reject");
+    assert.equal(writes, 1, "error handling must not write a second response header");
+    const response = await fetch(`${origin}/api/projects`, { headers: authorization });
+    assert.equal(response.status, 200, "the server must continue serving requests");
+    await response.json();
+  }
+  const missing = await fetch(`${origin}/api/not-a-route`, { headers: authorization });
+  assert.equal(missing.status, 404);
+  assert.match(await missing.text(), /Not found/);
+});
+
 async function startScientificTestApi(
   context: TestContext,
   dataDir: string,
