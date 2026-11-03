@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { commitsOnEnter } from "../app/ime-enter.js";
 import { TEXT } from "../text.js";
 
 interface Props {
@@ -106,7 +107,7 @@ export function PromptDialog({
                 setProblem(undefined);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter") submit();
+                if (commitsOnEnter(event)) submit();
               }}
               placeholder={placeholder}
               type="text"

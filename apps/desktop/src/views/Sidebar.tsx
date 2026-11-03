@@ -14,6 +14,7 @@
 
 import { useState } from "react";
 
+import { commitsOnEnter } from "../app/ime-enter.js";
 import { projectWithName } from "../app/project-name.js";
 import type { WorkspaceActions } from "../app/use-workspace.js";
 import { byRecency, untitled } from "../app/session-order.js";
@@ -161,7 +162,7 @@ export function Sidebar({
       onBlur={() => commitRename(next)}
       onChange={(event) => editValue(event.target.value)}
       onKeyDown={(event) => {
-        if (event.key === "Enter") commitRename(next);
+        if (commitsOnEnter(event)) commitRename(next);
         if (event.key === "Escape") setRenaming(undefined);
       }}
       value={next.value}

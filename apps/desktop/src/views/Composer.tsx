@@ -25,6 +25,7 @@ import type {
   Specialist,
 } from "../api/types.js";
 import type { Attachment } from "../app/attachments.js";
+import { commitsOnEnter } from "../app/ime-enter.js";
 import type { LandingCategory, LandingSeed } from "../app/landing.js";
 import { skillChoices, skillDraft, skillMark, slashQuery } from "../app/slash.js";
 import { TEXT } from "../text.js";
@@ -833,14 +834,14 @@ export function Composer({
                 setDismissed(true);
                 return;
               }
-              if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+              if (event.key === "Tab" || (commitsOnEnter(event) && !event.shiftKey)) {
                 event.preventDefault();
                 const choice = choices[active];
                 if (choice !== undefined) pickSkill(choice);
                 return;
               }
             }
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (commitsOnEnter(event) && !event.shiftKey) {
               event.preventDefault();
               submit();
             }
