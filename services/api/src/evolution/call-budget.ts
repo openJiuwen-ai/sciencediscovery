@@ -25,7 +25,7 @@
 
 import type { EvolveAlgorithm, EvolveBudgetPlan, ModelProfile } from "@sciencediscovery/schema";
 
-import { endpointCanDisableThinking } from "./model-thinking.js";
+import { thinkingControlGap, type ThinkingControlGap } from "./model-thinking.js";
 
 /**
  * Floor for one mutation call, which depends on the *thinking* setting far more
@@ -81,13 +81,24 @@ export function perCallCeiling(algorithm: EvolveAlgorithm, thinking: "enabled" |
  * detail. Returns the numbers `create_evolve_run` will apply rather than a
  * second opinion about them.
  */
+/** What to tell the user when "thinking off" cannot be honored, by cause. */
+const UNHONORED: Record<ThinkingControlGap, string> = {
+  "declared-unsupported": "this model is recorded as not honoring thinking control, so "
+    + "\"thinking off\" cannot be relied on; the run budgets for reasoning",
+  "model-unsupported": "this model is recorded without thinking control, so "
+    + "\"thinking off\" cannot be relied on; the run budgets for reasoning",
+  "no-control-field": "this endpoint's API variant has no thinking-control field, so "
+    + "\"thinking off\" is accepted and ignored; the run budgets for reasoning",
+  "no-disabled-mode": "this endpoint's API variant exposes a thinking control but no "
+    + "\"disabled\" mode, so the run cannot turn thinking off; it budgets for reasoning",
+};
+
 export function describeEvolveBudget(
   model: ModelProfile | undefined,
   requestedThinking: "enabled" | "disabled" = "disabled",
 ): EvolveBudgetPlan {
-  const effective = requestedThinking === "disabled" && !endpointCanDisableThinking(model)
-    ? "enabled"
-    : requestedThinking;
+  const gap = requestedThinking === "disabled" ? thinkingControlGap(model) : undefined;
+  const effective = gap ? "enabled" : requestedThinking;
   return {
     maxSeconds: DEFAULT_MAX_SECONDS,
     model: model?.name ?? null,
@@ -95,13 +106,9 @@ export function describeEvolveBudget(
       openevolve: perCallCeiling("openevolve", effective),
       puct: perCallCeiling("puct", effective),
     },
-    thinking: effective === requestedThinking
-      ? { effective }
-      : {
-        effective,
-        note: "this endpoint's API variant has no thinking-control field, so "
-          + "\"thinking off\" is accepted and ignored; the run budgets for reasoning",
-      },
+    thinking: gap
+      ? { effective, note: UNHONORED[gap] }
+      : { effective },
     totalTokenCap: DEFAULT_MAX_TOKENS,
   };
 }

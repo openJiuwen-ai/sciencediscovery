@@ -54,6 +54,25 @@ test("an endpoint that cannot stop thinking is priced as a thinking run", () => 
   assert.equal(plan.totalTokenCap, 600_000);
 });
 
+test("a dialect with a toggle but no disabled stop is priced as a thinking run", () => {
+  // The PR's original defect, on a dialect that maps a field: the request is
+  // heard, but there is no stop to ask for.
+  for (const apiVariant of ["gemini", "kimi-k3"] as const) {
+    const plan = describeEvolveBudget(model({ apiVariant }));
+    assert.equal(plan.thinking.effective, "enabled");
+    assert.match(plan.thinking.note ?? "", /no "disabled" mode/);
+    assert.deepEqual(plan.perCallCeiling, { openevolve: 128_000, puct: 96_000 });
+  }
+});
+
+test("the note names the cause when the profile says thinking cannot be stopped", () => {
+  // A fact is the operator's own statement; saying "no thinking-control field"
+  // would point them at a dialect when the thing they configured is the cause.
+  const plan = describeEvolveBudget(model({ apiVariant: "deepseek", facts: { thinkingSupported: false } }));
+  assert.equal(plan.thinking.effective, "enabled");
+  assert.match(plan.thinking.note ?? "", /recorded as not honoring thinking control/);
+});
+
 test("an endpoint that can stop thinking is priced as asked", () => {
   const plan = describeEvolveBudget(model({ apiVariant: "deepseek" }));
   assert.equal(plan.thinking.effective, "disabled");

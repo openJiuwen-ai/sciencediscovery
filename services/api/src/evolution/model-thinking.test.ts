@@ -43,6 +43,20 @@ test("a dialect that maps the toggle carries it", () => {
   assert.equal(endpointCanDisableThinking(model({ apiProtocol: "openai-responses" })), true);
 });
 
+test("a toggle without a disabled stop cannot be told to stop", () => {
+  // `gemini` and `kimi-k3` map a thinking field, but their only stops are
+  // "auto" and "enabled": sending "disabled" leaves thinking on exactly as a
+  // dialect with no field does, so a budget must not price them quiet.
+  assert.equal(endpointCanDisableThinking(model({ apiVariant: "gemini" })), false);
+  assert.equal(endpointCanDisableThinking(model({ apiVariant: "kimi-k3" })), false);
+
+  // The operator's own statement still wins: they know this endpoint.
+  assert.equal(
+    endpointCanDisableThinking(model({ apiVariant: "gemini", facts: { thinkingSupported: true } })),
+    true,
+  );
+});
+
 test("a stated fact overrides what the dialect suggests", () => {
   // The operator of a gateway is the only one who knows whether it honors the
   // field; the fact is theirs to state either way.

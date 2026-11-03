@@ -69,10 +69,11 @@ export interface ProposalDeps {
   orchestrator: EvolveOrchestrator;
   sessionId: string;
   /** Whether the run's model can be told to stop thinking. False when its API
-   *  variant has no thinking-control field: the request is accepted and
-   *  ignored, and the quiet ceiling then pays for reasoning nobody sees.
-   *  Absent means the caller could not tell, so the proposal's setting stands. */
-  thinkingSupported?: boolean;
+   *  variant has no thinking-control field, or a toggle but no "disabled" stop:
+   *  the request is accepted and ignored, and the quiet ceiling then pays for
+   *  reasoning nobody sees. Required: a caller that cannot answer must not
+   *  silently inherit the quiet ceiling. */
+  thinkingSupported: boolean;
 }
 
 /** The gate is what every candidate's score is measured on — the number the
