@@ -161,6 +161,28 @@ test("the budget the checkpoint shows is the budget the run starts with", async 
   }
 });
 
+test("the pace the user chose is recorded on the run, and silence means confirm", async () => {
+  let seen: EvolveGoal | undefined;
+  const world = () => deps({
+    orchestrator: {
+      probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async ({ goal }: { goal: EvolveGoal }) => {
+        seen = goal;
+        return { id: "run-1", status: "running" };
+      },
+    } as never,
+  });
+
+  await startProposedRun(proposal(), world().deps);
+  // An agent that has not heard the flag — or an older client that cannot send
+  // one — gets the pace every run had before the switch existed.
+  assert.equal(seen?.checkpointMode, "confirm");
+
+  await startProposedRun(proposal({ checkpointMode: "auto" }), world().deps);
+  assert.equal(seen?.checkpointMode, "auto");
+});
+
 test("the probe's own verdict reaches the agent unwrapped", async () => {
   // A 4xx from the sidecar is what the probe found, not a failure to probe.
   // Wrapping it in "the probe could not be carried out" contradicts the

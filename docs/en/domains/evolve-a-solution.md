@@ -34,6 +34,8 @@ Typing `/evolve-design` opens an algorithm picker. Select **PUCT**, then send th
 
 You can also specify the algorithm explicitly: `/evolve-design --algorithm puct …`.
 
+Add `--no-confirm` to let the design and the launch run in one pass, without pausing at each checkpoint; the desktop create dialog exposes the same choice as a switch. The checkpoints are still reported in the conversation, and a missing dataset or an ambiguous goal still stops and asks.
+
 The picker also offers OpenEvolve for population-based search. This tutorial uses PUCT throughout; see [Program evolution](../core/evolve.md) for the differences between the engines.
 
 ## Confirm requirements

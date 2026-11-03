@@ -373,6 +373,11 @@ async function assembleGoal(
   return {
     algorithm,
     baselineProgramCas: startCas,
+    // Stated, never omitted: the run card reads this to say whether the search
+    // was designed with pauses, and an absent field would only be read as
+    // "confirm" anyway. An older client that never sends it keeps the old
+    // behaviour.
+    checkpointMode: proposal.checkpointMode ?? "confirm",
     budget: {
       candidateTimeoutSeconds: 180,
       expansions: proposal.expansions,
