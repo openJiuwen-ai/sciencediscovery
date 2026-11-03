@@ -408,10 +408,16 @@ function buildJsonPreview(
   maxRows: number,
   maxChars: number,
 ): ArtifactPreviewPayload {
+  // The delimited path treats a leading U+FEFF as an encoding marker rather than
+  // as the first character of its first cell (splitDelimited), and a JSON file
+  // written by a Windows tool carries the same marker. Apply that same rule here
+  // before parsing: exactly one U+FEFF, and only at the start, or a valid
+  // document is reported as unparseable text.
+  const document = source.startsWith("\uFEFF") ? source.slice(1) : source;
   let parsed: unknown;
   let valid = true;
   try {
-    parsed = JSON.parse(source) as unknown;
+    parsed = JSON.parse(document) as unknown;
   } catch {
     valid = false;
   }
