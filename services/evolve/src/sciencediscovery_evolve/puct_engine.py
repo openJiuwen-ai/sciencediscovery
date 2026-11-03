@@ -276,6 +276,20 @@ class PuctEngine:
                 baseline_text=spec.baseline_code,
                 baseline=baseline,
             )
+        elif mode == "npu_job":
+            from .npu_job import NpuJobError, npu_client_from_spec, npu_domain
+
+            try:
+                client = npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+            except NpuJobError as error:
+                raise _Refusal(str(error)) from error
+            domain = npu_domain(
+                scorecard=spec.scorecard,
+                baseline_code=spec.baseline_code,
+                client=client,
+                statement=str(spec.statement or ""),
+                should_stop=should_stop,
+            )
         else:
             domain = self._domain_factory(
                 scorecard=spec.scorecard,
@@ -288,6 +302,9 @@ class PuctEngine:
                 should_stop=should_stop,
             )
 
+        from .direction import bound_domain
+
+        domain = bound_domain(domain, spec.baseline_code, spec.scorecard.get("direction"))
         tree = PuctTree(c_puct=float(spec.options.get("c_puct", 1.0)),
                         prior_exponent=_prior_exponent(spec.options),
                         candidate_limit=spec.expansions)
@@ -874,6 +891,22 @@ def _refuse_unrunnable(spec: RunSpec) -> None:
         # exists for — a prompt, an abstract, a protocol.
         if not spec.rubric.strip():
             raise _Refusal("this scorecard is graded by a model but was given no rubric")
+        return
+    if _mode_of(spec) == "npu_job":
+        # The Runner executes this. The local sandbox is not a substitute, and
+        # an unnamed edit surface would make the search a free rewrite.
+        direction = spec.scorecard.get("direction")
+        editable = direction.get("editable") if isinstance(direction, dict) else None
+        if not isinstance(editable, list) or not editable:
+            raise _Refusal(
+                "an NPU search has to name the editable fields; it does not freely rewrite the program"
+            )
+        from .npu_job import NpuJobError, npu_client_from_spec
+
+        try:
+            npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+        except NpuJobError as error:
+            raise _Refusal(str(error)) from error
         return
     if spec.packages:
         # Before anything is measured, and refused rather than warned about: a
