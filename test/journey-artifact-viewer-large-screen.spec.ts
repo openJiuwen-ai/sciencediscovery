@@ -63,6 +63,10 @@ async function dialogGeometry(dialog: Locator) {
     const paragraph = panel.querySelector<HTMLElement>(".markdown-body > p");
     const table = panel.querySelector<HTMLElement>(".markdown-table-scroll");
     const source = panel.querySelector<HTMLElement>("pre.artifact-source-preview");
+    const paragraphStyle = paragraph ? getComputedStyle(paragraph) : undefined;
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (context && paragraphStyle) context.font = paragraphStyle.font;
     return {
       bodyClientHeight: body?.clientHeight ?? 0,
       bodyClientWidth: body?.clientWidth ?? 0,
@@ -70,6 +74,7 @@ async function dialogGeometry(dialog: Locator) {
       height: Math.round(rect.height),
       left: Math.round(rect.left),
       paragraphWidth: Math.round(paragraph?.getBoundingClientRect().width ?? 0),
+      paragraphCharacterWidth: context?.measureText("0").width ?? 0,
       sourceHeight: Math.round(source?.getBoundingClientRect().height ?? 0),
       sourceWidth: Math.round(source?.getBoundingClientRect().width ?? 0),
       tableWidth: Math.round(table?.getBoundingClientRect().width ?? 0),
@@ -199,7 +204,10 @@ test("J309 大屏打开产物时查看器放大且正文保持可读宽度", { t
         await expect(dialog.locator(".markdown-table-scroll")).toBeVisible();
         const geometry = await expectViewerSize(page, dialog, { width: 1920, height: 1080 });
         await expectHeaderControls(dialog);
-        expect(geometry.paragraphWidth, "a paragraph keeps a readable measure instead of spanning the window").toBeLessThanOrEqual(760);
+        expect(
+          geometry.paragraphWidth,
+          "a paragraph keeps a readable 76ch measure instead of spanning the window",
+        ).toBeLessThanOrEqual(geometry.paragraphCharacterWidth * 76 + 1);
         expect(geometry.paragraphWidth).toBeGreaterThan(500);
         expect(geometry.tableWidth, "the wide table uses the window width").toBeGreaterThan(1500);
       },
