@@ -1296,7 +1296,7 @@ async function streamAnthropicTurn(
     toolCalls,
     streamDiagnostics,
     completionObserved,
-    ...(inputTokens !== undefined && outputTokens !== undefined && Number.isSafeInteger(inputTokens + outputTokens) ? { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens } } : {}),
+    ...(inputTokens !== undefined && outputTokens !== undefined && Number.isSafeInteger(inputTokens + outputTokens) ? { usage: { inputTokens, outputTokens, reasoningTokens: null, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens } } : {}),
     ...(truncated ? { truncated } : {}),
   };
 }
