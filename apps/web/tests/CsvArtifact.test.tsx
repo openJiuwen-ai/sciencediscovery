@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
-import { rowsToCsv, tableToCsv } from "../src/csv-artifact/chart-spec/filters.js";
+import { tableToCsv } from "../src/csv-artifact/chart-spec/filters.js";
 import {
   createCustomSpec,
   createDefaultSpecs,
@@ -39,6 +39,7 @@ import { MAX_CSV_DATA_ROWS, parseCsvText } from "../src/csv-artifact/csv/inferCs
 import { setActiveLocale } from "../src/i18n/index.js";
 import { csvSourceRecord } from "../src/csv-artifact/source.js";
 import {
+  type ColumnProfile,
   DEFAULT_CHART_DRAG_MODE,
   type DataSourceRecord,
 } from "../src/csv-artifact/types.js";
@@ -194,6 +195,15 @@ test("exports an unnamed overflow column with an empty header name", () => {
   const [widerHeader, widerRow] = tableToCsv(wider.rows, wider.columns).split(/\r?\n/);
   assert.equal(widerHeader, "a,b,,");
   assert.equal(widerRow, "1,2,3,4");
+});
+
+test("neutralizes a spreadsheet formula in an exported header name", () => {
+  const table = parse("formula-header.csv", "=SUM(1),b\n1,2\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["=SUM(1)", "b"]);
+  const csv = tableToCsv(table.rows, table.columns);
+  assert.ok(csv.startsWith("'=SUM(1),b"), csv);
+  assert.equal(csv.split(/\r?\n/)[1], "1,2");
 });
 
 test("imports one million numeric records, excluding the header and blank lines", () => {
@@ -733,10 +743,18 @@ test("selected scatter points keep their configured base size", () => {
 });
 
 test("CSV export neutralizes spreadsheet formulas", () => {
-  const csv = rowsToCsv([
+  const column: ColumnProfile = {
+    examples: [],
+    id: "label",
+    kind: "text",
+    label: "label",
+    missingCount: 0,
+    uniqueCount: 2,
+  };
+  const csv = tableToCsv([
     { __rowId: "unsafe", label: "=HYPERLINK(\"https://example.invalid\")" },
     { __rowId: "whitespace", label: " \t@SUM(1,2)" },
-  ], ["label"]);
+  ], [column]);
   assert.match(csv, /'=HYPERLINK/);
   assert.match(csv, /' \t@SUM/);
 });
