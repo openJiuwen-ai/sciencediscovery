@@ -83,6 +83,7 @@ import type {
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
   McpInvocation,
+  ModelApiProtocol,
   ModelFactOverrides,
   ModelUsageAnalyticsFilters,
   ModelUsageAnalyticsSummary,
@@ -214,7 +215,7 @@ import {
 } from "@sciencediscovery/executor";
 import { toolOutputStoreRoot } from "@sciencediscovery/tools";
 import { normalizeWorkspaceRelativePath } from "@sciencediscovery/workspace";
-import { summarizeGlobalModelUsage, summarizeModelUsage, summarizeModelUsageAnalytics } from "./model-usage.js";
+import { summarizeGlobalModelUsage, summarizeModelUsage, summarizeModelUsageAnalytics, usageDialectOf } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
 import { BUILTIN_SPECIALISTS } from "@sciencediscovery/specialist";
@@ -6778,6 +6779,13 @@ export class SessionStore {
     return pricingByModelProfileId;
   }
 
+  /** Dialect per profile, because recorded counts are shaped by it and cost depends on that shape. */
+  private modelUsageProtocolByProfileId(): Map<string, ModelApiProtocol> {
+    const protocolByModelProfileId = new Map<string, ModelApiProtocol>();
+    for (const model of this.catalog.models) protocolByModelProfileId.set(model.id, usageDialectOf(model));
+    return protocolByModelProfileId;
+  }
+
   async getModelUsageAnalyticsSummary(filters: ModelUsageAnalyticsFilters = {}): Promise<ModelUsageAnalyticsSummary> {
     const projectNameById = new Map(this.catalog.projects.map((project) => [project.id, project.name]));
     const projectIdBySessionId = new Map(this.catalog.sessions.map((session) => [session.id, session.projectId]));
@@ -6786,6 +6794,7 @@ export class SessionStore {
       pricingByModelProfileId: this.modelUsagePricingByProfileId(),
       projectIdBySessionId,
       projectNameById,
+      protocolByModelProfileId: this.modelUsageProtocolByProfileId(),
       sessionTitleById,
     }, filters);
   }
