@@ -67,19 +67,16 @@ export function columnHeaderName(column: ColumnProfile): string {
   return column.label === "" ? "" : column.id;
 }
 
-export function rowsToCsv(rows: DataRow[], fields: string[]): string {
-  return Papa.unparse(rows.map((row) =>
-    Object.fromEntries(fields.map((field) => [field, safeSpreadsheetValue(row[field] ?? null)]))));
-}
-
 /**
  * Export CSV with the same header text the grid shows: a real column keeps its
  * field id, an unnamed column exports an empty header while its values stay in
  * place. Papa's object-record form keys columns by name, so two unnamed columns
- * would collide; build the header row and the body positionally instead.
+ * would collide; build the header row and the body positionally instead. Header
+ * names reach Papa as data values, so they get the same formula neutralization
+ * as the cells.
  */
 export function tableToCsv(rows: readonly DataRow[], columns: readonly ColumnProfile[]): string {
-  const header = Papa.unparse([columns.map((column) => columnHeaderName(column))]);
+  const header = Papa.unparse([columns.map((column) => safeSpreadsheetValue(columnHeaderName(column)))]);
   if (!rows.length) return header;
   const body = Papa.unparse(rows.map((row) =>
     columns.map((column) => safeSpreadsheetValue(row[column.id] ?? null))));
