@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { ConfigurationCapabilityId, ConfigurationValues, SkillLibrary } from "@sciencediscovery/schema";
-import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import { canonical as canonicalConfiguration, ConfigurationError } from "./configuration/validation.js";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
@@ -2310,6 +2310,25 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpProxySource: () => Array<{ id: string; name: string; connectorIds: string[] }> = () => [];
+
+  setConfigurationMcpProxySource(source: () => Array<{ id: string; name: string; connectorIds: string[] }>): void {
+    this.configurationMcpProxySource = source;
+  }
+
+  /** Only safe catalog facts: never resolve/decrypt proxy URLs or MCP credentials. */
+  configurationMcpProxySettings() {
+    return { defaultPolicy: this.catalog.proxyDefaultPolicy,
+      services: this.configurationMcpProxySource().map(service => ({ ...structuredClone(service), proxyPolicy: this.mcpProxyPolicy(service.id) })).sort((a,b) => a.id.localeCompare(b.id)),
+      servers: this.catalog.proxyServers.map(server => ({ id: server.id, name: server.name, kind: server.kind })) };
+  }
+
+  applyMcpProxyConfigurationSync(serverId: string, proxyPolicy: ProxyPolicy): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("MCP proxy configuration requires the shared transaction");
+    if (!this.configurationMcpProxySource().some(service => service.id === serverId)) throw new Error("The selected MCP server is no longer registered");
+    this.applyMcpProxyPoliciesSync({ policies: { ...this.catalog.mcpProxyPolicies, [serverId]: proxyPolicy } });
+  }
+
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
 
   setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
@@ -2410,6 +2429,30 @@ export class SessionStore {
       runnerSelection: version([project.runnerIds, project.remoteRunnerHostIds, session.runnerIds, session.remoteRunnerHostIds]),
       registeredRunners: version([this.catalog.remoteHosts, this.getConfigurationDatabase().prepare("SELECT host_id, kind, encrypted_value FROM remote_host_credentials ORDER BY host_id, kind").all()]),
     };
+    if (capabilityId === "proxy.resources") systemVersions = {
+      proxyCatalog: version(this.configurationProxyResources()),
+      proxyCredentials: version(this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()),
+      proxyReferences: version([this.catalog.proxyDefaultPolicy, this.catalog.webSettings.proxyPolicy,
+        this.catalog.sandboxNetworkSettings.egressProxyPolicy, this.catalog.models.map(item => [item.id, item.proxyPolicy]),
+        this.catalog.providers.map(item => [item.id, item.proxyPolicy]), this.catalog.mcpProxyPolicies]),
+    };
+    if (capabilityId === "proxy.default") systemVersions = { proxyDefaults: version([
+      this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+      this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all(),
+    ]) };
+    if (capabilityId === "proxy.provider") {
+      const selected = this.getProvider(target), children = this.catalog.models.filter(model => model.providerId === target);
+      const credentialIds = new Set([providerSecretKey(target), ...children.map(model => model.id)]);
+      systemVersions = { providerProxy: version([selected, children, secretRows.filter(row => credentialIds.has(String(row.model_id))),
+        this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+        this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]) };
+    }
+    if (capabilityId === "proxy.mcp") {
+      const selected = this.configurationMcpProxySettings().services.find(service => service.id === target);
+      systemVersions = { mcpProxy: version([selected, selected ? this.configurationConnectorRevisionSource?.(selected.connectorIds) ?? "not_attached" : "unavailable",
+        this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+        this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]) };
+    }
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2438,6 +2481,10 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "proxy.resources" ? { proxyResources: this.configurationProxyResources() } : {}),
+        ...(capabilityId === "proxy.default" ? { proxyDefaults: this.configurationProxyDefaults() } : {}),
+        ...(capabilityId === "proxy.provider" ? { providerProxySettings: this.configurationProviderProxySettings() } : {}),
+        ...(capabilityId === "proxy.mcp" ? { mcpProxySettings: this.configurationMcpProxySettings() } : {}),
       },
     };
   }
@@ -2708,7 +2755,7 @@ export class SessionStore {
     if (!policy.startsWith("proxy:")) return;
     const serverId = policy.slice("proxy:".length);
     if (!this.getProxyServer(serverId)) {
-      throw new Error(`${field} references an unknown proxy server`);
+      throw new SessionStoreHttpError(`${field} references an unknown proxy server`, 400);
     }
   }
 
@@ -2784,15 +2831,48 @@ export class SessionStore {
     return row ? this.decryptModelApiToken(`proxy:${serverId}`, row.encrypted_url) : undefined;
   }
 
-  async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
+  /** Safe selection metadata, without decrypting URLs or inspecting proxy environment values. */
+  configurationProxyDefaults() {
+    return { defaultPolicy: this.catalog.proxyDefaultPolicy, servers: this.catalog.proxyServers.map(({ id, name, kind }) => ({ id, name, kind })) };
+  }
+
+  applyProxyDefaultConfigurationSync(defaultPolicy: string): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    this.applyProxyDefaultPolicy({ defaultPolicy });
+  }
+
+  private applyProxyDefaultPolicy(input: unknown): void {
     const defaultPolicy = normalizeProxyDefaultPolicy(isRecord(input) ? input.defaultPolicy : undefined);
     this.assertProxyPolicyKnown(defaultPolicy, "defaultPolicy");
     this.catalog.proxyDefaultPolicy = defaultPolicy;
+  }
+
+  async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
+    this.applyProxyDefaultPolicy(input);
     await this.saveCatalog();
     return this.getProxySettings();
   }
 
-  async createProxyServer(input: CreateProxyServerRequest): Promise<ProxyServer> {
+  /** Metadata only: never reads proxy environment values or decrypts a URL. */
+  configurationProxyResources(): ProxyServer[] {
+    return this.catalog.proxyServers.map(({ id, name, kind, hasUrl, createdAt, updatedAt }) => ({ id, name, kind, hasUrl, createdAt, updatedAt }));
+  }
+
+  applyProxyResourceConfigurationSync(operation: "create" | "update" | "delete", serverId: string | undefined,
+    input: UpdateProxyServerRequest): string {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Proxy configuration requires the shared transaction");
+    if (operation === "create") {
+      if (!input.kind || !input.name) throw new Error("Proxy kind and name are required");
+      return this.createProxyServerSync({ ...input, kind: input.kind, name: input.name }).id;
+    }
+    if (!serverId) throw new Error("Proxy server is required");
+    if (operation === "update") this.updateProxyServerSync(serverId, input);
+    else if (operation === "delete") this.deleteProxyServerSync(serverId);
+    else throw new Error("Unsupported proxy resource operation");
+    return serverId;
+  }
+
+  private createProxyServerSync(input: CreateProxyServerRequest): ProxyServer {
     if (!PROXY_SERVER_KINDS.has(input.kind)) {
       throw new Error("Proxy server kind must be custom_url, environment, or system");
     }
@@ -2814,11 +2894,16 @@ export class SessionStore {
     const now = new Date().toISOString();
     const server: ProxyServer = { createdAt: now, hasUrl, id, kind: input.kind, name, updatedAt: now };
     this.catalog.proxyServers.push(server);
+    return server;
+  }
+
+  async createProxyServer(input: CreateProxyServerRequest): Promise<ProxyServer> {
+    const server = this.createProxyServerSync(input);
     await this.saveCatalog();
     return this.proxyServerSettingsView(server);
   }
 
-  async updateProxyServer(serverId: string, input: UpdateProxyServerRequest): Promise<ProxyServer> {
+  private updateProxyServerSync(serverId: string, input: UpdateProxyServerRequest): ProxyServer {
     const server = this.getProxyServer(serverId);
     if (!server) throw new Error("Proxy server not found");
     // Validate the complete request before mutating catalog state so a mixed
@@ -2847,11 +2932,16 @@ export class SessionStore {
     server.name = nextName;
     server.kind = nextKind;
     server.updatedAt = new Date().toISOString();
+    return server;
+  }
+
+  async updateProxyServer(serverId: string, input: UpdateProxyServerRequest): Promise<ProxyServer> {
+    const server = this.updateProxyServerSync(serverId, input);
     await this.saveCatalog();
     return this.proxyServerSettingsView(server);
   }
 
-  async deleteProxyServer(serverId: string): Promise<void> {
+  private deleteProxyServerSync(serverId: string): void {
     const server = this.getProxyServer(serverId);
     if (!server) throw new Error("Proxy server not found");
     const policy: ProxyPolicy = `proxy:${serverId}`;
@@ -2864,14 +2954,21 @@ export class SessionStore {
     for (const model of this.catalog.models) {
       if (model.proxyPolicy === policy) references.push(`model "${model.name}"`);
     }
+    for (const provider of this.catalog.providers) {
+      if (provider.proxyPolicy === policy) references.push(`provider "${provider.name}"`);
+    }
     for (const [mcpServerId, mcpPolicy] of Object.entries(this.catalog.mcpProxyPolicies)) {
       if (mcpPolicy === policy) references.push(`MCP server "${mcpServerId}"`);
     }
     if (references.length) {
-      throw new Error(`Proxy server is referenced by ${references.join(", ")} and cannot be deleted`);
+      throw new ConfigurationError("PROXY_RESOURCE_IN_USE", `Proxy server is referenced by ${references.join(", ")} and cannot be deleted`, 409);
     }
     this.database?.prepare("DELETE FROM proxy_server_secrets WHERE server_id = ?").run(serverId);
     this.catalog.proxyServers = this.catalog.proxyServers.filter((entry) => entry.id !== serverId);
+  }
+
+  async deleteProxyServer(serverId: string): Promise<void> {
+    this.deleteProxyServerSync(serverId);
     await this.saveCatalog();
   }
 
@@ -2884,14 +2981,19 @@ export class SessionStore {
     return this.catalog.mcpProxyPolicies[serverId] ?? "inherit";
   }
 
-  async updateMcpProxyPolicies(input: UpdateMcpProxyPoliciesRequest): Promise<McpProxyPolicies> {
+  private applyMcpProxyPoliciesSync(input: UpdateMcpProxyPoliciesRequest): McpProxyPolicies {
     const policies = normalizeMcpProxyPolicies(isRecord(input) ? input.policies : undefined);
     for (const [serverId, policy] of Object.entries(policies)) {
       this.assertProxyPolicyKnown(policy, `policies.${serverId}`);
     }
     this.catalog.mcpProxyPolicies = policies;
-    await this.saveCatalog();
     return this.getMcpProxyPolicies();
+  }
+
+  async updateMcpProxyPolicies(input: UpdateMcpProxyPoliciesRequest): Promise<McpProxyPolicies> {
+    const policies = this.applyMcpProxyPoliciesSync(input);
+    await this.saveCatalog();
+    return policies;
   }
 
   async replaceTimeoutSettings(value: unknown): Promise<SystemTimeoutSettings> {
@@ -3588,6 +3690,11 @@ export class SessionStore {
     }
   }
 
+  private normalizeConnectionUpdateToken(value: string | null | undefined): string | undefined {
+    try { return normalizeApiToken(value); }
+    catch { throw new SessionStoreHttpError("A provided LLM API token must be a non-empty string of at most 16384 characters", 400); }
+  }
+
   async updateModel(modelId: string, input: UpdateModelProfileRequest): Promise<ModelProfile> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
@@ -3596,18 +3703,21 @@ export class SessionStore {
     if (provider && (normalized.baseUrl !== provider.baseUrl || normalized.apiProtocol !== provider.apiProtocol)) {
       throw new Error("The base URL and API protocol of a provider model cannot be changed here; edit the provider instead");
     }
+    // Validate the complete candidate before touching the live connection object.
+    const proxyPolicy = input.proxyPolicy === undefined ? profile.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
+    const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
     Object.assign(profile, normalized, { updatedAt: new Date().toISOString() });
     // `null` is an explicit "drop my overrides" so the listing and the catalog
     // answer again; an absent key keeps whatever was saved.
     if (input.facts === null) delete profile.facts;
     if (input.proxyPolicy !== undefined) {
-      profile.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+      profile.proxyPolicy = proxyPolicy;
     }
     if (input.apiToken === null) {
       this.setModelApiToken(modelId, undefined);
       profile.hasApiToken = provider?.hasApiToken === true;
     } else if (input.apiToken !== undefined) {
-      this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
+      this.setModelApiToken(modelId, apiToken);
       profile.hasApiToken = true;
     }
     // Heals catalogs from before auto-defaulting existed: re-saving a usable
@@ -3689,7 +3799,7 @@ export class SessionStore {
     return provider;
   }
 
-  async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
+  private applyProviderUpdateSync(providerId: string, input: UpdateModelProviderRequest): ModelProvider {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
     const previousProtocol = provider.apiProtocol;
@@ -3702,21 +3812,41 @@ export class SessionStore {
       name: input.name ?? provider.name,
       presetId: provider.presetId,
     });
+    // Validate the complete candidate before touching the live connection object.
+    const proxyPolicy = input.proxyPolicy === undefined ? provider.proxyPolicy : this.normalizeModelProxyPolicy(input.proxyPolicy);
+    const apiToken = this.normalizeConnectionUpdateToken(input.apiToken);
     Object.assign(provider, normalized, { updatedAt: new Date().toISOString() });
     if (input.tokenOptional !== undefined) provider.tokenOptional = input.tokenOptional === true;
     if (input.proxyPolicy !== undefined) {
-      provider.proxyPolicy = this.normalizeModelProxyPolicy(input.proxyPolicy);
+      provider.proxyPolicy = proxyPolicy;
     }
     if (input.apiToken === null) {
       this.setProviderApiToken(providerId, undefined);
       provider.hasApiToken = false;
     } else if (input.apiToken !== undefined) {
-      this.setProviderApiToken(providerId, normalizeApiToken(input.apiToken));
+      this.setProviderApiToken(providerId, apiToken);
       provider.hasApiToken = true;
     }
     this.syncProviderModels(provider, previousProtocol);
+    return provider;
+  }
+
+  async updateProvider(providerId: string, input: UpdateModelProviderRequest): Promise<ModelProvider> {
+    const provider = this.applyProviderUpdateSync(providerId, input);
     await this.saveCatalog();
     return provider;
+  }
+
+  applyProviderProxyConfigurationSync(providerId: string, proxyPolicy: ProxyPolicy): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Provider proxy configuration requires the shared transaction");
+    this.applyProviderUpdateSync(providerId, { proxyPolicy });
+  }
+
+  configurationProviderProxySettings() {
+    return { defaultPolicy: this.catalog.proxyDefaultPolicy,
+      providers: this.listProviders().map(provider => ({ id: provider.id, name: provider.name, proxyPolicy: provider.proxyPolicy,
+        modelCount: this.catalog.models.filter(model => model.providerId === provider.id).length })),
+      servers: this.catalog.proxyServers.map(server => ({ id: server.id, name: server.name, kind: server.kind })) };
   }
 
   async deleteProvider(providerId: string): Promise<void> {

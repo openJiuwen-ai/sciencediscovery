@@ -13,6 +13,7 @@ export interface ConfigurationSnapshot {
   runId?: string;
 }
 export interface ConfigurationPlan {
+  securityConsent?: Omit<NonNullable<ConfigurationRequestView["securityConsent"]>, "revision" | "status">;
   endpointAuthorization?: Omit<NonNullable<ConfigurationRequestView["endpointAuthorization"]>, "revision" | "status">;
   fields: ConfigurationFieldView[];
   changes: ConfigurationRequestView["changes"];
@@ -69,6 +70,7 @@ export interface ConfigurationAdapter {
   previewReversal?(receipt: ConfigurationApplyReceipt, snapshot: ConfigurationSnapshot): ConfigurationValues;
 }
 export interface ConfigurationHost {
+  projectSecurityConsent?(record: ConfigurationRecord): ConfigurationRequestView["securityConsent"];
   afterCommit?(sessionId: string): Promise<void>;
   executionDependencies?(record: ConfigurationRecord): Record<string, string> | undefined;
   projectEndpointAuthorization?(record: ConfigurationRecord): ConfigurationRequestView["endpointAuthorization"];

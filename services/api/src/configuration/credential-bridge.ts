@@ -44,7 +44,7 @@ export class ConfigurationCredentialBridge {
     catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
   private binding(binding: ConfigurationCredentialBinding): void {
-    if (!binding || typeof binding !== "object" || binding.fieldId !== "apiToken" || !Number.isSafeInteger(binding.revision) || binding.revision < 1 ||
+    if (!binding || typeof binding !== "object" || !["apiToken", "proxyUrl"].includes(binding.fieldId) || !Number.isSafeInteger(binding.revision) || binding.revision < 1 ||
       [binding.sessionId, binding.requestId, binding.target].some(value => typeof value !== "string" || !value || value.length > 4096)) throw new Error("INVALID_CONFIGURATION_CREDENTIAL");
   }
   provide(binding: ConfigurationCredentialBinding, secret: unknown, key?: string): { handle: string; expiresAt: string } {

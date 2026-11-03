@@ -16,7 +16,7 @@ export async function handleConfigurationHttp(input: {
   hasActiveRun(sessionId: string, ownRequestId?: string): Promise<boolean>;
 }): Promise<boolean> {
   const { request, response, url, store, framework } = input;
-  const match = url.pathname.match(/^\/api\/sessions\/([^/]+)\/(configuration-requests(?:\/([^/]+)(?:\/(credentials|preview|decision|continue|reversal|endpoint-consent))?)?|configuration\/capabilities)$/);
+  const match = url.pathname.match(/^\/api\/sessions\/([^/]+)\/(configuration-requests(?:\/([^/]+)(?:\/(credentials|preview|decision|continue|reversal|endpoint-consent|security-consent))?)?|configuration\/capabilities)$/);
   if (!match) return false;
   const sessionId = match[1]!;
   const requestId = match[3];
@@ -77,7 +77,9 @@ export async function handleConfigurationHttp(input: {
     }
     const record = framework.service.getRecord(sessionId, requestId);
     const body: unknown = await readJson(request);
-    if (operation === "endpoint-consent") {
+    if (operation === "security-consent") {
+      sendJson(response, 200, project(await framework.confirmSecurity(sessionId, requestId, body)));
+    } else if (operation === "endpoint-consent") {
       sendJson(response, 200, project(await framework.confirmEndpoint(sessionId, requestId, body)));
     } else if (operation === "credentials") {
       response.setHeader("cache-control", "no-store");

@@ -23,7 +23,7 @@ export class ConfigurationActivationCoordinator {
       await this.host.saveActivation(record.view.id, { state: "suppressed", code: "activation_baseline_changed" });
       return "suppressed";
     }
-    if (record.plan.activationMode === "next_run" || record.plan.activationMode === "requires_restart") {
+    if (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_connection" || record.plan.activationMode === "requires_restart") {
       await this.host.saveActivation(record.view.id, { state: "needs_user_action", code: record.plan.activationMode });
       return "needs_user_action";
     }
