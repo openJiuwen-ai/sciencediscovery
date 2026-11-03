@@ -1069,6 +1069,151 @@ export const EN: Text = {
     close: "Exit full screen",
   },
 
+  /** Program evolution: a search that improves itself against a scorecard.
+   *
+   *  The shelf and the full panel share this block; the wording is written for
+   *  the panel and shortened for the shelf, so a run is called the same thing
+   *  in both places. */
+  evolve: {
+    title: "Program evolution",
+    open: "Program evolution",
+    newRun: "New run",
+    runningCount: (count: number) => `${count} running`,
+    moreRuns: (count: number) => `${count} more`,
+    fewerRuns: "Show fewer",
+    shelfHint: "Let a program improve against a scorecard and keep the best version",
+    autoPace: "Auto",
+    autoPaceTitle: "Started without pausing at checkpoints",
+
+    create: {
+      title: "New evolution run",
+      intro: "Describe what should improve and how \"better\" is measured. The assistant designs the scorecard in the conversation first, then starts the search once you confirm.",
+      goalLabel: "Goal",
+      goalPlaceholder: "e.g. Maximize the compression ratio of compress / decompress while staying byte-exact, without using zlib / lzma / bz2.",
+      algorithmLabel: "Search algorithm",
+      puct: "PUCT",
+      puctHint: "Grows a tree one node at a time; suits tasks with clear parent-to-child improvements.",
+      openEvolve: "OpenEvolve",
+      openEvolveHint: "Explores islands and grids in parallel; suits widely different approaches.",
+      confirmLabel: "Pause at each checkpoint",
+      confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
+      autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
+      sessionNote: "The run is recorded in this session; once it starts, its progress stays reachable from the session header.",
+      send: "Start designing",
+      cancel: "Cancel",
+      blockedRunning: "This session is already running; wait for it to finish before starting another.",
+      blockedArchived: "An archived session cannot start a new run.",
+    },
+
+    setup: {
+      title: "The evolution runtime needs setup",
+      body: "The first run needs the evolution engine installed. The local service performs the install, which usually takes a few minutes.",
+      missing: "The evolution runtime is not ready",
+      installing: "Preparing the evolution runtime…",
+      install: "Prepare runtime",
+      operator: "This deployment does not allow automatic installation. Ask an administrator to enable program evolution on the server.",
+      error: "The evolution runtime is unavailable",
+    },
+
+    panel: {
+      eyebrow: "Program evolution",
+      close: "Close",
+      stop: "Stop",
+      stopping: "Stopping…",
+      stopHint: "Candidates found so far remain available after stopping.",
+      fullscreen: "Full screen",
+      exitFullscreen: "Exit full screen",
+      fullTask: "Show the full goal",
+    },
+
+    status: {
+      pending: "Queued",
+      running: "Running",
+      succeeded: "Succeeded",
+      stopped: "Stopped",
+      budget_exhausted: "Budget used up",
+      failed: "Failed",
+    },
+
+    metric: {
+      best: "Best score",
+      baseline: "Baseline",
+      test: "Held-out test",
+      candidates: "Candidates",
+      depth: "Max depth",
+    },
+
+    chart: {
+      title: "Best score over expansions",
+      aria: (baseline: string, best: string, candidates: number) =>
+        `Score chart: baseline ${baseline}, current best ${best}, ${candidates} candidates.`,
+      xAxis: "Expansions",
+      best: "Best so far",
+      gate: "Held-out score",
+      rollout: "In-search score",
+      test: "Test",
+      failed: "Did not run",
+      baseline: "Baseline",
+      empty: "No scores to plot yet.",
+    },
+
+    table: {
+      title: "Candidates",
+      filterAll: "All",
+      filterAccepted: "Accepted",
+      filterRejected: "Behind",
+      filterFailed: "Failed",
+      search: "Search changes or ids",
+      empty: "No candidates yet.",
+      noMatch: "No candidates match.",
+      node: "Node",
+      parent: "Parent",
+      change: "Change",
+      score: "Score",
+      verdict: "Verdict",
+      root: "Baseline",
+      accepted: "Accepted",
+      rejected: "Behind",
+      violated: "Violated",
+      failed: "Did not run",
+      truncated: (shown: number, total: number) => `Showing the first ${shown} of ${total} candidates`,
+    },
+
+    inspector: {
+      title: "Candidate",
+      emptyTitle: "Select a candidate",
+      emptyBody: "Pick a row to see its change against the parent, its scores and why it was judged that way.",
+      parent: "Parent",
+      depth: "Depth",
+      gate: "Held-out gate",
+      rollout: "In-search",
+      prior: "Model prior",
+      visits: "Visits",
+      diff: "Change",
+      loading: "Reading source…",
+      unavailable: "Source unavailable (it may have been pruned).",
+      unchanged: "Identical to the parent.",
+      noParent: "This is the baseline; it has no parent.",
+      error: "Failure",
+      hidden: (count: number) => `${count} unchanged lines folded`,
+      close: "Close candidate details",
+    },
+
+    budget: {
+      expansions: "Expansions",
+      tokens: "Tokens",
+      elapsed: "Elapsed",
+      cost: "Cost",
+    },
+
+    notice: {
+      placeholder: "This run used a placeholder scorecard, not one designed for it.",
+      stoppedShort: (made: number, planned: number, reason: string) =>
+        `Planned ${planned} expansions, completed ${made} (${reason}).`,
+      log: "Engine log",
+    },
+  },
+
   errors: {
     generic: "Something went wrong",
     sessionCreate: "Could not create the session",
