@@ -33,6 +33,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { writeSettingsCache } from "../src/app/settings-cache.js";
 import type { RuntimeSettingsOverrides, SkillDescriptor, Specialist } from "../src/api/types.js";
 import { TEXT } from "../src/text.js";
+import { LoadGate } from "../src/views/settings/rows.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { SpecialistsSettings } from "../src/views/settings/system/Specialists.js";
 import { StubClient } from "./api-stub.js";
@@ -117,5 +118,39 @@ describe("a settings pane's remembered answer", () => {
     );
     assert.ok(other.includes(TEXT.settings.loading), "an unvisited Project does not start at the loading frame");
     assert.ok(!other.includes("draft-review"), "one Project's enabled Skills leaked into another");
+  });
+});
+
+/**
+ * A remembered answer is painted before the refresh behind it answers, so the
+ * refresh can fail while a list is on screen. Keeping that list is the point:
+ * the failure is drawn above it, with the retry the error section already had.
+ */
+describe("a pane whose refresh fails", () => {
+  it("keeps the answer it painted, above the failure", () => {
+    const markup = renderToStaticMarkup(
+      <LoadGate loaded={{ error: "无法刷新列表", loading: false, reload: noop, value: ["分子绘图"] }}>
+        {(names) => <p>{names.join(",")}</p>}
+      </LoadGate>,
+    );
+
+    assert.ok(markup.includes("无法刷新列表"), "the failure is not on screen");
+    assert.ok(markup.includes("分子绘图"), "the list the pane had painted was thrown away");
+    assert.ok(
+      markup.indexOf("无法刷新列表") < markup.indexOf("分子绘图"),
+      "the failure is drawn below the stale list instead of above it",
+    );
+    assert.ok(markup.includes(TEXT.settings.retry), "the failure offers no retry");
+  });
+
+  it("draws the failure alone when there is no answer to keep", () => {
+    const markup = renderToStaticMarkup(
+      <LoadGate loaded={{ error: "无法刷新列表", loading: false, reload: noop, value: undefined }}>
+        {() => <p>never drawn</p>}
+      </LoadGate>,
+    );
+
+    assert.ok(markup.includes("无法刷新列表"));
+    assert.ok(!markup.includes("never drawn"), "a page with no answer drew content anyway");
   });
 });

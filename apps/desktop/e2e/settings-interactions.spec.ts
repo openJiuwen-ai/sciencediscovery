@@ -564,6 +564,29 @@ test.describe("技能", () => {
     await expect.poll(reads).toBeGreaterThan(before);
     await expect(card).toBeVisible();
   });
+
+  test("a refresh that fails keeps the remembered list under the failure", async ({ page }) => {
+    await installMockApi(page, {
+      models: MODELS,
+      projectSettings: { effective: { enabledSkillIds: [] }, overrides: {}, sources: {} },
+      skills,
+    });
+    const dialog = await openSettings(page, "技能");
+    const card = dialog.locator(".settings-card").filter({ hasText: "分子绘图" });
+    await expect(card).toBeVisible();
+
+    // Every later read of the list fails. The pane is about to be opened from
+    // its last answer, and the refresh behind it must not take that answer
+    // away — a stale list under a visible failure beats an empty page.
+    await page.route("**/api/skills", (route) =>
+      route.fulfill({ body: JSON.stringify({ error: "service unavailable" }), contentType: "application/json", status: 503 }));
+
+    await dialog.getByRole("button", { name: "专家", exact: true }).click();
+    await dialog.getByRole("button", { name: "技能", exact: true }).click();
+
+    await expect(dialog.getByRole("button", { name: "重试" })).toBeVisible();
+    await expect(card).toBeVisible();
+  });
 });
 
 test.describe("模型", () => {
