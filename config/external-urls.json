@@ -94,7 +94,8 @@
       "explore_template": "https://www.ebi.ac.uk/chembl/explore/{kind}/CHEMBL{identifier}",
       "resource_search_template": "https://www.ebi.ac.uk/chembl/api/data/{resource}/search.json",
       "activity_api": "https://www.ebi.ac.uk/chembl/api/data/activity.json",
-      "similarity_template": "https://www.ebi.ac.uk/chembl/api/data/similarity/{smiles}/{similarity}.json"
+      "similarity_template": "https://www.ebi.ac.uk/chembl/api/data/similarity/{smiles}/{similarity}.json",
+      "molecule_template": "https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL{identifier}"
     },
     "uniprot": {
       "api_base": "https://rest.uniprot.org",

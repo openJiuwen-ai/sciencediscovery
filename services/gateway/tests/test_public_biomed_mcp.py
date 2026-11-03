@@ -45,6 +45,8 @@ from sciencediscovery_gateway.public_biomed_mcp import (
     _preprint_search,
     _pubmed_search,
     chembl_search_molecules,
+    chembl_search_targets,
+    chembl_similarity_search,
     clinvar_search_variants,
     ensembl_lookup_gene,
     geo_search_studies,
@@ -315,6 +317,33 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["sourceId"], expected)
             self.assertEqual(result["records"][0]["source"], expected)
             self.assertEqual(result["records"][0]["primaryCitation"]["source"], expected)
+
+    async def test_chembl_molecule_links_use_the_live_compound_page(self) -> None:
+        molecules = {"molecules": [{"molecule_chembl_id": "CHEMBL25", "pref_name": "ASPIRIN"}]}
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=molecules),
+        ):
+            search = await chembl_search_molecules("aspirin")
+            similar = await chembl_similarity_search("CC(=O)OC1=CC=CC=C1C(=O)O")
+
+        live = "https://www.ebi.ac.uk/chembl/explore/compound/CHEMBL25"
+        for result in (search, similar):
+            record = result["records"][0]
+            self.assertEqual(record["url"], live)
+            self.assertEqual(record["primaryCitation"]["url"], live)
+            self.assertEqual(record["primaryCitation"]["markdown"], f"[Chembl:CHEMBL25]({live})")
+
+        targets = {"targets": [{"target_chembl_id": "CHEMBL1806", "pref_name": "BRAF"}]}
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=targets),
+        ):
+            target = await chembl_search_targets("BRAF")
+        self.assertEqual(
+            target["records"][0]["url"],
+            "https://www.ebi.ac.uk/chembl/explore/target/CHEMBL1806",
+        )
 
     async def test_arxiv_fixture_becomes_a_canonical_record(self) -> None:
         atom = """<?xml version="1.0"?>
