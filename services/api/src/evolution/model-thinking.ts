@@ -43,9 +43,17 @@ const NO_DISABLED_VARIANTS: readonly string[] = ["gemini", "kimi-k3"];
  * toggle without a "disabled" stop, so asking them to stop has the same
  * effect as a dialect that never hears the request.
  *
- * The user can overrule the dialect: `facts.thinkingSupported` is a statement
- * that this endpoint does or does not honor the field, and it wins over what
- * the wire protocol suggests.
+ * Three sources answer three different questions, and they are not
+ * interchangeable. The profile's configured dialect decides whether the wire
+ * has a control field at all — the catalog's `apiVariant` describes the
+ * vendor's own endpoint, and a gateway that reuses a model name may speak
+ * something else, so reading it here could promise a field this run never
+ * sends. The catalog (or the dialect's known stops, for a model it has never
+ * heard of) decides which stops exist. `facts.thinkingSupported` is the
+ * operator's own statement that this endpoint does or does not honor the
+ * field, and it wins over both; it cannot conjure a "disabled" stop the
+ * dialect does not offer, because "the field is heard" and "the field carries
+ * disabled" are separate questions.
  */
 export function thinkingControlGap(model: ModelProfile | undefined): ThinkingControlGap | undefined {
   if (!model) return undefined;
@@ -54,14 +62,13 @@ export function thinkingControlGap(model: ModelProfile | undefined): ThinkingCon
     : "openai-chat-completions");
   const variant = model.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
   if (!THINKING_CONTROL_VARIANTS.includes(variant)) return "no-control-field";
-  if (model.facts?.thinkingSupported === false) return "declared-unsupported";
-  if (model.facts?.thinkingSupported === true) return undefined;
 
   const catalog = lookupModelCatalog(model.model)?.thinking;
-  if (catalog?.supported === false) return "model-unsupported";
-  const modes: readonly string[] = catalog?.modes?.length
-    ? catalog.modes
-    : NO_DISABLED_VARIANTS.includes(variant) ? NO_DISABLED_MODES : ALL_MODES;
+  if (model.facts?.thinkingSupported === false) return "declared-unsupported";
+  if (model.facts?.thinkingSupported !== true && catalog?.supported === false) return "model-unsupported";
+
+  const modes: readonly string[] = catalog?.modes
+    ?? (NO_DISABLED_VARIANTS.includes(variant) ? NO_DISABLED_MODES : ALL_MODES);
   return modes.includes("disabled") ? undefined : "no-disabled-mode";
 }
 
