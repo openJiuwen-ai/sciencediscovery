@@ -2,8 +2,10 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { createHash } from "node:crypto";
 import type { ConfigurationCapabilityId, ConfigurationFieldView, ConfigurationValues, IdeaTreeSettings, SystemQuotaSettings, SystemTimeoutSettings } from "@sciencediscovery/schema";
+import { ENVIRONMENT_CONDA_SOURCE_PRESETS, ENVIRONMENT_PIP_SOURCE_PRESETS } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
 import { normalizeIdeaTreeSettings, normalizeQuotaSettings, normalizeTimeoutSettings, resolveIdeaTreeSettings } from "../store/settings.js";
+import { normalizeEnvironmentSourceSettings } from "../environment-sources.js";
 import { CONFIGURATION_AGENT_DESCRIPTORS, SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import type { ConfigurationAdapter, ConfigurationSnapshot } from "./types.js";
 import { ConfigurationError, invalid, object } from "./validation.js";
@@ -65,6 +67,7 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
     try {
       if (id === "timeouts.configure") normalizeTimeoutSettings({ ...currentTimeouts(snapshot), ...input });
       else if (id === "quotas.configure") normalizeQuotaSettings({ ...currentQuotas(snapshot), ...input });
+      else if (id === "environment.sources") normalizeEnvironmentSourceSettings({ ...normalizeEnvironmentSourceSettings(snapshot.data.environmentSourceSettings), ...input });
       else normalizeIdeaTreeSettings(input, currentIdeaTree(snapshot));
     } catch (error) { domainError(error); }
   };
@@ -76,7 +79,14 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
       checked(id, input, snapshot);
       const fields: ConfigurationFieldView[] = [];
       let message: string;
-      if (id === "timeouts.configure") {
+      if (id === "environment.sources") {
+        const current = { ...normalizeEnvironmentSourceSettings(snapshot.data.environmentSourceSettings), ...input };
+        message = "Deployment-wide package-source defaults. Subsequent environment preparation and package installation read the saved presets; an operation already submitted keeps its resolved source. Existing environments and installed packages are unchanged. Saving does not download, install or authorize package execution.";
+        fields.push(
+          enumField("pipSource", "pip package source", ENVIRONMENT_PIP_SOURCE_PRESETS.map(preset => preset.id), current.pipSource),
+          enumField("condaSource", "conda package source", ENVIRONMENT_CONDA_SOURCE_PRESETS.map(preset => preset.id), current.condaSource),
+        );
+      } else if (id === "timeouts.configure") {
         const current = { ...currentTimeouts(snapshot), ...input };
         message = "Deployment-wide. A run keeps the timeouts it read when it started; a later run reads the saved values. 0 disables that one limit. A single timeout is not a reason to remove a limit.";
         fields.push(
@@ -107,9 +117,10 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
           numberField("maxNodes", "Maximum nodes", current.maxNodes, "Integer from 2 to 10000."),
         );
       }
-      const current = id === "timeouts.configure" ? currentTimeouts(snapshot) : id === "quotas.configure" ? currentQuotas(snapshot) : currentIdeaTree(snapshot);
+      const current = id === "environment.sources" ? normalizeEnvironmentSourceSettings(snapshot.data.environmentSourceSettings)
+        : id === "timeouts.configure" ? currentTimeouts(snapshot) : id === "quotas.configure" ? currentQuotas(snapshot) : currentIdeaTree(snapshot);
       const changes = changed(input, current);
-      return { fields, changes, impact: { resourceLocation: "Deployment system settings", effectiveScope: "Every session in this deployment", message },
+      return { fields, changes, impact: { resourceLocation: "Deployment system settings", effectiveScope: "Every session in this deployment", message: message + " Saving does not schedule an unrelated task. An original configuration task already bound to this request may continue through the normal framework with its frozen task settings; this is separate from when the changed setting becomes effective." },
         verificationPlan: noProbe, activationMode: "next_run", disposition: !Object.keys(input).length ? "missing_input" : changes.length ? "change" : "no_change", ready: changes.length > 0 };
     },
     apply: context => {

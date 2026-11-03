@@ -125,7 +125,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     const targetChanged = previousTarget.current !== targetIdentity(next);
     if (targetChanged) {
       setSecrets({}); credentialDraft.current = undefined; operationKeys.current.clear();
-      submittedPreview.current = { revision: -1 };
+      // An explicit preview already binds this new target. Invalidate only a
+      // prior preview; endpoint consent must not strand the fresh one.
+      if (submittedPreview.current?.revision !== next.revision || submittedPreview.current.digest !== next.previewDigest)
+        submittedPreview.current = { revision: -1 };
     }
     latestRequest.current = next;
     previousTarget.current = targetIdentity(next);

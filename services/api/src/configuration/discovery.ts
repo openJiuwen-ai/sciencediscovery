@@ -23,7 +23,9 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "review.configure": "review reviewer semantic 审阅 审查 自动审查",
   "timeouts.configure": "timeout timeouts 超时 等待 时限",
   "quotas.configure": "quota quotas 配额 并发 上传 容量",
+  "runner.assign": "runner machine allocation assignment execution 运行器 分配 机器 执行环境 继承",
   "idea_tree.configure": "idea tree 探索树 深度 轮次",
+  "environment.sources": "environment package source pip conda mirror 包源 镜像源 环境 软件源",
 };
 const domainAliases: Record<string, string> = { proxy: "代理", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
 type Row = Record<string, unknown>;
@@ -89,6 +91,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const models = () => modelCache ??= store.listModels().map(model => ({ id: model.id, name: text(model.name), model: model.model,
     credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" }));
   const resources = async (id: ConfigurationCapabilityId): Promise<Row[]> => {
+    if (id === "runner.assign") return store.configurationRunnerResources();
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
     if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
     if (id === "skill.select") {
@@ -146,6 +149,11 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
+  else if (id === "environment.sources") current = { ...store.getEnvironmentSourceSettings() };
+  else if (id === "runner.assign") {
+    const selected = store.configurationRunnerSelection(sessionId);
+    current = { selectionMode: selected.selectionMode, runnerIds: preview(selected.runnerIds), effectiveRunnerIds: preview(selected.effectiveRunnerIds), projectRunnerIds: preview(selected.projectRunnerIds), catalogIsLiveConnectivityCheck: false };
+  }
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
     current = { explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,

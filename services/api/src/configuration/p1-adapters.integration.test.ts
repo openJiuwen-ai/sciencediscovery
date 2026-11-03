@@ -38,7 +38,12 @@ test("CFG-T29/33: server registry keeps domain fields while the model transport 
   const h = await harness(context); const registry = h.framework.service.registry;
   const parameters = JSON.stringify(createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: "test-run" })[0]!.parameters);
   for (const item of registry.describe()) { assert.ok(!parameters.includes(item.id)); for (const field of Object.keys(item.fields)) assert.ok(registry.fields(item.id)[field]); }
-  assert.equal(registry.describe().length, 10);
+  const registeredIds = new Set(registry.describe().map(item => item.id));
+  for (const id of [
+    "connector.enable", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select",
+    "quotas.configure", "review.configure", "skill.select", "thinking.configure", "timeouts.configure",
+    "environment.sources", "runner.assign",
+  ] as const) assert.ok(registeredIds.has(id), `Missing configuration capability: ${id}`);
   assert.throws(() => registry.agentValues("model.select", { enabledSkillIds: ["literature"] }));
   assert.throws(() => registry.agentValues("thinking.configure", { command: "install" }));
 });
