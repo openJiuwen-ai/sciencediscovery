@@ -37,6 +37,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import { shortErrorMessage, type LogFields, type OperationalLogger } from "@sciencediscovery/operational-logging";
 import type {
@@ -61,6 +62,19 @@ const PROXY_ENV_VARS = [
 ] as const;
 const URL_PROXY_ENV_VARS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] as const;
 const STDERR_TAIL_LIMIT = 4_000;
+
+/** Header credentials belong to the configured origin. Match the existing OAuth
+ * transport policy: configure a final endpoint rather than forwarding on 3xx. */
+function configuredMcpFetch(endpoint: string): FetchLike {
+  const origin = new URL(endpoint).origin;
+  return (input, init) => {
+    const target = new URL(input instanceof Request ? input.url : input.toString());
+    if (target.origin !== origin || target.username || target.password) {
+      throw new Error("MCP request does not match the configured server origin");
+    }
+    return fetch(input, { ...init, redirect: "error" });
+  };
+}
 
 function endpointFields(raw: string | undefined, prefix = "endpoint"): LogFields {
   if (!raw) return {};
@@ -351,13 +365,13 @@ export class McpNodeClient {
         if (!server.url) throw new Error(`MCP server '${serverId}' with sse transport requires 'url'`);
         await connect(new SSEClientTransport(new URL(server.url), {
           requestInit: { headers: server.headers },
-          ...(authorizedFetch ? { fetch: authorizedFetch } : {}),
+          fetch: authorizedFetch ?? configuredMcpFetch(server.url),
         }));
       } else {
         if (!server.url) throw new Error(`MCP server '${serverId}' with http transport requires 'url'`);
         await connect(new StreamableHTTPClientTransport(new URL(server.url), {
           requestInit: { headers: server.headers },
-          ...(authorizedFetch ? { fetch: authorizedFetch } : {}),
+          fetch: authorizedFetch ?? configuredMcpFetch(server.url),
         }));
       }
     } catch (error) {
