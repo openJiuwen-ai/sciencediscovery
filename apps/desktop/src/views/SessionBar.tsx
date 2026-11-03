@@ -20,10 +20,16 @@ import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { sessionTitle } from "../app/session-title.js";
 import { SidebarToggle } from "./SidebarToggle.js";
+import { EvolveGlyph } from "./evolve/glyphs.js";
 
 interface Props {
   actions: WorkspaceActions;
   detail?: SessionDetail;
+  /** The session has a search expanding right now; the header can say so
+   *  without the shelf row being open. */
+  evolveLive?: boolean;
+  /** Opens the session's searches, or starts the dialog when it has none. */
+  onEvolve?: () => void;
   /** Brings the collapsed left column back. The control belongs at the page
    *  head's left edge, where the content itself starts. */
   onExpandSidebar?: () => void;
@@ -55,6 +61,8 @@ function stamp(detail: SessionDetail): string {
 export function SessionBar({
   actions,
   detail,
+  evolveLive,
+  onEvolve,
   onExpandSidebar,
   onToggleWorkspace,
   projectName,
@@ -98,6 +106,18 @@ export function SessionBar({
         ) : null}
       </div>
       <div className="task-head-actions">
+        {onEvolve === undefined ? null : (
+          <button
+            aria-haspopup="dialog"
+            aria-label={TEXT.evolve.open}
+            className={`bar-icon-button is-evolve${evolveLive ? " is-live" : ""}`}
+            onClick={onEvolve}
+            title={TEXT.evolve.open}
+            type="button"
+          >
+            <EvolveGlyph size={16} />
+          </button>
+        )}
         {/* Only the closed state has this button: once the panel is open, its
             own header carries the collapse control, and a second one here
             would be the same action drawn twice. */}

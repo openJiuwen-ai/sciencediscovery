@@ -21,6 +21,7 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
+import { isEvolveRunActive } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
@@ -36,6 +37,8 @@ import { useLanguage } from "./app/use-language.js";
 import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
+import { evolveCommandCheckpointMode, evolveCommandGoal } from "./evolve/command.js";
+import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
 import { mergedSubagentSteps } from "./run-stream/subagent.js";
 import {
@@ -51,6 +54,9 @@ import { AuthScreen } from "./views/AuthScreen.js";
 import { Composer } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
+import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
+import { EvolveOverlay } from "./views/evolve/EvolveOverlay.js";
+import { EvolveShelf } from "./views/evolve/EvolveShelf.js";
 import { Guide } from "./views/Guide.js";
 import { Landing } from "./views/Landing.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
@@ -121,6 +127,37 @@ export function App({ initialToken }: Props) {
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
   const resize = usePanelWidth();
+
+  /** The runtime and the open Session's searches. The shelf reads `runs`
+   *  directly, which is why the hook exists at this level rather than inside
+   *  the panel: the searches must stay reachable while the panel is closed. */
+  const evolve = useEvolve(client, state.sessionId);
+  const refreshEvolve = evolve.refresh;
+  /** Which search the panel is showing, by id. Storing the id rather than the
+   *  record keeps the panel reading the same list the shelf does, so a status
+   *  that moves while the panel is open changes both at once. */
+  const [evolveRunId, setEvolveRunId] = useState<string>();
+  /** The create dialog, open with a typed goal when the command was diverted
+   *  here because the runtime is not ready. */
+  const [evolveCreate, setEvolveCreate] = useState<{
+    checkpointMode?: "auto" | "confirm";
+    goal?: string;
+  } | undefined>();
+
+  // An open panel belongs to one session's searches, like a selected
+  // subagent. The create dialog is deliberately left alone: it starts a run
+  // in whichever session is open when it sends, and the session the app is
+  // opening as it boots is not a reason to close a dialog the user just opened.
+  useEffect(() => {
+    setEvolveRunId(undefined);
+  }, [state.sessionId]);
+
+  // A search is created by the server while the agent's turn is running, and
+  // the list is not polled until one is active. The created event is therefore
+  // the one moment the app knows to look now rather than at the next poll.
+  useEffect(() => {
+    if (state.run.evolveRunsCreated > 0) void refreshEvolve();
+  }, [refreshEvolve, state.run.evolveRunsCreated]);
 
   // The shell (when present) pushes JiuwenSwarm cluster readiness.
   // "shell present, no verdict yet" is NOT ready — the composer stays gated
@@ -531,6 +568,35 @@ export function App({ initialToken }: Props) {
     setSettingsOpen(true);
   };
 
+  const evolveRun = evolve.runs.find((run) => run.id === evolveRunId);
+  const evolveLive = evolve.runs.some((run) => isEvolveRunActive(run.status));
+
+  /** The header button goes to the search that wants attention — a running
+   *  one, else the newest — and starts one only when the session has none. */
+  const openEvolve = () => {
+    const target = evolve.runs.find((run) => isEvolveRunActive(run.status)) ?? evolve.runs[0];
+    if (target === undefined) setEvolveCreate({});
+    else setEvolveRunId(target.id);
+  };
+
+  /** The command is a way into the surface, not only a message. While the
+   *  runtime is not ready the goal typed after it is carried into the setup
+   *  dialog instead of being sent to a server that cannot run it; a bare
+   *  command opens the dialog that asks for one. */
+  const sendMessage = (content: string) => {
+    const goal = evolveCommandGoal(content);
+    if (goal !== undefined && (goal === "" || evolve.status.state !== "ready")) {
+      setEvolveCreate({
+        checkpointMode: evolveCommandCheckpointMode(content),
+        goal: goal === "" ? undefined : goal,
+      });
+      return;
+    }
+    void actions.send(content);
+  };
+
+  const closeEvolveCreate = () => setEvolveCreate(undefined);
+
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
@@ -551,7 +617,7 @@ export function App({ initialToken }: Props) {
     onSelectModel: (modelId) => void actions.selectModel(modelId),
     onSelectProject: (projectId) => actions.selectProject(projectId),
     onSelectSpecialist: (specialistId) => void actions.selectSpecialist(specialistId),
-    onSend: (content) => void actions.send(content),
+    onSend: sendMessage,
     onStop: () => void actions.stop(),
     onUpload: (files) => void upload(files),
     // No name when the next conversation goes into no Project: the strip then
@@ -612,6 +678,8 @@ export function App({ initialToken }: Props) {
           <SessionBar
             actions={actions}
             detail={state.detail}
+            evolveLive={evolveLive}
+            onEvolve={openEvolve}
             onExpandSidebar={expandSidebar}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
             // A Session outside every Project is not "in 最近会话": that is
@@ -620,6 +688,14 @@ export function App({ initialToken }: Props) {
             projectName={state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName}
             sidebarCollapsed={showExpand}
             workspaceOpen={workspaceOpen}
+          />
+          {/* A search keeps running after the turn that started it, so its
+              handle belongs to the session rather than to the transcript. The
+              shelf draws nothing at all for a session that has none. */}
+          <EvolveShelf
+            onNew={() => setEvolveCreate({})}
+            onOpen={setEvolveRunId}
+            runs={evolve.runs}
           />
           {landing ? (
             /* The page's category and its open topic row belong to one
@@ -682,6 +758,34 @@ export function App({ initialToken }: Props) {
       ) : null}
 
       {guideOpen ? <Guide onClose={closeGuide} onStep={guideStep} /> : null}
+
+      {evolveRun === undefined ? null : (
+        <EvolveOverlay
+          client={client}
+          onClose={() => setEvolveRunId(undefined)}
+          onError={(message) => actions.toast(message, "error")}
+          onRunChanged={() => void refreshEvolve()}
+          run={evolveRun}
+        />
+      )}
+
+      {evolveCreate === undefined ? null : (
+        <EvolveCreateDialog
+          archived={state.detail?.archivedAt !== undefined}
+          error={evolve.error}
+          initialCheckpointMode={evolveCreate.checkpointMode}
+          initialGoal={evolveCreate.goal}
+          initializing={evolve.initializing}
+          onClose={closeEvolveCreate}
+          onInitialize={() => void evolve.initialize()}
+          onSend={(command) => {
+            closeEvolveCreate();
+            void actions.send(command);
+          }}
+          running={state.running}
+          status={evolve.status}
+        />
+      )}
 
       {/* The whole window is the drop target, so the whole window is what has
           to say so. It is drawn only while a file is actually over the app,
