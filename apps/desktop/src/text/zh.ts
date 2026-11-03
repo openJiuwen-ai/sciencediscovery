@@ -1130,6 +1130,19 @@ export const ZH = {
     autoPace: "自动",
     autoPaceTitle: "启动时未在每个检查点暂停",
 
+    /* 检查点卡片。标题和正文是模型写在卡片里的内容，这里只有卡片自己的
+       外壳：序号、等谁回答、两个按钮。 */
+    checkpoint: {
+      eyebrow: (step: number, total?: number) => (total === undefined ? `检查点 ${step}` : `检查点 ${step}/${total}`),
+      waiting: "等待确认",
+      auto: "自动",
+      confirm: "确认，继续",
+      adjust: "需要调整",
+      confirmReply: "确认，继续。",
+      adjustDraft: "我想调整这一步：",
+      busy: "这条回复还没结束，等它完成后再操作。",
+    },
+
     create: {
       title: "新建程序演进实验",
       intro: "描述你想改进的东西，以及“更好”应该怎么衡量。助手会先在对话里设计评分卡，确认后再开始搜索。",

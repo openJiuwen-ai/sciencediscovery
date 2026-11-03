@@ -181,6 +181,10 @@ export interface MockOptions {
    *  the guide's own is about a returning user, and the guide covers the page
    *  it would otherwise have to click through. Set `false` to get the guide. */
   guideSeen?: boolean;
+  /** The assistant answer a newly sent message streams back. The default is
+   *  the one-line crystal answer every other spec reads; a spec that wants a
+   *  checkpoint card hands in the fenced block the evolve-design skill writes. */
+  assistantAnswer?: string;
 }
 
 export interface RecordedCall {
@@ -643,7 +647,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         const session = state.sessions.find((entry) => entry.id === messages[1]);
         if (!session) return json(route, 404, { error: "session not found" });
         const prompt = (JSON.parse(body ?? "{}") as { content?: string }).content ?? "";
-        const answer = "晶格常数是 5.43 Å。";
+        const answer = options.assistantAnswer ?? "晶格常数是 5.43 Å。";
         const userMessage = { content: prompt, createdAt: CREATED_AT, id: "message-user", role: "user" };
         const assistantMessage = {
           content: answer,

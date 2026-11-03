@@ -28,7 +28,7 @@ import { getSubagent } from "./api/sessions.js";
 import type { Subagent, SubagentStep } from "./api/types.js";
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
-import { isEmptyTranscript, landingKey } from "./app/landing.js";
+import { isEmptyTranscript, landingKey, type LandingSeed } from "./app/landing.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
 import { followSubagent } from "./app/follow-subagent.js";
@@ -51,6 +51,7 @@ import {
 import { applyDocumentLanguage, TEXT } from "./text.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
+import { CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
 import { Composer } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
@@ -597,6 +598,30 @@ export function App({ initialToken }: Props) {
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
+  /** Text a checkpoint card puts in the composer. It replaces the draft
+   *  rather than appending to it, the way a starter prompt does: the press is
+   *  "I want to change this step", not "add a sentence to what I was typing".
+   *  The nonce makes the same sentence land twice — choosing the same card
+   *  again is still a choice. */
+  const [composerSeed, setComposerSeed] = useState<LandingSeed>();
+  const seedNonce = useRef(0);
+  /** The current `sendMessage`, read at press time. Holding it in a ref is
+   *  what lets the provider's value stay stable while a run streams: a value
+   *  rebuilt on every event would re-render every checkpoint card in the
+   *  transcript on every delta. */
+  const latestSend = useRef(sendMessage);
+  useEffect(() => {
+    latestSend.current = sendMessage;
+  });
+  const checkpointReply = useMemo<CheckpointReply>(() => ({
+    busy: state.running,
+    draft: (text) => {
+      seedNonce.current += 1;
+      setComposerSeed({ nonce: seedNonce.current, text });
+    },
+    reply: (text) => latestSend.current(text),
+  }), [state.running]);
+
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
@@ -653,7 +678,7 @@ export function App({ initialToken }: Props) {
   ].filter(Boolean).join(" ");
 
   return (
-    <>
+    <CheckpointReplyProvider value={checkpointReply}>
       <div className={shellClass} style={shellStyle}>
         <Rail
           onOpenSettings={() => openSettings(settingsGroup)}
@@ -715,7 +740,7 @@ export function App({ initialToken }: Props) {
                 run={state.run}
                 workspaceFiles={state.panelFiles}
               />
-              <Composer {...composerProps} />
+              <Composer {...composerProps} seed={composerSeed} />
             </>
           )}
         </main>
@@ -826,6 +851,6 @@ export function App({ initialToken }: Props) {
       ) : null}
 
       <FeedbackDialog />
-    </>
+    </CheckpointReplyProvider>
   );
 }

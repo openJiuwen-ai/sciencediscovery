@@ -1,0 +1,103 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, {
+  tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"],
+});
+import assert from "node:assert/strict";
+// The test runner compiles JSX with the classic runtime, so React has to be in
+// scope even though the app itself is built with the automatic one.
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { Markdown } from "../src/Markdown.js";
+import { CheckpointReplyProvider, type CheckpointReply } from "../src/views/CheckpointCard.js";
+
+const values: CheckpointReply = {
+  busy: false,
+  draft: () => {},
+  reply: () => {},
+};
+
+function card(over: Record<string, string | number> = {}): string {
+  const fields = {
+    pace: "confirm",
+    step: 1,
+    title: "什么算“更好”",
+    total: 4,
+    ...over,
+  };
+  const header = Object.entries(fields).map(([key, value]) => `${key}: ${value}`);
+  return [
+    "说明文字。",
+    "",
+    "```evolve-checkpoint",
+    ...header,
+    "---",
+    "**度量：** 压缩比",
+    "",
+    "**冻结：** 不许用现成库",
+    "```",
+  ].join("\n");
+}
+
+/** `null` is the card in a renderer with no composer behind it; a default
+ *  parameter would turn an omitted argument back into the live context. */
+function render(answer: string, reply: CheckpointReply | null = values): string {
+  const markdown = <Markdown>{answer}</Markdown>;
+  return renderToStaticMarkup(
+    reply === null ? markdown : <CheckpointReplyProvider value={reply}>{markdown}</CheckpointReplyProvider>,
+  );
+}
+
+test("a checkpoint is drawn as a card between the prose, not as a code block", () => {
+  const html = render(card());
+  assert.match(html, /class="evolve-checkpoint is-confirm"/);
+  assert.match(html, /检查点 1\/4/);
+  assert.match(html, /等待确认/);
+  assert.match(html, /什么算“更好”/);
+  // The body is prose inside the card, not the JSON the model wrote.
+  assert.match(html, /<strong>度量：<\/strong>/);
+  assert.doesNotMatch(html, /step: 1|title: /);
+  // The sentence before it is still an ordinary paragraph.
+  assert.match(html, /^<p>说明文字。<\/p>/);
+});
+
+test("a waiting checkpoint offers the two answers the flow expects", () => {
+  const html = render(card());
+  assert.match(html, /确认，继续/);
+  assert.match(html, /需要调整/);
+});
+
+test("an automatic checkpoint is a record: it says so and asks nothing", () => {
+  const html = render(card({ pace: "auto", step: 3 }));
+  assert.match(html, /class="evolve-checkpoint is-auto"/);
+  assert.match(html, /自动/);
+  assert.doesNotMatch(html, /确认，继续/);
+  assert.doesNotMatch(html, /evolve-checkpoint-actions/);
+});
+
+test("a card with no one to answer it still shows its content", () => {
+  const html = render(card(), null);
+  assert.match(html, /检查点 1\/4/);
+  assert.match(html, /什么算“更好”/);
+  assert.doesNotMatch(html, /evolve-checkpoint-actions/);
+});
+
+test("a card whose reply is still streaming disables its buttons", () => {
+  const html = render(card(), { ...values, busy: true });
+  assert.match(html, /class="evolve-checkpoint-confirm" disabled=""/);
+  assert.match(html, /这条回复还没结束/);
+});

@@ -1488,3 +1488,111 @@
 
   .evolve-inspector { transition: none; }
 }
+
+/* ── checkpoint cards ───────────────────────────────────────────────────────── */
+
+/* A checkpoint is a place the conversation stops, so it reads as a block of
+   its own inside the answer rather than as another paragraph: the accent edge
+   is the discovery green, the same colour the rest of the surface uses for
+   "this is an experiment", and it is the only way the card is told apart from
+   the prose that introduced it. */
+.evolve-checkpoint {
+  margin: 12px 0;
+  padding: 13px 16px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--discovery);
+  border-radius: var(--radius-m);
+  background: linear-gradient(120deg, #f7fcfa 0%, #fff 62%);
+}
+
+/* Auto is a record of a step that did not wait for anyone, so it carries the
+   same card without the accent that says "answer me". */
+.evolve-checkpoint.is-auto {
+  border-left-color: var(--border-strong);
+  background: var(--surface-subtle);
+}
+
+.evolve-checkpoint-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.evolve-checkpoint-step {
+  color: var(--discovery-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.evolve-checkpoint.is-auto .evolve-checkpoint-step { color: var(--text-faint); }
+
+.evolve-checkpoint-pace {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--discovery-soft);
+  color: var(--discovery-strong);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.evolve-checkpoint.is-auto .evolve-checkpoint-pace {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.evolve-checkpoint-title {
+  margin: 0 0 6px;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 20px;
+}
+
+.evolve-checkpoint-body.text {
+  font-size: 13.5px;
+  line-height: 21px;
+}
+
+.evolve-checkpoint-body.text > :last-child { margin-bottom: 0; }
+
+.evolve-checkpoint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.evolve-checkpoint-actions button {
+  height: 30px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.evolve-checkpoint-actions button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+.evolve-checkpoint-confirm {
+  border: 1px solid var(--discovery);
+  background: var(--discovery);
+  color: #fff;
+}
+
+.evolve-checkpoint-confirm:hover:not(:disabled) { background: var(--discovery-strong); }
+
+.evolve-checkpoint-adjust {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.evolve-checkpoint-adjust:hover:not(:disabled) { background: var(--surface-subtle); }

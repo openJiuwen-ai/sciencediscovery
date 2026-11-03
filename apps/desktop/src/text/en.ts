@@ -1085,6 +1085,19 @@ export const EN: Text = {
     autoPace: "Auto",
     autoPaceTitle: "Started without pausing at checkpoints",
 
+    /* The checkpoint card's own chrome. The title and body are the model's
+       words and arrive in the conversation's language already. */
+    checkpoint: {
+      eyebrow: (step: number, total?: number) => (total === undefined ? `Checkpoint ${step}` : `Checkpoint ${step}/${total}`),
+      waiting: "Waiting for you",
+      auto: "Auto",
+      confirm: "Looks right — continue",
+      adjust: "Needs a change",
+      confirmReply: "Looks right — continue.",
+      adjustDraft: "I'd like to change this step: ",
+      busy: "This reply is still running; wait for it to finish.",
+    },
+
     create: {
       title: "New evolution run",
       intro: "Describe what should improve and how \"better\" is measured. The assistant designs the scorecard in the conversation first, then starts the search once you confirm.",

@@ -2,7 +2,7 @@
 name: evolve-design
 description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve-design`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Runs a short checkpointed design conversation, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Designing an evolution search
@@ -23,8 +23,7 @@ the scorecard, the split and the starting point the same way and only set `algor
 **Pace second.** The command may carry `--no-confirm`, which means the user has chosen to let the
 design and the launch run in one pass: do steps 1–4 yourself, without stopping for a reply between
 them, and set `checkpointMode: "auto"` in `create_evolve_run`. Still show each checkpoint's result
-as it happens — one short section per step, labelled in the user's language as an automatic
-checkpoint (for example `Checkpoint 1/4 · auto`) — because the user is watching the conversation
+as it happens — its card, marked `pace: auto` — because the user is watching the conversation
 and will read them; you just do not wait. Checkpoint 3's cost summary is not skipped:
 say what the run will spend before you spend it. Absolute blockers still stop and ask: a dataset
 that is missing, a goal no default can settle, an approval you cannot give on the user's behalf.
@@ -35,6 +34,41 @@ Four checkpoints. **Do the work for a step, show the result, wait for the user, 
 A checkpoint is a glance, not a form: a few lines they can wave through, with a recommended
 default for every open question so "looks right" is always a valid answer. Do the work between
 checkpoints yourself; do not narrate it.
+
+## How a checkpoint is written
+
+Every checkpoint is one card, not prose. The card is a fenced block: a short header, a `---`
+line, then the checkpoint's own words. It is the **last** thing in the message, in place of the
+lines it describes.
+
+```evolve-checkpoint
+step: 1
+total: 4
+pace: confirm
+title: 什么算“更好”
+---
+**度量：** 压缩比 …
+
+**冻结：** …
+
+**起点：** …
+```
+
+- `step` and `total` number the four checkpoints. The card prints them, so do not repeat
+  "Checkpoint 1" in the title.
+- `title` is the question this step is asking, in one line, in the user's language.
+- `pace` is `confirm` when you are waiting for a reply, and `auto` when the command carried
+  `--no-confirm`. In auto the card records a step that did not wait; there is no reply to read.
+- The prose after `---` is the checkpoint itself — the few lines described below, in Markdown.
+  Keep it to what they must read to answer; the work behind it is not narrated.
+- Nothing may follow the fence in that message. A partial or malformed block is shown as a code
+  block instead of a card, and text after a card reads like an afterthought. In auto, the card
+  closes that message and you go on with the next step.
+- Do not also write the checkpoint as prose. A client that does not draw cards shows this block
+  as code — header and all — which is why it is plain `key: value` lines over readable prose
+  rather than JSON.
+
+Write the card once, when the step is done — not while you are still working on it.
 
 If the user says "you decide" or "just go", state your choices for the remaining steps in one
 message and run them without stopping. If they correct something, apply it and re-show that step
@@ -72,8 +106,8 @@ Read what is free first: this conversation, the workspace, science memory. Settl
    *result*. What is yours to reconsider is the **scoring** — do the cases reward what you care
    about, is the corpus wide enough to separate approaches — not the approach you would like.
 
-> **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what the
-> starting point is. Ask only for what you genuinely could not infer — all of it at once.
+> **Checkpoint 1** (`step: 1`). Say back, in the card: what will be measured, what is frozen, and
+> what the starting point is. Ask only for what you genuinely could not infer — all of it at once.
 
 ## Step 2 — Build the scoring; the probe proves it
 
@@ -106,10 +140,10 @@ beats the starting point — that is the search's entire job, done by hand at th
 and succeeding is worse than failing: you then throw the answer away or seed it, and a strong seed
 spends the search space. A starting point no obvious variation beats is a *good* one.
 
-> **Checkpoint 2.** Show one number — what the starting point scored — plus whether the evaluator
-> ran, and one sentence on what the scoring rewards. This is where a criterion that measures the
-> wrong thing gets caught, so make it easy to disagree: name what a candidate could do to score
-> higher, and let the user say whether that is what they want.
+> **Checkpoint 2** (`step: 2`). Show one number — what the starting point scored — plus whether
+> the evaluator ran, and one sentence on what the scoring rewards. This is where a criterion that
+> measures the wrong thing gets caught, so make it easy to disagree: name what a candidate could
+> do to score higher, and let the user say whether that is what they want.
 
 ## Step 3 — Size the run
 
@@ -149,8 +183,9 @@ does. Set one only for a reason you can give in a line:
   compression candidates replaced a working RLE+Huffman with a from-scratch arithmetic coder, and
   each scored 0). It cannot move the reported score; that comes from held-out shards.
 
-> **Checkpoint 3.** Show the shape in a few lines: what one unit is, how much is held out, how
-> many expansions with how many workers, and roughly what that costs in time and model calls.
+> **Checkpoint 3** (`step: 3`). Show the shape in the card: what one unit is, how much is held
+> out, how many expansions with how many workers, and roughly what that costs in time and model
+> calls.
 > Call `get_evolve_budget` first and read the money line off it — the per-call token ceiling you
 > will actually get, times the expansion count, against the run's total token cap. Call it rather
 > than guessing: the ceiling depends on whether this endpoint can turn thinking off at all, and
@@ -170,9 +205,10 @@ the command carried — `"auto"` for `--no-confirm`, `"confirm"` otherwise. `how
 sentence** for the user: what it measures, how much is held out. `risks`: at most two, only ones
 that change a decision; empty is fine.
 
-> **Checkpoint 4.** Report what came back — the probe's two numbers and what the search will do —
-> and then **end the turn**. Do not wait for it, do not call `get_evolve_run` to check on it, do
-> not loop. The search runs for minutes to hours; its card streams live progress, and sitting on
+> **Checkpoint 4** (`step: 4`). Report what came back — the probe's two numbers and what the
+> search will do — in the card, and then **end the turn**. Do not wait for it, do not call
+> `get_evolve_run` to check on it, do not loop. The search runs for minutes to hours; its card
+> streams live progress, and sitting on
 > the turn shows the user nothing they cannot already see and burns the run's own budget.
 > `get_evolve_run` is for **later**, when the user asks how it went — then report the actual
 > numbers, never an improvement you have not read.
