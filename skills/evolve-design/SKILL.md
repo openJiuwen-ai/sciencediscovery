@@ -2,7 +2,7 @@
 name: evolve-design
 description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve-design`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Runs a short checkpointed design conversation, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # Designing an evolution search
@@ -20,6 +20,17 @@ MAP-Elites islands. The four steps and the four scoring modes are identical for 
 the scorecard, the split and the starting point the same way and only set `algorithm` in
 `create_evolve_run`.
 
+**Pace second.** The command may carry `--no-confirm`, which means the user has chosen to let the
+design and the launch run in one pass: do steps 1–4 yourself, without stopping for a reply between
+them, and set `checkpointMode: "auto"` in `create_evolve_run`. Still show each checkpoint's result
+as it happens — one short section per step, labelled in the user's language as an automatic
+checkpoint (for example `Checkpoint 1/4 · auto`) — because the user is watching the conversation
+and will read them; you just do not wait. Checkpoint 3's cost summary is not skipped:
+say what the run will spend before you spend it. Absolute blockers still stop and ask: a dataset
+that is missing, a goal no default can settle, an approval you cannot give on the user's behalf.
+If the user says stop or asks a question mid-run, stop at the next step and answer. Without the
+flag, confirm at every checkpoint as described below.
+
 Four checkpoints. **Do the work for a step, show the result, wait for the user, then go on.**
 A checkpoint is a glance, not a form: a few lines they can wave through, with a recommended
 default for every open question so "looks right" is always a valid answer. Do the work between
@@ -29,8 +40,9 @@ If the user says "you decide" or "just go", state your choices for the remaining
 message and run them without stopping. If they correct something, apply it and re-show that step
 only.
 
-Do not design the whole thing in one thinking pass. Ask, write files, run them, then decide the
-numbers — a turn spent planning it all produces no candidate and no result.
+Do not design the whole thing in one thinking pass. Ask (when confirming), write files, run them,
+then decide the numbers — a turn spent planning it all produces no candidate and no result. Auto
+changes only whether you wait between steps, never whether the work between them happens.
 
 ---
 
@@ -147,13 +159,16 @@ does. Set one only for a reason you can give in a line:
 > say that to the user in the checkpoint instead of promising "thinking off" — they are approving
 > the budget, not the setting. Mention `search` only if you set it, in one line saying why;
 > otherwise leave it out. This is the last point before real money is spent — say so plainly, and
-> default to the smaller option when unsure.
+> default to the smaller option when unsure. In auto, say it and go on; it is the one checkpoint
+> whose numbers the user still sees before the spend, even though it no longer waits for an
+> answer.
 
 ## Step 4 — Start it, then report
 
-Call `create_evolve_run`. Set `algorithm` to what the user chose. `howScored` is **one sentence**
-for the user: what it measures, how much is held out. `risks`: at most two, only ones that change
-a decision; empty is fine.
+Call `create_evolve_run`. Set `algorithm` to what the user chose, and `checkpointMode` to the pace
+the command carried — `"auto"` for `--no-confirm`, `"confirm"` otherwise. `howScored` is **one
+sentence** for the user: what it measures, how much is held out. `risks`: at most two, only ones
+that change a decision; empty is fine.
 
 > **Checkpoint 4.** Report what came back — the probe's two numbers and what the search will do —
 > and then **end the turn**. Do not wait for it, do not call `get_evolve_run` to check on it, do

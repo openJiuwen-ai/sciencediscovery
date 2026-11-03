@@ -151,6 +151,12 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     algorithm: Type.Optional(Type.Union([Type.Literal("puct"), Type.Literal("openevolve")], {
       description: "The search algorithm the user chose (`/evolve-design --algorithm …`). Default puct.",
     })),
+    checkpointMode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("confirm")], {
+      description: "The pace the user chose for the design conversation. `auto` when the "
+        + "`/evolve-design` command carried `--no-confirm`: the user is not waiting at each "
+        + "checkpoint. Default `confirm`. It changes nothing about the run — record it and, in "
+        + "`auto`, finish the remaining steps without pausing for a reply.",
+    })),
     caseSplit: Type.Optional(Type.Object({
       gateGroups: Type.Integer({ maximum: 64, minimum: 4 }),
       rolloutGroups: Type.Integer({ maximum: 64, minimum: 1 }),
