@@ -1,4 +1,4 @@
-# Idea Tree research exploration
+# Idea Tree
 
 Idea Tree develops several proposals for a research goal, assesses them, and uses what it learns to improve the next proposals. It keeps directions, candidates, and assessments in a tree so you can compare promising paths and see what still needs validation.
 

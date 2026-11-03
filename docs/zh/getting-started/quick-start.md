@@ -1,101 +1,13 @@
-# 快速开始
+# 端到端体验案例
 
-这条路径只做一件事：让你尽快完成第一次可检查的 ScienceDiscovery 任务。
+从一份实验数据到可追溯的结论。本篇带你走完安装之后的第一条完整路径：用仓库自带的样例数据做一次统计分析，从外部补上文献证据，让 Reviewer 复核并按它的发现修订产物，追溯到每个数字的出处，最后把这次流程沉淀成一个可复用的 Skill。
 
-完成后，你应该能够：
+走完之后你会看到 ScienceDiscovery 与普通对话式工具的区别不在"能不能回答问题"，而在**每一步都能被检查、被复用**。全程约一小时，其中大部分是任务的运行时间。
 
-- 打开 ScienceDiscovery；
-- 配置一个可用的任务模型；
-- 让 Agent 实际运行一次 Python 计算；
-- 在工作区看到它交付的 Markdown 产物。
+- **你需要**：已经启动的 ScienceDiscovery（见[安装与部署](deployment.md)），以及至少一个模型服务商 API Key。
+- **使用的样例**：仓库自带的 [`plant-growth.csv`](../../examples/plant-growth.csv)，一份合成的植物生长数据，说明见[样例数据说明](../../examples/README.md)。
 
-## 1. 按你的系统启动 ScienceDiscovery
-
-### Linux：使用预编译版本
-
-如果你使用 glibc 2.28+ 的 Linux x86_64 或 aarch64，这是最短路径。
-此发行包不能直接在 Alpine Linux 等使用 musl 的发行版上运行。
-
-你需要：
-
-- 一个可用的模型 API Key；
-- Bubblewrap，用于隔离代码执行。
-
-先安装 Bubblewrap：
-
-```bash
-sudo apt-get install -y bubblewrap   # Debian / Ubuntu
-# 或：sudo dnf install -y bubblewrap # Fedora / RHEL / openEuler
-```
-
-然后从 [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases)下载与你的架构匹配的 ScienceDiscovery 可执行文件，并将它重命名为 `ScienceDiscovery`。
-
-在文件所在目录执行：
-
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
-```
-
-### macOS：使用本地源码模式
-
-macOS 13+ 的 x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本，
-本篇首次使用流程采用本地源码模式；沙箱使用系统自带的 Seatbelt，
-不需要安装 Bubblewrap。macOS Docker 为实验性路径，详见[部署指南](deployment.md)。
-
-先确认本机已有：
-
-- Node.js 22.19+；
-- pnpm 11.1.2；
-- `python3` 3.9+；
-- uv 0.9+；
-- Git；
-- curl；
-- 一个可用的模型 API Key。
-
-然后执行：
-
-```bash
-git clone https://github.com/openJiuwen-ai/sciencediscovery.git
-cd sciencediscovery
-
-scripts/jiuwenswarm.sh setup
-./scripts/start-stack.sh --mode local
-```
-
-此命令默认启动 JiuwenSwarm；行为与 native 切换方法见 [Agent 后端](../reference/agent-backends.md)。
-
-第一次执行会安装和构建所需组件，因此需要联网，耗时也会比后续启动更长。
-
-如果你已经完成过构建，之后可以用：
-
-```bash
-./scripts/start-stack.sh --mode local --no-build
-```
-
-### Windows：使用 WSL 2 或 Docker（实验性）
-
-所有 Windows 安装路径下的 Agent 运行效果尚未经过全面验证。
-
-可以在 WSL 2 Linux 发行版中运行 [Linux 预编译版](deployment.md#预编译单文件部署linux)
-或[本地源码模式](deployment.md#本地源码模式linux--macos)；
-也可以使用 Docker Desktop，按 [Docker 部署步骤](deployment.md#docker-部署linux-容器)
-运行 Linux 容器。服务启动后，继续阅读下文。
-
-### 启动成功后
-
-启动成功后，直接打开 <http://127.0.0.1:4310>。出现连接引导时，粘贴 `.sciencediscovery-data/secrets/auth-token`（Docker 宿主机为 `./data/secrets/auth-token`）中的本地服务访问令牌，或使用自定义数据目录 / `SCIENCE_AGENT_AUTH_TOKEN` 配置值，并保存。终端打印的 `Open to sign in` 链接只是快捷方式，无需查找启动日志。
-
-使用预编译版或源码模式时，不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
-Docker 服务在后台运行。
-
-如果服务未能启动、浏览器无法进入界面，或启动过程报错，
-请按部署方式查看[二进制与源码模式排障](deployment.md#二进制与本地模式的首次启动排障)
-或 [Docker 常见问题](deployment.md#docker-常见问题)。
-
-> Docker、离线环境、Linux 源码构建以及更完整的部署说明见[部署指南](deployment.md)。
-
-## 2. 配置模型
+## 准备：配置任务模型
 
 打开 **系统设置 → 模型注册表**：
 
@@ -106,52 +18,166 @@ Docker 服务在后台运行。
 
 这里填写的是模型服务商的 API Key。若连接失败，优先检查 API Key、服务商 URL、模型 ID 和网络连接。
 
-## 3. 完成第一次科研任务
+再确认一次代码执行环境：打开 **系统设置 → 本地 Runner → 科学环境**，Python 基础环境应显示 **就绪**。新的数据目录会在首次启动后于后台准备它；显示 **安装中** 时先等它完成。本案例需要 pandas、SciPy 和 Matplotlib，托管环境已经包含它们。
 
-新建一个 Project 和 Session，把下面的任务完整粘贴到消息框：
+## 1. 把数据跑起来
+
+新建一个 Project，例如 `plant-growth`，打开其中的 Session。在右侧 **工作区** 面板中，把 [`plant-growth.csv`](../../examples/plant-growth.csv) 拖到 **拖放文件** 区域，或点击该区域选择文件。文件会出现在 **文件** 下，并作为用户上传出现在 **产物** 中。
+
+把下面的提示完整粘贴到消息框并发送：
 
 ```text
-请完成一个最小的数据分析任务，并把结果交付为可查看的科研产物。
+请分析已上传的文件 plant-growth.csv。它记录了三种施肥处理下 45 株植物的干重。
 
-数据如下：
-temperature_c,yield_g
-20,41
-22,45
-24,49
-26,52
-28,54
-30,53
-32,49
-34,43
+1. 用 pandas 读取文件，报告每种处理各有多少株植物。
+2. 按处理汇总 dry_mass_g（n、均值、标准差），以表格给出。
+3. 用单因素方差分析（scipy.stats.f_oneway）检验各处理的 dry_mass_g 均值是否不同，再用 Tukey HSD（scipy.stats.tukey_hsd）做两两比较。报告统计量和 p 值。
+4. 画出按处理分组的 dry_mass_g 箱线图，并叠加每株植物的数据点，保存为 treatment-boxplot.png。
+5. 各株植物的 light_hours 也不同。检查它在各处理之间是否均衡，并说明它能否解释处理间的差异。
+6. 把表格、检验结果、图和简短的局限性说明写入 growth-report.md。
+7. 把 growth-report.md 和 treatment-boxplot.png 登记为产物，并在最终回复中写出它们的文件名。
 
-要求：
-1. 将数据保存为 temperature_yield.csv。
-2. 必须使用 Python 实际运行计算，不要只在回复中估算。
-3. 计算平均产率、最高产率对应的温度，以及 temperature_c 与 yield_g 的 Pearson 相关系数。
-4. 简要解释结果，并指出仅凭这组小样本不能得出因果结论。
-5. 将完整分析写入 Markdown 文件 first-analysis.md，并把它登记为产物。
-6. 最终回复中明确告诉我产物文件名。
+使用已经装有 pandas、SciPy 和 Matplotlib 的托管 Python 环境，所有计算都要实际运行，不要在回复中估算数字。
 ```
 
-如果首次代码执行出现权限确认，核对动作后批准，然后让任务继续完成。
+在默认审批模式 **危险操作时询问** 下，第一条命令会停在 **需要权限** 卡片上，动作是 **运行本地代码**：
 
-这个任务的目的不是得到一个复杂的科研结论，而是确认 ScienceDiscovery 已经完成了一个最小闭环：**理解任务 → 运行工具 → 产生文件 → 交付产物**。
+- **仅允许一次**：只批准这一条命令，下一条仍会询问；
+- **允许同类操作**：批准这一条以及之后的代码执行，分析可以不再中断地跑完；
+- **拒绝**：拒绝执行，Agent 只能在不运行代码的情况下继续。
 
-## 4. 确认你已经跑通
+这里选择 **允许同类操作**。代码仍在沙箱中运行，只能访问工作区，也不能联网。这项授权是长期的，第 5 步会带你撤销它。
 
-满足下面四项，就说明第一次使用成功：
+**你应该看到**：时间线先显示 Agent 列出并读取文件，然后是若干次代码执行；先失败一次、再修正重跑是正常的。**产物** 中出现 `growth-report.md` 和 `treatment-boxplot.png`，旁边通常还有分析脚本和结果文件。打开报告，可以看到每组 15 株的汇总表、方差分析的统计量和 p 值、三种处理之间的两两比较、图或对图的引用，以及一段局限性说明。这份样例的 `light_hours` 在各处理之间并不完全均衡，认真的报告会讨论它，而不是忽略它。
 
-- [ ] Session 中的任务已经结束，不再显示为运行中；
-- [ ] 时间线中可以看到实际的代码执行记录；
-- [ ] 工作区中可以看到 `first-analysis.md`；
-- [ ] 打开产物后，可以看到基于实际计算得到的数值和简短解释。
+> 不同模型写出的代码和文字不同，请对照结果的形态，而不是具体措辞或数字。
 
-不同模型生成的文字可能不同，这是正常的；这里关心的是工具是否实际执行、产物是否真实生成。
+## 2. 补上外部证据
 
-## 5. 接下来做什么
+这一步把数据之外的知识引进来：查询文献数据库，得到一份参考文献可以逐条打开的证据摘要。
 
-- **下一课：**[分析一份数据](analyze-a-dataset.md)使用仓库自带的样例 CSV。它是六节课中的第二课，每节课结尾都会指向下一课。
-- 想了解 ScienceDiscovery 能做什么：看[核心能力](../README.md#核心能力)。
-- 想照着真实科研案例做一遍：看[领域指南](../README.md#领域指南)。
-- 想跑一个具体的优化案例：看[使用PUCT优化一个文本压缩算法](../domains/evolve-a-solution.md)。
-- 想使用 Docker、源码构建或解决启动问题：看[部署指南](deployment.md)。
+在消息框下方的工具栏中打开 **数据连接器**，在 **数据源** 下开启 **PubMed** 和 **Europe PMC**。新 Session 默认只开启 Web 访问，所以这一步决定了 Agent 能否查询这两个文献库。
+
+再输入 `/`，依次选择 `literature-searcher`、`evidence-extractor` 和 `report-writer`，它们会以标签形式出现在消息框中；在提示里写出 Skill 名称同样有效。然后发送：
+
+```text
+请就下面的问题写一份简短、带引用的证据摘要：
+向土壤中添加生物炭能否提高作物产量？这种效果是否取决于土壤 pH？
+
+分三步完成：
+1. 用 literature-searcher 在 PubMed 和 Europe PMC 中找到 6 到 10 项相关研究，优先选择荟萃分析和田间试验，并记录你运行过的检索式。
+2. 用 evidence-extractor 为每项研究记录研究设计、作物、土壤 pH 范围和报告的产量效应，每一行都注明来源。
+3. 用 report-writer 写出 biochar-yield-summary.md：一段话的回答、证据表、研究之间的分歧和局限性。每个事实性句子都要有行内引用，指向带 DOI 或 URL 的参考文献。
+
+保持简短：这是证据摘要，不是完整综述。把 biochar-yield-summary.md 登记为产物，并在最终回复中写出文件名。
+```
+
+每一类新动作都会停在 **需要权限** 卡片上，卡片会写出连接器工具和检索词，例如 `mcp__pubmed__search`。检索是并行的，可能同时出现多张卡片；对每个连接器工具各选一次 **允许同类操作** 即可。
+
+**你应该看到**：先出现计划或待办列表，然后工作被拆成若干 **Subagent** 卡片——检索、提取和写作各一步，分别由与 Skill 同名的内置 Specialist 执行。时间线中有对 PubMed 和 Europe PMC 的检索调用；某个检索式没有结果是正常的，Agent 通常会改写后重试。中间产物（文献列表、证据表）之后是 `biochar-yield-summary.md`，其中包含简短回答、每项研究一行的表格、关于分歧的部分、局限性，以及带编号的参考文献列表。
+
+最后打开两三条参考文献，确认它们确实支持摘要中归于它们的说法。格式正确的引用并不证明来源支持该句子，这正是下一步要处理的问题。
+
+## 3. 接入 MCP 工具
+
+ScienceDiscovery 也可以通过 MCP 接入你自选的外部工具。这里用一个不需要安装、账号或密钥的公开服务器，核实第 1 步用到的统计方法本身。
+
+打开 **系统设置 → MCP 服务器 → 自定义**，选择 **添加服务器**：
+
+| 字段 | 值 |
+| --- | --- |
+| 名称 | `DeepWiki` |
+| 连接方式 | Streamable HTTP |
+| URL | `https://mcp.deepwiki.com/mcp` |
+| 认证 | 无认证 / 请求头，不添加任何请求头 |
+
+勾选表单顶部的 **启用此 MCP 服务器** 并点击 **保存**，然后点击服务器名称展开详情，选择 **测试连接**。状态变为 **已连接** 后，在消息框下方的 **数据连接器** 中，于 **自定义 MCP** 下为当前 Session 开启 **DeepWiki**——在设置中启用服务器，并不会让每个 Session 都获得它的工具。
+
+发送：
+
+```text
+请用 DeepWiki 连接器查看 GitHub 上的 scipy/scipy 仓库。
+
+1. 找到 scipy.stats.tukey_hsd 的实现位置，以及它用哪种分布计算 p 值和置信区间。
+2. 记录它对各组的假设，例如方差相等或样本量相等。
+3. 写出 tukey-hsd-notes.md，包含简短说明、DeepWiki 报告的源文件路径，并提醒 DeepWiki 的回答是生成式摘要，需要对照代码核实。
+
+把 tukey-hsd-notes.md 登记为产物，并在最终回复中写出文件名。
+```
+
+每个 DeepWiki 工具第一次调用时都会停在 **需要权限** 卡片上，对每个工具选择 **允许同类操作**，并批准写文件的代码执行。
+
+**你应该看到**：时间线中有对 DeepWiki 工具的调用，展开任意一次可以看到 Agent 发出的问题和返回的回答；产物中出现 `tukey-hsd-notes.md`，写明了实现文件、所用分布和关于假设的说明。DeepWiki 是第三方服务，它的回答是对代码的生成式摘要，不要向它发送任何私密内容。需要凭据、OAuth 或本地命令的服务器见[配置自定义 MCP、OAuth 与 Inspector](../advanced-setup/configure-custom-mcp.md)。
+
+## 4. 让 Reviewer 复核并接受修订
+
+回到第 1 步的 Session。`growth-report.md` 登记约一分钟后，对话中通常会出现一张 Reviewer 卡片；快速级别的常见发现是指出报告里没有关联到记录证据的数字。这些发现不会修改产物，它们是给你和 Agent 的提示，Reviewer 也可能出错。要关闭某个 Session 的自动评审，使用消息框下方审批模式旁边的 **自动审查**。
+
+先让一个内置 Skill 做一次独立检查。在消息框中输入 `/`，选择 `computation-reviewer`，然后发送：
+
+```text
+请对照本 Session 中记录的代码执行检查 growth-report.md。对报告表格和检验结果中的每个数字，说明它由哪一次执行产生，并列出无法追溯到任何执行的数字。不要修改报告。把检查结果写入 computation-check.md，并登记为产物。
+```
+
+产物中出现 `computation-check.md`，它用表格把报告中的每个数字和产生它的执行对应起来，并列出无法匹配的数字；`growth-report.md` 本身不变。Skill 可用并不证明模型用了它，时间线中加载该 Skill 的记录才是证据。
+
+再按 Reviewer 的发现请求修订：
+
+```text
+Reviewer 卡片列出了 growth-report.md 中没有关联到记录证据的数字。请添加一个简短的"数字来源"小节，为每个表格和检验写明产生它的脚本和结果文件，并把被指出的数值关联到这些记录。不要重新运行分析，也不要改动任何数字。保存文件，并再次登记 growth-report.md，使它成为同一产物的第 2 版。
+```
+
+**你应该看到**：Agent 读取报告和之前的记录，编辑文件，然后再次登记。产物的 **版本** 选择器现在列出两个版本，预览中显示 **第 2 版 / 共 2 版**。
+
+## 5. 对结果溯源
+
+复核之后还要能回答"这个数字是怎么来的"。打开 `treatment-boxplot.png`，从 **预览** 切换到 **溯源**：
+
+- 产生这张图的命令，通常是运行分析脚本，并可 **下载脚本**；
+- **执行日志**，包含退出码和脚本打印的输出；
+- **工作目录**，以及默认折叠的 **进程环境**；
+- **受管软件包环境**，列出这次运行使用的确切软件包版本，例如 pandas、SciPy 和 Matplotlib。
+
+这些是实际运行的记录，不是模型写出的描述。在 **工作区** 面板的 **文件** 下点击 [`plant-growth.csv`](../../examples/plant-growth.csv) 旁的信息图标，可以看到它的来源是 **用户上传**；再点击 `treatment-boxplot.png` 旁的信息图标，可以看到写出它的工具和执行、**关联产物** 以及 **修订历史**。
+
+回到 `growth-report.md`，在产物顶部的 **版本** 选择器中对比两版：第 2 版新增了"数字来源"小节，表格与检验结果中的每个数值都应与第 1 版一致，因为提示要求的是添加关联而不是重新计算。两个版本都会保留，第 1 版仍显示原始文本及其自身的溯源。
+
+最后撤销第 1 步留下的长期授权：打开 **系统设置 → 权限**，在 **长期权限授权** 下找到 **运行本地代码** 这一项，点击 **撤销**。每个选择过 **允许同类操作** 的 Session 都有自己的授权，前面步骤中的每个连接器工具也各有一项；撤销会把授权从列表中移除，已经运行过的执行仍保留其记录和溯源。
+
+## 6. 把这次流程沉淀成 Skill
+
+值得重复的分析就应该变成 Skill。在第 1 步的 Session 中，以 `/skill-creator` 开头输入消息，输入框会把它显示为 **Skill 编写** 命令，发送：
+
+```text
+/skill-creator 根据本 Session 中的分析创建一个名为 group-comparison 的 Skill。它要在上传的 CSV 中按某一列的分组比较另一列数值：报告每组的 n、均值和标准差，在托管 Python 环境中用 SciPy 做单因素方差分析和 Tukey HSD，画出叠加每个数据点的箱线图，并写出一份 Markdown 报告，与图一起登记为产物。由用户指定 CSV 文件和这两列。
+```
+
+Agent 会写出一个包含 `SKILL.md`、脚本，常常还有报告模板的软件包，并在沙箱中用 [`plant-growth.csv`](../../examples/plant-growth.csv) 测试脚本，最后创建一份 **待处理草稿**。此时还没有安装任何东西。
+
+打开 **系统设置 → Skills**，打开草稿，阅读 **查看变更**：`SKILL.md` 的说明、脚本以及其他文件都可以直接修改，这正是审核的意义。**发布到** 保持为项目 Skill 库，点击 **发布 Skill**。已发布的库中 Skill 只在开启了该库的范围内进入运行，所以在左侧栏打开该 Project 的菜单，选择 **设置**，在 **Skill 库** 中开启 **Project Skills** 并保存。
+
+在这个 Project 中新建一个 Session，按第 1 步再次上传 [`plant-growth.csv`](../../examples/plant-growth.csv)，发送：
+
+```text
+用 group-comparison 分析 plant-growth.csv，比较不同 treatment 分组之间的 light_hours。
+```
+
+和之前一样批准第一次代码执行。时间线中 Agent 读取 `group-comparison` Skill，并在文件上运行它自带的脚本，分组列为 `treatment`，数值列为 `light_hours`；产物中出现以所比较列命名的报告、箱线图和结果文件。如果要导入已有的 Skill 而不是新写一个，见[导入与管理科研 Skill](../advanced-setup/configure-skills.md)。
+
+## 确认结果
+
+- [ ] 时间线中有你批准过的代码执行、PubMed 或 Europe PMC 检索，以及 DeepWiki 工具调用。
+- [ ] 产物中有 `growth-report.md`、`treatment-boxplot.png`、`biochar-yield-summary.md`、`tukey-hsd-notes.md` 和 `computation-check.md`。
+- [ ] 图的 **溯源** 标签页显示了命令、退出码和运行时使用的软件包版本。
+- [ ] `growth-report.md` 的 **版本** 选择器列出两个版本；第 2 版新增了小节，数值与第 1 版一致。
+- [ ] 新 Session 中运行 `group-comparison` 得到的报告比较的是 `light_hours` 而不是 `dry_mass_g`。
+- [ ] **长期权限授权** 中不再列出你撤销的授权。
+
+不同运行的措辞和数字可能不同，这是正常的；这里关心的是工具是否实际执行、证据是否可追溯、流程是否可复用。
+
+## 接下来
+
+- 想把这条路径用到真实研究问题上：[领域指南](../README.md#领域指南)。
+- 想了解 ScienceDiscovery 为什么适合科研场景：[核心能力](../README.md#核心能力)。
+- 想跑一个具体的优化案例：[使用PUCT优化一个文本压缩算法](../domains/evolve-a-solution.md)。
+- 想了解追溯到记录了哪些内容以及为什么：[评审与溯源](../developer-docs/review-provenance.md)。

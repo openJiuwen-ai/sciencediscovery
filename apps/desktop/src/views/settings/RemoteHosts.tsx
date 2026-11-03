@@ -61,6 +61,8 @@ import { Group, Tag } from "./rows.js";
 /** How often the connect log is read while a connect is in flight. The request
  *  itself can take minutes; this is how the waiting is made visible. */
 const LOG_POLL_MS = 800;
+/** How often the catalog is re-read while a machine's reachability is pending. */
+const REACHABILITY_POLL_MS = 2_000;
 
 interface HostKeyPrompt extends HostKeyIssue {
   /** Runs the failed action again with the key accepted. */
@@ -113,6 +115,16 @@ export function RunnerSection({ client, hosts, onConfirm, onReload }: Props) {
    *  just as a registered machine does, and has no connection status to read
    *  its inventory from. */
   const [npu, setNpu] = useState<NpuRunnerSelectionsResponse>();
+
+  // A machine the API could not ask yet says so instead of holding the page:
+  // re-read until every pending answer has landed.
+  const checkingReachability = hosts.some((host) => host.reachability?.state === "checking");
+  useEffect(() => {
+    if (!checkingReachability) return;
+    const timer = setInterval(() => onReload(), REACHABILITY_POLL_MS);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkingReachability]);
 
   // Read once for every Runner rather than per machine record, and separately
   // from the catalog, so a machine list still renders if this read fails.

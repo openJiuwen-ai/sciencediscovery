@@ -42,9 +42,9 @@ process.env.PYTHONIOENCODING ??= "utf-8";
 // dev terminals stay untouched.
 process.env.SCIENCE_AGENT_DESKTOP ??= "1";
 
-// The desktop UI manages the skill selection (project settings): a run stages — and installs in JiuwenSwarm —
-// just what it enabled, and aligns JiuwenSwarm's own on/off switches with that. Server deployments (start-stack.sh)
-// keep every installed skill everywhere, switched inside JiuwenSwarm.
+// The desktop UI manages the Skill selection (Project settings): a run stages — and installs in JiuwenSwarm —
+// just what it enabled, then aligns JiuwenSwarm's own on/off switches. Server deployments use a shared native
+// catalog and therefore do not advertise those saved selections as request-scoped visibility guarantees.
 process.env.SCIENCE_AGENT_SKILL_SELECTION ??= "desktop";
 
 const say = message => process.stderr.write(`${message}\n`);

@@ -1,4 +1,4 @@
-# Scientific MCP and Skills: connect resources and reuse research methods
+# Scientific MCP and Skills
 
 Research needs concrete evidence: a protein annotation, a paper's experimental conditions, or atom positions in a structure file. Model knowledge alone cannot reliably keep that information current and inspectable. Without suitable procedures, even good data can lead to results that are difficult to reproduce.
 

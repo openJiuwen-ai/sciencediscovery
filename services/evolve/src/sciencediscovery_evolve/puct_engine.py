@@ -44,9 +44,10 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import events
+from .acceptance import paired_evidence
 from .candidates import CandidateStore
 from .completion import CompletionUnavailable, CompletionUsage, completion_for
 from .engine import RunSpec
@@ -744,6 +745,7 @@ class _Reporter:
 
         best = self.tree.best()
         test_score: Optional[float] = None
+        gate_evidence: Optional[Dict[str, Any]] = None
         if status != "failed" and best.program.valid and self.domain.test_shards:
             # The only number in the run the search never optimised against,
             # which is the only reason a reported improvement means anything
@@ -752,17 +754,92 @@ class _Reporter:
                 best.program.code, self.domain.test_shards)
             if valid:
                 test_score = float(metrics[SCORE_KEY])
+                gate_evidence = self._paired_gate_evidence(metrics)
             else:
                 self.emit(events.log("warn", f"the best candidate failed on the test shards: {error}"))
+        elif status != "failed" and best.program.valid:
+            # Said out loud rather than left to be inferred from a field that is
+            # simply absent: a run that reserved no held-out cases cannot make a
+            # claim about improvement, and that is different from a claim that
+            # failed.
+            self.emit(events.log(
+                "info",
+                "this run reserved no test shards, so its held-out score has no "
+                "baseline to be paired against and no evidence of improvement "
+                "is reported",
+            ))
 
         self.emit(events.search_finished(
             status, best.index if best.program.valid else None, len(self.tree.nodes),
             best_test_score=test_score,
+            gate_evidence=gate_evidence,
             stop_reason=self._stop_reason,
             expansions_planned=self._planned,
         ))
         log.info("run %s finished: status=%s nodes=%d best=%d",
                  self.spec.search_id, status, len(self.tree.nodes), best.index)
+
+    def _paired_gate_evidence(
+        self, candidate_metrics: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """The baseline on the same held-out cases as the winner, paired.
+
+        `bestTestScore` alone is one evaluation of one program. The claim it is
+        printed as -- "the search made progress it did not optimise against" --
+        needs the starting program measured on those same cases, so the
+        difference is a paired one rather than two runs of different splits.
+
+        Every failure to get there is reported rather than papered over: an
+        absent field says "the gate could not tell", while a field filled with
+        zeros would say "the gate looked and found nothing", and those send the
+        user to different places.
+        """
+        candidate_cases = candidate_metrics.get("caseResults")
+        if not isinstance(candidate_cases, Mapping) or not candidate_cases:
+            # Expected outside the test-gated mode: a dataset metric reports a
+            # score per shard, not an outcome per case, so there is nothing to
+            # pair. Said anyway, because a silently missing field is the thing
+            # this field exists to stop.
+            self.emit(events.log(
+                "info",
+                "this gate reports no per-case results, so its held-out score has no "
+                "baseline to be paired against and no evidence of improvement is reported",
+            ))
+            return None
+        # The tree's root program is the starting point the search actually
+        # ranked everything against, which is the baseline this claim is about.
+        try:
+            valid, metrics, error = self.domain.evaluate(
+                self.tree.root().program.code, self.domain.test_shards)
+        except Exception as failure:  # noqa: BLE001 - see below
+            # A test gate raises rather than returning invalid when it cannot
+            # produce a report (no JUnit XML, a setup command that failed,
+            # unparsable output). That is a missing half of the pairing, not a
+            # failed search: the run already finished, and letting it escape
+            # would make server.py send `search_finished("failed", None, 0)`
+            # for a search that completed and has a real held-out score.
+            self.emit(events.log(
+                "warn",
+                "the starting program could not be scored on the same test shards as the "
+                f"winner, so there is no paired evidence of improvement: {str(failure)[:300]}",
+            ))
+            return None
+        if not valid:
+            self.emit(events.log(
+                "warn",
+                "the starting program could not be scored on the same test shards as the "
+                f"winner, so there is no paired evidence of improvement: {error}",
+            ))
+            return None
+        baseline_cases = metrics.get("caseResults")
+        if not isinstance(baseline_cases, Mapping) or not baseline_cases:
+            self.emit(events.log(
+                "warn",
+                "the starting program's evaluation on the test shards carried no per-case "
+                "results, so there is no paired evidence of improvement",
+            ))
+            return None
+        return paired_evidence(baseline_cases, candidate_cases)
 
 
 # --- Refusals and wiring helpers ---------------------------------------------

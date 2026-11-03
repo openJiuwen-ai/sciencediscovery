@@ -1,4 +1,4 @@
-# RSI for scientific artifacts: put each improvement to the test
+# RSI for Scientific Artifacts
 
 Once an algorithm works, can it become faster, more accurate, or smaller? Once a proposal exists, can clear criteria guide its improvement? RSI for scientific artifacts turns repeated revision and evaluation into a recorded search process.
 

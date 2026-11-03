@@ -57,46 +57,7 @@ ScienceDiscovery 本地完成：智能体阅读文献、编写并运行代码、
 
 ![产物溯源面板：descriptive_absolute_risk.csv 的版本、run_shell 脚本与执行记录](docs/images/readme/tour-trace-zh.jpg)
 
-## 快速开始
-
-### Windows 桌面端
-
-1. 从 [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases) 下载 Windows 安装包（`.exe`）并运行。安装包自带科研运行时，无需另外安装 Node.js、Python，也无需 WSL。
-2. 首次启动时选择工作区目录（建议预留约 5 GB 可用空间）。应用会在后台准备运行时，首次准备可能需要几分钟。
-3. 选择模型提供方，填入 API Key，测试连接后即可开始使用。
-
-> 在 Windows 上推荐使用桌面端。Linux 用户可按下文说明，在浏览器中使用同一套工作区。
-
-### Linux 单文件二进制
-
-从 [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases) 下载 `ScienceDiscovery-<version>-linux-x86_64`（x86_64）或 `ScienceDiscovery-<version>-linux-aarch64`（arm64），将文件重命名为 `ScienceDiscovery`，然后运行：
-
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
-```
-
-打开 <http://127.0.0.1:4310>。首次连接时，在 **Connection** 页面粘贴 `.sciencediscovery-data/secrets/auth-token` 中的本地服务访问令牌——即使服务在后台运行，这种方式同样可用。该令牌可以进入本机工作区，请妥善保管。同一发布页面提供 `SHA256SUMS` 供校验文件完整性。
-
-### 连接模型
-
-ScienceDiscovery 不内置模型，需要接入你自己的 API。在 Linux 下，打开左侧栏底部的 **系统配置（System configuration）**，进入 **模型库（Model registry）**，选择预设提供方或手动添加，填写服务信息与 API Key，然后点击 **保存并连接（Save & connect）**。第一个模型同时会成为默认任务模型，之后可在 **全局默认任务模型** 中修改。协议支持范围与连接测试的费用说明见 [模型 API 兼容性](docs/zh/model-api-compatibility.md)。
-
-### 运行第一个任务
-
-新建项目与会话，将 CSV 或 PDF 拖入工作区，描述你希望完成的分析。权限卡出现时批准首次执行，在时间线中跟踪工具调用与结果，并从工作区面板打开任务声明为**产物（Artifacts）**的文件。
-
-## 核心能力
-
-| 能力 | 你将获得什么 | 参考文档 |
-| --- | --- | --- |
-| **文献与数据接入** | 内置连接器直达文献库与数据库；PDF 被解析为可引用的证据；自定义 MCP 服务器可扩展接入范围 | [文献调研](https://sciencediscovery.github.io/zh/docs/domains/literature-research.html) · [自定义 MCP](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-custom-mcp.html) |
-| **沙箱内代码执行** | 智能体在 fail-closed 沙箱中编写、调试并运行 Python、R 与 Shell，科研环境固定版本自动准备，长任务支持后台运行 | [沙箱执行](https://sciencediscovery.github.io/zh/docs/developer-docs/sandbox-execution.html) |
-| **复杂任务拆解与专家协同** | 任务规划与多智能体编排把工作分发给子智能体、Skill 与专家配置 | [子智能体编排](https://sciencediscovery.github.io/zh/docs/developer-docs/subagent-orchestration.html) · [Skill](https://sciencediscovery.github.io/zh/docs/developer-docs/skill-progressive-disclosure.html) |
-| **产物与全链路溯源** | 不可变版本、生成代码、输入、环境清单与引用证据按产物记录；可选的记忆图谱让整条链路可点击追溯 | [审阅与溯源](https://sciencediscovery.github.io/zh/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
-| **审阅与交付检查** | 对完成的回合做自动审阅，包含交付完整性检查，审阅结论绑定到对应产物版本 | [审阅与溯源](https://sciencediscovery.github.io/zh/docs/developer-docs/review-provenance.html) |
-
-## 评测与证据
+## 评测结果
 
 **BiomniBench-DA — 77.4（GLM-5.2，2026 年 8 月）。** 在生物医学数据分析基准中，ScienceDiscovery 取得 77.4 分。在同一篇媒体报道的对比中，Claude Code + Opus 4.7 为 73.3（报道称之为此前的业界 SOTA），Claude Code + GLM-5.2 为 69。
 
@@ -108,7 +69,19 @@ ScienceDiscovery 不内置模型，需要接入你自己的 API。在 Linux 下�
 
 ![BiomniBench-DA 对比：ScienceDiscovery + GLM-5.2 为 77.4，Claude Code + Opus 4.7 为 73.3，Claude Code + GLM-5.2 为 69](docs/images/readme/benchmark-biomnibench-da.png)
 
-图表与分数来自[公开报道](https://mp.weixin.qq.com/s/XSaX6oyok9qqZmwBUiQCFg)（机器之心，2026-08-16），对应 v0.1 版本。报道未说明数据划分、judge 配置、重复次数与被测 commit；本页不声称后续版本的分数，跨版本比较前应重新评测。
+图表与分数来自[公开报道](https://mp.weixin.qq.com/s/XSaX6oyok9qqZmwBUiQCFg)（机器之心，2026-08-16）。
+
+## 快速开始
+
+当前支持 Windows 和 Linux 两个版本，可以从 [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases) 下载 Windows 安装包 `ScienceDiscovery-<version>-win-x64-setup.exe`，以及 Linux 执行程序 `ScienceDiscovery-<version>-linux-x86_64`（x86_64）或 `ScienceDiscovery-<version>-linux-aarch64`（arm64）二进制；详细的安装与启动步骤见[官网安装指导](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html)。
+
+### 连接模型
+
+ScienceDiscovery 不内置模型，需要接入你自己的 API。在 Linux 下，打开左侧栏底部的 **系统配置（System configuration）**，进入 **模型库（Model registry）**，选择预设提供方或手动添加，填写服务信息与 API Key，然后点击 **保存并连接（Save & connect）**。第一个模型同时会成为默认任务模型，之后可在 **全局默认任务模型** 中修改。协议支持范围与连接测试的费用说明见 [模型 API 兼容性](docs/zh/model-api-compatibility.md)。
+
+### 运行第一个任务
+
+新建项目与会话，将 CSV 或 PDF 拖入工作区，描述你希望完成的分析。权限卡出现时批准首次执行，在时间线中跟踪工具调用与结果，并从工作区面板打开任务声明为**产物（Artifacts）**的文件。
 
 ## 系统要求
 
@@ -118,17 +91,6 @@ ScienceDiscovery 不内置模型，需要接入你自己的 API。在 Linux 下�
 | **Linux 二进制** | 基于 glibc 的 Linux x86_64 或 aarch64（含 WSL 2）；Bubblewrap 0.6+ 与免特权用户命名空间；无需系统 Python、R 或 conda |
 
 科研环境由固定版本的 micromamba 统一准备，Python 与 R 依赖无需自行配置。
-
-## 文档
-
-| 分类 | 指南 |
-| --- | --- |
-| **新手入门** | [快速开始](https://sciencediscovery.github.io/zh/docs/getting-started/quick-start.html) · [部署](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html) |
-| **进阶配置** | [自定义 MCP](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-custom-mcp.html) · [网络代理](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-network-proxy.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
-| **参考** | [配置](https://sciencediscovery.github.io/zh/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/zh/docs/reference/rest-api.html) · [内置工具](https://sciencediscovery.github.io/zh/docs/reference/builtin-tools.html) · [运行时行为](https://sciencediscovery.github.io/zh/docs/reference/runtime-behavior.html) |
-| **开发者文档** | [架构](https://sciencediscovery.github.io/zh/docs/developer-docs/architecture.html) 与[开发者索引](https://sciencediscovery.github.io/zh/docs/developer-docs/) |
-
-完整的中英文文档索引见[文档站](https://sciencediscovery.github.io/zh/docs/)；开发环境与测试命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 社区
 

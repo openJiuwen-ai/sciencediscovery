@@ -1,4 +1,4 @@
-# Analyze correlations and clusters of sepsis endotype scores
+# Sepsis Endotype Analysis
 
 ## Background
 

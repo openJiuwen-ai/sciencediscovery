@@ -149,7 +149,7 @@ async function runServe(binary, context, timeoutMs, verifyPersisted = false) {
         const detail = outcome.error?.message ?? (outcome.signal ? `signal ${outcome.signal}` : `status ${outcome.code}`);
         throw new Error(`serve exited before readiness (${detail}).\n${output}`);
       }
-      if (output.includes("ScienceDiscovery is ready at")) {
+      if (output.includes("ScienceDiscovery Web UI is available at")) {
         try {
           const response = await fetch(`http://127.0.0.1:${port}/health`, {
             signal: AbortSignal.timeout(2_000),
@@ -200,7 +200,7 @@ async function runServe(binary, context, timeoutMs, verifyPersisted = false) {
     }
     return {
       healthStatus,
-      readyLine: firstMatchingLine(output, /ScienceDiscovery is ready at/) ?? "ready banner observed",
+      readyLine: firstMatchingLine(output, /ScienceDiscovery Web UI is available at/) ?? "ready banner observed",
     };
   } catch (error) {
     if (!outcome) await stopProcess(child, outcomePromise);

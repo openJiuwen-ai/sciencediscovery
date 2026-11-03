@@ -89,7 +89,7 @@ Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管
 
 ## Docker 环境变量
 
-Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把下面的键插值到 `docker-compose.yml`。它们分两层：编排层只影响 Compose 如何启动容器；容器层由服务的 `environment` 块逐个转发进容器，留空等于使用内置默认值。操作步骤与分层说明见[Docker 部署](../getting-started/deployment.md#docker-部署)。
+Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把下面的键插值到 `docker-compose.yml`。它们分两层：编排层只影响 Compose 如何启动容器；容器层由服务的 `environment` 块逐个转发进容器，留空等于使用内置默认值。
 
 ### 编排层
 
@@ -155,6 +155,6 @@ Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把�
 | `.sciencediscovery-data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
 | 浏览器 local storage | 仅本地服务访问令牌——模型凭证从不离开后端 |
 
-数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于仓库启动器，已有默认 `data` 目录会一次性移动到 `.sciencediscovery-data`。对于单文件 launcher，已有默认 `./science-discovery-data` 或更早的 `./science-agent-data` 会按由新到旧的顺序一次性导入 `./.sciencediscovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../getting-started/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `.sciencediscovery-data/envs/` 下的环境。
+数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于仓库启动器，已有默认 `data` 目录会一次性移动到 `.sciencediscovery-data`。对于单文件 launcher，已有默认 `./science-discovery-data` 或更早的 `./science-agent-data` 会按由新到旧的顺序一次性导入 `./.sciencediscovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 Docker 部署中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `.sciencediscovery-data/envs/` 下的环境。
 
 单文件 payload 覆盖变量遵循同一命名和优先级：用 `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` 指定解包缓存，或用 `SCIENCE_DISCOVERY_PAYLOAD_DIR` 指定已解包 payload；对应的 `SCIENCE_AGENT_*` 名称继续作为带日志的兼容回退。

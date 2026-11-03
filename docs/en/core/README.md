@@ -1,10 +1,10 @@
-# ScienceDiscovery Core Capabilities
+# Core Capabilities
 
 Core does not explain basic Agent concepts. It answers a different question:
 
 > What special capabilities does ScienceDiscovery add on top of a general Agent?
 
-If you are new to Agent systems, first read [Basic concepts](../getting-started/concepts.md) to understand Agent loops, Tools, Skills, Specialists, Workspaces, and Artifacts.
+If you are new to Agent systems, start with the [end-to-end walkthrough](../getting-started/quick-start.md), which exercises Agent loops, Tools, Skills, Specialists, Workspaces, and Artifacts as it goes.
 
 ScienceDiscovery's differentiated capabilities fall into three areas.
 

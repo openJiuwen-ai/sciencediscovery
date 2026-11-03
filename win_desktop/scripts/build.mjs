@@ -52,5 +52,8 @@ if (watch) {
   // but the tray needs an explicit image — ship the 256px PNG next to the
   // bundled pages and let main.ts scale it down.
   cpSync(join(root, "build", "icon-256.png"), join(root, "dist", "icon.png"));
+  // The first-run brand row draws the same app mark as the rail logo in the
+  // SPA; it lives beside the pages so their stylesheets can point at it.
+  cpSync(join(root, "build", "icon-256.png"), join(root, "dist", "app-mark.png"));
   console.log("shell build ok -> dist/");
 }

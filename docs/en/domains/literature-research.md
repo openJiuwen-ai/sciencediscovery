@@ -1,4 +1,4 @@
-# Research how migrating birds determine location and direction
+# Bird Migration Navigation
 
 ## Background
 

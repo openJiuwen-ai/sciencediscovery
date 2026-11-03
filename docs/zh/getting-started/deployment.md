@@ -1,41 +1,69 @@
-# 部署 ScienceDiscovery
+# 安装 ScienceDiscovery
 
-如果你只是第一次使用 ScienceDiscovery，请优先看[快速开始](quick-start.md)。本文面向需要选择其他部署方式、长期运行服务，或排查启动问题的用户。
+Windows 使用桌面安装程序，装完之后双击就能用：不需要打开浏览器，也不需要手动粘贴本地服务访问令牌。
 
-## 选择部署方式
+Linux 使用预编译单文件发行包：下载后在终端执行一条命令启动服务，再用浏览器打开界面。
 
-| 方式 | 支持平台 | 适合谁 | 推荐程度 |
-| --- | --- | --- | --- |
-| 预编译单文件 | 使用 glibc 的 Linux x86_64 / aarch64、Windows x64（使用 glibc 发行版的 WSL 2，实验性） | 想最快启动的普通用户 | **原生 Linux 推荐** |
-| 本地源码模式 | Linux x86_64 / aarch64、macOS 13+ x64 / arm64、Windows x64（WSL 2，实验性） | macOS 用户、开发调试、需要改源码的用户 | macOS 推荐 |
-| Docker | Linux x86_64 / aarch64；macOS（Docker Desktop 或已有 Docker 引擎，实验性）；Windows（Docker Desktop，实验性） | 已有容器环境、希望隔离运行和方便运维的用户 | 按需 |
+## 前置条件
 
-macOS Docker 和所有 Windows 安装路径目前作为**实验性**方式提供，
-其 Agent 运行效果尚未经过全面验证。
+### Windows
 
-三条路径互相独立，选一条即可。服务启动成功后，后续的模型配置和第一次任务都回到[快速开始](quick-start.md)。
+- Windows x64；
+- 安装目录约需 2.6 GB 空闲空间；
+- 数据目录建议预留 5 GB 以上（首次启动会在其中准备 Python 运行时）；
+- 至少一个模型服务商的 API Key。
 
----
+### Linux
 
-## 预编译单文件部署（Linux）
+- 使用 glibc 的 Linux x86_64 或 aarch64；Alpine Linux 等使用 musl 的发行版不能直接运行此发行包；
+- 内置 Node.js 运行时要求 glibc 2.28+，且需要兼容的 libstdc++；
+- Bubblewrap 0.6+，推荐 0.8+，并允许非特权用户命名空间（Debian 11 自带的 0.4.1 版本过低）；
+- 首次启动可访问互联网，用于准备运行依赖；
+- 至少一个模型服务商的 API Key。
 
-### 前置条件
+## Windows 首次启动设置
 
-- 使用 glibc 的 Linux x86_64 或 aarch64，包括 Windows x64 上符合条件的
-  WSL 2 发行版。内置 Node.js 运行时要求 glibc 2.28+，且需要兼容的 libstdc++；
-- Linux 环境需能运行 Bubblewrap，并允许非特权用户命名空间；
-- 可访问互联网完成首次启动依赖准备；
-- 至少一个模型服务商 API Key。
+第一次启动是一个三屏的初始化向导，只需要走一次。
 
-此发行包不能直接在 Alpine Linux 等使用 musl 的发行版上运行。
+### 配置研究工作区
 
-Windows 用户请在 WSL 2 Linux 发行版中执行本节命令。
-请将下载的文件放在发行版的 Linux 文件系统中，例如用户主目录。
-如果文件由 Windows 浏览器下载，先打开 WSL 2 的 Linux 终端（例如 Ubuntu），
-在其中运行 `cd ~ && explorer.exe .`。Windows 文件资源管理器会打开
-Linux 用户主目录，再将下载文件复制进去。
+产物、中间结果和运行环境都会写在这里。默认目录是 `C:\Users\<你的用户名>\AppData\Local\ScienceDiscovery`，
+下方会显示当前磁盘剩余空间，需要 ≥5 GB。确认 **目录可写** 后点击 **下一步**。
 
-安装 Bubblewrap：
+![配置研究工作区](../../images/install/win-07-workspace.png)
+
+### 等待准备工作环境
+
+首次启动要在数据目录中准备 Python 运行时和依赖，可能需要几分钟到十几分钟，取决于磁盘速度与杀毒软件。
+中途可以最小化窗口，首次准备过程不会中断。
+
+![正在准备工作环境](../../images/install/win-08-preparing.png)
+
+### 选择模型提供方
+
+在 **服务商类型** 中选择预置服务商（DeepSeek、Moonshot Kimi、智谱 GLM、Z.AI、MiniMax、阿里云百炼、OpenAI、
+Anthropic、Google Gemini、SiliconFlow、OpenRouter、Ollama 等）；如果要接自建或中转服务，选择
+**自定义（手填地址）**，再填写 **接口协议**、**基础 URL**、**API key** 和 **模型名称**。
+模型列表可以点 **刷新列表** 重新拉取。
+
+填写完成后点击 **测试并继续**。
+
+![选择一个模型提供方](../../images/install/win-09-provider.png)
+
+![自定义服务商](../../images/install/win-10-provider-custom.png)
+
+### 连接成功
+
+测试通过后窗口会显示 **连接成功** 和耗时。点击 **开始使用** 进入主界面；
+如果失败，先核对 API Key、基础 URL 和模型名称，再点 **重新测试**。
+
+![连接成功](../../images/install/win-11-connected.png)
+
+![主界面](../../images/install/win-12-home.png)
+
+## Linux 安装与启动
+
+### 安装 Bubblewrap
 
 ```bash
 sudo apt-get install -y bubblewrap   # Debian / Ubuntu
@@ -43,7 +71,7 @@ sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 sudo dnf install -y bubblewrap       # Fedora / RHEL / openEuler
 ```
 
-### 下载并启动
+### 下载发行包
 
 从 [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases)下载与你的架构匹配的文件：
 
@@ -52,8 +80,11 @@ ScienceDiscovery-<version>-linux-x86_64
 ScienceDiscovery-<version>-linux-aarch64
 ```
 
-可以直接运行下载文件，也可以先重命名。在下载文件所在目录，
-如果对应架构的文件只有一个，可执行：
+请把文件放在本地磁盘的用户主目录下，不要放在网络盘或压缩包内。
+
+### 启动服务
+
+在下载文件所在目录执行：
 
 ```bash
 mv ScienceDiscovery-*-linux-"$(uname -m)" ScienceDiscovery
@@ -61,15 +92,24 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-启动成功后，直接打开 <http://127.0.0.1:4310>。如果出现连接引导，将 `<数据目录>/secrets/auth-token`（默认 `.sciencediscovery-data/secrets/auth-token`）中的本地服务访问令牌粘贴到连接页面并保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。终端打印的 `Open to sign in` 链接只是快捷方式，无需查找启动日志。
+第一次 `serve` 会准备部分运行依赖，因此需要联网；后续启动会复用已准备好的环境。
+如果主机无法联网，请在联网环境提前准备数据目录，或配置可访问的软件源，变量见[配置参考](../reference/configuration.md)。
 
-### 首次启动会做什么
+### 打开界面
 
-第一次 `serve` 会准备部分运行依赖，因此需要联网。后续启动会复用已准备好的环境。
+直接打开 <http://127.0.0.1:4310>。如果出现连接引导，将 `<数据目录>/secrets/auth-token`
+（默认 `.sciencediscovery-data/secrets/auth-token`）中的本地服务访问令牌粘贴到连接页面并保存；
+设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。终端打印的 `Open to sign in` 链接只是快捷方式，无需查找启动日志。
 
-如果主机无法联网，请在联网环境提前准备数据目录，或配置可访问的软件源。相关变量见[配置参考](../reference/configuration.md)。
+如果 ScienceDiscovery 跑在远程服务器上，推荐用 SSH 转发，不要直接把服务暴露到公网：
 
-### 命令
+```bash
+ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>
+```
+
+然后在本地浏览器打开 <http://127.0.0.1:4310>。
+
+### 常用命令
 
 ```text
 ScienceDiscovery serve [options]        启动 Web UI、控制 API 和沙箱 Runner
@@ -79,15 +119,7 @@ ScienceDiscovery version                打印发布版本和内置运行时版�
 ScienceDiscovery help                   显示全部命令和选项
 ```
 
-`run` 是面向脚本和管道的命令行客户端：在终端中输出文本，在管道中输出 JSONL；非交互运行必须传入 `--auto-approve`。选项和输出模式见 [CLI 参考](../reference/cli.md#run)。本地源码模式下，同一客户端的入口是 `node services/launcher/dist/main.js run`。
-
-### 常用启动选项
-
-```text
-ScienceDiscovery serve [options]
-```
-
-最常用的选项：
+最常用的启动选项：
 
 | 选项 | 作用 |
 | --- | --- |
@@ -99,379 +131,65 @@ ScienceDiscovery serve [options]
 
 默认只监听本机。若必须对外提供服务，请先配置独立认证令牌，并只在可信网络中开放。
 
----
+## 常见问题
 
-## 本地源码模式（Linux / macOS）
+### 安装时提示需要管理员权限
 
-本地源码模式适用于：
+只有勾选 **所有用户** 时才需要提权。改选 **仅为我安装** 即可用普通用户完成安装。
 
-- macOS 用户；
-- 希望在 Windows 的 WSL 2 中运行 Linux 源码步骤的用户；
-- 希望修改源码或调试的用户；
-- 不使用预编译 Linux 单文件的环境。
+### 安装程序打开后停在加载窗口
 
-### 前置条件
+这是安装包自检和解压，通常几十秒内结束。长时间无进展时，把安装包移到本地磁盘（不要放在网络盘或压缩包内）后重试。
 
-这些本地环境都需要：
+### 首次启动准备环境很慢
 
-- Node.js 22.19+；
-- pnpm 11.1.2；
-- `python3` 3.9+；
-- uv 0.9+；
-- Git；
-- curl。
+首次启动会下载并解压 Python 运行时和科学计算依赖。杀毒软件的实时扫描会明显拖慢这一过程；
+可以先将安装目录和数据目录加入信任列表。准备完成后，后续启动只需要几秒。
 
-安装脚本会在 uv 创建 Python 3.12 环境前调用 `python3`。
+### 模型连接测试失败
 
-沙箱要求：
+按顺序检查：API Key 是否有效、**基础 URL** 是否包含 `/v1` 之类的正确路径、
+**模型名称** 是否与服务商提供的名称一致、这台机器能否访问该服务。需要代理时见[配置网络代理](../advanced-setup/configure-network-proxy.md)。
 
-- Linux（包括 WSL 2）：Bubblewrap 0.6+ 和非特权用户命名空间，推荐 0.8+；
-- macOS：使用系统自带 Seatbelt，不需要 Bubblewrap。
+### 想更换工作区目录
 
-Debian 11 默认提供的 Bubblewrap 为 0.4.1，低于上面的 Linux 版本要求。
-如果使用该系统，请换用较新的软件包或发行版。
+在应用中打开 **系统设置**，修改数据目录后按提示重启；也可以在下次安装时更换安装位置。
 
-macOS 本地源码模式请使用 13 或更新版本，参见当前的
-[uv 平台支持政策](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions)。
+### 卸载
 
-### 获取源码并启动
-
-Windows 用户请在 WSL 2 Linux 发行版中执行以下命令。
-在 WSL 2 中，请将仓库克隆到发行版的 Linux 文件系统（如用户主目录），
-不要放在 `/mnt/c` 下。这样安装依赖更快，Linux 文件权限也能按预期工作。
-执行下方命令前，先运行 `cd ~`。
-
-```bash
-git clone https://github.com/openJiuwen-ai/sciencediscovery.git
-cd sciencediscovery
-
-scripts/jiuwenswarm.sh setup
-./scripts/start-stack.sh --mode local
-```
-
-源码模式现在也默认使用 JiuwenSwarm。需要旧版 Node 原生循环时，使用 `./scripts/start-stack.sh --mode local --no-jiuwenswarm`，或在 `.env` 中设置 `SCIENCE_AGENT_EXECUTOR=native`。行为差异和当前后端检查方法见 [Agent 后端](../reference/agent-backends.md)。
-
-JiuwenSwarm 本地运行数据默认保存到 `$HOME/.sciencediscovery/jiuwenswarm`，与独立安装隔离；旧数据不会自动迁移或修改。只有显式设置 `SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1` 才启用 `JIUWENSWARM_HOME` 等目录、安装和实例覆盖变量；自定义运行目录必须由 SD 独占，已有 registry/workspace 但没有 SD 归属标记的目录会被拒绝。Docker 保留 `/app/data/.home` 持久化目录。目录、端口和兼容说明见[运行数据与旧安装](../../en/getting-started/deployment.md#jiuwenswarm-runtime-data-and-existing-installations)。
-
-第一次启动会安装依赖并构建项目，需要联网。
-
-后续已经构建完成时可以使用：
-
-```bash
-./scripts/start-stack.sh --mode local --no-build
-```
-
-启动成功后，直接打开 <http://127.0.0.1:4310>，按连接引导填写 `.sciencediscovery-data/secrets/auth-token` 中的令牌（或自定义数据目录 / `SCIENCE_AGENT_AUTH_TOKEN` 配置值）。后台运行且原终端输出不可用时也可使用此方式。
-
-### macOS 注意事项
-
-如果本地源码模式启动时报 Seatbelt 不可用，先确认：
-
-```bash
-test -x /usr/bin/sandbox-exec
-```
-
-若该命令失败，或当前终端本身运行在更严格的沙箱中，
-请先解决当前运行环境的限制。
-
----
-
-## Docker 部署（Linux 容器）
-
-Docker 适合已经使用容器运维、希望通过容器隔离服务运行环境的用户。
-
-### 前置条件
-
-- Linux x86_64 或 aarch64；macOS 使用 Docker Desktop 时请核对其
-  [当前系统要求](https://docs.docker.com/desktop/setup/install/mac-install/#system-requirements)，
-  也可以使用已有的 Docker 引擎；
-  Windows 使用 Docker Desktop；
-- 非 Desktop 环境需要 Docker Engine 24+ 和 Docker Compose v2.15+；
-- Windows 上的 Docker Desktop 需使用 Linux 容器；
-- Linux 容器内需支持 Bubblewrap 和非特权用户命名空间；
-- 足够的磁盘空间用于镜像、构建缓存和科学计算环境；
-- 构建阶段可访问 Docker Hub、npm、PyPI、models.dev 等依赖源。
-
-### 1. 准备配置和数据目录
-
-如果本地还没有仓库，先克隆并进入仓库目录：
-
-```bash
-git clone https://github.com/openJiuwen-ai/sciencediscovery.git
-cd sciencediscovery
-```
-
-Windows 用户在仓库根目录打开 PowerShell，执行：
-
-```powershell
-Copy-Item .env.docker.example .env
-New-Item -ItemType Directory -Force data
-```
-
-Windows 上的 Docker Desktop 需运行 Linux 容器。WSL 2 后端通常默认启用；
-如果 Docker 提示无法启动 Linux 容器，请检查
-[Docker 的 WSL 2 设置](https://docs.docker.com/desktop/features/wsl/)。
-
-Linux 和 macOS 用户在仓库根目录的 Unix Shell 中执行：
-
-```bash
-cp .env.docker.example .env
-mkdir -p data
-id -u
-id -g
-```
-
-如果当前用户的 uid/gid 不是 `1000:1000`，请在 `.env` 中设置：
-
-```text
-SCIENCE_AGENT_UID=<你的 uid>
-SCIENCE_AGENT_GID=<你的 gid>
-```
-
-`data/` 保存项目、会话、工作区、凭据和其他运行状态。
-
-### 2. 构建并启动
-
-```text
-docker compose build
-docker compose up -d
-```
-
-检查状态：
-
-```text
-docker compose ps
-docker compose exec sciencediscovery curl -fsS http://127.0.0.1:4310/health
-```
-
-也可以在浏览器中打开 <http://127.0.0.1:4310/health>。
-顶层 `status: ok` 表示 API 能连接 Runner，但不能证明代码执行沙箱可用。
-登录后，请运行[快速开始](quick-start.md#3-完成第一次科研任务)中的小型 Python 计算，
-确认代码执行也正常。
-
-如果状态为 `degraded`，先查看日志：
-
-```bash
-docker compose logs --tail=200
-```
-
-### 3. 打开 Web UI
-
-直接打开 <http://127.0.0.1:4310>。出现连接引导时，读取宿主机的 `./data/secrets/auth-token`（容器内为 `/app/data/secrets/auth-token`），粘贴本地服务访问令牌并保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该配置值。日志中的登录链接只是快捷方式。
-
-登录链接和令牌等同于密码，请勿分享。
-
-### 4. 日常管理
-
-| 操作 | 命令 |
-| --- | --- |
-| 查看状态 | `docker compose ps` |
-| 查看日志 | `docker compose logs -f` |
-| 停止 | `docker compose down` |
-| 重启 | `docker compose restart` |
-| 更新代码后重建 | `docker compose up -d --build` |
-| 进入容器 | `docker compose exec sciencediscovery sh` |
-
-`docker compose down` 不会删除项目目录中的 `data/`。
-
-### 5. 远程主机访问
-
-如果 ScienceDiscovery 跑在远程服务器，推荐用 SSH 转发，不要直接把服务暴露到公网：
-
-```bash
-ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>
-```
-
-然后在本地浏览器打开 <http://127.0.0.1:4310>。
-
----
-
-## 二进制与本地模式的首次启动排障
-
-### 服务未能启动
-
-先看启动终端中最早出现的错误。很多后续错误只是前一个启动失败的结果。
-
-### 浏览器提示令牌无效
-
-读取 `<数据目录>/secrets/auth-token`（Docker 宿主机为 `./data/secrets/auth-token`）中的当前令牌，或使用 `SCIENCE_AGENT_AUTH_TOKEN` 配置值，粘贴到连接页面并保存，无需查找启动日志。
-
-如果手动输入令牌，请确认填写的是**本地服务访问令牌**，不是模型 API Key。
-
-### `/health` 返回 `degraded`
-
-执行：
-
-```bash
-curl -fsS http://127.0.0.1:4310/health
-```
-
-`degraded` 表示 API 无法连接 Runner，请先检查启动日志。
-在 Linux 或 WSL 2 中，即使 `/health` 返回 `ok`，
-若日志含 `could not build a sandbox`，代码执行仍会失败；
-此时按下面的沙箱步骤排查。
+打开 **设置 → 应用 → 已安装的应用**，找到 ScienceDiscovery 卸载。
+卸载不会删除你选择的工作区目录，需要时手动删除。
 
 ### Linux 提示缺少 `bwrap`
 
-安装 Bubblewrap：
-
-```bash
-sudo apt-get install -y bubblewrap
-# 或
-sudo dnf install -y bubblewrap
-```
-
-如果已安装但仍失败，请按下节检查沙箱。
-
-### Bubblewrap 已安装，但代码执行失败
-
-如果启动日志包含 `could not build a sandbox`，先查看具体错误，
-再决定是否修改系统设置。在 Linux 或 WSL 2 内执行：
+按上文安装 Bubblewrap 后重试：
 
 ```bash
 bwrap --version
+```
+
+### Linux 代码执行失败，日志提示 `could not build a sandbox`
+
+先确认沙箱条件，再决定是否修改系统设置：
+
+```bash
 sysctl kernel.unprivileged_userns_clone
 sysctl kernel.apparmor_restrict_unprivileged_userns
 ```
 
-某些内核没有其中一个 sysctl 键，这是正常情况。
-若 `kernel.unprivileged_userns_clone` 存在且为 `0`，说明当前 Linux 环境禁用了非特权用户命名空间。
-请检查该系统的设置，无法修改时联系系统管理员，启用后重试。
-若 AppArmor 键为 `1`，且报错为权限不足，先用 `sudo aa-status` 确认 AppArmor 是否启用。
-Ubuntu 24.04 及以后版本仅在该限制实际生效时配置 bwrap profile，
-操作可参考 [Ubuntu 的 AppArmor 说明](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007#define-bwrap-profile)。
-不同 WSL 2 环境的内核策略可能不同。只有所选 profile 加载方式需要 `systemctl` 且当前不可用时，
-才需要按[微软的 WSL 说明](https://learn.microsoft.com/zh-cn/windows/wsl/systemd/)启用 systemd。
-探针机制见[沙箱执行设计](../developer-docs/sandbox-execution.md)。
+某些内核没有其中一个 sysctl 键，这是正常情况。若 `kernel.unprivileged_userns_clone` 存在且为 `0`，
+说明当前环境禁用了非特权用户命名空间，需要开启后重试；无法修改时联系系统管理员。
+若 AppArmor 键为 `1` 且报错为权限不足，先用 `sudo aa-status` 确认 AppArmor 是否启用，
+再参考 [Ubuntu 的 AppArmor 说明](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)
+为 bwrap 配置 profile。机制细节见[沙箱执行设计](../developer-docs/sandbox-execution.md)。
 
-### macOS 提示 Seatbelt 不可用
+即使 `/health` 返回 `ok`，代码执行仍可能失败；此时以启动日志中的沙箱错误为准。
 
-检查：
+### Linux 浏览器提示令牌无效
 
-```bash
-test -x /usr/bin/sandbox-exec
-```
+读取 `<数据目录>/secrets/auth-token` 中的当前令牌，或使用 `SCIENCE_AGENT_AUTH_TOKEN` 配置值，
+粘贴到连接页面并保存，无需查找启动日志。请确认填写的是**本地服务访问令牌**，不是模型 API Key。
 
-ScienceDiscovery 不会在 Seatbelt 不可用时静默降级为无沙箱执行。
+## 下一步
 
-### 去哪里看日志
-
-默认日志保存在数据目录下的 `logs/`。具体路径和覆盖规则见[配置参考](../reference/configuration.md#存储布局)。
-
----
-
-## Docker 常见问题
-
-### Compose 拒绝 `systempaths=unconfined`
-
-先运行 `docker compose version`。该选项需要 Compose v2.15+。
-请更新 Compose 插件；若使用 Docker Desktop，则更新 Docker Desktop。
-
-### macOS Docker Desktop 无法挂载项目目录
-
-如果 Docker Desktop 报 `Mounts denied` 或 `file is not shared from the host`，
-请打开 **Settings → Resources → File sharing**，添加仓库所在目录。
-参见 [Docker 文件共享设置](https://docs.docker.com/desktop/settings-and-maintenance/settings/#file-sharing)。
-
-### `data/` 不可写
-
-先确认 `data/` 在 `docker compose up` 前已创建。
-如果日志提示权限不足，从容器内测试挂载目录：
-
-```text
-docker compose run --rm --entrypoint sh sciencediscovery -c 'id; ls -ld /app/data; touch /app/data/.write-test && rm /app/data/.write-test'
-```
-
-在 Linux 或 macOS 的 Unix Shell 中，还可以检查 uid/gid 是否与 `.env` 配置一致：
-
-```bash
-ls -ld data
-id -u
-id -g
-```
-
-Windows 用户先确认当前账户对项目目录中的 `data/` 有写权限，
-且 Docker Desktop 可以共享该目录。Windows 账户没有可填入 `.env` 的 Linux uid/gid。
-如果 Windows 目录挂载后仍不可写，可将仓库移到 WSL 2 发行版的 Linux 文件系统，
-开启 Docker Desktop 的 [WSL 集成](https://docs.docker.com/desktop/features/wsl/#enable-docker-in-a-wsl-2-distribution)，
-在 WSL 中运行 Compose。此时用该 Linux 用户的 `id -u`、`id -g` 值设置 `.env`，
-并由该用户创建 `data/`。
-
-### 容器启动了，但 `/health` 是 `degraded`
-
-先查看：
-
-```bash
-docker compose logs --tail=200
-```
-
-先检查 Runner 的启动错误和 `data/` 挂载。沙箱失败时，`/health` 也可能仍为 `ok`。
-
-如果 `/health` 为 `ok`，但代码任务失败，请检查日志中是否有
-`could not build a sandbox`，并核对前述 Linux 容器要求。
-Windows 用户若发现沙箱探针失败，请检查 Docker Desktop 和 WSL 是否需要更新。
-
-### 模型或外部资源无法访问
-
-容器需要直接访问模型服务商、文献源和其他外部服务。若环境需要代理，请配置[网络代理](../advanced-setup/configure-network-proxy.md)。
-
----
-
-## 部署成功后
-
-服务启动以后，不需要继续阅读部署细节。回到[快速开始](quick-start.md)：
-
-1. 配置模型；
-2. 创建 Project 和 Session；
-3. 跑第一次科研任务；
-4. 确认代码执行和 Artifact 正常。
-
-## 进一步阅读
-
-- CLI 命令与精确行为：[CLI 参考](../reference/cli.md)
-- 精确环境变量、端口和数据目录：[配置参考](../reference/configuration.md)
-- 单文件发行包如何构建：[开发者文档：二进制打包与发行](../developer-docs/binary-packaging.md)
-- 本地/Docker/远端 Runner 的内部部署机制：[开发者文档：部署运行机制](../developer-docs/deployment-runtime.md)
-- 沙箱隔离和执行机制：[开发者文档：沙箱执行](../developer-docs/sandbox-execution.md)
-- 系统内部进程与模块边界：[开发者文档：整体架构](../developer-docs/architecture.md)
-- 仓库布局和源码入口：[开发者文档：仓库布局](../developer-docs/repository-layout.md)
-
-## 按需初始化 Evolve
-
-精简二进制启动后，Evolve 及相关 Idea Tree 研究路径会如实显示为**尚未初始化**，
-聊天仍可使用。在会话中打开 **任务 → Evolve 演化**，点击**初始化 Evolve**；
-也可以输入 `/evolve-design`，使用输入框上方的初始化入口。
-启动 `serve` 不会自动下载演化服务或候选程序运行环境。
-
-初始化下载已指定的 `v0.3.0-rc1` 应用源码归档，提交为
-`844947da87b27528d9a34d0ee6d0efd591e57749`，校验 SHA-256
-`2cea0ea513eef43c94e697e72a21cf7bb3d4b8883117479240b6c8d3e0cc2e99`，
-并使用发布版自带的 Python（3.12 或更高）安装其中的 `services/evolve` 和冻结的
-候选程序依赖。不需要 Git 检出或主机 Python。请预留至少 1 GiB 可用磁盘空间，
-并允许访问 GitHub 和配置的 Python 包索引。源码包本地版本 `0.0.0` 通过上述
-发布版本、提交和归档摘要确定身份，不依赖单独的 PyPI 演化服务发布。
-完整依赖导出和校验值保存在 `services/launcher/src/evolve-lock.ts`。
-
-启动器让服务自行绑定空闲的本地回环端口，并使用每个安装实例独立随机生成的内部凭据。
-凭据以仅所有者可读写的权限保存在 `<数据目录>/evolve/secrets/internal-token`，
-不会作为浏览器令牌或模型密钥使用。关闭 `serve` 会停止其管理的服务进程；
-重启复用已校验的安装及凭据。下载、校验、安装或启动失败时，Evolve 保持不可用，
-可以再次点击**初始化 Evolve**重试。失败会清理本次临时目录；进程被中断后，
-显式重试会在安装锁内回收具有该固定运行环境所有权标记的私有临时目录。
-未知或无标记的目录会保留供管理员检查，不会自动删除。
-
-管理员仍可显式配置 `SCIENCE_AGENT_EVOLVE_URL` 和
-`SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN`，使用已有服务；启动器不会安装或停止该外部服务。
-健康与鉴权检查成功后才提供演化工具。不使用发布版启动器且未配置服务时，界面会说明
-初始化不可用。源码与容器栈通过同一个启动器监督机制启动已准备好的服务，不再依赖
-隐式固定端口或公开凭据。
-
-按需安装的托管演化环境只使用锁定的依赖，任务不会再从可变索引静默安装其他包；
-缺少额外依赖时会拒绝执行。扩展托管依赖需要更新经过审查的锁定清单。
-显式准备的源码栈或管理员配置的外部服务保留其自身的运行环境管理策略。
-
-启动器只向服务传递已记录的候选目录和日志设置，使 API 与服务共用
-`SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR`。显式准备的源码或容器运行环境还保留管理员的
-代理、包索引和证书路径配置；按需安装的托管环境仍只使用锁定依赖。
-模型密钥、HOME 和任意其他环境变量不会继承。Evolve 不可用时，其工作区和历史接口
-一并禁用；持久化记录仍保存在磁盘上，服务恢复就绪后重新显示。
+安装完成后，跟着[端到端体验案例](quick-start.md)用一个完整任务把统计、外部证据、复核和追溯走一遍。

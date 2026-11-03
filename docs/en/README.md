@@ -6,17 +6,10 @@ This is the complete English documentation set.
 
 ## Getting started
 
-- [Quick start](getting-started/quick-start.md) — follow the shortest Linux or macOS path, configure a model, and complete a first inspectable Agent task.
-- [Basic concepts](getting-started/concepts.md) — understand Agent loops, Tools, Skills, Specialists, Workspaces, and Artifacts.
-- [Deployment](getting-started/deployment.md) — choose a prepackaged single file, local source mode, or Docker, with long-running operation and first-run troubleshooting.
+- [Install and deploy](getting-started/deployment.md) — install on Windows, macOS, or Linux, with long-running operation and first-run troubleshooting.
+- [End-to-end walkthrough](getting-started/quick-start.md) — from one dataset to a traceable conclusion: statistics, external evidence, Reviewer review, tracing, and a Skill of your own.
 
-After the quick start, the learning path continues with five short lessons, each with a concrete input, the prompt to send, and the result to look for:
-
-1. [Analyze a dataset](getting-started/analyze-a-dataset.md) — upload the bundled sample CSV, approve code execution, and find a chart and a report among the Artifacts.
-2. [Search the literature and write a cited summary](getting-started/literature-search-and-report.md) — use the PubMed and Europe PMC connectors with the literature Skills.
-3. [Use and write Skills](getting-started/use-and-write-skills.md) — run a bundled Skill, create one with `skill-creator`, publish it, and use it.
-4. [Connect a tool](getting-started/connect-a-tool.md) — add an MCP server, test it, and use it in a Session.
-5. [Trace a result](getting-started/trace-a-result.md) — follow an Artifact back to its code and environment, act on Reviewer findings, and compare versions.
+This section is just those two pages: install first, then follow the walkthrough once end to end.
 
 ## Core capabilities
 

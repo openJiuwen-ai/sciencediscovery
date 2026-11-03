@@ -1,4 +1,4 @@
-# Specialists: give research tasks focused expertise
+# Specialists
 
 A research report often requires several kinds of work: finding papers, extracting evidence, writing code, evaluating results, and developing an argument. Each needs different judgment. Retrieval should fill source gaps; writing should avoid adding unsupported findings. Someone implementing an analysis also benefits from a separate examination of methodology and reliability.
 

@@ -243,12 +243,20 @@ def test_a_candidate_that_rewrites_the_tests_at_run_time_gains_nothing(tmp_path:
     assert metrics["cases"] == 2, metrics
     assert metrics["failed"] == 2, metrics
     assert metrics["pass_rate"] == pytest.approx(0.0), metrics
+    # The per-case outcome travels with the rate. The rate is one number; which
+    # cases moved is the pairing a paired test needs, and it must be real ids.
+    assert len(metrics["caseResults"]) == 2, metrics["caseResults"]
+    assert set(metrics["caseResults"].values()) == {False}, metrics["caseResults"]
 
     # And the same suite scores an honest candidate full marks, which is what
     # makes the zero above mean something.
     honest_valid, honest, _ = domain.evaluate("def solve(x):\n    return x * 2\n", (0, 1))
     assert honest_valid, honest
     assert honest["pass_rate"] == pytest.approx(1.0), honest
+    # Same cases, now all passing: the ids are stable between the two runs, or
+    # there would be nothing to pair across a baseline and a candidate.
+    assert honest["caseResults"] == {case: True for case in metrics["caseResults"]}, \
+        honest["caseResults"]
 
 
 def test_a_missing_runner_says_so_instead_of_blaming_the_candidate(tmp_path: Path) -> None:

@@ -57,46 +57,7 @@ Runs, artifacts and claims all carry their version and provenance: open the arti
 
 ![The artifact Provenance view showing version history, preview and provenance tabs](docs/images/evidence1.jpg)
 
-## Quick Start
-
-### Windows — desktop app
-
-1. Download the Windows installer (`.exe`) from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases), then run it. The app bundles its own scientific runtime — no Node.js, Python, or WSL setup is required.
-2. On first launch, choose a workspace directory (about 5 GB of free space is recommended). The app prepares its runtime in the background; the first preparation can take several minutes.
-3. Choose a model provider, add your API key, test the connection, and start using the app.
-
-> The desktop app is the recommended path on Windows. Linux users run the same workspace in the browser, as described below.
-
-### Linux — single-file binary
-
-Download the `ScienceDiscovery-<version>-linux-x86_64` asset for x86_64 or the `ScienceDiscovery-<version>-linux-aarch64` asset for arm64 from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases), rename the downloaded file to `ScienceDiscovery`, then run:
-
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
-```
-
-Open <http://127.0.0.1:4310>. On the first connection, paste the local service access token from `.sciencediscovery-data/secrets/auth-token` into the **Connection** page — this works even when the service runs in the background. That token grants access to this machine's workspace, so keep it private. The same release page publishes `SHA256SUMS` for integrity verification.
-
-### Connect a model
-
-ScienceDiscovery does not bundle a model; you connect your own model API. On Linux, open **System configuration** at the bottom of the left sidebar, choose **Model registry**, select a preset provider or add one manually, enter its details and API key, then choose **Save & connect**. The first model also becomes the default task model; change it later under **Global default task model**. Protocol support and connection-check costs are documented in [Model API compatibility](docs/en/model-api-compatibility.md).
-
-### Run your first task
-
-Create a Project and a Session, drop a CSV or a PDF into the workspace, and describe the analysis you want. Approve the first execution when the permission card appears, follow tool calls and their results in the timeline, and open the files the task declares as **Artifacts** from the workspace panel.
-
-## Capabilities
-
-| Capability | What you get | Reference |
-| --- | --- | --- |
-| **Literature and data access** | Built-in connectors reach paper and data repositories; PDFs are parsed into citable evidence; custom MCP servers extend the catalog | [Literature research](https://sciencediscovery.github.io/docs/domains/literature-research.html) · [Custom MCP](https://sciencediscovery.github.io/docs/advanced-setup/configure-custom-mcp.html) |
-| **Sandboxed execution** | The agent writes, debugs, and runs Python, R, and shell inside a fail-closed sandbox, with pinned managed environments and background tasks | [Sandbox execution](https://sciencediscovery.github.io/docs/developer-docs/sandbox-execution.html) |
-| **Task decomposition and specialists** | Planning and multi-agent orchestration distribute work across sub-agents, Skills, and expert profiles | [Subagent orchestration](https://sciencediscovery.github.io/docs/developer-docs/subagent-orchestration.html) · [Skills](https://sciencediscovery.github.io/docs/developer-docs/skill-progressive-disclosure.html) |
-| **Artifacts and end-to-end provenance** | Immutable artifact versions with producer code, inputs, environment inventory, and cited evidence; the optional memory graph makes the chain navigable | [Review and provenance](https://sciencediscovery.github.io/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
-| **Review and delivery checks** | Automatic review of a finished turn, including delivery completeness, with findings bound to the artifact version they reviewed | [Review and provenance](https://sciencediscovery.github.io/docs/developer-docs/review-provenance.html) |
-
-## Evidence & Benchmarks
+## Evaluation Results
 
 **BiomniBench-DA — 77.4 with GLM-5.2 (August 2026).** In this biomedical data-analysis benchmark, ScienceDiscovery scored 77.4. In the same media-reported comparison, Claude Code with Opus 4.7 scored 73.3 — the configuration the report labels as the previous industry SOTA — and Claude Code with GLM-5.2 scored 69.
 
@@ -108,7 +69,19 @@ Create a Project and a Session, drop a CSV or a PDF into the workspace, and desc
 
 ![BiomniBench-DA comparison: ScienceDiscovery with GLM-5.2 scores 77.4, Claude Code with Opus 4.7 scores 73.3, and Claude Code with GLM-5.2 scores 69](docs/images/readme/benchmark-biomnibench-da.png)
 
-The chart and scores come from the [published report](https://mp.weixin.qq.com/s/XSaX6oyok9qqZmwBUiQCFg) (Machine Heart, 2026-08-16) and describe the v0.1 release. The report does not state the dataset split, judge configuration, number of runs, or tested commit, so this page does not claim a score for any later release; re-measure before comparing across versions.
+The chart and scores come from the [published report](https://mp.weixin.qq.com/s/XSaX6oyok9qqZmwBUiQCFg) (Machine Heart, 2026-08-16).
+
+## Quick Start
+
+ScienceDiscovery is available for Windows and Linux. Download the Windows installer `ScienceDiscovery-<version>-win-x64-setup.exe`, or the Linux executable `ScienceDiscovery-<version>-linux-x86_64` (x86_64) / `ScienceDiscovery-<version>-linux-aarch64` (arm64), from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases). See the [official installation guide](https://sciencediscovery.github.io/docs/getting-started/deployment.html) for detailed installation and startup steps.
+
+### Connect a model
+
+ScienceDiscovery does not bundle a model; you connect your own model API. On Linux, open **System configuration** at the bottom of the left sidebar, choose **Model registry**, select a preset provider or add one manually, enter its details and API key, then choose **Save & connect**. The first model also becomes the default task model; change it later under **Global default task model**. Protocol support and connection-check costs are documented in [Model API compatibility](docs/en/model-api-compatibility.md).
+
+### Run your first task
+
+Create a Project and a Session, drop a CSV or a PDF into the workspace, and describe the analysis you want. Approve the first execution when the permission card appears, follow tool calls and their results in the timeline, and open the files the task declares as **Artifacts** from the workspace panel.
 
 ## Requirements
 
@@ -118,17 +91,6 @@ The chart and scores come from the [published report](https://mp.weixin.qq.com/s
 | **Linux binary** | glibc-based Linux x86_64 or aarch64, including WSL 2; Bubblewrap 0.6+ with unprivileged user namespaces; no system Python, R, or conda required |
 
 Managed scientific environments run on a pinned micromamba, so Python and R dependencies are prepared for you.
-
-## Documentation
-
-| Section | Guides |
-| --- | --- |
-| **Getting started** | [Quick start](https://sciencediscovery.github.io/docs/getting-started/quick-start.html) · [Deployment](https://sciencediscovery.github.io/docs/getting-started/deployment.html) |
-| **Advanced setup** | [Custom MCP](https://sciencediscovery.github.io/docs/advanced-setup/configure-custom-mcp.html) · [Network proxy](https://sciencediscovery.github.io/docs/advanced-setup/configure-network-proxy.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
-| **Reference** | [Configuration](https://sciencediscovery.github.io/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/docs/reference/rest-api.html) · [Built-in tools](https://sciencediscovery.github.io/docs/reference/builtin-tools.html) · [Runtime behavior](https://sciencediscovery.github.io/docs/reference/runtime-behavior.html) |
-| **Developer documentation** | [Architecture](https://sciencediscovery.github.io/docs/developer-docs/architecture.html) and the [developer index](https://sciencediscovery.github.io/docs/developer-docs/) |
-
-The complete English and Chinese indexes are on the [documentation site](https://sciencediscovery.github.io/docs/); development setup and test commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Community
 

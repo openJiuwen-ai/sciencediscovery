@@ -141,6 +141,7 @@ test("the sample is written once, so deleting it is not undone on the next start
   // The user deletes what they were given. The Project stays behind empty,
   // which is exactly the state a re-seed would fill again.
   await store.deleteSession(session.id, session.id);
+  await store.whenDeletionsSettle();
   assert.deepEqual(store.listSessions(project.id, "all"), []);
   assert.equal(await seedSampleSession(store), false);
 

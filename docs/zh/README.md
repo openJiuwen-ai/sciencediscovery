@@ -6,17 +6,10 @@
 
 ## 快速开始
 
-- [快速开始](getting-started/quick-start.md) — 按 Linux 或 macOS 的最短路径启动服务、配置模型，并完成第一次可检查的 Agent 任务。
-- [基本概念](getting-started/concepts.md) — 了解 Agent Loop、Tool、Skill、Specialist、Workspace 和 Artifact 等基础概念。
-- [部署](getting-started/deployment.md) — 选择预编译单文件、本地源码模式或 Docker，包含长期运行与首次启动排障。
+- [安装与部署](getting-started/deployment.md) — 按 Windows、macOS 或 Linux 的最短路径安装，包含长期运行与首次启动排障。
+- [端到端体验案例](getting-started/quick-start.md) — 从一份样例数据到可追溯的结论：统计分析、外部证据、Reviewer 复核、结果追溯，并把流程沉淀成自己的 Skill。
 
-快速开始之后，学习路径还有五节短课，每节都给出具体输入、要发送的提示和应看到的结果：
-
-1. [分析一份数据](getting-started/analyze-a-dataset.md) — 上传仓库自带的样例 CSV，批准代码执行，在产物中找到图和报告。
-2. [检索文献并写出带引用的摘要](getting-started/literature-search-and-report.md) — 结合文献类 Skill 使用 PubMed 和 Europe PMC 连接器。
-3. [使用和编写 Skill](getting-started/use-and-write-skills.md) — 运行内置 Skill，用 `skill-creator` 创建、发布并使用自己的 Skill。
-4. [连接一个工具](getting-started/connect-a-tool.md) — 添加 MCP 服务器，测试后在 Session 中使用。
-5. [追溯一个结果](getting-started/trace-a-result.md) — 从产物追溯到代码和环境，处理 Reviewer 的发现并对比版本。
+这一节只有这两篇：先安装，再跟着案例把完整流程走一遍。
 
 ## 核心能力
 

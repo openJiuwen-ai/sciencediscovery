@@ -86,6 +86,14 @@ test("CFG-Q02/03: large selected collections are previewed and installed resourc
   assert.equal(next.items.length, 3); assert.ok(!first.items.some((a: { id: string }) => next.items.some((b: { id: string }) => a.id === b.id)));
   assert.ok(Buffer.byteLength(first.raw) <= 8192); assert.ok(Buffer.byteLength(next.raw) <= 8192);
 });
+
+test("CFG-Q02: shared Skill catalogs report selection as unavailable", async context => {
+  const h = await fixture(context);
+  h.store.setSkillSelectionAvailable(false);
+  const result = await h.query({ action: "describe", capabilityId: "skill.select" });
+  assert.equal(result.available, false);
+  assert.equal(result.unsupportedReason, "SHARED_SKILL_CATALOG");
+});
 test("CFG-Q02: UTF-8 byte paging preserves valid complete identifiers and retrieves every row", () => {
   const rows = Array.from({ length: 1000 }, (_, i) => ({ id: `资源-${i}`, name: "科研方法".repeat(60) }));
   const received: string[] = []; let cursor: string | undefined;

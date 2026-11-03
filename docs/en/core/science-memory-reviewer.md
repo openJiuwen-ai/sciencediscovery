@@ -1,4 +1,4 @@
-# ScienceMemory and Reviewer: make conclusions easier to question
+# Science Memory and Reviewer
 
 A fluent report can still leave essential questions unanswered: which computation produced this number, and does the cited paper support this sentence? ScienceMemory and Reviewer help retain research foundations and identify issues that deserve another look.
 

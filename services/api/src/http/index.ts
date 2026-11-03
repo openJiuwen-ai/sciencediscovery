@@ -705,11 +705,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // With the JiuwenSwarm backend its web search is configured from the web settings: pushed once the store has
   // loaded (a few tries, the adapter may still be starting) and again on every change.
   const jiuwenSwarm = jiuwenSwarmConfigFromEnv();
+  store.setSkillSelectionAvailable(!jiuwenSwarm || jiuwenSwarm.skillSelection === "desktop");
   const webBackend = jiuwenSwarm ? "jiuwenswarm" as const : "native" as const;
-  // Desktop (SCIENCE_AGENT_SKILL_SELECTION=desktop): the UI's selection in project settings decides which skills a
-  // run stages — and installs in JiuwenSwarm, whose on/off switches each run aligns with it. Server deployments
-  // keep the JiuwenSwarm behavior: every installed skill everywhere, switched in JiuwenSwarm itself.
-  if (jiuwenSwarm && jiuwenSwarm.skillSelection !== "desktop") store.useEverySkillEverywhere();
   // The UI's language as JiuwenSwarm's; remembered so that each page load does not rewrite JiuwenSwarm's config.
   let jiuwenSwarmLanguage: "en" | "zh" | undefined;
   const syncJiuwenSwarmWeb = async () => jiuwenSwarm
@@ -1457,14 +1454,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "GET" && url.pathname === "/api/runners") {
         sendJson(response, 200, await Promise.all(["local", ...store.listRemoteHosts().map((host) => host.id)]
-          .map((id) => runnerTarget(store, runnerClient, remoteCompute, id))));
+          .map((id) => runnerTarget(store, runnerClient, remoteCompute, id, { reachability: "now" }))));
         return;
       }
       const runnerDetail = url.pathname.match(/^\/api\/runners\/([^/]+)$/);
       if (runnerDetail && request.method === "GET" && runnerDetail[1] !== "npu") {
         const id = decodeURIComponent(runnerDetail[1]!);
         if (id !== "local" && !store.getRemoteHost(id)) return sendError(response, 404, "Runner not found");
-        sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id));
+        sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id, { reachability: "now" }));
         return;
       }
       if (request.method === "POST" && /^\/api\/runners\/local\/(connect|probe)$/.test(url.pathname)) {
@@ -1480,7 +1477,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // "disconnected" would otherwise say nothing about the machine.
           const reachability = runnerStatus.state === "ready"
             ? undefined
-            : await remoteCompute.reachability(host);
+            : remoteCompute.reachabilityNow(host);
           return { ...host, runnerStatus, ...(reachability ? { reachability } : {}) };
         })));
         return;
@@ -2968,10 +2965,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           // Step 2: read the body from the data pool (same pool the broker /
           // recorder dataCas write into).
           const dataCas = new CasStore(store.dataDir, "data");
-          if (!(await dataCas.has(contentHash))) {
-            return sendError(response, 404, "CAS blob missing for this content_hash");
+          // Read once and branch on the failure, never on has(): has() answers a
+          // boolean, so "corrupted" and "never stored" collapse into one 404 the
+          // moment has() stops throwing (#680). A missing object is a 404; a
+          // corrupt one must stay the loud 500 + warn the catch below logs.
+          let bytes: Buffer;
+          try {
+            bytes = await dataCas.read(contentHash);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              return sendError(response, 404, "CAS blob missing for this content_hash");
+            }
+            throw error;
           }
-          const bytes = await dataCas.read(contentHash);
           // CAS blobs are content-addressed and immutable by construction, so
           // a long-lived cache hit is safe — set the immutable header via a
           // direct writeHead so it overrides the no-store default in
@@ -3923,6 +3929,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
   const cleanup = () => cleanupPromise ??= (async () => {
     jiuwenSwarmWebSyncAbort.abort();
+    // Deletions answer from the catalog and reclaim files afterwards; leaving
+    // them mid-flight would hand the next start a journal to finish.
+    await store.whenDeletionsSettle();
     ideaResearch.close();
     await (await platform.connectorPlugins).dispose();
     remoteCompute.close();

@@ -1,4 +1,4 @@
-# Design an antibody on Ascend NPU
+# Antibody Design on Ascend NPU
 
 **Allow about 30 minutes to configure and run the task. First-time resource preparation and model runtime are additional.**
 

@@ -64,3 +64,147 @@ test("invalid hashes are rejected and missing objects do not verify", async () =
     assert.equal(await store.verify("0".repeat(64)), false);
   });
 });
+
+test("a corrupt pool copy falls back to the intact legacy layout", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    // An older writer left the intact copy in the legacy bare-hash layout.
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    // The copy this store reads first was corrupted in place.
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    assert.deepEqual(await store.read(object.hash), bytes);
+    // The fallback must leave the two public predicates right for this layout
+    // too: has() used to throw and verify() to answer false, and a later
+    // cleanup of has() (see #680) must not undo half of it unnoticed.
+    assert.equal(await store.has(object.hash), true);
+    assert.equal(await store.verify(object.hash), true);
+  });
+});
+
+test("the other pool's layout is a fallback candidate too", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("artifact only the other pool kept intact");
+    const object = await store.put(bytes);
+
+    // This store reads its own pool first; that copy is corrupt, the legacy
+    // layout is absent, and only versioning/data still holds the real bytes.
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+    const otherPool = resolve(root, "versioning", "data", "blobs", "sha256", object.hash);
+    await mkdir(resolve(otherPool, ".."), { recursive: true });
+    await writeFile(otherPool, bytes);
+
+    assert.deepEqual(await store.read(object.hash), bytes);
+  });
+});
+
+test("a non-ENOENT filesystem failure is not reported as corruption", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("artifact behind an unreadable path");
+    const object = await store.put(bytes);
+
+    // A directory where the blob should be makes readFile fail with EISDIR:
+    // that is an I/O error, not a corrupt copy, so it must surface as-is.
+    await rm(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash));
+    await mkdir(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), { recursive: true });
+
+    await assert.rejects(store.read(object.hash), (error: NodeJS.ErrnoException) => {
+      assert.notEqual(error.code, "ENOENT");
+      assert.notEqual(error.message, "CAS integrity failure");
+      return true;
+    });
+  });
+});
+
+test("every copy corrupt still reports corruption, not a missing object", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, "corrupted legacy copy");
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    await assert.rejects(store.read(object.hash), /CAS integrity failure/);
+  });
+});
+
+test("a hash that was never stored keeps the ENOENT shape", async () => {
+  await withStore(async (store) => {
+    await assert.rejects(store.read("0".repeat(64)), (error: NodeJS.ErrnoException) => {
+      assert.equal(error.code, "ENOENT");
+      assert.equal(error.message, "CAS object not found");
+      return true;
+    });
+  });
+});
+
+test("stream() does not hand out a corrupt pool copy when the legacy copy is intact", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of store.stream(object.hash)) chunks.push(chunk as Buffer);
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  });
+});
+
+test("stream() emits no bytes when every copy is corrupt", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, "corrupted legacy copy");
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    let delivered = 0;
+    await assert.rejects(async () => {
+      for await (const chunk of store.stream(object.hash)) delivered += (chunk as Buffer).length;
+    }, /CAS integrity failure/);
+    assert.equal(delivered, 0);
+  });
+});
+
+test("retain() promotes the intact legacy copy instead of giving up on the corrupted pool copy", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    const promoted = await store.retain({ hash: object.hash, size: bytes.length }, "data");
+    assert.equal(promoted.digest, `sha256:${object.hash}`);
+    assert.equal(promoted.size, bytes.length);
+  });
+});
+
+test("stream() leaves an intact first layout untouched across several chunks", async () => {
+  await withStore(async (store, root) => {
+    // Larger than one pipe chunk, so the generator yields a sequence rather than
+    // a single buffer: the pre-check must not change what a healthy object looks
+    // like on the wire (#708 probe c).
+    const bytes = Buffer.from(Array.from({ length: 400_000 }, (_, index) => index % 251));
+    const object = await store.put(bytes);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of store.stream(object.hash)) chunks.push(chunk as Buffer);
+    assert.equal(chunks.length > 1, true, "a 400KB object is expected to arrive in several chunks");
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  });
+});

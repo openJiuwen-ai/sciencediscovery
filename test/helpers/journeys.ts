@@ -663,6 +663,25 @@ export function journeyViews(page: Page): {
   };
 }
 
+/**
+ * Expand the timeline's own grouping containers.
+ *
+ * A live run folds adjacent exploration steps into a collapsed
+ * `<details class="timeline-exploration">`, so a nested tool card — and its
+ * summary — does not exist visibly until that ancestor is open. Whether the
+ * wrapper appears at all depends on the model's tool sequence, which a journey
+ * does not pin; opening it first keeps reading the timeline independent of it.
+ *
+ * The region name is localized, so match both UI languages the journeys use.
+ * The 30s cap on a card summary click is headroom for a loaded runner on a
+ * local DOM toggle, not a measured latency.
+ */
+async function expandTimelineGroups(page: Page): Promise<void> {
+  await page.getByRole("region", { name: /^(Agent activity|Agent 活动)$/ })
+    .locator("details.timeline-exploration:not([open])")
+    .evaluateAll((groups) => groups.forEach((group) => group.setAttribute("open", "")));
+}
+
 /** Read the currently rendered timeline and expandable tool process cards. */
 export async function readRunActivity(page: Page, options: { expandTools?: boolean } = {}): Promise<{
   text: string[];
@@ -670,10 +689,11 @@ export async function readRunActivity(page: Page, options: { expandTools?: boole
 }> {
   const views = journeyViews(page);
   await expect(views.timelines.first()).toBeVisible();
+  if (options.expandTools) await expandTimelineGroups(page);
   const tools: ToolProcess[] = [];
   for (let index = 0; index < await views.toolProcesses.count(); index += 1) {
     const card = views.toolProcesses.nth(index);
-    if (options.expandTools && await card.getAttribute("open") === null) await card.locator(":scope > summary").click();
+    if (options.expandTools && await card.getAttribute("open") === null) await card.locator(":scope > summary").click({ timeout: 30_000 });
     tools.push({
       details: (await card.locator(".timeline-content").textContent())?.trim() ?? "",
       status: (await card.locator(".timeline-status").textContent())?.trim() ?? "",
@@ -686,12 +706,13 @@ export async function readRunActivity(page: Page, options: { expandTools?: boole
 
 /** Locate a tool process by a marker in its rendered input/output, then expand it. */
 export async function expandToolStep(page: Page, options: { contains: string | RegExp }): Promise<Locator> {
+  await expandTimelineGroups(page);
   const cards = page.getByRole("region", { name: /^(Agent activity|Agent 活动)$/ })
     .locator("details.timeline-disclosure.tool")
     .filter({ hasText: options.contains });
   await expect(cards.first(), `a tool step should contain ${String(options.contains)}`).toBeVisible({ timeout: 60_000 });
   const card = cards.first();
-  if (await card.getAttribute("open") === null) await card.locator(":scope > summary").click();
+  if (await card.getAttribute("open") === null) await card.locator(":scope > summary").click({ timeout: 30_000 });
   await expect(card.locator(".timeline-content")).toBeVisible();
   return card;
 }

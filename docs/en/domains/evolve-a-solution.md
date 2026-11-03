@@ -1,4 +1,4 @@
-# Use PUCT to optimize a text compression algorithm
+# Text Compression Optimization
 
 ## Background
 

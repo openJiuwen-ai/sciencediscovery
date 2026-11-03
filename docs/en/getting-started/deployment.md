@@ -1,42 +1,73 @@
-# Deploy ScienceDiscovery
+# Install ScienceDiscovery
 
-If this is your first time using ScienceDiscovery, start with the [Quick Start](quick-start.md). This page is for users who need another deployment path, want to run the service long-term, or need startup troubleshooting.
+Windows uses the desktop installer. Once it finishes you just open the app: no browser and no local service access token to paste.
 
-## Choose a deployment path
+On Linux you download the prepackaged single-file build, start it from a terminal, and open the interface in a browser.
 
-| Mode | Supported platforms | Best for | Recommendation |
-| --- | --- | --- | --- |
-| Prepackaged single file | glibc-based Linux x86_64 / aarch64, Windows x64 (WSL 2 with a glibc-based distribution, experimental) | Users who want the shortest startup path | **Recommended on native Linux** |
-| Local source mode | Linux x86_64 / aarch64, macOS 13+ x64 / arm64, Windows x64 (WSL 2, experimental) | macOS users, development, source changes | Recommended on macOS |
-| Docker | Linux x86_64 / aarch64, macOS (Docker Desktop or an existing Docker engine, experimental), Windows (Docker Desktop, experimental) | Existing container environments and operational isolation | As needed |
+The screenshots below show the Windows installer and the first-launch wizard in Chinese; the controls are in the same places in other languages.
 
-macOS Docker and all Windows installation paths are **experimental** because
-Agent behavior there has not been fully validated.
+## Prerequisites
 
-The three paths are independent. Choose one. Once the service is running, return to the [Quick Start](quick-start.md) for model configuration and the first task.
+### Windows
 
----
-
-## Prepackaged single-file deployment (Linux)
-
-### Prerequisites
-
-- glibc-based Linux on x86_64 or aarch64, including a suitable WSL 2
-  distribution on Windows x64. The bundled Node.js runtime requires
-  glibc 2.28+ and a compatible libstdc++;
-- Bubblewrap and usable unprivileged user namespaces in the Linux environment;
-- network access for first-launch dependency preparation;
+- Windows x64;
+- about 2.6 GB of free space for the installation;
+- 5 GB or more for the data directory, which prepares the Python runtime on first launch;
 - at least one model provider API key.
 
-This release binary does not run directly on musl-based distributions such as Alpine Linux.
+### Linux
 
-On Windows, run the commands in this section inside your WSL 2 Linux distribution.
-Keep the downloaded file in the distribution's Linux filesystem, such as your home directory.
-If you downloaded it in a Windows browser, open your WSL 2 Linux terminal
-(for example, Ubuntu) and run `cd ~ && explorer.exe .` there. Windows File
-Explorer opens your Linux home directory; copy the download into it.
+- glibc-based Linux on x86_64 or aarch64; musl-based distributions such as Alpine Linux cannot run this build;
+- the bundled Node.js runtime requires glibc 2.28+ and a compatible libstdc++;
+- Bubblewrap 0.6+, 0.8+ recommended, with unprivileged user namespaces enabled (Debian 11 ships 0.4.1, which is too old);
+- network access on first launch to prepare the runtime dependencies;
+- at least one model provider API key.
 
-Install Bubblewrap:
+## First-launch setup on Windows
+
+The first launch runs a three-screen setup wizard. You only go through it once.
+
+### Choose the research workspace
+
+Artifacts, intermediate results and the runtime environment all live in this directory. The default is
+`C:\Users\<your user name>\AppData\Local\ScienceDiscovery`, and the wizard shows the free space on that drive;
+it needs at least 5 GB. Once **Directory is writable** is confirmed, select **Next**.
+
+![Choose the research workspace](../../images/install/win-07-workspace.png)
+
+### Wait while the environment is prepared
+
+The first launch prepares the Python runtime and its dependencies inside the data directory, which can take
+a few minutes up to a quarter of an hour depending on disk speed and antivirus software. You can minimize
+the window; the first preparation is not interrupted.
+
+![Preparing the work environment](../../images/install/win-08-preparing.png)
+
+### Choose a model provider
+
+Pick a preset provider under **Provider type** (DeepSeek, Moonshot Kimi, Zhipu GLM, Z.AI, MiniMax, Alibaba Cloud
+Model Studio, OpenAI, Anthropic, Google Gemini, SiliconFlow, OpenRouter, Ollama, and others). To use a
+self-hosted or relay service, choose **Custom (enter the address manually)** and fill in **API protocol**,
+**Base URL**, **API key** and **Model name**. **Refresh list** fetches the available models again.
+
+Then select **Test and continue**.
+
+![Choose a model provider](../../images/install/win-09-provider.png)
+
+![A custom provider](../../images/install/win-10-provider-custom.png)
+
+### Connection succeeds
+
+On success the wizard shows **Connection succeeded** with the round-trip time. Select **Start using** to open
+the main window. If the test fails, check the API key, base URL and model name, then select **Test again**.
+
+![Connection succeeded](../../images/install/win-11-connected.png)
+
+![Main window](../../images/install/win-12-home.png)
+
+## Install and start on Linux
+
+### Install Bubblewrap
 
 ```bash
 sudo apt-get install -y bubblewrap   # Debian / Ubuntu
@@ -44,7 +75,7 @@ sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 sudo dnf install -y bubblewrap       # Fedora / RHEL / openEuler
 ```
 
-### Download and start
+### Download the build
 
 Download the file matching your architecture from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases):
 
@@ -53,9 +84,11 @@ ScienceDiscovery-<version>-linux-x86_64
 ScienceDiscovery-<version>-linux-aarch64
 ```
 
-You can run the downloaded file directly or rename it first. In the directory
-containing the download, use the following commands if you have one matching
-binary for your architecture:
+Keep it on a local disk in your home directory, not on a network share or inside an archive.
+
+### Start the service
+
+In the directory that holds the download:
 
 ```bash
 mv ScienceDiscovery-*-linux-"$(uname -m)" ScienceDiscovery
@@ -63,482 +96,113 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-Open <http://127.0.0.1:4310> after startup. If prompted, paste the local service access token from `<data-dir>/secrets/auth-token` (default `.sciencediscovery-data/secrets/auth-token`) into Connection and save. If `SCIENCE_AGENT_AUTH_TOKEN` is set, use that configured value. The printed `Open to sign in` URL is an optional shortcut; startup logs are not required.
+The first `serve` prepares some runtime dependencies and therefore needs network access; later launches reuse
+the prepared environment. For offline hosts, prepare the data directory on a connected machine first, or point
+the package sources at a mirror you can reach — see the [configuration reference](../reference/configuration.md).
 
-### What happens on first launch
+### Open the interface
 
-The first `serve` prepares some runtime dependencies and therefore needs network access. Later launches reuse the prepared environment.
+Open <http://127.0.0.1:4310>. If prompted, paste the local service access token from
+`<data-dir>/secrets/auth-token` (default `.sciencediscovery-data/secrets/auth-token`) into the connection page and
+save it. If `SCIENCE_AGENT_AUTH_TOKEN` is set, use that configured value. The printed `Open to sign in` URL is an
+optional shortcut; startup logs are not required.
 
-For offline hosts, prepare the data directory on a connected machine or configure reachable package mirrors. See the [configuration reference](../reference/configuration.md).
-
-### Commands
-
-```text
-ScienceDiscovery serve [options]        Start the Web UI, control API, and sandbox runner
-ScienceDiscovery run [input] [options]  Run an Agent task against a running serve
-ScienceDiscovery extract --to <dir>     Unpack the embedded runtime without starting it
-ScienceDiscovery version                Print the release and bundled runtime versions
-ScienceDiscovery help                   Show every command and option
-```
-
-`run` is the command-line client for scripts and pipelines. It prints text on a terminal and JSONL when piped, and a non-interactive run must pass `--auto-approve`. See the [CLI reference](../reference/cli.md#run) for its options and output modes. In local source mode, the same client is `node services/launcher/dist/main.js run`.
-
-### Common startup options
-
-```text
-ScienceDiscovery serve [options]
-```
-
-Most users only need:
-
-| Option | Purpose |
-| --- | --- |
-| `--data-dir <path>` | Set the data directory |
-| `--host <address>` | Set the Web/API bind address |
-| `--port <port>` | Set the Web/API port |
-| `--env-file <path>` | Read environment variables from a file |
-| `--skip-sandbox-check` | Start the UI when sandbox execution is unavailable; code execution will not work |
-
-The service binds to the local machine by default. If you must expose it, configure a separate authentication token first and use only a trusted network.
-
----
-
-## Local source mode (Linux / macOS)
-
-Use local source mode when:
-
-- you are on macOS;
-- you are on Windows and want to run the Linux source steps inside WSL 2;
-- you need to modify or debug the source;
-- you do not want the prepackaged Linux binary.
-
-### Prerequisites
-
-All supported local environments require:
-
-- Node.js 22.19+;
-- pnpm 11.1.2;
-- `python3` 3.9+;
-- uv 0.9+;
-- Git;
-- curl.
-
-The setup script calls `python3` before uv creates its Python 3.12 environment.
-
-Sandbox requirements differ:
-
-- Linux, including WSL 2: Bubblewrap 0.6+ and unprivileged user namespaces, 0.8+ recommended;
-- macOS: the built-in Seatbelt sandbox; Bubblewrap is not required.
-
-Debian 11's default Bubblewrap package is 0.4.1, below the listed Linux
-requirement. Use a newer package or distribution if it applies to you.
-
-On macOS, use version 13 or newer for local source mode, as required by the
-current [uv platform policy](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions).
-
-### Clone and start
-
-On Windows, run these commands inside your WSL 2 Linux distribution.
-In WSL 2, clone into the distribution's Linux filesystem, such as your home directory,
-rather than under `/mnt/c`. Dependency installation is much faster there, and
-Linux file permissions behave as expected. Run `cd ~` before the commands below.
-
-```bash
-git clone https://github.com/openJiuwen-ai/sciencediscovery.git
-cd sciencediscovery
-
-scripts/jiuwenswarm.sh setup
-./scripts/start-stack.sh --mode local
-```
-
-Source mode now starts JiuwenSwarm by default. To run the older native Node loop instead, use `./scripts/start-stack.sh --mode local --no-jiuwenswarm` or set `SCIENCE_AGENT_EXECUTOR=native` in `.env`. See [Agent backends](../reference/agent-backends.md) for behavior differences and an active-backend check.
-
-The first run installs dependencies and builds the project, so it needs network access.
-
-After a successful build, later starts can use:
-
-```bash
-./scripts/start-stack.sh --mode local --no-build
-```
-
-Open <http://127.0.0.1:4310> after startup and follow the Connection prompt using the token in `.sciencediscovery-data/secrets/auth-token` (or your configured data directory / `SCIENCE_AGENT_AUTH_TOKEN`). This also works for background services without the original terminal output.
-
-### JiuwenSwarm runtime data and existing installations
-
-Local source startup uses `$HOME/.sciencediscovery/jiuwenswarm` as
-`JIUWENSWARM_HOME`, without changing `HOME`. The registry is
-`.jiuwenswarm/instances.yaml` beneath that root; configuration, skills, sessions
-and process records are in `.jiuwenswarm-instances/sciencediscovery/`. Wrapper
-logs are `jiuwenswarm-sciencediscovery.log` under the same root. Standalone
-JiuwenSwarm keeps its own home registry and workspaces, so both applications
-can use the name `sciencediscovery` independently.
-
-Set `SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1` to explicitly enable SD's documented
-`JIUWENSWARM_*` controls. Without it, inherited Swarm variables are ignored.
-`JIUWENSWARM_HOME=/absolute/runtime` then selects another SD-only root; relative values
-resolve from the repository root. Use the same selection for `setup`, `start`,
-`status`, `env`, `stop` and stack startup. Test runs supply their own root.
-`JIUWENSWARM_ROOT` / `JIUWENSWARM_SRC` select the pinned installation, independently
-of runtime data. JiuwenSwarm detects occupied ports and persists a free port
-group at initialization/startup; `scripts/jiuwenswarm.sh env` reports current
-endpoints. Avoid pinning old gateway/management URLs when sharing a host.
-
-Existing local installations are **not moved, rewritten or deleted**. SD refuses
-to reuse an alternate root containing a registry or named workspaces unless it
-carries the `.sciencediscovery-owned` marker written by SD setup. The existing
-SD default and persisted Docker layout remain supported. An ambiguous legacy
-home is not adopted, even after opting into overrides. Choose a fresh directory:
-
-```bash
-export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
-export JIUWENSWARM_HOME="$HOME/sd-runtime"
-scripts/jiuwenswarm.sh setup
-./scripts/start-stack.sh --mode local
-```
-
-Use the same override opt-in and root for every lifecycle command. The stack
-always resolves endpoints from its own instance after startup, including after
-port reallocation. SDK child processes receive SD-owned runtime paths and a
-limited OS/proxy environment; standalone model credentials, configuration and
-Python search paths are not inherited. Manually starting the adapter requires
-the override opt-in and both SD-owned endpoint URLs; it never guesses ports
-when the JiuwenSwarm executor is selected.
-
-Docker retains the existing persisted layout: with the default Compose data
-mount `/app/data`, runtime root is `/app/data/.home`, registry is
-`/app/data/.home/.jiuwenswarm/instances.yaml` and the named workspace is
-`/app/data/.home/.jiuwenswarm-instances/sciencediscovery`. Wrapper logs are
-`/app/data/.home/jiuwenswarm-sciencediscovery.log`. An explicit container
-`JIUWENSWARM_HOME` must also be on a persisted mount. The image's installation
-remains under `/opt/sciencediscovery/jiuwenswarm/src`. The packaged launcher
-continues using its separate `<dataDir>/jiuwenswarm-home` runtime root.
-
-### macOS notes
-
-If local source mode reports that Seatbelt is unavailable, check:
-
-```bash
-test -x /usr/bin/sandbox-exec
-```
-
-If this fails, or your terminal is itself inside a stricter sandbox, fix the host restriction first.
-
----
-
-## Docker deployment (Linux containers)
-
-Docker is intended for users who already operate containerized services and want the runtime isolated from the host.
-
-### Prerequisites
-
-- Linux on x86_64 or aarch64, macOS with Docker Desktop (check its
-  [current macOS requirements](https://docs.docker.com/desktop/setup/install/mac-install/#system-requirements))
-  or an existing Docker engine,
-  or Windows with Docker Desktop;
-- Docker Engine 24+ and Docker Compose v2.15+ for non-Desktop setups;
-- Docker Desktop in Linux container mode on Windows;
-- support for Bubblewrap and unprivileged user namespaces inside the Linux container;
-- enough disk space for the image, build cache, and scientific environments;
-- build-time access to Docker Hub, npm, PyPI, models.dev, and other dependency sources.
-
-### 1. Prepare configuration and storage
-
-If you do not have a local checkout yet, clone the repository first:
-
-```bash
-git clone https://github.com/openJiuwen-ai/sciencediscovery.git
-cd sciencediscovery
-```
-
-On Windows, use PowerShell in the repository root:
-
-```powershell
-Copy-Item .env.docker.example .env
-New-Item -ItemType Directory -Force data
-```
-
-On Windows, Docker Desktop must be running Linux containers. Its WSL 2 engine is normally
-enabled by default; check [Docker's WSL 2 settings](https://docs.docker.com/desktop/features/wsl/)
-if Docker reports that it cannot start Linux containers.
-
-On Linux or macOS, use a Unix shell in the repository root:
-
-```bash
-cp .env.docker.example .env
-mkdir -p data
-id -u
-id -g
-```
-
-If your uid/gid is not `1000:1000`, set these values in `.env`:
-
-```text
-SCIENCE_AGENT_UID=<your uid>
-SCIENCE_AGENT_GID=<your gid>
-```
-
-The `data/` directory stores projects, sessions, workspaces, credentials, and other runtime state.
-
-### 2. Build and start
-
-```text
-docker compose build
-docker compose up -d
-```
-
-Check the service:
-
-```text
-docker compose ps
-docker compose exec sciencediscovery curl -fsS http://127.0.0.1:4310/health
-```
-
-You can also open <http://127.0.0.1:4310/health> in a browser.
-Top-level `status: ok` confirms that the API can reach the Runner. It does not
-prove that the code-execution sandbox works. After signing in, run the small
-Python calculation in the [Quick Start](quick-start.md#3-run-your-first-scientific-task)
-to check that part of the installation.
-
-If it reports `degraded`, inspect logs first:
-
-```bash
-docker compose logs --tail=200
-```
-
-### 3. Open the Web UI
-
-Open <http://127.0.0.1:4310> directly. When Connection asks for a local service access token, read `./data/secrets/auth-token` on the host (container: `/app/data/secrets/auth-token`), paste it and save. If `SCIENCE_AGENT_AUTH_TOKEN` is set, use that configured value. The sign-in URL in the logs is an optional shortcut.
-
-Treat the sign-in URL and token like a password.
-
-### 4. Routine operations
-
-| Action | Command |
-| --- | --- |
-| Check status | `docker compose ps` |
-| Follow logs | `docker compose logs -f` |
-| Stop | `docker compose down` |
-| Restart | `docker compose restart` |
-| Rebuild after code changes | `docker compose up -d --build` |
-| Enter the container | `docker compose exec sciencediscovery sh` |
-
-`docker compose down` does not delete the host `data/` directory.
-
-### 5. Remote access
-
-For a remote host, prefer SSH port forwarding instead of exposing the service directly to the public network:
+If ScienceDiscovery runs on a remote host, forward the port over SSH instead of exposing the service publicly:
 
 ```bash
 ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>
 ```
 
-Then open <http://127.0.0.1:4310> locally.
+Then open <http://127.0.0.1:4310> in your local browser.
 
----
+### Common commands
 
-## First-run troubleshooting for binary and local mode
-
-### The service does not start
-
-Read the earliest startup error first. Later failures are often consequences of the first one.
-
-### The browser rejects the token
-
-Read the current token from `<data-dir>/secrets/auth-token` (Docker host: `./data/secrets/auth-token`) or your configured `SCIENCE_AGENT_AUTH_TOKEN`, then paste it into Connection and save. Startup logs are not required.
-
-If entering a token manually, use the **local service access token**, not the model provider API key.
-
-### `/health` reports `degraded`
-
-Run:
-
-```bash
-curl -fsS http://127.0.0.1:4310/health
+```text
+ScienceDiscovery serve [options]        Start the web UI, control API and sandbox runner
+ScienceDiscovery run [input] [options]  Submit an agent task to a running serve
+ScienceDiscovery extract --to <dir>     Unpack the bundled runtime without starting it
+ScienceDiscovery version                Print the release and bundled runtime versions
+ScienceDiscovery help                   Show all commands and options
 ```
 
-A `degraded` status means the API cannot reach the Runner. Check the startup log.
-On Linux or WSL 2, a warning containing `could not build a sandbox` means code
-execution will fail, even when `/health` reports `ok`. Follow the sandbox steps
-below in that case.
+The most used startup options:
 
-### Linux reports missing `bwrap`
+| Option | Effect |
+| --- | --- |
+| `--data-dir <path>` | Data directory |
+| `--host <address>` | Web/API listen address |
+| `--port <port>` | Web/API port |
+| `--env-file <path>` | Read environment variables from a file |
+| `--skip-sandbox-check` | Start the UI even when the sandbox is unavailable; code execution is then disabled |
 
-Install Bubblewrap:
+The service listens on the loopback interface only. If you must expose it, configure a dedicated auth token first
+and keep the network trusted.
 
-```bash
-sudo apt-get install -y bubblewrap
-# Or
-sudo dnf install -y bubblewrap
-```
+## Troubleshooting
 
-If Bubblewrap is installed but still fails, follow the sandbox checks below.
+### The installer asks for administrator rights
 
-### Bubblewrap is installed, but code execution fails
+Only **Install for all users** needs elevation. Choose **Install for me only** to install with a normal user account.
 
-If the startup log says `could not build a sandbox`, check the error before
-changing system settings. On Linux or inside WSL 2, run:
+### The installer stays on its loading window
+
+That is the package verifying and unpacking itself and usually takes seconds. If it never advances, copy the
+installer to a local disk (not a network share or inside an archive) and run it again.
+
+### The first launch prepares the environment for a long time
+
+The first launch downloads and unpacks the Python runtime and the scientific packages. Real-time scanning by
+antivirus software makes this much slower; add the install and data directories to its exclusions. Later
+starts take a few seconds.
+
+### The model connection test fails
+
+Check, in order: that the API key is valid, that the **Base URL** includes the right path (often ending in `/v1`),
+that the **model name** matches the provider's own name, and that this machine can reach the service. For a proxy,
+see [Configure a network proxy](../advanced-setup/configure-network-proxy.md).
+
+### Change the workspace directory
+
+Open **System settings** in the app, change the data directory, and restart as prompted. Reinstalling also lets
+you pick a different install location.
+
+### Uninstall
+
+Open **Settings → Apps → Installed apps**, find ScienceDiscovery and uninstall it. Uninstalling leaves your
+chosen workspace directory in place; delete it manually if you no longer need it.
+
+### Linux reports a missing `bwrap`
+
+Install Bubblewrap as described above, then check:
 
 ```bash
 bwrap --version
+```
+
+### Linux code execution fails with `could not build a sandbox`
+
+Check the sandbox conditions before changing any system setting:
+
+```bash
 sysctl kernel.unprivileged_userns_clone
 sysctl kernel.apparmor_restrict_unprivileged_userns
 ```
 
-A missing sysctl key is normal on some kernels. If `kernel.unprivileged_userns_clone`
-exists and is `0`, unprivileged user namespaces are disabled on that host.
-Ask the host administrator to enable them before retrying.
-If the AppArmor key is `1` and the error is a permission denial, check whether
-AppArmor is active with `sudo aa-status`. On Ubuntu 24.04+, use a bwrap profile
-only when this restriction is present; see
-[Ubuntu's AppArmor guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007#define-bwrap-profile).
-WSL 2 installations do not all use the same kernel policy. Enable systemd only
-if your chosen profile-loading method needs `systemctl` and it is unavailable;
-see [Microsoft's WSL instructions](https://learn.microsoft.com/en-us/windows/wsl/systemd/).
-See [Sandbox execution](../developer-docs/sandbox-execution.md) for the probe details.
+Some kernels do not expose one of these keys, which is normal. If `kernel.unprivileged_userns_clone` exists and is
+`0`, unprivileged user namespaces are disabled; enable them and retry, or ask the system administrator.
+If the AppArmor key is `1` and the error is a permission failure, confirm AppArmor is active with `sudo aa-status`,
+then follow the [Ubuntu AppArmor note](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)
+to give bwrap a profile. The mechanism is described in
+[sandbox execution](../developer-docs/sandbox-execution.md).
 
-### macOS reports Seatbelt is unavailable
+Code execution can still fail while `/health` returns `ok`; in that case trust the sandbox error in the startup log.
 
-Check:
+### Linux: the browser says the token is invalid
 
-```bash
-test -x /usr/bin/sandbox-exec
-```
+Read the current token from `<data-dir>/secrets/auth-token`, or use the `SCIENCE_AGENT_AUTH_TOKEN` value, and paste
+it into the connection page. Make sure it is the **local service access token**, not a model API key.
 
-ScienceDiscovery does not silently fall back to unsandboxed execution when Seatbelt is unavailable.
+## Where to go next
 
-### Where are the logs?
-
-Logs are stored under `logs/` in the data directory by default. See the [configuration reference](../reference/configuration.md#storage-layout) for exact paths and overrides.
-
----
-
-## Docker FAQ
-
-### Compose rejects `systempaths=unconfined`
-
-Run `docker compose version`. This option requires Compose v2.15+.
-Update the Compose plugin, or update Docker Desktop if it supplies Compose.
-
-### macOS Docker Desktop cannot mount the project directory
-
-If Docker Desktop reports `Mounts denied` or `file is not shared from the host`,
-open **Settings → Resources → File sharing** and add the directory containing
-the checkout. See [Docker's file-sharing settings](https://docs.docker.com/desktop/settings-and-maintenance/settings/#file-sharing).
-
-### `data/` is not writable
-
-Make sure `data/` exists before `docker compose up`.
-If the logs show a permission error, test the bind mount from inside a container:
-
-```text
-docker compose run --rm --entrypoint sh sciencediscovery -c 'id; ls -ld /app/data; touch /app/data/.write-test && rm /app/data/.write-test'
-```
-
-On Linux or macOS, use a Unix shell to check that uid/gid match the `.env` configuration:
-
-```bash
-ls -ld data
-id -u
-id -g
-```
-
-On Windows, check that your account can write to the host `data/` directory
-and that Docker Desktop can share it. Windows accounts do not have Linux uid/gid
-values to enter in `.env`. If the Windows bind mount remains unwritable, move the
-checkout into a WSL 2 distribution's Linux filesystem, enable Docker Desktop's
-[WSL integration](https://docs.docker.com/desktop/features/wsl/#enable-docker-in-a-wsl-2-distribution),
-and run Compose there. Then use that Linux user's `id -u` and `id -g` values
-in `.env` and create `data/` as that user.
-
-### The container is running but `/health` is `degraded`
-
-Inspect:
-
-```bash
-docker compose logs --tail=200
-```
-
-Check the Runner startup error and the `data/` mount first. A sandbox failure
-can also occur while `/health` remains `ok`.
-
-If `/health` is `ok` but a code task fails, inspect the logs for
-`could not build a sandbox` and check the Linux-container requirements above.
-On Windows, check Docker Desktop and WSL updates if its sandbox probe fails.
-
-### The model or external resources are unreachable
-
-The container needs outbound access to model providers, literature sources, and other external services. If your environment requires a proxy, configure [network proxy settings](../advanced-setup/configure-network-proxy.md).
-
----
-
-## After deployment succeeds
-
-Once the service is running, stop reading deployment details and return to the [Quick Start](quick-start.md):
-
-1. configure a model;
-2. create a Project and Session;
-3. run the first scientific task;
-4. confirm code execution and the Artifact work.
-
-## Further reading
-
-- CLI commands and exact behavior: [CLI reference](../reference/cli.md)
-- Exact environment variables, ports, and storage: [Configuration reference](../reference/configuration.md)
-- How single-file releases are built: [Developer docs: Binary packaging and releases](../developer-docs/binary-packaging.md)
-- Local/Docker/remote Runner deployment internals: [Developer docs: Deployment runtime internals](../developer-docs/deployment-runtime.md)
-- Sandbox isolation and execution internals: [Developer docs: Sandbox execution](../developer-docs/sandbox-execution.md)
-- Internal processes and module boundaries: [Developer docs: Architecture](../developer-docs/architecture.md)
-- Repository structure and source entry points: [Developer docs: Repository layout](../developer-docs/repository-layout.md)
-
-## Initialize Evolve on demand
-
-The slim binary starts with Evolve and its related Idea Tree research paths
-**not initialized**. Chat remains available. In a Session, open **Tasks → Evolve**
-and select **Init Evolve**, or type `/evolve-design` and use the initialization
-action shown above the composer. Initialization is explicit: starting `serve`
-does not download Evolve or the candidate runtime.
-
-Init downloads the designated `v0.3.0-rc1` application source archive at commit
-`844947da87b27528d9a34d0ee6d0efd591e57749`, verifies SHA-256
-`2cea0ea513eef43c94e697e72a21cf7bb3d4b8883117479240b6c8d3e0cc2e99`,
-and installs `services/evolve` with the frozen candidate dependencies on the
-release's bundled Python (3.12 or later). No Git checkout or host Python is
-required. Allow at least 1 GiB of free disk space and network access to GitHub
-and the configured Python package index. The source package's local `0.0.0`
-version is identified by that release/commit/archive digest, not by a PyPI
-sidecar release. The exact runtime export and its checksum live in
-`services/launcher/src/evolve-lock.ts`.
-
-The launcher starts the installed sidecar on its own dynamically bound loopback
-socket. Its random internal credential is private to the installation and
-persists in `<data-dir>/evolve/secrets/internal-token` with owner-only access;
-it is never a browser/model token. Closing `serve` stops the owned process.
-Restarts reuse the verified installation and token. A failed download, checksum,
-installation or startup leaves Evolve unavailable; select **Init Evolve** to
-retry. Failed attempts clean their staging directory. After an interrupted process,
-explicit Init reclaims private staging marked as owned by this exact pinned runtime,
-under the installation lock. Unknown/unmarked directories are preserved for operator
-inspection rather than deleted automatically.
-
-Operators may explicitly configure `SCIENCE_AGENT_EVOLVE_URL` and
-`SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN` for an existing service. This mode remains
-operator-owned; the launcher does not install or stop that service. Health and
-authentication must succeed before Evolve tools are offered. Without a launcher
-or explicit service configuration, the UI explains that initialization is
-unavailable. The source/container stack explicitly starts its provisioned
-sidecar through the same launcher socket supervision; it no longer relies on
-an implicit fixed port or public credential.
-
-The managed Evolve runtime uses only its locked packages. A task cannot silently
-install another package from a mutable index; missing additional packages cause
-a refusal. Supporting another managed dependency requires updating the reviewed
-lock. An explicitly provisioned source stack or operator-configured service
-retains its own runtime provisioning policy.
-
-The launcher forwards the documented candidate-directory and log settings to its
-sidecar, so the API and sidecar share `SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR`.
-Only explicitly provisioned source/container runtimes also receive operator proxy,
-package-index and certificate-path settings; managed runtimes retain their locked
-package policy. Model keys, HOME and arbitrary environment variables are not inherited.
-While Evolve is unavailable, its workspace/history routes are disabled together;
-persisted records remain on disk and return when the service becomes ready.
+With the installation done, follow the [end-to-end walkthrough](quick-start.md) to take one complete task through
+statistics, external evidence, review and tracing.

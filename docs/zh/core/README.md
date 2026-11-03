@@ -1,10 +1,10 @@
-# ScienceDiscovery 核心能力
+# 核心功能总览
 
 Core 不负责解释 Agent 的基础概念，而是回答一个问题：
 
 > 在通用 Agent 能力之上，ScienceDiscovery 为科研任务增加了哪些特殊能力？
 
-如果你第一次接触 Agent，建议先阅读[基本概念](../getting-started/concepts.md)，了解 Agent Loop、Tool、Skill、Specialist、Workspace 和 Artifact。
+如果你第一次接触 Agent，建议先跟着[端到端体验案例](../getting-started/quick-start.md)走一遍完整任务，过程中会用到 Agent Loop、Tool、Skill、Specialist、Workspace 和 Artifact。
 
 ScienceDiscovery 的核心差异化能力可以分成三个方向：
 

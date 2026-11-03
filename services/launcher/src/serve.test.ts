@@ -347,7 +347,7 @@ describe("micromamba seeding", () => {
   });
 });
 
-for (const mode of ["owned", "operator", "abort-startup", "fail-startup"] as const) {
+for (const mode of ["owned", "operator", "runner-unavailable", "abort-startup", "fail-startup"] as const) {
 test(`serve ${mode} preserves ownership and cleans up on shutdown or interrupted startup`, { timeout: 15_000 }, async () => {
   const { createServer } = await import("node:http");
   const { mkdir, symlink } = await import("node:fs/promises");
@@ -359,6 +359,7 @@ test(`serve ${mode} preserves ownership and cleans up on shutdown or interrupted
   await Promise.all(reservations.map(server => new Promise<void>(done => server.close(() => done()))));
   const fixture = `const fs=require('node:fs'),http=require('node:http');
 const runner=process.argv[1].includes('/runner/');
+if(runner && ${JSON.stringify(mode === "runner-unavailable")})process.exit(1);
 if(runner)fs.writeFileSync(process.env.SCIENCE_AGENT_DATA_DIR+'/runner.pid',String(process.pid));
 if(!runner)fs.writeFileSync(process.env.SCIENCE_AGENT_DATA_DIR+'/control-observation.json',JSON.stringify({url:process.env.SCIENCE_AGENT_EVOLVE_CONTROL_URL,hasPrivateCredential:Boolean(process.env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN),hasImplicitEndpoint:Boolean(process.env.SCIENCE_AGENT_EVOLVE_URL)}));
 http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end('{"status":"ok"}');}).listen(Number(runner?process.env.SCIENCE_AGENT_RUNNER_PORT:process.env.SCIENCE_AGENT_PORT),'127.0.0.1');`;
@@ -370,15 +371,17 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
     const context = contextFor({ payloadRoot: root,
       baseEnv: { SCIENCE_AGENT_AUTH_TOKEN: "synthetic-launcher-access", ...(mode === "operator" ? { SCIENCE_AGENT_EVOLVE_URL: "http://explicit-operator.invalid", SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN: "synthetic-operator" } : {}) },
       settings: { ...defaultSettings({}, root), dataDir: join(root, "data"), scientificEnvironments: false, jiuwenswarm: false,
-        bwrapPath: "/nonexistent/bwrap-fixture", port: ports[0]!, runnerPort: ports[1]! } });
+        bwrapPath: mode === "runner-unavailable" ? "/bin/true" : "/nonexistent/bwrap-fixture", port: ports[0]!, runnerPort: ports[1]! } });
     let ready: () => void; const becameReady = new Promise<void>(done => { ready = done; });
+    const logs: string[] = [];
     const signals = process.listenerCount("SIGTERM");
     const running = serve(context, message => {
+      logs.push(message);
       if ((mode === "abort-startup" || mode === "fail-startup") && message.includes("Starting control API")) {
         if (mode === "abort-startup") process.emit("SIGTERM", "SIGTERM");
         throw new Error("fixture startup interruption");
       }
-      if (message.includes("ScienceDiscovery is ready at")) ready!();
+      if (message.includes("ScienceDiscovery Web UI is available at")) ready!();
     });
     if (mode === "abort-startup" || mode === "fail-startup") {
       if (mode === "abort-startup") assert.equal((await running).exitCode, 0);
@@ -396,6 +399,14 @@ http.createServer((req,res)=>{res.setHeader('content-type','application/json');r
       return;
     }
     await becameReady;
+    if (mode === "runner-unavailable") {
+      assert.match(logs.join("\n"), /Local Runner is unavailable; analyses cannot run on it/);
+      assert.doesNotMatch(logs.join("\n"), /Local sandbox is unavailable/);
+      assert.equal((await fetch(`http://127.0.0.1:${ports[0]}/health`)).status, 200);
+    } else {
+      assert.match(logs.join("\n"), /Local sandbox is unavailable; sandboxed analyses cannot run/);
+    }
+    assert.doesNotMatch(logs.join("\n"), /ScienceDiscovery is ready at/);
     const observed = JSON.parse(await readFile(join(root, "data/control-observation.json"), "utf8"));
     if (mode === "operator") {
       assert.equal(observed.hasPrivateCredential, false); assert.equal(observed.hasImplicitEndpoint, true);

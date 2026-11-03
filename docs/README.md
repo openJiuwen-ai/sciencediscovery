@@ -12,7 +12,7 @@ ScienceDiscovery documentation is available in English and Chinese:
 - [English documentation](en/README.md)
 - [中文文档](zh/README.md)
 
-For the shortest path to a working installation, start with the quick start in your preferred language:
+For the shortest path to a working installation, start with the install guide and the end-to-end walkthrough in your preferred language:
 
-- [Quick start](en/getting-started/quick-start.md)
-- [快速开始](zh/getting-started/quick-start.md)
+- [Install and deploy](en/getting-started/deployment.md) · [End-to-end walkthrough](en/getting-started/quick-start.md)
+- [安装与部署](zh/getting-started/deployment.md) · [端到端体验案例](zh/getting-started/quick-start.md)

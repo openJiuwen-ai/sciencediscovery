@@ -4,7 +4,7 @@ Small files that the [learning path](../en/getting-started/quick-start.md) uses,
 
 | File | Used by | Contents |
 | --- | --- | --- |
-| [`plant-growth.csv`](plant-growth.csv) | [Analyze a dataset](../en/getting-started/analyze-a-dataset.md) · [分析一份数据](../zh/getting-started/analyze-a-dataset.md) | 45 plants, 15 in each of three fertilizer treatments |
+| [`plant-growth.csv`](plant-growth.csv) | [End-to-end walkthrough](../en/getting-started/quick-start.md) · [端到端体验案例](../zh/getting-started/quick-start.md) | 45 plants, 15 in each of three fertilizer treatments |
 
 `plant-growth.csv` columns:
 
@@ -17,7 +17,7 @@ Small files that the [learning path](../en/getting-started/quick-start.md) uses,
 
 The values are synthetic: they were generated for these tutorials with a fixed random seed and do not describe real plants or a real experiment. Do not cite them as findings.
 
-中文教程使用同一份文件，见[快速开始](../zh/getting-started/quick-start.md)。
+中文教程使用同一份文件，见[端到端体验案例](../zh/getting-started/quick-start.md)。
 
 These files are part of this repository and are distributed under its [Apache License 2.0](../../LICENSE).
 

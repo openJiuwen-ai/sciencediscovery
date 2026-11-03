@@ -134,6 +134,9 @@ const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supp
 // Module-level so the embedded artifact panel keeps a stable prop identity
 // across the explorer's poll-driven re-renders.
 const NOOP = () => undefined;
+// "No nested window is open", as the embedded panel reports it. Module-level
+// so the initial state keeps one identity too.
+const NO_NESTED_WINDOWS = { csvWindowOpen: false, molstarOpen: false };
 
 /**
  * A "meaning" target: which filter row (node label / edge type) + its id,
@@ -738,6 +741,22 @@ export function shouldFocusEntryNode(initialNodeId: string | undefined, autoChai
 }
 
 /**
+ * Whether an Escape press should close the explorer.
+ *
+ * A CSV workspace or a Mol* viewer can be open on top of the embedded artifact
+ * panel, and each of them closes itself on Escape without stopping the event.
+ * The standalone artifact modal already refuses to close while either is open;
+ * in embedded mode that handler returns early, so the explorer's own global
+ * Escape is the last one left — an unguarded one closes the nested window and
+ * the explorer together, throwing away the selection, filters, unfolded set and
+ * viewport the user built. Escape belongs to the topmost layer only: the window
+ * closes, and this answers "no" until both windows are gone.
+ */
+export function shouldCloseOnEscape(csvWindowOpen: boolean, molstarOpen: boolean): boolean {
+  return !csvWindowOpen && !molstarOpen;
+}
+
+/**
  * Full-screen memory-graph explorer.
  *
  * Left column: the product of the selected node. For Artifact nodes this is
@@ -1048,11 +1067,25 @@ export function MemoryGraphExplorer({
   // stored nodes/edges, so they count on neither side.
   const graphCounts = useMemo(() => countVisibleAndTotal(graph, subgraph), [graph, subgraph]);
 
+  // Nested windows open on top of the embedded artifact panel. That panel owns
+  // the state; it reports it up so the global Escape below can tell "close the
+  // explorer" from "close the window the user is reading".
+  const [nestedWindows, setNestedWindows] = useState<{ csvWindowOpen: boolean; molstarOpen: boolean }>(NO_NESTED_WINDOWS);
+  const handleNestedWindowChange = useCallback((windows: { csvWindowOpen: boolean; molstarOpen: boolean }) => {
+    // Keep the identity when nothing changed: the reporter runs on its own
+    // re-renders, and a fresh object would re-register the Escape listener
+    // below on every one of them.
+    setNestedWindows((current) => (current.csvWindowOpen === windows.csvWindowOpen
+      && current.molstarOpen === windows.molstarOpen ? current : windows));
+  }, []);
+
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && shouldCloseOnEscape(nestedWindows.csvWindowOpen, nestedWindows.molstarOpen)) onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [nestedWindows, onClose]);
 
   // Entry focus: when opened from the artifact/evidence modals OR from a
   // report chip jump (App.tsx's handleChipClick → pendingMemoryNode) the
@@ -1709,6 +1742,7 @@ export function MemoryGraphExplorer({
             onClose={() => setSelectedId(undefined)}
             onError={onError}
             onChipClick={navigateChipInGraph}
+            onNestedWindowChange={handleNestedWindowChange}
             onNavigateArtifact={navigateArtifactInGraph}
             onNavigateCode={navigateCodeInGraph}
             onPendingAnnotation={onPendingAnnotation ?? NOOP}
