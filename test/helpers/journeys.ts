@@ -286,7 +286,9 @@ export function scriptedModel(
           // Read only the execution's scalar fields, without evaluating that
           // wrapper or treating a foreground wait deadline as completion.
           const result = String([...messages].reverse().find(message => message.role === "tool")?.content ?? "");
-          const executionId = result.match(/"id"\s*:\s*"([^"]+)"/)?.[1];
+          // Projected execution results expose `executionId`; retain `id` as
+          // a fallback for older execution_status fixtures during upgrades.
+          const executionId = result.match(/"(?:executionId|id)"\s*:\s*"([^"]+)"/)?.[1];
           const state = result.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
           if (!executionId || !state) throw new Error("Scripted shell returned no execution id/state");
           if (state === "queued" || state === "running") {
