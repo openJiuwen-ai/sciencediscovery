@@ -34,6 +34,12 @@ export function permissionMatchingKey(request: PermissionRequest): string {
  * A sandbox-network grant covers only the listed hosts, on the requesting
  * Runner, until the owning agent run ends. "Allow same type" reads as blanket
  * network access, so that one action names the hosts it actually grants.
+ *
+ * An evolution search asks with a fresh single-use key
+ * (`evolve-search:<session>:<uuid>`), and a `code` grant is matched on the
+ * whole resource, so "allow same type" could never match a later search. It
+ * would promise a decision the backend drops and leak the attempt id into the
+ * UI and the grant manager, so that card offers one search or denial.
  */
 export function PermissionDecisionActions({
   action,
@@ -49,6 +55,7 @@ export function PermissionDecisionActions({
   const { t } = useLocale();
   const helpId = useId();
   const sandboxNetwork = action === "sandbox_network";
+  const singleUse = action === "code" && resource.startsWith("evolve-search:");
   const prefixParts = action === "connector" || action === "artifact_download" ? 2 : action === "remote_job" ? 3 : 0;
   const matchingHelp = sandboxNetwork ? t("permissions.allowSandboxNetworkHostsHelp")
     : action === "code" && resource === "workspace-code" ? t("permissions.allowWorkspaceCodeHelp")
@@ -60,13 +67,13 @@ export function PermissionDecisionActions({
       <p>{t("permissions.waiting")}</p>
       <dl>
         <div><dt>{t("permissions.allowOnce")}</dt><dd id={`${helpId}-once`}>{t("permissions.allowOnceHelp")}</dd></div>
-        <div><dt>{sandboxNetwork ? t("permissions.allowSandboxNetworkHosts") : t("permissions.allowMatching")}</dt><dd id={`${helpId}-matching`}>{matchingHelp}</dd></div>
+        {singleUse ? null : <div><dt>{sandboxNetwork ? t("permissions.allowSandboxNetworkHosts") : t("permissions.allowMatching")}</dt><dd id={`${helpId}-matching`}>{matchingHelp}</dd></div>}
         <div><dt>{t("permissions.deny")}</dt><dd id={`${helpId}-deny`}>{t("permissions.denyHelp")}</dd></div>
       </dl>
     </div>
     <div className="plan-actions permission-decision-actions">
       <button className="secondary-button" aria-describedby={`${helpId}-once`} disabled={busy} onClick={() => onDecision("allow_once")} type="button">{t("permissions.allowOnce")}</button>
-      <button className="secondary-button" aria-describedby={`${helpId}-matching`} disabled={busy} onClick={() => onDecision("allow_matching")} title={sandboxNetwork ? t("permissions.allowSandboxNetworkHostsHint") : undefined} type="button">{sandboxNetwork ? t("permissions.allowSandboxNetworkHosts") : t("permissions.allowMatching")}</button>
+      {singleUse ? null : <button className="secondary-button" aria-describedby={`${helpId}-matching`} disabled={busy} onClick={() => onDecision("allow_matching")} title={sandboxNetwork ? t("permissions.allowSandboxNetworkHostsHint") : undefined} type="button">{sandboxNetwork ? t("permissions.allowSandboxNetworkHosts") : t("permissions.allowMatching")}</button>}
       <button className="danger-button" aria-describedby={`${helpId}-deny`} disabled={busy} onClick={() => onDecision("deny")} type="button">{t("permissions.deny")}</button>
     </div>
   </>;

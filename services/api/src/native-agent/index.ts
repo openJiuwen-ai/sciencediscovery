@@ -61,7 +61,7 @@ import {
 } from "@sciencediscovery/model";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import type { PlanStore } from "@sciencediscovery/plan";
-import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
+import { evolvePromptSection, type EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   ExternalWaitController,
@@ -396,7 +396,10 @@ class NativeAgent implements NativeAgentHandle {
     this.promptSkills = toolNames.has("read_skill")
       ? (options.skills ?? [])
       : [];
-    const composed = composeSystemPrompt(options, toolNames, this.promptSkills, this.toolRegistry.promptSections());
+    const toolPromptSections = options.evolve
+      ? [...this.toolRegistry.promptSections(), evolvePromptSection()]
+      : this.toolRegistry.promptSections();
+    const composed = composeSystemPrompt(options, toolNames, this.promptSkills, toolPromptSections);
     this.promptParts = composed.parts;
     this.systemPrompt = composed.systemPrompt;
     this.history = (options.gatewayHistory ?? options.history ?? []).map(normalizeHistoryMessage);

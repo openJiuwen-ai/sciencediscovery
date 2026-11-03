@@ -308,3 +308,31 @@ test("sandbox network grants end with the agent run while other grants keep the 
   assert.match(networkLine, /· this agent run<\/small>$/);
   assert.match(html, /workspace-code · this Session/);
 });
+
+test("an evolution search confirmation offers one search or denial and hides the attempt id", () => {
+  const request: PermissionRequest = {
+    action: "code",
+    createdAt: "2026-10-30T00:00:00.000Z",
+    id: "request-evolve",
+    projectId: "project-1",
+    resource: "evolve-search:session-1:5f0f3c1e-8a4b-4d6f-9c2a-7b1d0e4a6c33",
+    sessionId: "session-1",
+    state: "pending",
+    summary: "Start an evolution search? It runs mutations and sandboxed evaluations and spends budget.",
+  };
+  const html = renderToStaticMarkup(createElement(PermissionCards, {
+    expandedCards: { [activityCardId("permission", request.id)]: true },
+    onDecision: async () => undefined,
+    onToggleCard: noopToggle,
+    requests: [request],
+  }));
+  assert.match(html, /Confirm evolution search/);
+  assert.match(html, /this evolution search only/);
+  // The per-attempt key can never be matched by a same-type grant, so that
+  // action is neither offered nor explained on this card.
+  assert.doesNotMatch(html, /Allow same type/);
+  assert.equal(html.match(/class="secondary-button"/g)?.length, 1);
+  assert.match(html, /class="secondary-button"[^>]*>Allow once</);
+  assert.match(html, /class="danger-button"[^>]*>Deny</);
+  assert.doesNotMatch(html, /evolve-search:/);
+});
