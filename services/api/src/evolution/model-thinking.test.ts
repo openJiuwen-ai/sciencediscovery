@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ModelProfile } from "@sciencediscovery/schema";
+import { setModelCatalogSnapshot, type ModelCatalogSnapshot, type ModelProfile } from "@sciencediscovery/schema";
 
 import { endpointCanDisableThinking } from "./model-thinking.js";
 
@@ -50,12 +50,79 @@ test("a toggle without a disabled stop cannot be told to stop", () => {
   assert.equal(endpointCanDisableThinking(model({ apiVariant: "gemini" })), false);
   assert.equal(endpointCanDisableThinking(model({ apiVariant: "kimi-k3" })), false);
 
-  // The operator's own statement still wins: they know this endpoint.
+  // A stated fact answers a different question — whether this endpoint honors
+  // the field — so it cannot add a stop the dialect does not carry.
   assert.equal(
     endpointCanDisableThinking(model({ apiVariant: "gemini", facts: { thinkingSupported: true } })),
-    true,
+    false,
   );
 });
+
+test("the catalog's own stop list decides for a model it knows", () => {
+  // The hardcoded variant list only covers dialects whose stops are public
+  // knowledge. A model the catalog knows carries its own, and that entry is
+  // the only thing that knows whether this particular model has a stop.
+  installCatalog([
+    record("no-stop-model", { supported: true, modes: ["auto", "enabled"] }),
+    record("stoppable-model", { supported: true, modes: ["auto", "enabled", "disabled"] }),
+    record("never-thinks-model", { supported: false }),
+  ]);
+  try {
+    assert.equal(endpointCanDisableThinking(model({ apiVariant: "deepseek", model: "no-stop-model" })), false);
+    assert.equal(endpointCanDisableThinking(model({ apiVariant: "deepseek", model: "stoppable-model" })), true);
+    assert.equal(endpointCanDisableThinking(model({ apiVariant: "deepseek", model: "never-thinks-model" })), false);
+
+    // A stated fact overrides the catalog's supported flag...
+    assert.equal(endpointCanDisableThinking(model({
+      apiVariant: "deepseek", facts: { thinkingSupported: true }, model: "never-thinks-model",
+    })), true);
+    // ...but not its stop list: "the field is heard" is not "the field has
+    // disabled".
+    assert.equal(endpointCanDisableThinking(model({
+      apiVariant: "deepseek", facts: { thinkingSupported: true }, model: "no-stop-model",
+    })), false);
+  } finally {
+    installCatalog(undefined);
+  }
+});
+
+test("the configured dialect, not the catalog's, decides whether a field exists", () => {
+  // The catalog's apiVariant describes the vendor's own endpoint. A gateway
+  // that reuses the model name may speak a dialect with no thinking field, and
+  // the profile is what this run will actually call, so the catalog cannot
+  // promise a control the request will never carry. The opposite direction is
+  // safe: a profile that under-claims is merely priced for thinking.
+  installCatalog([record("vendor-model", { supported: true }, "deepseek")]);
+  try {
+    assert.equal(endpointCanDisableThinking(model({ apiVariant: "openai", model: "vendor-model" })), false);
+    assert.equal(endpointCanDisableThinking(model({ apiVariant: "deepseek", model: "vendor-model" })), true);
+  } finally {
+    installCatalog(undefined);
+  }
+});
+
+function installCatalog(records: ModelCatalogSnapshot["records"] | undefined): void {
+  setModelCatalogSnapshot(records && {
+    fetchedAt: "2026-11-03T00:00:00.000Z",
+    origin: "downloaded",
+    records,
+    sourceUrl: "https://example.test/catalog.json",
+  });
+}
+
+function record(
+  key: string,
+  thinking: NonNullable<ModelCatalogSnapshot["records"][number]["thinking"]>,
+  apiVariant?: ModelCatalogSnapshot["records"][number]["apiVariant"],
+): ModelCatalogSnapshot["records"][number] {
+  return {
+    key,
+    label: key,
+    source: { retrievedAt: "2026-11-03T00:00:00.000Z", url: "https://example.test/catalog.json" },
+    thinking,
+    ...(apiVariant ? { apiVariant } : {}),
+  };
+}
 
 test("a stated fact overrides what the dialect suggests", () => {
   // The operator of a gateway is the only one who knows whether it honors the
