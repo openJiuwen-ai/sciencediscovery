@@ -98,6 +98,22 @@ test("a workbook this build cannot read says so", () => {
   assert.match(markup, /这个工作簿无法读取/u);
 });
 
+test("a document this build cannot draw says so instead of showing its bytes", () => {
+  const bytes = zipSync({ "word/document.xml": strToU8("<w:document/>") });
+  const payload = documentPayload(bytes, "report.docx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  const markup = draw({ ...payload, label: "report.docx", path: "report.docx" });
+  assert.match(markup, /无法在面板内预览/u);
+  assert.doesNotMatch(markup, /PK|tab-content-source|�/u);
+});
+
+test("a log is still drawn as its text", () => {
+  const payload = documentPayload(strToU8("2026-11-03 start\n"), "run.log", "text/plain");
+  const markup = draw({ ...payload, label: "run.log", path: "run.log" });
+  assert.match(markup, /2026-11-03 start/u);
+  assert.doesNotMatch(markup, /无法在面板内预览/u);
+});
+
 test("a document too large to hold is named and left to the download", () => {
   const markup = draw({ label: "huge.pdf", path: "huge.pdf", tooLarge: true });
   assert.match(markup, /文件太大/u);
