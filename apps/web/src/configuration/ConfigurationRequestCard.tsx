@@ -62,7 +62,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const mounted = useRef(true);
   const latestRequest = useRef(request);
   const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "serverId"];
-  const dependentRemovalField = request.capabilityId === "mcp.remove_header" ? "headerName" : request.capabilityId === "mcp.remove_env" ? "envName" : undefined;
+  const dependentRemovalField = request.capabilityId === "mcp.remove_header" ? "headerName" : request.capabilityId === "mcp.remove_env" ? "envName" : request.capabilityId === "mcp.delete" ? "confirmDelete" : undefined;
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);

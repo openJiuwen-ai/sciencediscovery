@@ -2309,6 +2309,10 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpDeletionSource?: (id: string) => import("./configuration/mcp-delete-adapter.js").McpDeletionSnapshot;
+  setConfigurationMcpDeletionSource(source: (id: string) => import("./configuration/mcp-delete-adapter.js").McpDeletionSnapshot): void { this.configurationMcpDeletionSource = source; }
+  configurationMcpDeletion(id: string) { return this.configurationMcpDeletionSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
   private configurationMcpEnvironmentRemovalSource?: (target: string) => import("./configuration/mcp-env-removal-adapter.js").McpEnvironmentRemovalSnapshot;
   setConfigurationMcpEnvironmentRemovalSource(source: (target: string) => import("./configuration/mcp-env-removal-adapter.js").McpEnvironmentRemovalSnapshot): void { this.configurationMcpEnvironmentRemovalSource = source; }
   configurationMcpEnvironmentRemoval(target: string) { return this.configurationMcpEnvironmentRemovalSource?.(target) ?? { items: [], current: undefined, variable: undefined, caseSensitive: process.platform !== "win32", version: undefined }; }
@@ -2416,7 +2420,7 @@ export class SessionStore {
     const timeoutSettings = this.getTimeoutSettings();
     const quotaSettings = this.getQuotaSettings();
     const ideaTreeSettings = this.getIdeaTreeSettings();
-    const mcpMetadata = capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : capabilityId === "mcp.timeout" ? this.configurationMcpTimeout(target) : capabilityId === "mcp.remove_header" ? this.configurationMcpHeaderRemoval(target) : capabilityId === "mcp.remove_env" ? this.configurationMcpEnvironmentRemoval(target) : undefined;
+    const mcpMetadata = capabilityId === "mcp.delete" ? this.configurationMcpDeletion(target) : capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : capabilityId === "mcp.timeout" ? this.configurationMcpTimeout(target) : capabilityId === "mcp.remove_header" ? this.configurationMcpHeaderRemoval(target) : capabilityId === "mcp.remove_env" ? this.configurationMcpEnvironmentRemoval(target) : undefined;
     let systemVersions: Record<string, string> | undefined;
     if (mcpMetadata) systemVersions = { mcpMetadata: mcpMetadata.version ?? version([target, null]) };
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };

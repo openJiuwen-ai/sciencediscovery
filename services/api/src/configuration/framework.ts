@@ -29,7 +29,10 @@ import { CONFIGURATION_PENDING_STATES, configurationDecisionReady } from "./inte
 import { ModelDestinationAuthorizer } from "./model-destination.js";
 import type { ConfigurationConnectorRegistration } from "./connector-directory.js";
 
+import { createMcpDeletionAdapter, type McpDeletionPort } from "./mcp-delete-adapter.js";
+
 export interface ConfigurationFrameworkOptions {
+  mcpDeletion?: McpDeletionPort;
   mcpMetadata?: McpMetadataPort;
   mcpTimeout?: McpTimeoutPort;
   mcpHeaderRemoval?: McpHeaderRemovalPort;
@@ -188,11 +191,16 @@ export class ConversationalConfigurationFramework {
   }
 
   configure(options: ConfigurationFrameworkOptions): void {
-    this.options = { ...options, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout, mcpHeaderRemoval: options.mcpHeaderRemoval ?? this.options.mcpHeaderRemoval, mcpEnvironmentRemoval: options.mcpEnvironmentRemoval ?? this.options.mcpEnvironmentRemoval };
+    this.options = { ...options, mcpDeletion: options.mcpDeletion ?? this.options.mcpDeletion, mcpMetadata: options.mcpMetadata ?? this.options.mcpMetadata, mcpTimeout: options.mcpTimeout ?? this.options.mcpTimeout, mcpHeaderRemoval: options.mcpHeaderRemoval ?? this.options.mcpHeaderRemoval, mcpEnvironmentRemoval: options.mcpEnvironmentRemoval ?? this.options.mcpEnvironmentRemoval };
     this.attachMcpMetadata();
   }
 
   private attachMcpMetadata(): void {
+    const deletion = this.options.mcpDeletion;
+    if (deletion && !this.service.registry.list().some(adapter => adapter.id === "mcp.delete")) {
+      this.store.setConfigurationMcpDeletionSource(id => deletion.configurationDeletion(id));
+      this.service.registry.register(createMcpDeletionAdapter(deletion));
+    }
     const environment = this.options.mcpEnvironmentRemoval;
     if (environment && !this.service.registry.list().some(adapter => adapter.id === "mcp.remove_env")) {
       this.store.setConfigurationMcpEnvironmentRemovalSource(target => environment.configurationEnvironmentRemoval(target));
@@ -233,7 +241,7 @@ export class ConversationalConfigurationFramework {
     const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "Timeouts, quotas and Idea Tree settings apply to the whole deployment", 400);
-    const scope = input.scope ?? (systemCapability || ["mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
+    const scope = input.scope ?? (systemCapability || ["mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env", "mcp.delete"].includes(input.capabilityId) || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {

@@ -120,6 +120,8 @@ export class CustomMcpServers {
   readonly oauth: McpOAuthManager;
   private configs: Record<string, CustomMcpServerConfig> = {};
   private configurationOperations: Record<string, ConfigurationExternalOutcome> = {};
+  private pendingConfigurationDeletions: Record<string, string> = {};
+  private deletionJournal = false;
   private readonly checks = new Map<string, { checkedAt: string; tools: McpCatalogTool[]; error?: string; durationMs?: number }>();
   private key?: Buffer;
   private queue: Promise<unknown> = Promise.resolve();
@@ -143,7 +145,8 @@ export class CustomMcpServers {
       const encrypted = await readFile(this.path, "utf8");
       const saved: unknown = JSON.parse(decryptSecretValue(this.key, "custom-mcp-servers", encrypted));
       if (!object(saved)) throw new Error("Invalid saved MCP configuration");
-      const envelope = saved.format === "sciencediscovery-custom-mcp-v2" ? saved : undefined;
+      const envelope = ["sciencediscovery-custom-mcp-v2", "sciencediscovery-custom-mcp-v3"].includes(String(saved.format)) ? saved : undefined;
+      this.deletionJournal = saved.format === "sciencediscovery-custom-mcp-v3";
       const servers = envelope ? envelope.servers : saved;
       if (!object(servers) || envelope && !object(envelope.operations)) throw new Error("Invalid saved MCP configuration envelope");
       if (envelope) for (const [operationId, value] of Object.entries(envelope.operations as Record<string, unknown>)) {
@@ -160,11 +163,19 @@ export class CustomMcpServers {
         if (!/^custom-[a-f0-9]{12}$/.test(id)) throw new Error("Invalid saved MCP server id");
         this.configs[id] = normalizeCustomMcpConfig(value);
       }
+      if (this.deletionJournal) {
+        if (!object(envelope?.pendingDeletions)) throw new Error("Invalid pending MCP deletions");
+        for (const [operationId, id] of Object.entries(envelope.pendingDeletions)) {
+          if (typeof id !== "string" || !/^custom-[a-f0-9]{12}$/u.test(id) || this.configs[id] || this.configurationOperations[operationId]?.status !== "applied") throw new Error("Invalid pending MCP deletion binding");
+          this.pendingConfigurationDeletions[operationId] = id;
+        }
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     await this.oauth.load(this.key);
     this.sync();
+    for (const operationId of Object.keys(this.pendingConfigurationDeletions)) { await this.finishConfigurationDeletion(operationId); }
   }
 
   private sync(): void {
@@ -240,16 +251,56 @@ export class CustomMcpServers {
     return result;
   }
 
-  private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations, invalidateChecks: readonly string[] = []): Promise<void> {
+  private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations, invalidateChecks: readonly string[] = [], pendingDeletions = this.pendingConfigurationDeletions): Promise<void> {
     if (!this.key) throw new Error("MCP storage is not initialized");
     const temporary = `${this.path}.tmp`;
-    const payload = Object.keys(operations).length ? { format: "sciencediscovery-custom-mcp-v2", servers: next, operations } : next;
+    const deletionJournal = this.deletionJournal || Object.keys(pendingDeletions).length > 0;
+    const payload = Object.keys(operations).length ? { format: deletionJournal ? "sciencediscovery-custom-mcp-v3" : "sciencediscovery-custom-mcp-v2", servers: next, operations, ...(deletionJournal ? { pendingDeletions } : {}) } : next;
     await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(payload)), { mode: 0o600 });
     await rename(temporary, this.path);
     this.configs = next;
     for (const id of invalidateChecks) { this.checks.delete(id); }
     this.configurationOperations = operations;
+    this.pendingConfigurationDeletions = pendingDeletions;
+    this.deletionJournal = deletionJournal;
     this.sync();
+  }
+
+  configurationDeletion(serverId = "") {
+    const source = this.configurationMetadata(serverId);
+    return { ...source, version: serverId && !source.current ? this.deletedConfigurationRevision(serverId) : source.version };
+  }
+
+  private deletedConfigurationRevision(id: string): string {
+    if (!this.key) throw new Error("MCP storage is not initialized");
+    return createHmac("sha256", this.key).update(JSON.stringify(["mcp-deleted-v1", id])).digest("hex");
+  }
+
+  /** Only local, convergent cleanup. Never refresh/probe or replay an invocation. */
+  private async finishConfigurationDeletion(operationId: string): Promise<void> {
+    const id = this.pendingConfigurationDeletions[operationId];
+    if (!id) return;
+    if (this.configs[id]) throw new Error("Deleted MCP identity was replaced before cleanup");
+    this.registry.remove(id); this.checks.delete(id);
+    await this.oauth.clear(id);
+    await this.onRemoved(id);
+    const pending = { ...this.pendingConfigurationDeletions }; delete pending[operationId];
+    await this.persist(this.configs, this.configurationOperations, [], pending);
+  }
+
+  submitConfigurationDeletion(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation);
+      if (prior) { await this.finishConfigurationDeletion(operation.operationId); if (prior.status === "applied") this.sync(); return prior; }
+      if (!/^custom-[a-f0-9]{12}$/u.test(serverId) || !this.configs[serverId]) return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "CONFIGURATION_RESOURCE_UNAVAILABLE" });
+      if (this.configurationMetadataRevision(serverId) !== expectedVersion) return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "RESOURCE_VERSION_CONFLICT" });
+      if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
+      const outcome: ConfigurationExternalOutcome = { ...operation, status: "applied", resourceVersions: { mcpMetadata: this.deletedConfigurationRevision(serverId) } };
+      const next = { ...this.configs }; delete next[serverId];
+      await this.persist(next, { ...this.configurationOperations, [operation.operationId]: outcome }, [serverId], { ...this.pendingConfigurationDeletions, [operation.operationId]: serverId });
+      await this.finishConfigurationDeletion(operation.operationId);
+      return structuredClone(outcome);
+    });
   }
 
 
@@ -375,7 +426,7 @@ export class CustomMcpServers {
   resolveConfigurationMetadata(operation: ConfigurationExternalOperation): Promise<ConfigurationExternalOutcome> {
     return this.mutate(async () => {
       const prior = this.operationOutcome(operation);
-      if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      if (prior) { await this.finishConfigurationDeletion(operation.operationId); if (prior.status === "applied") this.sync(); return prior; }
       return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "EXTERNAL_OPERATION_NOT_SAVED" });
     });
   }

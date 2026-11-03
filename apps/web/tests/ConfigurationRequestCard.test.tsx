@@ -16,6 +16,19 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03f: changing the MCP deletion target clears its independent confirmation", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.delete", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "confirmDelete", label: "Delete this shared server and its saved references", kind: "boolean", required: true, value: true },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } }));
+    const check = renderer.root.findByProps({ name: "confirmDelete" }); assert.equal(check.props.checked, false); assert.equal(check.props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} })); assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
 test("CFG-X03e: changing a STDIO target clears its saved environment name without a secret input", async () => {
   const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_env", scope: { kind: "global" }, fields: [
     { id: "serverId", label: "Existing STDIO custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
