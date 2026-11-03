@@ -107,7 +107,7 @@ test("USG-007 cache tokens aggregate without treating missing fields as zero", (
 test("USG-007A reasoning tokens remain separately visible in usage diagnostics", () => {
   const summary = summarizeModelUsage("session-a", [
     usage({ reasoningTokens: 8 }),
-    usage({ id: "reasoning-missing", reasoningTokens: null }),
+    usage({ id: "reasoning-missing", reasoningTokens: null, startedAt: "2026-01-01T00:00:02.000Z" }),
   ]);
 
   assert.equal(summary.totals.reasoningTokens, 8);

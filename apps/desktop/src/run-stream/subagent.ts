@@ -117,6 +117,7 @@ function sameUsage(left: SubagentUsage | undefined, right: SubagentUsage | undef
     && left.cacheWriteTokens === right.cacheWriteTokens
     && left.inputTokens === right.inputTokens
     && left.outputTokens === right.outputTokens
+    && left.reasoningTokens === right.reasoningTokens
     && left.totalTokens === right.totalTokens);
 }
 

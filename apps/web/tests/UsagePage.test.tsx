@@ -36,6 +36,7 @@ function bucket(overrides: Partial<ModelUsageBucket> = {}): ModelUsageBucket {
     key: "bucket",
     label: "Bucket",
     outputTokens: 5,
+    reasoningTokens: 7,
     reportedInvocationCount: 1,
     totalTokens: 15,
     unreportedInvocationCount: 0,
@@ -236,6 +237,7 @@ test("USG-012 usage page renders model drilldown, chart and inline/table usage",
   assert.match(page, /All models/);
   assert.match(page, /Last 30 days/);
   assert.match(page, /Cache write/);
+  assert.match(page, /reasoning 7/);
   assert.match(page, /Estimated cost \(CNY, approx\.\)/);
   assert.match(page, /Displayed costs use approximate cached conversion \(1 USD = 6\.69 CNY \(2026-09-08\)\); exports keep original currencies, and CSV adds display conversion columns\./);
   assert.match(page, /<option value="CNY" selected="">CNY<\/option>/);

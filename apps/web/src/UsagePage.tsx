@@ -218,6 +218,7 @@ function createUiUsageBucket(key: string, label: string): ModelUsageBucket {
     key,
     label,
     outputTokens: null,
+    reasoningTokens: null,
     reportedInvocationCount: 0,
     totalTokens: null,
     unreportedInvocationCount: 0,
@@ -235,6 +236,7 @@ function addInvocationToUiBucket(bucket: ModelUsageBucket, invocation: ModelInvo
     bucket.reportedInvocationCount += 1;
     bucket.inputTokens = addUiNullable(bucket.inputTokens, invocation.inputTokens);
     bucket.outputTokens = addUiNullable(bucket.outputTokens, invocation.outputTokens);
+    bucket.reasoningTokens = addUiNullable(bucket.reasoningTokens ?? null, invocation.reasoningTokens);
     bucket.totalTokens = addUiNullable(bucket.totalTokens, invocation.totalTokens);
     bucket.cacheReadTokens = addUiNullable(bucket.cacheReadTokens, invocation.cacheReadTokens);
     bucket.cacheWriteTokens = addUiNullable(bucket.cacheWriteTokens, invocation.cacheWriteTokens);
