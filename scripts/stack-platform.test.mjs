@@ -15,7 +15,7 @@ import { createTest } from "../test/support/tagged/compat.mjs";
 
 import {
   absoluteFromRepository, findHostPython, isWindows, loadDotEnv,
-  portAvailability, probeTcp, venvEntry, venvPython, waitHealthy,
+  portAvailability, probeTcp, spawnService, venvEntry, venvPython, waitHealthy,
 } from "./lib/stack-platform.mjs";
 import { applyConfig } from "./jiuwenswarm.mjs";
 
@@ -64,6 +64,30 @@ test("serviceCommand resolves bare commands through the merged environment PATH"
     } finally {
       process.env.PATH = saved;
     }
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("spawnService runs Windows command shims without a shell option", async () => {
+  if (!isWindows) return;
+  const dir = await mkdtemp(join(tmpdir(), "sd stack cmd "));
+  try {
+    const shim = join(dir, "probe.cmd");
+    await writeFile(shim, "@echo off\r\nnode -e \"process.stdout.write(process.argv[1])\" %1\r\n", "utf8");
+    const child = spawnService(shim, ["shim & %PATH% ready"], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    const result = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    assert.deepEqual(result, { code: 0, signal: null }, stderr);
+    assert.equal(stdout, "shim & %PATH% ready");
   } finally {
     await rm(dir, { force: true, recursive: true });
   }
