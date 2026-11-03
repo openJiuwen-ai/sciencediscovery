@@ -67,6 +67,7 @@ function deps(over: Partial<ProposalDeps> = {}) {
       start: async () => ({ id: "run-1", status: "running" }),
     } as never,
     sessionId: "s1",
+    thinkingSupported: true,
     store: async (input) => {
       stored.push(input);
       return `sha256:${"a".repeat(64)}`;
@@ -124,7 +125,7 @@ test("the budget the checkpoint shows is the budget the run starts with", async 
   // from the same model and the same rule. The original defect was exactly this
   // gap: the checkpoint promised "thinking off" while the run recorded, and
   // paid for, thinking.
-  for (const apiVariant of [undefined, "openai", "deepseek"] as const) {
+  for (const apiVariant of [undefined, "openai", "deepseek", "gemini", "kimi-k3"] as const) {
     const model: ModelProfile = {
       apiVariant, baseUrl: "http://127.0.0.1:1/v1", createdAt: "", hasApiToken: true,
       id: "m1", model: "some-gateway-model", name: "Gateway", proxyPolicy: "inherit" as never,

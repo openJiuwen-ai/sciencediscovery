@@ -172,7 +172,7 @@ test("the ceiling the checkpoint shows is the one this gate accepts", async () =
   // nothing. Both algorithms, both kinds of endpoint, because the two numbers
   // are written in two places.
   for (const algorithm of ["puct", "openevolve"] as const) {
-    for (const apiVariant of [undefined, "openai", "deepseek"] as const) {
+    for (const apiVariant of [undefined, "openai", "deepseek", "gemini", "kimi-k3"] as const) {
       const where = `${algorithm} on ${apiVariant ?? "the default variant"}`;
       const model: ModelProfile = { ...MODEL, apiVariant, model: "some-gateway-model" };
       const thinkingSupported = endpointCanDisableThinking(model);
