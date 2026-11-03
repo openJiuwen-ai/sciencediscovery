@@ -65,7 +65,7 @@ function catalogRow(root: string): { bytes: number; json: string } {
 }
 
 /** The rows that used to be part of that row. */
-function sideTables(root: string): { bytes: number; files: number; revisions: number } {
+function sideTables(root: string): { bytes: number; files: number; lastPathRows: number; revisions: number } {
   const database = new DatabaseSync(resolve(root, "catalog.sqlite"));
   try {
     const row = database.prepare(`
@@ -75,7 +75,11 @@ function sideTables(root: string): { bytes: number; files: number; revisions: nu
     `).get() as { bytes: number };
     const files = (database.prepare("SELECT count(*) AS n FROM workspace_files").get() as { n: number }).n;
     const revisions = (database.prepare("SELECT count(*) AS n FROM workspace_file_revisions").get() as { n: number }).n;
-    return { bytes: Number(row.bytes), files: Number(files), revisions: Number(revisions) };
+    // Counting rows would pass on rows that say nothing. Read the content back:
+    // the last path recorded is in a row of its own, and nowhere else.
+    const lastPathRows = (database.prepare("SELECT count(*) AS n FROM workspace_files WHERE record_json LIKE ?")
+      .get(`%data/file-${REVISIONS - 1}.md%`) as { n: number }).n;
+    return { bytes: Number(row.bytes), files: Number(files), lastPathRows: Number(lastPathRows), revisions: Number(revisions) };
   } finally {
     database.close();
   }
@@ -128,6 +132,7 @@ test("the catalog row does not grow with the provenance stored beside it", async
   const side = sideTables(root);
   assert.equal(side.files, REVISIONS, "every record has a row of its own");
   assert.equal(side.revisions, REVISIONS, "every revision has a row of its own");
+  assert.equal(side.lastPathRows, 1, "the path the row no longer carries is in exactly one side row");
   assert.ok(
     side.bytes > after.bytes * 10,
     `the rows now carry the provenance (${side.bytes} B beside a ${after.bytes} B row)`,

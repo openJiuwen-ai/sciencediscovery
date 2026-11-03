@@ -132,8 +132,10 @@ export function parsePrunedBinaries(stdout: string): string[] {
 
 /** One reachability answer is good for this long; a page render is not a question. */
 const REACHABILITY_TTL_MS = 30_000;
-/** Long enough for a handshake on a slow link, short enough not to stall a list. */
-const REACHABILITY_TIMEOUT_MS = 8_000;
+/** Long enough for a handshake on a slow link, short enough not to stall a list.
+ *  Exported so the test that drives this budget with mock timers ticks the
+ *  same number the client waits on, rather than a second copy of it. */
+export const REACHABILITY_TIMEOUT_MS = 8_000;
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;

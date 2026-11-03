@@ -24,6 +24,7 @@ import { resolve } from "node:path";
 import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 
 import {
+  REACHABILITY_TIMEOUT_MS,
   RemoteComputeClient,
   SshHostKeyUntrustedError,
   validateRunnerCommand,
@@ -559,11 +560,11 @@ test("a machine that never answers is abandoned at the probe budget, not held fo
 
   // One connect timeout must not become the page's timeout: the probe has its
   // own budget, and it is the number the settings page waits at most.
-  context.mock.timers.tick(8_000);
+  context.mock.timers.tick(REACHABILITY_TIMEOUT_MS);
   const answer = await inFlight;
   assert.equal(answer.state, "offline");
-  assert.match(answer.error ?? "", /did not answer within 8 s/u);
-  assert.equal(client.reachabilityNow(sshHost, now + 8_000).state, "offline",
+  assert.match(answer.error ?? "", new RegExp(`did not answer within ${REACHABILITY_TIMEOUT_MS / 1_000} s`, "u"));
+  assert.equal(client.reachabilityNow(sshHost, now + REACHABILITY_TIMEOUT_MS).state, "offline",
     "the next render reads the bounded answer instead of waiting again");
   context.mock.timers.reset();
 });
