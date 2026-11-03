@@ -1052,3 +1052,72 @@ test("preview endpoint returns 422 when the CAS blob is missing", async (context
   });
   assert.equal(response.status, 422);
 });
+
+// -- Integers beyond 2^53 keep the digits that are stored -------------------
+
+test("json preview shows integers beyond 2^53 without rounding them", async (context) => {
+  const fixture = await createFixture(context);
+  // JSON.parse turns 9007199254740993 into 9007199254740992: the preview must
+  // display what the document says, not what a double can hold.
+  const tableVersion = await seedArtifact(fixture, {
+    content: '[{"sample_id":9007199254740993,"label":"x"}]',
+    kind: "json",
+    logicalName: "samples.json",
+    mediaType: "application/json",
+  });
+  const table = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, tableVersion,
+  );
+  if (table.mode !== "dataset-table") assert.fail(`unexpected mode: ${table.mode}`);
+  assert.deepEqual(table.columns, ["sample_id", "label"]);
+  assert.deepEqual(table.rows, [["9007199254740993", "x"]], "the cell must keep the stored digits");
+  if (!table.rawJson) assert.fail("a json-backed table must carry rawJson");
+  assert.ok(
+    table.rawJson.source.includes("9007199254740993"),
+    `rawJson must keep the stored digits: ${table.rawJson.source}`,
+  );
+
+  // A document that is not a record array goes to the source view, same rule.
+  const scalarVersion = await seedArtifact(fixture, {
+    content: '{"run_id":12345678901234567890}',
+    kind: "json",
+    logicalName: "run.json",
+    mediaType: "application/json",
+  });
+  const scalar = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarVersion,
+  );
+  if (scalar.mode !== "json-source") assert.fail(`unexpected mode: ${scalar.mode}`);
+  assert.equal(scalar.parsed, true);
+  assert.ok(
+    scalar.source.includes("12345678901234567890"),
+    `the source view must keep the stored digits: ${scalar.source}`,
+  );
+});
+
+test("json preview leaves safe numbers, strings and nested values unchanged", async (context) => {
+  const fixture = await createFixture(context);
+  const safeVersion = await seedArtifact(fixture, {
+    content: JSON.stringify([{ n: 42, text: "9007199254740993" }]),
+    kind: "json",
+    logicalName: "safe.json",
+    mediaType: "application/json",
+  });
+  const safe = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, safeVersion);
+  if (safe.mode !== "dataset-table") assert.fail(`unexpected mode: ${safe.mode}`);
+  assert.deepEqual(safe.rows, [["42", "9007199254740993"]], "a safe number and a string that looks like one stay put");
+
+  const nested = { config: { seed: 7, tags: ["a", "b"] }, ratio: 0.5 };
+  const nestedVersion = await seedArtifact(fixture, {
+    content: JSON.stringify(nested),
+    kind: "json",
+    logicalName: "nested.json",
+    mediaType: "application/json",
+  });
+  const nestedPreview = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, nestedVersion,
+  );
+  if (nestedPreview.mode !== "json-source") assert.fail(`unexpected mode: ${nestedPreview.mode}`);
+  assert.equal(nestedPreview.parsed, true);
+  assert.equal(nestedPreview.source, JSON.stringify(nested, null, 2));
+});
