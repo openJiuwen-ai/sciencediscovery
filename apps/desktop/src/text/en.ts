@@ -1055,6 +1055,7 @@ export const EN: Text = {
     imageFit: "Fit to the panel",
     pdfFallback: "If the page does not appear, download it:",
     tooLarge: "This file is too large to preview here. Download it to open it.",
+    unrenderable: "This build has no preview for this file's format. Download it to open it.",
     sourceTruncated: "This file is long; only the beginning is shown.",
   },
 

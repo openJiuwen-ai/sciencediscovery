@@ -1095,6 +1095,7 @@ export const ZH = {
     imageFit: "适应面板宽度",
     pdfFallback: "页面没有显示时可以下载后查看：",
     tooLarge: "文件太大，暂时无法在面板内预览，请下载后查看。",
+    unrenderable: "当前版本无法在面板内预览这种格式，请下载后查看。",
     sourceTruncated: "文件较长，这里只显示了开头部分。",
   },
 

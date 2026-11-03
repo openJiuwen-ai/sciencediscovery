@@ -20,7 +20,8 @@
  * turns a PNG into replacement characters. A document is now read as bytes and
  * turned into one of two representations here — the text it decodes to, or a
  * data URL a frame or an `<img>` can draw — and a document this app has no
- * renderer for is kept out of the tab entirely rather than shown as mojibake.
+ * renderer for is kept out of the tab entirely rather than shown as mojibake;
+ * a container among them keeps its bytes for the download alone.
  */
 
 import { documentKind, isBinaryDocument } from "./preview-kind.js";
@@ -99,10 +100,14 @@ export function documentPayload(bytes: Uint8Array, name: string, mediaType = "")
   const kind = documentKind(name, mediaType);
   const type = usableMediaType(kind, name, mediaType);
   if (bytes.byteLength > MAX_INLINE_BYTES) return { mediaType: type, tooLarge: true };
-  if (!isBinaryDocument(kind)) {
-    return { content: new TextDecoder("utf-8").decode(bytes), mediaType: type };
+  // A container this build has no renderer for — a .docx, a .pptx, an archive —
+  // never becomes text: decoding one is what showed `PK\u0003\u0004\u0014…`. Its
+  // bytes are still carried, because the notice that replaces the page leaves
+  // the download as the way to open the document.
+  if (kind === "unrenderable" || isBinaryDocument(kind)) {
+    return { dataUrl: `data:${type};base64,${base64Of(bytes)}`, mediaType: type };
   }
-  return { dataUrl: `data:${type};base64,${base64Of(bytes)}`, mediaType: type };
+  return { content: new TextDecoder("utf-8").decode(bytes), mediaType: type };
 }
 
 const KIND_TYPES: Record<string, string> = {
@@ -116,6 +121,7 @@ const KIND_TYPES: Record<string, string> = {
   python: "text/x-python",
   sheet: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   source: "text/plain",
+  unrenderable: "application/octet-stream",
 };
 
 const IMAGE_TYPES: Record<string, string> = {
