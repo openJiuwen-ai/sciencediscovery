@@ -104,6 +104,10 @@ function artifactView(result: JsonObject, sourceId: string, toolId: string): Jso
       mimeType: candidate!.mimeType,
       sourceId: candidate!.sourceId,
       sourceRecordId: candidate!.sourceRecordId,
+      // Preserve the terms and estimated cost needed before download consent.
+      license: candidate!.license,
+      attribution: candidate!.attribution,
+      ...(candidate!.expectedBytes !== undefined ? { expectedBytes: candidate!.expectedBytes } : {}),
     })),
     ...(candidates.length > MCP_MODEL_ARRAY_MAX_ITEMS
       ? { candidatesOmitted: candidates.length - MCP_MODEL_ARRAY_MAX_ITEMS, truncated: true } : {}),

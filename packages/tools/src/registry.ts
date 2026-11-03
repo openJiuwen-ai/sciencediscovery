@@ -82,6 +82,9 @@ export interface ToolBatchPolicy {
 }
 
 const MAX_DETAIL_DEPTH = 8;
+// Audit metadata can be deeper than the interactive view, but must remain
+// safe to traverse and serialize even when a provider returns pathological nesting.
+const MAX_AUDIT_DETAIL_DEPTH = 128;
 const MAX_DETAIL_KEYS = 100;
 const MAX_DETAIL_ARRAY_ITEMS = 100;
 const MAX_DETAIL_STRING_CHARS = 4_096;
@@ -139,7 +142,7 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   if (typeof value === "string") return sanitizeStringDetail(value, state);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "symbol" || typeof value === "function" || value === undefined) return undefined;
-  if (state.bounded && depth >= MAX_DETAIL_DEPTH) {
+  if (depth >= (state.bounded ? MAX_DETAIL_DEPTH : MAX_AUDIT_DETAIL_DEPTH)) {
     state.truncated = true;
     return "[max-depth]";
   }
@@ -210,8 +213,9 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   return result;
 }
 
-/** Persist safe metadata without the interactive size limits. Raw payload
- * fields remain omitted; full results belong in their governed source stores. */
+/** Persist safe metadata without the interactive size limits, retaining a
+ * defensive depth limit. Raw payload fields remain omitted; full results
+ * belong in their governed source stores. */
 export function redactToolDetails(details: unknown): unknown {
   return sanitizeDetailValue(details, {
     bounded: false, omitted: false, remainingChars: Infinity, seen: new WeakSet<object>(), truncated: false,
