@@ -1493,3 +1493,66 @@ test("json preview keeps placeholders for many big integers apart", async (conte
     `rawJson must parse back to the stored document: ${preview.rawJson.source}`,
   );
 });
+
+test("a delimited preview keeps every row as wide as the columns it advertises", async (context) => {
+  const fixture = await createFixture(context);
+  // An uneven file used to ship rows of their own width: the renderer prints one
+  // <th> per column and one <td> per cell, so a short row left cells under the
+  // wrong header and an extra cell had no header at all.
+  for (const [name, mediaType, content, columns, rows] of [
+    ["short.csv", "text/csv", "a,b,c\n1,2\n", ["a", "b", "c"], [["1", "2", ""]]],
+    ["long.csv", "text/csv", "a,b\n1,2,3\n", ["a", "b", ""], [["1", "2", "3"]]],
+    ["short.tsv", "text/tab-separated-values", "a\tb\tc\n1\t2\n", ["a", "b", "c"], [["1", "2", ""]]],
+    ["long.tsv", "text/tab-separated-values", "a\tb\n1\t2\t3\n", ["a", "b", ""], [["1", "2", "3"]]],
+  ] as const) {
+    const vid = await seedArtifact(fixture, { content, kind: "dataset", logicalName: name, mediaType });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`${name}: unexpected mode ${payload.mode}`);
+    assert.deepEqual(payload.columns, [...columns], `${name}: header text keeps its order, an extra column is blank`);
+    assert.deepEqual(
+      payload.rows,
+      rows.map((row) => [...row]),
+      `${name}: rows are padded or carried over, never dropped`,
+    );
+    assert.ok(
+      payload.rows.every((row) => row.length === payload.columns.length),
+      `${name}: every row must match the advertised width`,
+    );
+    assert.equal(payload.totalRows, 1, `${name}: totalRows must not change`);
+    assert.equal(payload.truncated, false, `${name}: truncated must not change`);
+  }
+
+  // A quoted cell that contains the delimiter is parsed by the field splitter,
+  // not by the width rule, and stays exactly as wide as the header.
+  const quoted = await seedArtifact(fixture, {
+    content: 'a,b\n"x,y",2\n',
+    kind: "dataset",
+    logicalName: "quoted.csv",
+    mediaType: "text/csv",
+  });
+  const quotedPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, quoted,
+  );
+  if (quotedPayload.mode !== "dataset-table") assert.fail(`unexpected mode: ${quotedPayload.mode}`);
+  assert.deepEqual(quotedPayload.columns, ["a", "b"]);
+  assert.deepEqual(quotedPayload.rows, [["x,y", "2"]]);
+
+  // Only the rows that are actually returned widen the table: a wide row beyond
+  // maxRows must not add an empty column that no returned row fills.
+  const truncated = await seedArtifact(fixture, {
+    content: "a,b\n1,2\n3,4,5\n",
+    kind: "dataset",
+    logicalName: "truncated.csv",
+    mediaType: "text/csv",
+  });
+  const truncatedPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, truncated, "1",
+  );
+  if (truncatedPayload.mode !== "dataset-table") assert.fail(`unexpected mode: ${truncatedPayload.mode}`);
+  assert.deepEqual(truncatedPayload.columns, ["a", "b"], "a row past maxRows must not add a column");
+  assert.deepEqual(truncatedPayload.rows, [["1", "2"]]);
+  assert.equal(truncatedPayload.totalRows, 2);
+  assert.equal(truncatedPayload.truncated, true);
+});
