@@ -14,4 +14,4 @@
 # the rest of that pipeline. It stays because gitcode.com's own review UI reads
 # it. GitHub does not: it prefers .github/CODEOWNERS, which names the same three
 # people by their GitHub logins. Keep the two in step.
-* @wang_cheng_zhao @yi-zhang95 @hong-ye-zhou
+* @wang_cheng_zhao @zhouyuan75 @hong-ye-zhou
