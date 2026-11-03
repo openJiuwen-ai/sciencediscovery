@@ -104,7 +104,9 @@ export function profileRows(
   kind: DataTableKind,
   source: DataSourceRecord,
   warnings: string[] = [],
+  unnamedFields: readonly string[] = [],
 ): DataTable {
+  const unnamed = new Set(unnamedFields);
   const fields = [...new Set(rows.flatMap((row) => Object.keys(row)).filter((field) => field !== "__rowId"))];
   const rawColumns = new Map<string, string[]>();
   for (const field of fields) {
@@ -155,7 +157,7 @@ export function profileRows(
       examples: [...new Set(present.map(String))].slice(0, 3),
       id: field,
       kind: kinds.get(field) ?? "text",
-      label: field.replaceAll("_", " "),
+      label: unnamed.has(field) ? "" : field.replaceAll("_", " "),
       ...(min !== undefined && max !== undefined ? {
         max,
         min,
@@ -202,12 +204,56 @@ function inferTableKind(fields: string[]): DataTableKind {
   return "generic";
 }
 
+const PAPA_OVERFLOW_FIELD = "__parsed_extra";
+
+/**
+ * Papa reports cells past the header under its own `__parsed_extra` key and
+ * leaves a short record without its trailing header keys. Neither shape may
+ * define a column, so every record is rebuilt to the table width: the header
+ * fields in file order, then one `__extra_N` field per overflow cell. Extra
+ * fields are unnamed (empty label) and a missing cell stays undefined, which
+ * profiles as null, so the table is rectangular without dropping a value.
+ */
+function rectangularizeRows(
+  rows: Array<Record<string, unknown>>,
+  headerFields: string[],
+): string[] {
+  let width = headerFields.length;
+  for (const row of rows) {
+    const overflow = row[PAPA_OVERFLOW_FIELD];
+    const extraCount = Array.isArray(overflow) ? overflow.length : overflow === undefined ? 0 : 1;
+    width = Math.max(width, headerFields.length + extraCount);
+  }
+
+  const taken = new Set(headerFields);
+  const extraFields: string[] = [];
+  while (headerFields.length + extraFields.length < width) {
+    let field = `__extra_${extraFields.length + 1}`;
+    while (taken.has(field)) field = `${field}_`;
+    taken.add(field);
+    extraFields.push(field);
+  }
+
+  for (const row of rows) {
+    const overflow = row[PAPA_OVERFLOW_FIELD];
+    const extras = Array.isArray(overflow) ? overflow : overflow === undefined ? [] : [overflow];
+    delete row[PAPA_OVERFLOW_FIELD];
+    for (const field of headerFields) {
+      if (!(field in row)) row[field] = undefined;
+    }
+    extraFields.forEach((field, index) => {
+      row[field] = extras[index];
+    });
+  }
+  return extraFields;
+}
+
 export function parseCsvText(content: string, source: DataSourceRecord): DataTable {
-  const rows: Array<Record<string, string>> = [];
+  const rows: Array<Record<string, unknown>> = [];
   const errors: Papa.ParseError[] = [];
   let fields: string[] = [];
   let tooManyRows = false;
-  Papa.parse<Record<string, string>>(content, {
+  Papa.parse<Record<string, unknown>>(content, {
     chunkSize: 256 * 1024,
     header: true,
     skipEmptyLines: "greedy",
@@ -231,6 +277,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     throw new Error(translateActive("csv.tooManyRows", { count: MAX_CSV_DATA_ROWS.toLocaleString("en-US") }));
   }
   if (!fields.length || !rows.length) throw new Error(translateActive("csv.parseHeaderRequired"));
+  const unnamedFields = rectangularizeRows(rows, fields);
   return profileRows(
     rows,
     `artifact:${source.sourceArtifactVersionId}`,
@@ -239,6 +286,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     source,
     errors.map((error) =>
       translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 })),
+    unnamedFields,
   );
 }
 
