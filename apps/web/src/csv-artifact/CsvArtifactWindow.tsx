@@ -37,7 +37,7 @@ import {
   useState,
 } from "react";
 
-import { downloadText, filterRows, rowsToCsv } from "./chart-spec/filters.js";
+import { downloadText, filterRows, tableToCsv } from "./chart-spec/filters.js";
 import { createCustomSpec, createDefaultSpecs, requiredMappings } from "./chart-spec/presets.js";
 import { PlotlyChart, type PlotlyChartHandle } from "./charts/PlotlyChart.js";
 import { ChartConfigPanel } from "./components/ChartConfigPanel.js";
@@ -211,7 +211,7 @@ export default function CsvArtifactWindow({
   function exportRows(rows: DataRow[]): void {
     if (!table) return;
     downloadText(
-      rowsToCsv(rows, table.columns.map((column) => column.id)),
+      tableToCsv(rows, table.columns),
       `${fileName.replace(/\.csv$/i, "")}-visible.csv`,
       "text/csv;charset=utf-8",
     );
