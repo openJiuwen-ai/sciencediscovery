@@ -300,6 +300,14 @@ export function scriptedModel(
               throw new Error(`Scripted shell did not succeed: state=${state}, exitCode=${exitCode ?? "missing"}`);
             }
             waitingForShell[route] = false;
+            // execution_status intentionally projects only lifecycle facts.
+            // Fetch retained output before the fixture advances so dependent
+            // scripted steps observe the command's actual stdout/stderr. A
+            // foreground run_shell result already carries those sections.
+            if (!result.includes("stdout:")) {
+              step = { tool: "execution_logs", arguments: { execution_id: executionId } };
+              pollingShell = true;
+            }
           }
         }
 
