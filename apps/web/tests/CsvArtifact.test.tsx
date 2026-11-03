@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
-import { rowsToCsv } from "../src/csv-artifact/chart-spec/filters.js";
+import { rowsToCsv, tableToCsv } from "../src/csv-artifact/chart-spec/filters.js";
 import {
   createCustomSpec,
   createDefaultSpecs,
@@ -127,6 +127,73 @@ test("profiles common scientific missing-value tokens as null", () => {
   assert.equal(table.columns.find((column) => column.id === "value")?.kind, "quantitative");
   assert.equal(table.columns.find((column) => column.id === "value")?.missingCount, 3);
   assert.deepEqual(table.rows.map((row) => row.value), [1.5, null, null, null, 3.5]);
+});
+
+test("keeps overflow cells in unique unnamed columns instead of Papa's internal key", () => {
+  const table = parse("extra.csv", "a,b\n1,2,3\n");
+
+  for (const column of table.columns) {
+    assert.ok(!column.id.includes("__parsed_extra"), `internal key became a column id: ${column.id}`);
+    assert.ok(!column.label.includes("parsed extra"), `internal key became a column label: ${column.label}`);
+  }
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "b", "__extra_1"]);
+  assert.deepEqual(table.columns.map((column) => column.label), ["a", "b", ""]);
+  assert.equal(table.rows[0]?.__extra_1, 3);
+  assert.equal(table.rows[0]?.__rowId, "row-2");
+
+  const wider = parse("extra-two.csv", "a,b\n1,2,3,4\n");
+  assert.deepEqual(wider.columns.map((column) => column.id), ["a", "b", "__extra_1", "__extra_2"]);
+  assert.equal(wider.rows[0]?.__extra_1, 3);
+  assert.equal(wider.rows[0]?.__extra_2, 4);
+
+  const mixed = parse("mixed-width.csv", "a,b\n1,2,3\n7,8\n");
+  assert.deepEqual(mixed.columns.map((column) => column.id), ["a", "b", "__extra_1"]);
+  assert.deepEqual(
+    mixed.rows.map((row) => [row.a, row.b, row.__extra_1]),
+    [[1, 2, 3], [7, 8, null]],
+  );
+  for (const row of mixed.rows) {
+    assert.deepEqual(Object.keys(row).filter((key) => key !== "__rowId"), mixed.columns.map((column) => column.id));
+  }
+});
+
+test("pads short rows to the header width so no header column disappears", () => {
+  const table = parse("short.csv", "a,b,c\n1,2\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "b", "c"]);
+  assert.equal(table.rows[0]?.c, null);
+  assert.equal(table.columns.find((column) => column.id === "c")?.missingCount, 1);
+  assert.deepEqual(Object.keys(table.rows[0] ?? {}).filter((key) => key !== "__rowId"), ["a", "b", "c"]);
+});
+
+test("the data table header hides an unnamed overflow column's internal id", () => {
+  const table = parse("extra-header.csv", "a,b\n1,2,3\n");
+  const html = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = html.slice(html.indexOf("csva-virtual-grid-header"), html.indexOf("csva-virtual-grid-body"));
+  const labels = [...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? "");
+
+  assert.deepEqual(labels, ["#", "a", "b", ""]);
+  assert.ok(!header.includes("<span>__extra_1</span>"), "the overflow column still shows its internal id");
+  assert.match(header, /title="Sort by __extra_1"/);
+});
+
+test("exports an unnamed overflow column with an empty header name", () => {
+  const table = parse("extra-export.csv", "a,b\n1,2,3\n");
+  const [header, firstRow] = tableToCsv(table.rows, table.columns).split(/\r?\n/);
+
+  assert.equal(header, "a,b,");
+  assert.equal(firstRow, "1,2,3");
+
+  const wider = parse("extra-export-two.csv", "a,b\n1,2,3,4\n");
+  const [widerHeader, widerRow] = tableToCsv(wider.rows, wider.columns).split(/\r?\n/);
+  assert.equal(widerHeader, "a,b,,");
+  assert.equal(widerRow, "1,2,3,4");
 });
 
 test("imports one million numeric records, excluding the header and blank lines", () => {
