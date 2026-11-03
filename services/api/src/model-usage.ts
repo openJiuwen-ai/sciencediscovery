@@ -19,6 +19,8 @@ import type {
   GlobalUsageProjectGroup,
   GlobalUsageRunGroup,
   GlobalUsageSessionGroup,
+  ModelApiProtocol,
+  ModelProfile,
   ModelUsageAnalyticsFilters,
   ModelUsageAnalyticsSummary,
   ModelUsageCost,
@@ -28,6 +30,7 @@ import type {
   ResolvedModelPricing,
   SessionUsageSummary,
 } from "@sciencediscovery/schema";
+import { isAnthropicEndpoint } from "@sciencediscovery/model";
 
 export function createUsageBucket(key: string, label: string): ModelUsageBucket {
   return {
@@ -259,6 +262,8 @@ export function summarizeGlobalModelUsage(
 
 export interface ModelUsageAnalyticsContext extends GlobalUsageContext {
   pricingByModelProfileId?: Map<string, ResolvedModelPricing>;
+  /** Dialect that produced a profile's recorded counts, which decides how they are priced. */
+  protocolByModelProfileId?: Map<string, ModelApiProtocol>;
 }
 
 const DEFAULT_USAGE_ANALYTICS_TIME_ZONE = "Asia/Shanghai";
@@ -364,16 +369,38 @@ function convertUsageCostsForDisplay(
   return { cost: { amount: Number(amount.toFixed(12)), currency: displayCurrency }, ...(exchangeRate ? { exchangeRate } : {}) };
 }
 
+/** The dialect a profile's requests use, resolved as the model client resolves it. */
+export function usageDialectOf(profile: Pick<ModelProfile, "apiProtocol" | "baseUrl">): ModelApiProtocol {
+  return profile.apiProtocol ?? (isAnthropicEndpoint(profile.baseUrl) ? "anthropic-messages" : "openai-chat-completions");
+}
+
+/** OpenAI-shaped dialects count the cache hits inside their prompt/input count. */
+function promptContainsCacheRead(dialect: ModelApiProtocol | undefined): boolean {
+  return dialect === "openai-chat-completions" || dialect === "openai-responses";
+}
+
 export function estimateInvocationCost(
   usage: ModelInvocationUsage,
   pricing: ResolvedModelPricing | undefined,
+  dialect?: ModelApiProtocol,
 ): ModelUsageCost | undefined {
   if (usage.usageStatus !== "reported") return undefined;
   if (pricing) {
-    const amount = ((usage.inputTokens ?? 0) * pricing.input
+    const cacheReadTokens = usage.cacheReadTokens ?? 0;
+    // When the prompt count already contains the cache hits, only the uncached
+    // span may be charged at the input rate; the hits are charged at the cached
+    // rate below instead of both.
+    const inputTokens = promptContainsCacheRead(dialect)
+      ? Math.max(0, (usage.inputTokens ?? 0) - cacheReadTokens)
+      : usage.inputTokens ?? 0;
+    // Chat Completions has no cache-write charge: its recorded write count is
+    // prompt_cache_miss_tokens, the uncached prompt that is already charged as
+    // input above. Anthropic Messages bills cache writes, so it keeps its own.
+    const cacheWriteTokens = dialect === "openai-chat-completions" ? 0 : usage.cacheWriteTokens ?? 0;
+    const amount = (inputTokens * pricing.input
       + (usage.outputTokens ?? 0) * pricing.output
-      + (usage.cacheReadTokens ?? 0) * (pricing.cachedInput ?? pricing.input)
-      + (usage.cacheWriteTokens ?? 0) * (pricing.cacheWriteInput ?? pricing.input)) / 1_000_000;
+      + cacheReadTokens * (pricing.cachedInput ?? pricing.input)
+      + cacheWriteTokens * (pricing.cacheWriteInput ?? pricing.input)) / 1_000_000;
     return amount > 0 ? { amount, currency: pricing.currency } : undefined;
   }
   return usage.costUsd !== null && usage.costUsd !== undefined && usage.costUsd > 0
@@ -403,7 +430,11 @@ export function summarizeModelUsageAnalytics(
   };
 
   for (const usage of normalized) {
-    const cost = estimateInvocationCost(usage, context.pricingByModelProfileId?.get(usage.modelProfileId));
+    const cost = estimateInvocationCost(
+      usage,
+      context.pricingByModelProfileId?.get(usage.modelProfileId),
+      context.protocolByModelProfileId?.get(usage.modelProfileId),
+    );
     addCost(overviewCosts, cost);
     if (usage.usageStatus === "reported") {
       overview.inputTokens += usage.inputTokens ?? 0;
