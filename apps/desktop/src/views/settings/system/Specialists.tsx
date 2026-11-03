@@ -60,7 +60,7 @@ export function SpecialistsSettings({ client, onConfirm }: Props) {
       listSkills(client),
     ]);
     return { connectors, skills, specialists };
-  });
+  }, { client, key: "specialists" });
   const [editing, setEditing] = useState<Specialist>();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();

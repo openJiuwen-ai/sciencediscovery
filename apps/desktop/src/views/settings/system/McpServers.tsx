@@ -242,7 +242,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       plugins: effective?.plugins ?? {},
       servers,
     };
-  });
+  }, { client, key: "mcp-servers" });
   const [draft, setDraft] = useState<Draft>();
   const [openId, setOpenId] = useState<string>();
   const [busy, setBusy] = useState(false);
