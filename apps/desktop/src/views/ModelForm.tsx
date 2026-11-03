@@ -31,6 +31,7 @@ import type {
   ModelProviderPreset,
   ProviderModelEntry,
 } from "../api/types.js";
+import { commitsOnEnter } from "../app/ime-enter.js";
 import { TEXT } from "../text.js";
 import { providerName } from "./provider-name.js";
 
@@ -196,7 +197,7 @@ function ModelComboBox({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActiveIndex((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter") {
+    } else if (commitsOnEnter(event)) {
       const entry = activeIndex >= 0 ? options[activeIndex] : undefined;
       if (entry) {
         event.preventDefault();

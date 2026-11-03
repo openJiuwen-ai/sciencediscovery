@@ -34,7 +34,13 @@ export interface EnterKeydown {
  * not.
  */
 export function commitsOnEnter(event: EnterKeydown): boolean {
-  // Stub of today's call-site predicate: the composition guards land with the
-  // fix, and the tests beside this file state the contract they have to meet.
-  return event.key === "Enter";
+  if (event.key !== "Enter") return false;
+  // During composition the Enter belongs to the IME: it accepts the candidate
+  // the user is still choosing. Both shapes are read because React keeps the
+  // flag on the native event while a bare KeyboardEvent has it on itself.
+  if (event.isComposing === true || event.nativeEvent?.isComposing === true) return false;
+  // Some IMEs (notably on Windows) report the confirming Enter as keyCode 229
+  // without setting isComposing at all.
+  if (event.keyCode === 229) return false;
+  return true;
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { ErrorDiagnosticActions, ErrorDiagnosticClient } from "./ErrorDiagnosticActions.js";
+import { commitsOnEnter } from "./ime-enter.js";
 import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useMcpReadiness } from "./composer/useMcpReadiness.js";
@@ -5048,7 +5049,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     setMessage(value);
                     if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
                   }} onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                    if (event.shiftKey || !commitsOnEnter(event)) return;
                     if (composerTrigger) return;
                     event.preventDefault();
                     if (!message.trim() || sessionArchived) return;

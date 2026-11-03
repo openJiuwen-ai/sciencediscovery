@@ -19,6 +19,7 @@ import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDe
 import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, EditIcon, EllipsisIcon, PlusIcon, RestoreIcon, SettingsIcon, TrashIcon } from "../icons.js";
 import { ScopedSettingsEditor } from "../ScopedSettingsEditor.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
+import { commitsOnEnter } from "../ime-enter.js";
 
 export function selectAfterRemoval<T extends { id: string }>(items: T[], removedId: string, selectedId?: string): string | undefined {
   if (selectedId !== removedId && items.some((item) => item.id === selectedId)) return selectedId;
@@ -63,7 +64,7 @@ export function InlineRenameInput({
     onDoubleClick={(event) => event.stopPropagation()}
     onFocus={(event) => event.currentTarget.select()}
     onKeyDown={(event) => {
-      if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+      if (!commitsOnEnter(event)) return;
       event.preventDefault();
       event.currentTarget.blur();
     }}
