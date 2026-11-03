@@ -4,6 +4,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import { Type } from "typebox";
 
@@ -196,7 +197,8 @@ test("returned tool failures keep their result, metadata, and error flag through
 
 test("durable details redact nested credentials and payloads without truncating safe metadata", async () => {
   const recorded: Array<{ details?: unknown }> = [];
-  const shared = { password: "nested-password", label: "shared" };
+  const testCredential = randomUUID();
+  const shared = { password: testCredential, label: "shared" };
   const details = {
     token: "root-token",
     records: Array.from({ length: 105 }, () => ({ metadata: "x".repeat(5_000), nested: [shared] })),
@@ -219,11 +221,14 @@ test("durable details redact nested credentials and payloads without truncating 
   assert.equal(audit.details.records[104]?.metadata.length, 5_000);
   assert.equal(audit.details.records[104]?.nested[0]?.password, "[redacted]");
   assert.deepEqual(audit.details.tail, { authorization: "[redacted]", body: "[omitted]" });
-  assert.deepEqual(audit.details.left, { password: "[redacted]", label: "shared" });
+  assert.equal(audit.details.left.password, "[redacted]");
+  assert.equal(audit.details.left.label, "shared");
+  assert.equal(Object.keys(audit.details.left).length, 2);
   assert.deepEqual(audit.details.right, audit.details.left);
-  assert.doesNotMatch(JSON.stringify(audit), /root-token|nested-password|header-secret|private-payload/);
+  assert.doesNotMatch(JSON.stringify(audit), /root-token|header-secret|private-payload/);
+  assert.equal(JSON.stringify(audit).includes(testCredential), false);
   assert.equal(details.token, "root-token");
-  assert.equal(shared.password, "nested-password");
+  assert.equal(shared.password, testCredential);
   assert.equal(cyclic.self, cyclic);
   assert.equal((result.details as { __detailsBoundary: { truncated: boolean } }).__detailsBoundary.truncated, true);
 });
