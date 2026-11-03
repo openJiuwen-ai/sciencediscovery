@@ -386,6 +386,65 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
   return { columns, rows, totalRows: records.length };
 }
 
+/**
+ * JSON.parse rounds every integer beyond 2^53 to the nearest double, so a
+ * document that stores a 64-bit identifier would preview with different digits
+ * than it holds. Keep the stored literal: a linear scan rewrites exactly those
+ * integer tokens to placeholder strings before parsing, and the renderers put
+ * the digits back. Strings are copied verbatim, so a row that merely looks like
+ * a big number is left alone.
+ */
+const BIG_INTEGER_PLACEHOLDER = "sd-bigint:";
+
+function protectBigIntegers(source: string): { text: string; literals: Set<string> } {
+  const literals = new Set<string>();
+  let text = "";
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index] ?? "";
+    if (char === '"') {
+      const start = index;
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        index += 1;
+        if (source[index - 1] === '"') break;
+      }
+      text += source.slice(start, index);
+      continue;
+    }
+    // Outside a string a digit or a leading minus can only open a number token.
+    const number = char === "-" || (char >= "0" && char <= "9")
+      ? /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(source.slice(index))
+      : null;
+    if (!number) {
+      text += char;
+      index += 1;
+      continue;
+    }
+    const literal = number[0];
+    const integer = !/[.eE]/.test(literal);
+    if (integer && !Number.isSafeInteger(Number(literal))) {
+      literals.add(literal);
+      text += `"${BIG_INTEGER_PLACEHOLDER}${literal}"`;
+    } else {
+      text += literal;
+    }
+    index += literal.length;
+  }
+  return { text, literals };
+}
+
+/** Write the stored digits back over the placeholders a render path produced. */
+function restoreBigIntegers(text: string, literals: Set<string>): string {
+  if (literals.size === 0) return text;
+  return text.replace(/sd-bigint:(-?\d+)/g, (placeholder, digits: string) =>
+    literals.has(digits) ? digits : placeholder);
+}
+
 /** Apply the char budget to one text form of a JSON document. */
 function jsonSourceOf(text: string, maxChars: number): ArtifactJsonSource {
   const truncated = text.length > maxChars;
@@ -414,10 +473,11 @@ function buildJsonPreview(
   // before parsing: exactly one U+FEFF, and only at the start, or a valid
   // document is reported as unparseable text.
   const document = source.startsWith("\uFEFF") ? source.slice(1) : source;
+  const protectedJson = protectBigIntegers(document);
   let parsed: unknown;
   let valid = true;
   try {
-    parsed = JSON.parse(document) as unknown;
+    parsed = JSON.parse(protectedJson.text) as unknown;
   } catch {
     valid = false;
   }
@@ -431,8 +491,12 @@ function buildJsonPreview(
         mode: "dataset-table",
         mediaSubtype: "json",
         ...table,
+        rows: table.rows.map((row) => row.map((cell) => restoreBigIntegers(cell, protectedJson.literals))),
         truncated: table.totalRows > maxRows,
-        rawJson: jsonSourceOf(JSON.stringify(parsed, null, 2), maxChars),
+        rawJson: jsonSourceOf(
+          restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.literals),
+          maxChars,
+        ),
       };
     }
   }
@@ -440,7 +504,10 @@ function buildJsonPreview(
     version,
     kind: "json",
     mode: "json-source",
-    ...jsonSourceOf(valid ? JSON.stringify(parsed, null, 2) : source, maxChars),
+    ...jsonSourceOf(
+      valid ? restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.literals) : source,
+      maxChars,
+    ),
     parsed: valid,
   };
 }
