@@ -51,18 +51,26 @@ test("a record whose outcome is unknown is finished, not live", async () => {
     assert.equal(live.length, 0, "unknown is terminal, so no record may render as process-live");
     const records = view.root.findAll((node) => node.type === "details" && String(node.props.className).includes("process-record"));
     assert.equal(records.length, 2, "both the execution and the transfer read as foldable history");
+    // The execution record specifically is history now, not live work.
+    const wrapsCancelExecution = (className: string) => view.root.findAll((node) => node.type === "details" && String(node.props.className).includes(className))
+      .filter((node) => node.findAllByType("button").some((button) => button.children.join("") === "Cancel execution")).length;
+    assert.deepEqual([wrapsCancelExecution("process-record"), wrapsCancelExecution("process-live")], [1, 0], "the unknown execution renders as a history record");
     // The reason the API stored is what the reader sees, so the record explains itself.
     assert.match(JSON.stringify(view.toJSON()), /Runner restarted before completion was recorded/);
     assert.match(JSON.stringify(view.toJSON()), /inspect completed files and target state/);
   } finally { await act(async () => view.unmount()); }
 });
 
-test("an unknown record offers no action that implies it is still running", async () => {
+test("an unknown record is history, yet its execution stays cancellable", async () => {
   const view = await renderWith(unknownOutcome());
   try {
     const button = (label: string) => view.root.findAllByType("button").find((node) => node.children.join("") === label);
-    assert.equal(button("Cancel execution")?.props.disabled, true, "unknown is terminal, so Cancel execution is disabled");
-    assert.equal(button("Cancel transfer")?.props.disabled, true, "unknown is terminal, so Cancel transfer is disabled");
+    // A transfer is decided by the API itself, so `unknown` leaves nothing out there to stop.
+    assert.equal(button("Cancel transfer")?.props.disabled, true, "an unknown transfer is terminal, so Cancel transfer is disabled");
+    // An execution may still be running on a runner the API restarted away from: the API
+    // keeps that cancel branch open (services/api/src/shell-executions.ts cancel()), because
+    // cancelling is safe while resubmitting is not. So the button stays reachable.
+    assert.equal(button("Cancel execution")?.props.disabled, false, "an unknown execution may still run remotely, so it stays cancellable");
   } finally { await act(async () => view.unmount()); }
 });
 
