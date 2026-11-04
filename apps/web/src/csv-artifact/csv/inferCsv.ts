@@ -117,7 +117,10 @@ export function profileRows(
     : [...new Set(rows.flatMap((row) => Object.keys(row)).filter((field) => field !== "__rowId"))];
   const rawColumns = new Map<string, string[]>();
   for (const field of fields) {
-    rawColumns.set(field, rows.map((row) => row[field] === null || row[field] === undefined ? "" : String(row[field])));
+    rawColumns.set(field, rows.map((row) => {
+      const cell = readCell(row, field);
+      return cell === null || cell === undefined ? "" : String(cell);
+    }));
   }
 
   const kinds = new Map<string, ColumnKind>();
@@ -135,7 +138,7 @@ export function profileRows(
   const parsedRows: DataRow[] = rows.map((row, index) => {
     const parsed: DataRow = { __rowId: "" };
     for (const field of fields) {
-      parsed[field] = parseValue(row[field], kinds.get(field) !== "quantitative");
+      writeCell(parsed, field, parseValue(readCell(row, field), kinds.get(field) !== "quantitative"));
     }
     const candidate = idField ? String(parsed[idField] ?? "").trim() : "";
     let rowId = candidate || `row-${index + 2}`;
@@ -214,6 +217,27 @@ function inferTableKind(fields: string[]): DataTableKind {
 const PAPA_OVERFLOW_FIELD = "__parsed_extra";
 
 /**
+ * A header may be named after an inherited member (`toString`, `constructor`,
+ * `__proto__`). `field in row` and a bare `row[field]` both see the prototype,
+ * so an import must read and write own properties only: otherwise a short
+ * record shows `function toString() { [native code] }` for a column the file
+ * left empty.
+ */
+function readCell(row: Record<string, unknown>, field: string): unknown {
+  return Object.hasOwn(row, field) ? row[field] : undefined;
+}
+
+function writeCell(row: Record<string, unknown>, field: string, value: unknown): void {
+  // `row["__proto__"] = value` runs the inherited setter and drops the cell, so
+  // `__proto__` is always defined as an own enumerable data property.
+  if (field === "__proto__") {
+    Object.defineProperty(row, field, { configurable: true, enumerable: true, value, writable: true });
+    return;
+  }
+  row[field] = value;
+}
+
+/**
  * Surplus columns are capped at the header width, floored at 2 and ceilinged at
  * 16. A table therefore materializes at most `2 x header width` cells per row
  * (`3 x` for a one-column header), so one wide record cannot multiply the cost
@@ -251,7 +275,7 @@ function rectangularizeRows(
 
   let surplusCount = 0;
   for (const row of rows) {
-    surplusCount = Math.max(surplusCount, surplusCells(row[PAPA_OVERFLOW_FIELD]).length);
+    surplusCount = Math.max(surplusCount, surplusCells(readCell(row, PAPA_OVERFLOW_FIELD)).length);
   }
   const kept = Math.min(surplusCount, surplusColumnLimit(headerFields.length));
 
@@ -266,20 +290,20 @@ function rectangularizeRows(
   const foldsTail = surplusCount > kept;
 
   for (const row of rows) {
-    const overflow = row[PAPA_OVERFLOW_FIELD];
+    const overflow = readCell(row, PAPA_OVERFLOW_FIELD);
     const extras = surplusCells(overflow);
     if (Array.isArray(overflow)) {
-      if (reservedColumn) row[PAPA_OVERFLOW_FIELD] = overflow[0];
+      if (reservedColumn) writeCell(row, PAPA_OVERFLOW_FIELD, overflow[0]);
       else delete row[PAPA_OVERFLOW_FIELD];
     }
     for (const field of headerFields) {
-      if (!(field in row)) row[field] = undefined;
+      if (!Object.hasOwn(row, field)) writeCell(row, field, undefined);
     }
     const cells = foldsTail
       ? [...extras.slice(0, kept - 1), extras.slice(kept - 1).join(", ")]
       : extras;
     surplusFields.forEach((field, index) => {
-      row[field] = cells[index];
+      writeCell(row, field, cells[index]);
     });
   }
   return { fields: [...headerFields, ...surplusFields], kept, surplusCount, surplusFields };
