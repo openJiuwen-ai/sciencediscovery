@@ -17,7 +17,9 @@ export interface ActivityFocus {
   token: number;
 }
 
-const active = (state: string) => ["queued", "running", "unknown"].includes(state);
+/** One predicate for both the live surface and the action guards, matching the API's
+ * definition of terminal: `unknown` is a finished-but-unverified outcome, not running work. */
+const active = (state: string) => state === "queued" || state === "running";
 export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiClient; focus?: ActivityFocus; sessionId: string }) {
   const { t } = useLocale();
   const [activity, setActivity] = useState<AgentActivity>();
@@ -103,7 +105,7 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
           <small>{t("activity.filesCommitted", { committed: item.progress.filter((file) => file.state === "completed").length, total: item.files.length })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
           <details><summary>{t("activity.fileProgress")}</summary>{item.progress.map((file) => <small key={file.targetPath}>{file.targetPath} · {file.state} · {t("downloads.bytes", { count: file.bytes })}</small>)}</details>
-          <button type="button" disabled={busy || !["queued", "running"].includes(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "transfers", item.id))}>{t("activity.cancelTransfer")}</button>
+          <button type="button" disabled={busy || !active(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "transfers", item.id))}>{t("activity.cancelTransfer")}</button>
         </article></ProcessRecord>)}
       </>}
     </div></details> : null}
