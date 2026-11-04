@@ -34,7 +34,7 @@ import { sessionTrajectory } from "../trajectory.js";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
 import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
 import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-settings.js";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
 type ResearchPackageInspectionCacheEntry = { projectId: string; bytes: Buffer; imported: ImportedResearchPackage; expiresAt: number };
@@ -105,7 +105,7 @@ import {
   type UpdateModelProviderRequest,
 } from "@sciencediscovery/schema";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { isWindowsReservedDeviceName, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
 import {
   handleGetCandidate as handleEvolveGetCandidate,
@@ -4246,6 +4246,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         store.assertSessionWritable(filesMatch[1]!);
         const body = await readJson<UploadFileRequest>(request);
         const target = resolveWorkspaceFile(store.workspacePath(filesMatch[1]!), body.path ?? "");
+        // Windows resolves a device name in every directory and with any extension, so this
+        // write would target the device (`CON`) or fail as a bare EPERM (`nul.txt`) instead
+        // of creating a file. The predicate lives in the workspace package so every write
+        // path applies one rule; the upload path already refuses the same names.
+        if (isWindowsReservedDeviceName(basename(target))) {
+          return sendError(response, 400, `"${basename(target)}" is a reserved device name on Windows; choose another file name`);
+        }
         if (Buffer.byteLength(body.content ?? "") > 1_000_000) return sendError(response, 413, "File exceeds 1 MB");
         await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(filesMatch[1]!), async () => {
           await mkdir(dirname(target), { recursive: true });
