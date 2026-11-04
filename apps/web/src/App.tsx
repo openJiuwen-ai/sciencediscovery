@@ -3799,7 +3799,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       const nextRuns = upsertSessionRunSnapshot(run.sessionId, cancelled);
       if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) setSessionRuns(nextRuns);
       setError(undefined);
-      const toast = queuedCancelToast(cancelled.status);
+      const toast = queuedCancelToast(cancelled.status, t);
       pushToast(toast.tone, toast.title, toast.detail);
       if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) {
         void refreshSession(run.sessionId).catch((reason: Error) => {

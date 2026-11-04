@@ -18,6 +18,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import { translateActive } from "../i18n/index.js";
+import type { MessageKey } from "../i18n/messages.js";
 import { formatRunFailure } from "../run-failure.js";
 
 const STOP_STREAM_GRACE_MS = 5_000;
@@ -127,17 +128,21 @@ export function isTerminalRunStatus(status: SessionRun["status"]): boolean {
   return status === "cancelled" || status === "completed" || status === "failed" || status === "interrupted";
 }
 
-export function queuedCancelToast(status: SessionRun["status"]): { detail?: string; title: string; tone: "error" | "info" } {
-  if (status === "cancelled") return { title: "Queued run cancelled", tone: "info" };
+/** The translator the toast renders through, so a Chinese reader hears the result of the
+ * button they pressed in Chinese instead of a sentence pinned in the source. */
+export type ToastTranslator = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+export function queuedCancelToast(status: SessionRun["status"], t: ToastTranslator): { detail?: string; title: string; tone: "error" | "info" } {
+  if (status === "cancelled") return { title: t("app.queuedCancelOutcome.cancelled"), tone: "info" };
   if (isActiveRunStatus(status)) {
     return {
-      detail: "The queued run has already started; use Stop to cancel the active run.",
-      title: "Run already started",
+      detail: t("app.queuedCancelOutcome.startedDetail"),
+      title: t("app.queuedCancelOutcome.started"),
       tone: "info",
     };
   }
-  if (isTerminalRunStatus(status)) return { title: "Run already finished", tone: "info" };
-  return { detail: `Current status: ${status}`, title: "Queued run updated", tone: "info" };
+  if (isTerminalRunStatus(status)) return { title: t("app.queuedCancelOutcome.finished"), tone: "info" };
+  return { detail: t("app.queuedCancelOutcome.statusDetail", { status }), title: t("app.queuedCancelOutcome.updated"), tone: "info" };
 }
 
 export function runsRequiringEventReplay(runs: SessionRun[]): SessionRun[] {
