@@ -7,7 +7,7 @@ export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
   fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
-  activation: "next_run" | "same_run_if_bound";
+  activation: "next_run" | "next_request" | "same_run_if_bound";
   diagnostics: readonly string[];
 }
 const id = { kind: "string", maxLength: 200 } as const;
@@ -19,6 +19,9 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     pipSource: { kind: "string", choices: ENVIRONMENT_PIP_SOURCE_PRESETS.map(preset => preset.id) },
     condaSource: { kind: "string", choices: ENVIRONMENT_CONDA_SOURCE_PRESETS.map(preset => preset.id) },
   }, activation: "next_run", diagnostics: [] },
+  "settings.inherit": { label: "Restore ordinary settings inheritance", whenNeeded: "Only an explicit request to remove selected ordinary overrides at this Session or its Project. selectedFields is a finite list of model/review/semantic/thinking/connector/Skill selection fields. Session is default; no Global, security, approval, auto-review, network, plugin JSON, Runner or credential reset. Manual v3 confirmation. Lower overrides keep precedence and frozen runs do not change.", fields: { selectedFields: ids }, activation: "next_run", diagnostics: [] },
+  "reviewer.enable": { label: "Configure global Reviewer Specialist", whenNeeded: "The user explicitly requests the global Reviewer Specialist participation switch, separate from session review preferences and feedback policy. Enabling may admit subsequent paid reviews under the existing feedback policy; disabling blocks pending review admission but does not cancel in-flight work or delete history. This switch does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate. Omit scope; manual confirmation required.", fields: { enabled: boolean }, activation: "next_request", diagnostics: [] },
+  "plugin.json_viewer": { label: "Configure JSON artifact previews", whenNeeded: "An explicit request to enable, disable or inherit the installed optional JSON viewer. mode is enabled, disabled or inherit. Session is the default; only its Project or explicit Global scope is allowed. No arbitrary plugin ID/config, installation, file deletion or access grant. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate. Manual v3 confirmation is required.", fields: { mode: { kind: "string", choices: ["enabled", "disabled", "inherit"] } }, activation: "next_run", diagnostics: [] },
   "model.select": { label: "Choose an existing model", whenNeeded: "An explicit model choice or no usable task model. Do not replace a usable inherited default without a requirement.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_NOT_SELECTED"] },
   "model.connect": { label: "Connect a model service", whenNeeded: "A new model service is needed. The user supplies credentials only in the secure card.", fields: { name: { ...id, maxLength: 200 }, baseUrl: { kind: "string", maxLength: 2048 }, model: { ...id, maxLength: 512 }, apiProtocol: { kind: "string", choices: ["openai-chat-completions", "openai-responses", "anthropic-messages"] }, apiVariant: { ...id, maxLength: 80 }, tokenOptional: boolean }, activation: "next_run", diagnostics: [] },
   "model.repair_credential": { label: "Repair a model credential", whenNeeded: "A structured authentication diagnosis identifies this exact model. A network failure, timeout or rate limit is not authentication evidence.", fields: { modelId: id }, activation: "next_run", diagnostics: ["MODEL_CREDENTIAL_MISSING", "MODEL_AUTHENTICATION_REJECTED"] },
@@ -35,13 +38,15 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     uploadMaxFileBytes: { kind: "integer", minimum: 0 }, uploadMaxRequestBytes: { kind: "integer", minimum: 0 },
   }, activation: "next_run", diagnostics: [] },
   "runner.assign": { label: "Select registered Runners", whenNeeded: "The user requests Project or Session Runner allocation. Describe existing IDs first; select only usable registered Runners. Selected + [] disables all Runners, Session inherit removes its override. Registration, SSH host trust and execution permission remain separate. This never starts or migrates a job.", fields: { selectionMode: { kind: "string", choices: ["selected", "inherit"] }, runnerIds: ids }, activation: "next_run", diagnostics: [] },
-  "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree intensity, score direction, or a bounded token, depth, or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
+  "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree registered template, intensity, score direction, or a bounded token, depth, or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
+    templateId: { kind: "string", choices: ["scientific-hypothesis-general/v1", "water-treatment-materials/v1"] },
     explorationIntensity: { kind: "string", choices: ["quick", "standard", "deep"] }, scoreDirection: { kind: "string", choices: ["maximize", "minimize"] },
     maxTokensPerCall: { kind: "integer", minimum: 256, maximum: 32768 }, maxDepth: { kind: "integer", minimum: 1, maximum: 20 },
     maxNodes: { kind: "integer", minimum: 2, maximum: 10000 },
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure", "environment.sources"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "reviewer.enable"] as const;
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })
