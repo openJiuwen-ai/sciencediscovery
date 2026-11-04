@@ -12,7 +12,7 @@ import type {
   ToolExecutionMode,
 } from "@sciencediscovery/runtime-core";
 
-import type { ToolOutputGuard, ToolOutputRecord } from "./bounded-output.js";
+import { retainedOutputNotice, type ToolOutputGuard, type ToolOutputRecord } from "./bounded-output.js";
 import {
   autoPromoteFromRouting,
   blockedDeferredToolResult,
@@ -355,6 +355,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     let details: unknown | undefined;
     let isError: boolean;
     let selfBounded = false;
+    let retainedContent: string | undefined;
     let outputRecord: ToolOutputRecord | undefined;
     const availableDeferred = this.availableDeferredState();
     if (call.argsParseError) {
@@ -386,7 +387,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       details = { ok: false, error: { code: "DEFERRED_TOOL_NOT_PROMOTED", message: content, retryable: true } };
       isError = true;
     } else {
-      ({ content, details, isError, selfBounded } = await this.executeRegistered(call, signal));
+      ({ content, details, isError, selfBounded, retainedContent } = await this.executeRegistered(call, signal));
     }
     if (this.options.errorGuidance && !this.errorGuidanceShown && !signal.aborted
       && call.name !== "configuration" && this.tools.has(call.name)) {
@@ -412,9 +413,11 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     }
     const boundedDetails = details === undefined ? undefined : sanitizeToolDetails(details);
     if (this.options.outputGuard) {
-      const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded);
+      const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded, retainedContent);
       content = guarded.content;
       outputRecord = guarded.record;
+    } else if (retainedContent !== undefined) {
+      content = retainedOutputNotice(content);
     }
     await this.options.commitResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });
     try { this.options.onResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence }); } catch { /* observer isolation */ }
@@ -460,7 +463,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   private async executeRegistered(
     call: RuntimeToolCall,
     signal: AbortSignal,
-  ): Promise<{ content: string; details?: unknown; isError: boolean; selfBounded: boolean }> {
+  ): Promise<{ content: string; details?: unknown; isError: boolean; selfBounded: boolean; retainedContent?: string }> {
     const decision = this.loopGuard.inspect(call.name, call.args);
     if (decision.action !== "allow") {
       return {
@@ -479,10 +482,11 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       });
       const text = result.content.map((item) => item.text).join("\n");
       return {
-        content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text,
+        content: (tool.mcp || isRemoteContentTool(call.name)) ? neutralizeUntrustedTags(text) : text,
         ...(result.details !== undefined ? { details: result.details } : {}),
         isError: result.isError === true,
         selfBounded: result.bounded === true,
+        ...(result.retainedContent !== undefined ? { retainedContent: neutralizeUntrustedTags(result.retainedContent) } : {}),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
