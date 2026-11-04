@@ -112,16 +112,21 @@ function bootHeading(boot: BootView): { title: string; sub: string } {
 }
 
 /** The shell prints the same sizes; keeping the rounding here avoids a second
- *  formatting convention on one screen. The unit still follows the value that
- *  is printed (`scaledSize`), so a reading one byte under a GiB is "1.0GB", not
- *  "1024MB". */
+ *  formatting convention on one screen. The unit follows the number each level
+ *  actually prints (`scaledSize`), so a reading one byte under a GiB is "1.0GB",
+ *  not "1024MB", and the band just under a unit promotes as well: KB and MB are
+ *  whole numbers there, so 1023.5 KB prints "1024" and belongs in the next
+ *  unit rather than reading "1024KB". */
 export function formatWizardFreeSpace(bytes: number): string {
   const size = Math.max(0, bytes);
-  const round = (value: number): number => Number(value.toFixed(1));
-  const { unit, value } = scaledSize(size, round, 4);
-  // The shell's convention, kept: KB/MB/GB with no space, whole megabytes.
-  if (unit <= 1) return `${Math.round(unit === 0 ? size / 1024 : value)}KB`;
-  return unit === 2 ? `${Math.round(value)}MB` : `${value.toFixed(1)}GB`;
+  // The shell's convention, kept: KB/MB/GB with no space, whole KB and MB, one
+  // decimal GB. This is both what is printed and what decides the unit, so the
+  // two cannot disagree.
+  const printed = (value: number, unit: number): number =>
+    unit <= 1 ? Math.round(unit === 0 ? value / 1024 : value) : unit === 2 ? Math.round(value) : Number(value.toFixed(1));
+  const { unit, value } = scaledSize(size, printed, 4);
+  if (unit === 3) return `${value.toFixed(1)}GB`;
+  return `${printed(value, unit)}${unit <= 1 ? "KB" : "MB"}`;
 }
 
 type CheckTone = "ok" | "warn" | "err";
