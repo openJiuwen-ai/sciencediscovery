@@ -6,6 +6,7 @@ import { rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type { ConfigurationRequestView, ConfigurationValues } from "@sciencediscovery/schema";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
+import { loadServerConfig } from "../bootstrap/config.js";
 import { SessionStore } from "../store.js";
 import { configurationFramework, type ConversationalConfigurationFramework } from "./framework.js";
 import { discoverConfiguration } from "./discovery.js";
@@ -36,6 +37,12 @@ test("CFG-XBUG-12: formal Neo4j password updates preserve meaningful surrounding
   const h = await harness(context), password = " \towned-password\u00a0 ";
   await h.store.updateMemoryGraphSettings({ neo4jPassword: password });
   assert.ok(h.store.getMemoryGraphNeo4jPassword() === password, "The formal writer changed the supplied password");
+});
+
+test("CFG-XBUG-12: bootstrap preserves nonblank Neo4j passwords exactly", () => {
+  const password = " \towned-password\u00a0 ";
+  assert.equal(loadServerConfig({ SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD: password }).memoryGraph.neo4jPassword, password);
+  assert.equal(loadServerConfig({ SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD: " \t " }).memoryGraph.neo4jPassword, undefined);
 });
 
 test("CFG-XBUG-12: secure conversation preserves password bytes through rebind, replay and reopen", async context => {
@@ -160,6 +167,10 @@ test("CFG-X04c: bilingual discovery projects password presence, not raw URI/acco
     const search = await discoverConfiguration(h.store, h.session.id, "", "search", { query });
     assert.ok((search.items as Array<{ capabilityId?: string }>).some(item => item.capabilityId === "memory.credential"));
   }
+  const backend = await discoverConfiguration(h.store, h.session.id, "", "search", { query: "memory backend" });
+  const items = backend.items as Array<{ domain?: string; capabilityId?: string; available?: boolean }>;
+  assert.ok(items.some(item => item.capabilityId === "memory.backend" && item.available));
+  assert.ok(!items.some(item => item.domain === "memory" && item.available === false));
   const detail = await discoverConfiguration(h.store, h.session.id, "", "describe", { capabilityId: "memory.credential" });
   assert.deepEqual(Object.keys(detail.fields as object), ["operation"]); assert.deepEqual(detail.scopes, ["global"]);
   assert.doesNotMatch(JSON.stringify(detail), /private-owned-user|synthetic-private-password|http:\/\/127/);

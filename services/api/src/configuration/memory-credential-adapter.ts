@@ -8,6 +8,12 @@ import { classifyEndpointAddress } from "./model-destination.js";
 import { ConfigurationError, digest, invalid, object } from "./validation.js";
 
 type Settings = ReturnType<SessionStore["getMemoryGraphSettings"]>;
+
+function assertPassword(password: string): void {
+  if (!password.trim()) invalid("Enter a non-empty Neo4j password", "apiToken");
+  if (password.length > 16_384) invalid("The Neo4j password is too long", "apiToken");
+}
+
 /** No network/DNS work. Custom paths and legacy embedded secrets require the formal connection editor. */
 function destination(settings: Settings): NonNullable<ConfigurationPlan["endpointAuthorization"]> {
   let url: URL;
@@ -39,6 +45,7 @@ export function createMemoryCredentialAdapter(store: SessionStore, credentials: 
   const binding = (context: ConfigurationAdapterContext) => ({ sessionId: context.sessionId, requestId: context.requestId,
     revision: context.revision, target: String(context.plan.data?.credentialTarget), fieldId: "apiToken", normalization: "exact" as const });
   return {
+    // Version 1 used trimmed drafts. Re-preview before accepting an exact password.
     id: "memory.credential", version: 2, schemaVersion: 1, scopes: ["global"], persistence: "local_transaction",
     fieldPolicy: { credentialFields: ["apiToken"], credentialNormalization: "exact" },
     normalize: (raw): ConfigurationValues => {
@@ -67,7 +74,7 @@ export function createMemoryCredentialAdapter(store: SessionStore, credentials: 
       if (context.input.operation === "clear") return { ok: true };
       if (!context.credentialHandle) return { ok: false, code: "CONFIGURATION_CREDENTIAL_REQUIRED", field: "apiToken", message: "Enter the Neo4j password in the secure user field" };
       return credentials.withLease(context.credentialHandle, binding(context), async secret => {
-        if (!secret.trim() || secret.length > 16384) invalid("Enter a non-empty Neo4j password", "apiToken");
+        assertPassword(secret);
         return { ok: true };
       });
     },
@@ -76,7 +83,7 @@ export function createMemoryCredentialAdapter(store: SessionStore, credentials: 
       if (context.input.operation !== "clear") {
         if (!context.credentialHandle) throw new ConfigurationError("CONFIGURATION_CREDENTIAL_REQUIRED", "The isolated password draft is missing", 409, "apiToken");
         password = credentials.read(context.credentialHandle, binding(context));
-        if (!password.trim()) invalid("Enter a non-empty Neo4j password", "apiToken");
+        assertPassword(password);
       }
       store.applyMemoryCredentialConfigurationSync(password);
       return { resourceRevision: digest(store.configurationSnapshot(context.sessionId, "memory.credential", target(context.input)).resourceVersions),

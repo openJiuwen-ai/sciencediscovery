@@ -2428,16 +2428,11 @@ export class SessionStore {
       const json = this.configurationJsonViewerSettings(sessionId);
       systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
     }
-    if (capabilityId === "memory.credential") systemVersions = { memoryGraph: version(this.catalog.memoryGraphSettings), memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()) };
-    else if (capabilityId === "memory.enable") systemVersions = {
+    if (capabilityId === "memory.credential" || capabilityId === "memory.enable" ||
+        capabilityId === "memory.backend" || capabilityId === "memory.connection") systemVersions = {
       memoryGraph: version(this.catalog.memoryGraphSettings),
       memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()),
     };
-    else if (capabilityId === "memory.backend") systemVersions = {
-      memoryGraph: version(this.catalog.memoryGraphSettings),
-      memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()),
-    };
-    else if (capabilityId === "memory.connection") systemVersions = { memoryGraph: version(this.catalog.memoryGraphSettings), memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
