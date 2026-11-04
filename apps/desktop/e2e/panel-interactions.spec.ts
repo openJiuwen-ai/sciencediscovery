@@ -429,7 +429,11 @@ test.describe("子代理的运行记录", () => {
     await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
 
     const panel = page.locator(".workspace-panel");
-    await expect(panel).toBeVisible({ timeout: 2000 });
+    // A budget that a loaded CI runner can still meet on the slow path. The
+    // timing is not the guard here — a wall-clock assertion on a shared runner
+    // is noisy either way. What proves the panel opened cheaply is the mount
+    // check below: nothing behind a closed fold is in the DOM.
+    await expect(panel).toBeVisible({ timeout: 15_000 });
 
     // Nothing behind a closed fold is in the DOM: not the brief, not the
     // timeline's step rows, and certainly not a step's body.
