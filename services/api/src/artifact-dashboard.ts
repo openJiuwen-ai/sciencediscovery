@@ -142,11 +142,23 @@ export type ArtifactPreviewPayload =
       truncated: boolean;
       /**
        * How many cells of the returned rows were left out of the preview
-       * because the grid's width is capped (see MAX_PREVIEW_CELLS). Zero for a
-       * table that came back whole; the count is the one user-visible loss, so
-       * the viewer can say it instead of showing a silently shorter row.
+       * because the grid's width is capped (see MAX_PREVIEW_COLUMNS). Zero for
+       * a table that came back whole; the count is a user-visible loss, so the
+       * viewer can say it instead of showing a silently shorter row.
        */
       clippedCells: number;
+      /**
+       * The file's own column count and the count the preview shows. They differ
+       * only when a line is wider than MAX_PREVIEW_COLUMNS; the viewer names both
+       * rather than quietly showing a narrower table.
+       */
+      clippedColumns: { total: number; shown: number };
+      /**
+       * Human-readable sentences for everything the preview left out: a clipped
+       * column set, clipped row cells, both, or nothing. Empty when the preview
+       * is whole, so a consumer can show them verbatim.
+       */
+      warnings: string[];
       /**
        * The re-indented source document, carried only for JSON-backed tables so
        * the viewer can offer a raw-JSON view of the same version. Absent for
@@ -225,16 +237,21 @@ const DEFAULT_MAX_ROWS = 100;
 const DEFAULT_MAX_CHARS = 100_000;
 const DEFAULT_MAX_CELLS = 200;
 /**
- * The most cells the padded preview may spend (returned rows x width). Padding
- * a short row is what squares the grid, but padding every row to one outlier
- * line copies that line into each of them: a 400 KB file holding one 200k-field
- * line asked for 100 x 200001 cells and a 60.8 MB response. The number is the
- * existing preview budget for a text source (DEFAULT_MAX_CHARS, 100k) rather
- * than a new one: one cell is a few bytes of JSON, so 100k cells and 100k
- * characters come out at the same order of bytes (~1 MB) and a preview never
- * spends more on a table than it already spends on the text it came from.
+ * The widest table a preview renders. 1001 is the widest legitimate header the
+ * preview contract covers (the regression test previews a 1001-column table
+ * whole), so a wider line is an outlier, not a table: a 400 KB file holding one
+ * 200k-field line used to ask for 100 x 200001 cells and a 60.8 MB response.
+ * 1001 columns also keeps the payload bound near the existing text budget: with
+ * MAX_PREVIEW_ROWS it caps a table at 100 x 1001 = 100,100 cells, the same
+ * order as DEFAULT_MAX_CHARS (one cell is a few bytes of JSON).
  */
-const MAX_PREVIEW_CELLS = DEFAULT_MAX_CHARS;
+const MAX_PREVIEW_COLUMNS = 1_001;
+/**
+ * The most rows one table preview returns. `maxRows` may lower it and never
+ * raise it, so a client query parameter cannot lift the payload bound; the
+ * widest and tallest preview is MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS.
+ */
+const MAX_PREVIEW_ROWS = DEFAULT_MAX_ROWS;
 const FIGURE_TRUNCATION_BYTES = 5 * 1024 * 1024;
 const IFRAME_TRUNCATION_BYTES = 2 * 1024 * 1024;
 
@@ -360,46 +377,57 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   rows: string[][];
   totalRows: number;
   clippedCells: number;
+  clippedColumns: { total: number; shown: number };
+  warnings: string[];
 } {
   const delimiter = subtype === ".csv" ? "," : "\t";
   const lines = splitDelimited(source, delimiter);
-  if (!lines.length) return { columns: [], rows: [], totalRows: 0, clippedCells: 0 };
+  if (!lines.length) {
+    return { columns: [], clippedCells: 0, clippedColumns: { shown: 0, total: 0 }, rows: [], totalRows: 0, warnings: [] };
+  }
   const header = lines[0] ?? [];
-  const rows = lines.slice(1, maxRows + 1);
-  // The table is as wide as the header plus any extra cell a returned row
-  // carries: the renderer prints one <th> per column and one <td> per cell, so a
-  // short row is padded and an extra cell gets its own blank header instead of
-  // landing under the wrong one. Only the returned rows count, or a wide row
-  // beyond maxRows would add an empty column no returned row fills.
-  const width = rows.reduce((widest, row) => Math.max(widest, row.length), header.length);
   const totalRows = Math.max(0, lines.length - 1);
-  // Padding squares the grid, but one outlier line makes it expensive: a 400 KB
-  // file holding one 200k-field line asked for 100 x 200001 cells and a 60.8 MB
-  // response. Cap the width instead of dropping the rectangle, so the preview
-  // stays square and one decision covers the whole table. The cap divides the
-  // budget by the file's own row count, never by the rows the caller asked for:
-  // `maxRows` is a client query parameter, and it must not decide how wide the
-  // table looks. The header is a floor, so no named column is ever cut; the only
-  // cells that leave are surplus cells past the cap, counted in clippedCells.
-  const band = Math.max(totalRows, 1);
-  const cap = Math.max(header.length, Math.floor(MAX_PREVIEW_CELLS / band));
-  const finalWidth = Math.min(width, cap);
+  // The width is the widest line of the whole file, capped by a constant, and
+  // never a function of how many rows the caller asked for: maxRows is a client
+  // query parameter, and the same file must show the same columns at maxRows=1
+  // and maxRows=1000. A wide line past the window therefore still sets the width
+  // and the returned rows are padded to it, because the renderer prints one <th>
+  // per column and one <td> per cell.
+  const widest = lines.reduce((widestLine, line) => Math.max(widestLine, line.length), 0);
+  const totalColumns = Math.max(header.length, widest);
+  const width = Math.min(totalColumns, MAX_PREVIEW_COLUMNS);
+  // The row count is bounded by its own constant, so the payload stays inside
+  // MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS cells. `maxRows` only lowers it.
+  const rows = lines.slice(1, Math.min(maxRows, MAX_PREVIEW_ROWS) + 1);
+  // Columns past the width leave the preview: the header keeps its first names
+  // and the payload says how many columns the file had, so a cut table is never
+  // mistaken for a narrow one.
+  const clippedColumns = { shown: width, total: totalColumns };
   let clippedCells = 0;
   const paddedRows = rows.map((row) => {
-    if (row.length === finalWidth) return row;
-    if (row.length > finalWidth) {
-      clippedCells += row.length - finalWidth;
-      return row.slice(0, finalWidth);
+    if (row.length === width) return row;
+    if (row.length > width) {
+      clippedCells += row.length - width;
+      return row.slice(0, width);
     }
-    return [...row, ...Array.from({ length: finalWidth - row.length }, () => "")];
+    return [...row, ...Array.from({ length: width - row.length }, () => "")];
   });
+  const warnings: string[] = [];
+  if (clippedColumns.total > clippedColumns.shown) {
+    warnings.push(`The file has ${clippedColumns.total} columns; the preview shows the first ${clippedColumns.shown}.`);
+  }
+  if (clippedCells > 0) {
+    warnings.push(`${clippedCells} cells past the preview width are not shown.`);
+  }
   return {
-    columns: header.length === finalWidth
-      ? header
-      : [...header, ...Array.from({ length: finalWidth - header.length }, () => "")],
+    clippedCells,
+    clippedColumns,
+    columns: header.length >= width
+      ? header.slice(0, width)
+      : [...header, ...Array.from({ length: width - header.length }, () => "")],
     rows: paddedRows,
     totalRows,
-    clippedCells,
+    warnings,
   };
 }
 
@@ -425,6 +453,8 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
   rows: string[][];
   totalRows: number;
   clippedCells: number;
+  clippedColumns: { total: number; shown: number };
+  warnings: string[];
 } {
   const columns = records.reduce<string[]>((acc, record) => {
     for (const key of Object.keys(record)) {
@@ -437,7 +467,14 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
     if (value === undefined || value === null) return "";
     return typeof value === "object" ? JSON.stringify(value) : String(value);
   }));
-  return { columns, rows, totalRows: records.length, clippedCells: 0 };
+  return {
+    clippedCells: 0,
+    clippedColumns: { shown: columns.length, total: columns.length },
+    columns,
+    rows,
+    totalRows: records.length,
+    warnings: [],
+  };
 }
 
 /**
@@ -677,7 +714,9 @@ export async function buildArtifactVersionPreview(
   if (!artifact) {
     throw new ArtifactDashboardError("ARTIFACT_NOT_FOUND", "Artifact not found");
   }
-  const maxRows = parsePositiveInt(maxRowsParam, DEFAULT_MAX_ROWS);
+  // maxRows may ask for fewer rows, never for more: the row constant is what
+  // makes the payload bound a constant instead of a function of the request.
+  const maxRows = Math.min(MAX_PREVIEW_ROWS, parsePositiveInt(maxRowsParam, DEFAULT_MAX_ROWS));
   const maxChars = parsePositiveInt(maxCharsParam, DEFAULT_MAX_CHARS);
   const maxCells = parsePositiveInt(maxCellsParam, DEFAULT_MAX_CELLS);
   const size = version.content.size;

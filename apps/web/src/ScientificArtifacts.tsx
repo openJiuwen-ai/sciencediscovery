@@ -236,19 +236,22 @@ export function isCsvWorkspaceReady({
   return detected && Boolean(source) && Boolean(versionId) && loadedVersionId === versionId;
 }
 
-export function DatasetTable({ clippedCells = 0, columns, rows, totalRows, truncated }: { clippedCells?: number; columns: string[]; rows: string[][]; totalRows: number; truncated: boolean }) {
+export function DatasetTable({ clippedCells = 0, clippedColumns, columns, rows, totalRows, truncated }: { clippedCells?: number; clippedColumns?: { total: number; shown: number }; columns: string[]; rows: string[][]; totalRows: number; truncated: boolean }) {
   const { t } = useLocale();
   // An empty grid plus "0 rows" is not usable feedback: say why
   // there is nothing to show instead of rendering a headerless table.
   if (!columns.length && !rows.length) {
     return <p className="artifact-empty">{t("artifact.tableEmpty")}</p>;
   }
+  const clippedColumnText = clippedColumns && clippedColumns.total > clippedColumns.shown
+    ? t("artifact.tableClippedColumns", { shown: clippedColumns.shown, total: clippedColumns.total })
+    : "";
   return <div className="dataset-table-wrapper">
     <table className="dataset-table">
       <thead><tr>{columns.map((col, i) => <th key={i}>{col}</th>)}</tr></thead>
       <tbody>{rows.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>)}</tbody>
     </table>
-    <p className="dataset-table-meta">{t(totalRows === 1 ? "artifact.tableRowOne" : "artifact.tableRows", { count: totalRows })}{truncated ? t("artifact.tableTruncated") : ""}{clippedCells > 0 ? t("artifact.tableClippedCells", { count: clippedCells }) : ""}</p>
+    <p className="dataset-table-meta">{t(totalRows === 1 ? "artifact.tableRowOne" : "artifact.tableRows", { count: totalRows })}{truncated ? t("artifact.tableTruncated") : ""}{clippedColumnText}{clippedCells > 0 ? t("artifact.tableClippedCells", { count: clippedCells }) : ""}</p>
   </div>;
 }
 
@@ -275,6 +278,7 @@ export type DatasetPreviewView = "raw" | "table";
 export function DatasetPreview({
   columns,
   clippedCells,
+  clippedColumns,
   onViewChange,
   rawJson,
   rows,
@@ -284,6 +288,7 @@ export function DatasetPreview({
 }: {
   columns: string[];
   clippedCells?: number;
+  clippedColumns?: { total: number; shown: number };
   onViewChange: (view: DatasetPreviewView) => void;
   rawJson?: { source: string; truncated: boolean };
   rows: string[][];
@@ -292,7 +297,7 @@ export function DatasetPreview({
   view: DatasetPreviewView;
 }) {
   const { t } = useLocale();
-  const table = <DatasetTable clippedCells={clippedCells} columns={columns} rows={rows} totalRows={totalRows} truncated={truncated} />;
+  const table = <DatasetTable clippedCells={clippedCells} clippedColumns={clippedColumns} columns={columns} rows={rows} totalRows={totalRows} truncated={truncated} />;
   if (!rawJson) return table;
   return <div className="dataset-preview">
     <nav aria-label={t("artifact.datasetViewAria")} className="dataset-view-tabs">
@@ -824,6 +829,7 @@ export function ArtifactModal({
   const datasetPreview: ReactNode = datasetTable
     ? <DatasetPreview
         clippedCells={datasetTable.clippedCells}
+        clippedColumns={datasetTable.clippedColumns}
         columns={datasetTable.columns}
         onViewChange={setDatasetView}
         {...(datasetTable.rawJson ? { rawJson: datasetTable.rawJson } : {})}
