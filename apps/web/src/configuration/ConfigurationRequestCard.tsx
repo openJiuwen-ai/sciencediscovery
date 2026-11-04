@@ -285,19 +285,23 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && ["next_run", "next_request"].includes(request.activation.mode) && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
+  const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "security.automatic_configuration"
+    ? m.mode.domainNextRequest : m.mode[request.activation.mode];
+  const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = request.capabilityId === "security.approval_mode" && request.activation.state === "active" ? m.sessionApprovalActive
     : request.capabilityId === "security.network" && request.activation.state === "active" ? m.securityActive
     : ["security.network", "security.approval_mode"].includes(request.capabilityId) && request.state === "applied" && request.activation.state === "failed" ? m.securityCleanupFailed
-    : request.activation.mode === "next_request" && request.activation.state === "needs_user_action" ? m.waitingNextRequest
+    : request.capabilityId === "security.automatic_configuration" && request.activation.mode === "next_request" && request.activation.state === "needs_user_action" ? m.waitingNextRequest
     : savedForNextRun && request.activation.mode === "next_run" && request.activation.state === "needs_user_action" ? m.waitingNextRun : m.activation[request.activation.state];
   const details = <>
     <p>{reasonText}</p>
     <dl className="configuration-impact">
       <dt>{m.resource}</dt><dd>{request.impact.resourceLocation}</dd>
       <dt>{m.scopeLabel}</dt><dd>{request.impact.effectiveScope || scope}</dd>
-      <dt>{m.activationLabel}</dt><dd>{m.mode[request.activation.mode]}</dd>
+      <dt>{m.activationLabel}</dt><dd>{activationModeLabel}</dd>
     </dl>
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
@@ -394,7 +398,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       </fieldset> : request.protocolVersion === 3 ? <section className="configuration-choice-options" aria-label={m.choosePath}>
         {!availableChoices.length ? <p role="status">{m.noAvailableChoice}</p> : null}
         {visibleChoices.map(option => <div key={option.id} aria-disabled={!option.available || undefined}>
-          <p><strong>{describeChoice(option)}{option.kind === "persisted_apply" ? ` · ${m.scope[request.scope.kind]} · ${m.mode[request.activation.mode]}` : ""}</strong></p>
+          <p><strong>{describeChoice(option)}{option.kind === "persisted_apply" ? ` · ${m.scope[request.scope.kind]} · ${activationModeLabel}` : ""}</strong></p>
           {option.kind !== "persisted_apply" ? <p>{option.description}</p> : null}
           {!option.available ? <p>{option.unavailableReason ?? m.choiceUnavailable}</p> : selectedOptionId !== option.id
             ? <button type="button" className="secondary-button" disabled={!editable || runActive} onClick={() => void selectOption(option.id)}>{m.selectChoice}</button> : null}
@@ -407,7 +411,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{locale.startsWith("zh") ? (request.capabilityId === "security.network" && field.id === "mode" ? m.field.networkMode : m.field[field.id]) ?? field.label : field.label}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}

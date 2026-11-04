@@ -5,6 +5,7 @@ import type { SessionStore } from "../store.js";
 import { configurationFramework } from "./framework.js";
 import { configurationConnectorDirectory } from "./connector-directory.js";
 import { nativeRuntimeConnectorIds } from "./native-choices.js";
+import { INHERITABLE_CONFIGURATION_FIELDS } from "./inherit-fields.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { securityNetworkValues } from "./security-network-adapter.js";
 import { configurationDiagnostic } from "./diagnostics.js";
@@ -15,6 +16,9 @@ import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "settings.inherit": "inherit reset restore parent override 继承 恢复 重置 上级 覆盖",
+  "reviewer.enable": "reviewer specialist global enable disable 审阅 专家 全局 开启 关闭",
+  "plugin.json_viewer": "json artifact preview viewer plugin JSON 预览 插件 文件 展示",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
@@ -25,12 +29,13 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "timeouts.configure": "timeout timeouts 超时 等待 时限",
   "quotas.configure": "quota quotas 配额 并发 上传 容量",
   "runner.assign": "runner machine allocation assignment execution 运行器 分配 机器 执行环境 继承",
-  "idea_tree.configure": "idea tree 探索树 深度 轮次",
   "environment.sources": "environment package source pip conda mirror 包源 镜像源 环境 软件源",
   "security.approval_mode": "session approval mode always allow dangerous permission security 会话 审批 批准 权限 安全 自动允许",
   "security.default_approval": "new session default approval permission 新会话 默认 授权 审批 工具权限",
   "security.automatic_configuration": "automatic low risk configuration 自动 低风险 配置 授权",
   "security.network": "sandbox network security permissions allowlist private 沙箱 网络 安全 权限 域名 私网 白名单",
+
+  "idea_tree.configure": "idea tree research template 模板 探索树 深度 轮次",
 };
 const domainAliases: Record<string, string> = { proxy: "代理", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", permission_policy: "permission approval 权限 自动批准", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
 type Row = Record<string, unknown>;
@@ -155,6 +160,9 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
+  else if (id === "settings.inherit") current = { sessionExplicitFields: INHERITABLE_CONFIGURATION_FIELDS.filter(field => Object.hasOwn(settings.overrides, field)), projectExplicitFields: INHERITABLE_CONFIGURATION_FIELDS.filter(field => Object.hasOwn(store.getProjectSettings(store.getSession(sessionId)!.projectId).overrides, field)), skillSelectionAvailable: skills().selectionAvailable };
+  else if (id === "reviewer.enable") current = { ...store.getReviewerSpecialistSettings() };
+  else if (id === "plugin.json_viewer") current = { ...store.configurationJsonViewerSettings(sessionId) };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
   else if (id === "environment.sources") current = { ...store.getEnvironmentSourceSettings() };
@@ -168,7 +176,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "security.network") current = { ...securityNetworkValues(store.getSandboxNetworkSettings()), writableSessionCount: store.configurationSecurityNetwork().writableSessionCount, independentHumanConfirmation: true };
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
-    current = { explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
+    current = { templateId: idea.templateId, explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
       maxTokensPerCall: idea.maxTokensPerCall, maxDepth: idea.maxDepth, maxNodes: idea.maxNodes };
   } else current = { modelId: effective.modelId ?? null };
   const selected = (await resources(id)).filter(row => (!input.targetId || row.id === input.targetId) && (!query || matches(query, `${row.id} ${row.name} ${row.model ?? ""}`)));
@@ -176,8 +184,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => ["security.default_approval"].includes(id) || (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: id === "security.approval_mode" ? "Current session only. Existing pending permission cards must be resolved through their separate human controls; this capability never bulk-approves them. Independent human security acknowledgement followed by manual configuration confirmation is mandatory. Always allow affects future eligible actions; direct code remains separate. A bound original task can continue after cleanup. Never widen approval to work around a failed action." : id === "security.network" ? "Deployment security policy: omit scope. An independent user-only security acknowledgement followed by manual confirmation is mandatory; no Agent or ordinary tool permission can supply it. All writable sessions and persistent kernel/shell state may be affected. Do not widen permissions to work around a failed call." : id === "security.default_approval" ? "New-session defaults only. Omit scope for global; project changes only this Project. inherit removes the selected override. Independent human security acknowledgement AND manual configuration confirmation are required. Existing sessions, pending permissions, network policy and kernels are unchanged." : id === "security.automatic_configuration" ? "This Session only. Independent human security acknowledgement AND manual confirmation are mandatory. Only future eligible ready-connector compatibility proposals can be automatically saved after their existing cancellation window. v3/security/credential choices remain manual. Tool permissions, network policy and original task resumption are separate." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    scopes: descriptor.scopes.filter(scope => ["plugin.json_viewer", "security.default_approval"].includes(id) || (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    instruction: id === "security.approval_mode" ? "Current session only. Existing pending permission cards must be resolved through their separate human controls; this capability never bulk-approves them. Independent human security acknowledgement followed by manual configuration confirmation is mandatory. Always allow affects future eligible actions; direct code remains separate. A bound original task can continue after cleanup. Never widen approval to work around a failed action." : id === "security.network" ? "Deployment security policy: omit scope. An independent user-only security acknowledgement followed by manual confirmation is mandatory; no Agent or ordinary tool permission can supply it. All writable sessions and persistent kernel/shell state may be affected. Do not widen permissions to work around a failed call." : id === "security.default_approval" ? "New-session defaults only. Omit scope for global; project changes only this Project. inherit removes the selected override. Independent human security acknowledgement AND manual configuration confirmation are required. Existing sessions, pending permissions, network policy and kernels are unchanged." : id === "security.automatic_configuration" ? "This Session only. Independent human security acknowledgement AND manual confirmation are mandatory. Only future eligible ready-connector compatibility proposals can be automatically saved after their existing cancellation window. v3/security/credential choices remain manual. Tool permissions, network policy and original task resumption are separate." : id === "settings.inherit" ? "Remove only selected finite ordinary override fields at the current Session (default) or its own Project. No Global or security reset. An equal explicit value still needs removal; absent fields produce no_change. Inherited Skill all mode can expose more installed content. Frozen task settings remain unchanged. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "reviewer.enable" ? "Only enabled:boolean may be proposed. Omit scope. This is the global Reviewer Specialist gate; it preserves session preferences and feedback policy, may admit paid reviews, and does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "plugin.json_viewer" ? "Only the bundled optional JSON viewer: mode enabled/disabled/inherit. Omit scope for this Session, or explicitly choose its Project or Global. inherit removes only this layer override. Generic source previews remain available. Do not supply arbitrary plugin IDs/config or claim all clients have refreshed." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);

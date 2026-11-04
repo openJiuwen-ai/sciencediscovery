@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { ConfigurationCapabilityId, ConfigurationValues, SkillLibrary } from "@sciencediscovery/schema";
+import { INHERITABLE_CONFIGURATION_FIELDS } from "./configuration/inherit-fields.js";
 import { ConfigurationError, canonical as canonicalConfiguration } from "./configuration/validation.js";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
@@ -25,6 +26,7 @@ import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat,
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
+import { installedPlugins } from "./plugins/catalog.js";
 import { PluginControl } from "./plugins/control.js";
 import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement, checkpointRetiredWorkspace } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
@@ -2377,6 +2379,17 @@ export class SessionStore {
           }
         }
       }
+      // Global/Project plugin edits also notify Project-only UI hosts after commit.
+      if (canonicalConfiguration(previous.persisted.globalSettings.plugins) !== canonicalConfiguration(this.catalog.globalSettings.plugins)) {
+        this.pluginControl?.changed();
+      } else {
+        for (const project of this.catalog.projects) {
+          const before = previous.persisted.projects.find(item => item.id === project.id);
+          if (before && canonicalConfiguration(before.settingsOverrides.plugins) !== canonicalConfiguration(project.settingsOverrides.plugins)) {
+            this.pluginControl?.changed(project.id);
+          }
+        }
+      }
       return result;
     });
   }
@@ -2411,6 +2424,11 @@ export class SessionStore {
       runnerSelection: version([project.runnerIds, project.remoteRunnerHostIds, session.runnerIds, session.remoteRunnerHostIds]),
       registeredRunners: version([this.catalog.remoteHosts, this.getConfigurationDatabase().prepare("SELECT host_id, kind, encrypted_value FROM remote_host_credentials ORDER BY host_id, kind").all()]),
     };
+    else if (capabilityId === "reviewer.enable") systemVersions = { globalReviewer: version([this.getReviewerSpecialistSettings(), this.catalog.reviewerSpecialistDefaultOnMigrated]) };
+    if (capabilityId === "plugin.json_viewer") {
+      const json = this.configurationJsonViewerSettings(sessionId);
+      systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
+    }
     if (capabilityId === "security.default_approval") systemVersions = { approvalDefaults: version([this.catalog.globalSettings.defaultApprovalMode, project.settingsOverrides.defaultApprovalMode]) };
     if (capabilityId === "security.automatic_configuration") systemVersions = { automaticConfiguration: version(session.autoApplyLowRiskConfiguration === true) };
     if (capabilityId === "security.network") systemVersions = { securityNetwork: version([
@@ -2434,7 +2452,7 @@ export class SessionStore {
         autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
       } : resourceVersions),
       data: {
-        capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        capabilityId, target, sessionId, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         defaultApproval: { global: this.catalog.globalSettings.defaultApprovalMode ?? "inherit", project: project.settingsOverrides.defaultApprovalMode ?? "inherit" },
         automaticConfiguration: session.autoApplyLowRiskConfiguration === true,
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
@@ -2455,6 +2473,9 @@ export class SessionStore {
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
         ...(capabilityId === "security.approval_mode" ? { sessionApproval: this.configurationSessionApproval(sessionId) } : {}),
         ...(capabilityId === "security.network" ? { securityNetwork: this.configurationSecurityNetwork() } : {}),
+
+        ...(capabilityId === "reviewer.enable" ? { globalReviewer: this.getReviewerSpecialistSettings() } : {}),
+        ...(capabilityId === "plugin.json_viewer" ? { jsonViewerSettings: this.configurationJsonViewerSettings(sessionId) } : {}),
       },
     };
   }
@@ -2571,6 +2592,41 @@ export class SessionStore {
     return { rotatedSessionIds, retiredPermissionEpochIds };
   }
 
+  configurationInheritanceCandidate(sessionId: string, scope: ConfigurationScope, fields: readonly string[]) {
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    if (scope.kind === "global" || scope.kind === "project" && scope.id !== project.id || scope.kind === "session" && scope.id !== sessionId) throw new Error("Unsupported inherited settings scope");
+    if (fields.some(field => !(INHERITABLE_CONFIGURATION_FIELDS as readonly string[]).includes(field))) throw new Error("Unsupported inherited setting");
+    const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const next = structuredClone(current);
+    for (const field of INHERITABLE_CONFIGURATION_FIELDS) {
+      if (fields.includes(field)) delete next[field];
+    }
+    // Only remove requested overrides. Keep unrelated stored values, including
+    // stale references that resolution already ignores.
+    const layers: Array<{ overrides: RuntimeSettingsOverrides; source: "global" | "project" | "session" }> = [
+      { overrides: this.catalog.globalSettings, source: "global" },
+      { overrides: scope.kind === "project" ? next : project.settingsOverrides, source: "project" },
+    ];
+    if (scope.kind === "session") layers.push({ overrides: next, source: "session" });
+    const resolved = this.resolveSettingsLayers(layers);
+    return { before: structuredClone(current), next, effective: resolved.effective, sources: resolved.sources };
+  }
+
+  applyConfigurationInheritanceSync(sessionId: string, scope: ConfigurationScope, fields: readonly string[]): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Inheritance configuration requires the shared transaction");
+    const candidate = this.configurationInheritanceCandidate(sessionId, scope, fields), session = this.assertSessionWritable(sessionId);
+    if (scope.kind === "project") {
+      const project = this.getProject(scope.id);
+      if (!project) throw new Error("Project not found");
+      project.settingsOverrides = candidate.next;
+      this.syncSessionCompatibilityForProject(scope.id);
+    } else {
+      session.settingsOverrides = candidate.next;
+      this.syncSessionCompatibility(session);
+    }
+    session.updatedAt = new Date().toISOString();
+  }
+
   /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
   applySystemConfigurationSync(capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues): void {
     if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
@@ -2677,7 +2733,12 @@ export class SessionStore {
     };
   }
 
-  async updateReviewerSpecialistSettings(value: unknown): Promise<ReviewerSpecialistSettings> {
+  applyReviewerParticipationSync(enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Reviewer configuration requires the shared transaction");
+    this.applyReviewerSpecialistSettingsSync({ enabled });
+  }
+
+  private applyReviewerSpecialistSettingsSync(value: unknown): void {
     if (!isRecord(value) || typeof value.enabled !== "boolean") {
       throw new Error("Reviewer Specialist enabled must be a boolean");
     }
@@ -2689,6 +2750,10 @@ export class SessionStore {
     // Record that the user (or API) chose a value so the default-on migration
     // will not override an intentional opt-out on the next load.
     this.catalog.reviewerSpecialistDefaultOnMigrated = true;
+  }
+
+  async updateReviewerSpecialistSettings(value: unknown): Promise<ReviewerSpecialistSettings> {
+    this.applyReviewerSpecialistSettingsSync(value);
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
   }
@@ -3401,11 +3466,52 @@ export class SessionStore {
     return run;
   }
 
+  private replaceRuntimeOverridesSync(scope: ConfigurationScope, value: unknown): void {
+    const normalized = this.normalizeSettings(value);
+    if (scope.kind === "global") {
+      this.catalog.globalSettings = withoutSkillSelection(normalized);
+      this.syncSessionCompatibilityForProject();
+    } else if (scope.kind === "project") {
+      const project = this.getProject(scope.id);
+      if (!project) throw new Error("Project not found");
+      project.settingsOverrides = normalized;
+      this.syncSessionCompatibilityForProject(project.id);
+    } else {
+      const session = this.assertSessionWritable(scope.id);
+      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
+      session.settingsOverrides = normalized;
+      session.updatedAt = new Date().toISOString();
+      this.syncSessionCompatibility(session);
+    }
+  }
+
+  configurationJsonViewerSettings(sessionId: string) {
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    const mode = (settings: RuntimeSettingsOverrides) => settings.plugins?.["artifact-json"]?.enabled === undefined ? "inherit" : settings.plugins["artifact-json"]!.enabled ? "enabled" : "disabled";
+    return { installed: installedPlugins.some(plugin => plugin.id === "artifact-json"),
+      modes: { global: mode(this.catalog.globalSettings), project: mode(project.settingsOverrides), session: mode(session.settingsOverrides) },
+      inherited: { global: true, project: this.getGlobalSettings().effective.plugins?.["artifact-json"]?.enabled !== false,
+        session: this.getProjectSettings(project.id).effective.plugins?.["artifact-json"]?.enabled !== false } };
+  }
+
+  applyJsonViewerConfigurationSync(sessionId: string, mode: "enabled" | "disabled" | "inherit", scope: ConfigurationScope): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Plugin configuration requires the shared transaction");
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    if (scope.kind === "project" && scope.id !== project.id || scope.kind === "session" && scope.id !== sessionId) throw new Error("Plugin scope does not belong to this session");
+    if (!this.configurationJsonViewerSettings(sessionId).installed || !["enabled", "disabled", "inherit"].includes(mode)) throw new Error("Unsupported JSON viewer configuration");
+    const current = scope.kind === "global" ? this.catalog.globalSettings : scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const plugins = structuredClone(current.plugins ?? {}), entry = { ...plugins["artifact-json"] };
+    if (mode === "inherit") delete entry.enabled; else entry.enabled = mode === "enabled";
+    if (Object.keys(entry).length) plugins["artifact-json"] = entry;
+    else delete plugins["artifact-json"];
+    const next: RuntimeSettingsOverrides = { ...current, plugins };
+    if (!Object.keys(plugins).length) delete next.plugins;
+    this.replaceRuntimeOverridesSync(scope, next);
+  }
+
   async replaceGlobalSettings(value: unknown): Promise<RuntimeSettingsDetails> {
     return this.withSettingsMutation(async () => {
-      const normalized = withoutSkillSelection(this.normalizeSettings(value));
-      this.catalog.globalSettings = normalized;
-      this.syncSessionCompatibilityForProject();
+      this.replaceRuntimeOverridesSync({ kind: "global" }, value);
       await this.saveCatalog();
       this.pluginControl?.changed();
       return this.getGlobalSettings();
@@ -3430,9 +3536,7 @@ export class SessionStore {
       assertCurrent?.();
       const project = this.getProject(projectId);
       if (!project) throw new Error("Project not found");
-      const normalized = this.normalizeSettings(value);
-      project.settingsOverrides = normalized;
-      this.syncSessionCompatibilityForProject(projectId);
+      this.replaceRuntimeOverridesSync({ kind: "project", id: projectId }, value);
       await this.saveCatalog();
       this.pluginControl?.changed(projectId);
       return this.getProjectSettings(projectId);
@@ -3478,11 +3582,7 @@ export class SessionStore {
     return this.withSettingsMutation(async () => {
       assertCurrent?.();
       const session = this.assertSessionWritable(sessionId);
-      const normalized = this.normalizeSettings(value);
-      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
-      session.settingsOverrides = normalized;
-      session.updatedAt = new Date().toISOString();
-      this.syncSessionCompatibility(session);
+      this.replaceRuntimeOverridesSync({ kind: "session", id: sessionId }, value);
       await this.saveCatalog();
       this.pluginControl?.changed(session.projectId, sessionId);
       return this.getSessionSettings(sessionId);

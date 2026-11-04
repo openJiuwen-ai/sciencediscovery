@@ -12,6 +12,9 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createInheritanceAdapter } from "./inherit-adapter.js";
+import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
+import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { createSessionApprovalAdapter } from "./session-approval-adapter.js";
 import { createDefaultApprovalAdapter } from "./default-approval-adapter.js";
@@ -122,7 +125,7 @@ export class ConversationalConfigurationFramework {
     this.security = new ConfigurationSecurityAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), createSessionApprovalAdapter(store, () => Boolean(this.options.sessionApprovalCleanup)), createDefaultApprovalAdapter(store), createAutomaticConfigurationAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), createSessionApprovalAdapter(store, () => Boolean(this.options.sessionApprovalCleanup)), createDefaultApprovalAdapter(store), createAutomaticConfigurationAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (["security.network", "security.approval_mode", "security.default_approval", "security.automatic_configuration"].includes(adapter.id)) {
         const apply = adapter.apply;
         if (!apply) throw new Error("Security policy adapters require a synchronous domain apply");

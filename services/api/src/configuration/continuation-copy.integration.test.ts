@@ -68,6 +68,26 @@ test("CFG-X10c: independent consent and save resume the bound task without apply
   assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
 });
 
+
+test("CFG-X09a: saving a bound Reviewer setting resumes the task without changing its snapshot", async context => {
+  const h = await fixture(context);
+  await h.store.updateReviewerSpecialistSettings({ enabled: true });
+  const frozen = structuredClone(h.run.settingsSnapshot);
+  const card = await h.framework.propose(h.session.id, {
+    protocolVersion: 3, runId: h.run.id, capabilityId: "reviewer.enable", values: { enabled: false },
+  });
+  assert.ok(card.previewDigest);
+  const decision = { revision: card.revision, previewDigest: card.previewDigest, selectedOptionId: "persist", decision: "apply" as const };
+  const applied = await h.framework.decide(h.session.id, card.id, decision);
+  assert.equal(applied.activation.mode, "next_request");
+  assert.equal(applied.activation.state, "needs_user_action");
+  assert.equal(applied.resumption.state, "queued");
+  await h.framework.decide(h.session.id, card.id, decision);
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  verifyNativeConfigurationToolAssembly({ store: h.store, sessionId: h.session.id, runId: h.run.id, requestId: card.id, enabledConnectorIds: [], tools: [] });
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+});
+
 test("CFG-XBUG-09: future-setting copy permits only its bound original continuation and preserves the recorded task settings on replay", async context => {
   const h = await fixture(context), frozen = structuredClone(h.run.settingsSnapshot);
   const card = await h.framework.propose(h.session.id, { protocolVersion: 3, runId: h.run.id, capabilityId: "timeouts.configure", values: { runnerExecTimeoutMs: 90000 } });

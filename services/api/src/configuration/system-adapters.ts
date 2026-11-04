@@ -110,6 +110,10 @@ export function createSystemConfigurationAdapters(store: SessionStore): Configur
         const current = normalizeIdeaTreeSettings(input, currentIdeaTree(snapshot));
         message = "Deployment-wide. A later idea-tree invocation reads these limits. Template and exploration intensity choose research budgets and assessor definitions. An idea-tree run already in progress keeps the settings it started with.";
         fields.push(
+          { id: "templateId", label: "Research template", kind: "enum", required: false, value: current.templateId, choices: [
+            { id: "scientific-hypothesis-general/v1", label: "General scientific hypothesis" },
+            { id: "water-treatment-materials/v1", label: "Water-treatment materials" },
+          ] },
           enumField("explorationIntensity", "Exploration intensity", intensities, current.explorationIntensity),
           enumField("scoreDirection", "Score direction", directions, current.scoreDirection),
           numberField("maxTokensPerCall", "Tokens per call", current.maxTokensPerCall ?? 32768, "Integer from 256 to 32768."),

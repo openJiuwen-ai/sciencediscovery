@@ -120,6 +120,16 @@ test("CFG-X10a: a saved security record retains the independent acknowledgement 
   await act(async () => { renderer.unmount(); });
 });
 
+
+test("CFG-X09a: saved global Reviewer switch describes later admission without claiming verified activation", async () => {
+  const renderer = await mount(request({ capabilityId: "reviewer.enable", state: "applied", runId: undefined,
+    activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }));
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /Configure global Reviewer Specialist · Saved · Subsequent review admissions; running work may finish/);
+  assert.match(content, /User action required/); assert.doesNotMatch(content, /Verified active/);
+  await act(async () => renderer.unmount());
+});
+
 test("CFG generic renderer requires a new preview after edits and binds approval to the exact revision and digest", async () => {
   const decisions: unknown[] = [];
   const previews: unknown[] = [];

@@ -1,4 +1,5 @@
 import { ArtifactViewerSlot } from "./plugins/artifact-viewers.js";
+import { useDisabledPlugins } from "./plugins/host.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -236,19 +237,22 @@ export function isCsvWorkspaceReady({
   return detected && Boolean(source) && Boolean(versionId) && loadedVersionId === versionId;
 }
 
-export function DatasetTable({ columns, rows, totalRows, truncated }: { columns: string[]; rows: string[][]; totalRows: number; truncated: boolean }) {
+export function DatasetTable({ clippedCells = 0, clippedColumns, columns, rows, totalRows, truncated }: { clippedCells?: number; clippedColumns?: { total: number; shown: number }; columns: string[]; rows: string[][]; totalRows: number; truncated: boolean }) {
   const { t } = useLocale();
   // An empty grid plus "0 rows" is not usable feedback: say why
   // there is nothing to show instead of rendering a headerless table.
   if (!columns.length && !rows.length) {
     return <p className="artifact-empty">{t("artifact.tableEmpty")}</p>;
   }
+  const clippedColumnText = clippedColumns && clippedColumns.total > clippedColumns.shown
+    ? t("artifact.tableClippedColumns", { shown: clippedColumns.shown, total: clippedColumns.total })
+    : "";
   return <div className="dataset-table-wrapper">
     <table className="dataset-table">
       <thead><tr>{columns.map((col, i) => <th key={i}>{col}</th>)}</tr></thead>
       <tbody>{rows.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>)}</tbody>
     </table>
-    <p className="dataset-table-meta">{t(totalRows === 1 ? "artifact.tableRowOne" : "artifact.tableRows", { count: totalRows })}{truncated ? t("artifact.tableTruncated") : ""}</p>
+    <p className="dataset-table-meta">{t(totalRows === 1 ? "artifact.tableRowOne" : "artifact.tableRows", { count: totalRows })}{truncated ? t("artifact.tableTruncated") : ""}{clippedColumnText}{clippedCells > 0 ? t("artifact.tableClippedCells", { count: clippedCells }) : ""}</p>
   </div>;
 }
 
@@ -274,6 +278,8 @@ export type DatasetPreviewView = "raw" | "table";
  */
 export function DatasetPreview({
   columns,
+  clippedCells,
+  clippedColumns,
   onViewChange,
   rawJson,
   rows,
@@ -282,6 +288,8 @@ export function DatasetPreview({
   view,
 }: {
   columns: string[];
+  clippedCells?: number;
+  clippedColumns?: { total: number; shown: number };
   onViewChange: (view: DatasetPreviewView) => void;
   rawJson?: { source: string; truncated: boolean };
   rows: string[][];
@@ -290,7 +298,7 @@ export function DatasetPreview({
   view: DatasetPreviewView;
 }) {
   const { t } = useLocale();
-  const table = <DatasetTable columns={columns} rows={rows} totalRows={totalRows} truncated={truncated} />;
+  const table = <DatasetTable clippedCells={clippedCells} clippedColumns={clippedColumns} columns={columns} rows={rows} totalRows={totalRows} truncated={truncated} />;
   if (!rawJson) return table;
   return <div className="dataset-preview">
     <nav aria-label={t("artifact.datasetViewAria")} className="dataset-view-tabs">
@@ -486,6 +494,7 @@ export function ArtifactModal({
   artifactSessionId?: string;
 }) {
   const { locale, t } = useLocale();
+  const jsonViewerDisabled = useDisabledPlugins().includes("artifact-json");
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
   const [artifactId, setArtifactId] = useState<string>();
   const [versions, setVersions] = useState<ScientificArtifactVersion[]>([]);
@@ -821,6 +830,8 @@ export function ArtifactModal({
   // table/raw-JSON switch whenever the payload carries the source document.
   const datasetPreview: ReactNode = datasetTable
     ? <DatasetPreview
+        clippedCells={datasetTable.clippedCells}
+        clippedColumns={datasetTable.clippedColumns}
         columns={datasetTable.columns}
         onViewChange={setDatasetView}
         {...(datasetTable.rawJson ? { rawJson: datasetTable.rawJson } : {})}
@@ -876,7 +887,9 @@ export function ArtifactModal({
             every other document is shown as formatted JSON or raw text, never
             an empty grid. */}
         {artifact?.kind === "json" && !(structureFormat && source)
-          ? datasetTable
+          ? jsonViewerDisabled
+            ? <SourcePreview language="json" source={source} truncated={jsonSource?.truncated ?? datasetTable?.truncated} />
+            : datasetTable
             ? datasetPreview
             : jsonSource
               ? <JsonSourcePreview parsed={jsonSource.parsed} source={jsonSource.source} truncated={jsonSource.truncated} />

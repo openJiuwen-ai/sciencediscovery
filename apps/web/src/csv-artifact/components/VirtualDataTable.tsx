@@ -15,6 +15,7 @@
 import { ArrowDownAZ, ArrowUpAZ, Download, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { columnHeaderName } from "../chart-spec/filters.js";
 import { resolveSelectedRowIds } from "../charts/selection.js";
 import { useLocale } from "../../i18n/index.js";
 import type { DataRow, DataTable, DataValue } from "../types.js";
@@ -93,7 +94,7 @@ export function VirtualDataTable({
         <div className="csva-virtual-grid-header" role="row" style={{ gridTemplateColumns }}>
           <span>#</span>
           {columns.map((column) => <button key={column.id} onClick={() => changeSort(column.id)} title={t("csv.sortBy", { column: column.id })} type="button">
-            <span>{column.id}</span>
+            <span>{columnHeaderName(column)}</span>
             {sort.field === column.id ? sort.direction === "asc" ? <ArrowDownAZ size={13} /> : <ArrowUpAZ size={13} /> : null}
           </button>)}
         </div>
