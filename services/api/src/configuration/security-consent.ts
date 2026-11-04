@@ -1,9 +1,11 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationSecurityConsent } from "@sciencediscovery/schema";
+import { configurationNeedsSecurityConsent, type ConfigurationSecurityConsent } from "@sciencediscovery/schema";
 import type { DatabaseSync } from "node:sqlite";
 import type { ConfigurationRecord } from "./types.js";
 import { ConfigurationError, integer, object, string } from "./validation.js";
+
+export { configurationNeedsSecurityConsent };
 
 /** A user-only policy acknowledgement, independent of ordinary configuration and tool permission. */
 export class ConfigurationSecurityAuthorizer {
@@ -23,7 +25,7 @@ export class ConfigurationSecurityAuthorizer {
     return { ...consent, revision: record.view.revision, status: confirmed ? "confirmed" : "required" };
   }
   assert(record: ConfigurationRecord, source = record.view.decisionSource): void {
-    if (!["security.network", "security.approval_mode", "security.default_approval", "security.automatic_configuration"].includes(record.view.capabilityId)) return;
+    if (!configurationNeedsSecurityConsent(record.view.capabilityId)) return;
     if (this.view(record)?.status !== "confirmed") throw new ConfigurationError("SECURITY_CONSENT_REQUIRED", "Independently confirm the exact security policy before applying it", 409);
     if (source !== "user") throw new ConfigurationError("SECURITY_MANUAL_CONFIRMATION_REQUIRED", "Security policy changes require a separate human decision", 409);
   }

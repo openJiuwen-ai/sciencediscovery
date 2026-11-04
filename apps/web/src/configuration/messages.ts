@@ -1,13 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { securityConsentMessages } from "./security-consent-messages.js";
+
 const en = {
-  sessionApprovalAcknowledge: "I have reviewed this session’s future approval policy, possible loss of persistent kernel/shell state, and continuation of its bound original task. Existing permission cards must be handled separately.",
+  securityAcknowledgement: securityConsentMessages.en,
   sessionApprovalActive: "Session policy saved; the new permission epoch is installed and reported retired local kernels are cleaned. Future action enforcement remains with the normal permission controls.",
   securityActive: "Policy saved and epoch fence installed; reported retired local kernels cleaned. Network connectivity was not tested.", securityCleanupFailed: "Policy saved and epochs rotated; old-kernel cleanup remains unverified.",
-  approvalDefaultAcknowledge: "I reviewed the tool approval policy for newly created sessions; existing sessions and pending tools will not change.",
-  automaticConfigurationAcknowledge: "I authorize supported low-risk connector proposals in this Session to use the cancellation window. Tool execution, credentials, security settings and explicit configuration choices still require their own authorization.",
-  securityTitle: "Independent security policy confirmation", securityAcknowledge: "I have reviewed the deployment-wide access changes and possible loss of persistent kernel/shell state.", securityConfirm: "Independently approve this exact security policy", securityConfirmed: "This exact security policy was independently confirmed. Review the changes, then confirm the configuration.", securityRequired: "A separate human security acknowledgement is required. Ordinary Apply and tool Always allow do not authorize this change.",
+  securityTitle: "Independent security policy confirmation", securityConfirm: "Independently approve this exact security policy", securityConfirmed: "This exact security policy was independently confirmed. Review the changes, then confirm the configuration.", securityRequired: "A separate human security acknowledgement is required. Ordinary Apply and tool Always allow do not authorize this change.",
   destinationChanged: "The credential destination changed during preview. Review the new destination and enter the key again.",
   webSearchAlternative: "Use existing Web search",
   credentialRetry: "Credential upload failed. Your input is retained on this device; refresh the proposed changes to retry.",
@@ -66,12 +66,10 @@ const en = {
 };
 
 const zh: typeof en = {
-  sessionApprovalAcknowledge: "我已核对当前会话后续动作的审批策略、持久 kernel／shell 内存可能丢失，以及已绑定原任务可能接续的影响。现有权限卡须单独处理。",
+  securityAcknowledgement: securityConsentMessages.zh,
   sessionApprovalActive: "当前会话策略已保存，新权限代次已建立，已清理本机报告的旧 kernel。后续动作仍由原有权限机制检查。",
   securityActive: "策略已保存且新权限代次已建立；已清理本机 Runner 报告的旧 kernel。未验证真实网络连接。", securityCleanupFailed: "策略已保存且权限代次已轮换；旧 kernel 清理尚未核实。",
-  approvalDefaultAcknowledge: "我已核对新建会话的工具授权默认值；现有会话和待批准工具不变。",
-  automaticConfigurationAcknowledge: "我允许本会话支持的低风险连接器提案使用取消窗口。工具执行、凭据、安全设置以及需明确选择的配置仍须分别授权。",
-  securityTitle: "独立确认安全策略", securityAcknowledge: "我已核对整个部署的访问权限变化，以及持久 kernel／shell 内存可能丢失的影响。", securityConfirm: "独立确认此精确安全策略", securityConfirmed: "此精确安全策略已独立确认。请核对修改内容，再确认配置。", securityRequired: "必须先由人工独立确认安全影响。普通 Apply 或工具的 Always allow 不构成本次授权。",
+  securityTitle: "独立确认安全策略", securityConfirm: "独立确认此精确安全策略", securityConfirmed: "此精确安全策略已独立确认。请核对修改内容，再确认配置。", securityRequired: "必须先由人工独立确认安全影响。普通 Apply 或工具的 Always allow 不构成本次授权。",
   destinationChanged: "预览期间凭据发送目标发生变化。请核对新目标后重新输入密钥。",
   webSearchAlternative: "使用现有网页检索",
   credentialRetry: "凭据上传失败，输入仍仅保存在此设备内存中。可直接刷新修改方案重试。",

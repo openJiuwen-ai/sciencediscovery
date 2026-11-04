@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
+import { configurationNeedsSecurityConsent, DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
 import type { ConfigurationAction, ConfigurationCredentialDraftView, ConfigurationCredentialInput, ConfigurationDecisionInput,
   ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../api/auth.js";
@@ -107,7 +107,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const securityConsent = request.securityConsent;
-  const securityReady = !["security.network", "security.approval_mode", "security.default_approval", "security.automatic_configuration"].includes(request.capabilityId) || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
+  const securityCapability = configurationNeedsSecurityConsent(request.capabilityId) ? request.capabilityId : undefined;
+  const securityReady = !securityCapability || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
@@ -361,7 +362,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
         title={m.closeAndReturn} disabled={busy || runActive || readOnly || mutationsBlocked} onClick={dismiss}>×</button> : null}
     </div>
     {details}
-    {securityConsent ? <section className="configuration-endpoint" aria-label={m.securityTitle}>
+    {securityConsent && securityCapability ? <section className="configuration-endpoint" aria-label={m.securityTitle}>
       <strong>{m.securityTitle}</strong><p>{securityConsent.statement}</p>
       <p role="status">{securityReady && !dirty ? m.securityConfirmed : m.securityRequired}</p>
       {(!securityReady || securityConsent.status !== "confirmed") && actions.securityConsent ? <>
@@ -369,7 +370,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           <input id={`${id}-security-ack`} type="checkbox" checked={securityAcknowledged}
             disabled={!editable || dirty || runActive || request.state !== "awaiting_confirmation"}
             onChange={event => setSecurityAcknowledged(event.target.checked)} />
-          <span>{request.capabilityId === "security.approval_mode" ? m.sessionApprovalAcknowledge : request.capabilityId === "security.default_approval" ? m.approvalDefaultAcknowledge : request.capabilityId === "security.automatic_configuration" ? m.automaticConfigurationAcknowledge : m.securityAcknowledge}</span>
+          <span>{m.securityAcknowledgement[securityCapability]}</span>
         </label>
         <button type="button" className="secondary-button" disabled={!editable || !securityAcknowledged || dirty || runActive || request.state !== "awaiting_confirmation"}
           onClick={() => void perform(() => actions.securityConsent!({ revision: request.revision, targetDigest: securityConsent.targetDigest, acknowledged: true }, operationKey(`security:${request.revision}:${securityConsent.targetDigest}`)))}>{m.securityConfirm}</button>

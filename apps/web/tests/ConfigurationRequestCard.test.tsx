@@ -56,6 +56,20 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
 
+test("CFG-X68-734: the shared card gates a proxy default request from a sibling capability", async () => {
+  // The standalone security branch does not register the proxy adapter.
+  const view = request({ capabilityId: "proxy.default" as ConfigurationRequestView["capabilityId"], runId: undefined,
+    scope: { kind: "global" }, fields: [],
+    securityConsent: { targetDigest: "sha256:route", statement: "Review the outbound route", revision: 2, status: "required" } });
+  const missing = await mount({ ...view, securityConsent: undefined });
+  assert.equal(button(missing, "Confirm this change").props.disabled, true);
+  await act(async () => { missing.unmount(); });
+  const renderer = await mount(view, actions({ securityConsent: async () => view }));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  assert.match(JSON.stringify(renderer.toJSON()), /new default route for inheriting outbound traffic/);
+  await act(async () => { renderer.unmount(); });
+});
+
 test("CFG-X10d: current Session approval needs its own acknowledgement and never uses deployment-wide consent wording", async () => {
   const view = request({ runId: undefined, capabilityId: "security.approval_mode", protocolVersion: 3,
     options: [{ id: "persist", kind: "persisted_apply", label: "Apply", description: "Save", available: true }], selectedOptionId: "persist",

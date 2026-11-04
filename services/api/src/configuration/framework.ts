@@ -20,7 +20,7 @@ import { createSessionApprovalAdapter } from "./session-approval-adapter.js";
 import { createDefaultApprovalAdapter } from "./default-approval-adapter.js";
 import { createAutomaticConfigurationAdapter } from "./automatic-configuration-adapter.js";
 import { createSecurityNetworkAdapter } from "./security-network-adapter.js";
-import { ConfigurationSecurityAuthorizer } from "./security-consent.js";
+import { ConfigurationSecurityAuthorizer, configurationNeedsSecurityConsent } from "./security-consent.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
 import type { ConfigurationApplyReceipt, ConfigurationLiveActivation, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
@@ -126,7 +126,7 @@ export class ConversationalConfigurationFramework {
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
       connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), createSessionApprovalAdapter(store, () => Boolean(this.options.sessionApprovalCleanup)), createDefaultApprovalAdapter(store), createAutomaticConfigurationAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
-      if (["security.network", "security.approval_mode", "security.default_approval", "security.automatic_configuration"].includes(adapter.id)) {
+      if (configurationNeedsSecurityConsent(adapter.id)) {
         const apply = adapter.apply;
         if (!apply) throw new Error("Security policy adapters require a synchronous domain apply");
         adapter.apply = context => {
