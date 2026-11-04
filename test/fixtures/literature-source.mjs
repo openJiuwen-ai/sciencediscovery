@@ -53,6 +53,11 @@ export function literatureSource() {
             mimeType: 'application/pdf', logicalName: `${identifier}.pdf`, sourceUrl: `https://arxiv.org/pdf/${identifier}`,
             attribution: 'Offline fixture', license: 'CC0',
           }] : [] };
+        // LR-14 must recover a genuinely truncated business field, rather than
+        // depending on duplicate citation metadata forcing every result to disk.
+        if (sourceId === 'arxiv' && String(input.query ?? '').includes('LR_CONFLICT_LONG')) {
+          result.records[0].structuredData.notes = 'Synthetic supporting evidence. '.repeat(400) + 'LR_RETAINED_TAIL';
+        }
         const isError = String(input.query ?? '').includes('LR_FAIL');
         if (String(input.query ?? '').includes('LR_EMPTY')) result.records = [];
         return { requestId: 'offline', serverId: request.serverId, toolName: request.toolName,

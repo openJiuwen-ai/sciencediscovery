@@ -94,7 +94,7 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
       return { text: "PDF extraction failed. No full-text evidence was obtained." };
     });
   } else {
-    steps.push(tool("mcp__arxiv__search", { query: scenario === "LR-09" ? "LR_FAIL" : "LR_CONFLICT" }),
+    steps.push(tool("mcp__arxiv__search", { query: scenario === "LR-09" ? "LR_FAIL" : "LR_CONFLICT_LONG" }),
       ({ results }) => {
         if (scenario === "LR-09") expect(results.at(-1)).toMatch(/LR_RATE_LIMIT|error|fail/i);
         else expect(results.at(-1)).toContain("LR_SOURCE_A");
@@ -112,18 +112,21 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
           && result.papers?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_A") && (record.structuredData as { effect?: number })?.effect === 1.25))).toBe(true);
         expect(projections.some(result => result.sourceId === "pubmed"
           && result.records?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_B") && (record.structuredData as { effect?: number })?.effect === 0.8))).toBe(true);
+        const pubmed = projections.find(result => result.sourceId === "pubmed" && result.records);
+        if (!pubmed) throw new Error("Missing PubMed model projection");
+        expect(pubmed._retainedOutput).toBeUndefined();
       }
       if (scenario === "LR-14") {
         const arxiv = results.flatMap(objects).find(o => o.sourceId === "arxiv" && o.papers);
         if (!arxiv) throw new Error("Missing arXiv model projection");
         expect(arxiv._retainedOutput?.ref).toMatch(/^tool-output-/);
-        return tool("read_tool_output", { ref: arxiv._retainedOutput.ref, query: "1.25" });
+        expect(JSON.stringify(arxiv)).not.toContain("LR_RETAINED_TAIL");
+        return tool("read_tool_output", { ref: arxiv._retainedOutput.ref, query: "LR_RETAINED_TAIL" });
       }
       return { text: scenario === "LR-09" ? "Alternative source returned synthetic evidence; failed source was not evidence." : "The same DOI has conflicting source estimates, 1.25 and 0.8. Preserve both citations; do not treat them as independent studies." };
     });
     if (scenario === "LR-14") steps.push(({ results }) => {
-      expect(results.at(-1)).toContain("1.25");
-      expect(results.at(-1)).toContain("effect");
+      expect(results.at(-1)).toContain("LR_RETAINED_TAIL");
       return { text: "The same DOI has conflicting source estimates, 1.25 and 0.8. Recovered the retained source evidence; preserve both citations rather than treating them as independent studies." };
     });
   }
