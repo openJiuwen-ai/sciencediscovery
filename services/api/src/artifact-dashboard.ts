@@ -141,6 +141,13 @@ export type ArtifactPreviewPayload =
       totalRows: number;
       truncated: boolean;
       /**
+       * How many cells of the returned rows were left out of the preview
+       * because the grid's width is capped (see MAX_PREVIEW_CELLS). Zero for a
+       * table that came back whole; the count is the one user-visible loss, so
+       * the viewer can say it instead of showing a silently shorter row.
+       */
+      clippedCells: number;
+      /**
        * The re-indented source document, carried only for JSON-backed tables so
        * the viewer can offer a raw-JSON view of the same version. Absent for
        * csv/tsv, which have no JSON form to switch to.
@@ -218,12 +225,14 @@ const DEFAULT_MAX_ROWS = 100;
 const DEFAULT_MAX_CHARS = 100_000;
 const DEFAULT_MAX_CELLS = 200;
 /**
- * The most cells a padded preview may hold (returned rows x width). Padding a
- * short row is what squares the grid, but padding every row to one outlier
+ * The most cells the padded preview may spend (returned rows x width). Padding
+ * a short row is what squares the grid, but padding every row to one outlier
  * line copies that line into each of them: a 400 KB file holding one 200k-field
- * line asked for 100 x 200001 cells and a 60.8 MB response. The preview
- * already spends 100k characters on a text source (DEFAULT_MAX_CHARS) and one
- * cell is a few bytes of JSON, so the grid gets that same 100k-cell budget.
+ * line asked for 100 x 200001 cells and a 60.8 MB response. The number is the
+ * existing preview budget for a text source (DEFAULT_MAX_CHARS, 100k) rather
+ * than a new one: one cell is a few bytes of JSON, so 100k cells and 100k
+ * characters come out at the same order of bytes (~1 MB) and a preview never
+ * spends more on a table than it already spends on the text it came from.
  */
 const MAX_PREVIEW_CELLS = DEFAULT_MAX_CHARS;
 const FIGURE_TRUNCATION_BYTES = 5 * 1024 * 1024;
@@ -350,10 +359,11 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   columns: string[];
   rows: string[][];
   totalRows: number;
+  clippedCells: number;
 } {
   const delimiter = subtype === ".csv" ? "," : "\t";
   const lines = splitDelimited(source, delimiter);
-  if (!lines.length) return { columns: [], rows: [], totalRows: 0 };
+  if (!lines.length) return { columns: [], rows: [], totalRows: 0, clippedCells: 0 };
   const header = lines[0] ?? [];
   const rows = lines.slice(1, maxRows + 1);
   // The table is as wide as the header plus any extra cell a returned row
@@ -363,20 +373,33 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // beyond maxRows would add an empty column no returned row fills.
   const width = rows.reduce((widest, row) => Math.max(widest, row.length), header.length);
   const totalRows = Math.max(0, lines.length - 1);
-  // The rectangle is worth its price only while it fits the cell budget. Past
-  // it, return every row at its own width — the shape before the padding fix —
-  // so one pathological line cannot be copied into all the rows around it.
-  // This is one decision for the whole table, never per row, and it drops no
-  // column: a legitimately wide table is still previewed whole.
-  if (rows.length * width > MAX_PREVIEW_CELLS) return { columns: header, rows, totalRows };
+  // Padding squares the grid, but one outlier line makes it expensive: a 400 KB
+  // file holding one 200k-field line asked for 100 x 200001 cells and a 60.8 MB
+  // response. Cap the width instead of dropping the rectangle, so the preview
+  // stays square and one decision covers the whole table. The cap divides the
+  // budget by the file's own row count, never by the rows the caller asked for:
+  // `maxRows` is a client query parameter, and it must not decide how wide the
+  // table looks. The header is a floor, so no named column is ever cut; the only
+  // cells that leave are surplus cells past the cap, counted in clippedCells.
+  const band = Math.max(totalRows, 1);
+  const cap = Math.max(header.length, Math.floor(MAX_PREVIEW_CELLS / band));
+  const finalWidth = Math.min(width, cap);
+  let clippedCells = 0;
+  const paddedRows = rows.map((row) => {
+    if (row.length === finalWidth) return row;
+    if (row.length > finalWidth) {
+      clippedCells += row.length - finalWidth;
+      return row.slice(0, finalWidth);
+    }
+    return [...row, ...Array.from({ length: finalWidth - row.length }, () => "")];
+  });
   return {
-    columns: header.length === width
+    columns: header.length === finalWidth
       ? header
-      : [...header, ...Array.from({ length: width - header.length }, () => "")],
-    rows: rows.map((row) => (
-      row.length === width ? row : [...row, ...Array.from({ length: width - row.length }, () => "")]
-    )),
+      : [...header, ...Array.from({ length: finalWidth - header.length }, () => "")],
+    rows: paddedRows,
     totalRows,
+    clippedCells,
   };
 }
 
@@ -401,6 +424,7 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
   columns: string[];
   rows: string[][];
   totalRows: number;
+  clippedCells: number;
 } {
   const columns = records.reduce<string[]>((acc, record) => {
     for (const key of Object.keys(record)) {
@@ -413,7 +437,7 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
     if (value === undefined || value === null) return "";
     return typeof value === "object" ? JSON.stringify(value) : String(value);
   }));
-  return { columns, rows, totalRows: records.length };
+  return { columns, rows, totalRows: records.length, clippedCells: 0 };
 }
 
 /**
