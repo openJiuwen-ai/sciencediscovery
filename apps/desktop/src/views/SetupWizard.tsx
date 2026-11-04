@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/client.js";
 import { getHealth, getSettings } from "../api/models.js";
 import type { ModelProvider, ModelProviderPreset } from "../api/types.js";
+import { scaledSize } from "../app/size-units.js";
 import { DATA_DIR_STORAGE_KEY, readStoredText, writeStoredText } from "../state/storage.js";
 import { TEXT } from "../text.js";
 import { ModelForm, type ModelFormResult } from "./ModelForm.js";
@@ -111,11 +112,16 @@ function bootHeading(boot: BootView): { title: string; sub: string } {
 }
 
 /** The shell prints the same sizes; keeping the rounding here avoids a second
- *  formatting convention on one screen. */
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
-  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)}MB`;
-  return `${Math.max(0, Math.round(bytes / 1024))}KB`;
+ *  formatting convention on one screen. The unit still follows the value that
+ *  is printed (`scaledSize`), so a reading one byte under a GiB is "1.0GB", not
+ *  "1024MB". */
+export function formatWizardFreeSpace(bytes: number): string {
+  const size = Math.max(0, bytes);
+  const round = (value: number): number => Number(value.toFixed(1));
+  const { unit, value } = scaledSize(size, round, 4);
+  // The shell's convention, kept: KB/MB/GB with no space, whole megabytes.
+  if (unit <= 1) return `${Math.round(unit === 0 ? size / 1024 : value)}KB`;
+  return unit === 2 ? `${Math.round(value)}MB` : `${value.toFixed(1)}GB`;
 }
 
 type CheckTone = "ok" | "warn" | "err";
@@ -270,12 +276,12 @@ export function SetupWizard({
           } else if (result.freeOk === false) {
             lines.push({
               tone: "err",
-              text: TEXT.wizard.workspace.check.freeLow(formatBytes(result.freeBytes)),
+              text: TEXT.wizard.workspace.check.freeLow(formatWizardFreeSpace(result.freeBytes)),
             });
           } else {
             lines.push({
               tone: "ok",
-              text: TEXT.wizard.workspace.check.free(formatBytes(result.freeBytes)),
+              text: TEXT.wizard.workspace.check.free(formatWizardFreeSpace(result.freeBytes)),
             });
           }
           for (const warning of result.warnings ?? []) {

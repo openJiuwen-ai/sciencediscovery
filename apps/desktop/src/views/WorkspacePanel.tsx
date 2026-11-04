@@ -23,6 +23,7 @@ import { DOC_MIN_WIDTH, LIST_MIN_WIDTH, LIST_NUDGE_STEP, isListClosed, listWidth
 import { usePanelSplit } from "../app/use-panel-split.js";
 import { fileFolder, fileName } from "../app/paths.js";
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, PANEL_NUDGE_STEP, PANEL_NUDGE_STRIDE } from "../app/panel-width.js";
+import { scaledSize } from "../app/size-units.js";
 import type { ToolDetail as ToolDetailData } from "../app/tool-io.js";
 import { detectStructureFormat } from "../molecular.js";
 import type { Session, SessionArtifactOutput, Subagent, WorkspaceFile } from "../api/types.js";
@@ -78,10 +79,16 @@ function GroupIcon({ group }: { group: PanelGroup }) {
   );
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+const WORKSPACE_SIZE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+
+/** A workspace row's size, the way a file manager prints it: binary units with a
+ *  space and one decimal above bytes. The unit comes from the printed value
+ *  (`scaledSize`), so a row one byte under a unit reads "1.0 MiB", never
+ *  "1024.0 KiB". */
+export function formatWorkspaceSize(bytes: number): string {
+  const round = (value: number): number => Number(value.toFixed(1));
+  const { unit, value } = scaledSize(bytes, round, WORKSPACE_SIZE_UNITS.length);
+  return unit === 0 ? `${Math.round(value)} B` : `${value.toFixed(1)} ${WORKSPACE_SIZE_UNITS[unit]}`;
 }
 
 function formatTime(iso: string): string {
@@ -261,7 +268,7 @@ function TreeLevel({ actions, activePath, node }: {
           className={`panel-list-row${file.path === activePath ? " is-active" : ""}`}
           key={file.path}
           onClick={() => void actions.openFile(file)}
-          title={`${file.path} · ${formatSize(file.size)} · ${formatTime(file.modifiedAt)}`}
+          title={`${file.path} · ${formatWorkspaceSize(file.size)} · ${formatTime(file.modifiedAt)}`}
           type="button"
         >
           <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="15">

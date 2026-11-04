@@ -49,3 +49,34 @@ test("the sizes that already read well keep reading the same", () => {
   assert.equal(formatByteLimit(1024), "1 KiB");
   assert.equal(formatByteLimit(1_073_741_824), "1 GiB");
 });
+
+import { formatWizardFreeSpace } from "../src/views/SetupWizard.js";
+import { formatWorkspaceSize } from "../src/views/WorkspacePanel.js";
+
+test("a workspace row one byte under 1 MiB prints 1.0 MiB, not 1024.0 KiB", () => {
+  // The row tooltip picks its unit from the value it prints, the same rule as
+  // the attachment card: 1_048_575 bytes is 1023.999 KiB unrounded and "1024.0"
+  // once printed, so it belongs in the next unit.
+  assert.equal(formatWorkspaceSize(1_048_575), "1.0 MiB");
+});
+
+test("a workspace row one byte under 1 GiB prints 1.0 GiB, not 1024.0 MiB", () => {
+  assert.equal(formatWorkspaceSize(1_073_741_823), "1.0 GiB");
+});
+
+test("the wizard's free-space line promotes KB to MB on the printed value", () => {
+  assert.equal(formatWizardFreeSpace(1_048_575), "1MB");
+});
+
+test("the wizard's free-space line promotes MB to GB on the printed value", () => {
+  assert.equal(formatWizardFreeSpace(1_073_741_823), "1.0GB");
+});
+
+test("the sizes that already read well keep reading the same on both rows", () => {
+  assert.equal(formatWorkspaceSize(1_048_576), "1.0 MiB");
+  assert.equal(formatWorkspaceSize(1_023), "1023 B");
+  assert.equal(formatWorkspaceSize(1_500_000), "1.4 MiB");
+  assert.equal(formatWizardFreeSpace(500_000), "488KB");
+  assert.equal(formatWizardFreeSpace(45_000_000_000), "41.9GB");
+  assert.equal(formatWizardFreeSpace(100), "0KB");
+});
