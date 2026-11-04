@@ -69,3 +69,18 @@ test("a notice persisted without records keeps its count summary and still hides
   assert.doesNotMatch(html, /<button/);
   assert.doesNotMatch(html, /Execution notifications/);
 });
+
+test("a cancelled execution is summarised as cancelled, not unconfirmed", () => {
+  // The record's own badge already says "cancelled"; the bucket above it used to
+  // fold every non-completed, non-failed state into "unconfirmed", so the card
+  // contradicted itself about an outcome the researcher chose themselves.
+  const html = renderToStaticMarkup(createElement(WakeNotice, {
+    notice: {
+      executions: 1, timers: 0, prompt: PROMPT,
+      records: [{ agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-9", state: "cancelled" }],
+    },
+  }));
+  assert.match(html, /1 cancelled/);
+  assert.match(html, /activity-badge cancelled/);
+  assert.doesNotMatch(html, /unconfirmed/);
+});
