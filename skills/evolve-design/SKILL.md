@@ -37,9 +37,10 @@ checkpoints yourself; do not narrate it.
 
 ## How a checkpoint is written
 
-Every checkpoint is one card, not prose. The card is a fenced block: a short header, a `---`
-line, then the checkpoint's own words. It is the **last** thing in the message, in place of the
-lines it describes.
+Every checkpoint is one card, not prose. The card is a fenced block tagged `evolve-checkpoint`
+— exactly that tag, not the skill's name `evolve-design` — with a short header, a `---` line,
+then the checkpoint's own words. It is the **last** thing in the message, in place of the lines
+it describes.
 
 ```evolve-checkpoint
 step: 1

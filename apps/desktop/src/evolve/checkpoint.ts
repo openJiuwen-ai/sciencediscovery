@@ -50,7 +50,11 @@ export type CheckpointSegment =
   | { checkpoint: EvolveCheckpoint; kind: "checkpoint" }
   | { kind: "markdown"; text: string };
 
-const OPEN = /^```evolve-checkpoint[ \t]*$/u;
+// The block's own name, and the skill's. A model told where the card comes
+// from reaches for `evolve-design` about as often as for the literal tag, and
+// the two are the same record: refusing the second only costs the reader a
+// card. Anything else stays a code block.
+const OPEN = /^```(?:evolve-checkpoint|evolve-design)[ \t]*$/u;
 const CLOSE = /^```[ \t]*$/u;
 const FIELD = /^([A-Za-z]+)[ \t]*:[ \t]*(.*)$/u;
 
