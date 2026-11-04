@@ -43,6 +43,10 @@ const path = (card, action) => `/api/sessions/${session.id}/configuration-reques
 const propose = values => api(path(), { protocolVersion: 3, capabilityId: "proxy.default", values });
 const decide = (card, decision = "apply") => api(path(card, "decision"), { revision: card.revision, previewDigest: card.previewDigest,
   decision, selectedOptionId: card.selectedOptionId }, "POST", 200);
+const confirmSecurity = card => {
+  assert.equal(card.securityConsent?.status, "required");
+  return api(path(card, "security-consent"), { revision: card.revision, targetDigest: card.securityConsent.targetDigest, acknowledged: true }, "POST", 200);
+};
 try {
   await step("1. Verify an immutable, explicitly isolated Native product", async () => {
     if (!token || !origin || !process.env.E2E_STARTUP_COMMAND || process.env.E2E_PROXY_DEFAULT_ISOLATED !== "1") throw new Blocked("Owned isolated startup metadata and token are required");
@@ -75,10 +79,13 @@ try {
     assert.equal(card.scope.kind, "global"); assert.equal(card.autoApplyAt, undefined);
     assert.equal(card.verificationPlan.maxRequests, 0);
     assert.deepEqual(await api("/api/proxy/settings"), lastSaved);
-    assert.equal((await decide(card)).state, "applied");
+    const refused = await api(path(card, "decision"), { revision: card.revision, previewDigest: card.previewDigest, decision: "apply", selectedOptionId: card.selectedOptionId }, "POST", 409);
+    assert.equal(refused.code, "SECURITY_CONSENT_REQUIRED");
+    const confirmed = await confirmSecurity(card);
+    assert.equal((await decide(confirmed)).state, "applied");
     lastSaved = { ...lastSaved, defaultPolicy };
     assert.deepEqual(await api("/api/proxy/settings"), lastSaved);
-    assert.equal((await decide(card)).state, "applied");
+    assert.equal((await decide(confirmed)).state, "applied");
   });
   await step("4. Refuse a separate change without modifying the saved defaults", async () => {
     let card = await propose({ defaultPolicy: "none" });
@@ -87,7 +94,7 @@ try {
     assert.deepEqual(await api("/api/proxy/settings"), lastSaved);
   });
   await step("5. A concurrent formal update fences the old card", async () => {
-    const card = await propose({ defaultPolicy: "none" });
+    const card = await confirmSecurity(await propose({ defaultPolicy: "none" }));
     lastSaved = await api("/api/proxy/settings", { defaultPolicy: "none" }, "PUT", 200);
     const result = await api(path(card, "decision"), { revision: card.revision, previewDigest: card.previewDigest, decision: "apply", selectedOptionId: card.selectedOptionId }, "POST", 409);
     assert.equal(result.code, "RESOURCE_VERSION_CONFLICT");

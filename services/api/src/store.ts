@@ -1512,6 +1512,7 @@ export class SessionStore {
     if (exists("configuration_native_runs_v3")) this.database.prepare("DELETE FROM configuration_native_runs_v3 WHERE session_id=?").run(sessionId);
     if (exists("configuration_credential_drafts")) new ConfigurationCredentialBridge(this.database, this.configurationSecretCipher()).clearSession(sessionId);
     if (exists("configuration_endpoint_consents")) this.database.prepare("DELETE FROM configuration_endpoint_consents WHERE session_id=?").run(sessionId);
+    if (exists("configuration_security_consents")) this.database.prepare("DELETE FROM configuration_security_consents WHERE session_id=?").run(sessionId);
   }
 
 

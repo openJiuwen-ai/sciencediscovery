@@ -47,6 +47,16 @@ test("CFG-X68-734: deployment proxy writes require independent human security co
   assert.equal(h.store.configurationProxyDefaults().defaultPolicy, h.policy);
 });
 
+test("CFG-X68-734: deleting a Session removes its security consent", async context => {
+  const h = await harness(context);
+  const card = await h.propose({ defaultPolicy: h.policy });
+  await confirmProxySecurity(h.framework, card);
+  const count = h.store.getConfigurationDatabase().prepare("SELECT count(*) AS total FROM configuration_security_consents WHERE session_id=?");
+  assert.equal(count.get(h.session.id)?.total, 1);
+  await h.store.deleteSession(h.session.id, h.session.id);
+  assert.equal(count.get(h.session.id)?.total, 0);
+});
+
 test("CFG-X03a: discovery and empty preview use safe metadata without decrypting proxy URLs", async context => {
   const h = await harness(context);
   h.store.getProxySettings = () => { throw new Error("Full proxy details are forbidden here"); };

@@ -277,6 +277,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   }
   const title = m.capability[request.capabilityId] ?? request.capabilityId;
   const changeFieldLabel = (field: string) => {
+    if (request.capabilityId === "proxy.default" && field === "defaultPolicy") return m.field.defaultPolicy;
     if (request.capabilityId !== "proxy.resources") return field;
     if (field === "name") return locale.startsWith("zh") ? "代理名称" : "Proxy name";
     return m.field[field] ?? field;
