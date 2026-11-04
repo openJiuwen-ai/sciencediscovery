@@ -39,9 +39,29 @@ test("CFG-XBUG-12: formal Neo4j password updates preserve meaningful surrounding
   assert.ok(h.store.getMemoryGraphNeo4jPassword() === password, "The formal writer changed the supplied password");
 });
 
-test("CFG-XBUG-12: bootstrap preserves nonblank Neo4j passwords exactly", () => {
+test("CFG-XBUG-12: bootstrap seeds and reopens the exact nonblank Neo4j password", async context => {
   const password = " \towned-password\u00a0 ";
-  assert.equal(loadServerConfig({ SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD: password }).memoryGraph.neo4jPassword, password);
+  const { memoryGraph } = loadServerConfig({ SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD: password });
+  const parent = resolve(process.cwd(), ".tmp");
+  const root = resolve(parent, `configuration-neo4j-seed-${randomUUID()}`);
+  context.after(async () => {
+    assert.ok(root.startsWith(parent + sep));
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  });
+  const store = new SessionStore(root, undefined, undefined, memoryGraph.neo4jPassword);
+  try {
+    await store.load();
+    assert.equal(store.getMemoryGraphNeo4jPassword(), password);
+  } finally {
+    store.close();
+  }
+  const reopened = new SessionStore(root, undefined, undefined, "different-startup-password");
+  try {
+    await reopened.load();
+    assert.equal(reopened.getMemoryGraphNeo4jPassword(), password);
+  } finally {
+    reopened.close();
+  }
   assert.equal(loadServerConfig({ SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD: " \t " }).memoryGraph.neo4jPassword, undefined);
 });
 

@@ -631,7 +631,7 @@ export class SessionStore {
     this.dataDir = resolve(dataDir);
     this.initialTimeoutSettings = initialTimeoutSettings;
     this.initialQuotaSettings = initialQuotaSettings;
-    this.initialNeo4jPassword = initialNeo4jPassword?.trim() || undefined;
+    this.initialNeo4jPassword = initialNeo4jPassword?.trim() ? initialNeo4jPassword : undefined;
     this.memoryGraphAvailable = memoryGraphAvailable;
   }
 
