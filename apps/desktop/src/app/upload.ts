@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { scaledSize } from "./size-units.js";
+
 /**
  * The parts of uploading that are decisions rather than plumbing, kept out of
  * the components so they can be tested: this repository's test environment has
@@ -37,14 +39,10 @@ export const DEFAULT_MAX_FILE_BYTES = 1_073_741_824;
 export function formatByteLimit(bytes: number): string | undefined {
   if (bytes <= 0) return undefined;
   const units = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
-  return `${rounded} ${units[unit]}`;
+  const round = (value: number): number => Number.isInteger(value) ? value : Number(value.toFixed(1));
+  // Promoted on the printed value, so a limit never reads "1024 MiB".
+  const { unit, value } = scaledSize(bytes, round, units.length);
+  return `${round(value)} ${units[unit]}`;
 }
 
 /**
