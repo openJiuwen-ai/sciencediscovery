@@ -997,3 +997,44 @@ test("a MiniMax reasoning_split transport flag from Swarm is honoured, not rejec
     assert.equal(unknown.status, 400, "the gateway still refuses a parameter it cannot honour");
   } finally { await g.close(); }
 });
+
+test("a run's own thinking mode wins over the Swarm reasoning_split flag", async () => {
+  // The run's endpoint carries what the user chose when the run started. Swarm
+  // writes `reasoning_split: true` for every MiniMax-M* model whether or not the
+  // user asked to think, so the flag must never flip an explicit choice.
+  for (const [configured, flag] of [["disabled", true], ["enabled", false]] as const) {
+    const { calls, streamer } = fakeStreamer(answer());
+    const controller = new AbortController();
+    const g = await startModelGateway({ ...ENDPOINT, thinkingMode: configured }, POLICY, controller.signal, streamer);
+    try {
+      const response = await post(g, { messages: [{ role: "user", content: "hi" }], max_tokens: 20, reasoning_split: flag });
+      assert.equal(response.status, 200);
+      assert.equal((calls[0]!.endpoint as { thinkingMode?: string }).thinkingMode, configured,
+        `thinkingMode:"${configured}" plus reasoning_split:${flag} must keep the run's choice`);
+    } finally { await g.close(); }
+  }
+});
+
+test("an auto thinking mode lets the Swarm reasoning_split flag decide", async () => {
+  // `auto` means the user did not choose (auto resolves to "send no thinking
+  // field, provider default"); only that open mode is decided by the transport
+  // flag, which is what makes accepting the field worth anything.
+  for (const [configured, flag, expected] of [
+    ["auto", true, "enabled"],
+    ["auto", false, "disabled"],
+    [undefined, true, "enabled"],
+  ] as const) {
+    const { calls, streamer } = fakeStreamer(answer());
+    const controller = new AbortController();
+    const g = await startModelGateway(
+      { ...ENDPOINT, ...(configured === undefined ? {} : { thinkingMode: configured }) },
+      POLICY, controller.signal, streamer,
+    );
+    try {
+      const response = await post(g, { messages: [{ role: "user", content: "hi" }], max_tokens: 20, reasoning_split: flag });
+      assert.equal(response.status, 200);
+      assert.equal((calls[0]!.endpoint as { thinkingMode?: string }).thinkingMode, expected,
+        `thinkingMode:${configured ?? "undefined"} plus reasoning_split:${flag} must follow the flag`);
+    } finally { await g.close(); }
+  }
+});
