@@ -239,6 +239,28 @@ test("keeps a real __parsed_extra column instead of reading it as overflow", () 
   assert.equal(wider.rows[0]?.__extra_1, 9);
 });
 
+test("keeps an inherited property name from becoming a column value", () => {
+  // `toString` and friends live on Object.prototype, so `in` and a bare read see
+  // them both. A short record must show an empty cell, not the
+  // `function toString() { [native code] }` the prototype would hand over.
+  const inherited = parse("inherited-header.csv", "a,toString\n1\n");
+  assert.deepEqual(inherited.columns.map((column) => column.id), ["a", "toString"]);
+  assert.equal(inherited.rows[0]?.a, 1);
+  assert.equal((inherited.rows[0] as Record<string, unknown> | undefined)?.["toString"], null);
+  assert.equal(inherited.columns[1]?.missingCount, 1);
+  assert.equal(inherited.columns[1]?.examples.length, 0);
+  assert.equal(tableToCsv(inherited.rows, inherited.columns).split(/\r?\n/)[1], "1,");
+
+  // Papa drops a `__proto__` cell on assignment, so this column is empty because
+  // the value is gone, not because the viewer invented one.
+  const proto = parse("proto-header.csv", "a,__proto__\n1,2\n");
+  assert.deepEqual(proto.columns.map((column) => column.id), ["a", "__proto__"]);
+  assert.equal(proto.rows[0]?.a, 1);
+  assert.equal(Object.hasOwn(proto.rows[0] ?? {}, "__proto__"), true);
+  assert.equal((proto.rows[0] as Record<string, unknown> | undefined)?.["__proto__"], null);
+  assert.equal(proto.columns[1]?.missingCount, 1);
+});
+
 test("caps surplus columns so one wide record cannot widen every row", () => {
   const dataRows = 20_000;
   const overflowCells = 497;
