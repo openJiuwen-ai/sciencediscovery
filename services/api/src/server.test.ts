@@ -4448,6 +4448,25 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.equal(assistantSteps.length, 1);
   assert.equal(assistantSteps[0]?.id, streamedAssistantSteps[0]?.id);
   assert.equal(assistantSteps[0]?.content, "Subagent inspected the workspace and returned a concise result.");
+  // The panel reads only the child it opens; the single record must match the
+  // one the roster carries, and an unknown id or Session is a 404 rather than
+  // an empty success.
+  const single = await jsonRequest<Subagent>(
+    `${origin}/api/sessions/${session.body.id}/subagents/${subagents.body[0]?.id}`,
+    { headers: authorization },
+  );
+  assert.equal(single.response.status, 200);
+  assert.deepEqual(single.body, subagents.body[0]);
+  const unknownChild = await jsonRequest(
+    `${origin}/api/sessions/${session.body.id}/subagents/no-such-child`,
+    { headers: authorization },
+  );
+  assert.equal(unknownChild.response.status, 404);
+  const unknownSession = await jsonRequest(
+    `${origin}/api/sessions/no-such-session/subagents/${subagents.body[0]?.id}`,
+    { headers: authorization },
+  );
+  assert.equal(unknownSession.response.status, 404);
   // The run stream stores one record per logical step. The snapshots streamed
   // while a message is still arriving are broadcast to live subscribers and
   // never stored, so this file cannot grow with the length of the message.

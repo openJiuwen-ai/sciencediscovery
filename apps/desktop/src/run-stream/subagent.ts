@@ -63,6 +63,34 @@ export function finalSteps(steps: readonly SubagentStep[]): SubagentStep[] {
 }
 
 /**
+ * Whether two snapshots of one step say the same thing.
+ *
+ * The wire is plain JSON, so a structural check keeps an unchanged step's
+ * identity and avoids a needless re-render. Prose is compared as the string it
+ * is: `content` can be hundreds of kilobytes, and stringifying both copies of
+ * every step on every stream tick allocates that much twice over. Only the
+ * small structured fields still go through JSON.
+ */
+function sameStep(left: SubagentStep, right: SubagentStep): boolean {
+  return left === right
+    || (left.id === right.id
+      && left.kind === right.kind
+      && left.status === right.status
+      && left.content === right.content
+      && left.progress === right.progress
+      && left.toolName === right.toolName
+      && left.toolCallId === right.toolCallId
+      && left.input === right.input
+      && left.createdAt === right.createdAt
+      && sameJson(left.args, right.args)
+      && sameJson(left.details, right.details));
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
  * Fold one snapshot's steps onto the ones already shown.
  *
  * A step keeps the position it first appeared in: the coordinator emits a
@@ -76,10 +104,7 @@ export function mergeSubagentSteps(current: SubagentStep[], incoming: SubagentSt
   let changed = false;
   const merged = current.map((step) => {
     const next = byId.get(step.id);
-    if (next === undefined || next === step) return step;
-    // The wire is plain JSON, so structural equality is enough to keep an
-    // unchanged step's identity and avoid a needless re-render.
-    if (JSON.stringify(next) === JSON.stringify(step)) return step;
+    if (next === undefined || sameStep(next, step)) return step;
     changed = true;
     return next;
   });
