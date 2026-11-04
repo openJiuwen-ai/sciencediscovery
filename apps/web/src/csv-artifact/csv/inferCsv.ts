@@ -235,11 +235,16 @@ function rectangularizeRows(
   rows: Array<Record<string, unknown>>,
   headerFields: string[],
 ): { surplusFields: string[]; surplusCount: number; kept: number } {
+  // A header column may itself be called `__parsed_extra`. Papa then pushes its
+  // value into the same array it uses for surplus cells, so the first element
+  // belongs to that column and only the rest are surplus.
+  const reservedColumn = headerFields.includes(PAPA_OVERFLOW_FIELD);
+  const surplusCells = (overflow: unknown): unknown[] =>
+    Array.isArray(overflow) ? (reservedColumn ? overflow.slice(1) : overflow) : [];
+
   let surplusCount = 0;
   for (const row of rows) {
-    const overflow = row[PAPA_OVERFLOW_FIELD];
-    const extraCount = Array.isArray(overflow) ? overflow.length : overflow === undefined ? 0 : 1;
-    surplusCount = Math.max(surplusCount, extraCount);
+    surplusCount = Math.max(surplusCount, surplusCells(row[PAPA_OVERFLOW_FIELD]).length);
   }
   const kept = Math.min(surplusCount, surplusColumnLimit(headerFields.length));
 
@@ -255,8 +260,11 @@ function rectangularizeRows(
 
   for (const row of rows) {
     const overflow = row[PAPA_OVERFLOW_FIELD];
-    const extras = Array.isArray(overflow) ? overflow : overflow === undefined ? [] : [overflow];
-    delete row[PAPA_OVERFLOW_FIELD];
+    const extras = surplusCells(overflow);
+    if (Array.isArray(overflow)) {
+      if (reservedColumn) row[PAPA_OVERFLOW_FIELD] = overflow[0];
+      else delete row[PAPA_OVERFLOW_FIELD];
+    }
     for (const field of headerFields) {
       if (!(field in row)) row[field] = undefined;
     }
