@@ -32,6 +32,8 @@ import pytest
 
 from sciencediscovery_memory_graph import query
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 CAP = query._NODE_LIMIT
 
 
@@ -104,12 +106,13 @@ def _papers(count: int, prefix: str = "p") -> list[dict]:
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_query_match_cap_reports_beyond_cap(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     driver = _Driver([("matched >= $min_matched", _papers(count))])
     monkeypatch.setattr(query, "handle", lambda: driver)
     result = query.query_match("TP53")
@@ -122,12 +125,13 @@ def test_query_match_cap_reports_beyond_cap(
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_by_node_type_cap_reports_beyond_cap(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     script = [("labels(n)[0] IN $types", _papers(count))]
     driver = _Driver(script)
     monkeypatch.setattr(query, "handle", lambda: driver)
@@ -154,12 +158,13 @@ def _edge_rows(count: int) -> list[dict]:
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_by_edge_type_cap_reports_beyond_cap(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     script = [("type(r) IN $types", _edge_rows(count))]
     driver = _Driver(script)
     monkeypatch.setattr(query, "handle", lambda: driver)
@@ -180,12 +185,13 @@ def _subgraph_nodes(count: int) -> list[dict]:
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_get_subgraph_cap_reports_beyond_cap(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     script = [
         ("RETURN labels(n)[0] AS label, n AS node", _subgraph_nodes(count)),
         ("type(r) AS edge_type, r AS rel", []),
@@ -226,12 +232,13 @@ def _spine_edges(count: int) -> list[dict]:
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_get_scope_expansion_cuts_the_page_and_drops_dangling_edges(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     # This reader has no Cypher LIMIT (the node set is assembled from children,
     # the produces subtree and the edge endpoints), so the cap has to be applied
     # in Python — and an edge whose endpoint was cut must not be rendered.
@@ -265,12 +272,13 @@ def _members(count: int) -> list[dict]:
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_get_group_expansion_cuts_the_page(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     script = [
         ("RETURN scope.task_id AS scope_id", [{"scope_id": "scope-1"}]),
         ("RETURN DISTINCT p AS product", _members(count)),
@@ -289,12 +297,13 @@ def test_get_group_expansion_cuts_the_page(
 
 @pytest.mark.parametrize(
     ("count", "truncated"),
-    [(CAP, False), (CAP + 1, True)],
+    [(500, False), (501, True)],
     ids=["exactly-at-cap-is-complete", "beyond-cap-is-truncated"],
 )
 def test_serialize_subgraph_cap_reports_beyond_cap(
     monkeypatch: pytest.MonkeyPatch, count: int, truncated: bool,
 ) -> None:
+    assert query._NODE_LIMIT == 500  # the table above is literal on purpose
     script = [
         ("elementId(n) IN $eids", _papers(count)),
         ("elementId(a) IN $eids AND elementId(b) IN $eids", []),
