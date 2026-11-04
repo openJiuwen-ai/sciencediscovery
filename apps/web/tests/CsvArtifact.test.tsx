@@ -197,6 +197,25 @@ test("exports an unnamed overflow column with an empty header name", () => {
   assert.equal(widerRow, "1,2,3,4");
 });
 
+test("keeps a real __parsed_extra column instead of reading it as overflow", () => {
+  const table = parse("internal-key-header.csv", "a,__parsed_extra\n1,x\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "__parsed_extra"]);
+  assert.equal(table.rows[0]?.a, 1);
+  assert.equal(table.rows[0]?.__parsed_extra, "x");
+  assert.deepEqual(
+    Object.keys(table.rows[0] ?? {}).filter((key) => key !== "__rowId"),
+    ["a", "__parsed_extra"],
+  );
+
+  // Papa pushes the real column's value into the same array it uses for surplus
+  // cells, so the first element belongs to the column and the rest are surplus.
+  const wider = parse("internal-key-overflow.csv", "a,__parsed_extra\n1,x,9\n");
+  assert.deepEqual(wider.columns.map((column) => column.id), ["a", "__parsed_extra", "__extra_1"]);
+  assert.equal(wider.rows[0]?.__parsed_extra, "x");
+  assert.equal(wider.rows[0]?.__extra_1, 9);
+});
+
 test("caps surplus columns so one wide record cannot widen every row", () => {
   const dataRows = 20_000;
   const overflowCells = 497;
