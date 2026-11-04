@@ -7268,6 +7268,48 @@ test("WSP-001 multipart upload preserves hashes and exposes specific workspace p
   assert.equal(overwrittenProvenance.body.artifacts[0]?.version, 2);
 });
 
+test("WSP-004 a reserved device name in an upload answers 400 and names the file", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `wsp-reserved-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Reserved device name" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Reserved device name" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201);
+
+  // The refusal is the guard's own, raised while the parts are read; what the
+  // caller sees is what decides whether a client can tell it what to rename. A
+  // name the route refuses is a bad request, not a server fault.
+  const form = new FormData();
+  form.append("files", new Blob([Buffer.from("metric,value\nrows,3\n")], { type: "text/csv" }), "CON.csv");
+  const refused = await fetch(`${origin}/api/sessions/${session.body.id}/workspace/upload`, {
+    body: form,
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(refused.status, 400);
+  const body = await refused.json() as ApiError;
+  assert.match(body.error, /CON\.csv/);
+  assert.match(body.error, /reserved device name/);
+
+  // Nothing was written under the refused name, so the workspace still holds
+  // only what it held before the attempt.
+  const listed = await jsonRequest<WorkspaceFile[]>(
+    `${origin}/api/sessions/${session.body.id}/files`,
+    { headers: authorization },
+  );
+  assert.deepEqual(listed.body, []);
+});
+
 test("WSP-003 rejects traversal upload paths and leaves the host untouched", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-escape-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
