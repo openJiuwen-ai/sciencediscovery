@@ -84,7 +84,7 @@ import {
   MAX_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
-import { mcpModelResultView } from "./mcp-result-view.js";
+import { mcpModelResultView, mcpRetainedContent } from "./mcp-result-view.js";
 
 export interface WorkspaceFileInfo {
   modifiedAt: string;
@@ -2222,10 +2222,12 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
       description: mcpTool.description,
       execute: async (toolCallId, params, signal, onProgress) => {
         const result = await mcpTool.execute(toolCallId, params as JsonValue, signal, onProgress);
-        const modelView = mcpModelResultView(result, mcpTool.sourceId, mcpTool.toolId);
+        const safeContent = mcpRetainedContent(result);
+        const projection = mcpModelResultView(JSON.parse(safeContent), mcpTool.sourceId, mcpTool.toolId);
         return {
           bounded: true,
-          content: [{ type: "text", text: JSON.stringify(modelView) }],
+          content: [{ type: "text", text: JSON.stringify(projection.view) }],
+          ...(projection.lossy ? { retainedContent: safeContent } : {}),
           details: result,
         };
       },

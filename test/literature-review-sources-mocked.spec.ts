@@ -41,7 +41,8 @@ for (const scenario of ["LR-09", "LR-10", "LR-11-html", "LR-11-broken", "LR-11-f
  * Purpose: Verify source fallback, governed PDF acquisition/extraction and contradictory source identity with actual Swarm tools.
  * Steps:
  *   1. Verify the offline source fixture, register a local model and enable fixture-backed built-in connectors.
- *   2. Run search/download/extract tools; inspect actual subsequent LLM inputs, jobs and audit records.
+ *   2. For conflicting evidence, inspect model-visible structured values and recover original evidence with read_tool_output.
+ *   3. Run search/download/extract tools; inspect actual subsequent LLM inputs, jobs and audit records.
  * Environment: Dedicated Swarm stack using test/fixtures/literature-api.mjs; E2E_LITERATURE_FIXTURE=1.
  * Type: mocked
  * LLM: Local scripted model; IDs taken from actual tool results, not fabricated.
@@ -108,11 +109,22 @@ test(`${scenario} offline literature source contract`, { tag: ["@mocked","@categ
       if (scenario === "LR-14") {
         const projections = results.flatMap(objects).filter(o => o.sourceId && (o.papers || o.records));
         expect(projections.some(result => result.sourceId === "arxiv"
-          && result.papers?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_A")))).toBe(true);
+          && result.papers?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_A") && (record.structuredData as { effect?: number })?.effect === 1.25))).toBe(true);
         expect(projections.some(result => result.sourceId === "pubmed"
-          && result.records?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_B")))).toBe(true);
+          && result.records?.some((record: Record<string, unknown>) => String(record.abstract).includes("LR_SOURCE_B") && (record.structuredData as { effect?: number })?.effect === 0.8))).toBe(true);
+      }
+      if (scenario === "LR-14") {
+        const arxiv = results.flatMap(objects).find(o => o.sourceId === "arxiv" && o.papers);
+        if (!arxiv) throw new Error("Missing arXiv model projection");
+        expect(arxiv._retainedOutput?.ref).toMatch(/^tool-output-/);
+        return tool("read_tool_output", { ref: arxiv._retainedOutput.ref, query: "1.25" });
       }
       return { text: scenario === "LR-09" ? "Alternative source returned synthetic evidence; failed source was not evidence." : "The same DOI has conflicting source estimates, 1.25 and 0.8. Preserve both citations; do not treat them as independent studies." };
+    });
+    if (scenario === "LR-14") steps.push(({ results }) => {
+      expect(results.at(-1)).toContain("1.25");
+      expect(results.at(-1)).toContain("effect");
+      return { text: "The same DOI has conflicting source estimates, 1.25 and 0.8. Recovered the retained source evidence; preserve both citations rather than treating them as independent studies." };
     });
   }
   const stub = await researchModel({ main: steps });
