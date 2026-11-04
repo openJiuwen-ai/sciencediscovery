@@ -3400,7 +3400,10 @@ export class SessionStore {
   }
 
   private replaceRuntimeOverridesSync(scope: ConfigurationScope, value: unknown): void {
-    const normalized = this.normalizeSettings(value);
+    this.writeRuntimeOverridesSync(scope, this.normalizeSettings(value));
+  }
+
+  private writeRuntimeOverridesSync(scope: ConfigurationScope, normalized: RuntimeSettingsOverrides): void {
     if (scope.kind === "global") {
       this.catalog.globalSettings = withoutSkillSelection(normalized);
       this.syncSessionCompatibilityForProject();
@@ -3439,7 +3442,8 @@ export class SessionStore {
     else delete plugins["artifact-json"];
     const next: RuntimeSettingsOverrides = { ...current, plugins };
     if (!Object.keys(plugins).length) delete next.plugins;
-    this.replaceRuntimeOverridesSync(scope, next);
+    // The validated viewer mode changes only this plugin. Preserve unrelated stored overrides.
+    this.writeRuntimeOverridesSync(scope, next);
   }
 
   async replaceGlobalSettings(value: unknown): Promise<RuntimeSettingsDetails> {

@@ -34,6 +34,18 @@ test("CFG-X09a: three-layer enable/disable/inherit preserve ordinary settings an
   }
   assert.equal(h.store.getSessionSettings(h.session.id).overrides.thinkingEffort, "high"); assert.equal(h.store.getSessionSettings(h.session.id).effective.plugins?.plan?.enabled, false);
 });
+test("CFG-X09a: changing the viewer preserves an unrelated stale skill selection", async context => {
+  const h = await fixture(context);
+  h.store.setAvailableSkillIds(["literature"]);
+  await h.store.replaceSessionSettings(h.session.id, { skillSelectionMode: "selected", enabledSkillIds: ["literature"] });
+  h.store.setAvailableSkillIds([]);
+  const card = await h.propose({ mode: "disabled" });
+  assert.equal((await h.framework.decide(h.session.id, card.id, h.approval(card))).state, "applied");
+  assert.equal(h.store.configurationJsonViewerSettings(h.session.id).modes.session, "disabled");
+  h.store.setAvailableSkillIds(["literature"]);
+  assert.deepEqual(h.store.getSessionSettings(h.session.id).overrides.enabledSkillIds, ["literature"]);
+});
+
 test("CFG-X09a: upper defaults and lower overrides resolve inheritance without rewriting queued snapshots", async context => {
   const h = await fixture(context); await h.store.replaceGlobalSettings({ plugins: { "artifact-json": { enabled: false } } });
   const run = await h.store.createSessionRun({ sessionId: h.session.id, prompt: "Owned frozen snapshot", settingsSnapshot: h.store.resolveRuntimeSettings(h.session.id).effective });
