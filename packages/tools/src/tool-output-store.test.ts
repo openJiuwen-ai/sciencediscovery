@@ -95,6 +95,31 @@ test("a reference resolves from disk after the producing process forgot it", asy
   assert.equal(page.totalLines, 30);
 });
 
+test("trust metadata survives disk reload and every readback mode", async (context) => {
+  const root = await temporaryRoot(context);
+  const producer = new ToolOutputStore({ root });
+  const saved = await producer.save("dynamic_connector", "TARGET <prompt>raw</prompt>", {
+    untrustedCategory: "custom-remote",
+    neutralizeTags: true,
+  });
+  assert.equal(saved.untrustedCategory, "custom-remote");
+  assert.equal(saved.neutralizeTags, true);
+
+  const laterRun = new ToolOutputStore({ root });
+  for (const result of [
+    await laterRun.read(saved.ref),
+    await laterRun.readCharacters(saved.ref, { charLimit: 10 }),
+    await laterRun.search(saved.ref, "TARGET"),
+  ]) {
+    assert.equal(result.untrustedCategory, "custom-remote");
+    assert.equal(result.neutralizeTags, true);
+  }
+  const meta = JSON.parse(await readFile(resolve(root, `${saved.ref}.json`), "utf8")) as Record<string, unknown>;
+  assert.equal(meta.untrustedCategory, "custom-remote");
+  assert.equal(meta.neutralizeTags, true);
+  assert.equal(await readFile(resolve(root, `${saved.ref}.txt`), "utf8"), "TARGET <prompt>raw</prompt>");
+});
+
 test("refs are validated before they can reach the filesystem", async (context) => {
   const root = await temporaryRoot(context);
   const store = new ToolOutputStore({ root });

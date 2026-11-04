@@ -273,7 +273,7 @@ export function createToolRegistry(
   options: NativeAgentOptions,
   plugins: Awaited<ReturnType<typeof startPluginScope>>,
   durable: DurableContextStore,
-  hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
+  hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void>; untrustedFenceNonce?: string } = {},
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
   const errorGuidance = executionTools.some((tool) => tool.name === "configuration")
@@ -312,6 +312,7 @@ export function createToolRegistry(
       retentionBytes: toolOutputSettings.retentionBytes,
       sink: toolOutputStore,
     }),
+    ...(hooks.untrustedFenceNonce ? { untrustedFenceNonce: hooks.untrustedFenceNonce } : {}),
   });
 }
 

@@ -141,6 +141,17 @@ export function resolveUntrustedCategory(tool: {
 }
 
 /**
+ * Remote-origin and subagent text always needs authority-tag neutralization,
+ * even when an explicit category changes its fence label. Other categories
+ * (for example verbatim corpora) stay byte-exact apart from fence-marker
+ * neutralization performed by fenceUntrustedContent itself.
+ */
+export function shouldNeutralizeUntrustedTags(tool: { mcp?: unknown; name: string }, category: string | undefined): boolean {
+  if (!category) return false;
+  return category === "remote" || category === "subagent" || Boolean(tool.mcp) || isRemoteContentTool(tool.name);
+}
+
+/**
  * Wrap content in a run-scoped nonce fence under an explicit category:
  * `[BEGIN UNTRUSTED <category> #<nonce>]…[END UNTRUSTED #<nonce>]`.
  *

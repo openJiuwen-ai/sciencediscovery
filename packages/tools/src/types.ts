@@ -14,6 +14,16 @@ export interface AgentToolResult {
   bounded?: boolean;
   content: Array<{ text: string; type: "text" }>;
   details?: unknown;
+  /**
+   * Dynamic result trust, used when one tool reads records produced by other
+   * tools. The registry still combines `content` verbatim for persistence and
+   * observers, but puts `frameworkPrefix` outside the model-facing fence.
+   */
+  frameworkPrefix?: string;
+  /** Override the registered tool's category for this particular result. */
+  untrustedCategory?: string;
+  /** Whether authority tags must be neutralized for this particular result. */
+  neutralizeTags?: boolean;
 }
 
 export interface AgentTool<S extends TSchema = TSchema> {

@@ -20,7 +20,7 @@ import { dirname, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
 
-import { BLOCKED_TAG_NAMES, fenceUntrustedContent, fenceUntrustedResult, isRemoteContentTool, neutralizeUntrustedTags, resolveUntrustedCategory } from "./sanitize.js";
+import { BLOCKED_TAG_NAMES, fenceUntrustedContent, fenceUntrustedResult, isRemoteContentTool, neutralizeUntrustedTags, resolveUntrustedCategory, shouldNeutralizeUntrustedTags } from "./sanitize.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // packages/tools/dist → repository root
@@ -165,6 +165,10 @@ test("resolveUntrustedCategory: explicit field > legacy names > mcp auto-mark > 
   assert.equal(resolveUntrustedCategory({ name: "web_search" }), "remote");
   assert.equal(resolveUntrustedCategory({ name: "dynamic_lookup", mcp: { sourceId: "s", toolId: "t" } }), "remote");
   assert.equal(resolveUntrustedCategory({ name: "run_shell" }), undefined);
+  assert.equal(shouldNeutralizeUntrustedTags({ name: "web_fetch" }, "custom"), true);
+  assert.equal(shouldNeutralizeUntrustedTags({ name: "dynamic", mcp: {} }, "custom"), true);
+  assert.equal(shouldNeutralizeUntrustedTags({ name: "task" }, "subagent"), true);
+  assert.equal(shouldNeutralizeUntrustedTags({ name: "document_extract" }, "document"), false);
 });
 
 test("fenceUntrustedContent fences under an explicit category, hyphenated included", () => {

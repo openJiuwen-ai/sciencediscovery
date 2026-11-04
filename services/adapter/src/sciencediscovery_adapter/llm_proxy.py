@@ -75,6 +75,8 @@ class LlmRoute:
     hidden_native_tools: frozenset[str] = frozenset()
     # The run's tag: put in each call of one of its tools, it tells the shared MCP server which run the call is for.
     run_tag: str | None = None
+    # Per-run boundary for native web/subagent results in model-visible history.
+    untrusted_fence_nonce: str = field(default_factory=lambda: secrets.token_hex(6))
     # The calls the model made, oldest first, as JiuwenSwarm is asked to run them (name, arguments without the run
     # tag): an approval question from JiuwenSwarm names the tool but not the arguments, which the user needs to see.
     recent_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
@@ -147,6 +149,38 @@ _DEBUG_FULL = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") == "2"
 _TRACE_TOOLS = os.environ.get("SCIENCE_AGENT_TRACE_TOOLS") == "1"
 
 
+# Native Swarm web and subagent results never cross the TypeScript registry.
+# Apply the same authority-tag and nonce-boundary defenses when their history
+# is rewritten for the next real model request. Platform bridge results are
+# already handled by the registry and are deliberately excluded below.
+_BLOCKED_TAG_NAMES = frozenset({
+    "available-deferred-tools", "available_skills", "durable_context_data", "mcp_routing_hints",
+    "plan_state", "run_contract", "skill_system", "subagent_system", "system-reminder", "system_reminder",
+    "analysis", "current_date", "ignore", "important", "instruction", "memory", "override", "prompt",
+    "role", "system", "think",
+})
+_BLOCKED_TAG_PATTERN = re.compile(
+    r"<\s*/?\s*(?:" + "|".join(re.escape(name) for name in sorted(_BLOCKED_TAG_NAMES)) + r")\b[^>]*>?", re.I)
+_FENCE_SHAPED_PATTERN = re.compile(r"\[\s*(?:BEGIN|END)\s+UNTRUSTED\b[^\]]{0,80}\]?", re.I)
+_NATIVE_REMOTE_RESULTS = frozenset({"free_search", "paid_search", "fetch_webpage"})
+_NATIVE_SUBAGENT_RESULTS = frozenset({
+    "subagent_spawn", "subagent_wait", "task_tool", "subagent_send_input", "subagent_resume",
+})
+
+
+def _neutralize_untrusted_tags(text: str) -> str:
+    escaped = _BLOCKED_TAG_PATTERN.sub(lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"), text)
+    return escaped.replace("--- BEGIN USER INPUT ---", "[BEGIN USER INPUT]").replace("--- END USER INPUT ---", "[END USER INPUT]")
+
+
+def _fence_native_result(name: str, content: str, nonce: str) -> str:
+    category = "remote" if name in _NATIVE_REMOTE_RESULTS else "subagent" if name in _NATIVE_SUBAGENT_RESULTS else None
+    if category is None:
+        return content
+    safe = _FENCE_SHAPED_PATTERN.sub("[UNTRUSTED fence marker neutralized]", _neutralize_untrusted_tags(content))
+    return f"[BEGIN UNTRUSTED {category} #{nonce}]\n{safe}\n[END UNTRUSTED #{nonce}]"
+
+
 def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
     out = dict(body)
     out["model"] = route.model
@@ -190,6 +224,8 @@ def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
     replaced = False
     for message in body.get("messages", []):
         message = dict(message)
+        raw_name = message.get("name")
+        platform_result = message.get("role") == "tool" and isinstance(raw_name, str) and _is_ours(raw_name, route)
         if message.get("role") == "system" and route.system_prompt is not None:
             if replaced:
                 continue  # one system prompt
@@ -205,6 +241,13 @@ def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
         for call in message.get("tool_calls") or []:
             call["function"] = {**call["function"], "name": _unprefixed(call["function"]["name"], route),
                                 "arguments": _with_run_tag(call["function"].get("arguments"), None)}
+        if message.get("role") == "tool" and not platform_result and isinstance(raw_name, str):
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = _fence_native_result(raw_name, content, route.untrusted_fence_nonce)
+            elif content is not None:
+                message["content"] = _fence_native_result(
+                    raw_name, json.dumps(content, ensure_ascii=False), route.untrusted_fence_nonce)
         if isinstance(message.get("name"), str):
             message["name"] = _unprefixed(message["name"], route)
         messages.append(message)

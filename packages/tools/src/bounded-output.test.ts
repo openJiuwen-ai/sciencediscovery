@@ -148,3 +148,42 @@ test("a storage failure still yields a bounded result", async () => {
   assert.match(result, /could not be stored for re-reading/);
   assert.ok(Buffer.byteLength(result, "utf8") < DEFAULT_TOOL_OUTPUT_MAX_BYTES * 1.1);
 });
+
+test("the guard passes trust metadata to durable output storage", async () => {
+  let savedTrust: unknown;
+  const guard = new ToolOutputGuard({
+    retentionBytes: 1,
+    sink: { async save(_toolName, _text, trust) { savedTrust = trust; return record(); } },
+  });
+  await guard.applyDetailed("dynamic_connector", "remote output", false, {
+    untrustedCategory: "custom-remote",
+    neutralizeTags: true,
+  });
+  assert.deepEqual(savedTrust, { untrustedCategory: "custom-remote", neutralizeTags: true });
+});
+
+test("final model fitting bounds only the body and preserves framework text and fence closure", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 140, maxLines: 7 });
+  const result = guard.fitModelContent({
+    body: "x".repeat(1_000),
+    frameworkPrefix: "TRUSTED HEADER\n",
+    frameworkSuffix: "\nTRUSTED SUFFIX",
+    wrap: (body) => `[BEGIN UNTRUSTED remote #nonce]\n${body}\n[END UNTRUSTED #nonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 140);
+  assert.ok(result.split("\n").length <= 7);
+  assert.ok(result.startsWith("TRUSTED HEADER\n[BEGIN UNTRUSTED remote #nonce]\n"));
+  assert.ok(result.endsWith("[END UNTRUSTED #nonce]\nTRUSTED SUFFIX"));
+});
+
+test("a budget smaller than the trust envelope fails closed without untrusted bytes", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 40, maxLines: 2 });
+  const result = guard.fitModelContent({
+    body: "SECRET-UNTRUSTED-BODY",
+    wrap: (body) => `[BEGIN UNTRUSTED remote #longnonce]\n${body}\n[END UNTRUSTED #longnonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 40);
+  assert.ok(result.split("\n").length <= 2);
+  assert.ok(!result.includes("SECRET-UNTRUSTED-BODY"));
+  assert.ok(!result.includes("BEGIN UNTRUSTED"));
+});
