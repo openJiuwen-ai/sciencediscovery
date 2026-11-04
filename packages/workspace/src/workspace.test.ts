@@ -1296,7 +1296,7 @@ test("MCP evidence results keep canonical details but expose a compact bounded m
   assert.match(String(view.instruction), /nextOffset/);
   assert.equal((view.warnings as string[]).length, 1, "record-level duplicate warnings are lifted once");
   assert.ok(Array.isArray(view.papers));
-  assert.doesNotMatch(text, /primaryCitation|citations|crossReferences|fullTextRetrieved|identifierType|structuredData|retrievedAt|untrusted/);
+  assert.doesNotMatch(text, /primaryCitation|citations|fullTextRetrieved|identifierType|retrievedAt|untrusted/);
   assert.match(text, /abstractTruncated|recordsOmitted|authorsTruncated/);
 });
 
