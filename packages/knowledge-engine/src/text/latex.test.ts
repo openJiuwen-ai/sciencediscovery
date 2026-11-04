@@ -63,6 +63,18 @@ test("texToMarkdown: headings, cite anchors, math, captions, macros", () => {
   assert.match(markdown, /\[@corti2016\]/);
 });
 
+test("texToMarkdown: newcommand applies and overrides an optional first-argument default", () => {
+  const markdown = texToMarkdown([
+    "\\documentclass{article}",
+    "\\newcommand{\\pair}[2][x]{#1_#2}",
+    "\\begin{document}",
+    "Default $\\pair{y}$; explicit $\\pair[z]{y}$.",
+    "\\end{document}",
+  ].join("\n"));
+  assert.match(markdown, /Default \$x_y\$/);
+  assert.match(markdown, /explicit \$z_y\$/);
+});
+
 test("texToMarkdown: align normalizes to aligned inside $$", () => {
   const markdown = texToMarkdown([
     "\\documentclass{article}",

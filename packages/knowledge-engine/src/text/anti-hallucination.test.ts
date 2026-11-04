@@ -118,6 +118,36 @@ test("noveltyCheck reports collisions and stays honest about scope", () => {
   assert.match(none.note, /wider literature|out of scope/i);
 });
 
+test("noveltyCheck relation endpoints respect token boundaries without breaking CJK", () => {
+  const aiRelation = { sourceName: "AI", targetName: "ML", type: "uses", supportCount: 1, quote: null };
+  const adversarial = noveltyCheck({
+    kbId: "kb1",
+    claim: "The mail and html substrings are not entity mentions",
+    entities: [],
+    relations: [aiRelation],
+    documents: [],
+  });
+  assert.deepEqual(adversarial.relationHits, []);
+
+  const direct = noveltyCheck({
+    kbId: "kb1",
+    claim: "AI/ML methods interact",
+    entities: [],
+    relations: [aiRelation],
+    documents: [],
+  });
+  assert.equal(direct.relationHits.length, 1);
+
+  const cjk = noveltyCheck({
+    kbId: "kb1",
+    claim: "胰岛素和葡萄糖相互作用",
+    entities: [],
+    relations: [{ sourceName: "胰岛素", targetName: "葡萄糖", type: "regulates", supportCount: 1, quote: null }],
+    documents: [],
+  });
+  assert.equal(cjk.relationHits.length, 1);
+});
+
 test("buildAntiHallucinationBrief renders three tiers, capped and deterministic", () => {
   const uncertainty = briefUncertaintyFrom({ id: "kb1", name: "Ebola" }, {
     entities: [

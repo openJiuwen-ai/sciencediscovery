@@ -210,6 +210,17 @@ test("hybridSearchBlocks: a vector-only anchor still resolves full block metadat
   assert.deepEqual(vectorOnly.matchedTerms, []);
 });
 
+test("hybridSearchBlocks ranks FTS relevance before applying the over-fetch slice", () => {
+  const documents = ["doc-a", "doc-b", "doc-c"].map((docId, index) => ({
+    docId,
+    title: docId,
+    // The strongest block is beyond topK * HYBRID_OVERFETCH (two here).
+    fulltext: index === 2 ? "kinase kinase kinase" : "kinase",
+  }));
+  const result = hybridSearchBlocks({ kbId: "kb1", query: "kinase", documents, vectorCandidates: [], topK: 1 });
+  assert.equal(result.hits[0]?.docId, "doc-c");
+});
+
 test("hybridSearchBlocks: missing vector arm degrades to keyword-only with a note", () => {
   const degraded = hybridSearchBlocks({
     kbId: "kb1",

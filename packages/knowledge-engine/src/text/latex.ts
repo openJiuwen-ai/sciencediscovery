@@ -181,6 +181,8 @@ const MATH_ENV_RE =
 interface MacroDef {
   nargs: number;
   body: string;
+  /** \newcommand's optional first argument, when declared. */
+  optionalDefault?: string;
 }
 
 /** Match a balanced {...} group at `pos` (skipping leading whitespace). */
@@ -198,6 +200,26 @@ function matchBrace(text: string, pos: number): { content: string; end: number }
     }
     if (text[i] === "{") depth += 1;
     else if (text[i] === "}") depth -= 1;
+    if (depth === 0) break;
+    i += 1;
+  }
+  if (depth !== 0) return null;
+  return { content: text.slice(start, i), end: i + 1 };
+}
+
+/** Match a balanced [...] optional argument at `pos`. */
+function matchBracket(text: string, pos: number): { content: string; end: number } | null {
+  if (text[pos] !== "[") return null;
+  let depth = 1;
+  const start = pos + 1;
+  let i = pos + 1;
+  while (i < text.length && depth > 0) {
+    if (text[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (text[i] === "[") depth += 1;
+    else if (text[i] === "]") depth -= 1;
     if (depth === 0) break;
     i += 1;
   }
@@ -275,11 +297,15 @@ function extractMacros(text: string): { text: string; macros: Map<string, MacroD
       nargs = parseInt(optMatch[1]!, 10);
       pos += optMatch[0].length;
     }
-    const defOptMatch = /^\[[^\]]*\]/.exec(text.slice(pos));
-    if (defOptMatch) pos += defOptMatch[0].length;
+    let optionalDefault: string | undefined;
+    const defOptMatch = /^\[([^\]]*)\]/.exec(text.slice(pos));
+    if (defOptMatch) {
+      optionalDefault = defOptMatch[1]!;
+      pos += defOptMatch[0].length;
+    }
     const body = matchBrace(text, pos);
     if (!body) continue;
-    macros.set(name.name, { nargs, body: body.content });
+    macros.set(name.name, { nargs, body: body.content, ...(optionalDefault !== undefined ? { optionalDefault } : {}) });
     removals.push([start, body.end]);
   }
 
@@ -344,6 +370,20 @@ function expandMacros(text: string, macros: Map<string, MacroDef>, depth = 0): s
         const args: string[] = [];
         for (let a = 0; a < def.nargs; a += 1) {
           while (p < text.length && /\s/.test(text[p]!)) p += 1;
+          if (a === 0 && def.optionalDefault !== undefined) {
+            if (text[p] !== "[") {
+              args.push(def.optionalDefault);
+              continue;
+            }
+            const optional = matchBracket(text, p);
+            if (!optional) {
+              args.push("");
+              break;
+            }
+            args.push(optional.content);
+            p = optional.end;
+            continue;
+          }
           if (text[p] === "{") {
             const br = matchBrace(text, p);
             if (!br) {

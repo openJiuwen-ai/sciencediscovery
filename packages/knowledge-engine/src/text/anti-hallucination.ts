@@ -164,16 +164,44 @@ function entityProbe(claimTerms: readonly string[], claim: string, entities: rea
   return hits.slice(0, 10);
 }
 
+const CJK_CHAR_RE = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u;
+const TOKEN_CHAR_RE = /^[\p{L}\p{N}]$/u;
+
+function isEndpointTokenChar(char: string): boolean {
+  // Unspaced CJK prose has no token separators around a normal entity name.
+  // Latin and other alphabetic scripts, however, must not match inside words.
+  return TOKEN_CHAR_RE.test(char) && !CJK_CHAR_RE.test(char);
+}
+
+function hasBoundedEndpoint(claim: string, endpoint: string): boolean {
+  let from = 0;
+  for (;;) {
+    const at = claim.indexOf(endpoint, from);
+    if (at === -1) return false;
+    const before = claim.slice(0, at).match(/.$/us)?.[0] ?? "";
+    const after = claim.slice(at + endpoint.length).match(/^./us)?.[0] ?? "";
+    if (!isEndpointTokenChar(before) && !isEndpointTokenChar(after)) return true;
+    from = at + endpoint.length;
+  }
+}
+
+function claimNamesEndpoint(claim: string, name: string): boolean {
+  const endpoint = normalizeGateText(name);
+  if (!endpoint) return false;
+  return hasBoundedEndpoint(claim, endpoint)
+    || (/[\p{L}\p{N}]$/u.test(endpoint) && hasBoundedEndpoint(claim, `${endpoint}s`));
+}
+
 /** Probe 2: relations whose endpoints are both named in the claim, or whose
  *  evidence quote shares ≥60% of the claim's terms. */
 function relationProbe(claimTerms: readonly string[], claim: string, relations: readonly NoveltyRelationInput[]): NoveltyRelationHit[] {
   if (claimTerms.length === 0) return [];
+  const normalizedClaim = normalizeGateText(claim);
   const claimTermSet = new Set(claimTerms);
   const hits: NoveltyRelationHit[] = [];
   for (const relation of relations) {
-    const endsNamed =
-      normalizeGateText(claim).includes(normalizeGateText(relation.sourceName))
-      && normalizeGateText(claim).includes(normalizeGateText(relation.targetName));
+    const endsNamed = claimNamesEndpoint(normalizedClaim, relation.sourceName)
+      && claimNamesEndpoint(normalizedClaim, relation.targetName);
     if (endsNamed) {
       hits.push(relation);
       continue;

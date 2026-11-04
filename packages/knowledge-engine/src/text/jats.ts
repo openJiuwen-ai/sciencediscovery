@@ -172,9 +172,21 @@ function firstChild(node: XmlNode, tag: string): XmlNode | undefined {
   return childElements(node, tag)[0];
 }
 
+function firstDescendant(node: XmlNode, tag: string): XmlNode | undefined {
+  for (const child of node.children) {
+    if (typeof child === "string") continue;
+    if (child.tag === tag) return child;
+    const nested = firstDescendant(child, tag);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
 /** Extract LaTeX from a formula element (<disp-formula>/<inline-formula>). */
 function formulaLatex(node: XmlNode): string | null {
-  const texMath = firstChild(node, "tex-math");
+  // JATS <alternatives> often puts MathML first and <tex-math> second. Search
+  // the whole formula subtree so fallback text never concatenates both forms.
+  const texMath = firstDescendant(node, "tex-math");
   if (texMath) {
     const latex = textContent(texMath).trim();
     return latex.length > 0 ? latex : null;

@@ -76,10 +76,22 @@ export function extractCitationContexts(markdown: string): CitationContext[] {
     const lineStart = Math.max(0, markdown.lastIndexOf("\n", anchorStart) + 1);
     let lineEnd = markdown.indexOf("\n", anchorStart);
     if (lineEnd === -1) lineEnd = markdown.length;
-    const line = markdown.slice(lineStart, lineEnd).trim();
-    // A line may hold several sentences — keep the one containing the anchor.
-    const parts = line.split(SENTENCE_SPLIT_RE);
-    const containing = parts.find((part) => part.includes(match[0]!)) ?? line;
+    const line = markdown.slice(lineStart, lineEnd);
+    const anchorInLine = anchorStart - lineStart;
+    // A line may hold several sentences — select by this occurrence's offset,
+    // not by anchor text (the same rid may occur in multiple sentences).
+    let containing = line.trim();
+    let searchFrom = 0;
+    for (const part of line.split(SENTENCE_SPLIT_RE)) {
+      const partStart = line.indexOf(part, searchFrom);
+      if (partStart === -1) continue;
+      const partEnd = partStart + part.length;
+      searchFrom = partEnd;
+      if (anchorInLine >= partStart && anchorInLine < partEnd) {
+        containing = part.trim();
+        break;
+      }
+    }
     const sentence = containing.length > MAX_SENTENCE_LEN
       ? `${containing.slice(0, MAX_SENTENCE_LEN)}…`
       : containing;

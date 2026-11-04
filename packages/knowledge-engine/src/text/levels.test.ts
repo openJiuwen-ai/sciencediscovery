@@ -103,6 +103,13 @@ test("parseDocumentBlocks merges wrapped pdfplumber lines into one paragraph", (
   assert.equal(blocks[0]!.text, "This is a long sentence that pdfplumber wrapped across several physical lines in the text layer.");
 });
 
+test("parseDocumentBlocks consumes single-line display math and following prose", () => {
+  const blocks = parseDocumentBlocks("Before.\n\n$$E=mc^2$$\n\nAfter the formula.");
+  assert.deepEqual(blocks.map((block) => block.type), ["paragraph", "formula", "paragraph"]);
+  assert.equal(blocks[1]!.text, "E=mc^2");
+  assert.equal(blocks[2]!.text, "After the formula.");
+});
+
 test("parseDocumentBlocks survives malformed input without throwing", () => {
   assert.deepEqual(parseDocumentBlocks(""), []);
   // Unterminated formula fence: the remainder becomes one formula block.

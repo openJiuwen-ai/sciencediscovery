@@ -285,7 +285,11 @@ export function hybridSearchBlocks(input: {
   const terms = extractQueryTerms(input.query);
   const vector = (input.vectorCandidates ?? []).slice(0, topK * HYBRID_OVERFETCH);
 
-  const ftsRanked = (terms.length === 0 ? [] : scoreAllBlocks(input.documents, terms)).slice(0, topK * HYBRID_OVERFETCH);
+  const ftsRanked = (terms.length === 0 ? [] : scoreAllBlocks(input.documents, terms))
+    .sort((left, right) =>
+      right.hit.score - left.hit.score || left.docOrder - right.docOrder || left.blockOrder - right.blockOrder,
+    )
+    .slice(0, topK * HYBRID_OVERFETCH);
   const sources: Array<"fts" | "vector"> = [];
   if (ftsRanked.length > 0) sources.push("fts");
   if (vector.length > 0) sources.push("vector");

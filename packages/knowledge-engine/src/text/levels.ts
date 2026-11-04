@@ -152,6 +152,17 @@ export function parseDocumentBlocks(markdown: string): DocumentBlock[] {
       continue;
     }
 
+    // A single-line display formula is special too. Consume it here rather
+    // than letting the paragraph loop see a special first line and make no
+    // progress. Be tolerant of a missing closing delimiter, as with fences.
+    if (trimmed.startsWith("$$")) {
+      const body = trimmed.slice(2);
+      const text = body.endsWith("$$") ? body.slice(0, -2) : body;
+      if (text.trim().length > 0) push("formula", text, i + 1, section);
+      i += 1;
+      continue;
+    }
+
     if (isHeading(line)) {
       const title = headingTitle(trimmed);
       inReferences = /^references$/i.test(title);
@@ -194,12 +205,20 @@ export function parseDocumentBlocks(markdown: string): DocumentBlock[] {
 
     // Paragraph: consecutive plain lines joined (pdfplumber wraps lines).
     const start = i + 1;
+    const paragraphStart = i;
     const collected: string[] = [];
     while (i < lines.length && !isSpecialLine(lines[i]!, inReferences)) {
       collected.push(lines[i]!.trim());
       i += 1;
     }
-    if (collected.length > 0) push("paragraph", collected.join(" "), start, section);
+    if (collected.length > 0) {
+      push("paragraph", collected.join(" "), start, section);
+    } else if (i === paragraphStart) {
+      // Every special line should be consumed above. Preserve malformed or
+      // newly encountered markdown as a paragraph instead of spinning here.
+      push("paragraph", trimmed, start, section);
+      i += 1;
+    }
   }
 
   return blocks;

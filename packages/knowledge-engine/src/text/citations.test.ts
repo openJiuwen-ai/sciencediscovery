@@ -63,6 +63,14 @@ test("extractCitationContexts maps anchors to sentences and sections", () => {
   assert.ok(repeat.sentence.includes("as described previously"));
 });
 
+test("extractCitationContexts distinguishes repeated anchors in separate sentences on one line", () => {
+  const contexts = extractCitationContexts("First observation [@b1]. Second interpretation [@b1].");
+  assert.deepEqual(contexts.map((context) => context.sentence), [
+    "First observation [@b1].",
+    "Second interpretation [@b1].",
+  ]);
+});
+
 test("extractCitationContexts returns empty for anchor-free text", () => {
   assert.deepEqual(extractCitationContexts("No anchors here. Just text."), []);
 });

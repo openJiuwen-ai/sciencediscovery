@@ -81,6 +81,20 @@ void test("jatsToMarkdown flattens tables and figure captions", () => {
   assert.match(result.markdown, /\[Figure\] Structure of GP complex\./);
 });
 
+void test("jatsToMarkdown prefers descendant tex-math over MathML alternatives", () => {
+  const jats = `<article><body>
+    <disp-formula><alternatives>
+      <math><mrow><mi>wrong</mi><mo>=</mo><mi>mathml</mi></mrow></math>
+      <tex-math><![CDATA[E=mc^2]]></tex-math>
+    </alternatives></disp-formula>
+    <p>Inline <inline-formula><alternatives><math><mi>wrong</mi></math><tex-math>x_i</tex-math></alternatives></inline-formula>.</p>
+  </body></article>`;
+  const result = jatsToMarkdown(jats);
+  assert.match(result.markdown, /\$\$\nE=mc\^2\n\$\$/);
+  assert.match(result.markdown, /Inline \$x_i\$\./);
+  assert.equal(result.markdown.includes("wrong"), false);
+});
+
 void test("jatsToMarkdown returns empty for non-article input", () => {
   assert.deepEqual(jatsToMarkdown("<html><body>x</body></html>"), { markdown: "", title: null, referenceCount: 0 });
   assert.deepEqual(jatsToMarkdown("not xml at all"), { markdown: "", title: null, referenceCount: 0 });
