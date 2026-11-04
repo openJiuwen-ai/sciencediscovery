@@ -17,9 +17,16 @@ export interface ActivityFocus {
   token: number;
 }
 
-/** One predicate for both the live surface and the action guards, matching the API's
- * definition of terminal: `unknown` is a finished-but-unverified outcome, not running work. */
-const active = (state: string) => state === "queued" || state === "running";
+/** What still counts as work in progress: it keeps the live surface and the
+ * transfer Cancel guard. `unknown` is a finished-but-unverified outcome, so it
+ * renders as a history record instead. */
+const live = (state: string) => state === "queued" || state === "running";
+/** An execution whose outcome is `unknown` may still be running on a runner the
+ * API restarted away from, and the API keeps its cancel branch open for exactly
+ * that reason (services/api/src/shell-executions.ts cancel(): cancelling is safe,
+ * resubmitting is not). Only the execution Cancel guard may use this: a transfer
+ * is decided by the API itself, so `unknown` leaves nothing out there to stop. */
+const cancellable = (state: string) => live(state) || state === "unknown";
 export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiClient; focus?: ActivityFocus; sessionId: string }) {
   const { t } = useLocale();
   const [activity, setActivity] = useState<AgentActivity>();
@@ -86,26 +93,26 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
     <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.executions")}</strong><span className="fold-meta">{activity.executions.length}</span></summary>
     <div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.executions.length ? <p>{t("activity.noExecutions")}</p> : activity.executions.toReversed().map((item) => <ProcessRecord key={item.id} active={active(item.state)} failed={item.state === "failed"} label={`${item.runnerId} · ${item.agentId} · ${item.state}`} reveal={reveal("executions", item.id)}><article>
+        {!activity.executions.length ? <p>{t("activity.noExecutions")}</p> : activity.executions.toReversed().map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.runnerId} · ${item.agentId} · ${item.state}`} reveal={reveal("executions", item.id)}><article>
           <header><strong>{item.runnerId} · {item.agentId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
           <code>{item.id}</code><small>{t("activity.executionMeta", { provenance: item.provenance, workspace: item.workspaceId })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
           <div className="activity-actions"><button type="button" disabled={busy} onClick={() => void action(async () => {
             const result = await client.executionLogs(sessionId, item.id);
             setLogs({ id: item.id, text: result.chunks.map((chunk) => chunk.text).join("").slice(-20000) || t("activity.noOutput") });
-          })}>{t("activity.viewLogs")}</button><button type="button" disabled={busy || !active(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "executions", item.id))}>{t("activity.cancelExecution")}</button></div>
+          })}>{t("activity.viewLogs")}</button><button type="button" disabled={busy || !cancellable(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "executions", item.id))}>{t("activity.cancelExecution")}</button></div>
           {logs?.id === item.id ? <pre aria-label={t("activity.logsAria")}>{logs.text}</pre> : null}
         </article></ProcessRecord>)}
       </>}
     </div></details> : null}
     {activity && activity.transfers.length > 0 ? <details className="workspace-fold" {...fold("transfers")}><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.transfers")}</strong><span className="fold-meta">{activity.transfers.length}</span></summary><div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.transfers.length ? <p>{t("runnerWorkspaces.noTransfers")}</p> : activity.transfers.map((item) => <ProcessRecord key={item.id} active={active(item.state)} failed={item.state === "failed"} label={`${item.sourceWorkspaceId} → ${item.targetWorkspaceId} · ${item.state}`}><article>
+        {!activity.transfers.length ? <p>{t("runnerWorkspaces.noTransfers")}</p> : activity.transfers.map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.sourceWorkspaceId} → ${item.targetWorkspaceId} · ${item.state}`}><article>
           <header><strong>{item.sourceWorkspaceId} → {item.targetWorkspaceId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
           <small>{t("activity.filesCommitted", { committed: item.progress.filter((file) => file.state === "completed").length, total: item.files.length })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
           <details><summary>{t("activity.fileProgress")}</summary>{item.progress.map((file) => <small key={file.targetPath}>{file.targetPath} · {file.state} · {t("downloads.bytes", { count: file.bytes })}</small>)}</details>
-          <button type="button" disabled={busy || !active(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "transfers", item.id))}>{t("activity.cancelTransfer")}</button>
+          <button type="button" disabled={busy || !live(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "transfers", item.id))}>{t("activity.cancelTransfer")}</button>
         </article></ProcessRecord>)}
       </>}
     </div></details> : null}
