@@ -156,7 +156,7 @@ test("CFG HTTP: first connection is preview-only until confirmation, applies onc
   const f = await fixture(context);
   const capabilities = await f.ok<{ items: Array<{ id: string }>; executor: string }>(`/api/sessions/${f.session.id}/configuration/capabilities`);
   const capabilityIds = new Set(capabilities.items.map((item) => item.id));
-  for (const id of ["connector.enable", "environment.sources", "idea_tree.configure", "mcp.availability", "mcp.delete", "mcp.header_credential", "mcp.metadata", "mcp.remove_env", "mcp.remove_header", "mcp.timeout", "memory.credential", "model.connect", "model.repair_credential", "model.select", "quotas.configure", "review.configure", "runner.assign", "skill.select", "thinking.configure", "timeouts.configure"]) assert.ok(capabilityIds.has(id), `Missing configuration capability: ${id}`);
+  for (const id of ["connector.enable", "environment.sources", "idea_tree.configure", "mcp.availability", "mcp.delete", "mcp.header_credential", "mcp.metadata", "mcp.remove_env", "mcp.remove_header", "mcp.timeout", "memory.credential", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure"]) assert.ok(capabilityIds.has(id), `Missing configuration capability: ${id}`);
   assert.equal(capabilities.executor, "native");
   const initial = await f.proposal("model.connect");
   assert.equal(initial.state, "collecting_input");

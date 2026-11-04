@@ -287,7 +287,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const savedForRestart = request.state === "applied" && request.activation.mode === "requires_restart"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun || savedForRestart ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
+  const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const summary = savedForNextRun || savedForRestart || savedForNextRequest ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];

@@ -17,6 +17,9 @@ import { createMcpHeaderRemovalAdapter, type McpHeaderRemovalPort } from "./mcp-
 import { createMcpAvailabilityAdapter, type McpAvailabilityPort } from "./mcp-availability-adapter.js";
 import { createMcpTimeoutAdapter, type McpTimeoutPort } from "./mcp-timeout-adapter.js";
 import { createMcpMetadataAdapter, type McpMetadataPort } from "./mcp-metadata-adapter.js";
+import { createInheritanceAdapter } from "./inherit-adapter.js";
+import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
+import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { createMemoryCredentialAdapter } from "./memory-credential-adapter.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
@@ -130,7 +133,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createMemoryCredentialAdapter(store, this.credentials, context => {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createMemoryCredentialAdapter(store, this.credentials, context => {
         const record = this.repository.get(context.requestId, context.sessionId);
         if (!record || record.view.revision !== context.revision) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Review the current password destination", 409);
         this.destinations.assert(record, true);
