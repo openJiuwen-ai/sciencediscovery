@@ -261,6 +261,36 @@ test("keeps an inherited property name from becoming a column value", () => {
   assert.equal(proto.columns[1]?.missingCount, 1);
 });
 
+test("shows a duplicate header under the name the file used", () => {
+  const table = parse("duplicate-header.csv", "a,a\n1,2\n");
+
+  // Papa renames a repeated header to a unique id. The id keys the row, but the
+  // reader and the export must see the text the file wrote, not Papa's suffix.
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "a_1"]);
+  assert.deepEqual(table.columns.map((column) => column.label), ["a", "a"]);
+  assert.deepEqual(table.rows.map((row) => [row.a, row.a_1]), [[1, 2]]);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "a,a");
+  assert.match(table.warnings.join("\n"), /1 duplicate header/);
+
+  const grid = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = grid.slice(grid.indexOf("csva-virtual-grid-header"), grid.indexOf("csva-virtual-grid-body"));
+  assert.deepEqual([...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? ""), ["#", "a", "a"]);
+
+  // A file may also contain the id Papa invents; the mapping stays per renamed
+  // id, so the real `a_1` column keeps its own name.
+  const three = parse("duplicate-header-real-id.csv", "a,a,a_1\n1,2,3\n");
+  assert.deepEqual(three.columns.map((column) => column.id), ["a", "a_2", "a_1"]);
+  assert.deepEqual(three.columns.slice(0, 2).map((column) => column.label), ["a", "a"]);
+  assert.equal(tableToCsv(three.rows, three.columns).split(/\r?\n/)[0], "a,a,a_1");
+  assert.deepEqual(three.rows.map((row) => [row.a, row.a_2, row.a_1]), [[1, 2, 3]]);
+});
+
 test("caps surplus columns so one wide record cannot widen every row", () => {
   const dataRows = 20_000;
   const overflowCells = 497;
