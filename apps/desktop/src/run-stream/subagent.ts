@@ -63,6 +63,31 @@ export function finalSteps(steps: readonly SubagentStep[]): SubagentStep[] {
 }
 
 /**
+ * Every field of a step, so the comparison cannot silently ignore one.
+ *
+ * The `satisfies` clause fails the build when `SubagentStep` gains a field and
+ * this record does not, which is the only change that would otherwise let two
+ * different snapshots compare as equal. Adding the field here is enough to
+ * bring it into the comparison.
+ */
+const STEP_FIELDS = {
+  args: true,
+  content: true,
+  createdAt: true,
+  details: true,
+  id: true,
+  input: true,
+  kind: true,
+  progress: true,
+  status: true,
+  toolCallId: true,
+  toolName: true,
+} satisfies Record<keyof SubagentStep, true>;
+
+/** The fields that may hold nested structure, and so are compared as JSON. */
+const JSON_FIELDS: ReadonlySet<keyof SubagentStep> = new Set<keyof SubagentStep>(["args", "details"]);
+
+/**
  * Whether two snapshots of one step say the same thing.
  *
  * The wire is plain JSON, so a structural check keeps an unchanged step's
@@ -72,18 +97,12 @@ export function finalSteps(steps: readonly SubagentStep[]): SubagentStep[] {
  * small structured fields still go through JSON.
  */
 function sameStep(left: SubagentStep, right: SubagentStep): boolean {
-  return left === right
-    || (left.id === right.id
-      && left.kind === right.kind
-      && left.status === right.status
-      && left.content === right.content
-      && left.progress === right.progress
-      && left.toolName === right.toolName
-      && left.toolCallId === right.toolCallId
-      && left.input === right.input
-      && left.createdAt === right.createdAt
-      && sameJson(left.args, right.args)
-      && sameJson(left.details, right.details));
+  if (left === right) return true;
+  for (const field of Object.keys(STEP_FIELDS) as (keyof SubagentStep)[]) {
+    const same = JSON_FIELDS.has(field) ? sameJson(left[field], right[field]) : left[field] === right[field];
+    if (!same) return false;
+  }
+  return true;
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
