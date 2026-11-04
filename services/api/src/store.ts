@@ -22,7 +22,7 @@ import type { ConfigurationScope, ConfigurationValues as ScopedConfigurationValu
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, realpath, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
@@ -1986,7 +1986,7 @@ export class SessionStore {
         throw new Error(`Cannot restore staged data because ${entry.source} already exists`);
       }
       await mkdir(dirname(entry.source), { recursive: true });
-      await rename(entry.staged, entry.source);
+      await renameReplace(entry.staged, entry.source);
     }
   }
 
@@ -2030,7 +2030,7 @@ export class SessionStore {
             operation.entries.push({ source, staged: resolve(root, "data", relativePath) });
           }
           await writeFile(resolve(root, "operation.next.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
-          await rename(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
+          await renameReplace(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
           // The final Workspace snapshot and the move into `.trash` are not part
           // of the request: they run behind the fence this retirement installs,
           // which keeps the data unreachable for as long as they take.
@@ -2056,7 +2056,7 @@ export class SessionStore {
     for (const entry of operation.entries) {
       if (!await this.pathExists(entry.source)) continue;
       await mkdir(dirname(entry.staged), { recursive: true });
-      await rename(entry.source, entry.staged);
+      await renameReplace(entry.source, entry.staged);
     }
   }
 
