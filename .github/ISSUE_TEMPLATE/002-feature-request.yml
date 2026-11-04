@@ -40,11 +40,11 @@ body:
     attributes:
       label: Acceptance Criteria
       description: |
-        Define the conditions that must be met for this feature to be accepted. Include at least one test that fails without the change and passes after it, plus the commands that must pass (for example `pnpm check` for typecheck and unit tests, or `pnpm test:shared` for the full CI plan). Call out any functional, performance, reliability, or security threshold explicitly.
+        Define the conditions that must be met for this feature to be accepted. State the observable behaviour and the verification that must pass after the change. If this request fixes a defect, add a test that fails without the fix and passes after it; a new capability does not need a red test. Name the commands that must pass (for example `pnpm ci:l1` for the static gate, or `pnpm test:shared` for the full CI plan). Call out any functional, performance, reliability, or security threshold explicitly.
       placeholder: |
         - [ ] <observable behavior that must hold>
         - [ ] <edge case or error path that must be handled>
-        - Command that must pass: `pnpm check`
+        - Command that must pass: `pnpm ci:l1`
     validations:
       required: true
   - type: textarea
