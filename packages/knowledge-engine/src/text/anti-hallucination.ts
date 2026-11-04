@@ -440,6 +440,18 @@ function normalizeClaimWords(text: string): Set<string> {
   return words;
 }
 
+/** Claim strength uses only base units: CJK characters and non-CJK words.
+ *  Adjacent bigrams improve coverage but are not independent evidence that a
+ *  claim is long enough to support a novelty verdict. */
+function claimContentSize(claimWords: ReadonlySet<string>): number {
+  let size = 0;
+  for (const word of claimWords) {
+    const chars = [...word];
+    if (chars.length === 1 || !CJK_CHAR_RE.test(chars[0] ?? "")) size += 1;
+  }
+  return size;
+}
+
 function claimCoverage(claimWords: ReadonlySet<string>, text: string): number {
   if (claimWords.size === 0) return 0;
   const textWords = normalizeClaimWords(text);
@@ -562,10 +574,11 @@ export function combineNovelty(input: {
   external: NoveltyExternalSection | null;
 }): NoveltyCombined {
   const claimWords = normalizeClaimWords(input.claim);
+  const claimSize = claimContentSize(claimWords);
   const reasons: string[] = [];
-  if (claimWords.size < NOVELTY_MIN_CLAIM_WORDS) {
+  if (claimSize < NOVELTY_MIN_CLAIM_WORDS) {
     reasons.push(
-      `claim normalizes to only ${claimWords.size} content word(s) (need >= ${NOVELTY_MIN_CLAIM_WORDS}) — not a reliable search term set`,
+      `claim normalizes to only ${claimSize} content word(s) (need >= ${NOVELTY_MIN_CLAIM_WORDS}) — not a reliable search term set`,
     );
     return { verdict: "inconclusive", caveat: PU_CAVEAT_INCONCLUSIVE, reasons, similarItems: [] };
   }

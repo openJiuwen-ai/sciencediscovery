@@ -241,6 +241,18 @@ test("CJK novelty tokens support the claim gate and reordered external coverage"
   assert.equal(combined.verdict, "similar-found");
 });
 
+test("CJK claim gate counts characters, not coverage bigrams", () => {
+  const external = { status: "ok" as const, checkedSources: [], candidates: 0, items: [] };
+  const internalFor = (claim: string) => noveltyCheck({ kbId: "kb1", claim, entities: [], relations: [], documents: [] });
+
+  const twoCharacters = combineNovelty({ claim: "肝炎", internal: internalFor("肝炎"), external });
+  assert.equal(twoCharacters.verdict, "inconclusive");
+  assert.match(twoCharacters.reasons[0] ?? "", /only 2 content word/);
+
+  const longer = combineNovelty({ claim: "肝炎治疗", internal: internalFor("肝炎治疗"), external });
+  assert.equal(longer.verdict, "novel");
+});
+
 test("runExternalNoveltyStage prefers S2 and scores coverage against the claim", async () => {
   const s2 = source("semantic-scholar", async () => [
     { title: "Zebrafish cardiac regeneration after cryoinjury", year: 2020, url: "https://doi.org/10.1/x", abstract: "cardiac tissue regenerate cryoinjury zebra fish study" },

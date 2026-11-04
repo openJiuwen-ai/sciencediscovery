@@ -71,6 +71,9 @@ void test("Unicode entity names survive numeric and symbol screening with relati
       { name: "Рецептор", type: "protein" },
       { name: "１２３４", type: "protein" },
       { name: "±∞", type: "protein" },
+      { name: "12\t34", type: "protein" },
+      { name: "́̀", type: "protein" },
+      { name: "Café", type: "protein" },
     ],
     relations: [{
       source: "胰岛素",
@@ -79,7 +82,7 @@ void test("Unicode entity names survive numeric and symbol screening with relati
       evidence_quote: "胰岛素结合Рецептор并启动下游信号",
     }],
   }), BIOMEDICAL_SCHEMA);
-  assert.deepEqual(result.entities.map((entity) => entity.name), ["胰岛素", "Рецептор"]);
+  assert.deepEqual(result.entities.map((entity) => entity.name), ["胰岛素", "Рецептор", "Café"]);
   assert.equal(result.relations.length, 1);
   assert.equal(result.relations[0]?.source, "胰岛素");
   assert.equal(result.relations[0]?.target, "Рецептор");
