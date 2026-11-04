@@ -157,7 +157,12 @@ export function profileRows(
   const columns: ColumnProfile[] = fields.map((field) => {
     const values = parsedRows.map((row) => row[field]);
     const present = values.filter((value): value is Exclude<DataValue, null> => value !== null);
-    const header = headerNames[field];
+    // `renamedHeaders` is a plain object, so `headerNames[field]` would answer
+    // with `toString`/`__proto__` and friends from Object.prototype for a header
+    // that happens to carry one of those names. Read the mapping the same way the
+    // cells are read: own properties only, so a file's `toString` column is named
+    // by the file, not by the prototype.
+    const header = Object.hasOwn(headerNames, field) ? headerNames[field] : undefined;
     let min: number | undefined;
     let max: number | undefined;
     for (const value of present) {
