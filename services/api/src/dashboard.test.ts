@@ -1656,6 +1656,9 @@ test("a delimited preview returns the same columns whatever maxRows it is asked 
     }
     assert.equal(payload.clippedCells, 0, `${label}: no surplus cell is past the cap`);
   }
+  if (many.mode !== "dataset-table" || few.mode !== "dataset-table") {
+    assert.fail("both calls must answer a dataset-table");
+  }
   assert.equal(many.rows.length, 1_000);
   assert.equal(few.rows.length, 100);
 });
