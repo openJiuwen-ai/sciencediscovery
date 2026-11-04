@@ -2050,6 +2050,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return [request, ...items.filter((item) => item.id !== request.id)];
     });
     if (request.state === "applied" || request.state === "dismissed") void refreshSession(request.sessionId).catch(() => undefined);
+    if (request.state === "applied" && ["mcp.metadata", "mcp.timeout", "mcp.remove_header", "mcp.remove_env", "mcp.header_credential", "mcp.availability", "mcp.delete"].includes(request.capabilityId)) void client.listConnectors().then(setConnectors).catch(() => undefined);
     if (request.state === "applied" && request.capabilityId.startsWith("model.")) {
       void Promise.all([client.listModels(), client.listProviders(), client.getGlobalSettings()]).then(([modelItems, registry, settings]) => {
         setModels(modelItems);

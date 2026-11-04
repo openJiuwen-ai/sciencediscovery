@@ -16,9 +16,12 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CustomMcpServerConfig, CustomMcpServerDetails, McpCatalog, McpCatalogTool } from "@sciencediscovery/schema";
+import type { ConfigurationExternalOperation, ConfigurationExternalOutcome } from "../configuration/types.js";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
+import { canonicalMcpEnvironmentName, mcpEnvironmentRemovalEffect } from "./runtime-environment.js";
+import { isMcpCredentialHeader, isMcpHeaderCredentialValue } from "./header-credential-policy.js";
 import { customMcpAdapter } from "./custom-adapter.js";
 import { loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
 import { McpOAuthManager, validateOAuthUrl } from "./oauth.js";
@@ -117,6 +120,9 @@ function entry(config: CustomMcpServerConfig): McpServerEntry {
 export class CustomMcpServers {
   readonly oauth: McpOAuthManager;
   private configs: Record<string, CustomMcpServerConfig> = {};
+  private configurationOperations: Record<string, ConfigurationExternalOutcome> = {};
+  private pendingConfigurationDeletions: Record<string, string> = {};
+  private deletionJournal = false;
   private readonly checks = new Map<string, { checkedAt: string; tools: McpCatalogTool[]; error?: string; durationMs?: number }>();
   private key?: Buffer;
   private queue: Promise<unknown> = Promise.resolve();
@@ -140,15 +146,37 @@ export class CustomMcpServers {
       const encrypted = await readFile(this.path, "utf8");
       const saved: unknown = JSON.parse(decryptSecretValue(this.key, "custom-mcp-servers", encrypted));
       if (!object(saved)) throw new Error("Invalid saved MCP configuration");
-      for (const [id, value] of Object.entries(saved)) {
+      const envelope = ["sciencediscovery-custom-mcp-v2", "sciencediscovery-custom-mcp-v3"].includes(String(saved.format)) ? saved : undefined;
+      this.deletionJournal = saved.format === "sciencediscovery-custom-mcp-v3";
+      const servers = envelope ? envelope.servers : saved;
+      if (!object(servers) || envelope && !object(envelope.operations)) throw new Error("Invalid saved MCP configuration envelope");
+      if (envelope) for (const [operationId, value] of Object.entries(envelope.operations as Record<string, unknown>)) {
+        if (!object(value)) throw new Error("Invalid saved MCP operation");
+        this.validateConfigurationOperation({ operationId, bindingDigest: String(value.bindingDigest) });
+        if (value.operationId !== operationId || !(value.status === "rejected" && typeof value.code === "string" && /^[A-Z][A-Z0-9_]{2,99}$/.test(value.code)
+          || value.status === "applied" && object(value.resourceVersions) && Object.keys(value.resourceVersions).length === 1 && typeof value.resourceVersions.mcpMetadata === "string" && /^[a-f0-9]{64}$/.test(value.resourceVersions.mcpMetadata))) throw new Error("Invalid saved MCP operation outcome");
+        this.configurationOperations[operationId] = value.status === "rejected"
+          ? { operationId, bindingDigest: String(value.bindingDigest), status: "rejected", code: String(value.code) }
+          : { operationId, bindingDigest: String(value.bindingDigest), status: "applied", resourceVersions: { mcpMetadata: String((value.resourceVersions as Record<string, unknown>).mcpMetadata) } };
+      }
+      if (Object.keys(this.configurationOperations).length > 10_000) throw new Error("MCP configuration operation journal exceeds capacity");
+      for (const [id, value] of Object.entries(servers)) {
         if (!/^custom-[a-f0-9]{12}$/.test(id)) throw new Error("Invalid saved MCP server id");
         this.configs[id] = normalizeCustomMcpConfig(value);
+      }
+      if (this.deletionJournal) {
+        if (!object(envelope?.pendingDeletions)) throw new Error("Invalid pending MCP deletions");
+        for (const [operationId, id] of Object.entries(envelope.pendingDeletions)) {
+          if (typeof id !== "string" || !/^custom-[a-f0-9]{12}$/u.test(id) || this.configs[id] || this.configurationOperations[operationId]?.status !== "applied") throw new Error("Invalid pending MCP deletion binding");
+          this.pendingConfigurationDeletions[operationId] = id;
+        }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     await this.oauth.load(this.key);
     this.sync();
+    for (const operationId of Object.keys(this.pendingConfigurationDeletions)) { await this.finishConfigurationDeletion(operationId); }
   }
 
   private sync(): void {
@@ -224,13 +252,225 @@ export class CustomMcpServers {
     return result;
   }
 
-  private async persist(next: Record<string, CustomMcpServerConfig>): Promise<void> {
+  private async persist(next: Record<string, CustomMcpServerConfig>, operations = this.configurationOperations, invalidateChecks: readonly string[] = [], pendingDeletions = this.pendingConfigurationDeletions): Promise<void> {
     if (!this.key) throw new Error("MCP storage is not initialized");
     const temporary = `${this.path}.tmp`;
-    await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(next)), { mode: 0o600 });
+    const deletionJournal = this.deletionJournal || Object.keys(pendingDeletions).length > 0;
+    const payload = Object.keys(operations).length ? { format: deletionJournal ? "sciencediscovery-custom-mcp-v3" : "sciencediscovery-custom-mcp-v2", servers: next, operations, ...(deletionJournal ? { pendingDeletions } : {}) } : next;
+    await writeFile(temporary, encryptSecretValue(this.key, "custom-mcp-servers", JSON.stringify(payload)), { mode: 0o600 });
     await rename(temporary, this.path);
     this.configs = next;
+    for (const id of invalidateChecks) { this.checks.delete(id); }
+    this.configurationOperations = operations;
+    this.pendingConfigurationDeletions = pendingDeletions;
+    this.deletionJournal = deletionJournal;
     this.sync();
+  }
+
+  configurationDeletion(serverId = "") {
+    const source = this.configurationMetadata(serverId);
+    return { ...source, version: serverId && !source.current ? this.deletedConfigurationRevision(serverId) : source.version };
+  }
+
+  private deletedConfigurationRevision(id: string): string {
+    if (!this.key) throw new Error("MCP storage is not initialized");
+    return createHmac("sha256", this.key).update(JSON.stringify(["mcp-deleted-v1", id])).digest("hex");
+  }
+
+  /** Only local, convergent cleanup. Never refresh/probe or replay an invocation. */
+  private async finishConfigurationDeletion(operationId: string): Promise<void> {
+    const id = this.pendingConfigurationDeletions[operationId];
+    if (!id) return;
+    if (this.configs[id]) throw new Error("Deleted MCP identity was replaced before cleanup");
+    this.registry.remove(id); this.checks.delete(id);
+    await this.oauth.clear(id);
+    await this.onRemoved(id);
+    const pending = { ...this.pendingConfigurationDeletions }; delete pending[operationId];
+    await this.persist(this.configs, this.configurationOperations, [], pending);
+  }
+
+  submitConfigurationDeletion(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation);
+      if (prior) { await this.finishConfigurationDeletion(operation.operationId); if (prior.status === "applied") this.sync(); return prior; }
+      if (!/^custom-[a-f0-9]{12}$/u.test(serverId) || !this.configs[serverId]) return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "CONFIGURATION_RESOURCE_UNAVAILABLE" });
+      if (this.configurationMetadataRevision(serverId) !== expectedVersion) return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "RESOURCE_VERSION_CONFLICT" });
+      if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
+      const outcome: ConfigurationExternalOutcome = { ...operation, status: "applied", resourceVersions: { mcpMetadata: this.deletedConfigurationRevision(serverId) } };
+      const next = { ...this.configs }; delete next[serverId];
+      await this.persist(next, { ...this.configurationOperations, [operation.operationId]: outcome }, [serverId], { ...this.pendingConfigurationDeletions, [operation.operationId]: serverId });
+      await this.finishConfigurationDeletion(operation.operationId);
+      return structuredClone(outcome);
+    });
+  }
+
+
+  /** Finite safe catalog; transport values and credentials never leave this service. */
+  configurationMetadata(serverId?: string) {
+    const items = Object.entries(this.configs).map(([id, config]) => ({ id, name: config.name, description: config.description, transport: config.transport, enabled: config.enabled }));
+    return { items, current: items.find(item => item.id === serverId), version: serverId ? this.configurationMetadataRevision(serverId) : undefined };
+  }
+
+  configurationTimeout(serverId?: string) {
+    const source = this.configurationMetadata(serverId);
+    const items = source.items.map(item => ({ ...item, timeoutSeconds: this.configs[item.id]?.timeoutSeconds ?? 60 }));
+    return { items, current: items.find(item => item.id === serverId), version: source.version };
+  }
+
+  /** Header names/counts only. Values and endpoint/execution details never leave the authority. */
+  configurationHeaderRemoval(target = "") {
+    let serverId = "", headerName = "";
+    if (target) {
+      try { const parsed: unknown = JSON.parse(target); if (Array.isArray(parsed) && parsed.length === 2 && parsed.every(value => typeof value === "string")) { serverId = String(parsed[0]); headerName = String(parsed[1]).toLowerCase(); } } catch { /* Unbound discovery has no selected header. */ }
+    }
+    const items = Object.entries(this.configs).filter(([, config]) => config.transport !== "stdio").map(([id, config]) => {
+      const counts = new Map<string, number>(); for (const name of Object.keys(config.headers)) { counts.set(name.toLowerCase(), (counts.get(name.toLowerCase()) ?? 0) + 1); }
+      return { id, name: config.name, transport: config.transport, enabled: config.enabled, headers: [...counts].filter(([name]) => name.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(name)).map(([name, aliases]) => ({ name, aliases })).sort((a, b) => a.name.localeCompare(b.name)) };
+    });
+    const current = items.find(item => item.id === serverId);
+    return { items, current, header: current?.headers.find(item => item.name === headerName), version: serverId ? this.configurationMetadataRevision(serverId) : undefined };
+  }
+
+  submitConfigurationHeaderRemoval(operation: ConfigurationExternalOperation, target: string, expectedVersion: string): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code });
+      const source = this.configurationHeaderRemoval(target), selected = source.current;
+      if (!selected || !source.header) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      if (source.version !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
+      const previous = this.configs[selected.id]; if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      const selectedName = source.header.name;
+      const candidate = normalizeCustomMcpConfig({ ...previous, headers: Object.fromEntries(Object.entries(previous.headers).filter(([name]) => name.toLowerCase() !== selectedName)) }, previous);
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationMetadataRevision(selected.id, candidate) } }, { ...this.configs, [selected.id]: candidate }, [selected.id]);
+    });
+  }
+
+  /** Safe recipient identity only: a saved path/query may itself contain secrets. */
+  configurationHeaderCredential(target = "") {
+    let serverId = "", headerName = "";
+    try { const parsed: unknown = JSON.parse(target); if (Array.isArray(parsed) && parsed.length >= 2 && parsed.slice(0, 2).every(value => typeof value === "string")) { serverId = String(parsed[0]); headerName = String(parsed[1]).toLowerCase(); } } catch { /* Unbound collection has no recipient. */ }
+    const source = this.configurationHeaderRemoval(JSON.stringify([serverId, headerName]));
+    const items = source.items.filter(item => this.configs[item.id]?.authMode === "headers").map(item => ({ ...item, headers: item.headers.filter(header => isMcpCredentialHeader(header.name)) })).filter(item => item.headers.length > 0);
+    const current = items.find(item => item.id === serverId), header = current?.headers.find(item => item.name === headerName);
+    const binding = JSON.stringify([serverId, headerName, source.version ?? ""]);
+    let destination: { endpointTarget: string; host: string; origin: string; classification: "loopback" | "private_network" | "public_https" | "public_http" } | undefined;
+    const selectedConfig = current ? this.configs[current.id] : undefined;
+    if (current && header && selectedConfig && this.key) {
+      const url = new URL(selectedConfig.url), host = url.hostname.toLowerCase().replace(/^\[|\]$/gu, ""), octets = host.split(".").map(Number);
+      const ipv4 = /^\d+\.\d+\.\d+\.\d+$/u.test(host) && octets.every(value => value >= 0 && value <= 255), first = octets[0] ?? -1, second = octets[1] ?? -1;
+      const loopback = host === "localhost" || host.endsWith(".localhost") || host === "::1" || ipv4 && first === 127 || /^::ffff:7f[0-9a-f]{2}:/iu.test(host);
+      const privateNetwork = ipv4 && (first === 10 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168 || first === 169 && second === 254 || first === 0) || /^(?:f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/iu.test(host);
+      destination = { endpointTarget: createHmac("sha256", this.key).update(JSON.stringify(["mcp-header-credential-v1", binding])).digest("hex"), host: url.host, origin: url.origin,
+        classification: loopback ? "loopback" : privateNetwork ? "private_network" : url.protocol === "https:" ? "public_https" : "public_http" };
+    }
+    return { items, current, header, version: source.version, target: binding, destination };
+  }
+
+  submitConfigurationHeaderCredential(operation: ConfigurationExternalOperation, target: string, expectedVersion: string, secret: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") { this.sync(); } return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code }), source = this.configurationHeaderCredential(target), selected = source.current;
+      if (!selected || !source.header || !source.destination) { return reject("CONFIGURATION_RESOURCE_UNAVAILABLE"); }
+      if (source.version !== expectedVersion || source.target !== target) { return reject("RESOURCE_VERSION_CONFLICT"); }
+      if (source.destination.classification === "public_http") { return reject("ENDPOINT_CREDENTIAL_INSECURE"); }
+      if (!isMcpHeaderCredentialValue(secret)) { return reject("INVALID_CONFIGURATION_CREDENTIAL"); }
+      const previous = this.configs[selected.id]; if (!previous) { return reject("CONFIGURATION_RESOURCE_UNAVAILABLE"); }
+      const selectedName = source.header.name, headers = { ...Object.fromEntries(Object.entries(previous.headers).filter(([name]) => name.toLowerCase() !== selectedName)), [selectedName]: secret };
+      const candidate = normalizeCustomMcpConfig({ ...previous, headers }, previous);
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationMetadataRevision(selected.id, candidate) } }, { ...this.configs, [selected.id]: candidate }, [selected.id]);
+    });
+  }
+
+  configurationEnvironmentRemoval(target = "") {
+    let serverId = "", envName = "";
+    if (target) {
+      try { const parsed: unknown = JSON.parse(target); if (Array.isArray(parsed) && parsed.length === 2 && parsed.every(value => typeof value === "string")) { serverId = String(parsed[0]); envName = canonicalMcpEnvironmentName(String(parsed[1])); } } catch { /* No selected stored variable. */ }
+    }
+    const items = Object.entries(this.configs).filter(([, config]) => config.transport === "stdio").map(([id, config]) => {
+      const counts = new Map<string, number>(); for (const key of Object.keys(config.env)) { if (/^[A-Za-z_][A-Za-z0-9_]{0,255}$/u.test(key)) { const name = canonicalMcpEnvironmentName(key); counts.set(name, (counts.get(name) ?? 0) + 1); } }
+      return { id, name: config.name, transport: config.transport, enabled: config.enabled, variables: [...counts].map(([name, aliases]) => ({ name, aliases, effect: mcpEnvironmentRemovalEffect(name) })).sort((a, b) => a.name.localeCompare(b.name)) };
+    });
+    const current = items.find(item => item.id === serverId);
+    return { items, current, variable: current?.variables.find(item => item.name === envName), caseSensitive: process.platform !== "win32", version: serverId ? this.configurationEnvironmentRevision(serverId) : undefined };
+  }
+
+  private configurationEnvironmentRevision(serverId: string, config = this.configs[serverId]): string {
+    if (!this.key) throw new Error("MCP storage is not initialized");
+    return createHmac("sha256", this.key).update(JSON.stringify(["mcp-env-removal-v1", process.platform, this.configurationMetadataRevision(serverId, config)])).digest("hex");
+  }
+
+  submitConfigurationEnvironmentRemoval(operation: ConfigurationExternalOperation, target: string, expectedVersion: string): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code }), source = this.configurationEnvironmentRemoval(target), selected = source.current;
+      if (!selected || !source.variable) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      if (source.version !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
+      const previous = this.configs[selected.id]; if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      const selectedName = source.variable.name;
+      const candidate = normalizeCustomMcpConfig({ ...previous, env: Object.fromEntries(Object.entries(previous.env).filter(([name]) => canonicalMcpEnvironmentName(name) !== selectedName)) }, previous);
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationEnvironmentRevision(selected.id, candidate) } }, { ...this.configs, [selected.id]: candidate }, [selected.id]);
+    });
+  }
+
+  private configurationMetadataRevision(serverId: string, config = this.configs[serverId]): string {
+    if (!this.key) throw new Error("MCP storage is not initialized");
+    return createHmac("sha256", this.key).update(JSON.stringify([serverId, config ?? null, this.oauth.configurationRevision([serverId])])).digest("hex");
+  }
+
+  private validateConfigurationOperation(operation: ConfigurationExternalOperation): void {
+    if (!/^[a-f0-9-]{36}:[1-9][0-9]{0,15}:external_submit$/.test(operation.operationId) || !/^sha256:[a-f0-9]{64}$/.test(operation.bindingDigest)) throw new Error("Invalid MCP configuration operation identity");
+  }
+
+  private operationOutcome(operation: ConfigurationExternalOperation): ConfigurationExternalOutcome | undefined {
+    this.validateConfigurationOperation(operation);
+    const prior = this.configurationOperations[operation.operationId];
+    if (prior && prior.bindingDigest !== operation.bindingDigest) throw new Error("MCP configuration operation binding mismatch");
+    return prior ? structuredClone(prior) : undefined;
+  }
+
+  private async recordConfigurationOutcome(outcome: ConfigurationExternalOutcome, configs = this.configs, invalidateChecks: readonly string[] = []): Promise<ConfigurationExternalOutcome> {
+    if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
+    await this.persist(configs, { ...this.configurationOperations, [outcome.operationId]: outcome }, invalidateChecks);
+    return structuredClone(outcome);
+  }
+
+  submitConfigurationMetadata(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["name", "description"]);
+  }
+
+  submitConfigurationTimeout(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["timeoutSeconds"]);
+  }
+
+  submitConfigurationAvailability(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown): Promise<ConfigurationExternalOutcome> {
+    return this.submitConfigurationFields(operation, serverId, expectedVersion, values, ["enabled"]);
+  }
+
+  private submitConfigurationFields(operation: ConfigurationExternalOperation, serverId: string, expectedVersion: string, values: unknown, fields: readonly string[]): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation); if (prior) { if (prior.status === "applied") this.sync(); return prior; }
+      const reject = (code: string) => this.recordConfigurationOutcome({ ...operation, status: "rejected", code });
+      const previous = /^custom-[a-f0-9]{12}$/.test(serverId) && Object.hasOwn(this.configs, serverId) ? this.configs[serverId] : undefined;
+      if (!previous) return reject("CONFIGURATION_RESOURCE_UNAVAILABLE");
+      if (this.configurationMetadataRevision(serverId) !== expectedVersion) return reject("RESOURCE_VERSION_CONFLICT");
+      if (!object(values) || !Object.keys(values).length || Object.keys(values).some(key => !fields.includes(key))) return reject("INVALID_CONFIGURATION_INPUT");
+      if (fields.includes("timeoutSeconds") && (typeof values.timeoutSeconds !== "number" || !Number.isInteger(values.timeoutSeconds) || values.timeoutSeconds < 1 || values.timeoutSeconds > 600)) return reject("INVALID_CONFIGURATION_INPUT");
+      if (fields.includes("enabled") && typeof values.enabled !== "boolean") return reject("INVALID_CONFIGURATION_INPUT");
+      let candidate: CustomMcpServerConfig;
+      try { candidate = normalizeCustomMcpConfig({ ...previous, ...values }, previous); } catch { return reject("INVALID_CONFIGURATION_INPUT"); }
+      if (Object.entries(this.configs).some(([id, item]) => id !== serverId && item.name.toLowerCase() === candidate.name.toLowerCase())) return reject("MCP_METADATA_NAME_CONFLICT");
+      const next = { ...this.configs, [serverId]: candidate };
+      return this.recordConfigurationOutcome({ ...operation, status: "applied", resourceVersions: { mcpMetadata: this.configurationMetadataRevision(serverId, candidate) } }, next);
+    });
+  }
+
+  /** Absence becomes a durable tombstone, fencing a delayed old submit. */
+  resolveConfigurationMetadata(operation: ConfigurationExternalOperation): Promise<ConfigurationExternalOutcome> {
+    return this.mutate(async () => {
+      const prior = this.operationOutcome(operation);
+      if (prior) { await this.finishConfigurationDeletion(operation.operationId); if (prior.status === "applied") this.sync(); return prior; }
+      return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "EXTERNAL_OPERATION_NOT_SAVED" });
+    });
   }
 
   save(value: unknown, id?: string): Promise<CustomMcpServerDetails> {

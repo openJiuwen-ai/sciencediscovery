@@ -50,12 +50,13 @@ export class ModelDestinationAuthorizer {
   }
   assert(record: ConfigurationRecord, credential: boolean): void {
     const view = this.view(record);
+    const field = record.view.capabilityId === "mcp.header_credential" ? "serverId" : "baseUrl";
     if (!view) {
-      if (["model.connect", "model.repair_credential"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
+      if (["model.connect", "model.repair_credential", "memory.credential", "mcp.header_credential"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, field);
       return;
     }
-    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, "baseUrl");
-    if (!["confirmed", "trusted"].includes(view.status)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Confirm the exact destination in the dedicated endpoint control before supplying a credential or sending a probe", 409, "baseUrl");
+    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive a credential", 400, field);
+    if (!["confirmed", "trusted"].includes(view.status)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Confirm the exact destination in the dedicated endpoint control before supplying a credential or sending a probe", 409, field);
   }
   assertContext(context: ConfigurationAdapterContext, profile: ModelProfile, credential: boolean): void {
     if (!context.plan.endpointAuthorization || modelDestination(profile).endpointTarget !== context.plan.endpointAuthorization.endpointTarget)
@@ -68,7 +69,7 @@ export class ModelDestinationAuthorizer {
     const destination = this.view(record);
     if (!destination || record.view.revision !== body.revision || destination.endpointTarget !== body.endpointTarget) throw new ConfigurationError("STALE_ENDPOINT_CONSENT", "Review the current destination before confirming", 409);
     if (!["collecting_input", "awaiting_confirmation", "needs_fix", "failed"].includes(record.view.state)) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "This request cannot accept destination consent", 409);
-    if (destination.status === "blocked") throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, "baseUrl");
+    if (destination.status === "blocked") throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, record.view.capabilityId === "mcp.header_credential" ? "serverId" : "baseUrl");
     this.database.prepare("INSERT OR IGNORE INTO configuration_endpoint_consents(request_id,revision,endpoint_target,session_id,confirmed_at) VALUES(?,?,?,?,?)")
       .run(record.view.id, record.view.revision, destination.endpointTarget, record.view.sessionId, new Date().toISOString());
   }

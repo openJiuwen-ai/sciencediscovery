@@ -52,6 +52,17 @@ export interface ConfigurationApplyResult {
   /** Exact inverse input, including absence markers encoded by the registered domain adapter. */
   reversal?: ConfigurationValues;
 }
+/** An external authority records this identity atomically with its write. */
+export interface ConfigurationExternalOperation { operationId: string; bindingDigest: string; }
+export type ConfigurationExternalOutcome = ConfigurationExternalOperation & (
+  | { status: "applied"; resourceVersions: Record<string, string> }
+  | { status: "rejected"; code: string }
+);
+export interface ConfigurationExternalControl {
+  submit(operation: ConfigurationExternalOperation, context: ConfigurationAdapterContext): Promise<ConfigurationExternalOutcome>;
+  /** A negative outcome must fence a delayed submit, not merely observe absence. */
+  resolve(operation: ConfigurationExternalOperation): Promise<ConfigurationExternalOutcome>;
+}
 export interface ConfigurationAdapter {
   readonly id: ConfigurationCapabilityId;
   readonly version: number;
@@ -59,7 +70,8 @@ export interface ConfigurationAdapter {
   readonly scopes: ReadonlyArray<ConfigurationScope["kind"]>;
   readonly persistence: "local_transaction" | "external_control";
   readonly autoApplyEligible?: boolean;
-  readonly fieldPolicy?: { helpHosts?: readonly string[]; credentialFields?: readonly string[] };
+  readonly externalControl?: ConfigurationExternalControl;
+  readonly fieldPolicy?: { helpHosts?: readonly string[]; credentialFields?: readonly string[]; credentialNormalization?: "trim" | "exact" };
   normalize(input: unknown): ConfigurationValues;
   target(input: ConfigurationValues): string;
   preview(input: ConfigurationValues, snapshot: ConfigurationSnapshot, scope: ConfigurationScope): ConfigurationPlan;

@@ -61,7 +61,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "serverId", "operation", "headerName"];
+  const dependentRemovalField = ["mcp.remove_header", "mcp.header_credential"].includes(request.capabilityId) ? "headerName" : request.capabilityId === "mcp.remove_env" ? "envName" : request.capabilityId === "mcp.delete" ? "confirmDelete" : undefined;
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -100,7 +101,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId)
+    || ["memory.credential", "mcp.header_credential"].includes(request.capabilityId) && request.fields.some(field => field.kind === "credential");
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -143,9 +145,13 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     credentialDraft.current = undefined;
     if (field.kind === "credential") {
       setSecrets((current) => ({ ...current, [field.id]: String(value) }));
-    } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => ({ ...current, [field.id]: value,
-      ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
-        ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) })); }
+    } else { if (targetFields.includes(field.id)) setSecrets({}); setValues((current) => {
+      const next: ConfigurationValues = { ...current, [field.id]: value,
+        ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
+          ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) };
+      if (dependentRemovalField && field.id === "serverId" && current.serverId !== value) delete next[dependentRemovalField];
+      return next;
+    }); }
   }
   async function selectOption(optionId: string) {
     if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
@@ -279,7 +285,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+  const savedForRestart = request.state === "applied" && request.activation.mode === "requires_restart"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const summary = savedForNextRun || savedForRestart ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];
@@ -293,7 +301,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{m.fieldsByCapability[request.capabilityId]?.[change.field] ?? change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -379,18 +387,23 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {request.fields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
-        const common = { id: inputId, name: field.id, disabled: !editable, required: field.required,
+        const translatedLabel = request.capabilityId === "memory.credential" && field.id === "apiToken" ? m.field.neo4jPassword
+          : request.capabilityId === "memory.credential" && field.id === "operation" ? m.field.neo4jOperation : m.field[field.id];
+        const loadingRemovalName = field.id === dependentRemovalField && values.serverId !== fieldValues(request).serverId;
+        const common = { id: inputId, name: field.id, disabled: !editable || loadingRemovalName, required: field.required && !loadingRemovalName,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{m.fieldsByCapability[request.capabilityId]?.[field.id] ?? (locale.startsWith("zh") ? translatedLabel ?? field.label : field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
               placeholder={field.status === "provided" ? m.providedPlaceholder : field.placeholder}
               onChange={(event) => edit(field, event.target.value)} /> : <p>{authorization?.classification === "public_http" ? m.endpointBlocked : m.endpointRequired}</p>}
             <p id={descriptionId}>{m.credential[field.status]} · {m.credentialNote}{field.description ? ` ${field.description}` : ""}</p>
-          </> : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
+          </> : field.kind === "text" && request.capabilityId === "mcp.metadata" && field.id === "description" ? <textarea {...common} rows={4}
+            value={String(values[field.id] ?? "")} placeholder={field.placeholder} onChange={(event) => edit(field, event.target.value)} />
+          : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
             onChange={(event) => edit(field, Array.from(event.target.selectedOptions, option => option.value))}>
             {field.choices?.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
           </select> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>

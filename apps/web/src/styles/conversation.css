@@ -176,7 +176,8 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .configuration-field select[multiple] { min-height: 104px; }
 .configuration-field { display: grid; gap: 6px; min-width: 0; }
 .configuration-field label { font-size: 12px; font-weight: 650; }
-.configuration-field input:not([type=checkbox]), .configuration-field select { width: 100%; min-width: 0; min-height: 36px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text); padding: 7px 9px; }
+.configuration-field input:not([type=checkbox]), .configuration-field select, .configuration-field textarea { width: 100%; min-width: 0; min-height: 36px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text); padding: 7px 9px; }
+.configuration-field textarea { resize: vertical; line-height: 1.5; }
 .configuration-field input[type=checkbox] { justify-self: start; width: 18px; height: 18px; }
 .configuration-field p, .configuration-field a, .configuration-verification p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .configuration-diff, .configuration-verification { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-wrap: anywhere; }

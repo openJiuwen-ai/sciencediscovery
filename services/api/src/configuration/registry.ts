@@ -14,6 +14,7 @@ export class ConfigurationRegistry {
     if (!adapter.scopes.length || adapter.scopes.some((scope) => !["session", "project", "global"].includes(scope))) invalid("Invalid adapter scope");
     if (adapter.persistence !== "local_transaction" && adapter.persistence !== "external_control") invalid("Invalid adapter persistence");
     if (adapter.persistence === "local_transaction" && !adapter.apply) invalid("Local adapters require a synchronous domain apply");
+    if (adapter.persistence === "external_control" && (!adapter.externalControl?.submit || !adapter.externalControl.resolve)) invalid("External adapters require an idempotent submit and authoritative fenced resolve port");
     if (!descriptor?.label || !Object.keys(descriptor.fields).length) invalid("Registered capabilities require finite Agent metadata");
     this.adapters.set(adapter.id, adapter); this.descriptors.set(adapter.id, structuredClone(descriptor)); return this;
   }
@@ -22,6 +23,7 @@ export class ConfigurationRegistry {
     if (!adapter) throw new ConfigurationError("CONFIGURATION_CAPABILITY_UNAVAILABLE", "This configuration capability is not available", 409);
     return adapter;
   }
+  lookup(id: string): ConfigurationAdapter | undefined { return this.adapters.get(id as ConfigurationCapabilityId); }
   list(): ConfigurationCapabilityView[] {
     return [...this.adapters.values()].map((adapter) => ({ id: adapter.id, adapterVersion: adapter.version, schemaVersion: adapter.schemaVersion, scopes: [...adapter.scopes], persistence: adapter.persistence, autoApplyEligible: adapter.autoApplyEligible === true }));
   }

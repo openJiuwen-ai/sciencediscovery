@@ -2310,6 +2310,32 @@ export class SessionStore {
     return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: this.skillSelectionAvailable };
   }
 
+  private configurationMcpHeaderCredentialSource?: (target: string) => import("./configuration/mcp-header-credential-adapter.js").McpHeaderCredentialSnapshot;
+  setConfigurationMcpHeaderCredentialSource(source: (target: string) => import("./configuration/mcp-header-credential-adapter.js").McpHeaderCredentialSnapshot): void { this.configurationMcpHeaderCredentialSource = source; }
+  configurationMcpHeaderCredential(target: string) { return this.configurationMcpHeaderCredentialSource?.(target) ?? { items: [], current: undefined, header: undefined, version: undefined, target: "", destination: undefined }; }
+  private configurationMcpDeletionSource?: (id: string) => import("./configuration/mcp-delete-adapter.js").McpDeletionSnapshot;
+  setConfigurationMcpDeletionSource(source: (id: string) => import("./configuration/mcp-delete-adapter.js").McpDeletionSnapshot): void { this.configurationMcpDeletionSource = source; }
+  configurationMcpDeletion(id: string) { return this.configurationMcpDeletionSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
+  private configurationMcpEnvironmentRemovalSource?: (target: string) => import("./configuration/mcp-env-removal-adapter.js").McpEnvironmentRemovalSnapshot;
+  setConfigurationMcpEnvironmentRemovalSource(source: (target: string) => import("./configuration/mcp-env-removal-adapter.js").McpEnvironmentRemovalSnapshot): void { this.configurationMcpEnvironmentRemovalSource = source; }
+  configurationMcpEnvironmentRemoval(target: string) { return this.configurationMcpEnvironmentRemovalSource?.(target) ?? { items: [], current: undefined, variable: undefined, caseSensitive: process.platform !== "win32", version: undefined }; }
+
+  private configurationMcpHeaderRemovalSource?: (target: string) => import("./configuration/mcp-header-removal-adapter.js").McpHeaderRemovalSnapshot;
+  setConfigurationMcpHeaderRemovalSource(source: (target: string) => import("./configuration/mcp-header-removal-adapter.js").McpHeaderRemovalSnapshot): void { this.configurationMcpHeaderRemovalSource = source; }
+  configurationMcpHeaderRemoval(target: string) { return this.configurationMcpHeaderRemovalSource?.(target) ?? { items: [], current: undefined, header: undefined, version: undefined }; }
+  private configurationMcpAvailabilitySource?: (id: string) => import("./configuration/mcp-availability-adapter.js").McpAvailabilitySnapshot;
+  setConfigurationMcpAvailabilitySource(source: (id: string) => import("./configuration/mcp-availability-adapter.js").McpAvailabilitySnapshot): void { this.configurationMcpAvailabilitySource = source; }
+  configurationMcpAvailability(id: string) { return this.configurationMcpAvailabilitySource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
+  private configurationMcpTimeoutSource?: (id: string) => import("./configuration/mcp-timeout-adapter.js").McpTimeoutSnapshot;
+  setConfigurationMcpTimeoutSource(source: (id: string) => import("./configuration/mcp-timeout-adapter.js").McpTimeoutSnapshot): void { this.configurationMcpTimeoutSource = source; }
+  configurationMcpTimeout(id: string) { return this.configurationMcpTimeoutSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
+  private configurationMcpMetadataSource?: (id: string) => import("./configuration/mcp-metadata-adapter.js").McpMetadataSnapshot;
+  setConfigurationMcpMetadataSource(source: (id: string) => import("./configuration/mcp-metadata-adapter.js").McpMetadataSnapshot): void { this.configurationMcpMetadataSource = source; }
+  configurationMcpMetadata(id: string) { return this.configurationMcpMetadataSource?.(id) ?? { items: [], current: undefined, version: undefined }; }
+
   private configurationConnectorRevisionSource?: (ids?: readonly string[]) => string;
 
   setConfigurationConnectorRevisionSource(source: (ids?: readonly string[]) => string): void {
@@ -2401,7 +2427,9 @@ export class SessionStore {
     const timeoutSettings = this.getTimeoutSettings();
     const quotaSettings = this.getQuotaSettings();
     const ideaTreeSettings = this.getIdeaTreeSettings();
+    const mcpMetadata = capabilityId === "mcp.header_credential" ? this.configurationMcpHeaderCredential(target) : capabilityId === "mcp.metadata" ? this.configurationMcpMetadata(target) : capabilityId === "mcp.timeout" ? this.configurationMcpTimeout(target) : capabilityId === "mcp.remove_header" ? this.configurationMcpHeaderRemoval(target) : capabilityId === "mcp.remove_env" ? this.configurationMcpEnvironmentRemoval(target) : capabilityId === "mcp.availability" ? this.configurationMcpAvailability(target) : capabilityId === "mcp.delete" ? this.configurationMcpDeletion(target) : undefined;
     let systemVersions: Record<string, string> | undefined;
+    if (mcpMetadata) systemVersions = { mcpMetadata: mcpMetadata.version ?? version([target, null]) };
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
@@ -2410,6 +2438,7 @@ export class SessionStore {
       runnerSelection: version([project.runnerIds, project.remoteRunnerHostIds, session.runnerIds, session.remoteRunnerHostIds]),
       registeredRunners: version([this.catalog.remoteHosts, this.getConfigurationDatabase().prepare("SELECT host_id, kind, encrypted_value FROM remote_host_credentials ORDER BY host_id, kind").all()]),
     };
+    else if (capabilityId === "memory.credential") systemVersions = { memoryGraph: version(this.catalog.memoryGraphSettings), memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2421,6 +2450,7 @@ export class SessionStore {
         autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
       } : resourceVersions),
       data: {
+        ...(mcpMetadata ? { mcpMetadata } : {}),
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
@@ -2438,6 +2468,7 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "memory.credential" ? { memoryCredentialSettings: this.getMemoryGraphSettings() } : {}),
       },
     };
   }
@@ -2926,7 +2957,19 @@ export class SessionStore {
     return row ? this.decryptModelApiToken("memory-graph:neo4j", row.encrypted_password) : undefined;
   }
 
-  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+  /** Safe discovery only; no old password decryption or raw connection projection. */
+  configurationMemoryCredential() {
+    const settings = this.getMemoryGraphSettings(); let destinationHost = "Unreviewed destination";
+    try { destinationHost = new URL(settings.neo4jHttp).host || destinationHost; } catch { /* Invalid legacy target remains unreviewed. */ }
+    return { enabled: settings.enabled, backend: settings.backend, destinationHost, hasPassword: settings.hasNeo4jPassword };
+  }
+
+  applyMemoryCredentialConfigurationSync(password: string | null): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    this.applyMemoryGraphSettingsSync({ neo4jPassword: password });
+  }
+
+  private applyMemoryGraphSettingsSync(input: UpdateMemoryGraphSettingsRequest): void {
     const { neo4jPassword, ...settingsInput } = input;
     // 2B: fields are independent — only the keys present in the payload move.
     // Overlay provided fields on the current settings, then normalize. The
@@ -2943,16 +2986,19 @@ export class SessionStore {
       if (neo4jPassword === null) {
         this.database!.prepare("DELETE FROM memory_graph_secret WHERE id = 1").run();
       } else {
-        const trimmed = neo4jPassword.trim();
-        if (!trimmed) throw new Error("The Neo4j password cannot be empty");
-        if (trimmed.length > 16_384) throw new Error("The Neo4j password is too long");
-        const encrypted = this.encryptModelApiToken("memory-graph:neo4j", trimmed);
+        if (!neo4jPassword.trim()) throw new Error("The Neo4j password cannot be empty");
+        if (neo4jPassword.length > 16_384) throw new Error("The Neo4j password is too long");
+        const encrypted = this.encryptModelApiToken("memory-graph:neo4j", neo4jPassword);
         this.database!.prepare(
           "INSERT INTO memory_graph_secret (id, encrypted_password) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET encrypted_password = excluded.encrypted_password",
         ).run(encrypted);
       }
     }
     this.catalog.memoryGraphSettings = next;
+  }
+
+  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+    this.applyMemoryGraphSettingsSync(input);
     await this.saveCatalog();
     return this.getMemoryGraphSettings();
   }
