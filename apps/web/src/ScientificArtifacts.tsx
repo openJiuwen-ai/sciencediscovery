@@ -234,7 +234,10 @@ export function isCsvWorkspaceReady({
   source: string;
   versionId?: string;
 }): boolean {
-  return detected && Boolean(source) && Boolean(versionId) && loadedVersionId === versionId;
+  // Readiness says whether the immutable version arrived, not how many bytes it
+  // holds: a zero-byte `.csv` is a valid artifact, and requiring content kept its
+  // panel on "Loading CSV Artifact" forever.
+  return detected && Boolean(versionId) && loadedVersionId === versionId;
 }
 
 export function DatasetTable({ clippedCells = 0, clippedColumns, columns, rows, totalRows, truncated }: { clippedCells?: number; clippedColumns?: { total: number; shown: number }; columns: string[]; rows: string[][]; totalRows: number; truncated: boolean }) {
