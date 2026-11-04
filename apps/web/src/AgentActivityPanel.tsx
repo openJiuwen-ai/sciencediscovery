@@ -109,7 +109,7 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
       {!activity ? <p>{t("activity.loading")}</p> : <>
         {!activity.transfers.length ? <p>{t("runnerWorkspaces.noTransfers")}</p> : activity.transfers.map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.sourceWorkspaceId} → ${item.targetWorkspaceId} · ${item.state}`}><article>
           <header><strong>{item.sourceWorkspaceId} → {item.targetWorkspaceId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
-          <small>{t("activity.filesCommitted", { committed: item.progress.filter((file) => file.state === "completed").length, total: item.files.length })}</small>
+          <small>{t("activity.filesCommitted", { committed: item.progress.filter((file) => file.state === "completed").length, total: item.progress.length })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
           <details><summary>{t("activity.fileProgress")}</summary>{item.progress.map((file) => <small key={file.targetPath}>{file.targetPath} · {file.state} · {t("downloads.bytes", { count: file.bytes })}</small>)}</details>
           <button type="button" disabled={busy || !live(item.state)} onClick={() => void action(() => client.cancelActivity(sessionId, "transfers", item.id))}>{t("activity.cancelTransfer")}</button>
