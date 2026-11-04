@@ -33,6 +33,10 @@ export interface EvolveStatus {
    *  would invite a second click that starts a second install. */
   canInitialize: boolean;
   error?: string;
+  /** `direct` is the Windows path: no sandbox exists there, so the create
+   *  dialog has to collect the user's confirmation before a run that executes
+   *  candidates can start. Anything else means a sandbox is in place. */
+  sandbox?: "bwrap" | "seatbelt" | "direct" | null;
   state: "error" | "installing" | "not_initialized" | "ready";
 }
 

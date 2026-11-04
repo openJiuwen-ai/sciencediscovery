@@ -87,4 +87,10 @@ Windows 侧已知行为差异：runner 沙箱依赖（bubblewrap/seatbelt）不�
 `ready:false` 优雅降级启动（direct-execution provider 语义）；科学环境
 （micromamba）由后续运行时 PR 交付。
 
+程序演进（evolve）在 Windows 上同样没有隔离后端，改走显式的「无隔离直跑」：桌面壳只为自己
+的进程设置 `SCIENCE_AGENT_EVOLVE_UNISOLATED=1`（服务部署不会继承），「新建实验」对话框因此
+显示一个**默认关闭**的「允许无隔离直接运行候选代码」开关。不开时，任何需要执行候选程序的
+实验都会在启动前被拒绝；开启后候选以当前用户身份直接运行，可读写用户文件、访问网络，且没有
+CPU / 内存限制——这是用户逐次确认的选择，不是平台的默认行为。
+
 Linux/macOS 侧回归说明：本 PR 未改动任何 bash 启动脚本，双平台启动链不回归。

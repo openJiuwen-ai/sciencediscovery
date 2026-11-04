@@ -21,9 +21,11 @@ import type { EvolveEventRecord, EvolveRun } from "@sciencediscovery/schema";
 import type { RunStreamEvent } from "../src/api/types.js";
 import {
   evolveCommand,
+  evolveCommandAllowUnisolated,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveCommand,
+  isEvolveSkill,
 } from "../src/evolve/command.js";
 import {
   bestCandidate,
@@ -211,6 +213,14 @@ test("a created search is counted as a reason to re-read the list, not as a mess
   assert.equal(next.turns.length, 0);
 });
 
+test("only the skill the command names opens the setup dialog", () => {
+  // `/api/skills` reports the design skill under the id the command uses, so
+  // the palette pick is the same skill the composer would have written.
+  assert.equal(isEvolveSkill({ id: "evolve-design" }), true);
+  assert.equal(isEvolveSkill({ id: "skill-creator" }), false);
+  assert.equal(isEvolveSkill({ id: "evolve-designer" }), false);
+});
+
 test("the command parses only as the first word", () => {
   assert.equal(isEvolveCommand("/evolve-design --algorithm puct fewer bytes"), true);
   assert.equal(isEvolveCommand("please /evolve-design"), false);
@@ -255,6 +265,39 @@ test("the pace flag is read as a flag, not as part of the goal", () => {
     evolveCommand("puct", "faster", "confirm"),
     "/evolve-design --algorithm puct faster",
   );
+});
+
+test("the direct-execution approval is a flag, not part of the goal", () => {
+  // The dialog writes it only on Windows, but a detour through setup has to be
+  // able to read it back, and a person may type the flags in any order.
+  assert.equal(evolveCommandAllowUnisolated("/evolve-design --allow-direct faster"), true);
+  assert.equal(
+    evolveCommandAllowUnisolated("/evolve-design --algorithm puct --allow-direct"),
+    true,
+  );
+  assert.equal(evolveCommandAllowUnisolated("/evolve-design --algorithm puct slower"), false);
+  assert.equal(evolveCommandAllowUnisolated("hello"), undefined);
+
+  assert.equal(
+    evolveCommandGoal("/evolve-design --algorithm puct --allow-direct fewer bytes"),
+    "fewer bytes",
+  );
+  // A goal that merely mentions the phrase keeps it.
+  assert.equal(
+    evolveCommandGoal("/evolve-design explain --allow-direct elsewhere"),
+    "explain --allow-direct elsewhere",
+  );
+
+  assert.equal(
+    evolveCommand("puct", "faster", "confirm", true),
+    "/evolve-design --algorithm puct --allow-direct faster",
+  );
+  assert.equal(
+    evolveCommand("openevolve", "faster", "auto", true),
+    "/evolve-design --algorithm openevolve --no-confirm --allow-direct faster",
+  );
+  // Off by default: only the dialog's switch writes it.
+  assert.equal(evolveCommand("puct", "faster"), "/evolve-design --algorithm puct faster");
 });
 
 test("the diff shows an insertion as an insertion, not as a rewritten file", () => {

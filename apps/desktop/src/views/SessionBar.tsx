@@ -15,12 +15,13 @@
 import { useState } from "react";
 
 import type { WorkspaceActions } from "../app/use-workspace.js";
+import type { EvolveStatus } from "../api/evolve.js";
 import type { SessionDetail } from "../api/types.js";
+import { evolveRuntimeLabel, evolveRuntimeTone } from "../evolve/status.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { sessionTitle } from "../app/session-title.js";
 import { SidebarToggle } from "./SidebarToggle.js";
-import { EvolveGlyph } from "./evolve/glyphs.js";
 
 interface Props {
   actions: WorkspaceActions;
@@ -28,6 +29,10 @@ interface Props {
   /** The session has a search expanding right now; the header can say so
    *  without the shelf row being open. */
   evolveLive?: boolean;
+  /** Whether the runtime can start a search. The capsule says so before the
+   *  click, so an installation that is missing is not discovered only after
+   *  writing a goal. */
+  evolveState?: EvolveStatus["state"];
   /** Opens the session's searches, or starts the dialog when it has none. */
   onEvolve?: () => void;
   /** Brings the collapsed left column back. The control belongs at the page
@@ -62,6 +67,7 @@ export function SessionBar({
   actions,
   detail,
   evolveLive,
+  evolveState,
   onEvolve,
   onExpandSidebar,
   onToggleWorkspace,
@@ -74,6 +80,11 @@ export function SessionBar({
   // then carries the same name the sidebar gives it, not a second word for
   // the same state.
   const title = detail ? sessionTitle(detail.title) : TEXT.sessionBar.untitled;
+  // Until the status read lands the runtime is unknown; "not ready" is the
+  // honest word for that, and it is also what the capsule says after a failed
+  // read, so an install that is missing is never promised by the header.
+  const evolveRuntime = evolveState ?? "not_initialized";
+  const evolveTone = evolveRuntimeTone(evolveRuntime, evolveLive === true);
 
   return (
     <header className="task-head">
@@ -107,15 +118,22 @@ export function SessionBar({
       </div>
       <div className="task-head-actions">
         {onEvolve === undefined ? null : (
+          /* A capsule rather than an icon: the header has room for a word, and
+             the words "available" or "not ready" are what the reader needs
+             before deciding to open it. */
           <button
             aria-haspopup="dialog"
-            aria-label={TEXT.evolve.open}
-            className={`bar-icon-button is-evolve${evolveLive ? " is-live" : ""}`}
+            className={`evolve-capsule is-${evolveTone}`}
             onClick={onEvolve}
-            title={TEXT.evolve.open}
+            title={TEXT.evolve.shelfHint}
             type="button"
           >
-            <EvolveGlyph size={16} />
+            <span aria-hidden="true" className={`evolve-dot is-${evolveTone}`} />
+            <span className="evolve-capsule-label">{TEXT.evolve.title}</span>
+            <span aria-hidden="true" className="evolve-capsule-sep">·</span>
+            <span className="evolve-capsule-state">
+              {evolveRuntimeLabel(evolveRuntime, evolveLive === true)}
+            </span>
           </button>
         )}
         {/* Only the closed state has this button: once the panel is open, its

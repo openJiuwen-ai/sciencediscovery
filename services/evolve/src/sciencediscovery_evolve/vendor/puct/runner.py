@@ -13,8 +13,9 @@
 # limitations under the License.
 
 # Copied from agentdescent @ b3d4240, examples/era/_era_runner.py.
-# Everything below this line is verbatim (sha256:e1ddfe6df2fd0d44...); only this header
-# was added.
+# Everything below this line is verbatim (sha256:e1ddfe6df2fd0d44...), except the
+# guarded `resource` import: the module is Unix-only, and this script is what runs a
+# candidate on a Windows direct-execution search. See the comment there.
 #
 # DO NOT REWRITE. It encodes one non-obvious thing: RLIMIT_CPU counts CPU
 # seconds *across threads*, so an OpenBLAS that helpfully starts eight would
@@ -44,7 +45,17 @@ import importlib.util
 import io
 import sys
 import json
-import resource
+# `resource` is a Unix-only stdlib module; Windows has no counterpart, and on
+# a direct-execution run this script is what starts the candidate. Leaving the
+# bare import here made every Windows candidate die at startup with
+# `ModuleNotFoundError: resource` — an error the search reads as the model
+# having written a broken program. set_resource_limits() already treats every
+# refused limit as "unavailable", so `resource = None` reports all five rather
+# than pretending they were applied.
+try:
+    import resource
+except ImportError:
+    resource = None
 import time
 from typing import List
 

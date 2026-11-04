@@ -86,6 +86,7 @@ export function EvolveShelf({ onNew, onOpen, runs }: EvolveShelfProps) {
             run.goal.statement,
             evolveStatusLabel(run.status),
             ...(run.goal.checkpointMode === "auto" ? [TEXT.evolve.autoPaceTitle] : []),
+            ...(run.goal.allowUnisolated === true ? [TEXT.evolve.unisolatedTitle] : []),
           ].join(" · ")}
           type="button"
         >
@@ -93,6 +94,9 @@ export function EvolveShelf({ onNew, onOpen, runs }: EvolveShelfProps) {
           <span className="evolve-chip-title">{evolveShortTitle(run.goal.statement)}</span>
           {run.goal.checkpointMode === "auto"
             ? <span className="evolve-chip-auto">{TEXT.evolve.autoPace}</span>
+            : null}
+          {run.goal.allowUnisolated === true
+            ? <span className="evolve-chip-unisolated">{TEXT.evolve.unisolated}</span>
             : null}
           <span className="evolve-chip-meta">
             {run.candidates}/{run.goal.budget.expansions}

@@ -179,6 +179,106 @@ test("the create dialog can send a design that does not pause at checkpoints", a
   ).toBe(true);
 });
 
+test("a host with no sandbox asks for the no-isolation confirmation before sending", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    // What a Windows installation reports: no bubblewrap, no Seatbelt.
+    evolveStatus: { canInitialize: true, sandbox: "direct", state: "ready" },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "程序演进" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("优化目标").fill("让压缩比更高");
+
+  // Off by default: the switch cannot give consent on the user's behalf.
+  const consent = dialog.getByRole("switch", { name: /允许无隔离直接运行候选代码/ });
+  await expect(consent).toBeVisible();
+  await expect(consent).not.toBeChecked();
+
+  await consent.click();
+  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await expect.poll(() =>
+    mock.calls.some(
+      (call) =>
+        call.method === "POST" &&
+        call.path === "/api/sessions/session-1/messages" &&
+        call.body?.includes("/evolve-design --algorithm puct --allow-direct 让压缩比更高") === true,
+    ),
+  ).toBe(true);
+});
+
+test("a typed design command on a host with no sandbox detours through the consent switch", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    evolveStatus: { canInitialize: true, sandbox: "direct", state: "ready" },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  // The dialog is the only place this installation can collect the consent,
+  // so a command typed straight into the composer does not skip it — the goal
+  // is carried over rather than sent to an agent that would design a run the
+  // server then refuses.
+  await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
+  await page.locator("#composer-textarea").press("Enter");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("优化目标")).toHaveValue("让压缩比更高");
+  const consent = dialog.getByRole("switch", { name: /允许无隔离直接运行候选代码/ });
+  await expect(consent).not.toBeChecked();
+  expect(posts(mock)).toHaveLength(0);
+
+  await consent.click();
+  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await expect.poll(() =>
+    mock.calls.some(
+      (call) =>
+        call.method === "POST" &&
+        call.path === "/api/sessions/session-1/messages" &&
+        call.body?.includes("/evolve-design --algorithm puct --allow-direct 让压缩比更高") === true,
+    ),
+  ).toBe(true);
+});
+
+test("picking the evolve skill from the slash palette opens the setup dialog", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    sessions: [makeSession()],
+    skills: [
+      {
+        currentRevision: 1,
+        declaredVersion: "1.3.0",
+        description: "设计评分卡并启动一次程序演进",
+        diagnostics: [],
+        hash: "hash-evolve",
+        id: "evolve-design",
+        name: "程序演进设计",
+        readOnly: true,
+        resourceSummary: { bytes: 2, files: 1, kinds: {} },
+        source: "built-in",
+      },
+    ],
+  });
+  await page.goto("/");
+
+  await page.locator("#composer-textarea").fill("/evolve");
+  const row = page.locator(".composer-skills .expert-row").first();
+  await expect(row).toContainText("程序演进设计");
+  await row.click();
+
+  // The pick opens the dialog that collects the command's two flags: which
+  // search, and whether it pauses at checkpoints.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("新建程序演进实验");
+  await expect(dialog.getByLabel("优化目标")).toBeVisible();
+  await expect(dialog.getByRole("radiogroup", { name: "搜索算法" })).toBeVisible();
+  await expect(dialog.getByRole("switch", { name: /检查点需要人工确认/ })).toBeChecked();
+  // The command was not merely written into the draft: the composer is empty
+  // and the slash was never sent.
+  await expect(page.locator("#composer-textarea")).toHaveValue("");
+  expect(posts(mock)).toHaveLength(0);
+});
+
 test("a missing runtime is installed from the dialog before the form appears", async ({
   page,
 }) => {

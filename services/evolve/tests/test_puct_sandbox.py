@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -156,6 +157,37 @@ def test_no_backend_refuses_rather_than_running_unconfined(tmp_path):
     the wrong way to make anything portable."""
     with pytest.raises(SandboxUnavailable, match="no candidate isolation"):
         sandbox_command(tmp_path, ["x.py"], capability=SandboxCapability(), timeout=10.0)
+
+
+def test_direct_execution_hands_over_only_what_a_candidate_needs(tmp_path, monkeypatch):
+    """Windows has no backend, so the environment is the last thing this side controls.
+
+    The sidecar holds the control plane's internal token, and a candidate is
+    model-written code. Passing `os.environ` through would hand it that
+    credential; the allowlist keeps the interpreter's own variables and points
+    every spelling of the temp directory at the scratch, and nothing else.
+    """
+    monkeypatch.setenv("SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN", "internal-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("TMPDIR", "/somewhere/else")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    command, env = sandbox_command(
+        scratch, ["-c", "pass"], capability=SandboxCapability(backend="direct"),
+        timeout=5.0, extra_env={"SCIENCE_AGENT_SHARDS": "1"},
+    )
+
+    assert SandboxCapability(backend="direct").available
+    # Nothing wraps the interpreter: the candidate runs as this user.
+    assert command == [sys.executable, "-I", "-c", "pass"]
+    assert "SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN" not in env
+    assert "OPENAI_API_KEY" not in env
+    # What the run staged for the evaluator still arrives, the same way it does
+    # through the two sandboxed backends.
+    assert env["SCIENCE_AGENT_SHARDS"] == "1"
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        assert env[key] == str(scratch.resolve()), f"{key} must point at the scratch"
 
 
 def test_the_container_corrections_reach_the_command(tmp_path):

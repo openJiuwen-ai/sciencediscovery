@@ -367,6 +367,13 @@ export interface EvolveRunProposal {
    *  choice is a pace, not a different search: the scorecard, the probe and
    *  the run itself are identical either way. */
   checkpointMode?: EvolveCheckpointMode;
+  /** The user's answer to the no-isolation warning, on Windows.
+   *
+   *  Set from `/evolve-design --allow-direct`, which the desktop writes only
+   *  when the user turned the warning switch on in the setup dialog. The
+   *  control plane refuses a run that needs it and does not carry it; a host
+   *  with bubblewrap or Seatbelt ignores it. Default false. */
+  allowUnisolated?: boolean;
   /** What the search is for, in the user's terms. Shown on the run card. */
   statement: string;
   /** How a candidate gets its number, in plain words — the one line a person
@@ -479,6 +486,17 @@ export interface EvolveGoal {
    * every checkpoint — read absent as `"confirm"`.
    */
   checkpointMode?: EvolveCheckpointMode;
+  /**
+   * Whether this run executes candidates without isolation.
+   *
+   *  Present only when the installation has no sandbox (the Windows desktop)
+   *  *and* the user confirmed the warning for this run. Read as a record, not
+   *  a permission: pre-flight is what decides whether a run may start, and it
+   *  will not accept a goal that carries this without the sandbox being
+   *  `direct`. A run card shows it so a result from an unconfined search is
+   *  never mistaken for one that was contained.
+   */
+  allowUnisolated?: boolean;
   /**
    * Whether the mutation calls may use the model's hidden reasoning.
    *

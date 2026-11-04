@@ -91,6 +91,13 @@ function switchTag(html: string): string {
   return html.match(/<input[^>]*role="switch"[^>]*>/)?.[0] ?? "";
 }
 
+/** The unisolated switch is the second one in the dialog, so the generic
+ *  helper above would read the checkpoint switch instead. */
+function unisolatedSwitch(html: string): string {
+  const after = html.split("is-unisolated")[1] ?? "";
+  return after.match(/<input[^>]*>/)?.[0] ?? "";
+}
+
 function view(over: Partial<EvolveRunView> = {}): EvolveRunView {
   return {
     ...emptyRunView(),
@@ -287,6 +294,74 @@ test("the create dialog pauses at checkpoints unless the command said otherwise"
   assert.equal(switchTag(auto).includes("checked"), false);
 });
 
+test("only a host with no sandbox offers the direct-execution warning", () => {
+  // The switch is the user's per-run consent, and a switch on a host that has
+  // a sandbox would be a choice the deployment cannot honour.
+  const render = (sandbox: EvolveStatus["sandbox"], initialAllowUnisolated?: boolean) => renderToStaticMarkup(
+    <EvolveCreateDialog
+      archived={false}
+      initialAllowUnisolated={initialAllowUnisolated}
+      initializing={false}
+      onClose={() => {}}
+      onInitialize={() => {}}
+      onSend={() => {}}
+      running={false}
+      status={{ canInitialize: true, sandbox, state: "ready" }}
+    />,
+  );
+
+  const direct = render("direct");
+  assert.match(direct, /evolve-create-confirm is-unisolated/);
+  assert.match(direct, /允许无隔离直接运行候选代码/);
+  // Off unless the detour carried an approval: a default cannot give consent.
+  assert.equal(unisolatedSwitch(direct).includes("checked"), false);
+  assert.match(direct, /会在启动前被拒绝/);
+  assert.match(unisolatedSwitch(render("direct", true)), /checked/);
+
+  for (const sandbox of ["bwrap", "seatbelt", null, undefined] as const) {
+    assert.equal(
+      render(sandbox).includes("允许无隔离直接运行候选代码"),
+      false,
+      `${String(sandbox)}: a sandboxed host must not offer to run unconfined`,
+    );
+  }
+});
+
+test("a search that ran without a sandbox is marked in the shelf and the panel", () => {
+  const marked = run({ goal: { ...run().goal, allowUnisolated: true } });
+  const shelf = renderToStaticMarkup(
+    <EvolveShelf onNew={() => {}} onOpen={() => {}} runs={[marked, run({ id: "isolated" })]} />,
+  );
+  // Only the run whose goal recorded the confirmation is marked.
+  assert.equal((shelf.match(/evolve-chip-unisolated/g) ?? []).length, 1);
+  assert.match(shelf, />无隔离</);
+  assert.match(shelf, /候选代码没有在沙箱中执行/);
+
+  const overlay = renderToStaticMarkup(
+    <EvolveOverlay
+      client={client}
+      onClose={() => {}}
+      onError={() => {}}
+      onRunChanged={() => {}}
+      run={marked}
+    />,
+  );
+  assert.match(overlay, /evolve-unisolated/);
+  assert.match(overlay, />无隔离</);
+
+  // A goal written before the field existed has no badge.
+  const plain = renderToStaticMarkup(
+    <EvolveOverlay
+      client={client}
+      onClose={() => {}}
+      onError={() => {}}
+      onRunChanged={() => {}}
+      run={run()}
+    />,
+  );
+  assert.equal(plain.includes("无隔离"), false);
+});
+
 test("the create dialog offers the install when the runtime is missing", () => {
   const status: EvolveStatus = { canInitialize: true, state: "not_initialized" };
   const html = renderToStaticMarkup(
@@ -321,18 +396,40 @@ test("the create dialog explains a runtime the deployment will not install", () 
   assert.match(html, /请联系管理员/);
 });
 
-test("the header's evolve control is named, and marks a live search", () => {
-  const html = renderToStaticMarkup(
+function header(over: { live?: boolean; state?: "error" | "installing" | "not_initialized" | "ready" } = {}): string {
+  return renderToStaticMarkup(
     <SessionBar
       actions={actions}
-      evolveLive={true}
+      evolveLive={over.live ?? false}
+      evolveState={over.state ?? "ready"}
       onEvolve={() => {}}
       onExpandSidebar={() => {}}
       onToggleWorkspace={() => {}}
       workspaceOpen={false}
     />,
   );
-  assert.match(html, /aria-label="程序演进"/);
-  assert.match(html, /is-evolve is-live/);
-  assert.match(html, new RegExp(TEXT.evolve.open));
+}
+
+test("the header's evolve control is a capsule that says whether a search can run", () => {
+  const html = header();
+  assert.match(html, /class="evolve-capsule is-good"/);
+  assert.match(html, new RegExp(TEXT.evolve.title));
+  assert.match(html, new RegExp(TEXT.evolve.runtime.ready));
+});
+
+test("a live search outranks the runtime state in the capsule", () => {
+  const html = header({ live: true });
+  assert.match(html, /class="evolve-capsule is-live"/);
+  assert.match(html, new RegExp(TEXT.evolve.runtime.running));
+  assert.doesNotMatch(html, new RegExp(TEXT.evolve.runtime.ready));
+});
+
+test("a capsule with no runtime says so instead of promising a search", () => {
+  const html = header({ state: "not_initialized" });
+  assert.match(html, /class="evolve-capsule is-quiet"/);
+  assert.match(html, new RegExp(TEXT.evolve.runtime.not_initialized));
+
+  const broken = header({ state: "error" });
+  assert.match(broken, /class="evolve-capsule is-bad"/);
+  assert.match(broken, new RegExp(TEXT.evolve.runtime.error));
 });

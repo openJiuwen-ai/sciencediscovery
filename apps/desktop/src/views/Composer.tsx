@@ -69,6 +69,10 @@ interface Props {
   /** 新建项目 from the landing strip: a Project needs nothing but a name. */
   onCreateProject: (name: string) => void;
   onOpenSettings: () => void;
+  /** A skill whose choice has more to it than its command: the pick is handed
+   *  here, and `true` means the surface it opened has taken the draft, so no
+   *  command is written. */
+  onPickSkill?: (skill: SkillDescriptor) => boolean;
   onSelectModel: (modelId: string) => void;
   /** Point the next conversation at a Project, or at none (`undefined`). */
   onSelectProject: (projectId?: string) => void;
@@ -612,6 +616,7 @@ export function Composer({
   onClearAttachments,
   onCreateProject,
   onOpenSettings,
+  onPickSkill,
   onRemoveAttachment,
   onRetryAttachment,
   onSelectModel,
@@ -693,6 +698,15 @@ export function Composer({
   const active = Math.min(highlight, Math.max(choices.length - 1, 0));
 
   const pickSkill = (skill: SkillDescriptor) => {
+    // A skill with a setup surface of its own takes the pick: its command
+    // carries flags the dialog asks for, so writing the bare command would
+    // only be a step towards opening that dialog anyway. The draft is emptied
+    // because the slash was the whole of it.
+    if (onPickSkill?.(skill) === true) {
+      setText("");
+      setDismissed(true);
+      return;
+    }
     setText(skillDraft(skill));
     setDismissed(true);
     const node = area.current;
