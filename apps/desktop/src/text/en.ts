@@ -1090,9 +1090,12 @@ export const EN: Text = {
     checkpoint: {
       eyebrow: (step: number, total?: number) => (total === undefined ? `Checkpoint ${step}` : `Checkpoint ${step}/${total}`),
       waiting: "Waiting for you",
+      answered: "Answered",
       auto: "Auto",
       confirm: "Looks right — continue",
       adjust: "Needs a change",
+      send: "Send",
+      cancel: "Cancel",
       confirmReply: "Looks right — continue.",
       adjustDraft: "I'd like to change this step: ",
       busy: "This reply is still running; wait for it to finish.",

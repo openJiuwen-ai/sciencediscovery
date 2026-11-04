@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useState } from "react";
 
 import type { EvolveCheckpoint } from "../evolve/checkpoint.js";
 import { MarkdownProse } from "../MarkdownProse.js";
@@ -32,9 +32,6 @@ export interface CheckpointReply {
   /** The assistant is still answering: a card that could be pressed while the
    *  composer is blocked would send a message into a live run. */
   busy: boolean;
-  /** Put this text in the composer without sending it, for a change the reader
-   *  is about to describe. */
-  draft: (text: string) => void;
   /** Send this as the reader's message. */
   reply: (text: string) => void;
 }
@@ -45,6 +42,24 @@ export const CheckpointReplyProvider = CheckpointReplyContext.Provider;
 
 export function useCheckpointReply(): CheckpointReply | undefined {
   return useContext(CheckpointReplyContext);
+}
+
+/**
+ * Whether the card is already part of the past.
+ *
+ * Folding is decided by the transcript, not by the card: a card is answered
+ * once a later turn exists, which only the conversation can see. A card that
+ * was answered keeps its header — the question and the title — and puts its
+ * body behind a click, so a conversation that walked four checkpoints reads as
+ * four lines instead of four screens. An unanswered card is shown in full:
+ * it is the thing the reader is being asked to act on.
+ */
+const CheckpointAnsweredContext = createContext(false);
+
+export const CheckpointAnsweredProvider = CheckpointAnsweredContext.Provider;
+
+export function useCheckpointAnswered(): boolean {
+  return useContext(CheckpointAnsweredContext);
 }
 
 /**
@@ -62,9 +77,55 @@ export function useCheckpointReply(): CheckpointReply | undefined {
  */
 export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint }) {
   const reply = useCheckpointReply();
+  const answered = useCheckpointAnswered();
   const text = TEXT.evolve.checkpoint;
   const label = text.eyebrow(checkpoint.step, checkpoint.total);
   const auto = checkpoint.pace === "auto";
+  /** 需要调整 opens the note in the card instead of handing the composer a
+   *  sentence: the change is described where the step is, and sending it does
+   *  not take the reader's eyes or the caret down to the bottom of the window. */
+  const [adjusting, setAdjusting] = useState(false);
+  const [note, setNote] = useState("");
+  const closeAdjust = () => {
+    setAdjusting(false);
+    setNote("");
+  };
+  const sendAdjustment = () => {
+    const change = note.trim();
+    if (change === "" || reply === undefined || reply.busy) return;
+    // The prefix is what tells the model this is a revision of the step rather
+    // than a new instruction; the reader's own words follow it unchanged.
+    reply.reply(`${text.adjustDraft}${change}`);
+    closeAdjust();
+  };
+  const body = checkpoint.body === "" ? null : (
+    <div className="evolve-checkpoint-body text">
+      <MarkdownProse>{checkpoint.body}</MarkdownProse>
+    </div>
+  );
+  // A card the conversation has moved past folds to its header; opening it
+  // shows what the step said, never the buttons — that step already has an
+  // answer below it, and a second press would send it twice.
+  if (answered) {
+    return (
+      <details
+        aria-label={label}
+        className={`evolve-checkpoint is-${checkpoint.pace} is-answered`}
+        data-pace={checkpoint.pace}
+        data-step={checkpoint.step}
+      >
+        <summary className="evolve-checkpoint-head">
+          <span className="evolve-checkpoint-step">{label}</span>
+          {checkpoint.title === undefined ? null : (
+            <span className="evolve-checkpoint-title">{checkpoint.title}</span>
+          )}
+          <span className="evolve-checkpoint-pace">{auto ? text.auto : text.answered}</span>
+          <span aria-hidden="true" className="collapse-chev">›</span>
+        </summary>
+        {body}
+      </details>
+    );
+  }
   return (
     <section
       aria-label={label}
@@ -79,12 +140,55 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
       {checkpoint.title === undefined ? null : (
         <h4 className="evolve-checkpoint-title">{checkpoint.title}</h4>
       )}
-      {checkpoint.body === "" ? null : (
-        <div className="evolve-checkpoint-body text">
-          <MarkdownProse>{checkpoint.body}</MarkdownProse>
-        </div>
-      )}
-      {auto || reply === undefined ? null : (
+      {body}
+      {auto || reply === undefined ? null : adjusting ? (
+        <form
+          className="evolve-checkpoint-adjust-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            sendAdjustment();
+          }}
+        >
+          <textarea
+            aria-label={text.adjustDraft}
+            autoFocus
+            className="evolve-checkpoint-note"
+            onChange={(event) => setNote(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter writes a second line; the shortcut sends, the way it does
+              // in the composer. A bare Enter here would make a half-written
+              // change impossible to check before it went.
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                sendAdjustment();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                closeAdjust();
+              }
+            }}
+            placeholder={text.adjustDraft}
+            rows={2}
+            value={note}
+          />
+          <div className="evolve-checkpoint-actions">
+            <button
+              className="evolve-checkpoint-confirm"
+              disabled={reply.busy || note.trim() === ""}
+              title={reply.busy ? text.busy : undefined}
+              type="submit"
+            >
+              {text.send}
+            </button>
+            <button
+              className="evolve-checkpoint-adjust"
+              onClick={closeAdjust}
+              type="button"
+            >
+              {text.cancel}
+            </button>
+          </div>
+        </form>
+      ) : (
         <div className="evolve-checkpoint-actions">
           <button
             className="evolve-checkpoint-confirm"
@@ -98,7 +202,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
           <button
             className="evolve-checkpoint-adjust"
             disabled={reply.busy}
-            onClick={() => reply.draft(text.adjustDraft)}
+            onClick={() => setAdjusting(true)}
             title={reply.busy ? text.busy : undefined}
             type="button"
           >

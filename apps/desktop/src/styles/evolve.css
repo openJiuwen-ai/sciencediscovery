@@ -1596,3 +1596,93 @@
 }
 
 .evolve-checkpoint-adjust:hover:not(:disabled) { background: var(--surface-subtle); }
+
+/* 需要调整 writes the change in the card. The note is the composer's own
+   input, at the card's scale: same border, same focus colour, so it reads as
+   typing rather than as a second kind of control. */
+.evolve-checkpoint-adjust-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.evolve-checkpoint-note {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 58px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  resize: vertical;
+}
+
+.evolve-checkpoint-note::placeholder { color: var(--text-faint); }
+
+.evolve-checkpoint-note:focus {
+  border-color: var(--discovery);
+  outline: none;
+}
+
+.evolve-checkpoint-adjust-form .evolve-checkpoint-actions { margin-top: 0; }
+
+/* A checkpoint the conversation has moved past. The card keeps the step and
+   the question it asked, and folds the rest away: a design that walked four
+   checkpoints leaves four scannable lines in the transcript instead of four
+   screens of prose. No accent edge here — nothing is waiting on the reader. */
+.evolve-checkpoint.is-answered {
+  margin: 8px 0;
+  padding: 9px 14px;
+  border-left-color: var(--border-strong);
+  background: var(--surface-subtle);
+}
+
+.evolve-checkpoint.is-answered > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.evolve-checkpoint.is-answered > summary::-webkit-details-marker { display: none; }
+
+.evolve-checkpoint.is-answered > summary.evolve-checkpoint-head {
+  margin-bottom: 0;
+}
+
+.evolve-checkpoint.is-answered .evolve-checkpoint-step { color: var(--text-faint); }
+
+.evolve-checkpoint.is-answered .evolve-checkpoint-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolve-checkpoint.is-answered .evolve-checkpoint-pace {
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.evolve-checkpoint.is-answered .collapse-chev {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 14px;
+  transition: transform .15s ease;
+}
+
+.evolve-checkpoint.is-answered[open] > summary .collapse-chev { transform: rotate(90deg); }
+
+.evolve-checkpoint.is-answered[open] > .evolve-checkpoint-body { margin-top: 9px; }

@@ -28,7 +28,7 @@ import { getSubagent } from "./api/sessions.js";
 import type { Subagent, SubagentStep } from "./api/types.js";
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
-import { isEmptyTranscript, landingKey, type LandingSeed } from "./app/landing.js";
+import { isEmptyTranscript, landingKey } from "./app/landing.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
 import type { ToolDetail } from "./app/tool-io.js";
 import { followSubagent } from "./app/follow-subagent.js";
@@ -495,32 +495,21 @@ export function App({ initialToken }: Props) {
     void actions.send(content);
   };
 
-  /** Text a checkpoint card puts in the composer. It replaces the draft
-   *  rather than appending to it, the way a starter prompt does: the press is
-   *  "I want to change this step", not "add a sentence to what I was typing".
-   *  The nonce makes the same sentence land twice — choosing the same card
-   *  again is still a choice.
-   *
-   *  These hooks sit above the boot screens' early returns on purpose: a hook
-   *  declared after them runs on the main screen and not on the loading one,
-   *  and React counts that as a different number of hooks between renders. */
-  const [composerSeed, setComposerSeed] = useState<LandingSeed>();
-  const seedNonce = useRef(0);
   /** The current `sendMessage`, read at press time. Holding it in a ref is
    *  what lets the provider's value stay stable while a run streams: a value
    *  rebuilt on every event would re-render every checkpoint card in the
    *  transcript on every delta. It starts as a no-op and the effect replaces
-   *  it before any card can be pressed. */
+   *  it before any card can be pressed.
+   *
+   *  These hooks sit above the boot screens' early returns on purpose: a hook
+   *  declared after them runs on the main screen and not on the loading one,
+   *  and React counts that as a different number of hooks between renders. */
   const latestSend = useRef<(content: string) => void>(() => {});
   useEffect(() => {
     latestSend.current = sendMessage;
   });
   const checkpointReply = useMemo<CheckpointReply>(() => ({
     busy: state.running,
-    draft: (text) => {
-      seedNonce.current += 1;
-      setComposerSeed({ nonce: seedNonce.current, text });
-    },
     reply: (text) => latestSend.current(text),
   }), [state.running]);
 
@@ -749,7 +738,7 @@ export function App({ initialToken }: Props) {
                 run={state.run}
                 workspaceFiles={state.panelFiles}
               />
-              <Composer {...composerProps} seed={composerSeed} />
+              <Composer {...composerProps} />
             </>
           )}
         </main>
