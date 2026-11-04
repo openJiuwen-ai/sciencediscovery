@@ -307,6 +307,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     if (this.executed) throw new Error("Agent handle has already been executed");
     this.executed = true;
     const durable = new DurableContextStore({
+      fenceUntrusted: (content, category) => fenceUntrustedContent(
+        neutralizeUntrustedTags(content), category, this.untrustedFenceNonce),
       history: this.options.gatewayHistory,
       ...(this.options.runContract ? { runContract: this.options.runContract } : {}),
     });

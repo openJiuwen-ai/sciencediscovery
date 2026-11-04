@@ -163,16 +163,18 @@ test("the guard passes trust metadata to durable output storage", async () => {
 });
 
 test("final model fitting bounds only the body and preserves framework text and fence closure", () => {
-  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 140, maxLines: 7 });
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 360, maxLines: 9 });
   const result = guard.fitModelContent({
     body: "x".repeat(1_000),
     frameworkPrefix: "TRUSTED HEADER\n",
     frameworkSuffix: "\nTRUSTED SUFFIX",
+    outputRecord: record({ ref: "tool-output-0123456789abcdef" }),
     wrap: (body) => `[BEGIN UNTRUSTED remote #nonce]\n${body}\n[END UNTRUSTED #nonce]`,
   });
-  assert.ok(Buffer.byteLength(result, "utf8") <= 140);
-  assert.ok(result.split("\n").length <= 7);
-  assert.ok(result.startsWith("TRUSTED HEADER\n[BEGIN UNTRUSTED remote #nonce]\n"));
+  assert.ok(Buffer.byteLength(result, "utf8") <= 360);
+  assert.ok(result.split("\n").length <= 9);
+  assert.ok(result.startsWith("TRUSTED HEADER\n[bounded tool output] The final fenced result was truncated"));
+  assert.ok(result.indexOf("read_tool_output") < result.indexOf("[BEGIN UNTRUSTED remote #nonce]"));
   assert.ok(result.endsWith("[END UNTRUSTED #nonce]\nTRUSTED SUFFIX"));
 });
 

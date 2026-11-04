@@ -72,7 +72,7 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
    */
   untrustedFenceNonce?: string;
   /** Required bounded-state reduction. Failure stops the turn; observers remain best-effort. */
-  commitResult?(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number }): Promise<void>;
+  commitResult?(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number; untrustedCategory?: string }): Promise<void>;
 }
 
 export interface ToolBatchSupersedeDecision {
@@ -442,11 +442,19 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         body,
         frameworkPrefix,
         frameworkSuffix,
+        ...(outputRecord ? { outputRecord } : {}),
         selfBounded,
         wrap,
       }) ?? `${frameworkPrefix}${wrap(body)}${frameworkSuffix}`;
     }
-    await this.options.commitResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });
+    await this.options.commitResult?.({
+      call,
+      content,
+      ...(boundedDetails !== undefined ? { details: boundedDetails } : {}),
+      isError,
+      sequence,
+      ...(fenceResult && category ? { untrustedCategory: category } : {}),
+    });
     try { this.options.onResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence }); } catch { /* observer isolation */ }
     return {
       content: modelVisible,

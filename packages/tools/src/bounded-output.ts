@@ -269,20 +269,29 @@ export class ToolOutputGuard {
     body: string;
     frameworkPrefix?: string;
     frameworkSuffix?: string;
+    outputRecord?: ToolOutputRecord;
     selfBounded?: boolean;
     wrap?(body: string): string;
   }): string {
     const tolerance = input.selfBounded ? SELF_BOUNDED_TOLERANCE : 1;
     const maxBytes = this.maxBytes * tolerance;
     const maxLines = this.maxLines * tolerance;
-    const prefix = input.frameworkPrefix ?? "";
+    const originalPrefix = input.frameworkPrefix ?? "";
     const suffix = input.frameworkSuffix ?? "";
     const wrap = input.wrap ?? ((body: string) => body);
-    const compose = (body: string) => `${prefix}${wrap(body)}${suffix}`;
+    const complete = `${originalPrefix}${wrap(input.body)}${suffix}`;
     const fits = (text: string) => Buffer.byteLength(text, "utf8") <= maxBytes
       && splitKeepingLineEndings(text).length <= maxLines;
-    const complete = compose(input.body);
     if (fits(complete)) return complete;
+
+    // The pre-fence guard result can fit while its closing marker and framework
+    // guidance push the final model message over budget. Make that second cut
+    // explicit and preserve the durable readback path outside the fence.
+    const truncationNotice = input.outputRecord
+      ? `[bounded tool output] The final fenced result was truncated to fit the model-output budget. Read the full output with read_tool_output(ref="${input.outputRecord.ref}", offset=<1-based line>, limit=<lines>).\n`
+      : "[bounded tool output] The final fenced result was truncated to fit the model-output budget. No new readback ref was created; use any readback ref in the framework guidance above or re-run the tool with a narrower request.\n";
+    const prefix = `${originalPrefix}${truncationNotice}`;
+    const compose = (body: string) => `${prefix}${wrap(body)}${suffix}`;
 
     const envelopeBytes = Buffer.byteLength(compose(""), "utf8");
     const byteBudget = maxBytes - envelopeBytes;
@@ -303,7 +312,7 @@ export class ToolOutputGuard {
     }
     // A budget smaller than the trust envelope itself cannot safely carry any
     // of the untrusted bytes. Fail closed with framework-only text.
-    return boundText("[bounded tool output] Untrusted content omitted because the configured model-output budget is too small for its trust boundary.", {
+    return boundText(`${truncationNotice}[bounded tool output] Untrusted content omitted because the configured model-output budget is too small for its trust boundary.`, {
       keep: "head", maxBytes, maxLines,
     }).text;
   }

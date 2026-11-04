@@ -70,6 +70,8 @@ import {
 } from "@sciencediscovery/runtime-core";
 import {
   createToolOutputTools,
+  fenceUntrustedContent,
+  neutralizeUntrustedTags,
   resolveToolOutputSettings,
   ToolOutputGuard,
   ToolOutputReadTracker,
@@ -297,8 +299,8 @@ export function createToolRegistry(
       role: "tool", tool_call_id: call.id, name: call.name, content,
       ...(output ? { additional_kwargs: { tool_output: output } } : {}),
     }),
-    commitResult: async ({ call, content, isError, sequence }) => {
-      durable.observe(call, { content, isError }, sequence);
+    commitResult: async ({ call, content, isError, sequence, untrustedCategory }) => {
+      durable.observe(call, { content, isError, ...(untrustedCategory ? { untrustedCategory } : {}) }, sequence);
       for (const contribution of plugins.contributions) {
         await contribution.commitResult?.({ call, content, isError, sequence });
       }
@@ -359,6 +361,7 @@ class NativeAgent implements NativeAgentHandle {
   private endpoint!: ModelEndpoint;
   private policy!: ModelClientPolicy;
   private readonly waitController = new ExternalWaitController();
+  private readonly untrustedFenceNonce = randomUUID().replaceAll("-", "").slice(0, 12);
   private readonly durableContext: DurableContextStore;
   private history: WireMessage[] = [];
   private controller: AbortController | undefined;
@@ -377,6 +380,8 @@ class NativeAgent implements NativeAgentHandle {
   constructor(private readonly options: NativeAgentOptions) {
     this.contextId = `${options.sessionId}:${randomUUID()}`;
     this.durableContext = new DurableContextStore({
+      fenceUntrusted: (content, category) => fenceUntrustedContent(
+        neutralizeUntrustedTags(content), category, this.untrustedFenceNonce),
       history: options.gatewayHistory,
       ...(options.runContract ? { runContract: options.runContract } : {}),
     });
@@ -392,6 +397,7 @@ class NativeAgent implements NativeAgentHandle {
     this.toolRegistry = createToolRegistry(options, this.plugins, this.durableContext, {
       onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       recordResult: options.versioning ? async (input) => { await this.versionRecorder?.recordObservation(input); } : undefined,
+      untrustedFenceNonce: this.untrustedFenceNonce,
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("read_skill")

@@ -674,11 +674,11 @@ test("final fenced messages respect output budgets and keep framework guidance o
     ...createToolOutputTools(store),
   ], {
     createResultMessage: resultMessage,
-    outputGuard: new ToolOutputGuard({ sink: store, maxBytes: 600, maxLines: 12, retentionBytes: 1 }),
+    outputGuard: new ToolOutputGuard({ sink: store, maxBytes: 900, maxLines: 12, retentionBytes: 1 }),
     untrustedFenceNonce: "boundnonce",
   });
   const result = await registry.execute({ args: {}, id: "oversized", name: "web_fetch" }, new AbortController().signal);
-  assert.ok(Buffer.byteLength(result.content, "utf8") <= 600, `final message was ${Buffer.byteLength(result.content, "utf8")} bytes`);
+  assert.ok(Buffer.byteLength(result.content, "utf8") <= 900, `final message was ${Buffer.byteLength(result.content, "utf8")} bytes`);
   assert.ok(result.content.split("\n").length <= 12);
   const fenceAt = result.content.indexOf("[BEGIN UNTRUSTED remote #boundnonce]");
   assert.ok(fenceAt > 0, result.content);
@@ -692,6 +692,32 @@ test("final fenced messages respect output budgets and keep framework guidance o
   assert.equal(result.message.additional_kwargs?.tool_output?.neutralizeTags, true);
   const stored = await store.read(ref);
   assert.equal(stored.text, raw, "the full unfenced evidence remains stored verbatim");
+});
+
+test("post-fence overflow reports the extra omission and readback ref outside the fence", async () => {
+  const store = new ToolOutputStore();
+  const raw = `UNTRUSTED-${"x".repeat(250)}`;
+  const nonce = "postfencenonce";
+  assert.ok(Buffer.byteLength(raw, "utf8") < 320, "the pre-fence body fits");
+  assert.ok(Buffer.byteLength(`[BEGIN UNTRUSTED remote #${nonce}]\n${raw}\n[END UNTRUSTED #${nonce}]`, "utf8") > 320);
+  const registry = new ToolRegistry([{
+    name: "web_fetch", label: "web_fetch", description: "web_fetch", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text", text: raw }] }; },
+  }], {
+    createResultMessage: resultMessage,
+    outputGuard: new ToolOutputGuard({ sink: store, maxBytes: 320, maxLines: 8, retentionBytes: 1 }),
+    untrustedFenceNonce: nonce,
+  });
+  const result = await registry.execute({ args: {}, id: "post-fence", name: "web_fetch" }, new AbortController().signal);
+  const ref = result.message.additional_kwargs?.tool_output?.ref;
+  assert.ok(ref);
+  assert.ok(Buffer.byteLength(result.content, "utf8") <= 320, result.content);
+  const fenceAt = result.content.indexOf(`[BEGIN UNTRUSTED remote #${nonce}]`);
+  const noticeAt = result.content.indexOf("The final fenced result was truncated");
+  assert.ok(noticeAt >= 0 && noticeAt < fenceAt, result.content);
+  assert.ok(result.content.indexOf(`read_tool_output(ref="${ref}"`) < fenceAt, result.content);
+  assert.ok(!result.content.includes(raw), "the extra body omission is real");
+  assert.equal((await store.read(ref)).text, raw, "readback retains the complete pre-fence evidence");
 });
 
 test("oversized MCP, task, and custom-category outputs retain trust through every readback mode", async () => {

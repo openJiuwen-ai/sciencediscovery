@@ -53,6 +53,7 @@ export const BLOCKED_TAG_NAMES: ReadonlySet<string> = new Set([
   "mcp_routing_hints",
   "plan_state",
   "run_contract",
+  "runtime_context_data",
   "skill_system",
   "subagent_system",
   "system-reminder",
