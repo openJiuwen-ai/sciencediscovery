@@ -7371,8 +7371,9 @@ test("WSP-005 a reserved device name in a session file write answers 400 and nam
   );
   assert.deepEqual(listed.body, []);
 
-  // Stems that merely begin with a reserved word, and ports above 9, are ordinary files.
-  for (const path of ["conifer.csv", "console.log", "auxiliary.csv", "com10.csv"]) {
+  // Stems that merely begin with a reserved word, ports above 9, and a directory that is
+  // clean are ordinary paths; the walk must not start refusing legitimate nested names.
+  for (const path of ["conifer.csv", "console.log", "auxiliary.csv", "com10.csv", "conifer/notes.txt"]) {
     const accepted = await write(path);
     assert.equal(accepted.response.status, 201, `${path} must be writable`);
   }
