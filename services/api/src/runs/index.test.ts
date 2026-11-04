@@ -15,11 +15,14 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 
 import { installApiTestModelCatalog } from "../model-catalog.fixture.js";
+import { FileReplaceError } from "../platform/os/replace.js";
 import { SessionStore } from "../store.js";
 import {
   appendToolProgress,
@@ -30,6 +33,7 @@ import {
   computeSettingsSnapshot,
   firstUserAuthoredMessage,
   skillAuthoringCommandPrompt,
+  scheduleSessionRuns,
   splitArtifactVersionSuffix,
 } from "./index.js";
 
@@ -259,4 +263,49 @@ test("completed traces retain bounded authoritative evidence and actual per-resp
   }
   for(const value of ["null","plain evidence","{}",'{"sourceId":"other","toolId":"search","records":[]}',
     '{"sourceId":"pubmed","toolId":"read","records":[]}','{"sourceId":"pubmed","toolId":"search","records":3}']) assert.equal(trace(value).paperCount,undefined);
+});
+
+test("a state write that fails after retries is contained instead of killing the API", async (context) => {
+  // #816: the writing half of a chat run is started with `void`, so a rejected
+  // `writeArray` (all 20 replace attempts exhausted) had nowhere to go and the
+  // process died on the unhandled rejection. The scheduler now catches at that
+  // boundary; this pins the containment, not the retry (replace.test.ts holds
+  // that half).
+  const root = resolve(process.cwd(), ".tmp", `scheduler-containment-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const project = await store.createProject("Scheduler containment");
+  const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
+  const run = await store.createSessionRun({
+    sessionId: session.id,
+    prompt: "Persist through a locked state file",
+    settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+  });
+  context.mock.method(store, "appendSessionRunEvent", async () => {
+    throw new FileReplaceError(
+      resolve(root, "session-runs", `${session.id}.json`),
+      20,
+      "EPERM",
+      Object.assign(new Error("EPERM: operation not permitted, rename"), {
+        code: "EPERM", errno: -4048, path: resolve(root, "session-runs", `${session.id}.json`), syscall: "rename",
+      }),
+    );
+  });
+  context.after(() => context.mock.restoreAll());
+
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => { rejections.push(reason); };
+  process.on("unhandledRejection", onRejection);
+  context.after(() => process.off("unhandledRejection", onRejection));
+
+  scheduleSessionRuns(store, undefined as never, undefined as never, undefined as never, undefined as never,
+    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+    undefined as never, undefined as never, undefined as never, undefined as never, undefined as never,
+    session.id, undefined as never, null, undefined);
+  await delay(200);
+
+  assert.deepEqual(rejections, [], "a failed state write must be logged, not rejected into the process");
+  const persisted = await store.getSessionRun(session.id, run.id);
+  assert.equal(persisted?.status, "running", "the run keeps the last status it could persist for restart recovery");
 });

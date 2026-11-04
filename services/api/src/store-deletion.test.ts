@@ -3,7 +3,8 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import fs, { mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import type { TestContext } from "node:test";
@@ -54,6 +55,39 @@ test("Session deletion waits for main/child commits and fences late creation; fi
   finally { refs.close(); }
   const reopened = new SessionStore(data); await reopened.load();
   assert.equal(reopened.getSession(session.id), undefined);
+});
+
+test("a transient EPERM on the deletion journal finalize is retried", async (t) => {
+  const { store, session } = await fixture(t);
+  // The journal finalize is the same atomic replace the state writers use; on
+  // Windows a scanner holding `operation.next.json` rejected the bare rename
+  // there too. Inject that failure twice on the one hop under test and let the
+  // facade's retry carry it, so the deletion still commits.
+  const hostRename = rename;
+  let finalizes = 0;
+  t.mock.method(fs, "rename", async (source: string, destination: string) => {
+    if (source.endsWith("operation.next.json") && destination.endsWith("operation.json")) {
+      finalizes += 1;
+      if (finalizes <= 2) {
+        throw Object.assign(
+          new Error(`EPERM: operation not permitted, rename '${source}' -> '${destination}'`),
+          { code: "EPERM", errno: -4048, path: source, dest: destination, syscall: "rename" },
+        );
+      }
+    }
+    return hostRename(source, destination);
+  });
+  syncBuiltinESMExports();
+  // Restore the namespace *and* re-sync, otherwise the named `rename` binding
+  // inside store.ts keeps the mock (with its failure counter) for every later
+  // test in this file.
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  await store.deleteSession(session.id, session.id);
+  await store.whenDeletionsSettle();
+
+  assert.ok(finalizes >= 3, `the journal finalize must be retried, got ${finalizes} attempt(s)`);
+  assert.equal(store.getSession(session.id), undefined);
 });
 
 test("an open session stays readable until its catalog deletion commits", async (t) => {

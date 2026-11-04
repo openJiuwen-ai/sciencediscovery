@@ -52,6 +52,13 @@ function failReplaces(context: TestContext, failures: number, code = "EPERM"): (
     }
     return hostRename(source, destination);
   });
+  // `platform/os/replace.ts` imports `rename` as a *named* binding from
+  // "node:fs/promises", and a named import is bound when the module is
+  // evaluated. Mocking the `fs` namespace alone therefore never reaches it —
+  // this call re-syncs the builtin ESM named exports from the mocked namespace
+  // object. The test would still pass without it (the mock would simply be
+  // invisible and no failure would be injected), so the line is load-bearing
+  // evidence, not cleanup: keep it next to the mock it enables.
   syncBuiltinESMExports();
   context.after(() => context.mock.restoreAll());
   return () => attempts;

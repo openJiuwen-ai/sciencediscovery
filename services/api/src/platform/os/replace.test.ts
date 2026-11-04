@@ -16,7 +16,7 @@ import { createTest } from "../../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { FileReplaceError, replaceFile } from "./replace.js";
+import { FileReplaceError, replaceFile, transientReplaceCodes } from "./replace.js";
 
 function errno(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: rename`), { code });
@@ -38,8 +38,8 @@ test("a transient sharing violation is retried until the replace succeeds", asyn
   assert.deepEqual(calls, Array.from({ length: 3 }, () => "staging.tmp->state.json"));
 });
 
-test("every transient errno is retried", async () => {
-  for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+test("every errno this host retries heals by waiting", async () => {
+  for (const code of transientReplaceCodes()) {
     let attempt = 0;
     await replaceFile("staging.tmp", "state.json", {
       attempts: 3,
@@ -53,7 +53,34 @@ test("every transient errno is retried", async () => {
   }
 });
 
-test("a persistent sharing violation is classified after the last attempt", async () => {
+test("EACCES is a Windows sharing errno, not a POSIX retry", async () => {
+  // Windows reports the transient hold as EACCES too (its redirector maps the
+  // sharing violation onto that code); POSIX reserves EACCES for a lasting
+  // mode/ownership problem, and the store write path is on the chat run path,
+  // so waiting 5.2 s there would only slow down a failure that cannot heal.
+  assert.ok(transientReplaceCodes("win32").has("EACCES"), "Windows must retry EACCES");
+  assert.equal(transientReplaceCodes("linux").has("EACCES"), false, "POSIX must not retry EACCES");
+  for (const code of ["EPERM", "EBUSY"]) {
+    assert.ok(transientReplaceCodes("linux").has(code), `${code} stays transient on POSIX`);
+    assert.ok(transientReplaceCodes("win32").has(code), `${code} stays transient on Windows`);
+  }
+  let attempt = 0;
+  await assert.rejects(
+    replaceFile("staging.tmp", "state.json", {
+      attempts: 5,
+      delayMs: () => 0,
+      transientCodes: transientReplaceCodes("linux"),
+      renameFile: async () => {
+        attempt += 1;
+        throw errno("EACCES");
+      },
+    }),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES",
+  );
+  assert.equal(attempt, 1, "a POSIX EACCES fails at once instead of burning the patience budget");
+});
+
+test("the classified error keeps the errno fields callers classify on", async () => {
   let attempt = 0;
   await assert.rejects(
     replaceFile("staging.tmp", "session-runs/session.json", {
@@ -61,7 +88,7 @@ test("a persistent sharing violation is classified after the last attempt", asyn
       delayMs: () => 0,
       renameFile: async () => {
         attempt += 1;
-        throw errno("EPERM");
+        throw Object.assign(errno("EPERM"), { dest: "session-runs/session.json", errno: -4048, path: "staging.tmp", syscall: "rename" });
       },
     }),
     (error: unknown) => {
@@ -71,6 +98,10 @@ test("a persistent sharing violation is classified after the last attempt", asyn
       assert.equal(error.destination, "session-runs/session.json");
       assert.match(error.message, /after 3 attempts \(EPERM\)/);
       assert.equal((error.cause as NodeJS.ErrnoException).code, "EPERM", "the last failure is kept as the cause");
+      assert.equal(error.errno, -4048, "errno survives the retry wrapper");
+      assert.equal(error.syscall, "rename");
+      assert.equal(error.path, "staging.tmp");
+      assert.equal(error.dest, "session-runs/session.json");
       return true;
     },
   );
