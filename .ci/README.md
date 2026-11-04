@@ -184,7 +184,10 @@ artifact preserves worker HTML/image links and the suite-level plan/summary.
 
 For direct PR, push and merge-group events, `policy` checks the complete Git
 diff. Only `README.md`, `README_zh.md`, `CONTRIBUTING.md`, `LICENSE`,
-`Third_Party_Open_Source_Software_Notice.txt` and paths under `docs/` qualify.
+`Third_Party_Open_Source_Software_Notice.txt`, paths under `docs/`, and paths
+under `.agents/skills/` ending in `.md` qualify. The skill path prefix and
+extension are case-sensitive; other `.agents/` paths and non-Markdown files
+under `.agents/skills/` keep the full profile.
 Renames check both paths. Empty or unavailable diffs keep the full profile;
 Markdown elsewhere (including `skills/`) also keeps it. PR diffs use the merge
 base; push and merge-group diffs use the event's base and head SHAs.
