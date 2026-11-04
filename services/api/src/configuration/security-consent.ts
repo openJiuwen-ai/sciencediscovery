@@ -1,17 +1,17 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationSecurityConsent } from "@sciencediscovery/schema";
+import { configurationNeedsSecurityConsent, type ConfigurationSecurityConsent } from "@sciencediscovery/schema";
 import type { DatabaseSync } from "node:sqlite";
 import type { ConfigurationRecord } from "./types.js";
 import { ConfigurationError, integer, object, string } from "./validation.js";
 
-export function configurationNeedsSecurityConsent(capabilityId: string): boolean {
-  return ["security.network", "security.approval_mode", "security.default_approval", "security.automatic_configuration", "proxy.default"].includes(capabilityId);
-}
+export { configurationNeedsSecurityConsent };
 
 /** A user-only policy acknowledgement, independent of ordinary configuration and tool permission. */
 export class ConfigurationSecurityAuthorizer {
   constructor(private readonly database: DatabaseSync) {
+    // Retain acknowledgements with the Session for audit, even after a request
+    // expires or is dismissed. Session deletion removes the audit rows.
     database.exec(`CREATE TABLE IF NOT EXISTS configuration_security_consents (
       request_id TEXT NOT NULL, session_id TEXT NOT NULL, revision INTEGER NOT NULL,
       target_digest TEXT NOT NULL, confirmed_at TEXT NOT NULL,

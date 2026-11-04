@@ -9,6 +9,7 @@ import { normalizeConfigurationFields } from "./schema-normalizer.js";
 import { canonical, ConfigurationError, digest, displayText, integer, invalid, object, string } from "./validation.js";
 import { choosePlan, defaultChoices, makeChoiceReceipt, normalizeChoices, projectChoiceReceipt, selectedChoice } from "./choices.js";
 import { configurationNeedKey } from "./need-key.js";
+import { configurationNeedsSecurityConsent } from "./security-consent.js";
 
 const editable = new Set(["collecting_input", "awaiting_confirmation", "needs_fix", "stale", "failed"]);
 export interface ConfigurationRequestServiceOptions {
@@ -211,7 +212,9 @@ export class ConfigurationRequestService {
   private async proposeInternal(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>, trustedReversal = false): Promise<ConfigurationRequestView> {
     const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
-    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "proxy.resources", "proxy.default", "proxy.provider", "proxy.mcp", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+    const capabilityId = String(value.capabilityId);
+    if (input.protocolVersion !== 3 && (configurationNeedsSecurityConsent(capabilityId) ||
+        ["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "proxy.resources", "proxy.provider", "proxy.mcp", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(capabilityId)))
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);

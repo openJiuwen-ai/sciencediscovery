@@ -19,6 +19,7 @@ test('CFG-X03d: manual shared proxy save syncs child profiles once without decry
  const h=await fixture(context),before=structuredClone(h.provider),other=structuredClone(h.other),otherModel=structuredClone(h.otherModel),secrets=cipher(h.store);let reads=0;
  h.store.getProviderApiToken=()=>{reads++;throw Error('Old plaintext access forbidden');};h.store.getModelApiToken=()=>{reads++;throw Error('Old plaintext access forbidden');};h.store.getProxySettings=()=>{throw Error('Full secret-bearing proxy view forbidden');};
  const card=await h.propose({providerId:h.provider.id,proxyPolicy:h.policy});assert.equal(card.scope.kind,'global');assert.equal(card.autoApplyAt,undefined);assert.deepEqual(h.store.getProvider(h.provider.id),before);assert.equal((await h.framework.decide(h.session.id,card.id,h.approval(card))).state,'applied');
+ assert.match(card.impact.message, /replaces the individual proxy selections of all existing models/);
  const saved=structuredClone(h.store.getProvider(h.provider.id)!);assert.equal(saved.proxyPolicy,h.policy);assert.deepEqual(withoutRoute(saved),withoutRoute(before));assert.equal(h.store.getModel(h.first.id)?.proxyPolicy,h.policy);assert.equal(h.store.getModel(h.second.id)?.proxyPolicy,h.policy);assert.deepEqual(h.store.getProvider(h.other.id),other);assert.deepEqual(h.store.getModel(h.otherModel.id),otherModel);assert.deepEqual(cipher(h.store),secrets);assert.equal(reads,0);
  await h.framework.decide(h.session.id,card.id,h.approval(card));assert.deepEqual(h.store.getProvider(h.provider.id),saved);
 });

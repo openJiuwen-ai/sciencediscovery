@@ -1,9 +1,11 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { securityConsentMessages } from "./security-consent-messages.js";
+
 const en = {
+  securityAcknowledgement: securityConsentMessages.en,
   securityTitle: "Independent security policy confirmation",
-  proxyDefaultAcknowledge: "I have reviewed the new default route for inheriting outbound traffic, including later requests that carry credentials.",
   securityConfirm: "Independently approve this exact security policy",
   securityConfirmed: "This exact security policy was independently confirmed. Review the changes, then confirm the configuration.",
   securityRequired: "A separate human security acknowledgement is required. Ordinary Apply and tool Always allow do not authorize this change.",
@@ -65,8 +67,8 @@ const en = {
 };
 
 const zh: typeof en = {
+  securityAcknowledgement: securityConsentMessages.zh,
   securityTitle: "独立确认安全策略",
-  proxyDefaultAcknowledge: "我已核对继承部署默认的出站流量将使用的新路由，包括后续携带凭据的请求。",
   securityConfirm: "独立确认此精确安全策略",
   securityConfirmed: "此精确安全策略已独立确认。请核对修改内容，再确认配置。",
   securityRequired: "必须先由人工独立确认安全影响。普通 Apply 或工具的 Always allow 不构成本次授权。",

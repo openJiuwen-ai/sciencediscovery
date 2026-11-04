@@ -32,7 +32,8 @@ export function createProxyDefaultConfigurationAdapter(store: SessionStore): Con
     },
     apply: context => {
       store.applyProxyDefaultConfigurationSync(String(context.input.defaultPolicy));
-      return { summary: "Deployment proxy default saved; proxy connectivity and existing client reconfiguration were not verified" };
+      return { resourceRevision: digest(store.configurationSnapshot(context.sessionId, "proxy.default", "proxy.default").resourceVersions),
+        summary: "Deployment proxy default saved; proxy connectivity and existing client reconfiguration were not verified" };
     },
   };
 }

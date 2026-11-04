@@ -9,6 +9,7 @@ import type { ConfigurationRequestView, ConfigurationValues } from "@sciencedisc
 import { SessionStore } from "../store.js";
 import { configurationFramework, type ConversationalConfigurationFramework } from "./framework.js";
 import { discoverConfiguration } from "./discovery.js";
+import { digest } from "./validation.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 async function harness(context: { after(action: () => Promise<void>): void }) {
   const parent = resolve(process.cwd(), ".tmp"); const root = resolve(parent, `configuration-proxy-${randomUUID()}`);
@@ -45,6 +46,8 @@ test("CFG-X68-734: deployment proxy writes require independent human security co
   await h.framework.confirmSecurity(h.session.id, card.id, { revision: card.revision, targetDigest: consent.targetDigest, acknowledged: true });
   assert.equal((await h.framework.decide(h.session.id, card.id, input)).state, "applied");
   assert.equal(h.store.configurationProxyDefaults().defaultPolicy, h.policy);
+  assert.equal(h.framework.repository.getReceipt(card.id, card.revision)?.result.resourceRevision,
+    digest(h.store.configurationSnapshot(h.session.id, "proxy.default", "proxy.default").resourceVersions));
 });
 
 test("CFG-X68-734: deleting a Session removes its security consent", async context => {
