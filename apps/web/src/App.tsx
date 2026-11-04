@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { ErrorDiagnosticActions, ErrorDiagnosticClient } from "./ErrorDiagnosticActions.js";
+import { FeedbackDialog } from "./FeedbackDialog.js";
+import { openFeedback } from "./feedback-open.js";
 import { commitsOnEnter } from "./ime-enter.js";
 import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
@@ -144,6 +146,7 @@ import {
   CodeFileIcon,
   DownloadIcon,
   EditIcon,
+  FeedbackIcon,
   FileIcon,
   ImageIcon,
   InfoIcon,
@@ -4740,6 +4743,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
           <span><SettingsIcon size={17} /></span><span>{t("app.systemConfiguration")}</span><span className="mode-chip">{models.length}</span>
         </button>
+        <button className="settings-button feedback-entry" onClick={() => openFeedback()}>
+          <span><FeedbackIcon size={17} /></span><span>{t("feedback.entry")}</span>
+        </button>
       </aside>
 
       <main className="main-area">
@@ -5718,6 +5724,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       /> : null}
 
     </div>
+
+      <FeedbackDialog />
     </PluginWebHost></RuntimeConfigClient.Provider></ErrorDiagnosticClient.Provider>
   );
 }

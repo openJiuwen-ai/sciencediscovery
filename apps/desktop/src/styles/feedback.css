@@ -1,0 +1,237 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* The feedback dialog borrows the modal shell from `overlays.css` and only
+   styles the form, tabs, result and history lists it adds inside. */
+
+/* Smaller corner than the shared modal shell: this dialog is a form, not a
+   full-page surface, so the square-ish edge reads as more utilitarian. */
+.feedback-dialog {
+  max-width: 560px;
+  border-radius: var(--radius-s);
+}
+
+.feedback-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 28px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.feedback-tabs button {
+  padding: 8px 14px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.feedback-tabs button:hover { color: var(--text-strong); }
+.feedback-tabs button.active {
+  border-bottom-color: var(--primary);
+  color: var(--text-strong);
+}
+
+.feedback-form { display: flex; flex-direction: column; gap: 14px; }
+
+.feedback-kind { display: flex; gap: 8px; }
+.feedback-kind button {
+  padding: 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.feedback-kind button:hover { background: var(--surface-hover); }
+.feedback-kind button.active {
+  border-color: var(--primary-soft);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+}
+
+.feedback-field { display: flex; flex-direction: column; gap: 6px; }
+.feedback-field > span {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.feedback-body,
+.feedback-contact,
+.feedback-option-grid select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+}
+.feedback-body { resize: vertical; }
+
+.feedback-counter {
+  align-self: flex-end;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.feedback-hint { color: var(--muted); font-size: 11px; }
+.feedback-inline-error { color: var(--danger); font-size: 12px; }
+
+.feedback-option-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.feedback-option-grid select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23667085' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 30px;
+}
+
+.feedback-diagnostics { display: flex; flex-direction: column; gap: 6px; }
+.feedback-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.feedback-diagnostics-preview summary { cursor: pointer; color: var(--primary-strong); font-size: 12px; }
+.feedback-diagnostics-preview pre {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.feedback-pii {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--danger-soft);
+  border-radius: var(--radius-s);
+  background: var(--danger-soft);
+}
+.feedback-pii p { color: var(--danger); font-size: 13px; }
+.feedback-pii--none { display: none; }
+
+.feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.feedback-result { display: flex; flex-direction: column; gap: 10px; }
+.feedback-result h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+.feedback-result p { color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.feedback-failure h3 { color: var(--danger); }
+
+.feedback-receipt-banner {
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-subtle);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: .02em;
+  color: var(--text-strong);
+  word-break: break-all;
+}
+
+.feedback-history { display: flex; flex-direction: column; gap: 8px; }
+.feedback-history .muted { color: var(--muted); font-size: 13px; }
+.feedback-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.feedback-history-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.feedback-receipt { font-family: var(--font-mono); font-size: 13px; color: var(--text-strong); }
+.feedback-history-copy small { color: var(--muted); font-size: 11px; }
+/* Scoped: shell.css owns the shared .icon-button, and redefining it here
+   resized every icon button in the app. */
+.feedback-delete {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+  font-size: 14px;
+}
+.feedback-delete:hover { background: var(--surface-hover); color: var(--text-strong); }
+
+/* One bottom row holding the repo star and the feedback entry, star first. */
+.side-footer-row {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+/* Inside the row the two pills lay themselves out, so they drop the
+   column-level placement they were styled with on their own. */
+.side-footer-row .side-star,
+.side-footer-row .side-feedback {
+  align-self: auto;
+  margin-top: 0;
+}
+
+/* The sidebar entry, styled to match the repository star pill beside it. */
+.side-feedback {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid #e3e3e3;
+  border-radius: 10px;
+  background: #fff;
+  color: #6b6b6b;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.side-feedback:hover {
+  border-color: #d4d4d4;
+  background: #fafafa;
+  color: #191919;
+}
+.side-feedback svg { flex: 0 0 auto; }
