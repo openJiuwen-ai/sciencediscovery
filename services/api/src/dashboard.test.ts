@@ -1539,8 +1539,10 @@ test("a delimited preview keeps every row as wide as the columns it advertises",
   assert.deepEqual(quotedPayload.columns, ["a", "b"]);
   assert.deepEqual(quotedPayload.rows, [["x,y", "2"]]);
 
-  // Only the rows that are actually returned widen the table: a wide row beyond
-  // maxRows must not add an empty column that no returned row fills.
+  // The column set comes from the whole file, not from the rows a caller asked
+  // for: the same file must show the same columns at maxRows=1 and maxRows=1000,
+  // so a wide row past the window still sets the width and the returned rows are
+  // padded to it.
   const truncated = await seedArtifact(fixture, {
     content: "a,b\n1,2\n3,4,5\n",
     kind: "dataset",
@@ -1551,19 +1553,48 @@ test("a delimited preview keeps every row as wide as the columns it advertises",
     fixture.store, fixture.recorder, fixture.session.id, truncated, "1",
   );
   if (truncatedPayload.mode !== "dataset-table") assert.fail(`unexpected mode: ${truncatedPayload.mode}`);
-  assert.deepEqual(truncatedPayload.columns, ["a", "b"], "a row past maxRows must not add a column");
-  assert.deepEqual(truncatedPayload.rows, [["1", "2"]]);
+  assert.deepEqual(
+    truncatedPayload.columns,
+    ["a", "b", ""],
+    "the width is the file's widest line, whatever maxRows returns",
+  );
+  assert.deepEqual(truncatedPayload.rows, [["1", "2", ""]], "the returned row is padded to that width");
   assert.equal(truncatedPayload.totalRows, 2);
   assert.equal(truncatedPayload.truncated, true);
 });
 
-test("a delimited preview caps its width instead of copying one pathological line into every row", async (context) => {
+test("a long file does not cost a legitimate table its columns", async (context) => {
   const fixture = await createFixture(context);
-  // Squaring the grid is what the padding fix is for, but one 200k-field line
-  // must not be copied into every returned row: a 400 KB file asked for 20M
-  // cells and a 60 MB response. The width is capped by the cell budget, decided
-  // once from the file's own row count, and the surplus cells of the wide line
-  // are counted in the payload instead of disappearing silently.
+  // The width is the widest line capped by a constant, never the file's row
+  // count over the budget: 20,000 rows of six cells still pad to 100 x 6 cells,
+  // so the sixth column must not disappear from a long file.
+  for (const rowCount of [20_000, 50_000]) {
+    const lines = ["title"];
+    for (let index = 0; index < rowCount; index += 1) lines.push(`${index},a,b,c,d,e`);
+    const vid = await seedArtifact(fixture, {
+      content: lines.join("\n"),
+      kind: "dataset",
+      logicalName: `long-${rowCount}.csv`,
+      mediaType: "text/csv",
+    });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+    assert.equal(payload.columns.length, 6, `${rowCount} rows must not cost the sixth column`);
+    assert.equal(payload.rows.length, 100);
+    for (const row of payload.rows) assert.equal(row.length, 6, `${rowCount}: rows are six cells wide`);
+    assert.deepEqual(payload.clippedColumns, { shown: 6, total: 6 });
+    assert.equal(payload.clippedCells, 0, `${rowCount}: nothing is past the width`);
+    assert.deepEqual(payload.warnings, [], `${rowCount}: a whole table warns about nothing`);
+  }
+});
+
+test("a delimited preview caps a pathological line and counts what it leaves out", async (context) => {
+  const fixture = await createFixture(context);
+  // One 200k-field line may widen the grid only up to the column constant; the
+  // payload says how many columns and cells did not make it, instead of hiding
+  // the loss behind a shorter row.
   const wide = Array.from({ length: 200_001 }, () => "w").join(",");
   const lines = ["a,b"];
   for (let index = 0; index < 99; index += 1) lines.push("1,2");
@@ -1578,33 +1609,111 @@ test("a delimited preview caps its width instead of copying one pathological lin
     fixture.store, fixture.recorder, fixture.session.id, vid,
   );
   if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
-  // 100 returned rows share the 100k-cell budget: 1000 columns wide, 100 rows
-  // tall, so the grid is square instead of as wide as the outlier line.
-  assert.equal(payload.columns.length, 1_000, "the preview stops widening at its cell budget");
+  assert.equal(payload.columns.length, 1_001, "the width stops at the column constant");
   assert.equal(payload.rows.length, 100);
   // Compare lengths and short slices: diffing a 200k-element array against a
-  // 1000-element one is what the assertion itself must never do.
+  // 1001-element one is what the assertion itself must never do.
   for (const row of payload.rows) {
     assert.equal(row.length, payload.columns.length, "every row is as wide as the grid");
   }
   const cells = payload.rows.reduce((total, row) => total + row.length, 0);
-  assert.ok(cells <= 100_000, `the grid must fit the 100k-cell budget, got ${cells}`);
+  assert.ok(cells <= 100_100, `the grid must fit the preview bound, got ${cells}`);
   assert.deepEqual(payload.rows[99]?.slice(0, 2), ["w", "w"], "the leading cells of the wide line are kept");
-  assert.equal(
-    payload.clippedCells,
-    199_001,
-    "the 199,001 cells past the cap are counted, not hidden",
+  assert.equal(payload.clippedCells, 199_000, "the cells past the width are counted, not hidden");
+  assert.deepEqual(
+    payload.clippedColumns,
+    { shown: 1_001, total: 200_001 },
+    "the payload reports the file's width and the shown width",
   );
+  assert.equal(payload.warnings.length, 2, "a clipped preview says so in warnings");
+  assert.ok(
+    JSON.stringify(payload).length < 1_000_000,
+    `the response must stay small, got ${JSON.stringify(payload).length} chars`,
+  );
+  // `maxRows` may lower the row count, never raise it past the constant.
+  const asked = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "10000",
+  );
+  if (asked.mode !== "dataset-table") assert.fail(`unexpected mode ${asked.mode}`);
+  assert.equal(asked.rows.length, 100, "maxRows cannot lift the row constant");
+  assert.deepEqual(asked.columns, payload.columns);
   assert.equal(payload.totalRows, 100);
   assert.equal(payload.truncated, false);
 });
 
+test("a header wider than the preview is clipped with an explicit signal", async (context) => {
+  const fixture = await createFixture(context);
+  // A 200k-column header is not a table; keeping every named column made the
+  // payload unbounded (20M cells, 60 MB). The cap keeps the first constant
+  // number of columns and says how many columns the file actually had.
+  const header = Array.from({ length: 200_001 }, (_, index) => `h${index}`);
+  const lines = [header.join(",")];
+  for (let index = 0; index < 600; index += 1) lines.push("1,2");
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "wide-header.csv",
+    mediaType: "text/csv",
+  });
+  for (const [label, maxRows] of [["default", undefined], ["maxRows=500", "500"]] as const) {
+    const payload = maxRows === undefined
+      ? await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid)
+      : await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, maxRows);
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+    assert.equal(payload.columns.length, 1_001, `${label}: the width stops at the column constant`);
+    assert.deepEqual(payload.columns.slice(0, 2), ["h0", "h1"], `${label}: the leading names are kept`);
+    assert.equal(payload.rows.length, 100, `${label}: the row constant holds`);
+    for (const row of payload.rows) assert.equal(row.length, 1_001, `${label}: every row is square`);
+    assert.deepEqual(payload.clippedColumns, { shown: 1_001, total: 200_001 }, `${label}: both widths are reported`);
+    assert.equal(payload.clippedCells, 0, `${label}: the lost columns are reported as columns, not cells`);
+    assert.ok(
+      JSON.stringify(payload).length < 1_000_000,
+      `${label}: the response must stay small, got ${JSON.stringify(payload).length} chars`,
+    );
+  }
+});
+
+test("a delimited preview shows the same columns whatever maxRows it is asked for", async (context) => {
+  const fixture = await createFixture(context);
+  // The width comes from every line of the file plus a constant, so a wide line
+  // past the window cannot make maxRows=1 and maxRows=1000 disagree about the
+  // columns; maxRows only decides how many of those rows come back.
+  const wide = Array.from({ length: 200_001 }, () => "w").join(",");
+  const lines = ["a,b", "1,2", "3,4", wide];
+  for (let index = 0; index < 100; index += 1) lines.push("5,6");
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "outlier-beyond-window.csv",
+    mediaType: "text/csv",
+  });
+  const first = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "1",
+  );
+  const many = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "1000",
+  );
+  const some = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "50",
+  );
+  if (first.mode !== "dataset-table" || many.mode !== "dataset-table" || some.mode !== "dataset-table") {
+    assert.fail("every call must answer a dataset-table");
+  }
+  assert.deepEqual(first.columns, many.columns, "maxRows cannot change the column set");
+  assert.deepEqual(first.columns, some.columns, "maxRows cannot change the column set");
+  assert.equal(first.columns.length, 1_001);
+  assert.equal(first.rows.length, 1);
+  assert.equal(first.rows[0]?.length, 1_001, "a returned row is padded to the file-wide width");
+  assert.equal(many.rows.length, 100, "maxRows above the row constant is clamped");
+  assert.equal(some.rows.length, 50, "maxRows below the row constant still lowers the count");
+  assert.equal(many.totalRows, 103);
+});
+
 test("a delimited preview keeps a header wider than the budget whole", async (context) => {
   const fixture = await createFixture(context);
-  // 1001 named columns are more than the 1000 columns 100 rows may spend, and
-  // the cap never drops below the header: losing named columns to save room
-  // would delete data the user already had. The surplus here is padding, not a
-  // cut, so nothing is reported as clipped.
+  // 1001 named columns is the widest header the preview contract covers, and
+  // MAX_PREVIEW_COLUMNS is chosen so it is previewed whole: a legitimate table
+  // keeps every named column, and only a line wider than that constant is cut.
   const columns = Array.from({ length: 1_001 }, (_, index) => `c${index}`);
   const lines = [columns.join(",")];
   for (let index = 0; index < 100; index += 1) lines.push("1,2,3");
@@ -1625,42 +1734,6 @@ test("a delimited preview keeps a header wider than the budget whole", async (co
   assert.deepEqual(payload.rows[0]?.slice(0, 3), ["1", "2", "3"]);
   assert.equal(payload.rows[0]?.[1_000], "", "the padding columns stay empty");
   assert.equal(payload.clippedCells, 0, "nothing left the preview, so nothing is reported as clipped");
-});
-
-test("a delimited preview returns the same columns whatever maxRows it is asked for", async (context) => {
-  const fixture = await createFixture(context);
-  // The cap comes from the file's own row count, never from the rows a client
-  // asked for, so `maxRows` can no longer decide whether the preview is square.
-  const columns = Array.from({ length: 101 }, (_, index) => `c${index}`);
-  const fullRow = columns.map((column) => `v-${column}`).join(",");
-  const shortRow = columns.slice(0, 50).map((column) => `v-${column}`).join(",");
-  const lines = [columns.join(",")];
-  for (let index = 0; index < 1_200; index += 1) lines.push(index % 2 === 0 ? fullRow : shortRow);
-  const vid = await seedArtifact(fixture, {
-    content: lines.join("\n"),
-    kind: "dataset",
-    logicalName: "ragged.csv",
-    mediaType: "text/csv",
-  });
-  const many = await buildArtifactVersionPreview(
-    fixture.store, fixture.recorder, fixture.session.id, vid, "1000",
-  );
-  const few = await buildArtifactVersionPreview(
-    fixture.store, fixture.recorder, fixture.session.id, vid, "100",
-  );
-  for (const [label, payload] of [["maxRows=1000", many], ["maxRows=100", few]] as const) {
-    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
-    assert.deepEqual(payload.columns, columns, `${label}: the same 101 named columns`);
-    for (const row of payload.rows) {
-      assert.equal(row.length, 101, `${label}: every returned row is square`);
-    }
-    assert.equal(payload.clippedCells, 0, `${label}: no surplus cell is past the cap`);
-  }
-  if (many.mode !== "dataset-table" || few.mode !== "dataset-table") {
-    assert.fail("both calls must answer a dataset-table");
-  }
-  assert.equal(many.rows.length, 1_000);
-  assert.equal(few.rows.length, 100);
 });
 
 test("a delimited preview returns a legitimately wide table whole", async (context) => {
