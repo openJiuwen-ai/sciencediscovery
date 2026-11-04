@@ -69,12 +69,15 @@ function fixture(t) {
 const payload = (event, base, head) => event === 'pull_request' ? { pull_request: { base: { sha: base }, head: { sha: head } } }
   : event === 'merge_group' ? { merge_group: { base_sha: base, head_sha: head } } : { before: base, after: head };
 
-test('only the explicit documentation allowlist qualifies, regardless of extension', () => {
+test('only allowed documentation paths qualify; skill documentation requires lowercase .md', () => {
   const allowed = ['README.md', 'README_zh.md', 'CONTRIBUTING.md', 'LICENSE', 'Third_Party_Open_Source_Software_Notice.txt',
-    'docs/guide.md', 'docs/en/reference/nested.md', 'docs/images/example.png'];
+    'docs/guide.md', 'docs/en/reference/nested.md', 'docs/images/example.png',
+    '.agents/skills/foo/SKILL.md', '.agents/skills/foo/references/note.md'];
   assert.equal(documentationOnly(allowed), true);
   for (const path of ['skills/example.md', 'test/README.md', '.github/workflows/ci.yml', '.ci/README.md', 'packages/example.md',
-    'services/README.md', 'apps/web/README.md', 'README.txt', 'docs-other/guide.md', 'Docs/guide.md']) {
+    'services/README.md', 'apps/web/README.md', 'README.txt', 'docs-other/guide.md', 'Docs/guide.md',
+    '.agents/skills.md', '.agents/skills/foo.json', '.agents/skills/script.mjs', '.agents/skills/foo/note.MD',
+    '.agents/Skills/foo/note.md', '.Agents/skills/foo/note.md', '.agents/README.md', '.agents/other/note.md']) {
     assert.equal(documentationOnly(['docs/guide.md', path]), false, path);
   }
   for (const paths of [null, undefined, [], [''], [null]]) assert.equal(documentationOnly(paths), false);
@@ -82,7 +85,8 @@ test('only the explicit documentation allowlist qualifies, regardless of extensi
 
 test('PR, push and merge-group read actual history and retain unusual filenames', t => {
   const f = fixture(t);
-  const names = ['docs/with spaces.md', 'docs/with\nnewline.md', 'docs/中文.md'];
+  const names = ['docs/with spaces.md', 'docs/with\nnewline.md', 'docs/中文.md',
+    '.agents/skills/foo/SKILL.md', '.agents/skills/foo/references/note.md'];
   for (const name of names) f.write(name);
   const head = f.commit();
   for (const event of ['pull_request', 'push', 'merge_group']) {
@@ -124,6 +128,26 @@ test('renames check both old and new paths and deletions remain visible', t => {
   assert.deepEqual(changedPaths('push', payload('push', renamed, f.commit()), { git: f.git }), ['docs/renamed.md']);
 });
 
+test('renaming between skill Markdown and product paths checks both endpoints', t => {
+  const f = fixture(t);
+  f.write('.agents/skills/foo/SKILL.md');
+  const base = f.commit();
+  const rename = (from, to, previous, expected) => {
+    mkdirSync(dirname(join(f.cwd, to)), { recursive: true });
+    renameSync(join(f.cwd, from), join(f.cwd, to));
+    const head = f.commit();
+    for (const event of ['pull_request', 'push', 'merge_group']) {
+      const paths = changedPaths(event, payload(event, previous, head), { git: f.git });
+      assert.deepEqual(paths.sort(), [from, to].sort());
+      assert.equal(documentationOnly(paths), expected);
+    }
+    return head;
+  };
+  const renamed = rename('.agents/skills/foo/SKILL.md', '.agents/skills/foo/references/note.md', base, true);
+  const product = rename('.agents/skills/foo/references/note.md', 'skills/foo/note.md', renamed, false);
+  rename('skills/foo/note.md', '.agents/skills/foo/SKILL.md', product, false);
+});
+
 test('unavailable, empty, malformed or truncated diffs retain the full profile', () => {
   const event = payload('push', 'a'.repeat(40), 'b'.repeat(40));
   for (const git of [() => { throw new Error('history unavailable'); }, () => '', () => 'docs/guide.md', () => 'docs/guide.md\0\0']) {
@@ -139,8 +163,10 @@ test('dispatch and reusable calls never inspect diffs or change the requested pr
   for (const event of ['workflow_dispatch', 'workflow_call', 'schedule']) {
     assert.equal(changedPaths(event, {}, { git: () => assert.fail('not a diff event') }), null);
     for (const profile of ['pr', 'merge', 'daily', 'release']) {
-      const policy = route(event, profile, 'legacy', ['docs/guide.md']);
-      assert.equal(policy.docs_only, false); assert.equal(policy.profile, profile); assert.equal(policy.backend, 'legacy');
+      for (const paths of [['docs/guide.md'], ['.agents/skills/foo/SKILL.md']]) {
+        const policy = route(event, profile, 'legacy', paths);
+        assert.equal(policy.docs_only, false); assert.equal(policy.profile, profile); assert.equal(policy.backend, 'legacy');
+      }
     }
   }
   // Reusable workflows inherit the caller's event_name. The profile input is
@@ -184,22 +210,24 @@ test('documentation-only PR, push and queue run docs and merge-gate without heav
   assert.match(docs, /pnpm install --frozen-lockfile/);
   const artifacts = jobs['merge-gate'].split(/\n      - /).filter(step => /download-artifact|mocked-report|upload-artifact/.test(step));
   assert.equal(artifacts.length, 4);
-  for (const event of ['pull_request', 'push', 'merge_group']) {
-    const needs = selection(event, ['docs/en/guide.md']);
-    for (const name of ['policy', 'l1', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);
-    for (const name of unaffected) assert.equal(needs[name].result, 'skipped', `${event}: ${name}`);
-    assert.deepEqual(gate(needs.policy.outputs.profile, needs), []);
-    assert.equal(eligible(condition(docs), needs), true);
-    assert.equal(eligible(condition(full), needs), false);
-    for (const step of artifacts) assert.equal(eligible(condition(step), needs), false);
-    for (const name of unaffected.filter(name => name !== 'coverage')) {
-      for (const result of ['success', 'failure', 'cancelled', undefined]) {
-        assert.ok(gate(needs.policy.outputs.profile, { ...needs, [name]: { result } }).length);
+  for (const paths of [['docs/en/guide.md'], ['.agents/skills/foo/SKILL.md', '.agents/skills/foo/references/note.md']]) {
+    for (const event of ['pull_request', 'push', 'merge_group']) {
+      const needs = selection(event, paths);
+      for (const name of ['policy', 'l1', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);
+      for (const name of unaffected) assert.equal(needs[name].result, 'skipped', `${event}: ${name}`);
+      assert.deepEqual(gate(needs.policy.outputs.profile, needs), []);
+      assert.equal(eligible(condition(docs), needs), true);
+      assert.equal(eligible(condition(full), needs), false);
+      for (const step of artifacts) assert.equal(eligible(condition(step), needs), false);
+      for (const name of unaffected.filter(name => name !== 'coverage')) {
+        for (const result of ['success', 'failure', 'cancelled', undefined]) {
+          assert.ok(gate(needs.policy.outputs.profile, { ...needs, [name]: { result } }).length);
+        }
       }
-    }
-    for (const name of ['policy', 'l1']) {
-      for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
-        assert.ok(gate(needs.policy.outputs.profile, { ...needs, [name]: { ...needs[name], result } }).length);
+      for (const name of ['policy', 'l1']) {
+        for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+          assert.ok(gate(needs.policy.outputs.profile, { ...needs, [name]: { ...needs[name], result } }).length);
+        }
       }
     }
   }
@@ -216,17 +244,23 @@ test('documentation-only PR, push and queue run docs and merge-gate without heav
 });
 
 test('documentation-only drafts still check docs and keep the heavy jobs and gate skipped', () => {
-  const needs = selection('pull_request', ['docs/guide.md'], { draft: true });
-  assert.equal(needs.l1.result, 'success');
-  const docs = jobs.l1.split(/\n      - /).find(step => step.includes('pnpm docs:check'));
-  assert.equal(eligible(condition(docs), needs, { draft: true }), true);
-  for (const name of [...unaffected, 'merge-gate']) assert.equal(needs[name].result, 'skipped', name);
+  for (const paths of [['docs/guide.md'], ['.agents/skills/foo/SKILL.md']]) {
+    const needs = selection('pull_request', paths, { draft: true });
+    assert.equal(needs.l1.result, 'success');
+    const docs = jobs.l1.split(/\n      - /).find(step => step.includes('pnpm docs:check'));
+    assert.equal(eligible(condition(docs), needs, { draft: true }), true);
+    for (const name of [...unaffected, 'merge-gate']) assert.equal(needs[name].result, 'skipped', name);
+  }
 });
 
 test('mixed, non-documentation and unknown diffs preserve all existing profile selections and gate rules', () => {
   for (const event of ['pull_request', 'push', 'merge_group', 'workflow_dispatch', 'workflow_call']) {
     for (const profile of ['pr', 'merge', 'daily', 'release']) {
-      for (const paths of [null, ['docs/guide.md', 'services/api/src/main.ts'], ['skills/guide.md']]) {
+      for (const paths of [null, ['docs/guide.md', 'services/api/src/main.ts'], ['skills/guide.md'],
+        ['.agents/skills/foo/SKILL.md', 'services/api/src/main.ts'],
+        ...['.agents/skills.md', '.agents/skills/foo.json', '.agents/skills/script.mjs', '.agents/README.md',
+          '.agents/other/note.md', '.agents/skills/foo/note.MD', '.agents/Skills/foo/note.md']
+          .map(path => ['.agents/skills/foo/SKILL.md', path])]) {
         const needs = selection(event, paths, { profile });
         const selectedProfile = needs.policy.outputs.profile;
         for (const name of ['l1', 'ut', 'st', 'e2e-plan', 'e2e', 'coverage', 'merge-gate']) assert.equal(needs[name].result, 'success', `${event}: ${name}`);

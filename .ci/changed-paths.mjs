@@ -10,7 +10,8 @@ const diffEvents = new Set(['pull_request', 'push', 'merge_group']);
 
 export function documentationOnly(paths) {
   return Array.isArray(paths) && paths.length > 0 && paths.every(path =>
-    typeof path === 'string' && (documentationFiles.has(path) || path.startsWith('docs/')));
+    typeof path === 'string' && (documentationFiles.has(path) || path.startsWith('docs/') ||
+      (path.startsWith('.agents/skills/') && path.endsWith('.md'))));
 }
 
 // Unknown/missing history must preserve the full profile. Disabling rename
