@@ -78,9 +78,15 @@ const WINDOWS_RESERVED_DEVICE_NAME =
  * Windows ignores a trailing dot or space on a path segment, so `nul.` and `CON ` name the
  * device too. The stem is everything before the first dot: for a reserved name the
  * extension is irrelevant.
+ *
+ * The stream syntax is the same reservation: `NUL:anything` and `CON:$DATA` open the
+ * device, so the part before the colon is what names it. Only that part is tested —
+ * a colon in front of an ordinary stem (`report:2024.csv`) is a legal name on Linux and
+ * macOS, and refusing it would trade this bug for a portability one.
  */
 function isWindowsReservedDeviceName(name: string): boolean {
-  const stem = name.split(".")[0]?.replace(/[. ]+$/, "") ?? "";
+  const beforeStream = name.split(":")[0] ?? "";
+  const stem = beforeStream.split(".")[0]?.replace(/[. ]+$/, "") ?? "";
   return WINDOWS_RESERVED_DEVICE_NAME.test(stem);
 }
 
