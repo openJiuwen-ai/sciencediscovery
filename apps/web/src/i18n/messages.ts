@@ -1598,6 +1598,7 @@ export const en = {
   "artifact.tableRows": "{count} rows",
   "artifact.tableTruncated": " (truncated)",
   "artifact.tableClippedCells": " ({count} cells past the preview width are not shown)",
+  "artifact.tableClippedColumns": " (showing {shown} of {total} columns)",
 
   "evidence.fileMissing": "File \"{name}\" is no longer in this session's artifacts.",
   "evidence.loadFileFailed": "Could not load file content.",
@@ -4557,6 +4558,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "artifact.tableRows": "{count} 行",
   "artifact.tableTruncated": "（已截断）",
   "artifact.tableClippedCells": "（预览宽度之外还有 {count} 个单元格未显示）",
+  "artifact.tableClippedColumns": "（共 {total} 列，显示前 {shown} 列）",
 
   "evidence.fileMissing": "文件「{name}」已不在本会话的产物中。",
   "evidence.loadFileFailed": "无法加载文件内容。",
