@@ -291,6 +291,15 @@
   },
   {
    "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/subagents/:sid",
+   "handling": "direct",
+   "target": "store.catalog.subagents",
+   "notes": "One child with its steps; the panel shows one record at a time",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
    "method": "POST",
    "path": "/api/sessions/:id/subagents/:sid/resume",
    "handling": "approximate",

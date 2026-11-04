@@ -12,12 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { Subagent, SubagentStep } from "../api/types.js";
 import { Markdown } from "../Markdown.js";
 import { finalSteps } from "../run-stream/subagent.js";
 import { TEXT } from "../text.js";
+
+/**
+ * A folded section whose body is not rendered until it is first opened.
+ *
+ * A closed `<details>` still mounts its children, so a panel that draws every
+ * step inside one pays for parsing and laying out text nobody can see. In a
+ * long run that is megabytes of tool output. The body renders on first open
+ * and stays afterwards, so reopening is instant.
+ *
+ * `open` is never controlled: the browser keeps owning the open state, which
+ * is what lets a running step collapse on its own when it finishes. This only
+ * remembers that the body has been rendered once.
+ */
+function Disclosure({
+  className,
+  children,
+  initialOpen = false,
+  summary,
+}: {
+  className?: string;
+  children: ReactNode;
+  initialOpen?: boolean;
+  summary: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(initialOpen);
+  return (
+    <details
+      className={className}
+      open={initialOpen || undefined}
+      onToggle={(event) => {
+        if (event.currentTarget.open) setMounted(true);
+      }}
+    >
+      <summary>{summary}</summary>
+      {mounted || initialOpen ? children : null}
+    </details>
+  );
+}
 
 function pretty(value: unknown): string {
   if (typeof value === "string") return value;
@@ -56,9 +94,7 @@ function StepBody({ step }: { step: SubagentStep }) {
           <div className="subagent-step-label">{TEXT.subagent.output}</div>
           <div className="subagent-tool-output">
             {output === "" ? null : (
-              <div className="text">
-                <Markdown>{output}</Markdown>
-              </div>
+              <pre className="tab-content-source subagent-pre">{output}</pre>
             )}
             {progress === "" ? null : (
               <pre className="tab-content-source subagent-pre">{progress}</pre>
@@ -82,16 +118,20 @@ function StepRow({ step }: { step: SubagentStep }) {
   if (step.kind === "tool") {
     const name = step.toolName ?? TEXT.subagent.tool;
     return (
-      <details className={`subagent-step is-tool is-${step.status ?? "completed"}`}>
-        <summary>
-          <span aria-hidden="true" className="subagent-step-icon">{stepStatusIcon(step)}</span>
-          <span className="subagent-step-title">{TEXT.subagent.tool} · {name}</span>
-          <span aria-hidden="true" className="collapse-chev">›</span>
-        </summary>
+      <Disclosure
+        className={`subagent-step is-tool is-${step.status ?? "completed"}`}
+        summary={(
+          <>
+            <span aria-hidden="true" className="subagent-step-icon">{stepStatusIcon(step)}</span>
+            <span className="subagent-step-title">{TEXT.subagent.tool} · {name}</span>
+            <span aria-hidden="true" className="collapse-chev">›</span>
+          </>
+        )}
+      >
         <div className="subagent-step-body">
           <StepBody step={step} />
         </div>
-      </details>
+      </Disclosure>
     );
   }
 
@@ -116,12 +156,17 @@ function StepRow({ step }: { step: SubagentStep }) {
 
   if (step.kind !== "thinking") return null;
   return (
-    <details className={`subagent-step is-${step.kind}`} open={step.status === "running"}>
-      <summary>
-        <span aria-hidden="true" className="subagent-step-icon">✳</span>
-        <span className="subagent-step-title">{TEXT.subagent.thinking}</span>
-        <span aria-hidden="true" className="collapse-chev">›</span>
-      </summary>
+    <Disclosure
+      className={`subagent-step is-${step.kind}`}
+      initialOpen={step.status === "running"}
+      summary={(
+        <>
+          <span aria-hidden="true" className="subagent-step-icon">✳</span>
+          <span className="subagent-step-title">{TEXT.subagent.thinking}</span>
+          <span aria-hidden="true" className="collapse-chev">›</span>
+        </>
+      )}
+    >
       <div className="subagent-step-body">
         {text === "" ? (
           <div className="workspace-empty">{TEXT.conversation.emptyTurn}</div>
@@ -131,7 +176,7 @@ function StepRow({ step }: { step: SubagentStep }) {
           </div>
         )}
       </div>
-    </details>
+    </Disclosure>
   );
 }
 
@@ -147,13 +192,17 @@ function FoldCard({ children, className, title }: {
   title: string;
 }) {
   return (
-    <details className={`subagent-card${className === undefined ? "" : ` ${className}`}`}>
-      <summary>
-        <span className="subagent-section-title">{title}</span>
-        <span aria-hidden="true" className="collapse-chev">›</span>
-      </summary>
+    <Disclosure
+      className={`subagent-card${className === undefined ? "" : ` ${className}`}`}
+      summary={(
+        <>
+          <span className="subagent-section-title">{title}</span>
+          <span aria-hidden="true" className="collapse-chev">›</span>
+        </>
+      )}
+    >
       <div className="subagent-card-body">{children}</div>
-    </details>
+    </Disclosure>
   );
 }
 

@@ -23,7 +23,7 @@ import {
 } from "react";
 
 import { ApiClient } from "./api/client.js";
-import { listSubagents } from "./api/sessions.js";
+import { getSubagent } from "./api/sessions.js";
 import type { Subagent, SubagentStep } from "./api/types.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
@@ -220,25 +220,37 @@ export function App({ initialToken }: Props) {
 
   /** The run's event log stores subagent snapshots without their steps, so a
    *  replayed child arrives empty. The catalog has them, and is re-read when
-   *  the open child reaches a terminal status so the last steps are complete. */
-  const [subagentCatalog, setSubagentCatalog] = useState<Subagent[]>([]);
+   *  the open child reaches a terminal status so the last steps are complete.
+   *
+   *  Only the open child is read: the panel shows one record at a time, and
+   *  the roster route carried every sibling's steps — megabytes for a long
+   *  run — to choose one of them. A running child is skipped entirely because
+   *  `followSubagent` below is already reading its steps incrementally. */
+  const [subagentCatalog, setSubagentCatalog] = useState<Subagent | undefined>(undefined);
   const [subagentLoading, setSubagentLoading] = useState(false);
   useEffect(() => {
     if (openSubagentId === undefined || state.sessionId === undefined) {
-      setSubagentCatalog([]);
+      setSubagentCatalog(undefined);
+      setSubagentLoading(false);
+      return;
+    }
+    // The followed stream is the steps while the child runs. Once it settles
+    // the effect runs again, with `foundSubagent.status` changed, and the
+    // complete record is read.
+    if (foundSubagent?.status === "running" && foundSubagent.parentTurnId !== undefined) {
       setSubagentLoading(false);
       return;
     }
     let cancelled = false;
     setSubagentLoading(true);
-    void listSubagents(client, state.sessionId)
-      .then((children) => {
-        if (!cancelled) setSubagentCatalog(children);
+    void getSubagent(client, state.sessionId, openSubagentId)
+      .then((child) => {
+        if (!cancelled) setSubagentCatalog(child);
       })
       .catch(() => {
         // The run-state copy still names the task and shows its status; only
         // the steps are missing, so this is not worth an error banner.
-        if (!cancelled) setSubagentCatalog([]);
+        if (!cancelled) setSubagentCatalog(undefined);
       })
       .finally(() => {
         if (!cancelled) setSubagentLoading(false);
@@ -246,11 +258,9 @@ export function App({ initialToken }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [client, foundSubagent?.status, openSubagentId, state.sessionId]);
+  }, [client, foundSubagent?.parentTurnId, foundSubagent?.status, openSubagentId, state.sessionId]);
 
-  const catalogSubagent = openSubagentId === undefined
-    ? undefined
-    : subagentCatalog.find((subagent) => subagent.id === openSubagentId);
+  const catalogSubagent = subagentCatalog?.id === openSubagentId ? subagentCatalog : undefined;
   const resolvedSubagent = foundSubagent
     ?? catalogSubagent
     ?? (lastSubagent.current?.id === openSubagentId ? lastSubagent.current : undefined);
@@ -310,7 +320,7 @@ export function App({ initialToken }: Props) {
     setOpenSubagentId(undefined);
     setOpenTool(undefined);
     lastSubagent.current = undefined;
-    setSubagentCatalog([]);
+    setSubagentCatalog(undefined);
   }, [state.sessionId]);
 
   // Pressing a line opens the child it belongs to, and pressing the same line

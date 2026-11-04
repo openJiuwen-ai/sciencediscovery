@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 import type { RunStreamEvent, Subagent, SubagentStep } from "../src/api/types.js";
 import { closeRunStream, reduceRunStream } from "../src/run-stream/reducer.js";
 import { emptyRunStream, hasVisibleAnswer, thinkingSteps, type RunStreamState } from "../src/run-stream/model.js";
+import { mergeSubagentSteps } from "../src/run-stream/subagent.js";
 
 /** Fold a script of events, which is what both a live stream and a replay are. */
 function fold(events: RunStreamEvent[], start: RunStreamState = emptyRunStream()): RunStreamState {
@@ -537,6 +538,24 @@ test("a restarted step keeps its place rather than appearing twice", () => {
   const steps = state.turns[0]!.subagents[0]!.subagent.steps;
   assert.equal(steps.length, 1);
   assert.equal(steps[0]!.status, "completed");
+});
+
+test("a snapshot that says nothing new leaves the steps alone", () => {
+  // A child's stream repeats steps it has already shown. Prose can run to
+  // hundreds of kilobytes, so an unchanged step must keep its identity — both
+  // to spare the render and to compare the string once rather than stringify
+  // two copies of it on every tick.
+  const content = "x".repeat(200_000);
+  const first = step("s1", { content, status: "running" });
+  const current = [first];
+  const merged = mergeSubagentSteps(current, [step("s1", { content, status: "running" })]);
+  assert.equal(merged, current);
+  assert.equal(merged[0], first);
+
+  const withArgs = mergeSubagentSteps(current, [
+    step("s1", { args: { path: "a.pdf" }, content, status: "running" }),
+  ]);
+  assert.deepEqual(withArgs[0]!.args, { path: "a.pdf" });
 });
 
 test("a resumed child goes back to running on the same line", () => {
