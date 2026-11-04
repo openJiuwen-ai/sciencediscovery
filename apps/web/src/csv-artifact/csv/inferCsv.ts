@@ -207,32 +207,51 @@ function inferTableKind(fields: string[]): DataTableKind {
 const PAPA_OVERFLOW_FIELD = "__parsed_extra";
 
 /**
+ * Surplus columns are capped at the header width, floored at 2 and ceilinged at
+ * 16. A table therefore materializes at most `2 x header width` cells per row
+ * (`3 x` for a one-column header), so one wide record cannot multiply the cost
+ * of every other row. Header columns are never part of the cap: a legitimate
+ * 200-column header still yields 200 columns.
+ */
+const SURPLUS_COLUMN_FLOOR = 2;
+const SURPLUS_COLUMN_CEILING = 16;
+
+function surplusColumnLimit(headerWidth: number): number {
+  return Math.min(SURPLUS_COLUMN_CEILING, Math.max(SURPLUS_COLUMN_FLOOR, headerWidth));
+}
+
+/**
  * Papa reports cells past the header under its own `__parsed_extra` key and
  * leaves a short record without its trailing header keys. Neither shape may
  * define a column, so every record is rebuilt to the table width: the header
- * fields in file order, then one `__extra_N` field per overflow cell. Extra
+ * fields in file order, then one `__extra_N` field per surplus cell. Extra
  * fields are unnamed (empty label) and a missing cell stays undefined, which
  * profiles as null, so the table is rectangular without dropping a value.
+ *
+ * Past `surplusColumnLimit` surplus cells the trailing cells are folded into
+ * the last surplus column as one comma-joined value, and the caller warns.
  */
 function rectangularizeRows(
   rows: Array<Record<string, unknown>>,
   headerFields: string[],
-): string[] {
-  let width = headerFields.length;
+): { surplusFields: string[]; surplusCount: number; kept: number } {
+  let surplusCount = 0;
   for (const row of rows) {
     const overflow = row[PAPA_OVERFLOW_FIELD];
     const extraCount = Array.isArray(overflow) ? overflow.length : overflow === undefined ? 0 : 1;
-    width = Math.max(width, headerFields.length + extraCount);
+    surplusCount = Math.max(surplusCount, extraCount);
   }
+  const kept = Math.min(surplusCount, surplusColumnLimit(headerFields.length));
 
   const taken = new Set(headerFields);
-  const extraFields: string[] = [];
-  while (headerFields.length + extraFields.length < width) {
-    let field = `__extra_${extraFields.length + 1}`;
+  const surplusFields: string[] = [];
+  while (surplusFields.length < kept) {
+    let field = `__extra_${surplusFields.length + 1}`;
     while (taken.has(field)) field = `${field}_`;
     taken.add(field);
-    extraFields.push(field);
+    surplusFields.push(field);
   }
+  const foldsTail = surplusCount > kept;
 
   for (const row of rows) {
     const overflow = row[PAPA_OVERFLOW_FIELD];
@@ -241,11 +260,14 @@ function rectangularizeRows(
     for (const field of headerFields) {
       if (!(field in row)) row[field] = undefined;
     }
-    extraFields.forEach((field, index) => {
-      row[field] = extras[index];
+    const cells = foldsTail
+      ? [...extras.slice(0, kept - 1), extras.slice(kept - 1).join(", ")]
+      : extras;
+    surplusFields.forEach((field, index) => {
+      row[field] = cells[index];
     });
   }
-  return extraFields;
+  return { kept, surplusCount, surplusFields };
 }
 
 export function parseCsvText(content: string, source: DataSourceRecord): DataTable {
@@ -277,16 +299,23 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     throw new Error(translateActive("csv.tooManyRows", { count: MAX_CSV_DATA_ROWS.toLocaleString("en-US") }));
   }
   if (!fields.length || !rows.length) throw new Error(translateActive("csv.parseHeaderRequired"));
-  const unnamedFields = rectangularizeRows(rows, fields);
+  const rectangular = rectangularizeRows(rows, fields);
+  const warnings = errors.map((error) =>
+    translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 }));
+  if (rectangular.surplusCount > rectangular.kept) {
+    warnings.push(translateActive("csv.importSurplusColumns", {
+      count: rectangular.surplusCount.toLocaleString("en-US"),
+      kept: rectangular.kept,
+    }));
+  }
   return profileRows(
     rows,
     `artifact:${source.sourceArtifactVersionId}`,
     source.fileName,
     inferTableKind(fields),
     source,
-    errors.map((error) =>
-      translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 })),
-    unnamedFields,
+    warnings,
+    rectangular.surplusFields,
   );
 }
 
