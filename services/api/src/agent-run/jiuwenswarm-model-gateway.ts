@@ -286,8 +286,14 @@ export async function startModelGateway(
       // Swarm writes a MiniMax model's thinking switch as `reasoning_split` on the chat-completions
       // request it sends this gateway. It is a transport flag, never a provider field: it only decides
       // the endpoint's thinking mode, and the model client sends the provider's own control for it.
+      // The run's own mode (what the user chose at run start) always wins — Swarm sends the flag for
+      // every MiniMax-M* model regardless of that choice, so trusting it would silently turn thinking
+      // back on. Only an open mode (`auto`, or none) is the flag's to decide, which is all accepting
+      // the field buys: `auto` sends no thinking field and falls back to the provider default.
       const thinkingMode = body.thinking ? body.thinking.type as "enabled" | "disabled"
-        : typeof body.reasoning_split === "boolean" ? (body.reasoning_split ? "enabled" : "disabled") : undefined;
+        : endpoint.thinkingMode === undefined || endpoint.thinkingMode === "auto"
+          ? (typeof body.reasoning_split === "boolean" ? (body.reasoning_split ? "enabled" : "disabled") : undefined)
+          : undefined;
       requestEndpoint = { ...endpoint, ...(thinkingMode ? { thinkingMode } : {}) };
       translated = toModelRequest(body, restore);
     } catch (error) {
