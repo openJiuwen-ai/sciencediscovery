@@ -348,6 +348,28 @@ test("keeps a legitimate wide header without folding its columns", () => {
   assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], header);
 });
 
+test("keeps the surplus warning in step with the columns it keeps", () => {
+  const table = parse("folded-surplus.csv", "a,b\n1,2,3,4,5,6\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "b", "__extra_1", "__extra_2"]);
+  assert.equal(table.rows[0]?.__extra_1, 3);
+  // The last surplus column is the folded one, so it carries the trailing cells
+  // too: the warning must not claim a column boundary the table never shows.
+  assert.equal(table.rows[0]?.__extra_2, "4, 5, 6");
+
+  const warning = table.warnings.join("\n");
+  assert.match(warning, /4 cells past the header/);
+  assert.match(warning, /capped at 2/);
+  assert.doesNotMatch(warning, /first 2/);
+
+  try {
+    setActiveLocale("zh-CN");
+    assert.match(parse("folded-surplus-zh.csv", "a,b\n1,2,3,4,5,6\n").warnings.join("\n"), /最多保留 2 列/);
+  } finally {
+    setActiveLocale("en");
+  }
+});
+
 test("neutralizes a spreadsheet formula in an exported header name", () => {
   const table = parse("formula-header.csv", "=SUM(1),b\n1,2\n");
 
