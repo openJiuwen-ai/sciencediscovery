@@ -106,6 +106,7 @@ export function profileRows(
   warnings: string[] = [],
   unnamedFields: readonly string[] = [],
   fieldOrder: readonly string[] = [],
+  headerNames: Readonly<Record<string, string>> = {},
 ): DataTable {
   const unnamed = new Set(unnamedFields);
   // JavaScript enumerates integer-like keys in numeric order, so a header whose
@@ -156,6 +157,7 @@ export function profileRows(
   const columns: ColumnProfile[] = fields.map((field) => {
     const values = parsedRows.map((row) => row[field]);
     const present = values.filter((value): value is Exclude<DataValue, null> => value !== null);
+    const header = headerNames[field];
     let min: number | undefined;
     let max: number | undefined;
     for (const value of present) {
@@ -165,9 +167,10 @@ export function profileRows(
     }
     return {
       examples: [...new Set(present.map(String))].slice(0, 3),
+      ...(header === undefined ? {} : { header }),
       id: field,
       kind: kinds.get(field) ?? "text",
-      label: unnamed.has(field) ? "" : field.replaceAll("_", " "),
+      label: unnamed.has(field) ? "" : header ?? field.replaceAll("_", " "),
       ...(min !== undefined && max !== undefined ? {
         max,
         min,
@@ -313,6 +316,10 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
   const rows: Array<Record<string, unknown>> = [];
   const errors: Papa.ParseError[] = [];
   let fields: string[] = [];
+  // Papa renames a repeated header to a unique id (`a` twice becomes `a` and
+  // `a_1`) and reports `a_1 -> a` here; the id keys the row, the original name
+  // is what a reader must see.
+  let renamedHeaders: Record<string, string> = {};
   let tooManyRows = false;
   Papa.parse<Record<string, unknown>>(content, {
     chunkSize: 256 * 1024,
@@ -327,6 +334,8 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
         return;
       }
       fields = result.meta.fields ?? [];
+      const meta = result.meta as Papa.ParseMeta & { renamedHeaders?: Record<string, string> | null };
+      if (meta.renamedHeaders) renamedHeaders = meta.renamedHeaders;
       rows.push(result.data);
       for (const error of result.errors) {
         if (errors.length < 8) errors.push(error);
@@ -341,6 +350,8 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
   const rectangular = rectangularizeRows(rows, fields);
   const warnings = errors.map((error) =>
     translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 }));
+  const renamedCount = Object.keys(renamedHeaders).length;
+  if (renamedCount) warnings.push(translateActive("csv.importRenamedColumns", { count: renamedCount }));
   if (rectangular.surplusCount > rectangular.kept) {
     warnings.push(translateActive("csv.importSurplusColumns", {
       count: rectangular.surplusCount.toLocaleString("en-US"),
@@ -356,6 +367,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     warnings,
     rectangular.surplusFields,
     rectangular.fields,
+    renamedHeaders,
   );
 }
 

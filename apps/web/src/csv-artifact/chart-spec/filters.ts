@@ -58,13 +58,14 @@ function safeSpreadsheetValue(value: DataValue): DataValue {
 }
 
 /**
- * Header text for a column: a real column shows its field id, while an unnamed
- * column (a CSV cell with no header) shows an empty header instead of an
- * internal key. `label` is "" only for those unnamed columns; every real label
- * is its id with underscores spaced, so this stays an equality check, not `||`.
+ * Header text for a column: a real column shows the header the file wrote (its
+ * field id unless Papa had to make a duplicate unique), while an unnamed column
+ * (a CSV cell with no header) shows an empty header instead of an internal key.
+ * `label` is "" only for those unnamed columns; every real label is its header
+ * with underscores spaced, so this stays an equality check, not `||`.
  */
 export function columnHeaderName(column: ColumnProfile): string {
-  return column.label === "" ? "" : column.id;
+  return column.label === "" ? "" : column.header ?? column.id;
 }
 
 /**
