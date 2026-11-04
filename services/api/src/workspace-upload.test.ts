@@ -73,6 +73,26 @@ test("sanitizeUploadFilename rejects Windows reserved device names", () => {
   assert.equal(sanitizeUploadFilename("auxiliary.csv"), "auxiliary.csv");
 });
 
+test("sanitizeUploadFilename rejects the stream syntax of a Windows reserved device name", () => {
+  // Windows resolves `NUL:anything` and `CON:$DATA` to the device in every
+  // directory, so the alternate syntax is the same reservation as `nul.txt`,
+  // not a different character rule.
+  const verdict = (name: string): string => {
+    try {
+      sanitizeUploadFilename(name);
+      return "accepted";
+    } catch {
+      return "rejected";
+    }
+  };
+  assert.deepEqual(["nul:stream", "con:$DATA"].map(verdict), ["rejected", "rejected"]);
+  // A colon is not illegal here: Linux and macOS allow it in a file name, so a
+  // name whose stem is ordinary keeps working unchanged — the reservation is
+  // about the device, never about the character.
+  assert.equal(sanitizeUploadFilename("report:2024.csv"), "report:2024.csv");
+});
+
+
 test("parseConflictPolicy defaults to rename", () => {
   assert.equal(parseConflictPolicy(undefined), "rename");
   assert.equal(parseConflictPolicy("overwrite"), "overwrite");
