@@ -291,6 +291,19 @@ test("shows a duplicate header under the name the file used", () => {
   assert.deepEqual(three.rows.map((row) => [row.a, row.a_2, row.a_1]), [[1, 2, 3]]);
 });
 
+test("hides a header named after the internal row id and says so", () => {
+  // The grid keys every row by `__rowId`. A file column with that name cannot be
+  // shown, so it stays hidden as before, but the import reports it instead of
+  // letting the row id overwrite the value without a trace.
+  const table = parse("reserved-header.csv", "a,__rowId\n1,2\n");
+  assert.deepEqual(table.columns.map((column) => column.id), ["a"]);
+  assert.equal(table.rows[0]?.a, 1);
+  assert.equal(table.rows[0]?.__rowId, "row-2");
+  assert.match(table.warnings.join("\n"), /__rowId/);
+
+  assert.deepEqual(parse("plain-names.csv", "a,b\n1,2\n").warnings, []);
+});
+
 test("caps surplus columns so one wide record cannot widen every row", () => {
   const dataRows = 20_000;
   const overflowCells = 497;
