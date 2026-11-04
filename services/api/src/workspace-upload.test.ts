@@ -66,6 +66,16 @@ test("sanitizeUploadFilename rejects Windows reserved device names", () => {
       `${name} must be rejected as a Windows reserved device name`,
     );
   }
+  // The naming document lists superscript 1, 2 and 3 as port digits too: Windows
+  // resolves `COM¹.txt` to the first serial port exactly like `COM1.txt`, so the
+  // ASCII-only class would let the name through and fail later at write time.
+  for (const name of ["COM¹.txt", "com².csv", "LPT³.log"]) {
+    assert.throws(
+      () => sanitizeUploadFilename(name),
+      /reserved/,
+      `${name} must be rejected as a Windows reserved device name`,
+    );
+  }
   // Stems that merely start with a reserved word, or use a two-digit port, stay valid.
   assert.equal(sanitizeUploadFilename("conifer.csv"), "conifer.csv");
   assert.equal(sanitizeUploadFilename("console.log"), "console.log");
