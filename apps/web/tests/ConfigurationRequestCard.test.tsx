@@ -56,6 +56,70 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
 
+test("CFG-X10d: current Session approval needs its own acknowledgement and never uses deployment-wide consent wording", async () => {
+  const view = request({ runId: undefined, capabilityId: "security.approval_mode", protocolVersion: 3,
+    options: [{ id: "persist", kind: "persisted_apply", label: "Apply", description: "Save", available: true }], selectedOptionId: "persist",
+    fields: [{ id: "approvalMode", label: "Current session approval mode", kind: "enum", required: true, value: "always_allow", choices: [{ id: "always_allow", label: "Always allow eligible actions" }] }],
+    securityConsent: { revision: 2, targetDigest: "sha256:session-policy", statement: "Current session future actions; no bulk approval.", status: "required" }, activation: { mode: "next_execution", state: "not_requested" } });
+  const submitted: unknown[] = [], confirmed = { ...view, securityConsent: { ...view.securityConsent!, status: "confirmed" as const } };
+  const api = actions({ securityConsent: async input => { submitted.push(input); return confirmed; } });
+  const renderer = await mount(view, api);
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Existing permission cards must be handled separately/); assert.doesNotMatch(text, /deployment-wide access changes/);
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true);
+  await act(async () => { renderer.root.findByProps({ type: "checkbox" }).props.onChange({ target: { checked: true } }); });
+  await act(async () => { button(renderer, "Independently approve this exact security policy").props.onClick(); });
+  assert.equal(submitted.length, 1);
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, false);
+  await act(async () => { renderer.unmount(); });
+});
+
+test("CFG-X10a: security changes require a separate checked acknowledgement before ordinary confirmation", async () => {
+  const submitted: unknown[] = [];
+  const view = request({ runId: undefined, capabilityId: "security.network", scope: { kind: "global" }, protocolVersion: 3,
+    options: [{ id: "persist", kind: "persisted_apply", label: "Apply", description: "Save", available: true }, { id: "dismiss", kind: "dismiss", label: "Not now", description: "Decline", available: true }], selectedOptionId: "persist",
+    fields: [{ id: "mode", label: "Mode", kind: "enum", required: false, value: "open", choices: [{ id: "none", label: "none" }, { id: "open", label: "open" }] }],
+    securityConsent: { revision: 2, targetDigest: "sha256:policy-target", statement: "All deployment sessions may lose persistent state.", status: "required" },
+    activation: { mode: "next_execution", state: "not_requested" } });
+  const confirmed = { ...view, securityConsent: { ...view.securityConsent!, status: "confirmed" as const } };
+  const api = actions({ securityConsent: async input => { submitted.push(input); return confirmed; } });
+  const renderer = await mount(view, api);
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true);
+  const independent = () => button(renderer, "Independently approve this exact security policy");
+  assert.equal(independent().props.disabled, true);
+  const checkbox = renderer.root.findAllByType("input").find(input => input.props.type === "checkbox")!;
+  await act(async () => { checkbox.props.onChange({ target: { checked: true } }); });
+  assert.equal(independent().props.disabled, false);
+  await act(async () => { independent().props.onClick(); });
+  assert.deepEqual(submitted, [{ revision: 2, targetDigest: "sha256:policy-target", acknowledged: true }]);
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true, "The parent must supply the confirmed server snapshot");
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, false);
+  await act(async () => { renderer.root.findByType("select").props.onChange({ target: { value: "none" } }); });
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true);
+  await act(async () => { renderer.unmount(); });
+});
+
+test("CFG-X10a: a stale security acknowledgement never enables Apply and Chinese risk controls remain reachable", async () => {
+  const view = request({ runId: undefined, capabilityId: "security.network", revision: 3, fields: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:old-policy", statement: "部署中所有未归档会话都可能失去持久内存。", status: "confirmed" } });
+  const renderer = await mount(view, actions(), () => undefined, "zh");
+  assert.equal(button(renderer, "确认此项变更").props.disabled, true);
+  assert.match(JSON.stringify(renderer.toJSON()), /独立确认安全策略/);
+  assert.match(JSON.stringify(renderer.toJSON()), /部署中所有未归档会话/);
+  await act(async () => { renderer.unmount(); });
+});
+
+test("CFG-X10a: a saved security record retains the independent acknowledgement and exact execution boundary", async () => {
+  const renderer = await mount(request({ runId: undefined, capabilityId: "security.network", state: "applied", fields: [], allowedActions: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:policy", statement: "All sessions were reviewed.", status: "confirmed" },
+    activation: { mode: "next_execution", state: "active" } }));
+  const text = JSON.stringify(renderer.toJSON());
+  assert.match(text, /independently confirmed/); assert.match(text, /Next execution under the new Permission Epoch/);
+  assert.equal(renderer.root.findAllByType("input").length, 0);
+  await act(async () => { renderer.unmount(); });
+});
+
 test("CFG generic renderer requires a new preview after edits and binds approval to the exact revision and digest", async () => {
   const decisions: unknown[] = [];
   const previews: unknown[] = [];
@@ -805,4 +869,47 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
+});
+
+test("CFG-X10b: default-approval card requires independent acknowledgement and discloses new-session scope", async () => {
+  let latest = request({ capabilityId: "security.default_approval", scope: { kind: "global" }, fields: [{ id: "defaultApprovalMode", label: "New-session tool approval", kind: "enum", value: "always_allow", choices: [{ id: "always_allow", label: "Always allow eligible tools" }] }],
+    securityConsent: { targetDigest: "sha256:defaults", statement: "Only new sessions; pending tools remain unchanged", revision: 2, status: "required" } });
+  let renderer!: ReactTestRenderer; const acknowledgements: unknown[] = [];
+  const api = actions({ securityConsent: async input => { acknowledgements.push(input); return { ...latest, stateVersion: latest.stateVersion + 1, securityConsent: { ...latest.securityConsent!, status: "confirmed" } }; } });
+  const draw = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } }));
+  await act(async () => { renderer = create(draw()); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  assert.equal(button(renderer, "Independently approve this exact security policy").props.disabled, true);
+  assert.match(JSON.stringify(renderer.toJSON()), /newly created sessions/); assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /possible loss of persistent/);
+  await act(async () => renderer.root.findByProps({ type: "checkbox" }).props.onChange({ target: { checked: true } }));
+  await act(async () => button(renderer, "Independently approve this exact security policy").props.onClick());
+  assert.deepEqual(acknowledgements, [{ revision: 2, targetDigest: "sha256:defaults", acknowledged: true }]);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X10c: automation needs separate acknowledgement after editing and never uses the network memory-loss disclosure", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    let latest = request({ capabilityId: "security.automatic_configuration", scope: { kind: "session", id: "s1" }, fields: [{ id: "autoApplyLowRiskConfiguration", label: "Automatic configuration", kind: "boolean", value: false }],
+      securityConsent: { targetDigest: "sha256:automatic-2", statement: "Eligible connector cancellation windows only", revision: 2, status: "required" } });
+    let renderer!: ReactTestRenderer; const acknowledgements: unknown[] = [];
+    const api = actions({ preview: async input => { assert.deepEqual(input.values, { autoApplyLowRiskConfiguration: true }); return { ...latest, revision: 3, previewDigest: "sha256:preview-3", fields: [{ ...latest.fields[0]!, value: true }], securityConsent: { ...latest.securityConsent!, revision: 3, targetDigest: "sha256:automatic-3" } }; },
+      securityConsent: async input => { acknowledgements.push(input); return { ...latest, stateVersion: latest.stateVersion + 1, securityConsent: { ...latest.securityConsent!, status: "confirmed" } }; } });
+    const draw = () => createElement(LocaleProvider, { initialLocale: locale }, createElement(ConfigurationRequestCard, { request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } }));
+    await act(async () => { renderer = create(draw()); });
+    const confirm = () => button(renderer, locale === "zh" ? "确认此项变更" : "Confirm this change"), independent = () => button(renderer, locale === "zh" ? "独立确认此精确安全策略" : "Independently approve this exact security policy");
+    assert.equal(confirm().props.disabled, true); assert.match(JSON.stringify(renderer.toJSON()), locale === "zh" ? /取消窗口/ : /cancellation window/); assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /possible loss of persistent|持久 kernel／shell 内存可能丢失/);
+    await act(async () => renderer.root.findByProps({ name: "autoApplyLowRiskConfiguration" }).props.onChange({ target: { checked: true } }));
+    assert.equal(independent().props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    assert.equal(confirm().props.disabled, true);
+    await act(async () => renderer.root.findByProps({ className: "configuration-security-ack" }).findByType("input").props.onChange({ target: { checked: true } }));
+    await act(async () => independent().props.onClick()); assert.deepEqual(acknowledgements, [{ revision: 3, targetDigest: "sha256:automatic-3", acknowledged: true }]); assert.equal(confirm().props.disabled, false);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG-X10c: saved next-request policy names subsequent requests without claiming a subsequent Run or verified activation", async () => {
+  const renderer = await mount(request({ capabilityId: "security.automatic_configuration", runId: undefined, state: "applied", fields: [], activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }));
+  const value = JSON.stringify(renderer.toJSON()); assert.match(value, /Saved for subsequent requests/); assert.doesNotMatch(value, /Waiting for a subsequent run|Verified active/); await act(async () => renderer.unmount());
 });

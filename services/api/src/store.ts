@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { ConfigurationCapabilityId, ConfigurationValues, SkillLibrary } from "@sciencediscovery/schema";
-import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import { ConfigurationError, canonical as canonicalConfiguration } from "./configuration/validation.js";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
 import { normalizeSpecialistRuntime } from "./specialist-runtime/config.js";
@@ -1512,6 +1512,7 @@ export class SessionStore {
     if (exists("configuration_native_runs_v3")) this.database.prepare("DELETE FROM configuration_native_runs_v3 WHERE session_id=?").run(sessionId);
     if (exists("configuration_credential_drafts")) new ConfigurationCredentialBridge(this.database, this.configurationSecretCipher()).clearSession(sessionId);
     if (exists("configuration_endpoint_consents")) this.database.prepare("DELETE FROM configuration_endpoint_consents WHERE session_id=?").run(sessionId);
+    if (exists("configuration_security_consents")) this.database.prepare("DELETE FROM configuration_security_consents WHERE session_id=?").run(sessionId);
   }
 
 
@@ -2410,6 +2411,18 @@ export class SessionStore {
       runnerSelection: version([project.runnerIds, project.remoteRunnerHostIds, session.runnerIds, session.remoteRunnerHostIds]),
       registeredRunners: version([this.catalog.remoteHosts, this.getConfigurationDatabase().prepare("SELECT host_id, kind, encrypted_value FROM remote_host_credentials ORDER BY host_id, kind").all()]),
     };
+    if (capabilityId === "security.default_approval") systemVersions = { approvalDefaults: version([this.catalog.globalSettings.defaultApprovalMode, project.settingsOverrides.defaultApprovalMode]) };
+    if (capabilityId === "security.automatic_configuration") systemVersions = { automaticConfiguration: version(session.autoApplyLowRiskConfiguration === true) };
+    if (capabilityId === "security.network") systemVersions = { securityNetwork: version([
+      this.catalog.sandboxNetworkSettings, this.catalog.sessions.filter(session => !session.archivedAt).map(session => [session.id, session.permissionEpochId]),
+      this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+      this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all(),
+    ]) };
+    if (capabilityId === "security.approval_mode") systemVersions = { sessionApproval: version([
+      session.approvalMode, session.permissionEpochId, this.getSessionPermissionEpoch(sessionId),
+      this.listPermissionRequests(sessionId), this.listPermissionGrants().filter(grant => grant.projectId === project.id && (!grant.sessionId || grant.sessionId === sessionId)),
+      this.catalog.sandboxNetworkSettings,
+    ]) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2422,6 +2435,8 @@ export class SessionStore {
       } : resourceVersions),
       data: {
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        defaultApproval: { global: this.catalog.globalSettings.defaultApprovalMode ?? "inherit", project: project.settingsOverrides.defaultApprovalMode ?? "inherit" },
+        automaticConfiguration: session.autoApplyLowRiskConfiguration === true,
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
@@ -2438,6 +2453,8 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "security.approval_mode" ? { sessionApproval: this.configurationSessionApproval(sessionId) } : {}),
+        ...(capabilityId === "security.network" ? { securityNetwork: this.configurationSecurityNetwork() } : {}),
       },
     };
   }
@@ -2447,6 +2464,38 @@ export class SessionStore {
       encrypt: (id, secret) => this.encryptModelApiToken(id, secret),
       decrypt: (id, ciphertext) => this.decryptModelApiToken(id, ciphertext),
     };
+  }
+
+  applyDefaultApprovalConfigurationSync(sessionId: string, scope: ConfigurationScope, mode: "inherit" | "always_allow" | "ask_for_dangerous"): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Approval defaults require the shared transaction");
+    if (!["inherit", "always_allow", "ask_for_dangerous"].includes(mode)) throw new Error("Invalid approval default");
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    if (scope.kind !== "global" && (scope.kind !== "project" || scope.id !== project.id)) throw new Error("Invalid approval-default scope");
+    const next = { ...(scope.kind === "global" ? this.catalog.globalSettings : project.settingsOverrides) };
+    if (mode === "inherit") delete next.defaultApprovalMode; else next.defaultApprovalMode = mode;
+    const normalized = this.normalizeSettings(next);
+    if (scope.kind === "global") this.catalog.globalSettings = normalized; else project.settingsOverrides = normalized;
+    this.syncSessionCompatibilityForProject(scope.kind === "project" ? project.id : undefined);
+  }
+
+  applyAutomaticConfigurationSync(sessionId: string, enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Automatic configuration requires the shared transaction");
+    if (typeof enabled !== "boolean") throw new Error("Invalid automatic configuration policy");
+    this.applyAutomaticConfigurationPolicySync(sessionId, enabled);
+  }
+
+  private applyAutomaticConfigurationPolicySync(sessionId: string, enabled: boolean): void {
+    const session = this.assertSessionWritable(sessionId);
+    session.autoApplyLowRiskConfiguration = enabled;
+    if (!enabled && this.database) {
+      const pending = this.listConnectorConfigurationRequests(sessionId).filter(request => request.state === "awaiting_confirmation" && request.autoApplyAt);
+      for (const request of pending) {
+        delete request.autoApplyAt;
+        this.database.prepare("UPDATE connector_configuration_requests SET record_json=? WHERE id=?").run(JSON.stringify(request), request.id);
+      }
+      if (this.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuration_requests_v2'").get())
+        new ConfigurationRepository(this.database).withdrawAutoApply(sessionId);
+    }
   }
 
   getGlobalSettings(): RuntimeSettingsDetails {
@@ -2478,6 +2527,22 @@ export class SessionStore {
     rotatedSessionIds: string[];
     settings: SandboxNetworkSettings;
   }> {
+    const result = this.applySandboxNetworkPolicy(value);
+    await this.saveCatalog();
+    return { rotatedSessionIds: result.rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
+  }
+
+  configurationSecurityNetwork() {
+    return { settings: this.getSandboxNetworkSettings(), writableSessionCount: this.catalog.sessions.filter(session => !session.archivedAt).length,
+      proxyPolicies: ["inherit", "none", ...this.catalog.proxyServers.map(server => `proxy:${server.id}`)] };
+  }
+
+  applySecurityNetworkConfigurationSync(value: unknown): { rotatedSessionIds: string[]; retiredPermissionEpochIds: string[] } {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    return this.applySandboxNetworkPolicy(value);
+  }
+
+  private applySandboxNetworkPolicy(value: unknown): { rotatedSessionIds: string[]; retiredPermissionEpochIds: string[] } {
     const settings = normalizeSandboxNetworkSettings(value);
     // Same guard the other policy surfaces use: reject a dangling reference at
     // save time rather than letting every later execution fail closed on it.
@@ -2485,10 +2550,12 @@ export class SessionStore {
     this.catalog.sandboxNetworkSettings = settings;
     const access = this.currentSandboxNetworkAccess();
     const rotatedSessionIds: string[] = [];
+    const retiredPermissionEpochIds: string[] = [];
     for (const session of this.catalog.sessions) {
       if (session.archivedAt) continue;
       const current = this.getPermissionEpoch(session.permissionEpochId);
       if (current && epochSandboxNetworkAccess(current).revision === access.revision) continue;
+      if (current) retiredPermissionEpochIds.push(current.id);
       const epoch = createPermissionEpoch(
         session.id,
         "Sandbox network access policy changed",
@@ -2501,8 +2568,7 @@ export class SessionStore {
       session.updatedAt = epoch.createdAt;
       rotatedSessionIds.push(session.id);
     }
-    await this.saveCatalog();
-    return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
+    return { rotatedSessionIds, retiredPermissionEpochIds };
   }
 
   /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
@@ -5792,18 +5858,7 @@ export class SessionStore {
       session.settingsOverrides = nextSettings;
       if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
-      if (autoApplyLowRiskConfiguration !== undefined) {
-        session.autoApplyLowRiskConfiguration = autoApplyLowRiskConfiguration;
-        if (!autoApplyLowRiskConfiguration && this.database) {
-          const pending = this.listConnectorConfigurationRequests(sessionId).filter((request) =>
-            request.state === "awaiting_confirmation" && request.autoApplyAt);
-          for (const request of pending) {
-            delete request.autoApplyAt;
-            this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ?")
-              .run(JSON.stringify(request), request.id);
-          }
-        }
-      }
+      if (autoApplyLowRiskConfiguration !== undefined) this.applyAutomaticConfigurationPolicySync(sessionId, autoApplyLowRiskConfiguration);
       if (reviewMode) session.reviewMode = reviewMode;
       if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
       if (specialistId === null) delete session.specialistId;
@@ -6239,16 +6294,38 @@ export class SessionStore {
     return structuredClone(cancelled);
   }
 
-  async setApprovalMode(
+  configurationSessionApproval(sessionId: string) {
+    const session = this.assertSessionWritable(sessionId);
+    return { approvalMode: session.approvalMode, pendingCount: this.listPermissionRequests(sessionId).filter(request => request.state === "pending").length };
+  }
+
+  applySessionApprovalConfigurationSync(sessionId: string, value: unknown): { retiredPermissionEpochIds: string[] } {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    if (value !== "always_allow" && value !== "ask_for_dangerous") throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Select a registered session approval mode", 400);
+    if (this.configurationSessionApproval(sessionId).pendingCount) throw new ConfigurationError("PENDING_PERMISSION_REQUESTS", "Resolve existing permission cards separately before changing approval mode", 409);
+    const previous = this.assertSessionWritable(sessionId).permissionEpochId;
+    const result = this.applyApprovalModeSync(sessionId, value, "Session approval mode changed; persistent kernel and shell memory was lost");
+    if (result.authorizations.length || result.resolvedPendingRequests.length) throw new Error("Configuration approval changes cannot approve pending actions");
+    return { retiredPermissionEpochIds: result.permissionEpoch.id === previous ? [] : [previous] };
+  }
+
+  async setApprovalMode(sessionId: string, approvalMode: Session["approvalMode"], memoryLostReason?: string) {
+    const previous = this.assertSessionWritable(sessionId).approvalMode;
+    const result = this.applyApprovalModeSync(sessionId, approvalMode, memoryLostReason);
+    if (previous !== approvalMode) await this.saveCatalogWithAuthorizations(result.authorizations);
+    return result;
+  }
+
+  private applyApprovalModeSync(
     sessionId: string,
     approvalMode: Session["approvalMode"],
     memoryLostReason?: string,
-  ): Promise<{
+  ): {
     authorizations: PermissionAuthorization[];
     permissionEpoch: PermissionEpoch;
     resolvedPendingRequests: PermissionRequest[];
     session: Session;
-  }> {
+  } {
     const session = this.assertSessionWritable(sessionId);
     if (approvalMode !== "always_allow" && approvalMode !== "ask_for_dangerous") {
       throw new Error("Invalid approval mode");
@@ -6297,7 +6374,6 @@ export class SessionStore {
       request.permissionAuthorizationId = authorization.id;
       return authorization;
     });
-    await this.saveCatalogWithAuthorizations(authorizations);
     return {
       authorizations: structuredClone(authorizations),
       permissionEpoch: structuredClone(permissionEpoch),

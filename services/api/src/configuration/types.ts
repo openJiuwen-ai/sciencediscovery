@@ -13,6 +13,7 @@ export interface ConfigurationSnapshot {
   runId?: string;
 }
 export interface ConfigurationPlan {
+  securityConsent?: Omit<NonNullable<ConfigurationRequestView["securityConsent"]>, "revision" | "status">;
   endpointAuthorization?: Omit<NonNullable<ConfigurationRequestView["endpointAuthorization"]>, "revision" | "status">;
   fields: ConfigurationFieldView[];
   changes: ConfigurationRequestView["changes"];
@@ -47,6 +48,8 @@ export interface ConfigurationVerificationResult {
   retryable?: boolean;
 }
 export interface ConfigurationApplyResult {
+  /** Server-only follow-up targets. Never an instruction supplied by the Agent. */
+  retiredPermissionEpochIds?: string[];
   resourceRevision?: string;
   summary?: string;
   /** Exact inverse input, including absence markers encoded by the registered domain adapter. */
@@ -69,6 +72,7 @@ export interface ConfigurationAdapter {
   previewReversal?(receipt: ConfigurationApplyReceipt, snapshot: ConfigurationSnapshot): ConfigurationValues;
 }
 export interface ConfigurationHost {
+  projectSecurityConsent?(record: ConfigurationRecord): ConfigurationRequestView["securityConsent"];
   afterCommit?(sessionId: string): Promise<void>;
   executionDependencies?(record: ConfigurationRecord): Record<string, string> | undefined;
   projectEndpointAuthorization?(record: ConfigurationRecord): ConfigurationRequestView["endpointAuthorization"];
