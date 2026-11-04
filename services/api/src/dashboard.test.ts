@@ -1556,3 +1556,63 @@ test("a delimited preview keeps every row as wide as the columns it advertises",
   assert.equal(truncatedPayload.totalRows, 2);
   assert.equal(truncatedPayload.truncated, true);
 });
+
+test("a delimited preview does not widen every row to one pathological line", async (context) => {
+  const fixture = await createFixture(context);
+  // Padding every returned row to the widest line is what squares the grid, but
+  // one 200k-field line then costs 200k cells per row: a 400 KB file asked for
+  // 20M cells and a 60 MB response. Past the cell budget the table keeps each
+  // row at its own width instead — the shape before the padding fix — so the
+  // outlier line cannot be copied into the rows around it.
+  const wide = Array.from({ length: 200_001 }, () => "w").join(",");
+  const vid = await seedArtifact(fixture, {
+    content: ["a,b,c", "1,2,3", wide, "4,5,6"].join("\n"),
+    kind: "dataset",
+    logicalName: "pathological.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+  // Compare lengths and short slices: diffing a 200k-element array against a
+  // three-element one is what the assertion itself must never do.
+  assert.equal(payload.columns.length, 3, "the outlier row must not add blank columns");
+  assert.deepEqual(payload.columns.slice(0, 3), ["a", "b", "c"], "the header keeps its names in order");
+  assert.equal(payload.rows[0]?.length, 3, "a normal row keeps its own three cells");
+  assert.deepEqual(payload.rows[0]?.slice(0, 3), ["1", "2", "3"]);
+  assert.equal(payload.rows[2]?.length, 3, "every normal row keeps its own width");
+  assert.deepEqual(payload.rows[2]?.slice(0, 3), ["4", "5", "6"]);
+  assert.equal(payload.rows[1]?.length, 200_001, "the outlier row is still returned whole, no cell is dropped");
+  const cells = payload.rows.reduce((total, row) => total + row.length, 0);
+  assert.ok(
+    cells <= 200_007,
+    `the preview must stay near the file's own cells instead of rowCount x widest, got ${cells}`,
+  );
+  assert.equal(payload.totalRows, 3);
+  assert.equal(payload.truncated, false);
+});
+
+test("a delimited preview returns a legitimately wide table whole", async (context) => {
+  const fixture = await createFixture(context);
+  // The cell budget must never be spent by cutting columns: a well-formed table
+  // of 100 or 200 named columns is previewed exactly, as it was before.
+  for (const columnCount of [100, 200]) {
+    const columns = Array.from({ length: columnCount }, (_, index) => `c${index}`);
+    const values = Array.from({ length: columnCount }, (_, index) => `v${index}`);
+    const vid = await seedArtifact(fixture, {
+      content: [columns.join(","), values.join(","), values.join(",")].join("\n"),
+      kind: "dataset",
+      logicalName: `wide-${columnCount}.csv`,
+      mediaType: "text/csv",
+    });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+    assert.deepEqual(payload.columns, columns, `${columnCount}: every named column is kept in order`);
+    assert.deepEqual(payload.rows, [values, values], `${columnCount}: every row keeps all its cells`);
+    assert.equal(payload.totalRows, 2, `${columnCount}: totalRows must not change`);
+    assert.equal(payload.truncated, false, `${columnCount}: truncated must not change`);
+  }
+});
