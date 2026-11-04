@@ -184,6 +184,29 @@ test("the data table header hides an unnamed overflow column's internal id", () 
   assert.match(header, /title="Sort by __extra_1"/);
 });
 
+test("keeps numeric header names in file order", () => {
+  const table = parse("numeric-header.csv", "10,2\n1,2\n3,4\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["10", "2"]);
+  assert.deepEqual(table.rows.map((row) => [row["10"], row["2"]]), [[1, 2], [3, 4]]);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "10,2");
+
+  const three = parse("numeric-header-three.csv", "2024,2025,2\n7,8,9\n");
+  assert.deepEqual(three.columns.map((column) => column.id), ["2024", "2025", "2"]);
+  assert.deepEqual(three.rows.map((row) => [row["2024"], row["2025"], row["2"]]), [[7, 8, 9]]);
+  assert.equal(tableToCsv(three.rows, three.columns).split(/\r?\n/)[0], "2024,2025,2");
+
+  const grid = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = grid.slice(grid.indexOf("csva-virtual-grid-header"), grid.indexOf("csva-virtual-grid-body"));
+  assert.deepEqual([...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? ""), ["#", "10", "2"]);
+});
+
 test("exports an unnamed overflow column with an empty header name", () => {
   const table = parse("extra-export.csv", "a,b\n1,2,3\n");
   const [header, firstRow] = tableToCsv(table.rows, table.columns).split(/\r?\n/);
