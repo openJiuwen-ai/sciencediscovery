@@ -105,9 +105,16 @@ export function profileRows(
   source: DataSourceRecord,
   warnings: string[] = [],
   unnamedFields: readonly string[] = [],
+  fieldOrder: readonly string[] = [],
 ): DataTable {
   const unnamed = new Set(unnamedFields);
-  const fields = [...new Set(rows.flatMap((row) => Object.keys(row)).filter((field) => field !== "__rowId"))];
+  // JavaScript enumerates integer-like keys in numeric order, so a header whose
+  // first column is called `10` would lose the file order in the key union.
+  // Importers that know the header pass the order in; the union stays the
+  // fallback for callers that only have rows.
+  const fields = fieldOrder.length
+    ? [...fieldOrder]
+    : [...new Set(rows.flatMap((row) => Object.keys(row)).filter((field) => field !== "__rowId"))];
   const rawColumns = new Map<string, string[]>();
   for (const field of fields) {
     rawColumns.set(field, rows.map((row) => row[field] === null || row[field] === undefined ? "" : String(row[field])));
@@ -234,7 +241,7 @@ function surplusColumnLimit(headerWidth: number): number {
 function rectangularizeRows(
   rows: Array<Record<string, unknown>>,
   headerFields: string[],
-): { surplusFields: string[]; surplusCount: number; kept: number } {
+): { fields: string[]; surplusFields: string[]; surplusCount: number; kept: number } {
   // A header column may itself be called `__parsed_extra`. Papa then pushes its
   // value into the same array it uses for surplus cells, so the first element
   // belongs to that column and only the rest are surplus.
@@ -275,7 +282,7 @@ function rectangularizeRows(
       row[field] = cells[index];
     });
   }
-  return { kept, surplusCount, surplusFields };
+  return { fields: [...headerFields, ...surplusFields], kept, surplusCount, surplusFields };
 }
 
 export function parseCsvText(content: string, source: DataSourceRecord): DataTable {
@@ -324,6 +331,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     source,
     warnings,
     rectangular.surplusFields,
+    rectangular.fields,
   );
 }
 
