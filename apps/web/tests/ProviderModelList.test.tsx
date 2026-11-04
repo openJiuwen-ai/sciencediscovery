@@ -50,6 +50,17 @@ test("token counts compact to integers: 1M, 200k, 131k", () => {
   assert.equal(compactTokenCount(undefined), undefined);
 });
 
+test("a context window between 1M and 10M keeps the fraction it has", () => {
+  // Announcing 1,500,000 tokens as "2M" overstates the badge by half a million;
+  // whole millions stay whole, and the 1000k rounding crosses into M instead of
+  // printing a count that reads as a million but is not.
+  assert.equal(compactTokenCount(1_500_000), "1.5M");
+  assert.equal(compactTokenCount(1_400_000), "1.4M");
+  assert.equal(compactTokenCount(999_999), "1M");
+  assert.equal(compactTokenCount(2_000_000), "2M");
+  assert.equal(compactTokenCount(10_500_000), "11M");
+});
+
 const EMPTY_FORM: ManualModelForm = {
   contextWindow: "",
   label: "",
