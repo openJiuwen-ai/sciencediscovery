@@ -261,6 +261,59 @@ test("keeps an inherited property name from becoming a column value", () => {
   assert.equal(proto.columns[1]?.missingCount, 1);
 });
 
+test("keeps an inherited header name out of the header the reader shows", () => {
+  // `renamedHeaders` is a plain object, so a bare read for a header called
+  // `toString` returns the function on Object.prototype. The reader would show
+  // that function as the column name (the grid drops it) and the export would
+  // print its source text instead of the name the file wrote.
+  const table = parse("inherited-header-name.csv", "a,toString\n1\n2\n");
+  const column = table.columns.find((entry) => entry.id === "toString");
+  assert.equal(column?.label, "toString");
+  assert.equal(column?.header, undefined);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "a,toString");
+
+  const html = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = html.slice(html.indexOf("csva-virtual-grid-header"), html.indexOf("csva-virtual-grid-body"));
+  const labels = [...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? "");
+  assert.deepEqual(labels, ["#", "a", "toString"]);
+});
+
+test("renders a header named __proto__ without taking Object.prototype as its name", () => {
+  // `a,__proto__` must stay a table the viewer can open: reading the name off a
+  // plain object hands back Object.prototype, which React refuses to render and
+  // the export prints as `[object Object]`.
+  const table = parse("proto-header-name.csv", "a,__proto__\n1,2\nx,y\n");
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "__proto__"]);
+  const column = table.columns.find((entry) => entry.id === "__proto__");
+  // The label stays a string: no prototype member may reach the grid or the
+  // export. Its text is the usual underscore humanization, which is a product
+  // rule for every header and not this fix's business.
+  assert.equal(typeof column?.label, "string");
+  assert.equal(column?.header, undefined);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "a,__proto__");
+  assert.deepEqual(
+    table.rows.map((row) => [row.a, (row as Record<string, unknown>)["__proto__"]]),
+    [["1", null], ["x", null]],
+  );
+
+  const html = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = html.slice(html.indexOf("csva-virtual-grid-header"), html.indexOf("csva-virtual-grid-body"));
+  const labels = [...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? "");
+  assert.deepEqual(labels, ["#", "a", "__proto__"]);
+});
+
 test("shows a duplicate header under the name the file used", () => {
   const table = parse("duplicate-header.csv", "a,a\n1,2\n");
 
