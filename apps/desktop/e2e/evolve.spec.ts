@@ -30,6 +30,8 @@ import {
   installMockApi,
   makeSession,
   type EvolveFixture,
+  type Mock,
+  type RecordedCall,
 } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
@@ -269,7 +271,7 @@ test("an automatic checkpoint is shown but asks for nothing", async ({ page }) =
   await expect(card.getByRole("button")).toHaveCount(0);
 });
 
-test("a checkpoint's change button fills the composer instead of sending", async ({ page }) => {
+test("a checkpoint's change button writes the note in the card and sends it from there", async ({ page }) => {
   const mock = await installMockApi(page, {
     assistantAnswer: checkpointAnswer({ step: 2 }),
     sessions: [makeSession()],
@@ -286,11 +288,24 @@ test("a checkpoint's change button fills the composer instead of sending", async
   await expect(adjust).toBeEnabled();
   await adjust.click();
 
-  await expect(page.locator("#composer-textarea")).toHaveValue("我想调整这一步：");
-  // A change is something the user is about to describe, so nothing was sent.
-  expect(
-    mock.calls.filter(
-      (call) => call.method === "POST" && call.path === "/api/sessions/session-1/messages",
-    ),
-  ).toHaveLength(1);
+  // The note is written where the step is, not in the composer.
+  const note = card.getByRole("textbox");
+  await expect(note).toBeVisible();
+  await expect(page.locator("#composer-textarea")).toHaveValue("");
+  // Nothing is sent until the reader has said what should change.
+  expect(posts(mock)).toHaveLength(1);
+  await note.fill("字数少一点，别动结构");
+  await card.getByRole("button", { name: "发送" }).click();
+
+  await expect.poll(() => posts(mock).length).toBe(2);
+  const sent = posts(mock)[1]!.body ?? "";
+  expect(sent).toContain("我想调整这一步：字数少一点，别动结构");
+  // The composer stayed out of it: the sentence was never seeded there.
+  await expect(page.locator("#composer-textarea")).toHaveValue("");
 });
+
+function posts(mock: Mock): RecordedCall[] {
+  return mock.calls.filter(
+    (call) => call.method === "POST" && call.path === "/api/sessions/session-1/messages",
+  );
+}

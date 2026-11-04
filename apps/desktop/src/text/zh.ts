@@ -1135,9 +1135,12 @@ export const ZH = {
     checkpoint: {
       eyebrow: (step: number, total?: number) => (total === undefined ? `检查点 ${step}` : `检查点 ${step}/${total}`),
       waiting: "等待确认",
+      answered: "已回答",
       auto: "自动",
       confirm: "确认，继续",
       adjust: "需要调整",
+      send: "发送",
+      cancel: "取消",
       confirmReply: "确认，继续。",
       adjustDraft: "我想调整这一步：",
       busy: "这条回复还没结束，等它完成后再操作。",

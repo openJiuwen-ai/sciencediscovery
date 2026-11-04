@@ -23,11 +23,14 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Markdown } from "../src/Markdown.js";
-import { CheckpointReplyProvider, type CheckpointReply } from "../src/views/CheckpointCard.js";
+import {
+  CheckpointAnsweredProvider,
+  CheckpointReplyProvider,
+  type CheckpointReply,
+} from "../src/views/CheckpointCard.js";
 
 const values: CheckpointReply = {
   busy: false,
-  draft: () => {},
   reply: () => {},
 };
 
@@ -55,10 +58,16 @@ function card(over: Record<string, string | number> = {}): string {
 
 /** `null` is the card in a renderer with no composer behind it; a default
  *  parameter would turn an omitted argument back into the live context. */
-function render(answer: string, reply: CheckpointReply | null = values): string {
+function render(
+  answer: string,
+  reply: CheckpointReply | null = values,
+  answered = false,
+): string {
   const markdown = <Markdown>{answer}</Markdown>;
   return renderToStaticMarkup(
-    reply === null ? markdown : <CheckpointReplyProvider value={reply}>{markdown}</CheckpointReplyProvider>,
+    <CheckpointAnsweredProvider value={answered}>
+      {reply === null ? markdown : <CheckpointReplyProvider value={reply}>{markdown}</CheckpointReplyProvider>}
+    </CheckpointAnsweredProvider>,
   );
 }
 
@@ -100,4 +109,25 @@ test("a card whose reply is still streaming disables its buttons", () => {
   const html = render(card(), { ...values, busy: true });
   assert.match(html, /class="evolve-checkpoint-confirm" disabled=""/);
   assert.match(html, /这条回复还没结束/);
+});
+
+test("a checkpoint the conversation has moved past folds to its header", () => {
+  const html = render(card(), values, true);
+  assert.match(html, /class="evolve-checkpoint is-confirm is-answered"/);
+  assert.match(html, /已回答/);
+  // The question it asked stays on the folded line; the step's words are
+  // behind it, and the buttons are gone — the reply is already in the
+  // transcript, so there is nothing left to press.
+  assert.match(html, /什么算“更好”/);
+  assert.match(html, /<strong>度量：<\/strong>/);
+  assert.doesNotMatch(html, /<details[^>]*\sopen/);
+  assert.doesNotMatch(html, /确认，继续/);
+  assert.doesNotMatch(html, /需要调整/);
+});
+
+test("an answered automatic checkpoint folds too, still saying it was automatic", () => {
+  const html = render(card({ pace: "auto" }), values, true);
+  assert.match(html, /class="evolve-checkpoint is-auto is-answered"/);
+  assert.match(html, /自动/);
+  assert.doesNotMatch(html, /<button/);
 });
