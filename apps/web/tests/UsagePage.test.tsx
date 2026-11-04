@@ -22,7 +22,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { GlobalModelUsageSummary, ModelInvocationUsage, ModelUsageAnalyticsSummary, ModelUsageBucket } from "@sciencediscovery/schema";
 
-import { filterGlobalUsageSummary, InvocationTable, latestUsageChartScrollLeft, RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "../src/UsagePage.js";
+import { filterGlobalUsageSummary, formatChartNumber, InvocationTable, latestUsageChartScrollLeft, RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "../src/UsagePage.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { formatCompactTokenValue, usageBreakdownLabel, usageInlineLabel, usageInOutLabel } from "../src/usageFormat.js";
 
@@ -59,6 +59,23 @@ test("USG-011 usage formatting omits missing token fields instead of unreported"
   assert.equal(usageInOutLabel(bucket({ cacheReadTokens: 19_000 })), "in 10 · out 5");
   assert.doesNotMatch(usageInOutLabel(bucket({ cacheReadTokens: 19_000 })), /cache/);
   assert.equal(usageBreakdownLabel(bucket({ inputTokens: null, unreportedInvocationCount: 1 })), "out 5");
+});
+
+test("USG-031 a compact token count never rounds up into a unit it has not reached", () => {
+  // 999_999 tokens are 999.999K; rounding the thousands would print `1000K`,
+  // which reads as a million while the exported field stays 999999. The count
+  // passes into the next unit instead, so the printed number never claims more
+  // than the data holds.
+  assert.equal(formatCompactTokenValue(999_999), "1.0M");
+  assert.equal(formatCompactTokenValue(999_500), "1.0M");
+  assert.equal(formatCompactTokenValue(999_499), "999K");
+  assert.equal(formatCompactTokenValue(1_000_000), "1.0M");
+  assert.equal(formatCompactTokenValue(10_000), "10K");
+  // The chart axis uses the same rule: `999.9K` must not become `1000.0K`.
+  assert.equal(formatChartNumber(999_999), "1.0M");
+  assert.equal(formatChartNumber(999_949), "999.9K");
+  assert.equal(formatChartNumber(1_500), "1.5K");
+  assert.equal(formatChartNumber(1_000_000), "1.0M");
 });
 
 test("USG-012 usage page renders model drilldown, chart and inline/table usage", () => {

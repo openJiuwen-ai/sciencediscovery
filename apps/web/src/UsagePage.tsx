@@ -147,7 +147,7 @@ function formatChartDate(date: string, locale: string): string {
     .format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-function formatChartNumber(value: number): string {
+export function formatChartNumber(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
