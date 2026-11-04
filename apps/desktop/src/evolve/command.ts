@@ -20,20 +20,31 @@
  * the run. So "新建实验" is a shortcut into that conversation, not a second
  * way of starting a search.
  *
- * The command also carries the two choices the dialog collects: which search,
- * and whether the design pauses at its checkpoints. Both are flags the agent
- * reads, not fields on a request — the conversation is still what designs the
- * run.
+ * The command also carries the choices the dialog collects: which search,
+ * whether the design pauses at its checkpoints, and — on Windows, where there
+ * is no sandbox — that the user accepted candidates running unconfined. All
+ * are flags the agent reads, not fields on a request — the conversation is
+ * still what designs the run.
  */
 
 import type { EvolveAlgorithm, EvolveCheckpointMode } from "@sciencediscovery/schema";
 
 export const EVOLVE_COMMAND = "/evolve-design";
 
+/** The skill the command names, as `/api/skills` reports it. Picking it from
+ *  the composer's palette opens the setup dialog rather than writing a bare
+ *  command: the two choices that dialog collects are exactly the command's
+ *  flags, and typing them by hand is the part nobody should have to learn. */
+export const EVOLVE_SKILL_ID = "evolve-design";
+
+export function isEvolveSkill(skill: { id: string }): boolean {
+  return skill.id === EVOLVE_SKILL_ID;
+}
+
 /** The flags the surface may put after the command, in any order. Only the
  *  leading run of them is consumed: a goal that happens to start with a dash
  *  keeps its own text. */
-const LEADING_FLAGS = /^(?:\s*--(?:algorithm\s+(?:puct|openevolve)|no-confirm)\b)+/;
+const LEADING_FLAGS = /^(?:\s*--(?:algorithm\s+(?:puct|openevolve)|no-confirm|allow-direct)\b)+/;
 
 export function isEvolveCommand(text: string): boolean {
   return new RegExp(`^${EVOLVE_COMMAND}(?:\\s|$)`).test(text.trim());
@@ -63,12 +74,25 @@ export function evolveCommandCheckpointMode(text: string): EvolveCheckpointMode 
   return /(^|\s)--no-confirm\b/.test(afterCommand(text)) ? "auto" : "confirm";
 }
 
+/** Whether the command already carries the user's approval to run candidates
+ *  without a sandbox.
+ *
+ *  Only Windows needs it, and the dialog is what writes it — reading it back
+ *  keeps a setup detour from silently dropping an approval the user gave. */
+export function evolveCommandAllowUnisolated(text: string): boolean | undefined {
+  if (!isEvolveCommand(text)) return undefined;
+  return /(^|\s)--allow-direct\b/.test(afterCommand(text));
+}
+
 /** The message that starts the design conversation. */
 export function evolveCommand(
   algorithm: EvolveAlgorithm,
   goal: string,
   checkpointMode: EvolveCheckpointMode = "confirm",
+  allowUnisolated = false,
 ): string {
-  const flags = `${EVOLVE_COMMAND} --algorithm ${algorithm}${checkpointMode === "auto" ? " --no-confirm" : ""}`;
+  const flags = `${EVOLVE_COMMAND} --algorithm ${algorithm}`
+    + (checkpointMode === "auto" ? " --no-confirm" : "")
+    + (allowUnisolated ? " --allow-direct" : "");
   return `${flags} ${goal.trim()}`.trimEnd();
 }

@@ -47,6 +47,7 @@ import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
+import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
@@ -298,7 +299,13 @@ export function createPlatformServices(
     evolutionStore,
     new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url, connection: () => evolveAvailability.connection() }),
     memoryGraphSink,
-    undefined,
+    // Stated here rather than left to the orchestrator's default: whether an
+    // installation may run candidates unconfined is a configuration decision,
+    // and the default must stay "no".
+    () => probeEvolveSandbox(
+      process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+      { unisolated: config.evolve.unisolated },
+    ),
     evolveRunTokens,
     // The sidecar reaches the model proxy at this origin. `0.0.0.0` is a bind
     // address, not somewhere to connect to, so it is dialled back to loopback —

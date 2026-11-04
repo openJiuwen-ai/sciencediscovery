@@ -175,6 +175,12 @@ export function EvolveOverlay({ client, onClose, onError, onRunChanged, run }: E
             >
               {TEXT.evolve.autoPace}
             </span> : null}
+            {run.goal.allowUnisolated === true ? <span
+              className="evolve-unisolated"
+              title={TEXT.evolve.unisolatedTitle}
+            >
+              {TEXT.evolve.unisolated}
+            </span> : null}
           </div>
           <h2 id="evolve-panel-title" title={run.goal.statement}>{title}</h2>
           {title === statement ? null : <details className="evolve-goal">

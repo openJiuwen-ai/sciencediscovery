@@ -1084,6 +1084,20 @@ export const EN: Text = {
     shelfHint: "Let a program improve against a scorecard and keep the best version",
     autoPace: "Auto",
     autoPaceTitle: "Started without pausing at checkpoints",
+    /* This run's candidates did not run in a sandbox. Both the badge and its
+       tooltip have to say so, or an unconfined result reads like a contained
+       one. */
+    unisolated: "No sandbox",
+    unisolatedTitle: "Candidate code ran without a sandbox",
+
+    /* The header capsule's second half: whether a search can start now. */
+    runtime: {
+      ready: "Ready",
+      running: "Running",
+      installing: "Preparing",
+      not_initialized: "Not ready",
+      error: "Unavailable",
+    },
 
     /* The checkpoint card's own chrome. The title and body are the model's
        words and arrive in the conversation's language already. */
@@ -1114,6 +1128,12 @@ export const EN: Text = {
       confirmLabel: "Pause at each checkpoint",
       confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
       autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
+      /* Windows has no bwrap/seatbelt. This switch is the user's explicit
+         consent to unconfined execution, and it is off by default; without it
+         the server refuses a run that executes candidate code. */
+      unisolatedLabel: "Allow candidate code to run without a sandbox",
+      unisolatedHint: "Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. Turn this on only if you understand that.",
+      unisolatedOffHint: "Off: any run that has to execute candidate programs is refused before it starts.",
       sessionNote: "The run is recorded in this session; once it starts, its progress stays reachable from the session header.",
       send: "Start designing",
       cancel: "Cancel",

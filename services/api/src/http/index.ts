@@ -387,6 +387,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  /** Availability plus the isolation a run would actually get.
+   *
+   *  The desktop needs the backend before it draws the create dialog, not at
+   *  the first refused run: on Windows the dialog has to collect the
+   *  no-isolation confirmation exactly when the backend is `direct`, and
+   *  hiding that until after a scorecard has been designed wastes the whole
+   *  design pass. A probe that fails answers `null`, which only ever reads as
+   *  "no backend". */
+  const evolveStatusPayload = async (initialize = false) => ({
+    ...await evolveAvailability.refresh(initialize),
+    sandbox: await evolveOrchestrator.sandboxCapability()
+      .then((capability) => capability.backend)
+      .catch(() => null),
+  });
   const conversationalConfiguration = () => {
     store.setConfigurationConnectorRevisionSource((ids?: readonly string[]) => {
       const selected = mcpRegistry.listManifests().filter(manifest => !ids || ids.includes(manifest.id));
@@ -951,10 +965,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
 
       if (url.pathname === "/api/evolve/status" && request.method === "GET") {
-        return sendJson(response, 200, await evolveAvailability.refresh());
+        return sendJson(response, 200, await evolveStatusPayload());
       }
       if (url.pathname === "/api/evolve/init" && request.method === "POST") {
-        return sendJson(response, 200, await evolveAvailability.refresh(true));
+        return sendJson(response, 200, await evolveStatusPayload(true));
       }
       if ((url.pathname.startsWith("/api/evolve/") || /^\/api\/sessions\/[^/]+\/idea-tree(?:\/|$)/.test(url.pathname))
           && (await evolveAvailability.refresh()).state !== "ready") {

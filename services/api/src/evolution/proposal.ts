@@ -53,6 +53,7 @@ import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
+import type { EvolveSandboxCapability } from "./sandbox.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
 import { basename } from "node:path";
@@ -153,9 +154,13 @@ export async function startProposedRun(
   const shape = shapeOf(proposal);
   if (typeof shape === "string") return { refusedBecause: shape };
 
+  // Probed before the goal is assembled, not after: whether this search runs
+  // unconfined is a property of what the goal records, and a stray
+  // `allowUnisolated` on a host with a real sandbox must not end up in it.
+  const sandbox = await deps.orchestrator.sandboxCapability();
   let goal;
   try {
-    goal = await assembleGoal(proposal, deps);
+    goal = await assembleGoal(proposal, deps, sandbox);
   } catch (error) {
     // A path the agent got wrong is something it can fix, so it comes back as a
     // refusal naming the field. Anything else is this side breaking, and throws.
@@ -166,7 +171,7 @@ export async function startProposedRun(
     casHas: deps.casHas,
     goal,
     model: deps.model?.(goal.modelId) as never,
-    sandbox: await deps.orchestrator.sandboxCapability(),
+    sandbox,
     thinkingSupported: deps.thinkingSupported,
   });
   if (issues.length) return { refusedBecause: describe(issues) };
@@ -323,7 +328,7 @@ const DEFAULT_CASE_SPLIT: EvolveCaseSplit = {
 
 /** The proposal's own text and paths, resolved into a goal. */
 async function assembleGoal(
-  proposal: EvolveRunProposal, deps: ProposalDeps,
+  proposal: EvolveRunProposal, deps: ProposalDeps, sandbox: EvolveSandboxCapability,
 ): Promise<EvolveGoal> {
   const now = new Date().toISOString();
   const split = proposal.split ?? DEFAULT_SPLIT;
@@ -378,6 +383,13 @@ async function assembleGoal(
     // "confirm" anyway. An older client that never sends it keeps the old
     // behaviour.
     checkpointMode: proposal.checkpointMode ?? "confirm",
+    // Written only when this run really does execute candidates unconfined.
+    // The proposal's flag alone is not enough: a host with a sandbox that
+    // somehow received it is still isolated, and a goal claiming otherwise
+    // would put a warning badge on a safe run.
+    ...(sandbox.backend === "direct" && proposal.allowUnisolated === true
+      ? { allowUnisolated: true }
+      : {}),
     budget: {
       candidateTimeoutSeconds: 180,
       expansions: proposal.expansions,

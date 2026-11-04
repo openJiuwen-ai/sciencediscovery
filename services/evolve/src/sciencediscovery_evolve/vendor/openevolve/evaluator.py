@@ -73,6 +73,28 @@ BOUNDS = (-5.0, 5.0)
 RUNNER = Path(__file__).with_name("runner.py")
 
 
+def _kill_tree(process: "subprocess.Popen[str]") -> None:
+    """End the candidate **and everything it started** once its time is up.
+
+    ``os.killpg`` does not exist on Windows, and neither does ``signal.SIGKILL``
+    — a direct-execution run there would raise ``AttributeError`` from inside
+    the timeout handler instead of reporting the timeout. Windows has no
+    process groups to signal, so the tree is walked by ``taskkill /T``, the same
+    way ``sciencediscovery_evolve.sandbox_run._kill`` does.
+    """
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=10, check=False,
+            )
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, OSError, subprocess.SubprocessError):
+        pass
+
+
 def objective_value(x: float, y: float) -> float:
     """The objective the candidate's ``search_algorithm`` is trying to minimise.
 
@@ -307,10 +329,7 @@ def evaluate_source(
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                _kill_tree(process)
                 process.communicate()
                 error = f"candidate timed out after {timeout:.1f}s"
                 return False, _zero_metrics(error), error, []

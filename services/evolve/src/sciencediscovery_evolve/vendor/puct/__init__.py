@@ -35,7 +35,9 @@ engine itself — `evolve()`, `FlatPuct`, `Ledger`, the verifier and the policie
   `MedHouseVal` target, the 80/20 head/tail split, RMSE); this port takes its
   objective from the scorecard instead, so `prepare_splits`, `run_candidate`
   and `evaluate_source` are not here.
-* `_era_runner.py` is copied **byte for byte**. See the note in that file: it
+* `_era_runner.py` is copied **byte for byte**, except its `resource` import,
+  which is guarded because the module is Unix-only and a Windows
+  direct-execution run starts this same script. See the note in that file: it
   encodes a non-obvious CPU-budget interaction, and a rewrite fails in a way
   that looks like poor candidate quality.
 * Imports are rewritten for this package's layout.

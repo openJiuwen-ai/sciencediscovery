@@ -30,6 +30,13 @@ that is missing, a goal no default can settle, an approval you cannot give on th
 If the user says stop or asks a question mid-run, stop at the next step and answer. Without the
 flag, confirm at every checkpoint as described below.
 
+**Isolation last, and never assumed.** Windows has neither bubblewrap nor Seatbelt. There, the
+desktop can run candidates unconfined, but only for a run the user approved: the command then
+carries `--allow-direct`, written by the setup dialog when the user turned the warning on. Pass
+`allowUnisolated: true` **only** when the command carries it. Without it the server refuses the
+run — correctly, because the candidate would run with the user's own file and network access.
+Never add it to make a refusal go away, and never say the run is sandboxed when it is not.
+
 Four checkpoints. **Do the work for a step, show the result, wait for the user, then go on.**
 A checkpoint is a glance, not a form: a few lines they can wave through, with a recommended
 default for every open question so "looks right" is always a valid answer. Do the work between
@@ -202,9 +209,10 @@ does. Set one only for a reason you can give in a line:
 ## Step 4 — Start it, then report
 
 Call `create_evolve_run`. Set `algorithm` to what the user chose, and `checkpointMode` to the pace
-the command carried — `"auto"` for `--no-confirm`, `"confirm"` otherwise. `howScored` is **one
-sentence** for the user: what it measures, how much is held out. `risks`: at most two, only ones
-that change a decision; empty is fine.
+the command carried — `"auto"` for `--no-confirm`, `"confirm"` otherwise. Set
+`allowUnisolated: true` only when the command carried `--allow-direct`; leave it out otherwise.
+`howScored` is **one sentence** for the user: what it measures, how much is held out. `risks`: at
+most two, only ones that change a decision; empty is fine.
 
 > **Checkpoint 4** (`step: 4`). Report what came back — the probe's two numbers and what the
 > search will do — in the card, and then **end the turn**. Do not wait for it, do not call

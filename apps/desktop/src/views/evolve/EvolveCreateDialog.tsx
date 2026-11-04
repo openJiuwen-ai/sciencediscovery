@@ -39,6 +39,10 @@ export interface EvolveCreateDialogProps {
   /** The pace the typed command already chose, carried through the setup
    *  detour so a `--no-confirm` draft does not come back switched on. */
   initialCheckpointMode?: EvolveCheckpointMode;
+  /** The no-isolation approval the typed command already carried, carried
+   *  through the setup detour for the same reason: a `--allow-direct` draft
+   *  must not silently lose the user's answer. */
+  initialAllowUnisolated?: boolean;
   /** A goal the user already typed after the command, carried through the
    *  setup detour so it is not written twice. */
   initialGoal?: string;
@@ -53,6 +57,7 @@ export interface EvolveCreateDialogProps {
 export function EvolveCreateDialog({
   archived,
   error,
+  initialAllowUnisolated,
   initialCheckpointMode,
   initialGoal,
   initializing,
@@ -67,6 +72,10 @@ export function EvolveCreateDialog({
   // Confirm by default: pausing is the safe pace, and an unattended design
   // spends real model calls before the user has seen a single checkpoint.
   const [confirm, setConfirm] = useState(initialCheckpointMode !== "auto");
+  // Off by default, always. This is the one switch whose default decides
+  // whether model-written code runs unconfined, and a default cannot give
+  // consent on the user's behalf.
+  const [allowUnisolated, setAllowUnisolated] = useState(initialAllowUnisolated === true);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -105,7 +114,7 @@ export function EvolveCreateDialog({
         onSubmit={(event) => {
           event.preventDefault();
           if (!canSend) return;
-          onSend(evolveCommand(algorithm, goal, confirm ? "confirm" : "auto"));
+          onSend(evolveCommand(algorithm, goal, confirm ? "confirm" : "auto", allowUnisolated));
         }}
       >
         <p className="evolve-create-intro">{TEXT.evolve.create.intro}</p>
@@ -151,6 +160,22 @@ export function EvolveCreateDialog({
             <span>{confirm ? TEXT.evolve.create.confirmHint : TEXT.evolve.create.autoHint}</span>
           </span>
         </label>
+
+        {/* Only where the runtime has no sandbox at all. On Linux and macOS
+            there is nothing to warn about, and showing the switch there would
+            suggest a choice the deployment does not offer. */}
+        {status.sandbox === "direct" ? <label className="evolve-create-confirm is-unisolated">
+          <input
+            checked={allowUnisolated}
+            onChange={(event) => setAllowUnisolated(event.target.checked)}
+            role="switch"
+            type="checkbox"
+          />
+          <span className="evolve-create-confirm-text">
+            <strong>{TEXT.evolve.create.unisolatedLabel}</strong>
+            <span>{allowUnisolated ? TEXT.evolve.create.unisolatedHint : TEXT.evolve.create.unisolatedOffHint}</span>
+          </span>
+        </label> : null}
 
         <p className="evolve-create-note">{TEXT.evolve.create.sessionNote}</p>
         {blocked === undefined ? null : <p className="evolve-create-blocked">{blocked}</p>}

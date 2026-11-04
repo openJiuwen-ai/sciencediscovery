@@ -140,6 +140,19 @@
   font-weight: 650;
 }
 
+/* A search whose candidates did not run in a sandbox. Warm rather than
+   neutral: it changes how the result should be read. */
+.evolve-chip-unisolated {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning-strong);
+  font-size: 10px;
+  font-weight: 650;
+}
+
 .evolve-chip.is-more {
   flex: 0 0 auto;
   color: var(--muted);
@@ -188,24 +201,49 @@
   100% { box-shadow: 0 0 0 0 rgba(31, 157, 122, 0); }
 }
 
-/* The header's own way in, for a session whose searches are all closed. */
-.bar-icon-button.is-evolve { position: relative; }
-
-.bar-icon-button.is-evolve.is-live {
-  color: var(--discovery-strong);
-  background: var(--discovery-soft);
+/* The header's own way in: a capsule, so the bar says whether a search can
+   run before the click. It keeps the room of a chip rather than a button —
+   the label and the state are read together. */
+.evolve-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 240px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: border-color .12s ease, background .12s ease;
 }
 
-.bar-icon-button.is-evolve.is-live::after {
-  content: "";
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--discovery);
+.evolve-capsule:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-subtle);
 }
+
+.evolve-capsule-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 550;
+  color: var(--text);
+}
+
+.evolve-capsule-sep { color: var(--text-faint); }
+
+.evolve-capsule-state {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+/* The state word carries the tone, not the whole capsule: the object the
+   header names is still "程序演进", and only its readiness changes. */
+.evolve-capsule.is-live { border-color: #b9e4d5; background: #f3fbf8; }
+.evolve-capsule.is-live .evolve-capsule-state { color: var(--discovery-strong); }
+.evolve-capsule.is-bad .evolve-capsule-state { color: var(--danger); }
 
 /* ── the create dialog ─────────────────────────────────────────────────────── */
 
@@ -362,6 +400,30 @@
 .evolve-create-confirm input:focus-visible {
   outline: 2px solid var(--discovery);
   outline-offset: 2px;
+}
+
+/* The no-isolation switch is a caution, not another setting: it is only drawn
+   where no sandbox exists at all, and it stays warm even before it is on. */
+.evolve-create-confirm.is-unisolated {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.evolve-create-confirm.is-unisolated .evolve-create-confirm-text strong {
+  color: var(--warning-strong);
+}
+
+.evolve-create-confirm.is-unisolated input:checked {
+  border-color: #e0b56a;
+  background: #f6e3bd;
+}
+
+.evolve-create-confirm.is-unisolated input:checked::after {
+  background: #b1781a;
+}
+
+.evolve-create-confirm.is-unisolated input:focus-visible {
+  outline-color: #b1781a;
 }
 
 .evolve-create-confirm-text {
@@ -531,6 +593,16 @@
   border-radius: var(--radius-pill);
   background: var(--discovery-soft);
   color: var(--discovery-strong);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.evolve-unisolated {
+  padding: 1px 7px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning-strong);
   font-size: 10.5px;
   font-weight: 600;
 }
@@ -1475,6 +1547,9 @@
 
   .evolve-shelf-label > span { display: none; }
   .evolve-chip { max-width: 160px; }
+  /* The header has the least room of any row: the state word is what the
+     capsule is for, so the name is the part that gives way. */
+  .evolve-capsule { max-width: 150px; }
 
   .evolve-create-algorithms > div { grid-template-columns: 1fr; }
   .evolve-create-body { padding: 16px 20px 0; }

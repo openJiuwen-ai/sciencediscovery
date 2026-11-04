@@ -382,6 +382,22 @@ def test_a_candidate_that_resolves_its_own_annotations_can_load(tmp_path) -> Non
         sys.modules.pop("candidate", None)
 
 
+def test_a_platform_without_resource_still_runs_the_candidate(monkeypatch) -> None:
+    """Windows has no `resource` module, and a direct-execution run starts the
+    candidate through this very script. A bare import there died at startup
+    with `ModuleNotFoundError: resource`, which the search reads as the model
+    having written a broken program — so the import is guarded and the five
+    limits report as unavailable, the same answer Darwin already gives for the
+    one it lacks.
+    """
+    from sciencediscovery_evolve.vendor.puct import runner
+
+    monkeypatch.setattr(runner, "resource", None)
+    assert set(runner.set_resource_limits(5, 64)) == {
+        "RLIMIT_CPU", "RLIMIT_AS", "RLIMIT_FSIZE", "RLIMIT_NOFILE", "RLIMIT_NPROC",
+    }
+
+
 def test_a_repair_may_replace_something_that_does_not_exist() -> None:
     """The repair prompt used to forbid the only possible fix.
 

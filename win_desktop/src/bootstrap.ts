@@ -102,6 +102,14 @@ export function packagedEnv(paths: PackagedPaths, dataDir: string): NodeJS.Proce
     SCIENCE_AGENT_PAPER_PYTHON_PATH: join(envsRoot, "sd-services", "Scripts", "python.exe"),
     // Tell the stack where to find the sidecar venvs (in-place or copied).
     SCIENCE_AGENT_ENVS_DIR: envsRoot,
+    // Windows has no bubblewrap or Seatbelt, so program evolution would be
+    // refused outright. This opts the installation into direct candidate
+    // execution — which is *not* a sandbox: a candidate runs with the user's
+    // own file, network and environment access. The API still refuses any run
+    // whose goal does not carry the user's confirmation, collected by the
+    // create dialog's warning switch. Set here and nowhere else, so a server
+    // deployment cannot pick it up by accident.
+    SCIENCE_AGENT_EVOLVE_UNISOLATED: "1",
     // Ship the new desktop UI as the renderer payload.
     SCIENCE_AGENT_WEB_DIR: "apps/desktop/dist",
   };

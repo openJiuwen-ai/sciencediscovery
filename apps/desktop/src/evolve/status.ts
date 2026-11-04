@@ -14,6 +14,7 @@
 
 import type { EvolveRunStatus } from "@sciencediscovery/schema";
 
+import type { EvolveStatus } from "../api/evolve.js";
 import { TEXT } from "../text.js";
 
 /** The user-facing name of a status.
@@ -35,6 +36,31 @@ export function evolveStatusTone(status: EvolveRunStatus): string {
     case "budget_exhausted":
       return "warn";
     case "failed":
+      return "bad";
+    default:
+      return "quiet";
+  }
+}
+
+/** What the header capsule says after its name.
+ *
+ *  A live search outranks the runtime's own state: the runtime being ready is
+ *  the fact that made the search possible, and what the reader wants from the
+ *  header while one is expanding is that it is expanding. */
+export function evolveRuntimeLabel(state: EvolveStatus["state"], live: boolean): string {
+  if (live) return TEXT.evolve.runtime.running;
+  return TEXT.evolve.runtime[state];
+}
+
+/** The capsule's dot, in the same tones the shelf's chips use. */
+export function evolveRuntimeTone(state: EvolveStatus["state"], live: boolean): string {
+  if (live) return "live";
+  switch (state) {
+    case "ready":
+      return "good";
+    case "installing":
+      return "warn";
+    case "error":
       return "bad";
     default:
       return "quiet";
