@@ -69,10 +69,12 @@ export function parseConflictPolicy(value: string | null | undefined): Workspace
  * `CON.csv` and `nul.txt` never reach the filesystem there: `open()` targets the device
  * instead, and the write fails with EPERM (or silently goes to the console for CON).
  * COM0/LPT0 are not reserved; CONIN$/CONOUT$ are.
+ * The naming document lists superscript 1, 2 and 3 as port digits, so `COM¹.txt` names the
+ * first serial port exactly like `COM1.txt`; an ASCII-only class lets that spelling through.
  * https://learn.microsoft.com/windows/win32/fileio/naming-a-file#naming-conventions
  */
 const WINDOWS_RESERVED_DEVICE_NAME =
-  /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)$/i;
+  /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)$/i;
 
 /**
  * Windows ignores a trailing dot or space on a path segment, so `nul.` and `CON ` name the
