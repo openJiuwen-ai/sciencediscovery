@@ -217,6 +217,15 @@ export type ArtifactPreviewPayload =
 const DEFAULT_MAX_ROWS = 100;
 const DEFAULT_MAX_CHARS = 100_000;
 const DEFAULT_MAX_CELLS = 200;
+/**
+ * The most cells a padded preview may hold (returned rows x width). Padding a
+ * short row is what squares the grid, but padding every row to one outlier
+ * line copies that line into each of them: a 400 KB file holding one 200k-field
+ * line asked for 100 x 200001 cells and a 60.8 MB response. The preview
+ * already spends 100k characters on a text source (DEFAULT_MAX_CHARS) and one
+ * cell is a few bytes of JSON, so the grid gets that same 100k-cell budget.
+ */
+const MAX_PREVIEW_CELLS = DEFAULT_MAX_CHARS;
 const FIGURE_TRUNCATION_BYTES = 5 * 1024 * 1024;
 const IFRAME_TRUNCATION_BYTES = 2 * 1024 * 1024;
 
@@ -353,6 +362,13 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // landing under the wrong one. Only the returned rows count, or a wide row
   // beyond maxRows would add an empty column no returned row fills.
   const width = rows.reduce((widest, row) => Math.max(widest, row.length), header.length);
+  const totalRows = Math.max(0, lines.length - 1);
+  // The rectangle is worth its price only while it fits the cell budget. Past
+  // it, return every row at its own width — the shape before the padding fix —
+  // so one pathological line cannot be copied into all the rows around it.
+  // This is one decision for the whole table, never per row, and it drops no
+  // column: a legitimately wide table is still previewed whole.
+  if (rows.length * width > MAX_PREVIEW_CELLS) return { columns: header, rows, totalRows };
   return {
     columns: header.length === width
       ? header
@@ -360,7 +376,7 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
     rows: rows.map((row) => (
       row.length === width ? row : [...row, ...Array.from({ length: width - row.length }, () => "")]
     )),
-    totalRows: Math.max(0, lines.length - 1),
+    totalRows,
   };
 }
 
