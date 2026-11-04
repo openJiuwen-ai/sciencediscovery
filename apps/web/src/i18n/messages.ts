@@ -1396,6 +1396,9 @@ export const en = {
   "memory.stats.visibleOfTotal": "{visible} / {total}",
 
   "csv.importDuplicateIds": "Found {count} duplicate identifiers; source row numbers were appended to disambiguate them.",
+  "csv.importRenamedColumns": "Found {count} duplicate header name(s). Repeated columns still show the name the file used, with a unique internal id.",
+  "csv.importReservedColumn": "The column {name} is hidden because that name is reserved for row identifiers.",
+  "csv.importSurplusColumns": "A row has {count} cells past the header; the surplus columns are capped at {kept}, and the cells past the last one are joined into it instead of widening every row.",
   "csv.parseHeaderRequired": "CSV must contain a header and at least one data row",
   "csv.parseRowError": "Row {row}: {message}",
   "csv.tooManyRows": "This CSV has more than {count} data rows. Please process it locally or split/sample it before opening it here.",
@@ -1594,6 +1597,8 @@ export const en = {
   "artifact.tableRowOne": "{count} row",
   "artifact.tableRows": "{count} rows",
   "artifact.tableTruncated": " (truncated)",
+  "artifact.tableClippedCells": " ({count} cells past the preview width are not shown)",
+  "artifact.tableClippedColumns": " (showing {shown} of {total} columns)",
 
   "evidence.fileMissing": "File \"{name}\" is no longer in this session's artifacts.",
   "evidence.loadFileFailed": "Could not load file content.",
@@ -4351,6 +4356,9 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "memory.stats.visibleOfTotal": "{visible} / {total}",
 
   "csv.importDuplicateIds": "发现 {count} 个重复标识符，已追加原始行号以区分。",
+  "csv.importRenamedColumns": "发现 {count} 个重复表头；重复列仍按文件中的原名显示，内部标识保持唯一。",
+  "csv.importReservedColumn": "已隐藏列 {name}：该名称保留给行标识使用。",
+  "csv.importSurplusColumns": "有行在表头之外多出 {count} 格；溢出列最多保留 {kept} 列，超出最后一列的单元格会合并进该列，而不是把每一行都加宽。",
   "csv.parseHeaderRequired": "CSV 必须包含表头和至少一行数据",
   "csv.parseRowError": "第 {row} 行：{message}",
   "csv.tooManyRows": "该 CSV 超过 {count} 行数据。请先在本地处理，或拆分/抽样后再在此打开。",
@@ -4549,6 +4557,8 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "artifact.tableRowOne": "{count} 行",
   "artifact.tableRows": "{count} 行",
   "artifact.tableTruncated": "（已截断）",
+  "artifact.tableClippedCells": "（预览宽度之外还有 {count} 个单元格未显示）",
+  "artifact.tableClippedColumns": "（共 {total} 列，显示前 {shown} 列）",
 
   "evidence.fileMissing": "文件「{name}」已不在本会话的产物中。",
   "evidence.loadFileFailed": "无法加载文件内容。",

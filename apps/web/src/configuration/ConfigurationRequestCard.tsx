@@ -284,7 +284,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun || savedForRestart || savedForNextRequest ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
+  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "memory.enable"
+    ? m.mode.domainNextRequest : m.mode[request.activation.mode];
+  const summary = savedForNextRun || savedForRestart || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];
@@ -293,7 +295,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     <dl className="configuration-impact">
       <dt>{m.resource}</dt><dd>{request.impact.resourceLocation}</dd>
       <dt>{m.scopeLabel}</dt><dd>{request.impact.effectiveScope || scope}</dd>
-      <dt>{m.activationLabel}</dt><dd>{m.mode[request.activation.mode]}</dd>
+      <dt>{m.activationLabel}</dt><dd>{activationModeLabel}</dd>
     </dl>
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
@@ -375,7 +377,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       </fieldset> : request.protocolVersion === 3 ? <section className="configuration-choice-options" aria-label={m.choosePath}>
         {!availableChoices.length ? <p role="status">{m.noAvailableChoice}</p> : null}
         {visibleChoices.map(option => <div key={option.id} aria-disabled={!option.available || undefined}>
-          <p><strong>{describeChoice(option)}{option.kind === "persisted_apply" ? ` · ${m.scope[request.scope.kind]} · ${m.mode[request.activation.mode]}` : ""}</strong></p>
+          <p><strong>{describeChoice(option)}{option.kind === "persisted_apply" ? ` · ${m.scope[request.scope.kind]} · ${activationModeLabel}` : ""}</strong></p>
           {option.kind !== "persisted_apply" ? <p>{option.description}</p> : null}
           {!option.available ? <p>{option.unavailableReason ?? m.choiceUnavailable}</p> : selectedOptionId !== option.id
             ? <button type="button" className="secondary-button" disabled={!editable || runActive} onClick={() => void selectOption(option.id)}>{m.selectChoice}</button> : null}
@@ -385,7 +387,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
         const translatedLabel = request.capabilityId === "memory.credential" && field.id === "apiToken" ? m.field.neo4jPassword
-          : request.capabilityId === "memory.credential" && field.id === "operation" ? m.field.neo4jOperation : m.field[field.id];
+          : request.capabilityId === "memory.credential" && field.id === "operation" ? m.field.neo4jOperation : request.capabilityId === "memory.enable" && field.id === "enabled" ? m.field.memoryEnabled : m.field[field.id];
         const common = { id: inputId, name: field.id, disabled: !editable, required: field.required,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };

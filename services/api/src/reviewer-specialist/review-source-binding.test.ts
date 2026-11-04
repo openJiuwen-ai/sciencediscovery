@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import assert from "node:assert/strict";
+import { configurationFramework } from "../configuration/framework.js";
 import { createHash, randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
@@ -133,6 +134,26 @@ test("CFG-T33 a live global Reviewer off switch suppresses a previously queued f
   assert.equal(f.executions.length, 0);
 });
 
+test("CFG-X09a conversational global-off suppresses a queued audit at its real admission boundary", async context => {
+  const f = await fixture(context); let entered!: () => void, release!: () => void;
+  const atAdmission = new Promise<void>(done => { entered = done; }), continueAdmission = new Promise<void>(done => { release = done; });
+  const worker = f.coordinator({ deepBatchQuietMs: 0, isMainAgentBusy: async () => { entered(); await continueAdmission; return false; } });
+  const run = await f.run({ automaticReviewEnabled: true, level: "deep" });
+  const task = await f.enqueue(worker, await f.report("conversation-global-switch", run.id)); assert.ok(task);
+  await atAdmission;
+  try {
+    const framework = configurationFramework(f.store, { nativeExecutor: true, connector: () => undefined });
+    const card = await framework.propose(f.session.id, { protocolVersion: 3, capabilityId: "reviewer.enable", values: { enabled: false } });
+    const saved = await framework.decide(f.session.id, card.id, { revision: card.revision, previewDigest: card.previewDigest!, decision: "apply", selectedOptionId: "persist" });
+    assert.equal(saved.state, "applied"); assert.equal(saved.resumption.state, "not_requested");
+  } finally { release(); }
+  const settled = await f.waitTerminal(task.id);
+  assert.equal(settled.status, "skipped"); assert.equal(settled.skipReason, "specialist_disabled");
+  assert.equal(f.executions.length, 0); assert.equal(settled.errorSummary, undefined);
+  assert.equal(f.store.getSessionReviewerSpecialistSettings(f.session.id).automaticReviewEnabled, true);
+  await f.waitCheckpoint(task.checkpointMessageId);
+});
+
 test("CFG-T33 a global-off decision during asynchronous Deep admission is checked again before execution", async context => {
   const f = await fixture(context); let entered!: () => void, release!: () => void;
   const atAdmission = new Promise<void>(done => { entered = done; }), continueAdmission = new Promise<void>(done => { release = done; });
@@ -209,26 +230,28 @@ for (const recovery of ["restart", "stop"] as const) {
     });
     // This durable task + still-running card is the crash window before the
     // final checkpoint write, not a fake executed ArtifactReviewRun.
-    const restored = new SessionStore(f.root); await restored.load();
-    context.after(() => restored.close());
-    let executions = 0;
-    const recovered = new ReviewerAuditCoordinator(restored, { run: async () => { executions++; return []; } });
-    if (recovery === "restart") await recovered.resume();
-    else await recovered.cancelSession(f.session.id);
-    for (const status of ["queued", "running", "completed", "failed", "superseded"] as const) {
-      const late = await restored.updateReviewerAuditTask(f.session.id, task.id, { status, errorSummary: "late", reviewIds: ["invented"] });
-      assert.equal(late.status, "skipped"); assert.equal(late.skipReason, "specialist_disabled");
-      assert.equal(late.errorSummary, undefined); assert.equal(late.reviewIds, undefined);
-    }
-    const checkpoint = await restored.updateReviewerCheckpointMessage(f.session.id, task.checkpointMessageId, {
-      content: "late completion", status: "completed",
-    });
-    assert.equal(checkpoint.reviewerCheckpoint?.status, "skipped");
-    assert.equal(checkpoint.reviewerCheckpoint?.skipReason, "specialist_disabled");
-    assert.notEqual(checkpoint.content, "late completion");
-    assert.equal(executions, 0);
-    assert.deepEqual(await restored.listArtifactReviews(f.session.id), []);
-    assert.deepEqual(await restored.listReviewFeedback(f.session.id), []);
+    const restored = new SessionStore(f.root);
+    try {
+      await restored.load();
+      let executions = 0;
+      const recovered = new ReviewerAuditCoordinator(restored, { run: async () => { executions++; return []; } });
+      if (recovery === "restart") await recovered.resume();
+      else await recovered.cancelSession(f.session.id);
+      for (const status of ["queued", "running", "completed", "failed", "superseded"] as const) {
+        const late = await restored.updateReviewerAuditTask(f.session.id, task.id, { status, errorSummary: "late", reviewIds: ["invented"] });
+        assert.equal(late.status, "skipped"); assert.equal(late.skipReason, "specialist_disabled");
+        assert.equal(late.errorSummary, undefined); assert.equal(late.reviewIds, undefined);
+      }
+      const checkpoint = await restored.updateReviewerCheckpointMessage(f.session.id, task.checkpointMessageId, {
+        content: "late completion", status: "completed",
+      });
+      assert.equal(checkpoint.reviewerCheckpoint?.status, "skipped");
+      assert.equal(checkpoint.reviewerCheckpoint?.skipReason, "specialist_disabled");
+      assert.notEqual(checkpoint.content, "late completion");
+      assert.equal(executions, 0);
+      assert.deepEqual(await restored.listArtifactReviews(f.session.id), []);
+      assert.deepEqual(await restored.listReviewFeedback(f.session.id), []);
+    } finally { restored.close(); }
   });
 }
 

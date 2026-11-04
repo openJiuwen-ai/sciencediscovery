@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
-import { rowsToCsv } from "../src/csv-artifact/chart-spec/filters.js";
+import { tableToCsv } from "../src/csv-artifact/chart-spec/filters.js";
 import {
   createCustomSpec,
   createDefaultSpecs,
@@ -39,6 +39,7 @@ import { MAX_CSV_DATA_ROWS, parseCsvText } from "../src/csv-artifact/csv/inferCs
 import { setActiveLocale } from "../src/i18n/index.js";
 import { csvSourceRecord } from "../src/csv-artifact/source.js";
 import {
+  type ColumnProfile,
   DEFAULT_CHART_DRAG_MODE,
   type DataSourceRecord,
 } from "../src/csv-artifact/types.js";
@@ -127,6 +128,308 @@ test("profiles common scientific missing-value tokens as null", () => {
   assert.equal(table.columns.find((column) => column.id === "value")?.kind, "quantitative");
   assert.equal(table.columns.find((column) => column.id === "value")?.missingCount, 3);
   assert.deepEqual(table.rows.map((row) => row.value), [1.5, null, null, null, 3.5]);
+});
+
+test("keeps overflow cells in unique unnamed columns instead of Papa's internal key", () => {
+  const table = parse("extra.csv", "a,b\n1,2,3\n");
+
+  for (const column of table.columns) {
+    assert.ok(!column.id.includes("__parsed_extra"), `internal key became a column id: ${column.id}`);
+    assert.ok(!column.label.includes("parsed extra"), `internal key became a column label: ${column.label}`);
+  }
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "b", "__extra_1"]);
+  assert.deepEqual(table.columns.map((column) => column.label), ["a", "b", ""]);
+  assert.equal(table.rows[0]?.__extra_1, 3);
+  assert.equal(table.rows[0]?.__rowId, "row-2");
+
+  const wider = parse("extra-two.csv", "a,b\n1,2,3,4\n");
+  assert.deepEqual(wider.columns.map((column) => column.id), ["a", "b", "__extra_1", "__extra_2"]);
+  assert.equal(wider.rows[0]?.__extra_1, 3);
+  assert.equal(wider.rows[0]?.__extra_2, 4);
+
+  const mixed = parse("mixed-width.csv", "a,b\n1,2,3\n7,8\n");
+  assert.deepEqual(mixed.columns.map((column) => column.id), ["a", "b", "__extra_1"]);
+  assert.deepEqual(
+    mixed.rows.map((row) => [row.a, row.b, row.__extra_1]),
+    [[1, 2, 3], [7, 8, null]],
+  );
+  for (const row of mixed.rows) {
+    assert.deepEqual(Object.keys(row).filter((key) => key !== "__rowId"), mixed.columns.map((column) => column.id));
+  }
+});
+
+test("pads short rows to the header width so no header column disappears", () => {
+  const table = parse("short.csv", "a,b,c\n1,2\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "b", "c"]);
+  assert.equal(table.rows[0]?.c, null);
+  assert.equal(table.columns.find((column) => column.id === "c")?.missingCount, 1);
+  assert.deepEqual(Object.keys(table.rows[0] ?? {}).filter((key) => key !== "__rowId"), ["a", "b", "c"]);
+});
+
+test("the data table header hides an unnamed overflow column's internal id", () => {
+  const table = parse("extra-header.csv", "a,b\n1,2,3\n");
+  const html = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = html.slice(html.indexOf("csva-virtual-grid-header"), html.indexOf("csva-virtual-grid-body"));
+  const labels = [...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? "");
+
+  assert.deepEqual(labels, ["#", "a", "b", ""]);
+  assert.ok(!header.includes("<span>__extra_1</span>"), "the overflow column still shows its internal id");
+  assert.match(header, /title="Sort by __extra_1"/);
+});
+
+test("keeps numeric header names in file order", () => {
+  const table = parse("numeric-header.csv", "10,2\n1,2\n3,4\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["10", "2"]);
+  assert.deepEqual(table.rows.map((row) => [row["10"], row["2"]]), [[1, 2], [3, 4]]);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "10,2");
+
+  const three = parse("numeric-header-three.csv", "2024,2025,2\n7,8,9\n");
+  assert.deepEqual(three.columns.map((column) => column.id), ["2024", "2025", "2"]);
+  assert.deepEqual(three.rows.map((row) => [row["2024"], row["2025"], row["2"]]), [[7, 8, 9]]);
+  assert.equal(tableToCsv(three.rows, three.columns).split(/\r?\n/)[0], "2024,2025,2");
+
+  const grid = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = grid.slice(grid.indexOf("csva-virtual-grid-header"), grid.indexOf("csva-virtual-grid-body"));
+  assert.deepEqual([...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? ""), ["#", "10", "2"]);
+});
+
+test("exports an unnamed overflow column with an empty header name", () => {
+  const table = parse("extra-export.csv", "a,b\n1,2,3\n");
+  const [header, firstRow] = tableToCsv(table.rows, table.columns).split(/\r?\n/);
+
+  assert.equal(header, "a,b,");
+  assert.equal(firstRow, "1,2,3");
+
+  const wider = parse("extra-export-two.csv", "a,b\n1,2,3,4\n");
+  const [widerHeader, widerRow] = tableToCsv(wider.rows, wider.columns).split(/\r?\n/);
+  assert.equal(widerHeader, "a,b,,");
+  assert.equal(widerRow, "1,2,3,4");
+});
+
+test("keeps a real __parsed_extra column instead of reading it as overflow", () => {
+  const table = parse("internal-key-header.csv", "a,__parsed_extra\n1,x\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "__parsed_extra"]);
+  assert.equal(table.rows[0]?.a, 1);
+  assert.equal(table.rows[0]?.__parsed_extra, "x");
+  assert.deepEqual(
+    Object.keys(table.rows[0] ?? {}).filter((key) => key !== "__rowId"),
+    ["a", "__parsed_extra"],
+  );
+
+  // Papa pushes the real column's value into the same array it uses for surplus
+  // cells, so the first element belongs to the column and the rest are surplus.
+  const wider = parse("internal-key-overflow.csv", "a,__parsed_extra\n1,x,9\n");
+  assert.deepEqual(wider.columns.map((column) => column.id), ["a", "__parsed_extra", "__extra_1"]);
+  assert.equal(wider.rows[0]?.__parsed_extra, "x");
+  assert.equal(wider.rows[0]?.__extra_1, 9);
+});
+
+test("keeps an inherited property name from becoming a column value", () => {
+  // `toString` and friends live on Object.prototype, so `in` and a bare read see
+  // them both. A short record must show an empty cell, not the
+  // `function toString() { [native code] }` the prototype would hand over.
+  const inherited = parse("inherited-header.csv", "a,toString\n1\n");
+  assert.deepEqual(inherited.columns.map((column) => column.id), ["a", "toString"]);
+  assert.equal(inherited.rows[0]?.a, 1);
+  assert.equal((inherited.rows[0] as Record<string, unknown> | undefined)?.["toString"], null);
+  assert.equal(inherited.columns[1]?.missingCount, 1);
+  assert.equal(inherited.columns[1]?.examples.length, 0);
+  assert.equal(tableToCsv(inherited.rows, inherited.columns).split(/\r?\n/)[1], "1,");
+
+  // Papa drops a `__proto__` cell on assignment, so this column is empty because
+  // the value is gone, not because the viewer invented one.
+  const proto = parse("proto-header.csv", "a,__proto__\n1,2\n");
+  assert.deepEqual(proto.columns.map((column) => column.id), ["a", "__proto__"]);
+  assert.equal(proto.rows[0]?.a, 1);
+  assert.equal(Object.hasOwn(proto.rows[0] ?? {}, "__proto__"), true);
+  assert.equal((proto.rows[0] as Record<string, unknown> | undefined)?.["__proto__"], null);
+  assert.equal(proto.columns[1]?.missingCount, 1);
+});
+
+test("keeps an inherited header name out of the header the reader shows", () => {
+  // `renamedHeaders` is a plain object, so a bare read for a header called
+  // `toString` returns the function on Object.prototype. The reader would show
+  // that function as the column name (the grid drops it) and the export would
+  // print its source text instead of the name the file wrote.
+  const table = parse("inherited-header-name.csv", "a,toString\n1\n2\n");
+  const column = table.columns.find((entry) => entry.id === "toString");
+  assert.equal(column?.label, "toString");
+  assert.equal(column?.header, undefined);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "a,toString");
+
+  const html = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = html.slice(html.indexOf("csva-virtual-grid-header"), html.indexOf("csva-virtual-grid-body"));
+  const labels = [...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? "");
+  assert.deepEqual(labels, ["#", "a", "toString"]);
+});
+
+test("renders a header named __proto__ without taking Object.prototype as its name", () => {
+  // `a,__proto__` must stay a table the viewer can open: reading the name off a
+  // plain object hands back Object.prototype, which React refuses to render and
+  // the export prints as `[object Object]`.
+  const table = parse("proto-header-name.csv", "a,__proto__\n1,2\nx,y\n");
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "__proto__"]);
+  const column = table.columns.find((entry) => entry.id === "__proto__");
+  // The label stays a string: no prototype member may reach the grid or the
+  // export. Its text is the usual underscore humanization, which is a product
+  // rule for every header and not this fix's business.
+  assert.equal(typeof column?.label, "string");
+  assert.equal(column?.header, undefined);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "a,__proto__");
+  assert.deepEqual(
+    table.rows.map((row) => [row.a, (row as Record<string, unknown>)["__proto__"]]),
+    [["1", null], ["x", null]],
+  );
+
+  const html = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = html.slice(html.indexOf("csva-virtual-grid-header"), html.indexOf("csva-virtual-grid-body"));
+  const labels = [...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? "");
+  assert.deepEqual(labels, ["#", "a", "__proto__"]);
+});
+
+test("shows a duplicate header under the name the file used", () => {
+  const table = parse("duplicate-header.csv", "a,a\n1,2\n");
+
+  // Papa renames a repeated header to a unique id. The id keys the row, but the
+  // reader and the export must see the text the file wrote, not Papa's suffix.
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "a_1"]);
+  assert.deepEqual(table.columns.map((column) => column.label), ["a", "a"]);
+  assert.deepEqual(table.rows.map((row) => [row.a, row.a_1]), [[1, 2]]);
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], "a,a");
+  assert.match(table.warnings.join("\n"), /1 duplicate header/);
+
+  const grid = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds: [],
+    table,
+  }));
+  const header = grid.slice(grid.indexOf("csva-virtual-grid-header"), grid.indexOf("csva-virtual-grid-body"));
+  assert.deepEqual([...header.matchAll(/<span>([^<]*)<\/span>/g)].map((match) => match[1] ?? ""), ["#", "a", "a"]);
+
+  // A file may also contain the id Papa invents; the mapping stays per renamed
+  // id, so the real `a_1` column keeps its own name.
+  const three = parse("duplicate-header-real-id.csv", "a,a,a_1\n1,2,3\n");
+  assert.deepEqual(three.columns.map((column) => column.id), ["a", "a_2", "a_1"]);
+  assert.deepEqual(three.columns.slice(0, 2).map((column) => column.label), ["a", "a"]);
+  assert.equal(tableToCsv(three.rows, three.columns).split(/\r?\n/)[0], "a,a,a_1");
+  assert.deepEqual(three.rows.map((row) => [row.a, row.a_2, row.a_1]), [[1, 2, 3]]);
+});
+
+test("hides a header named after the internal row id and says so", () => {
+  // The grid keys every row by `__rowId`. A file column with that name cannot be
+  // shown, so it stays hidden as before, but the import reports it instead of
+  // letting the row id overwrite the value without a trace.
+  const table = parse("reserved-header.csv", "a,__rowId\n1,2\n");
+  assert.deepEqual(table.columns.map((column) => column.id), ["a"]);
+  assert.equal(table.rows[0]?.a, 1);
+  assert.equal(table.rows[0]?.__rowId, "row-2");
+  assert.match(table.warnings.join("\n"), /__rowId/);
+
+  assert.deepEqual(parse("plain-names.csv", "a,b\n1,2\n").warnings, []);
+});
+
+test("caps surplus columns so one wide record cannot widen every row", () => {
+  const dataRows = 20_000;
+  const overflowCells = 497;
+  const lines = ["a,b,c"];
+  for (let index = 0; index < dataRows; index += 1) lines.push(`${index},${index + 1},${index + 2}`);
+  lines.push(["w", "x", "y", ...Array.from({ length: overflowCells }, (_, index) => `${index}`)].join(","));
+  const table = parse("wide-record.csv", lines.join("\n"));
+
+  // Three header columns keep three surplus columns, so the wide record cannot
+  // turn the other 20,000 rows into 500-cell rows.
+  assert.equal(table.columns.length, 6);
+  const normal = table.rows[0];
+  assert.deepEqual([normal?.a, normal?.b, normal?.c], [0, 1, 2]);
+  assert.equal(normal?.__extra_1, null);
+  assert.equal(Object.keys(normal ?? {}).length, 7);
+
+  const wide = table.rows[dataRows];
+  assert.equal(wide?.__extra_1, 0);
+  assert.equal(wide?.__extra_2, 1);
+  assert.equal(
+    wide?.__extra_3,
+    Array.from({ length: overflowCells - 2 }, (_, index) => `${index + 2}`).join(", "),
+  );
+
+  const cells = table.rows.reduce((total, row) => total + Object.keys(row).length, 0);
+  assert.ok(cells <= table.rows.length * 7, `cells grew with the wide record: ${cells}`);
+  assert.match(table.warnings.join("\n"), /497 cells past the header/);
+});
+
+test("keeps a legitimate wide header without folding its columns", () => {
+  const width = 200;
+  const header = Array.from({ length: width }, (_, index) => `c${index}`).join(",");
+  const first = Array.from({ length: width }, (_, index) => `${index}`).join(",");
+  const second = Array.from({ length: width }, (_, index) => `${index + 1}`).join(",");
+  const table = parse("wide-header.csv", [header, first, second].join("\n"));
+
+  assert.equal(table.columns.length, width);
+  assert.deepEqual(table.columns.map((column) => column.id), header.split(","));
+  for (const row of table.rows) {
+    assert.equal(Object.keys(row).length, width + 1);
+  }
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], header);
+});
+
+test("keeps the surplus warning in step with the columns it keeps", () => {
+  const table = parse("folded-surplus.csv", "a,b\n1,2,3,4,5,6\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["a", "b", "__extra_1", "__extra_2"]);
+  assert.equal(table.rows[0]?.__extra_1, 3);
+  // The last surplus column is the folded one, so it carries the trailing cells
+  // too: the warning must not claim a column boundary the table never shows.
+  assert.equal(table.rows[0]?.__extra_2, "4, 5, 6");
+
+  const warning = table.warnings.join("\n");
+  assert.match(warning, /4 cells past the header/);
+  assert.match(warning, /capped at 2/);
+  assert.doesNotMatch(warning, /first 2/);
+
+  try {
+    setActiveLocale("zh-CN");
+    assert.match(parse("folded-surplus-zh.csv", "a,b\n1,2,3,4,5,6\n").warnings.join("\n"), /最多保留 2 列/);
+  } finally {
+    setActiveLocale("en");
+  }
+});
+
+test("neutralizes a spreadsheet formula in an exported header name", () => {
+  const table = parse("formula-header.csv", "=SUM(1),b\n1,2\n");
+
+  assert.deepEqual(table.columns.map((column) => column.id), ["=SUM(1)", "b"]);
+  const csv = tableToCsv(table.rows, table.columns);
+  assert.ok(csv.startsWith("'=SUM(1),b"), csv);
+  assert.equal(csv.split(/\r?\n/)[1], "1,2");
 });
 
 test("imports one million numeric records, excluding the header and blank lines", () => {
@@ -666,10 +969,18 @@ test("selected scatter points keep their configured base size", () => {
 });
 
 test("CSV export neutralizes spreadsheet formulas", () => {
-  const csv = rowsToCsv([
+  const column: ColumnProfile = {
+    examples: [],
+    id: "label",
+    kind: "text",
+    label: "label",
+    missingCount: 0,
+    uniqueCount: 2,
+  };
+  const csv = tableToCsv([
     { __rowId: "unsafe", label: "=HYPERLINK(\"https://example.invalid\")" },
     { __rowId: "whitespace", label: " \t@SUM(1,2)" },
-  ], ["label"]);
+  ], [column]);
   assert.match(csv, /'=HYPERLINK/);
   assert.match(csv, /' \t@SUM/);
 });
