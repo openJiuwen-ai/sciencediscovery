@@ -88,6 +88,14 @@ test("a failed temporary-file cleanup never masks the replace error", async (con
     const surfaced = `${(error as Error | undefined)?.message ?? ""} ${(error as { cause?: Error } | undefined)?.cause?.message ?? ""}`;
     assert.doesNotMatch(surfaced, /\[sentinel-rm\]/, "the cleanup failure must not replace the replace error");
     assert.match(surfaced, /\[sentinel-rename\]/, "the caller must still see the replace that failed");
+    // Once the platform replace retries and classifies the failure (#857), the caller gets a
+    // FileReplaceError instead: it must carry the real attempt count and the underlying errno,
+    // never a value forged for the message.
+    const classified = error as { attempts?: unknown; cause?: { code?: unknown }; name?: unknown };
+    if (classified.name === "FileReplaceError") {
+      assert.equal(classified.attempts, 20, "the classified error reports the real attempt count");
+      assert.equal(classified.cause?.code, "EPERM", "the classified error keeps the underlying errno as its cause");
+    }
     return true;
   });
 });
