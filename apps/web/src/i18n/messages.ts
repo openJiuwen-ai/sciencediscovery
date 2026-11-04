@@ -1082,6 +1082,8 @@ export const en = {
   "usage.filteredEmptyTitle": "No usage in this view",
   "usage.run": "Run usage",
   "usage.subtitle": "{tokens} tokens across {models} models",
+  "usage.subtitleOne": "{tokens} tokens across 1 model",
+  "usage.subtitleFilteredEmpty": "No usage in the selected range",
   "chain.view": "View chain",
   "chain.viewTask": "View task chain",
   "chain.viewArtifact": "View artifact chain",
@@ -4050,6 +4052,8 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "usage.filteredEmptyTitle": "当前视图暂无用量",
   "usage.run": "运行用量",
   "usage.subtitle": "{tokens} Token，覆盖 {models} 个模型",
+  "usage.subtitleOne": "{tokens} Token，覆盖 1 个模型",
+  "usage.subtitleFilteredEmpty": "所选范围内暂无用量",
 
   // Memory-graph node detail panel.
   "node.field.content": "正文",

@@ -987,11 +987,19 @@ export function UsagePage({
   const subtitle = useMemo(() => {
     if (loading) return t("usage.loading");
     if (empty) return t("usage.empty");
-    return t("usage.subtitle", {
-      models: filters.modelProfileId ? filteredModelGroups.length : summary!.byModel.length,
+    // A range that keeps nothing has no model count to announce; say what the
+    // body says instead of pairing a zero total with every model ever seen.
+    if (filteredEmpty) return t("usage.subtitleFilteredEmpty");
+    // The tokens beside this sentence come from `analytics.overview`, which the
+    // server already narrowed to the selected dates, and the list below it is
+    // `filteredModelGroups`. Counting `summary.byModel` here would announce every
+    // model ever seen next to a date-scoped token total.
+    const models = filteredModelGroups.length;
+    return t(models === 1 ? "usage.subtitleOne" : "usage.subtitle", {
+      models,
       tokens: formatCompactTokenValue(analytics!.overview.totalTokens),
     });
-  }, [analytics, empty, filteredModelGroups.length, filters.modelProfileId, loading, summary, t]);
+  }, [analytics, empty, filteredEmpty, filteredModelGroups.length, loading, t]);
 
   return (
     <section className="usage-page" aria-label={t("usage.aria")}>
