@@ -29,10 +29,12 @@ from sciencediscovery_evolve.npu_job import (
     execution_signature,
     interpret_npu_job,
     npu_domain,
+    program_with_candidate,
 )
 from sciencediscovery_evolve.puct_engine import _Refusal, _refuse_unrunnable
 
 BASELINE = '{"lr": 0.1, "model": "fixed"}'
+FIXED = "print('from-the-fixed-program')\n"
 SCORECARD = {
     "criteria": [{
         "id": "score",
@@ -48,7 +50,7 @@ def _spec(**overrides) -> RunSpec:
         "npu": {
             "url": "http://127.0.0.1:9",
             "token": "token",
-            "execution": {"executionId": "evolve-npu-1", "agentId": "agent"},
+            "execution": {"agentId": "agent", "code": FIXED},
             "sessionId": "session",
             "agentId": "agent",
         },
@@ -102,13 +104,24 @@ def test_a_missing_or_non_npu_result_is_not_stored_as_zero():
     assert 0 not in metrics.values()
 
 
+def test_the_candidate_is_data_for_the_fixed_program_and_each_job_is_new():
+    first = program_with_candidate(FIXED, '{"lr": 0.2, "model": "fixed"}')
+    assert first.startswith('_EVOLVE_CANDIDATE = {"lr":0.2,"model":"fixed"}\n')
+    assert first.endswith(FIXED)
+    assert "print('rewrite')" not in first
+    with pytest.raises(Exception, match="not JSON"):
+        program_with_candidate(FIXED, "print('rewrite')")
+
+
 def test_the_client_submits_a_signed_shell_and_waits_for_npu(tmp_path):
     del tmp_path
     scripted = [
-        {"id": "evolve-npu-1", "state": "running"},
-        {"id": "evolve-npu-1", "state": "completed", "result": {"stdout": '{"device": "npu", "score": 1.5}\n'}},
+        {"state": "running"},
+        {"state": "completed", "result": {"stdout": '{"device": "npu", "score": 1.5}\n'}},
+        {"state": "running"},
+        {"state": "completed", "result": {"stdout": '{"device": "npu", "score": 1.5}\n'}},
     ]
-    seen = {}
+    seen = {"bodies": []}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -117,8 +130,8 @@ def test_the_client_submits_a_signed_shell_and_waits_for_npu(tmp_path):
             timestamp = self.headers.get("x-science-execution-timestamp")
             signature = self.headers.get("x-science-execution-signature")
             assert signature == execution_signature("token", timestamp, body)
-            seen["body"] = json.loads(body)
-            self._json(202, {"id": "evolve-npu-1", "state": "queued"})
+            seen["bodies"].append(json.loads(body))
+            self._json(202, {"id": json.loads(body)["executionId"], "state": "queued"})
 
         def do_GET(self):
             self._json(200, scripted.pop(0))
@@ -142,7 +155,7 @@ def test_the_client_submits_a_signed_shell_and_waits_for_npu(tmp_path):
         client = RunnerNpuClient(
             url=f"http://127.0.0.1:{port}",
             token="token",
-            execution={"executionId": "evolve-npu-1", "agentId": "agent"},
+            execution={"agentId": "agent", "code": FIXED},
             session_id="session",
             agent_id="agent",
             timeout=5,
@@ -155,12 +168,43 @@ def test_the_client_submits_a_signed_shell_and_waits_for_npu(tmp_path):
             statement="raise the score",
         )
         valid, metrics, error = domain.evaluate('{"lr": 0.2, "model": "fixed"}', ())
+        domain.evaluate('{"lr": 0.3, "model": "fixed"}', ())
     finally:
         server.shutdown()
         thread.join(timeout=2)
 
-    assert seen["body"]["code"] == '{"lr": 0.2, "model": "fixed"}'
-    assert seen["body"]["executionId"] == "evolve-npu-1"
+    submitted = seen["bodies"]
+    assert len(submitted) == 2
+    assert submitted[0]["code"].startswith('_EVOLVE_CANDIDATE = {"lr":0.2,"model":"fixed"}\n')
+    assert submitted[0]["code"].endswith(FIXED)
+    assert submitted[0]["code"] != '{"lr": 0.2, "model": "fixed"}'
+    assert submitted[0]["executionId"].startswith("evolve-")
+    assert submitted[1]["executionId"].startswith("evolve-")
+    assert submitted[0]["executionId"] != submitted[1]["executionId"]
     assert valid is True and error == ""
     assert metrics["score"] == 1.5
     assert metrics["device"] == "npu"
+
+
+def test_the_probe_damages_only_the_first_editable_field():
+    from sciencediscovery_evolve.probe import _damage_json
+
+    damaged, label = _damage_json(
+        '{"model": "fixed", "pos_2": "T", "pos_4": "K"}',
+        {"editable": ["pos_2", "pos_4"]},
+    )
+    assert label == "changed pos_2"
+    assert json.loads(damaged) == {"model": "fixed", "pos_2": "T-damaged", "pos_4": "K"}
+
+
+def test_an_npu_search_is_one_measurement():
+    from sciencediscovery_evolve.puct_engine import _group_held_out_frac, _group_tasks
+
+    spec = type("Spec", (), {
+        "scorecard": {"criteria": [{"measure": {"kind": "npu_job"}}]},
+        "search_id": "search",
+    })()
+    tasks = _group_tasks(spec)
+    assert len(tasks) == 1
+    assert tasks[0].meta["shard"] == 0
+    assert _group_held_out_frac(spec) == 1.0

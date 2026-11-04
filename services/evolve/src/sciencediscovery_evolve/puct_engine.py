@@ -984,6 +984,11 @@ def _group_tasks(spec: RunSpec) -> List[Any]:
     """
     from agentdescent.evolution import Task
 
+    if _mode_of(spec) == "npu_job":
+        # One measurement. Repeating it to fill a hold-out would spend the card
+        # four times on the same candidate.
+        return [Task(id=f"{spec.search_id}:npu", prompt="npu", meta={"shard": 0})]
+
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
     if counts["gate"] < 4:
@@ -1025,6 +1030,8 @@ def _tasks(dataset: Dataset, search_id: str) -> List[Any]:
 
 
 def _group_held_out_frac(spec: RunSpec) -> float:
+    if _mode_of(spec) == "npu_job":
+        return 1.0
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
     if not counts["gate"] or not total:

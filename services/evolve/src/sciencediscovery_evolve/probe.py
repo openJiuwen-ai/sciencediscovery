@@ -175,6 +175,31 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         return {"baseline": baseline, "flat": flat,
                 "label": damage_label, "worsened": worsened}
 
+    if mode == "npu_job":
+        from .npu_job import NpuJobError, npu_client_from_spec, npu_domain
+
+        try:
+            client = npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+        except NpuJobError as error:
+            raise ProbeError(str(error)) from error
+        domain = npu_domain(
+            scorecard=spec.scorecard,
+            baseline_code=spec.baseline_code,
+            client=client,
+            statement=spec.statement,
+        )
+        baseline, _raw, why = _measure(domain.evaluate, spec.baseline_code, ())
+        if baseline is None:
+            raise ProbeError(
+                "the starting point did not get an NPU score. "
+                + (why.strip() or "The runner gave no reason.")
+            )
+        damaged, damage_label = _damage_json(spec.baseline_code, spec.scorecard.get("direction") or {})
+        worsened = _score(domain.evaluate, damaged, ())
+        flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
+        _refuse_saturated(spec, baseline, worsened)
+        return {"baseline": baseline, "flat": flat, "label": damage_label, "worsened": worsened}
+
     if mode == "llm_judge":
         from .judge_domain import grader, judge_domain
 
@@ -318,6 +343,36 @@ def _refuse_saturated(spec: RunSpec, baseline: float, worsened: Optional[float] 
         "cases, tighter tolerances, or a more demanding metric. Saying \"make the cases "
         "harder\" in the box above is enough to redesign it."
     )
+
+
+def _damage_json(baseline: str, direction: Any) -> Tuple[str, str]:
+    """Change the first editable field, and nothing else."""
+    import json
+
+    try:
+        parsed = json.loads(baseline)
+    except json.JSONDecodeError as error:
+        raise ProbeError("the starting point is not JSON") from error
+    if not isinstance(parsed, dict):
+        raise ProbeError("the starting point is not a JSON object")
+    editable = direction.get("editable") if isinstance(direction, dict) else None
+    if not isinstance(editable, list) or not editable:
+        raise ProbeError("an NPU search has to name the editable fields")
+    field = str(editable[0])
+    if field not in parsed:
+        raise ProbeError(f"the starting point has no field {field}")
+    parsed[field] = _damaged_value(parsed[field])
+    return json.dumps(parsed, separators=(",", ":"), sort_keys=True), f"changed {field}"
+
+
+def _damaged_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return value + 1
+    if isinstance(value, str):
+        return value + "-damaged"
+    return "damaged"
 
 
 def _hollow_out(source: str) -> str:

@@ -190,6 +190,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         + "nothing to fix, so it discards the approach and re-rolls instead of repairing.",
       maxLength: 200_000, minLength: 1,
     })),
+    editableFields: Type.Optional(Type.Array(Type.String({ maxLength: 80, minLength: 1 }), { maxItems: 50 })),
     expansions: Type.Integer({ maximum: 40, minimum: 1 }),
     frozenGlobs: Type.Optional(Type.Array(Type.String({ maxLength: 500, minLength: 1 }), { maxItems: 50 })),
     howScored: Type.String({ maxLength: 400, minLength: 1 }),
@@ -200,7 +201,7 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     })),
     mode: Type.Union([
       Type.Literal("dataset_metric"), Type.Literal("test_gate"),
-      Type.Literal("custom_script"), Type.Literal("llm_judge"),
+      Type.Literal("custom_script"), Type.Literal("llm_judge"), Type.Literal("npu_job"),
     ], {
       description: "Take the first that fits, in this order. dataset_metric: cases with known "
         + "answers and a number to move — generate the table if it does not exist yet, that is "
@@ -208,7 +209,9 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         + "says \"write tests\" or \"make these pass\". custom_script: the FALLBACK, for when "
         + "neither fits — you write and own the measuring apparatus, so every mistake in it is "
         + "yours, and the framework can no longer do the splitting or the freezing for you. "
-        + "llm_judge: only when quality is a reading rather than a computation.",
+        + "llm_judge: only when quality is a reading rather than a computation. "
+        + "npu_job: the fixed evaluator runs on this conversation's selected runner. "
+        + "The starting point is JSON. editableFields names the fields that may change.",
     }),
     normalize: Type.Optional(Type.Union([
       Type.Literal("identity"), Type.Literal("reciprocal"),

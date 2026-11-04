@@ -298,6 +298,10 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
         + "is wobbling";
     }
   }
+  if (proposal.mode === "npu_job") {
+    if (!proposal.evaluatorSource?.trim()) return "npu_job needs the fixed program that computes the score";
+    if (!proposal.editableFields?.length) return "npu_job needs editableFields: the JSON fields this run may change";
+  }
   if (proposal.mode === "test_gate") {
     if (!proposal.testCmd?.trim()) return "test_gate needs the command that runs the tests";
     if (!proposal.frozenGlobs?.length) {
@@ -355,7 +359,7 @@ async function assembleGoal(
   // an evaluator: both are the scoring, in different languages.
   const scoringCas = proposal.mode === "llm_judge"
     ? await deps.store({ content: proposal.rubric! })
-    : proposal.mode === "custom_script"
+    : proposal.mode === "custom_script" || proposal.mode === "npu_job"
       ? await deps.store({ content: proposal.evaluatorSource! })
       : "";
 
@@ -400,6 +404,7 @@ async function assembleGoal(
       derivedFrom: { draftRunId: "", statement: proposal.statement },
       hash: `sha256:agent-${proposal.mode}-${(scoringCas || startCas).slice(-12)}-${split.seed}`,
       schemaVersion: 1,
+      ...(proposal.editableFields?.length ? { direction: { editable: proposal.editableFields } } : {}),
       // A graded scorer rarely reaches 0.999, and at the default every rollout
       // asks for a proposal and the run reports below-threshold — which reads
       // as the reflector failing when nothing was ever counted as done. The
@@ -464,6 +469,8 @@ async function measureOf(
       return {
         kind: "custom_script", scriptCas: scoringCas, split, timeoutSeconds: 180,
       };
+    case "npu_job":
+      return { kind: "npu_job", scriptCas: scoringCas, timeoutSeconds: 180 };
     case "llm_judge":
       return {
         blind: true,

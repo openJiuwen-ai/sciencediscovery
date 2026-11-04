@@ -145,7 +145,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   // reads it — so requiring isolation there would refuse a run that never runs
   // anything, which is the opposite of what the refusal is for.
   const executes = input.goal.scorecard.criteria.some(
-    (criterion) => criterion.measure.kind !== "llm_judge",
+    (criterion) => criterion.measure.kind !== "llm_judge" && criterion.measure.kind !== "npu_job",
   );
   if (executes && !input.sandbox.backend) {
     issues.push({
@@ -229,7 +229,7 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   // --- a scripted scorecard's own two requirements ---------------------------
 
   for (const criterion of input.goal.scorecard.criteria) {
-    if (criterion.measure.kind !== "custom_script") continue;
+    if (criterion.measure.kind !== "custom_script" && criterion.measure.kind !== "npu_job") continue;
     const measure = criterion.measure;
 
     if (!measure.scriptCas) {
@@ -247,6 +247,13 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
         fix: "add the evaluator to frozen",
         message: "the evaluator must be frozen, or the search can rewrite what measures it instead "
           + "of getting better",
+      });
+    }
+    if (criterion.measure.kind === "npu_job" && !input.goal.scorecard.direction?.editable?.length) {
+      issues.push({
+        code: "direction_missing",
+        fix: "name the JSON fields this run may change",
+        message: "an NPU search has to name the editable fields",
       });
     }
   }

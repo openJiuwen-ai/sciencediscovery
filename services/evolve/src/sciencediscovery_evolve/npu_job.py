@@ -14,10 +14,11 @@
 
 """Score one candidate by a Runner shell execution, not by the local sandbox.
 
-The sidecar signs and submits ``POST /shell-executions``, then polls that
-execution. Success is ``completed`` with ``device`` equal to ``npu``. A job
-that is still queued, running, or unknown, or that finished without an NPU
-result, is invalid and carries no numeric score.
+The fixed program in the execution template is what runs. The candidate is a
+JSON object handed to that program as ``_EVOLVE_CANDIDATE``. Each candidate
+gets its own execution id. Success is ``completed`` with ``device`` equal to
+``npu``. A job that is still queued, running, or unknown, or that finished
+without an NPU result, is invalid and carries no numeric score.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any, Callable, Mapping, Optional, Tuple
 from urllib.parse import quote
 
@@ -75,6 +77,24 @@ def interpret_npu_job(
     return True, {"job_status": "completed", "device": "npu", metric_key: score, "score": score}, ""
 
 
+def program_with_candidate(fixed: str, candidate: str) -> str:
+    """Return the fixed program, with the candidate bound as data.
+
+    The candidate text is not the program. It is parsed as a JSON object and
+    assigned to ``_EVOLVE_CANDIDATE`` before the fixed program runs.
+    """
+    if not fixed.strip():
+        raise NpuJobError("the NPU execution has no fixed program")
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError as error:
+        raise NpuJobError("the candidate is not JSON") from error
+    if not isinstance(parsed, dict):
+        raise NpuJobError("the candidate is not a JSON object")
+    binding = "_EVOLVE_CANDIDATE = " + json.dumps(parsed, separators=(",", ":"), sort_keys=True)
+    return binding + "\n" + fixed
+
+
 class RunnerNpuClient:
     """Submit one signed shell execution and wait for its terminal state."""
 
@@ -89,6 +109,7 @@ class RunnerNpuClient:
         timeout: float,
         poll_seconds: float = 0.25,
         clock: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
+        transport: str = "runner",
     ) -> None:
         self.url = url.rstrip("/")
         self.token = token
@@ -96,8 +117,12 @@ class RunnerNpuClient:
         self.session_id = session_id
         self.agent_id = agent_id
         self.timeout = timeout
+        self.transport = transport
         self.poll_seconds = poll_seconds
         self.clock = clock
+        fixed = self.execution.get("code")
+        if not isinstance(fixed, str) or not fixed.strip():
+            raise NpuJobError("the NPU execution has no fixed program")
 
     def run(
         self,
@@ -105,10 +130,9 @@ class RunnerNpuClient:
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> Tuple[dict[str, Any], Optional[dict[str, Any]]]:
         body = dict(self.execution)
-        body["code"] = code
-        execution_id = str(body.get("executionId") or "")
-        if not execution_id:
-            raise NpuJobError("the NPU execution template has no executionId")
+        body["code"] = program_with_candidate(str(self.execution.get("code") or ""), code)
+        execution_id = f"evolve-{uuid.uuid4().hex}"
+        body["executionId"] = execution_id
         raw = json.dumps(body, separators=(",", ":"), sort_keys=True)
         _status, accepted = self._send("POST", "/shell-executions", raw)
         if not isinstance(accepted, dict):
@@ -124,6 +148,7 @@ class RunnerNpuClient:
             state = str(record.get("state") or record.get("status") or "")
             if state in NOT_FINISHED:
                 if time.monotonic() >= deadline:
+                    self._send("POST", self._execution_path(execution_id, "cancel"), "")
                     return {"status": "unknown", "execution_id": execution_id}, None
                 time.sleep(self.poll_seconds)
                 continue
@@ -141,6 +166,8 @@ class RunnerNpuClient:
     def _send(self, method: str, path: str, body: Optional[str]) -> Tuple[int, Any]:
         data = None if body is None else body.encode("utf-8")
         request = urllib.request.Request(self.url + path, data=data, method=method)
+        if self.transport == "api":
+            request.add_header("authorization", f"Bearer {self.token}")
         if body is not None:
             timestamp = str(self.clock())
             request.add_header(TIMESTAMP_HEADER, timestamp)
@@ -186,7 +213,10 @@ def npu_domain(
 
     def evaluate(code: str, shards) -> Tuple[bool, dict[str, Any], str]:
         del shards
-        job, artifact = client.run(code, should_stop)
+        try:
+            job, artifact = client.run(code, should_stop)
+        except NpuJobError as error:
+            return False, {"job_status": "fault"}, str(error)
         return interpret_npu_job(job, artifact, metric_key=metric_key)
 
     def reward(metrics: Mapping[str, Any]) -> float:
@@ -229,6 +259,8 @@ def npu_client_from_spec(options: Mapping[str, Any], timeout: float) -> RunnerNp
         raise NpuJobError("this search scores on NPU but was given no runner")
     if not isinstance(execution, dict):
         raise NpuJobError("this search scores on NPU but was given no execution template")
+    if not isinstance(execution.get("code"), str) or not str(execution.get("code")).strip():
+        raise NpuJobError("the NPU execution has no fixed program")
     return RunnerNpuClient(
         url=url,
         token=token,
@@ -237,4 +269,5 @@ def npu_client_from_spec(options: Mapping[str, Any], timeout: float) -> RunnerNp
         agent_id=str(npu.get("agentId") or ""),
         timeout=timeout,
         poll_seconds=float(npu.get("pollSeconds") or 0.25),
+        transport=str(npu.get("transport") or "runner"),
     )
