@@ -51,10 +51,10 @@ export class ModelDestinationAuthorizer {
   assert(record: ConfigurationRecord, credential: boolean): void {
     const view = this.view(record);
     if (!view) {
-      if (["model.connect", "model.repair_credential"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
+      if (["model.connect", "model.repair_credential", "memory.credential", "memory.connection"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
       return;
     }
-    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, "baseUrl");
+    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive a credential", 400, "baseUrl");
     if (!["confirmed", "trusted"].includes(view.status)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Confirm the exact destination in the dedicated endpoint control before supplying a credential or sending a probe", 409, "baseUrl");
   }
   assertContext(context: ConfigurationAdapterContext, profile: ModelProfile, credential: boolean): void {

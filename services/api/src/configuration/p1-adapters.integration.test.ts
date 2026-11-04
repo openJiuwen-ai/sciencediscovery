@@ -43,6 +43,7 @@ test("CFG-T29/33: server registry keeps domain fields while the model transport 
     "connector.enable", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select",
     "quotas.configure", "review.configure", "skill.select", "thinking.configure", "timeouts.configure",
     "environment.sources", "runner.assign",
+    "memory.backend", "memory.connection", "memory.credential", "memory.enable",
   ] as const) assert.ok(registeredIds.has(id), `Missing configuration capability: ${id}`);
   assert.throws(() => registry.agentValues("model.select", { enabledSkillIds: ["literature"] }));
   assert.throws(() => registry.agentValues("thinking.configure", { command: "install" }));
