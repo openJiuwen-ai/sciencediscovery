@@ -84,7 +84,7 @@ test("provider truncation flags do not masquerade as projection loss", async () 
 test("retained artifact plans preserve consent metadata without exposing provider endpoints", async () => {
   const { response, store } = await dispatch({ invocationId: "download", records: [], artifacts: [{
     id: "candidate", license: "CC-BY", attribution: "Provider", expectedBytes: 240_000_000,
-    sourceUrl: "https://provider.invalid/private-download", logicalName: "result.pdf",
+    sourceUrl: "https://provider.invalid/private-download", logicalName: "result.pdf", checksum: "provider-checksum",
   }] });
   const view = JSON.parse(response.content);
   assert.equal(view.candidates[0].candidateId, "candidate");
@@ -109,5 +109,52 @@ test("custom large text, malformed records and near-budget Unicode JSON remain r
     assert.equal(response.isError, false);
     if ("text" in canonical) assert.ok((await store.search(view._retainedOutput.ref, "CUSTOM-END")).matches.length > 0);
     if ("records" in canonical && canonical.records[0] === null) assert.deepEqual(view.records, canonical.records);
+  }
+});
+
+test("deep and cyclic provider results degrade safely without a false complete-result reference", async () => {
+  const credential = randomUUID();
+  const cyclic: Record<string, unknown> = { answer: "visible", authorization: credential, sourceUrl: "https://provider.invalid/hidden" };
+  cyclic.self = cyclic;
+  let deep: unknown = { answer: "deep" };
+  for (let index = 0; index < 10_000; index += 1) deep = { next: deep };
+  for (const input of [cyclic, { answer: "visible", data: deep }]) {
+    const { response } = await dispatch(input);
+    assert.equal(response.isError, false);
+    const view = JSON.parse(response.content);
+    assert.equal(view.answer, "visible");
+    assert.equal(view._retainedOutput.ref, undefined);
+    assert.match(view._retainedOutput.instruction, /could not be stored/);
+    assert.doesNotMatch(response.content, new RegExp(credential));
+    assert.doesNotMatch(response.content, /provider.invalid|sourceUrl/);
+    assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
+  }
+  assert.equal(cyclic.self, cyclic);
+  assert.equal(cyclic.authorization, credential);
+});
+
+test("complete normalized records and download plans need no recovery reference", async () => {
+  const citation = { markdown: "PDB:1", identifier: "1", source: "pdb" };
+  const record = { identifier: "1", identifierType: "pdb", title: "Structure", source: "pdb", fullTextRetrieved: false,
+    citations: [citation], primaryCitation: citation, warnings: [], structuredData: { resolution: 1.8 }, crossReferences: [] };
+  const { response } = await dispatch({ records: [record], warnings: [], artifacts: [], sourceVersion: "v1" });
+  const view = JSON.parse(response.content);
+  assert.equal(view.records[0].structuredData.resolution, 1.8);
+  assert.equal(view._retainedOutput, undefined);
+  const plan = await dispatch({ records: [], artifacts: [{ id: "pdf", logicalName: "result.pdf", license: "CC-BY", expectedBytes: 42 }] });
+  assert.equal(JSON.parse(plan.response.content)._retainedOutput, undefined);
+});
+
+
+test("distinct supporting citations and unknown business fields still trigger retention", async () => {
+  const primary = { identifier: "primary", source: "db", markdown: "Primary" };
+  for (const record of [
+    { identifier: "record", primaryCitation: primary, citations: [primary, { ...primary, identifier: "supporting" }] },
+    { identifier: "record", extraAnalysis: { score: 0.75 } },
+  ]) {
+    const { response, store } = await dispatch({ records: [record], artifacts: [] });
+    const ref = JSON.parse(response.content)._retainedOutput.ref;
+    const full = JSON.parse((await store.read(ref)).text);
+    assert.deepEqual(full.records[0], record);
   }
 });
