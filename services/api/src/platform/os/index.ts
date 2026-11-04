@@ -17,6 +17,7 @@
 // `process.platform === "win32"` branches may appear in consumer code.
 
 import { posixAdaptation } from "./posix.js";
+import { replaceFile } from "./replace.js";
 import type { OsAdaptation } from "./types.js";
 import { win32Adaptation } from "./win32.js";
 
@@ -24,6 +25,12 @@ const adaptation: OsAdaptation = process.platform === "win32" ? win32Adaptation 
 
 export const restrictToOwner: OsAdaptation["restrictToOwner"] = adaptation.restrictToOwner;
 export const restrictToOwnerSync: OsAdaptation["restrictToOwnerSync"] = adaptation.restrictToOwnerSync;
-export const renameReplace: OsAdaptation["renameReplace"] = adaptation.renameReplace;
+/**
+ * Atomic replace that survives a transient sharing violation. The retry is
+ * applied here rather than per platform so a durable write behaves the same
+ * wherever it runs (see replace.ts).
+ */
+export const renameReplace: OsAdaptation["renameReplace"] = (source, destination) =>
+  replaceFile(source, destination, { renameFile: adaptation.renameReplace });
 export const secretProtector: OsAdaptation["secretProtector"] = adaptation.secretProtector;
 export type { RestrictToOwnerOptions, SecretProtector } from "./types.js";

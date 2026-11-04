@@ -33,8 +33,9 @@ export interface OsAdaptation {
   /**
    * Atomic replace via rename. POSIX rename always replaces; on Windows the
    * replace can transiently fail with EPERM/EACCES/EBUSY while an antivirus
-   * scanner or indexer holds the destination, so the win32 implementation
-   * retries with backoff before giving up.
+   * scanner or indexer holds the destination. The platform implementation is a
+   * plain rename; the facade (index.ts) wraps it with the shared retry
+   * (replace.ts) so every consumer and every platform gets the same policy.
    */
   renameReplace(source: string, destination: string): Promise<void>;
   /**
