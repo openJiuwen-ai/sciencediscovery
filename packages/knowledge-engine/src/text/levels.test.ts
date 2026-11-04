@@ -68,18 +68,18 @@ test("parseDocumentBlocks types every jats.ts construct and numbers types indepe
   // Abstract, Introduction, Results, References).
   assert.equal(blocks.filter((block) => block.type === "heading").map((block) => block.index).join(","), "0,1,2,3,4");
   assert.equal(blocks.filter((block) => block.type === "paragraph").map((block) => block.index).join(","), "0,1,2,3");
-  assert.equal(formula!.index, 0);
-  assert.equal(table!.index, 0);
-  assert.ok(table!.text.startsWith("[Table 1]"), "table block absorbs its caption line");
+  assert.equal(formula.index, 0);
+  assert.equal(table.index, 0);
+  assert.ok(table.text.startsWith("[Table 1]"), "table block absorbs its caption line");
   assert.deepEqual(references.map((block) => block.index), [0, 1]);
 
   // Section tracking: paragraphs carry their nearest heading; references sit under References.
-  assert.equal(paragraph!.section, "Introduction");
-  assert.equal(formula!.section, "Results");
+  assert.equal(paragraph.section, "Introduction");
+  assert.equal(formula.section, "Results");
   assert.equal(references[0]!.section, "References");
   // The title itself is a heading block with null section (no preceding heading).
   const titleBlock = blocks.find((block) => block.type === "heading" && block.text === "Neutralization of Ebola virus");
-  assert.equal(titleBlock!.section, "Neutralization of Ebola virus");
+  assert.equal(titleBlock?.section, "Neutralization of Ebola virus");
 });
 
 test("parseDocumentBlocks is deterministic — identical input, identical output", () => {
@@ -137,8 +137,8 @@ test("resolveDocumentAnchor round-trips anchors and returns neighbors", () => {
   const anchorId = documentAnchor("kb1-doc1", paragraph);
   const hit = resolveDocumentAnchor(blocks, anchorId);
   assert.ok(hit);
-  assert.equal(hit!.block.text, paragraph.text);
-  assert.ok(hit!.before || hit!.after, "paragraph has neighbors in this document");
+  assert.equal(hit.block.text, paragraph.text);
+  assert.ok(hit.before || hit.after, "paragraph has neighbors in this document");
 
   assert.equal(resolveDocumentAnchor(blocks, "kb1-doc1:paragraph:999"), null);
   assert.equal(resolveDocumentAnchor(blocks, "not-an-anchor"), null);

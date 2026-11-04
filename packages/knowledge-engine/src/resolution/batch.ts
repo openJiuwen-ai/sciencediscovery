@@ -84,7 +84,7 @@ export function buildComponents(pairs: CandidatePair[]): string[][] {
  */
 export function trimOversized(pairs: CandidatePair[], maxSize: number = MAX_CLUSTER): CandidatePair[] {
   let current = pairs;
-  for (;;) {
+  while (true) {
     const components = buildComponents(current);
     const oversized = new Set(components.filter((c) => c.length > maxSize).flat());
     if (oversized.size === 0) return current;

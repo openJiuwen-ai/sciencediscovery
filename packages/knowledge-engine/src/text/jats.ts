@@ -40,7 +40,7 @@ export function parseXml(xml: string): XmlNode | null {
   const length = xml.length;
 
   function skipMisc(): void {
-    for (;;) {
+    while (true) {
       while (index < length && /\s/.test(xml[index]!)) index += 1;
       if (xml.startsWith("<!--", index)) {
         const end = xml.indexOf("-->", index);
@@ -56,7 +56,7 @@ export function parseXml(xml: string): XmlNode | null {
 
   function parseAttrs(): Record<string, string> {
     const attrs: Record<string, string> = {};
-    for (;;) {
+    while (true) {
       while (index < length && /\s/.test(xml[index]!)) index += 1;
       const nameMatch = /^[a-zA-Z_][\w:.-]*/.exec(xml.slice(index));
       if (!nameMatch) return attrs;
@@ -93,7 +93,7 @@ export function parseXml(xml: string): XmlNode | null {
     if (xml[index] !== ">") return null;
     index += 1;
     const children: Array<XmlNode | string> = [];
-    for (;;) {
+    while (true) {
       if (index >= length) break;
       if (xml.startsWith(`</${tag}`, index)) {
         const end = xml.indexOf(">", index);

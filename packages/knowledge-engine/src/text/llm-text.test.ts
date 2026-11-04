@@ -59,5 +59,5 @@ void test("the MiniMax trap: thinking block brackets must not poison salvage", (
   const stripped = stripThinkingProcess(content);
   const salvaged = salvageJson(stripped);
   assert.equal(salvaged, '{"right": true}');
-  assert.deepEqual(JSON.parse(salvaged!), { right: true });
+  assert.deepEqual(JSON.parse(salvaged), { right: true });
 });
