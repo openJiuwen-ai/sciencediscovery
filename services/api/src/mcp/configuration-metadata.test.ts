@@ -9,6 +9,7 @@ import { createTest } from "../../../../test/support/tagged/compat.mjs";
 import { CustomMcpServers } from "./custom-servers.js";
 import { decryptSecretValue, encryptSecretValue, loadOrCreateModelSecretKey } from "../store/secrets.js";
 import { digest } from "../configuration/validation.js";
+import type { ConfigurationExternalOutcome } from "../configuration/types.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 const operation = () => ({ operationId: `${randomUUID()}:1:external_submit`, bindingDigest: digest(randomUUID()) });
 function metadataVersion(manager: CustomMcpServers, id: string): string { const version = manager.configurationMetadata(id).version; assert.ok(version); return version; }
@@ -63,6 +64,37 @@ test("CFG-X03a: failure after atomic rename retains the authoritative saved rece
   await assert.rejects(h.manager.submitConfigurationMetadata(op, h.server.id, metadataVersion(h.manager, h.server.id), { description: "Committed before callback" })); h.registry.upsert = upsert;
   assert.equal((await h.manager.resolveConfigurationMetadata(op)).status, "applied", "Reconciliation retries only in-memory metadata publication, never the configuration write or catalog discovery");
   const reloaded = new CustomMcpServers(h.root, createMcpSourceRegistry(), () => undefined, async () => undefined); await reloaded.load(); assert.equal((await reloaded.resolveConfigurationMetadata(op)).status, "applied"); assert.equal(reloaded.configurationMetadata(h.server.id).current?.description, "Committed before callback");
+});
+
+test("CFG-X03a: a full journal rejects new edits and deletions while preserving existing receipts", async context => {
+  const h = await harness(context);
+  const file = resolve(h.root, "custom-mcp-servers.enc");
+  const key = await loadOrCreateModelSecretKey(resolve(h.root, "model-secrets.key"));
+  const servers: unknown = JSON.parse(decryptSecretValue(key, "custom-mcp-servers", await readFile(file, "utf8")));
+  const prior: ConfigurationExternalOutcome = { ...operation(), status: "applied", resourceVersions: { mcpMetadata: metadataVersion(h.manager, h.server.id) } };
+  const operations = Object.fromEntries<ConfigurationExternalOutcome>(Array.from({ length: 9_999 }, () => {
+    const rejected: ConfigurationExternalOutcome = { ...operation(), status: "rejected", code: "EXTERNAL_OPERATION_NOT_SAVED" };
+    return [rejected.operationId, rejected];
+  }));
+  operations[prior.operationId] = prior;
+  const disk = encryptSecretValue(key, "custom-mcp-servers", JSON.stringify({ format: "sciencediscovery-custom-mcp-v2", servers, operations }));
+  await writeFile(file, disk);
+  const reload = async () => {
+    const manager = new CustomMcpServers(h.root, createMcpSourceRegistry(), () => undefined, async () => undefined);
+    await manager.load();
+    return manager;
+  };
+  const manager = await reload();
+  const edit = operation(), deletion = operation(), version = metadataVersion(manager, h.server.id);
+  const rejection = (op: ReturnType<typeof operation>) => ({ ...op, status: "rejected", code: "MCP_CONFIGURATION_JOURNAL_FULL" });
+  assert.deepEqual(await manager.submitConfigurationMetadata(edit, h.server.id, version, { name: "Must not save" }), rejection(edit));
+  assert.deepEqual(await manager.submitConfigurationDeletion(deletion, h.server.id, version), rejection(deletion));
+  const restarted = await reload();
+  assert.deepEqual(await restarted.resolveConfigurationMetadata(edit), rejection(edit));
+  assert.deepEqual(await restarted.resolveConfigurationMetadata(deletion), rejection(deletion));
+  assert.deepEqual(await restarted.resolveConfigurationMetadata(prior), prior);
+  assert.equal(metadataVersion(restarted, h.server.id), version);
+  assert.equal(await readFile(file, "utf8"), disk);
 });
 
 test("CFG-X03a: operation identity/binding mismatch cannot overwrite an existing authority receipt", async context => {

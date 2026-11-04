@@ -117,6 +117,8 @@ function entry(config: CustomMcpServerConfig): McpServerEntry {
   };
 }
 
+const CONFIGURATION_JOURNAL_CAPACITY = 10_000;
+
 export class CustomMcpServers {
   readonly oauth: McpOAuthManager;
   private configs: Record<string, CustomMcpServerConfig> = {};
@@ -159,7 +161,7 @@ export class CustomMcpServers {
           ? { operationId, bindingDigest: String(value.bindingDigest), status: "rejected", code: String(value.code) }
           : { operationId, bindingDigest: String(value.bindingDigest), status: "applied", resourceVersions: { mcpMetadata: String((value.resourceVersions as Record<string, unknown>).mcpMetadata) } };
       }
-      if (Object.keys(this.configurationOperations).length > 10_000) throw new Error("MCP configuration operation journal exceeds capacity");
+      if (Object.keys(this.configurationOperations).length > CONFIGURATION_JOURNAL_CAPACITY) throw new Error("MCP configuration operation journal exceeds capacity");
       for (const [id, value] of Object.entries(servers)) {
         if (!/^custom-[a-f0-9]{12}$/.test(id)) throw new Error("Invalid saved MCP server id");
         this.configs[id] = normalizeCustomMcpConfig(value);
@@ -295,7 +297,8 @@ export class CustomMcpServers {
       if (prior) { await this.finishConfigurationDeletion(operation.operationId); if (prior.status === "applied") this.sync(); return prior; }
       if (!/^custom-[a-f0-9]{12}$/u.test(serverId) || !this.configs[serverId]) return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "CONFIGURATION_RESOURCE_UNAVAILABLE" });
       if (this.configurationMetadataRevision(serverId) !== expectedVersion) return this.recordConfigurationOutcome({ ...operation, status: "rejected", code: "RESOURCE_VERSION_CONFLICT" });
-      if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
+      const capacityRejection = this.configurationJournalRejection(operation);
+      if (capacityRejection) return capacityRejection;
       const outcome: ConfigurationExternalOutcome = { ...operation, status: "applied", resourceVersions: { mcpMetadata: this.deletedConfigurationRevision(serverId) } };
       const next = { ...this.configs }; delete next[serverId];
       await this.persist(next, { ...this.configurationOperations, [operation.operationId]: outcome }, [serverId], { ...this.pendingConfigurationDeletions, [operation.operationId]: serverId });
@@ -428,8 +431,15 @@ export class CustomMcpServers {
     return prior ? structuredClone(prior) : undefined;
   }
 
+  private configurationJournalRejection(operation: ConfigurationExternalOperation): ConfigurationExternalOutcome | undefined {
+    if (Object.keys(this.configurationOperations).length < CONFIGURATION_JOURNAL_CAPACITY) return undefined;
+    // Receipts are never evicted, so an unknown operation stays fenced at capacity across restarts.
+    return { operationId: operation.operationId, bindingDigest: operation.bindingDigest, status: "rejected", code: "MCP_CONFIGURATION_JOURNAL_FULL" };
+  }
+
   private async recordConfigurationOutcome(outcome: ConfigurationExternalOutcome, configs = this.configs, invalidateChecks: readonly string[] = []): Promise<ConfigurationExternalOutcome> {
-    if (Object.keys(this.configurationOperations).length >= 10_000) throw new Error("MCP configuration operation capacity reached; no automatic receipt deletion is allowed");
+    const capacityRejection = this.configurationJournalRejection(outcome);
+    if (capacityRejection) return capacityRejection;
     await this.persist(configs, { ...this.configurationOperations, [outcome.operationId]: outcome }, invalidateChecks);
     return structuredClone(outcome);
   }
