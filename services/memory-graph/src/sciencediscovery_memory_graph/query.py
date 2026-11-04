@@ -35,6 +35,21 @@ log = get_logger("query")
 _NODE_LIMIT = 500
 
 
+def _cap_page(rows: list[Any]) -> tuple[list[Any], bool]:
+    """Apply ``_NODE_LIMIT`` to one page of raw Cypher rows.
+
+    Returns ``(kept, truncated)``. The reads below bind their Cypher ``LIMIT``
+    to ``_NODE_LIMIT + 1`` so the flag is decidable: only a result set that
+    really holds a 501st row is truncated. Comparing ``len(rows) >=
+    _NODE_LIMIT`` against a page that was already cut at ``_NODE_LIMIT`` can
+    never tell a complete 500-row answer from a cut one, and reported the
+    complete one as cut. The contract in this module says results *beyond* the
+    cap carry ``truncated: True`` — a page that comes back exactly full is not
+    evidence of another page (#883).
+    """
+    return rows[:_NODE_LIMIT], len(rows) > _NODE_LIMIT
+
+
 def get_subgraph(session_id: str) -> dict[str, Any]:
     driver = handle()
     if not driver.is_reachable():
@@ -64,17 +79,25 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
             LIMIT $limit
             """,
             sid=session_id,
-            limit=_NODE_LIMIT,
+            limit=_NODE_LIMIT + 1,
         )
 
-        nodes: list[dict[str, Any]] = []
-        node_ids: set[str] = set()
+        # The extra row is the truncation signal; ``node_ids`` is built from the
+        # kept page only so every edge/surrogate below resolves to a node the
+        # caller actually receives.
+        node_rows: list[tuple[str, str, Any]] = []
         for record in nodes_result:
             node = record["node"]
             label = record["label"]
             node_id = _node_identity(label, node)
             if node_id is None:
                 continue
+            node_rows.append((label, node_id, node))
+        node_rows, truncated = _cap_page(node_rows)
+
+        nodes: list[dict[str, Any]] = []
+        node_ids: set[str] = set()
+        for label, node_id, node in node_rows:
             node_ids.add(node_id)
             nodes.append(
                 {
@@ -269,7 +292,7 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
             "nodes": nodes,
             "edges": edges,
             "total": len(nodes),
-            "truncated": len(nodes) >= _NODE_LIMIT,
+            "truncated": truncated,
         }
 
 
@@ -421,14 +444,17 @@ def query_match(
             min_matched=min_matched,
             primary=tokens[0],
             sid=session_id,
-            limit=_NODE_LIMIT,
+            limit=_NODE_LIMIT + 1,
         )
-        hits = [_to_hit(rec["n"], rec["label"]) for rec in result]
+        # Count raw rows, not hits: a row whose label has no id field is
+        # dropped by ``_to_hit``, and a dropped label is not a truncation.
+        rows, truncated = _cap_page(list(result))
+        hits = [_to_hit(rec["n"], rec["label"]) for rec in rows]
         hits = [h for h in hits if h is not None]
         return {
             "hits": hits,
             "total": len(hits),
-            "truncated": len(hits) >= _NODE_LIMIT,
+            "truncated": truncated,
         }
 
 
@@ -455,14 +481,15 @@ def by_node_type(node_types: list[str], session_id: str | None = None) -> dict[s
             """,
             types=node_types,
             sid=session_id,
-            limit=_NODE_LIMIT,
+            limit=_NODE_LIMIT + 1,
         )
-        hits = [_to_hit(rec["n"], rec["label"]) for rec in result]
+        rows, truncated = _cap_page(list(result))
+        hits = [_to_hit(rec["n"], rec["label"]) for rec in rows]
         hits = [h for h in hits if h is not None]
         return {
             "hits": hits,
             "total": len(hits),
-            "truncated": len(hits) >= _NODE_LIMIT,
+            "truncated": truncated,
         }
 
 
@@ -493,11 +520,12 @@ def by_edge_type(edge_types: list[str], session_id: str | None = None) -> dict[s
             """,
             types=edge_types,
             sid=session_id,
-            limit=_NODE_LIMIT,
+            limit=_NODE_LIMIT + 1,
         )
+        rows, truncated = _cap_page(list(result))
         edges: list[dict[str, Any]] = []
         node_map: dict[str, dict[str, Any]] = {}
-        for rec in result:
+        for rec in rows:
             src = _to_hit(rec["a"], rec["a_label"])
             dst = _to_hit(rec["b"], rec["b_label"])
             if src is None or dst is None:
@@ -515,7 +543,7 @@ def by_edge_type(edge_types: list[str], session_id: str | None = None) -> dict[s
             "edges": edges,
             "nodes": nodes,
             "total": len(edges),
-            "truncated": len(edges) >= _NODE_LIMIT,
+            "truncated": truncated,
         }
 
 
@@ -891,11 +919,22 @@ def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
         else:
             edges = []
 
+        # This reader assembles its node set from the children, the produces
+        # subtree and the edge endpoints, so it has no Cypher LIMIT to bound —
+        # the cap is applied to the assembled page instead. Edges into a node
+        # that fell outside it are dropped rather than rendered against an
+        # absent endpoint (#883).
+        nodes, truncated = _cap_page(nodes)
+        if truncated:
+            kept = {n["id"] for n in nodes}
+            edges = [e for e in edges
+                     if e["source"] in kept and e["target"] in kept]
+
         return {
             "nodes": nodes,
             "edges": edges,
             "total": len(nodes),
-            "truncated": len(nodes) >= _NODE_LIMIT,
+            "truncated": truncated,
         }
 
 
@@ -1017,11 +1056,19 @@ def get_group_expansion(group_id: str, session_id: str) -> dict[str, Any]:
                 "extra": {"surrogate": True, "via_child": rec["via_child"]},
             })
 
+        # The member walk has no Cypher LIMIT (the folded_products shortcut
+        # cannot carry one either), so the cap is applied to the assembled
+        # page and a member's surrogate edge goes with it when it is cut.
+        nodes, truncated = _cap_page(nodes)
+        if truncated:
+            kept = {n["id"] for n in nodes}
+            edges = [e for e in edges if e["target"] in kept]
+
         return {
             "nodes": nodes,
             "edges": edges,
             "total": len(nodes),
-            "truncated": len(nodes) >= _NODE_LIMIT,
+            "truncated": truncated,
         }
 
 
@@ -1238,14 +1285,18 @@ def _serialize_subgraph(
         LIMIT $limit
         """,
         eids=eids,
-        limit=_NODE_LIMIT,
+        limit=_NODE_LIMIT + 1,
     )
-    nodes: list[dict[str, Any]] = []
+    # The extra row decides the flag; nodes past the cap are dropped, and with
+    # them every edge that would render against an absent endpoint (#883).
+    hit_rows: list[Any] = []
     for rec in nodes_result:
         hit = _to_hit(rec["n"], rec["label"])
         if hit is None:
             continue
-        nodes.append(hit)
+        hit_rows.append(hit)
+    hit_rows, truncated = _cap_page(hit_rows)
+    nodes: list[dict[str, Any]] = list(hit_rows)
 
     edges_result = session.run(
         """
@@ -1291,11 +1342,15 @@ def _serialize_subgraph(
             "extra": _json_safe(dict(rec["edge_props"])) if rec["edge_props"] else {},
         })
 
+    if truncated:
+        kept = {n["id"] for n in nodes}
+        edges = [e for e in edges if e["source"] in kept and e["target"] in kept]
+
     return {
         "nodes": nodes,
         "edges": edges,
         "total": len(nodes),
-        "truncated": len(nodes) >= _NODE_LIMIT,
+        "truncated": truncated,
     }
 
 
