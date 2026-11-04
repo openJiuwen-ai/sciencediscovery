@@ -1429,7 +1429,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.sandboxNetwork) {
     const parameters = Type.Object({ hosts: Type.Array(Type.String({ minLength: 1, maxLength: 253 }), { minItems: 1, maxItems: 16 }),
-      purpose: Type.String({ minLength: 1, maxLength: 100 }), ...machineParameter });
+      purpose: Type.String({ minLength: 1, maxLength: 100, description: "Brief reason, 1–100 characters. Shorten and resubmit if validation rejects it." }), ...machineParameter });
     const request: AgentTool<typeof parameters> = {
       name: "request_sandbox_network", label: "Request sandbox network access", parameters,
       description: "For additional sandbox HTTP access beyond the configured policy, explicitly declare exact hosts (optionally :port) and why. Pauses on an in-conversation permission card. Returns a one-use network authorization for run_shell on the same Runner, Agent and run; approval NEVER executes code. Do not batch with dependent execution. Deny/cancel keeps offline: report required retrieval as blocked, never silently replace it with web_search success. For a previously executed command, inspect files and remote outcomes before issuing a safe NEW call; never blindly replay side effects. Global Sandbox network settings remain separate. Opaque scripts in none mode cannot automatically disclose hosts.",

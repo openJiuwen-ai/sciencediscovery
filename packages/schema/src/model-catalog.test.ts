@@ -50,6 +50,13 @@ test("declared stops replace the variant's when a role effort is narrowed", () =
   assert.deepEqual(roleThinking(gateway, [], "max"), { thinkingEffort: "high", thinkingMode: "enabled" });
 });
 
+test("an unknown DeepSeek gateway preserves explicitly requested role efforts", () => {
+  const gateway = profile({ apiVariant: "deepseek", model: "deepseek-flash" });
+  for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+    assert.deepEqual(roleThinking(gateway, [], effort), { thinkingEffort: effort, thinkingMode: "enabled" });
+  }
+});
+
 test("no role effort, or a model with nothing to honor it with, keeps the caller's thinking", () => {
   assert.equal(roleThinking(profile({ apiVariant: "kimi-k3" }), [], undefined), undefined);
   assert.equal(roleThinking(undefined, [], "high"), undefined);

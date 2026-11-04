@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
@@ -97,8 +98,8 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     } });
     expect(skillResponse.ok()).toBe(true); const skillRecord = await skillResponse.json(); skill = skillRecord.id;
     metrics.configuration = { connector, specialist, toolName, skill: skillRecord, builtins: builtins.filter(s => roles.some(r => s.id === `builtin-${r}`)) };
-    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", projectName: `TC-E2E-01 ${Date.now()}`, sessionTitle: "BRCA1 team signoff",
-      ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: "TC-E2E-01 generator" } }) });
+    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", ...realModelThinking(), projectName: `TC-E2E-01 ${Date.now()}`, sessionTitle: "BRCA1 team signoff",
+      ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: "TC-E2E-01 generator", apiVariant: realModelApiVariant(), ...realModelThinking() } }) });
     const prefix = `/api/sessions/${fixture.session.id}`;
     const selection = await page.request.patch(`${apiBaseUrl()}${prefix}`, { headers, data: { enabledSkillIds: [skill, "science-research-team"] } });
     expect(selection.ok()).toBe(true);

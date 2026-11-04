@@ -134,6 +134,7 @@ import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   lookupModelCatalog,
+  MODEL_THINKING_EFFORTS,
   resolveModelFacts,
   SKILL_PACKAGES_PORTABLE_ROOT,
   THINKING_CONTROL_VARIANTS,
@@ -3122,7 +3123,8 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
     ? [...model.facts.thinkingEfforts]
     : catalog?.thinking?.efforts ?? [];
   if (!model.facts?.thinkingEfforts?.length && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
-    if (variant === "gemini") efforts = ["low", "medium", "high"];
+    if (variant === "deepseek") efforts = [...MODEL_THINKING_EFFORTS];
+    else if (variant === "gemini") efforts = ["low", "medium", "high"];
     else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
     else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
     else if (variant === "kimi-k3") efforts = ["low", "high", "max"];

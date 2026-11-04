@@ -103,3 +103,92 @@ def test_accounting_failure_does_not_discard_valid_text(model_server):
     def fail(_usage):
         raise RuntimeError("accounting unavailable")
     assert completion_for(model_server, "synthetic", on_usage=fail)("synthetic") == "ok"
+
+
+@pytest.mark.parametrize("status", [429, 502, 524])
+def test_transient_http_failure_retries_same_mutation_and_reports_usage_once(status, monkeypatch):
+    import io
+    import urllib.error
+    calls, usage, failures = [], [], []
+    def request(req, **kwargs):
+        calls.append(req.data)
+        if len(calls) < 3:
+            raise urllib.error.HTTPError(req.full_url, status, "temporary", {}, io.BytesIO(b"temporary"))
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": "candidate"}}],
+                                     "usage": {"completion_tokens": 3, "total_tokens": 5}}).encode())
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    result = completion_for("http://synthetic.test", "synthetic", thinking="enabled", max_tokens=96_000)(
+        "same mutation", usage.append, failures.append)
+    assert result == "candidate"
+    assert len(calls) == 3 and len(set(calls)) == 1
+    assert len(usage) == 1 and usage[0].total == 5
+    assert failures == []
+
+
+@pytest.mark.parametrize("status, expected", [(400, 1), (401, 1), (524, 3)])
+def test_permanent_or_exhausted_http_failure_stays_failed(status, expected, monkeypatch):
+    import io
+    import urllib.error
+    calls, failures = [], []
+    def request(req, **kwargs):
+        calls.append(req)
+        raise urllib.error.HTTPError(req.full_url, status, "failed", {}, io.BytesIO(b"upstream unavailable"))
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    assert completion_for("http://synthetic.test", "synthetic")("mutate", on_failure=failures.append) == ""
+    assert len(calls) == expected
+    assert len(failures) == 1 and f"HTTP {status}" in failures[0]
+
+
+def test_stop_during_backoff_prevents_next_paid_call(monkeypatch):
+    import io
+    import urllib.error
+    stopped, calls = [], []
+    def request(req, **kwargs):
+        calls.append(req)
+        stopped.append(True)
+        raise urllib.error.HTTPError(req.full_url, 524, "timeout", {}, io.BytesIO(b"timeout"))
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    assert completion_for("http://synthetic.test", "synthetic", should_stop=lambda: bool(stopped))("mutate") == ""
+    assert len(calls) == 1
+
+
+def test_malformed_json_and_empty_model_answer_are_not_transport_retried(monkeypatch):
+    import io
+    calls = []
+    def request(*args, **kwargs):
+        calls.append(1)
+        return io.BytesIO(b"not json")
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    assert completion_for("http://synthetic.test", "synthetic")("mutate") == ""
+    assert len(calls) == 1
+    calls.clear()
+    def empty(*args, **kwargs):
+        calls.append(1)
+        return io.BytesIO(b'{"choices":[{"message":{"content":null},"finish_reason":"length"}]}')
+    monkeypatch.setattr("urllib.request.urlopen", empty)
+    assert completion_for("http://synthetic.test", "synthetic")("mutate") == ""
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("first_attempt_seconds", [1, 10])
+def test_connection_retries_share_original_deadline(first_attempt_seconds, monkeypatch):
+    import io
+    import urllib.error
+    elapsed, timeouts, failures = [0.0], [], []
+    monkeypatch.setattr("sciencediscovery_evolve.completion.time.monotonic", lambda: elapsed[0])
+    monkeypatch.setattr("sciencediscovery_evolve.completion.time.sleep", lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
+    def request(req, *, timeout):
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            elapsed[0] += first_attempt_seconds
+            raise urllib.error.URLError("connection reset")
+        return io.BytesIO(b'{"choices":[{"message":{"content":"candidate"}}]}')
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    result = completion_for("http://synthetic.test", "synthetic", timeout=10)("mutate", on_failure=failures.append)
+    if first_attempt_seconds == 1:
+        assert result == "candidate"
+        assert timeouts == pytest.approx([10, 8.5])
+        assert failures == []
+    else:
+        assert result == "" and timeouts == [10]
+        assert failures == ["completion transport retry deadline exceeded"]

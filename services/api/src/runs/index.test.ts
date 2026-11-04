@@ -209,6 +209,28 @@ test("run snapshots narrow legacy Responses max to the selected model wire capab
   assert.equal(snapshot.thinkingEffort, "xhigh");
 });
 
+test("run snapshots preserve the requested effort for an unknown DeepSeek gateway", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `deepseek-snapshot-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  const model = await store.createModel({ name: "Gateway", model: "deepseek-flash", baseUrl: "https://example.test/v1", apiVariant: "deepseek", apiToken: "test-token" });
+  const project = await store.createProject("Gateway effort");
+  const session = await store.createSession(project.id, "Gateway effort", model.id);
+  assert.equal(computeSettingsSnapshot(store, session.id).thinkingEffort, "high");
+  for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+    await store.updateSession(session.id, { thinkingEffort: effort, thinkingMode: "enabled" });
+    const snapshot = computeSettingsSnapshot(store, session.id);
+    assert.equal(snapshot.thinkingMode, "enabled");
+    assert.equal(snapshot.thinkingEffort, effort);
+  }
+});
+
 
 test("completed subagent tools retain intermediate output beside their final result", () => {
   const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "search", toolName: "search_pubmed", isError: false,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { expect } from "@playwright/test";
 
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
@@ -77,11 +78,13 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
 
   const fixture = await createProjectAndSession(page, {
     approvalMode: "always_allow",
+    ...realModelThinking(),
     model: {
       apiToken: real.E2E_LLM_TOKEN,
       baseUrl: real.E2E_LLM_BASE_URL,
       model: real.E2E_LLM_MODEL,
       name: `J5 real model ${Date.now()}`,
+      apiVariant: realModelApiVariant(), ...realModelThinking(),
     },
     projectName: `J5 real request ${Date.now()}`,
     sessionTitle: `J5 statistics session ${Date.now()}`,

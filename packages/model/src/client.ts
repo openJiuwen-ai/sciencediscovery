@@ -411,6 +411,16 @@ class ModelWireRecorder {
     this.dispatchedMs = Date.now();
   }
 
+  attemptCount(): number { return this.attempts; }
+
+  beginAttempt(): void {
+    this.textSeen = false;
+    this.reasoningSeen = false;
+    this.toolSeen = false;
+    this.finish = undefined;
+    this.truncated = false;
+  }
+
   headers(status: number, headers: Record<string, string | string[] | undefined>): void {
     this.headersMs = Date.now();
     this.httpStatus = status;
@@ -619,11 +629,13 @@ async function collectBounded(body: AsyncIterable<Uint8Array>, cap: number): Pro
 async function backoff(attempt: number, retryAfterMs: number | undefined, signal: AbortSignal): Promise<void> {
   const delay = retryAfterMs ?? Math.min(4_000, 500 * 2 ** attempt);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, delay);
-    signal.addEventListener("abort", () => {
+    if (signal.aborted) { reject(new Error("aborted")); return; }
+    const abort = () => {
       clearTimeout(timer);
       reject(new Error("aborted"));
-    }, { once: true });
+    };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, delay);
+    signal.addEventListener("abort", abort, { once: true });
   });
 }
 
@@ -1380,11 +1392,19 @@ export async function streamModelTurn(
 ): Promise<ModelTurn> {
   const protocol = endpointProtocol(endpoint);
   const recorder = new ModelWireRecorder(endpoint, protocol);
+  // A reasoning-only interrupted attempt has not committed an answer or tool
+  // call. Once either is emitted, replay would duplicate observable output.
+  let answerStarted = false;
+  let reasoningBuffer: string[] = [];
+  const flushReasoning = () => {
+    for (const delta of reasoningBuffer) callbacks.onThinkingDelta?.(delta);
+    reasoningBuffer = [];
+  };
   const observed: ModelStreamCallbacks = {
     ...callbacks,
-    onTextDelta: (delta) => { recorder.text(delta); callbacks.onTextDelta?.(delta); },
-    onThinkingDelta: (delta) => { recorder.reasoning(delta); callbacks.onThinkingDelta?.(delta); },
-    onToolCallDelta: (delta) => { recorder.tool(delta); callbacks.onToolCallDelta?.(delta); },
+    onTextDelta: (delta) => { if (delta.length > 0) { answerStarted = true; flushReasoning(); } recorder.text(delta); callbacks.onTextDelta?.(delta); },
+    onThinkingDelta: (delta) => { recorder.reasoning(delta); reasoningBuffer.push(delta); },
+    onToolCallDelta: (delta) => { answerStarted = true; flushReasoning(); recorder.tool(delta); callbacks.onToolCallDelta?.(delta); },
   };
   const emit = (errorClass?: ModelWireErrorClass): ModelWireDiagnostics => {
     const diagnostics = recorder.report(errorClass);
@@ -1392,17 +1412,36 @@ export async function streamModelTurn(
     return diagnostics;
   };
   let turn: ModelTurn;
+  let outerRetries = 0;
   try {
-    switch (protocol) {
-      case "anthropic-messages":
-        turn = await streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, observed, recorder);
+    for (;;) {
+      // Share one attempt budget with connection/HTTP retries inside the call.
+      const remainingPolicy = { ...policy, maxRetries: Math.max(0, policy.maxRetries - recorder.attemptCount()) };
+      try {
+        recorder.beginAttempt();
+        reasoningBuffer = [];
+        switch (protocol) {
+          case "anthropic-messages":
+            turn = await streamAnthropicTurn(endpoint, systemPrompt, history, tools, remainingPolicy, signal, observed, recorder);
+            break;
+          case "openai-responses":
+            turn = await streamResponsesTurn(endpoint, systemPrompt, history, tools, remainingPolicy, signal, observed, recorder);
+            break;
+          default:
+            turn = await streamOpenAiTurn(endpoint, systemPrompt, history, tools, remainingPolicy, signal, observed, recorder);
+            break;
+        }
+        flushReasoning();
         break;
-      case "openai-responses":
-        turn = await streamResponsesTurn(endpoint, systemPrompt, history, tools, policy, signal, observed, recorder);
-        break;
-      default:
-        turn = await streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, observed, recorder);
-        break;
+      } catch (error) {
+        const classification = classifyModelWireError(error);
+        if (signal.aborted || answerStarted || outerRetries >= policy.maxRetries || recorder.attemptCount() > policy.maxRetries
+          || !["network", "timeout"].includes(classification)) throw error;
+        outerRetries += 1;
+        reasoningBuffer = [];
+        recorder.retry(classification);
+        await backoff(recorder.attemptCount() - 1, undefined, signal);
+      }
     }
   } catch (error) {
     const diagnostics = emit(classifyModelWireError(error));
