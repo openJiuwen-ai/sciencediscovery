@@ -241,6 +241,14 @@ void test("verifyEvidence rejects fabricated and short quotes", () => {
   assert.ok(!verifyEvidence("", haystack));
 });
 
+void test("verifyEvidence rejects word-permuted and semantically inverted quotes", () => {
+  const haystack = "Resistant cells inhibit the growth of the drug in vitro. Control cells remained viable.";
+  assert.ok(verifyEvidence("Resistant cells inhibit the growth of the drug in vitro.", haystack));
+  assert.ok(!verifyEvidence("The drug inhibit the growth of resistant cells.", haystack));
+  assert.ok(!verifyEvidence("growth of the drug was measured after resistant cells inhibit", haystack));
+  assert.ok(!verifyEvidence("A activates B", "A inhibits B. C activates D."));
+});
+
 void test("applyProvenanceGate partitions and counts", () => {
   const haystack = "GP mediates entry. NPC1 is the receptor.";
   const relations = [

@@ -471,46 +471,49 @@ export interface DocGrepResult {
   readonly pattern: string;
   readonly matches: readonly DocGrepMatch[];
   readonly scannedDocs: number;
-  /** true when matches were cut by maxMatches — more exist. */
+  /** true when matches were cut by maxMatches or input by the scan budget. */
   readonly truncated: boolean;
-  /** Present when the pattern is invalid or its execution deadline expires. */
+  /** Present for invalid patterns, worker startup failure, or regex timeout. */
   readonly error?: string;
 }
 
 const GREP_LINE_CAP = 200;
 const GREP_TEST_LINE_CAP = 2_000;
-/** Total character budget across the scan: the 50-match cap bounds matches,
- *  not work; this bounds the work itself on the synchronous API event loop. */
+/** Total character budget across the scan. Input is sliced to this prefix
+ *  before worker construction, so cloning never includes the whole corpus. */
 const GREP_SCAN_CHAR_BUDGET = 2_000_000;
-/** Hard whole-scan deadline, including worker startup. */
+/** Regex compilation and scanning have a hard deadline of their own. */
 const GREP_REGEX_TIMEOUT_MS = 100;
+/** Startup is operationally separate from regex cost, but still bounded. */
+const GREP_WORKER_STARTUP_TIMEOUT_MS = 10_000;
 
 interface WorkerGrepResult {
   readonly matches: DocGrepMatch[];
   readonly truncated: boolean;
 }
 
+type GrepWorkerOutcome =
+  | { readonly kind: "result"; readonly result: WorkerGrepResult }
+  | { readonly kind: "regex-timeout" | "startup-timeout" | "worker-error" };
+
 /** JavaScript's RegExp engine can backtrack catastrophically. Run the complete
  *  scan once off the main thread, then synchronously collect its queued message.
  *  Atomics.wait plus receiveMessageOnPort preserves the API without depending on
- *  the main event loop, and one worker avoids startup cost per document line. */
+ *  the main event loop. State 1 means the worker is about to start regex work;
+ *  state 2 means a result/error message has been queued. */
 const GREP_WORKER_SOURCE = `
 const { workerData } = require("node:worker_threads");
-const { pattern, documents, maxMatches, lineCap, testLineCap, scanCharBudget, signal, port } = workerData;
+const { pattern, documents, maxMatches, lineCap, testLineCap, signal, port } = workerData;
 const result = { matches: [], truncated: false };
 try {
+  Atomics.store(signal, 0, 1);
+  Atomics.notify(signal, 0);
   const regex = new RegExp(pattern, "i");
-  let budget = scanCharBudget;
   let collect = true;
   outer: for (const document of documents) {
     const lines = document.fulltext.split("\\n");
     for (let i = 0; i < lines.length; i += 1) {
       const raw = lines[i].slice(0, testLineCap);
-      budget -= raw.length;
-      if (budget <= 0) {
-        result.truncated = true;
-        break outer;
-      }
       if (!regex.test(raw)) continue;
       if (!collect) {
         result.truncated = true;
@@ -522,31 +525,50 @@ try {
       if (result.matches.length >= maxMatches) collect = false;
     }
   }
-  port.postMessage(result);
+  port.postMessage({ type: "result", result });
 } catch {
   // Pattern syntax was already checked by the caller; any worker-side failure
-  // still wakes the caller, which returns the same bounded execution error.
+  // still wakes the caller, which returns a structured worker error.
+  port.postMessage({ type: "error" });
 }
-Atomics.store(signal, 0, 1);
+Atomics.store(signal, 0, 2);
 Atomics.notify(signal, 0);
 `;
+
+function budgetGrepDocuments(documents: readonly KbSearchDocumentInput[]): {
+  documents: KbSearchDocumentInput[];
+  truncated: boolean;
+} {
+  const budgeted: KbSearchDocumentInput[] = [];
+  let remaining = GREP_SCAN_CHAR_BUDGET;
+  for (const document of documents) {
+    if (remaining <= 0) return { documents: budgeted, truncated: true };
+    const fulltext = document.fulltext.slice(0, remaining);
+    budgeted.push({ ...document, fulltext });
+    remaining -= fulltext.length;
+    if (fulltext.length !== document.fulltext.length) {
+      return { documents: budgeted, truncated: true };
+    }
+  }
+  return { documents: budgeted, truncated: false };
+}
 
 function runGrepWithDeadline(
   pattern: string,
   documents: readonly KbSearchDocumentInput[],
   maxMatches: number,
-): WorkerGrepResult | null {
+): GrepWorkerOutcome {
+  const budgeted = budgetGrepDocuments(documents);
   const signal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const { port1, port2 } = new MessageChannel();
   const worker = new Worker(GREP_WORKER_SOURCE, {
     eval: true,
     workerData: {
       pattern,
-      documents,
+      documents: budgeted.documents,
       maxMatches,
       lineCap: GREP_LINE_CAP,
       testLineCap: GREP_TEST_LINE_CAP,
-      scanCharBudget: GREP_SCAN_CHAR_BUDGET,
       signal,
       port: port2,
     },
@@ -554,11 +576,43 @@ function runGrepWithDeadline(
   });
   worker.unref();
   port1.unref();
-  const wait = Atomics.wait(signal, 0, 0, GREP_REGEX_TIMEOUT_MS);
-  const received = wait === "timed-out" ? undefined : receiveMessageOnPort(port1);
+
+  const startupWait = Atomics.wait(signal, 0, 0, GREP_WORKER_STARTUP_TIMEOUT_MS);
+  let state = Atomics.load(signal, 0);
+  let outcome: GrepWorkerOutcome;
+  if (startupWait === "timed-out" && state === 0) {
+    outcome = { kind: "startup-timeout" };
+  } else {
+    if (state === 1) {
+      // Reset only if the worker has not already finished; otherwise the reset
+      // could erase its done notification and manufacture a false timeout.
+      state = Atomics.compareExchange(signal, 0, 1, 0) === 1 ? 0 : Atomics.load(signal, 0);
+    }
+    if (state === 0) {
+      Atomics.wait(signal, 0, 0, GREP_REGEX_TIMEOUT_MS);
+      state = Atomics.load(signal, 0);
+    }
+    if (state !== 2) {
+      outcome = { kind: "regex-timeout" };
+    } else {
+      const message = receiveMessageOnPort(port1)?.message as {
+        type?: string;
+        result?: WorkerGrepResult;
+      } | undefined;
+      outcome = message?.type === "result" && message.result
+        ? {
+          kind: "result",
+          result: {
+            matches: message.result.matches,
+            truncated: message.result.truncated || budgeted.truncated,
+          },
+        }
+        : { kind: "worker-error" };
+    }
+  }
   port1.close();
   void worker.terminate();
-  return (received?.message ?? null) as WorkerGrepResult | null;
+  return outcome;
 }
 
 /** W8 `doc_grep` — regex over document fulltexts, line-grained like grep.
@@ -588,22 +642,20 @@ export function grepDocuments(input: {
     return empty(`invalid regex: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
 
-  const result = runGrepWithDeadline(input.pattern, input.documents, maxMatches);
-  if (!result) {
-    return {
-      kbId: input.kbId,
-      pattern: input.pattern,
-      matches: [],
-      scannedDocs: input.documents.length,
-      truncated: true,
-      error: `regex execution exceeded ${GREP_REGEX_TIMEOUT_MS} ms deadline; choose a simpler pattern`,
-    };
+  const outcome = runGrepWithDeadline(input.pattern, input.documents, maxMatches);
+  if (outcome.kind !== "result") {
+    const error = outcome.kind === "regex-timeout"
+      ? `regex execution exceeded ${GREP_REGEX_TIMEOUT_MS} ms deadline; choose a simpler pattern`
+      : outcome.kind === "startup-timeout"
+        ? `grep worker startup exceeded ${GREP_WORKER_STARTUP_TIMEOUT_MS} ms; retry the query`
+        : "grep worker failed before returning a result; retry the query";
+    return empty(error);
   }
   return {
     kbId: input.kbId,
     pattern: input.pattern,
-    matches: result.matches,
+    matches: outcome.result.matches,
     scannedDocs: input.documents.length,
-    truncated: result.truncated,
+    truncated: outcome.result.truncated,
   };
 }

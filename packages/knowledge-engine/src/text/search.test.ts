@@ -160,8 +160,24 @@ test("grepDocuments terminates catastrophic regex backtracking at a hard deadlin
     documents: [{ docId: "doc-re2", title: "Adversarial", fulltext: `${"a".repeat(1_500)}!` }],
   });
   assert.match(result.error ?? "", /exceeded 100 ms deadline/);
-  assert.equal(result.truncated, true);
+  assert.equal(result.truncated, false, "an execution failure is not evidence of ordinary result truncation");
   assert.ok(Date.now() - started < 2_000, "regex worker must be terminated promptly");
+});
+
+test("grepDocuments caps worker input without losing early matches in a large corpus", () => {
+  const result = grepDocuments({
+    kbId: "kb1",
+    pattern: "mAb114",
+    documents: [{
+      docId: "doc-large",
+      title: "Large full text",
+      fulltext: `mAb114 is present before the scan boundary.\n${"x".repeat(3_000_000)}`,
+    }],
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0]?.line, 1);
+  assert.equal(result.truncated, true, "the unscanned suffix is reported honestly");
 });
 
 test("grepDocuments returns structured errors, never throws", () => {
