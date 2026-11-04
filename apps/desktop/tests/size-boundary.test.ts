@@ -72,6 +72,22 @@ test("the wizard's free-space line promotes MB to GB on the printed value", () =
   assert.equal(formatWizardFreeSpace(1_073_741_823), "1.0GB");
 });
 
+test("the wizard's free-space line promotes KB inside the band, where one decimal still reads 1023.5", () => {
+  // KB is printed as a whole number, so the band just under 1024 has to promote
+  // too. Promotion read off one decimal missed it: 1_048_064 bytes is 1023.5 KB
+  // and printed "1024KB", a level can never print 1024 of its own unit.
+  assert.equal(formatWizardFreeSpace(1_048_064), "1MB");
+  // The neighbour that already printed 1023 keeps reading that way.
+  assert.equal(formatWizardFreeSpace(1_048_063), "1023KB");
+});
+
+test("the wizard's free-space line promotes MB inside the band, where one decimal still reads 1023.8", () => {
+  // Same band one unit up: 1_073_600_000 bytes is 1023.86 MB and printed
+  // "1024MB" before the unit followed the printed number.
+  assert.equal(formatWizardFreeSpace(1_073_600_000), "1.0GB");
+  assert.equal(formatWizardFreeSpace(1_073_217_535), "1023MB");
+});
+
 test("the sizes that already read well keep reading the same on both rows", () => {
   assert.equal(formatWorkspaceSize(1_048_576), "1.0 MiB");
   assert.equal(formatWorkspaceSize(1_023), "1023 B");
