@@ -981,3 +981,19 @@ for (const shape of ["reasoning-only", "nothing-at-all"] as const) test(`gateway
       "a turn that spent its budget thinking is not a relay that sent nothing");
   } finally { await gateway.close(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });
+
+test("a MiniMax reasoning_split transport flag from Swarm is honoured, not rejected as an unknown parameter", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { messages: [{ role: "user", content: "hi" }], max_tokens: 20, reasoning_split: true });
+    assert.equal(response.status, 200, "a MiniMax chat-completions flag must not fail an Anthropic Messages run");
+    assert.equal(calls.length, 1);
+    assert.equal((calls[0]!.endpoint as { thinkingMode?: string }).thinkingMode, "enabled",
+      "the flag still decides the provider's thinking control");
+    assert.doesNotMatch(JSON.stringify(calls[0]!.endpoint), /reasoning_split/,
+      "the transport flag must not travel to the provider verbatim");
+    const unknown = await post(g, { messages: [{ role: "user", content: "hi" }], max_tokens: 20, frequency_penalty: 1 });
+    assert.equal(unknown.status, 400, "the gateway still refuses a parameter it cannot honour");
+  } finally { await g.close(); }
+});
