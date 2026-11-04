@@ -62,3 +62,46 @@
 .error-diagnostic-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; min-width: 0; }
 .error-diagnostic-actions .secondary-button { min-height: 28px; padding: 4px 8px; font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
 .error-diagnostic-actions [role="status"] { flex-basis: 100%; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+
+/* --- User feedback dialog --------------------------------------------- */
+
+.feedback-dialog { width: min(560px, 100%); }
+.feedback-dialog > .config-header { margin-bottom: 18px; }
+.feedback-tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.feedback-tabs button { flex: 1; border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 8px 4px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.feedback-tabs button:hover { color: var(--text-strong); }
+.feedback-tabs button.active { color: var(--accent-ink); border-bottom-color: var(--accent); }
+.feedback-kind { display: flex; gap: 6px; margin-bottom: 16px; }
+.feedback-kind button { flex: 1; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 8px 10px; color: var(--text-secondary); font-size: 13px; cursor: pointer; }
+.feedback-kind button:hover { border-color: var(--border-strong); color: var(--text-strong); }
+.feedback-kind button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.feedback-body { width: 100%; resize: vertical; min-height: 120px; }
+.feedback-counter { display: block; margin-top: 6px !important; text-align: right; color: var(--muted); font-size: 11px; font-weight: 400 !important; }
+.feedback-hint { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 400 !important; }
+.feedback-contact { width: 100%; }
+.feedback-inline-error { margin: -12px 0 16px; color: var(--danger); font-size: 12px; }
+.feedback-option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.feedback-diagnostics { margin-bottom: 16px; }
+.feedback-checkbox { display: flex; align-items: center; gap: 8px; margin-bottom: 8px !important; }
+.feedback-checkbox > span { display: inline !important; margin: 0 !important; font-weight: 500 !important; }
+.feedback-checkbox input { flex: 0 0 auto; margin: 0; }
+.feedback-diagnostics-preview summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+.feedback-diagnostics-preview pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-soft); padding: 10px; font-size: 11px; }
+.feedback-pii { border: 1px solid var(--danger-border); border-radius: var(--radius-m); background: var(--danger-soft); padding: 12px; margin-bottom: 16px; }
+.feedback-pii p { margin: 0 0 10px; color: var(--danger); font-size: 12px; }
+.feedback-pii .feedback-checkbox { margin-bottom: 0 !important; color: var(--danger-deep); }
+.feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.feedback-actions .primary-button, .feedback-actions .secondary-button { width: auto; flex: 0 0 auto; }
+.feedback-button-copy { display: inline-flex; align-items: center; gap: 6px; }
+.feedback-result { text-align: left; }
+.feedback-result h3 { margin: 0 0 10px; color: var(--text-strong); font-size: 18px; }
+.feedback-result p { margin: 0 0 16px; color: var(--text-secondary); font-size: 13px; }
+.feedback-receipt-banner { border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-soft); padding: 14px 16px; margin-bottom: 16px; font-family: monospace; font-size: 20px; letter-spacing: 1px; color: var(--accent-ink); text-align: center; }
+.feedback-failure h3 { color: var(--danger-deep); }
+.feedback-history { display: grid; gap: 8px; }
+.feedback-history-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 10px 12px; }
+.feedback-history-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.feedback-receipt { font-family: monospace; font-size: 13px; color: var(--text-strong); }
+.feedback-history-copy small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.feedback-history-item .icon-button { flex: 0 0 auto; color: var(--muted-light); }
+.feedback-history-item .icon-button:hover { color: var(--danger); }

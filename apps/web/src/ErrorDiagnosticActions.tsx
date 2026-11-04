@@ -17,6 +17,7 @@ import { createContext, useContext, useMemo, useRef, useState } from "react";
 import { formatErrorDiagnostic, errorIssueUrl, type DiagnosticIds, type DiagnosticSnapshot } from "@sciencediscovery/operational-logging/diagnostics";
 
 import { errorDiagnosticIds } from "./error-diagnostics.js";
+import { openFeedback } from "./feedback-open.js";
 import { useLocale } from "./i18n/index.js";
 
 declare const __SCIENCE_DISCOVERY_BUILD__: string;
@@ -74,6 +75,18 @@ export function ErrorDiagnosticActions({ title, detail = "", ids }: { title: str
       try { tab.location.replace(errorIssueUrl(title, await bundle())); }
       finally { setBusy(false); }
     }}>{t("diagnostics.issue")}</button>
+    <button type="button" className="secondary-button" disabled={busy} onClick={async () => {
+      setBusy(true); setFeedback(undefined);
+      try {
+        openFeedback({
+          kind: "bug",
+          title,
+          body: detail ? `${title}\n\n${detail}` : title,
+          diagnostics: await bundle(),
+          meta: correlation,
+        });
+      } finally { setBusy(false); }
+    }}>{t("diagnostics.submitAnonymous")}</button>
     {feedback ? <span role="status">{t(`diagnostics.${feedback}`)}</span> : null}
   </div>;
 }
