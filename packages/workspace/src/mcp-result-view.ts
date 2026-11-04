@@ -25,6 +25,11 @@ interface ProjectionState { lossy: boolean }
 const MCP_MODEL_STRING_MAX_BYTES = 4 * 1024;
 const MCP_MODEL_ARRAY_MAX_ITEMS = 25;
 const MCP_MODEL_OBJECT_MAX_ENTRIES = 50;
+const MAX_SAFE_MCP_DEPTH = 128;
+const REDACTED_MCP_KEY = /^(?:authorization|api[_-]?key|apiToken|authToken|access[_-]?token|refresh[_-]?token|runnerToken|bearerToken|token|password|passphrase|clientSecret|secretKey|secret|credential|cookie|set-cookie|private[_-]?key)$/iu;
+const RECORD_PRESENTATION_KEYS = new Set(["citations", "identifierType", "source", "fullTextRetrieved"]);
+const RESULT_ENVELOPE_KEYS = new Set(["records", "data", "warnings", "sourceId", "toolId", "invocationId", "attribution", "license", "retrievedAt", "untrusted", "sourceVersion", "artifacts"]);
+const CANDIDATE_KEYS = new Set(["id", "logicalName", "kind", "format", "mimeType", "sourceId", "sourceRecordId", "license", "attribution", "expectedBytes"]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -72,11 +77,19 @@ function compactRecord(record: JsonObject, state: ProjectionState, abstractMaxBy
     ? truncateUtf8(record.abstract, abstractMaxBytes)
     : undefined;
   const preserved = new Set(["identifier", "title", "authors", "abstract", "year", "url", "primaryCitation", "contentScope", "peerReviewStatus", "structuredData", "crossReferences", "warnings"]);
-  if (Object.keys(record).some(key => !preserved.has(key)) || (Array.isArray(record.authors) && record.authors.length !== rawAuthors.length)
+  if (Object.keys(record).some(key => !preserved.has(key) && !RECORD_PRESENTATION_KEYS.has(key)) || (Array.isArray(record.authors) && record.authors.length !== rawAuthors.length)
     || (record.authors !== undefined && !Array.isArray(record.authors)) || rawAuthors.length > 8
     || rawAuthors.some(author => Buffer.byteLength(author) > 160)
     || (typeof record.title === "string" && Buffer.byteLength(record.title) > 1_000)
     || abstract?.truncated) state.lossy = true;
+  // Repeated primary-citation metadata is presentation-only. Distinct
+  // supporting citations remain recoverable even when the preview is small.
+  if (Array.isArray(record.citations) && record.citations.some(citation => {
+    const entry = object(citation);
+    const primary = object(record.primaryCitation);
+    return !entry || !primary || entry.identifier !== primary.identifier || entry.source !== primary.source
+      || entry.url !== primary.url || citationText({ primaryCitation: entry }) !== citationText(record);
+  })) state.lossy = true;
   return {
     ...(record.structuredData !== undefined ? { structuredData: compactUnknown(record.structuredData, state) } : {}),
     ...(record.crossReferences !== undefined ? { crossReferences: compactUnknown(record.crossReferences, state) } : {}),
@@ -104,7 +117,11 @@ function artifactView(result: JsonObject, sourceId: string, toolId: string, stat
   if (!Array.isArray(result.artifacts) || result.artifacts.length === 0) return undefined;
   const candidates = result.artifacts.map(object);
   if (!candidates.every((candidate): candidate is JsonObject => candidate !== undefined)) return undefined;
-  state.lossy = true;
+  if (candidates.length > MCP_MODEL_ARRAY_MAX_ITEMS
+    || candidates.some(candidate => Object.keys(candidate).some(key => !CANDIDATE_KEYS.has(key)))
+    || (Array.isArray(result.records) && result.records.length > 0)
+    || result.data !== undefined
+    || Object.keys(result).some(key => key !== "artifacts" && !RESULT_ENVELOPE_KEYS.has(key))) state.lossy = true;
   const view: JsonObject = {
     sourceId,
     toolId,
@@ -127,7 +144,9 @@ function artifactView(result: JsonObject, sourceId: string, toolId: string, stat
       ? { candidatesOmitted: candidates.length - MCP_MODEL_ARRAY_MAX_ITEMS, truncated: true } : {}),
     instruction: "Use artifact_download with invocationId and candidateId to download a selected candidate. A candidate has not been downloaded or read yet.",
   };
-  return utf8Bytes(view) <= MCP_VIEW_BUDGET ? view : {
+  if (utf8Bytes(view) <= MCP_VIEW_BUDGET) return view;
+  state.lossy = true;
+  return {
     sourceId, toolId,
     ...(typeof result.invocationId === "string" ? { invocationId: result.invocationId } : {}),
     truncated: true,
@@ -210,7 +229,7 @@ function evidenceView(result: JsonObject, sourceId: string, toolId: string, stat
   if (view.hasMore === true && !view.instruction) {
     view.instruction = "Use nextOffset to request the next result page.";
   }
-  if (Object.keys(result).some(key => !["records", "data", "warnings", "sourceId", "toolId", "invocationId", "attribution", "license", "retrievedAt", "untrusted"].includes(key))) state.lossy = true;
+  if (Object.keys(result).some(key => !RESULT_ENVELOPE_KEYS.has(key))) state.lossy = true;
   return fitEvidenceView(view, recordsKey, state);
 }
 
@@ -239,10 +258,18 @@ function compactUnknown(value: unknown, state: ProjectionState, depth = 0): unkn
 
 /** Project an MCP result for model consumption while leaving the full result
  * untouched for details, CAS, audit and governed follow-up operations. */
-export function mcpModelResultView(result: unknown, sourceId: string, toolId: string): { view: JsonObject; lossy: boolean } {
-  const state: ProjectionState = { lossy: false };
-  const view = projectResult(result, sourceId, toolId, state);
-  return { view, lossy: state.lossy };
+export function mcpModelResultView(result: unknown, sourceId: string, toolId: string): { view: JsonObject; lossy: boolean; retainedContent?: string } {
+  const safety = { incomplete: false, ancestors: new WeakSet<object>() };
+  const safe = safeMcpValue(result, safety, 0);
+  const state: ProjectionState = { lossy: safety.incomplete };
+  const view = projectResult(safe, sourceId, toolId, state);
+  // Serialize only when real business information was omitted. A depth/cycle
+  // marker is not a complete result and must never receive a recovery ref.
+  const retainedContent = state.lossy && !safety.incomplete ? mcpRetainedContent(safe) : undefined;
+  if (state.lossy && retainedContent === undefined) {
+    view._retainedOutput = { instruction: "Content was omitted; the full result could not be stored because the provider result cannot be safely serialized. Re-run with a narrower request or explicit pagination." };
+  }
+  return { view, lossy: state.lossy, ...(retainedContent !== undefined ? { retainedContent } : {}) };
 }
 
 function projectResult(result: unknown, sourceId: string, toolId: string, state: ProjectionState): JsonObject {
@@ -269,12 +296,26 @@ function projectResult(result: unknown, sourceId: string, toolId: string, state:
   return fallback;
 }
 
-/** Retention uses the same credential boundary as the model view. Provider
- * download endpoints remain private; identifiers still support governed downloads. */
-export function mcpRetainedContent(result: unknown): string {
-  return neutralizeUntrustedTags(JSON.stringify(result, (key, value: unknown) => {
-    if (/^(?:authorization|api[_-]?key|apiToken|authToken|access[_-]?token|refresh[_-]?token|runnerToken|bearerToken|token|password|passphrase|clientSecret|secretKey|secret|credential|cookie|set-cookie|private[_-]?key)$/iu.test(key)) return "[redacted]";
-    if (key === "sourceUrl") return undefined;
-    return value;
-  }));
+/** Copy through a finite safety boundary before projecting. Credential and URL
+ * policies apply to both views; cycles and excessive depth cannot fail a call. */
+function safeMcpValue(value: unknown, state: { incomplete: boolean; ancestors: WeakSet<object> }, depth: number): unknown {
+  if (typeof value === "string") return neutralizeUntrustedTags(value);
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "object") { state.incomplete = true; return "[unsupported value]"; }
+  if (depth >= MAX_SAFE_MCP_DEPTH) { state.incomplete = true; return "[max-depth]"; }
+  if (state.ancestors.has(value)) { state.incomplete = true; return "[circular]"; }
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  state.ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return value.map(item => safeMcpValue(item, state, depth + 1));
+    return Object.fromEntries(Object.entries(value).filter(([key, item]) => key !== "sourceUrl" && item !== undefined)
+      .map(([key, item]) => [key, REDACTED_MCP_KEY.test(key) ? "[redacted]" : safeMcpValue(item, state, depth + 1)]));
+  } finally { state.ancestors.delete(value); }
+}
+
+/** A retention failure cannot replace a successfully projected result with an error. */
+function mcpRetainedContent(result: unknown): string | undefined {
+  try { return JSON.stringify(result); }
+  catch { return undefined; }
 }
