@@ -127,8 +127,9 @@ test("CFG-Q03: Idea Tree current values expose only supported runtime controls",
   const h = await fixture(context);
   const value = await h.query({ action: "describe", capabilityId: "idea_tree.configure" });
   assert.ok(!value.error);
-  assert.deepEqual(Object.keys(value.current).sort(), ["explorationIntensity", "maxDepth", "maxNodes", "maxTokensPerCall", "scoreDirection"]);
+  assert.deepEqual(Object.keys(value.current).sort(), ["explorationIntensity", "maxDepth", "maxNodes", "maxTokensPerCall", "scoreDirection", "templateId"]);
   const saved = h.store.getIdeaTreeSettings();
+  assert.equal(value.current.templateId, saved.templateId);
   assert.equal(value.current.maxTokensPerCall, saved.maxTokensPerCall);
   assert.equal(value.current.maxDepth, saved.maxDepth);
   assert.equal(value.current.maxNodes, saved.maxNodes);

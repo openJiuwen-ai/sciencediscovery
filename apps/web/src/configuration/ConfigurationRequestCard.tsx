@@ -291,7 +291,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+  const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];

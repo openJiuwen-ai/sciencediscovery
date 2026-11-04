@@ -5,10 +5,11 @@ import type { SessionStore } from "../store.js";
 import { configurationFramework } from "./framework.js";
 import { configurationConnectorDirectory } from "./connector-directory.js";
 import { nativeRuntimeConnectorIds } from "./native-choices.js";
+import { INHERITABLE_CONFIGURATION_FIELDS } from "./inherit-fields.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { CONFIGURATION_SETTINGS_INVENTORY } from "./settings-catalog.js";
-import { SYSTEM_CONFIGURATION_CAPABILITIES, DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
+import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationError, digest, invalid, string } from "./validation.js";
 import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
@@ -17,6 +18,10 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "proxy.resources": "proxy server resource create update delete 代理 资源 新建 修改 删除",
   "proxy.provider": "provider proxy route shared model 供应商 代理 模型 路由",
   "proxy.mcp": "mcp server proxy route shared service MCP 服务 连接器 代理 路由",
+
+  "settings.inherit": "inherit reset restore parent override 继承 恢复 重置 上级 覆盖",
+  "reviewer.enable": "reviewer specialist global enable disable 审阅 专家 全局 开启 关闭",
+  "plugin.json_viewer": "json artifact preview viewer plugin JSON 预览 插件 文件 展示",
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
@@ -28,8 +33,8 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "quotas.configure": "quota quotas 配额 并发 上传 容量",
   "runner.assign": "runner machine allocation assignment execution 运行器 分配 机器 执行环境 继承",
   "proxy.default": "proxy route default global 代理 默认 全局 路由 出站",
-  "idea_tree.configure": "idea tree 探索树 深度 轮次",
   "environment.sources": "environment package source pip conda mirror 包源 镜像源 环境 软件源",
+  "idea_tree.configure": "idea tree research template 模板 探索树 深度 轮次",
 };
 const domainAliases: Record<string, string> = { proxy: "代理", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
 type Row = Record<string, unknown>;
@@ -158,6 +163,10 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "proxy.resources") current = { routingSelectedByCreation: false, connectionVerified: false };
   else if (id === "proxy.provider") current = { defaultPolicy: store.configurationProviderProxySettings().defaultPolicy, providerCount: store.listProviders().length };
   else if (id === "proxy.mcp") current = { defaultPolicy: store.configurationMcpProxySettings().defaultPolicy, serverCount: store.configurationMcpProxySettings().services.length };
+
+  else if (id === "settings.inherit") current = { sessionExplicitFields: INHERITABLE_CONFIGURATION_FIELDS.filter(field => Object.hasOwn(settings.overrides, field)), projectExplicitFields: INHERITABLE_CONFIGURATION_FIELDS.filter(field => Object.hasOwn(store.getProjectSettings(store.getSession(sessionId)!.projectId).overrides, field)), skillSelectionAvailable: skills().selectionAvailable };
+  else if (id === "reviewer.enable") current = { ...store.getReviewerSpecialistSettings() };
+  else if (id === "plugin.json_viewer") current = { ...store.configurationJsonViewerSettings(sessionId) };
   else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
   else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
   else if (id === "environment.sources") current = { ...store.getEnvironmentSourceSettings() };
@@ -168,7 +177,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "proxy.default") current = { defaultPolicy: store.configurationProxyDefaults().defaultPolicy, connectivityVerified: false };
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
-    current = { explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
+    current = { templateId: idea.templateId, explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
       maxTokensPerCall: idea.maxTokensPerCall, maxDepth: idea.maxDepth, maxNodes: idea.maxNodes };
   } else current = { modelId: effective.modelId ?? null };
   const selected = (await resources(id)).filter(row => (!input.targetId || row.id === input.targetId) && (!query || matches(query, `${row.id} ${row.name} ${row.model ?? ""}`)));
@@ -176,8 +185,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: id === "proxy.resources" ? "Shared proxy metadata only. URLs go through the secure user card. Omit scope. Creating a resource does not select a route; editing a used resource affects later connections. No connection test or current-run activation is claimed." : id === "proxy.default" ? "Deployment-wide: omit scope. Select defaultPolicy none or a registered proxy ID from the resources. Full proxy URLs and credentials are not fields. This manual configuration does not grant destination/private-network or tool-execution authorization and does not verify connectivity." : id === "proxy.provider" ? "Shared existing provider route only: omit scope. Choose a provider from the bounded resource page and an existing proxy ID, inherit or none. Never supply a proxy URL, key or endpoint. This affects its child models; network/tool permissions remain separate. Saving does not test the connection. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "proxy.mcp" ? "Choose an existing MCP server ID from the safe resource page, not a connector ID. Omit scope. Only inherit, none or an existing proxy ID may be saved. All connectors sharing this server are affected. No URL/key/header/env/command fields, probes, reconnects or tool calls. Saving does not prove actual transport routing or grant network/tool permissions." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    scopes: descriptor.scopes.filter(scope => ["plugin.json_viewer"].includes(id) || (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    instruction: id === "proxy.resources" ? "Shared proxy metadata only. URLs go through the secure user card. Omit scope. Creating a resource does not select a route; editing a used resource affects later connections. No connection test or current-run activation is claimed." : id === "proxy.default" ? "Deployment-wide: omit scope. Select defaultPolicy none or a registered proxy ID from the resources. Full proxy URLs and credentials are not fields. This manual configuration does not grant destination/private-network or tool-execution authorization and does not verify connectivity." : id === "proxy.provider" ? "Shared existing provider route only: omit scope. Choose a provider from the bounded resource page and an existing proxy ID, inherit or none. Never supply a proxy URL, key or endpoint. This affects its child models; network/tool permissions remain separate. Saving does not test the connection. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "proxy.mcp" ? "Choose an existing MCP server ID from the safe resource page, not a connector ID. Omit scope. Only inherit, none or an existing proxy ID may be saved. All connectors sharing this server are affected. No URL/key/header/env/command fields, probes, reconnects or tool calls. Saving does not prove actual transport routing or grant network/tool permissions." : id === "settings.inherit" ? "Remove only selected finite ordinary override fields at the current Session (default) or its own Project. No Global or security reset. An equal explicit value still needs removal; absent fields produce no_change. Inherited Skill all mode can expose more installed content. Frozen task settings remain unchanged. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "reviewer.enable" ? "Only enabled:boolean may be proposed. Omit scope. This is the global Reviewer Specialist gate; it preserves session preferences and feedback policy, may admit paid reviews, and does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "plugin.json_viewer" ? "Only the bundled optional JSON viewer: mode enabled/disabled/inherit. Omit scope for this Session, or explicitly choose its Project or Global. inherit removes only this layer override. Generic source previews remain available. Do not supply arbitrary plugin IDs/config or claim all clients have refreshed." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);

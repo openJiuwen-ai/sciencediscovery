@@ -17,6 +17,9 @@ import { createProxyResourceAdapter } from "./proxy-resource-adapter.js";
 import { createProxyDefaultConfigurationAdapter } from "./proxy-adapter.js";
 import { createProviderProxyAdapter } from "./provider-proxy-adapter.js";
 import { createMcpProxyAdapter } from "./mcp-proxy-adapter.js";
+import { createInheritanceAdapter } from "./inherit-adapter.js";
+import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
+import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
@@ -120,7 +123,7 @@ export class ConversationalConfigurationFramework {
     this.security = new ConfigurationSecurityAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createProxyResourceAdapter(store, this.credentials), createProxyDefaultConfigurationAdapter(store), createProviderProxyAdapter(store), createMcpProxyAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createProxyResourceAdapter(store, this.credentials), createProxyDefaultConfigurationAdapter(store), createProviderProxyAdapter(store), createMcpProxyAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (configurationNeedsSecurityConsent(adapter.id)) {
         const apply = adapter.apply;
         if (!apply) throw new Error("Security policy adapters require a synchronous domain apply");
