@@ -593,8 +593,10 @@ const WINDOWS_RESERVED_DEVICE_NAME =
  * device too; the stem is everything before the first dot, because for a reserved name
  * the extension is irrelevant. A workspace is a shared, portable artifact — a file the
  * host cannot create must be refused on every platform, not only where the failure
- * surfaces — so this predicate is platform-independent. Keep it beside
- * {@link assertWorkspacePath} and call it from every path that writes user-chosen names.
+ * surfaces — so this predicate is platform-independent. It is a per-segment rule, so a
+ * path is checked segment by segment rather than by its last one alone: the session file
+ * write route does that today. The agent-side workspace tools, which write through
+ * {@link assertWorkspacePath}, are not wired to it yet.
  */
 export function isWindowsReservedDeviceName(name: string): boolean {
   const stem = name.split(".")[0]?.replace(/[. ]+$/, "") ?? "";
