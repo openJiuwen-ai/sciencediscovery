@@ -36,12 +36,12 @@ async function listen(context: TestContext) {
   const headers = { authorization: "Bearer test-token", "content-type": "application/json" };
   const created = await fetch(`${origin}/api/projects`, { method: "POST", headers, body: JSON.stringify({ name: "Artifact version miss" }) });
   assert.equal(created.status, 201);
-  const project = await created.json() as { firstSession: { id: string } };
-  return { origin, sessionId: project.firstSession.id };
+  const project = await created.json() as { firstSession: { id: string }; id: string };
+  return { origin, projectId: project.id, sessionId: project.firstSession.id };
 }
 
 test("a sibling artifact-version route answers a missing version like content does", async (context) => {
-  const { origin, sessionId } = await listen(context);
+  const { origin, projectId, sessionId } = await listen(context);
   const headers = { authorization: "Bearer test-token" };
   const versionId = randomUUID();
   // content already answers 404 for a version that does not exist; provenance and diff are
@@ -59,4 +59,20 @@ test("a sibling artifact-version route answers a missing version like content do
     provenance: { status: 404, error: "Artifact version not found" },
     diff: { status: 404, error: "Artifact version not found" },
   });
+
+  // The same family at project scope: listing versions of an artifact that does not exist ran
+  // through the store helper's bare throw, so a stale artifact id answered 500 too.
+  const projectResponse = await fetch(`${origin}/api/projects/${projectId}/artifacts/${randomUUID()}/versions`, { headers });
+  assert.deepEqual({ status: projectResponse.status, error: ((await projectResponse.json()) as { error?: string }).error },
+    { status: 404, error: "Artifact not found" });
+
+  // And the Session-scoped list route has the same shape: an artifact id that is not in the
+  // Session's project is a missing resource, not a server fault.
+  const sessionList = await fetch(`${origin}/api/sessions/${sessionId}/artifacts/${randomUUID()}/versions`, { headers });
+  assert.deepEqual({ status: sessionList.status, error: ((await sessionList.json()) as { error?: string }).error },
+    { status: 404, error: "Artifact not found" });
+
+  // A project id that does not exist is reported by the same route, not by a 500.
+  const missingProject = await fetch(`${origin}/api/projects/${randomUUID()}/artifacts/${randomUUID()}/versions`, { headers });
+  assert.equal(missingProject.status, 404);
 });
