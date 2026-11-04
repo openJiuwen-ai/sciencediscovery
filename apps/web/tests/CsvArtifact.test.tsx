@@ -197,6 +197,50 @@ test("exports an unnamed overflow column with an empty header name", () => {
   assert.equal(widerRow, "1,2,3,4");
 });
 
+test("caps surplus columns so one wide record cannot widen every row", () => {
+  const dataRows = 20_000;
+  const overflowCells = 497;
+  const lines = ["a,b,c"];
+  for (let index = 0; index < dataRows; index += 1) lines.push(`${index},${index + 1},${index + 2}`);
+  lines.push(["w", "x", "y", ...Array.from({ length: overflowCells }, (_, index) => `${index}`)].join(","));
+  const table = parse("wide-record.csv", lines.join("\n"));
+
+  // Three header columns keep three surplus columns, so the wide record cannot
+  // turn the other 20,000 rows into 500-cell rows.
+  assert.equal(table.columns.length, 6);
+  const normal = table.rows[0];
+  assert.deepEqual([normal?.a, normal?.b, normal?.c], [0, 1, 2]);
+  assert.equal(normal?.__extra_1, null);
+  assert.equal(Object.keys(normal ?? {}).length, 7);
+
+  const wide = table.rows[dataRows];
+  assert.equal(wide?.__extra_1, 0);
+  assert.equal(wide?.__extra_2, 1);
+  assert.equal(
+    wide?.__extra_3,
+    Array.from({ length: overflowCells - 2 }, (_, index) => `${index + 2}`).join(", "),
+  );
+
+  const cells = table.rows.reduce((total, row) => total + Object.keys(row).length, 0);
+  assert.ok(cells <= table.rows.length * 7, `cells grew with the wide record: ${cells}`);
+  assert.match(table.warnings.join("\n"), /497 cells past the header/);
+});
+
+test("keeps a legitimate wide header without folding its columns", () => {
+  const width = 200;
+  const header = Array.from({ length: width }, (_, index) => `c${index}`).join(",");
+  const first = Array.from({ length: width }, (_, index) => `${index}`).join(",");
+  const second = Array.from({ length: width }, (_, index) => `${index + 1}`).join(",");
+  const table = parse("wide-header.csv", [header, first, second].join("\n"));
+
+  assert.equal(table.columns.length, width);
+  assert.deepEqual(table.columns.map((column) => column.id), header.split(","));
+  for (const row of table.rows) {
+    assert.equal(Object.keys(row).length, width + 1);
+  }
+  assert.equal(tableToCsv(table.rows, table.columns).split(/\r?\n/)[0], header);
+});
+
 test("neutralizes a spreadsheet formula in an exported header name", () => {
   const table = parse("formula-header.csv", "=SUM(1),b\n1,2\n");
 
