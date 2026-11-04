@@ -81,6 +81,8 @@ interface ChatRequest {
   parallel_tool_calls?: boolean;
   stream_options?: { include_usage?: boolean };
   n?: number;
+  /** MiniMax's chat-completions thinking flag, which Swarm writes for a MiniMax model. */
+  reasoning_split?: boolean;
   tools?: Array<{ function?: { description?: string; name?: string; parameters?: unknown } }>;
 }
 
@@ -269,7 +271,7 @@ export async function startModelGateway(
     let requestPolicy = policy;
     let requestEndpoint = endpoint;
     try {
-      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
+      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "reasoning_split", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
       if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
       if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
       if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
@@ -281,7 +283,12 @@ export async function startModelGateway(
       if (body.top_p !== undefined && (!Number.isFinite(body.top_p) || body.top_p < 0 || body.top_p > 1)) throw new Error("top_p must be between zero and one");
       if (body.thinking && !["enabled", "disabled"].includes(body.thinking.type)) throw new Error("Unsupported gateway thinking control");
       requestPolicy = { ...policy, maxTokens: budget, ...(body.top_p === undefined ? {} : { topP: body.top_p }), ...(body.temperature === undefined ? {} : { temperature: body.temperature }), ...(body.thinking ? { thinking: body.thinking } : {}) };
-      requestEndpoint = { ...endpoint, ...(body.thinking ? { thinkingMode: body.thinking.type as "enabled" | "disabled" } : {}) };
+      // Swarm writes a MiniMax model's thinking switch as `reasoning_split` on the chat-completions
+      // request it sends this gateway. It is a transport flag, never a provider field: it only decides
+      // the endpoint's thinking mode, and the model client sends the provider's own control for it.
+      const thinkingMode = body.thinking ? body.thinking.type as "enabled" | "disabled"
+        : typeof body.reasoning_split === "boolean" ? (body.reasoning_split ? "enabled" : "disabled") : undefined;
+      requestEndpoint = { ...endpoint, ...(thinkingMode ? { thinkingMode } : {}) };
       translated = toModelRequest(body, restore);
     } catch (error) {
       fail(400, error instanceof Error ? error.message : "Invalid gateway request");
