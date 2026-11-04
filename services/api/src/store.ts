@@ -2158,7 +2158,10 @@ export class SessionStore {
       await writeFile(temporaryPath, `${JSON.stringify(values, null, 2)}\n`, "utf8");
       await rename(temporaryPath, path);
     } finally {
-      await rm(temporaryPath, { force: true });
+      // A cleanup failure must not replace the error that brought us here: when rename is
+      // refused (EPERM while an antivirus scanner holds the file) the cleanup can be refused
+      // for the same reason, and that bare EPERM would hide the classified replace error.
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
     }
   }
 
