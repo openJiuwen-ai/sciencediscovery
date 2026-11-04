@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from sciencediscovery_evolve.direction import outside_direction
+from sciencediscovery_evolve.direction import baseline_rows, bound_domain, field_changes, outside_direction
 from sciencediscovery_evolve.engine import RunSpec
 from sciencediscovery_evolve.npu_job import (
     RunnerNpuClient,
@@ -30,7 +30,9 @@ from sciencediscovery_evolve.npu_job import (
     interpret_npu_job,
     npu_domain,
     program_with_candidate,
+    score_for_search,
 )
+from sciencediscovery_evolve.vendor.puct.domain import Domain
 from sciencediscovery_evolve.puct_engine import _Refusal, _refuse_unrunnable
 
 BASELINE = '{"lr": 0.1, "model": "fixed"}'
@@ -92,6 +94,83 @@ def test_an_npu_search_refuses_to_start_without_a_direction_or_a_runner():
     with pytest.raises(_Refusal, match="no runner"):
         _refuse_unrunnable(_spec(options={"npu": {}}))
     _refuse_unrunnable(_spec())
+
+
+def test_a_missing_score_is_not_ranked_as_zero():
+    assert score_for_search({}) == float("-inf")
+    assert score_for_search({"job_status": "waiting"}) == float("-inf")
+    assert score_for_search({"job_status": "fault"}) == float("-inf")
+    assert score_for_search({"score": 0, "job_status": "completed", "device": "npu"}) == 0.0
+    client = RunnerNpuClient(
+        url="http://127.0.0.1:9",
+        token="token",
+        execution={"code": FIXED},
+        session_id="session",
+        agent_id="agent",
+        timeout=1,
+    )
+    domain = npu_domain(scorecard=SCORECARD, baseline_code=BASELINE, client=client, statement="")
+    assert domain.reward({}) == float("-inf")
+    assert domain.reward({"job_status": "waiting"}) == float("-inf")
+
+
+def test_a_fixed_field_is_rejected_before_scoring_and_not_as_zero():
+    calls = []
+
+    def evaluate(code, shards):
+        del shards
+        calls.append(code)
+        return True, {"score": 3.0}, ""
+
+    domain = bound_domain(
+        Domain(
+            name="probe",
+            entrypoint="main",
+            metric_key="score",
+            metric_better="higher",
+            initial_program=BASELINE,
+            initial_summary="",
+            evaluate=evaluate,
+            reward=lambda metrics: float(metrics["score"]),
+            prompt=lambda program: program.code,
+            task_prompt=lambda shard: str(shard),
+            test_shards=(),
+        ),
+        BASELINE,
+        {"editable": ["lr"]},
+    )
+    valid, metrics, error = domain.evaluate('{"lr": 0.2, "model": "other"}', ())
+    assert valid is False
+    assert error == "fixed field changed: model"
+    assert metrics["job_status"] == "rejected"
+    assert metrics["score"] == float("-inf")
+    assert calls == []
+
+
+def test_the_preview_run_keeps_a_missing_result_empty():
+    from sciencediscovery_evolve.field_table import scripted_rounds
+
+    rows = scripted_rounds({"pos_2": "T", "pos_4": "K", "model": "fixed"}, ["pos_2", "pos_4"])
+    by_title = {row["title"]: row for row in rows}
+    assert by_title["作业未结束，先等待"]["score"] == "—"
+    assert by_title["固定程序在 NPU 上返回分数"]["score"] == "0.42"
+    assert by_title["固定程序在 NPU 上返回分数"]["field"] == "pos_2"
+    assert "fixed field" in by_title["改了没有勾选的字段"]["note"]
+    assert by_title["改了没有勾选的字段"]["score"] == "—"
+    assert "不收成新节点" in by_title["同一处修改没有更好，不收成新节点"]["note"]
+    assert by_title["设备不是 NPU，不记 0"]["score"] == "—"
+    assert "0" not in by_title["设备不是 NPU，不记 0"]["score"]
+
+
+def test_the_confirmation_table_names_fields_and_the_run_names_what_changed():
+    rows = baseline_rows('{"pos_2": "T", "pos_4": "K", "model": "fixed"}')
+    assert [row["field"] for row in rows] == ["pos_2", "pos_4", "model"]
+    assert rows[0]["value"] == "T"
+    changes = field_changes(
+        '{"pos_2": "T", "pos_4": "K", "model": "fixed"}',
+        '{"pos_2": "A", "pos_4": "K", "model": "fixed"}',
+    )
+    assert changes == [{"field": "pos_2", "old": "T", "new": "A"}]
 
 
 def test_a_missing_or_non_npu_result_is_not_stored_as_zero():

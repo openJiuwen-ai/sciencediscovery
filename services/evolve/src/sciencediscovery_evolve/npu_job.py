@@ -52,6 +52,27 @@ def execution_signature(token: str, timestamp: str, body: str) -> str:
     return hmac.new(token.encode("utf-8"), f"{timestamp}\n{body_hash}".encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def score_for_search(metrics: Mapping[str, Any]) -> float:
+    """The number ``search.py`` ranks by.
+
+    A waiting, faulted, or rejected job has no measurement. The unchanged
+    aggregator still indexes ``metrics["score"]``, so the sentinel is ``-inf``,
+    which is not a stored ``0``. A completed job may legitimately score ``0``.
+    """
+    value = metrics.get("score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return float("-inf")
+    return float(value)
+
+
+def with_search_score(metrics: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy ``metrics``, filling the search sentinel when no score was measured."""
+    copied = dict(metrics)
+    if "score" not in copied:
+        copied["score"] = float("-inf")
+    return copied
+
+
 def interpret_npu_job(
     job: Mapping[str, Any],
     artifact: Optional[Mapping[str, Any]],
@@ -216,14 +237,12 @@ def npu_domain(
         try:
             job, artifact = client.run(code, should_stop)
         except NpuJobError as error:
-            return False, {"job_status": "fault"}, str(error)
-        return interpret_npu_job(job, artifact, metric_key=metric_key)
+            return False, with_search_score({"job_status": "fault"}), str(error)
+        valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric_key)
+        return valid, with_search_score(metrics), error
 
     def reward(metrics: Mapping[str, Any]) -> float:
-        value = metrics.get("score")
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return 0.0
-        return float(value)
+        return score_for_search(metrics)
 
     def prompt(program: Program) -> str:
         return f"{statement}\n{program.code}"

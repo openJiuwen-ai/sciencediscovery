@@ -28,6 +28,39 @@ from typing import Any, Mapping, Optional
 from .vendor.puct.domain import Domain
 
 
+def _render(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def baseline_rows(baseline: str) -> list[dict[str, str]]:
+    """The confirmation table: one row per top-level field. The raw object is not the view."""
+    try:
+        parsed = json.loads(baseline)
+    except json.JSONDecodeError as error:
+        raise ValueError("the baseline is not JSON") from error
+    if not isinstance(parsed, dict):
+        raise ValueError("the baseline is not a JSON object")
+    return [{"field": str(key), "value": _render(value)} for key, value in parsed.items()]
+
+
+def field_changes(baseline: str, candidate: str) -> list[dict[str, str]]:
+    """Fields whose value differs. Empty when the candidate is not the same object shape."""
+    try:
+        base = json.loads(baseline)
+        cand = json.loads(candidate)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(base, dict) or not isinstance(cand, dict):
+        return []
+    changes: list[dict[str, str]] = []
+    for key, old in base.items():
+        if key in cand and cand[key] != old:
+            changes.append({"field": str(key), "old": _render(old), "new": _render(cand[key])})
+    return changes
+
+
 def outside_direction(baseline: str, candidate: str, direction: Mapping[str, Any]) -> str:
     """Return why ``candidate`` leaves the declared direction, or ``""``."""
     editable = direction.get("editable")
@@ -64,8 +97,13 @@ def bound_domain(domain: Domain, baseline_code: str, direction: Optional[Mapping
     def bounded_evaluate(code: str, shards):
         reason = outside_direction(baseline_code, code, direction)
         if reason:
-            return False, {}, reason
-        return evaluate(code, shards)
+            # ``-inf`` is the dead-node sentinel the unchanged aggregator reads.
+            # It is not a measured score, and it is not ``0``.
+            return False, {"job_status": "rejected", "score": float("-inf")}, reason
+        valid, metrics, error = evaluate(code, shards)
+        if isinstance(metrics, Mapping) and "score" not in metrics:
+            metrics = {**dict(metrics), "score": float("-inf")}
+        return valid, metrics, error
 
     def bounded_prompt(program):
         return (
