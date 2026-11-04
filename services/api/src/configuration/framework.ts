@@ -12,8 +12,11 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createInheritanceAdapter } from "./inherit-adapter.js";
+import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
+import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
-import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
+import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
 import type { ConfigurationApplyReceipt, ConfigurationLiveActivation, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
@@ -113,7 +116,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -192,7 +195,7 @@ export class ConversationalConfigurationFramework {
       throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "No configuration interaction adapter is installed", 409);
     await this.reconcileLifecycle(sessionId);
     if (Object.keys(input.values).some(name => name.startsWith("restore"))) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Restoration fields are reserved for receipt-based reversal", 400);
-    const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
+    const systemCapability = (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
     if (systemCapability && input.scope && input.scope.kind !== "global")
       throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "This setting applies to the whole deployment", 400);
     const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||

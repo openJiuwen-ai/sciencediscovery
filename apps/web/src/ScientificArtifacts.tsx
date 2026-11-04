@@ -1,4 +1,5 @@
 import { ArtifactViewerSlot } from "./plugins/artifact-viewers.js";
+import { useDisabledPlugins } from "./plugins/host.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -493,6 +494,7 @@ export function ArtifactModal({
   artifactSessionId?: string;
 }) {
   const { locale, t } = useLocale();
+  const jsonViewerDisabled = useDisabledPlugins().includes("artifact-json");
   const [artifacts, setArtifacts] = useState<ScientificArtifact[]>([]);
   const [artifactId, setArtifactId] = useState<string>();
   const [versions, setVersions] = useState<ScientificArtifactVersion[]>([]);
@@ -885,7 +887,9 @@ export function ArtifactModal({
             every other document is shown as formatted JSON or raw text, never
             an empty grid. */}
         {artifact?.kind === "json" && !(structureFormat && source)
-          ? datasetTable
+          ? jsonViewerDisabled
+            ? <SourcePreview language="json" source={source} truncated={jsonSource?.truncated ?? datasetTable?.truncated} />
+            : datasetTable
             ? datasetPreview
             : jsonSource
               ? <JsonSourcePreview parsed={jsonSource.parsed} source={jsonSource.source} truncated={jsonSource.truncated} />
