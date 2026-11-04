@@ -3,6 +3,7 @@
 import type { ConfigurationValues } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
 import type { ConfigurationAdapter, ConfigurationAdapterContext, ConfigurationPlan } from "./types.js";
+import { classifyEndpointAddress } from "./model-destination.js";
 import { ConfigurationError, digest, invalid, object } from "./validation.js";
 type Settings = ReturnType<SessionStore["getMemoryGraphSettings"]>;
 
@@ -31,13 +32,9 @@ function resolve(input: ConfigurationValues, settings: Settings) {
     user: typeof input.neo4jUser === "string" ? input.neo4jUser : safe.neo4jUser ?? "" };
 }
 function destination(candidate: { origin: string; user: string }): NonNullable<ConfigurationPlan["endpointAuthorization"]> {
-  const url = new URL(origin(candidate.origin)), host = url.hostname.toLowerCase().replace(/^\[|\]$/g, ""), octets = host.split(".").map(Number);
-  const ipv4 = /^\d+\.\d+\.\d+\.\d+$/.test(host) && octets.every(value => value >= 0 && value <= 255), [first = -1, second = -1] = octets;
-  const loopback = host === "localhost" || host.endsWith(".localhost") || host === "::1" || ipv4 && first === 127 || /^::ffff:7f[0-9a-f]{2}:/i.test(host);
-  const privateNetwork = ipv4 && (first === 10 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168 || first === 169 && second === 254 || first === 0)
-    || /^(?:f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(host);
+  const url = new URL(origin(candidate.origin));
   return { endpointTarget: JSON.stringify(["neo4j-http", "neo4j", url.origin, "/db/neo4j/tx", digest(candidate.user)]), host: url.host,
-    classification: loopback ? "loopback" : privateNetwork ? "private_network" : url.protocol === "https:" ? "public_https" : "public_http" };
+    classification: classifyEndpointAddress(url) };
 }
 
 export function createMemoryConnectionAdapter(store: SessionStore, assertConsent: (context: ConfigurationAdapterContext) => void): ConfigurationAdapter {
