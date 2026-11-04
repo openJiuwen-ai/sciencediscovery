@@ -18,14 +18,19 @@ import { rename } from "node:fs/promises";
  * Errnos a replace reports while another handle briefly owns the freshly
  * written file. Windows has the widest window — an antivirus scanner, a search
  * indexer or a backup agent opens the new file between `writeFile` and the
- * `MoveFileEx`-backed rename — but the same codes can surface on a network
- * share or a busy volume elsewhere, so the policy lives in one place.
+ * `MoveFileEx`-backed rename — and reports `EPERM`/`EBUSY` there. `EACCES` is
+ * kept deliberately even though on POSIX it often means a lasting permission
+ * problem: an SMB or NFS share returns it transiently while another client
+ * holds the file, and waiting is exactly what heals that case. A genuinely
+ * unwritable directory therefore pays the full patience below before failing,
+ * which is the trade this list makes on purpose.
  */
 const TRANSIENT_REPLACE_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 
 /**
- * 20 attempts with the backoff below spend ~5.6 s of patience, far longer than
- * the tens-of-milliseconds window those holders keep.
+ * 20 attempts with the backoff below spend ~5.2 s of patience (19 waits:
+ * `19 × 50 ms + 25 ms × (0 + … + 18) = 5,225 ms`), far longer than the
+ * tens-of-milliseconds window those holders keep.
  */
 export const REPLACE_ATTEMPTS = 20;
 
