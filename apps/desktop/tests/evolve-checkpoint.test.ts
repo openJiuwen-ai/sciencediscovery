@@ -55,6 +55,15 @@ test("a checkpoint block becomes a card, and the prose around it stays prose", (
   });
 });
 
+test("a block the model tagged with the skill's name is still a card", () => {
+  // Observed in a live run: the model wrote the fence as `evolve-design`,
+  // the skill's own name, and the card rendered as a code block instead.
+  const answer = ["```evolve-design", "step: 1", "total: 4", "---", "**度量：** 压缩比", "```"].join("\n");
+
+  const segments = splitEvolveCheckpoints(answer);
+  assert.deepEqual(segments.map((segment) => segment.kind), ["checkpoint"]);
+});
+
 test("an absent pace is a checkpoint that waits, and an absent total prints the step alone", () => {
   const parsed = parseEvolveCheckpoint(["step: 2", "---", "只有一句话"].join("\n"));
   assert.deepEqual(parsed, { body: "只有一句话", pace: "confirm", step: 2, title: undefined });
