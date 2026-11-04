@@ -115,7 +115,7 @@ export function profileRows(
   // fallback for callers that only have rows.
   const fields = fieldOrder.length
     ? [...fieldOrder]
-    : [...new Set(rows.flatMap((row) => Object.keys(row)).filter((field) => field !== "__rowId"))];
+    : [...new Set(rows.flatMap((row) => Object.keys(row)).filter((field) => field !== INTERNAL_ROW_ID))];
   const rawColumns = new Map<string, string[]>();
   for (const field of fields) {
     rawColumns.set(field, rows.map((row) => {
@@ -240,6 +240,9 @@ function writeCell(row: Record<string, unknown>, field: string, value: unknown):
   row[field] = value;
 }
 
+/** The grid keys every row by this field; a file column cannot use the name. */
+const INTERNAL_ROW_ID = "__rowId";
+
 /**
  * Surplus columns are capped at the header width, floored at 2 and ceilinged at
  * 16. A table therefore materializes at most `2 x header width` cells per row
@@ -347,9 +350,16 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     throw new Error(translateActive("csv.tooManyRows", { count: MAX_CSV_DATA_ROWS.toLocaleString("en-US") }));
   }
   if (!fields.length || !rows.length) throw new Error(translateActive("csv.parseHeaderRequired"));
-  const rectangular = rectangularizeRows(rows, fields);
+  // `profileRows` writes the row id into `__rowId` itself, so a file column of
+  // that name cannot be rendered. Keep it hidden as the key-union fallback does,
+  // but report it instead of letting the row id overwrite the value silently.
+  const headerFields = fields.filter((field) => field !== INTERNAL_ROW_ID);
+  const rectangular = rectangularizeRows(rows, headerFields);
   const warnings = errors.map((error) =>
     translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 }));
+  if (headerFields.length !== fields.length) {
+    warnings.push(translateActive("csv.importReservedColumn", { name: INTERNAL_ROW_ID }));
+  }
   const renamedCount = Object.keys(renamedHeaders).length;
   if (renamedCount) warnings.push(translateActive("csv.importRenamedColumns", { count: renamedCount }));
   if (rectangular.surplusCount > rectangular.kept) {
@@ -362,7 +372,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     rows,
     `artifact:${source.sourceArtifactVersionId}`,
     source.fileName,
-    inferTableKind(fields),
+    inferTableKind(headerFields),
     source,
     warnings,
     rectangular.surplusFields,

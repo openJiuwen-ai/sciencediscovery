@@ -1397,6 +1397,7 @@ export const en = {
 
   "csv.importDuplicateIds": "Found {count} duplicate identifiers; source row numbers were appended to disambiguate them.",
   "csv.importRenamedColumns": "Found {count} duplicate header name(s). Repeated columns still show the name the file used, with a unique internal id.",
+  "csv.importReservedColumn": "The column {name} is hidden because that name is reserved for row identifiers.",
   "csv.importSurplusColumns": "A row has {count} cells past the header; cells after the first {kept} surplus columns are joined into one column instead of widening every row.",
   "csv.parseHeaderRequired": "CSV must contain a header and at least one data row",
   "csv.parseRowError": "Row {row}: {message}",
@@ -4354,6 +4355,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
 
   "csv.importDuplicateIds": "发现 {count} 个重复标识符，已追加原始行号以区分。",
   "csv.importRenamedColumns": "发现 {count} 个重复表头；重复列仍按文件中的原名显示，内部标识保持唯一。",
+  "csv.importReservedColumn": "已隐藏列 {name}：该名称保留给行标识使用。",
   "csv.importSurplusColumns": "有行在表头之外多出 {count} 格；第 {kept} 个溢出列之后的单元格已合并为一列，避免一条超宽行把整张表加宽。",
   "csv.parseHeaderRequired": "CSV 必须包含表头和至少一行数据",
   "csv.parseRowError": "第 {row} 行：{message}",
