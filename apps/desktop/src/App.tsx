@@ -475,6 +475,55 @@ export function App({ initialToken }: Props) {
     actions.retryBoot();
   };
 
+  /** The command is a way into the surface, not only a message. While the
+   *  runtime is not ready the goal typed after it is carried into the setup
+   *  dialog instead of being sent to a server that cannot run it; a bare
+   *  command opens the dialog that asks for one.
+   *
+   *  Defined above the boot screens' early returns because the checkpoint
+   *  provider below reads it in an effect: a `const` declared after an early
+   *  `return` is still in its temporal dead zone when that effect commits. */
+  const sendMessage = (content: string) => {
+    const goal = evolveCommandGoal(content);
+    if (goal !== undefined && (goal === "" || evolve.status.state !== "ready")) {
+      setEvolveCreate({
+        checkpointMode: evolveCommandCheckpointMode(content),
+        goal: goal === "" ? undefined : goal,
+      });
+      return;
+    }
+    void actions.send(content);
+  };
+
+  /** Text a checkpoint card puts in the composer. It replaces the draft
+   *  rather than appending to it, the way a starter prompt does: the press is
+   *  "I want to change this step", not "add a sentence to what I was typing".
+   *  The nonce makes the same sentence land twice — choosing the same card
+   *  again is still a choice.
+   *
+   *  These hooks sit above the boot screens' early returns on purpose: a hook
+   *  declared after them runs on the main screen and not on the loading one,
+   *  and React counts that as a different number of hooks between renders. */
+  const [composerSeed, setComposerSeed] = useState<LandingSeed>();
+  const seedNonce = useRef(0);
+  /** The current `sendMessage`, read at press time. Holding it in a ref is
+   *  what lets the provider's value stay stable while a run streams: a value
+   *  rebuilt on every event would re-render every checkpoint card in the
+   *  transcript on every delta. It starts as a no-op and the effect replaces
+   *  it before any card can be pressed. */
+  const latestSend = useRef<(content: string) => void>(() => {});
+  useEffect(() => {
+    latestSend.current = sendMessage;
+  });
+  const checkpointReply = useMemo<CheckpointReply>(() => ({
+    busy: state.running,
+    draft: (text) => {
+      seedNonce.current += 1;
+      setComposerSeed({ nonce: seedNonce.current, text });
+    },
+    reply: (text) => latestSend.current(text),
+  }), [state.running]);
+
   // No token is its own screen, ahead of the boot states: without one nothing
   // the app can say about the server is knowable, including whether it is up.
   if (token === "") {
@@ -580,47 +629,7 @@ export function App({ initialToken }: Props) {
     else setEvolveRunId(target.id);
   };
 
-  /** The command is a way into the surface, not only a message. While the
-   *  runtime is not ready the goal typed after it is carried into the setup
-   *  dialog instead of being sent to a server that cannot run it; a bare
-   *  command opens the dialog that asks for one. */
-  const sendMessage = (content: string) => {
-    const goal = evolveCommandGoal(content);
-    if (goal !== undefined && (goal === "" || evolve.status.state !== "ready")) {
-      setEvolveCreate({
-        checkpointMode: evolveCommandCheckpointMode(content),
-        goal: goal === "" ? undefined : goal,
-      });
-      return;
-    }
-    void actions.send(content);
-  };
-
   const closeEvolveCreate = () => setEvolveCreate(undefined);
-
-  /** Text a checkpoint card puts in the composer. It replaces the draft
-   *  rather than appending to it, the way a starter prompt does: the press is
-   *  "I want to change this step", not "add a sentence to what I was typing".
-   *  The nonce makes the same sentence land twice — choosing the same card
-   *  again is still a choice. */
-  const [composerSeed, setComposerSeed] = useState<LandingSeed>();
-  const seedNonce = useRef(0);
-  /** The current `sendMessage`, read at press time. Holding it in a ref is
-   *  what lets the provider's value stay stable while a run streams: a value
-   *  rebuilt on every event would re-render every checkpoint card in the
-   *  transcript on every delta. */
-  const latestSend = useRef(sendMessage);
-  useEffect(() => {
-    latestSend.current = sendMessage;
-  });
-  const checkpointReply = useMemo<CheckpointReply>(() => ({
-    busy: state.running,
-    draft: (text) => {
-      seedNonce.current += 1;
-      setComposerSeed({ nonce: seedNonce.current, text });
-    },
-    reply: (text) => latestSend.current(text),
-  }), [state.running]);
 
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
