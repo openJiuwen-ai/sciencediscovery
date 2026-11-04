@@ -209,8 +209,9 @@ function renderInline(node: XmlNode | string): string {
     const refType = node.attrs["ref-type"] ?? "";
     const rid = node.attrs["rid"] ?? "";
     if (refType === "bibr" && rid) {
-      // The DeepAnalyze citation anchor convention: [@key] in text.
-      return `[@${rid}]`;
+      // JATS rid is NMTOKENS: grouped references use space-separated IDs.
+      // Emit one anchor per ID so each matches its own bibliography entry.
+      return rid.trim().split(/\s+/).filter(Boolean).map((key) => `[@${key}]`).join(" ");
     }
     const label = normalizeWhitespace(textContent(node));
     return label.length > 0 ? label : "";

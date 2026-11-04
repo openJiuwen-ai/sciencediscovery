@@ -491,8 +491,12 @@ export function texToMarkdown(tex: string): string {
   s = s.replace(/\\\[[\s\S]*?\\\]/g, (match) => protectFlatten(match, 2, 2));
   s = s.replace(/\\\([\s\S]*?\\\)/g, (match) => protectFlatten(match, 2, 2));
 
-  // 3. Preamble → drop (keep title).
+  // 3. Preamble → drop after capturing the title. Nothing before
+  // \begin{document} is body text: author/date/thanks/affiliation commands
+  // must not be unwrapped into a second copy of the metadata.
   const title = s.match(/\\title\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/)?.[1];
+  const beginDocument = /\\begin\{document\}/.exec(s);
+  if (beginDocument) s = s.slice(beginDocument.index + beginDocument[0].length);
   s = s.replace(/\\documentclass(\[[^\]]*\])?\{[^}]*\}/, "");
   s = s.replace(/\\usepackage(\[[^\]]*\])?\{[^}]*\}/g, "");
   s = s.replace(/\\(bibliographystyle|bibliography|addbibresource)(\[[^\]]*\])?\{[^}]*\}/g, "");

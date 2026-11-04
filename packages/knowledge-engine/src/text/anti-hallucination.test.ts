@@ -148,6 +148,41 @@ test("noveltyCheck relation endpoints respect token boundaries without breaking 
   assert.equal(cjk.relationHits.length, 1);
 });
 
+test("noveltyCheck entity probes use bounded punctuation-aware names and CJK", () => {
+  const punctuated = noveltyCheck({
+    kbId: "kb1",
+    claim: "SP-D, glycoproteins interact",
+    entities: [
+      { name: "SP-D", type: "protein", supportCount: 1 },
+      { name: "glycoprotein", type: "protein", supportCount: 1 },
+    ],
+    relations: [],
+    documents: [],
+  });
+  assert.deepEqual(punctuated.entityHits.map((hit) => hit.name), ["SP-D", "glycoprotein"]);
+
+  const adversarial = noveltyCheck({
+    kbId: "kb1",
+    claim: "mail and html are substrings",
+    entities: [
+      { name: "AI", type: "concept", supportCount: 1 },
+      { name: "ML", type: "concept", supportCount: 1 },
+    ],
+    relations: [],
+    documents: [],
+  });
+  assert.deepEqual(adversarial.entityHits, []);
+
+  const cjk = noveltyCheck({
+    kbId: "kb1",
+    claim: "胰岛素和葡萄糖相互作用",
+    entities: [{ name: "胰岛素", type: "protein", supportCount: 1 }],
+    relations: [],
+    documents: [],
+  });
+  assert.equal(cjk.entityHits.length, 1);
+});
+
 test("buildAntiHallucinationBrief renders three tiers, capped and deterministic", () => {
   const uncertainty = briefUncertaintyFrom({ id: "kb1", name: "Ebola" }, {
     entities: [
@@ -188,6 +223,22 @@ const internalNoCollision = noveltyCheck({
   entities: [],
   relations: [],
   documents: [],
+});
+
+test("CJK novelty tokens support the claim gate and reordered external coverage", async () => {
+  const claim = "胰岛素调节葡萄糖";
+  const section = await runExternalNoveltyStage(claim, [source("semantic-scholar", async () => [{
+    title: "葡萄糖受胰岛素调节",
+    year: 2024,
+    url: null,
+    abstract: null,
+  }])], { backoffMs: 0 });
+  assert.ok((section.items[0]?.coverage ?? 0) >= NOVELTY_SIMILAR_COVERAGE);
+  assert.equal(section.items[0]?.aboveThreshold, true);
+
+  const internal = noveltyCheck({ kbId: "kb1", claim, entities: [], relations: [], documents: [] });
+  const combined = combineNovelty({ claim, internal, external: section });
+  assert.equal(combined.verdict, "similar-found");
 });
 
 test("runExternalNoveltyStage prefers S2 and scores coverage against the claim", async () => {

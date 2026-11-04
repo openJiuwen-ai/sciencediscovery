@@ -64,6 +64,28 @@ void test("isBibliographicOrGeneric filters institutions and generic words", () 
   assert.ok(!isBibliographicOrGeneric("mAb114"));
 });
 
+void test("Unicode entity names survive numeric and symbol screening with relations intact", () => {
+  const result = validateExtractionProposal(JSON.stringify({
+    entities: [
+      { name: "胰岛素", type: "protein" },
+      { name: "Рецептор", type: "protein" },
+      { name: "１２３４", type: "protein" },
+      { name: "±∞", type: "protein" },
+    ],
+    relations: [{
+      source: "胰岛素",
+      target: "Рецептор",
+      type: "binds",
+      evidence_quote: "胰岛素结合Рецептор并启动下游信号",
+    }],
+  }), BIOMEDICAL_SCHEMA);
+  assert.deepEqual(result.entities.map((entity) => entity.name), ["胰岛素", "Рецептор"]);
+  assert.equal(result.relations.length, 1);
+  assert.equal(result.relations[0]?.source, "胰岛素");
+  assert.equal(result.relations[0]?.target, "Рецептор");
+  assert.deepEqual(result.rejects, []);
+});
+
 void test("validateExtractionProposal accepts a clean proposal with zero rejects", () => {
   const response = JSON.stringify({
     entities: [

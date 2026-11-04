@@ -151,11 +151,11 @@ export interface NoveltyRelationInput {
 /** Probe 1: KB entities whose name or alias appears in the claim (or a
  *  claim term equals the name after normalization). */
 function entityProbe(claimTerms: readonly string[], claim: string, entities: readonly NoveltyEntityInput[]): NoveltyEntityHit[] {
-  const normalizedClaim = ` ${normalizeGateText(claim)} `;
+  const normalizedClaim = normalizeGateText(claim);
   const hits: NoveltyEntityHit[] = [];
   for (const entity of entities) {
     const names = [entity.name, ...(entity.aliases ?? [])].map(normalizeGateText).filter((name) => name.length > 1);
-    const nameHit = names.some((name) => normalizedClaim.includes(` ${name} `) || normalizedClaim.includes(` ${name}s `));
+    const nameHit = names.some((name) => claimNamesEndpoint(normalizedClaim, name));
     const termHit = names.some((name) => claimTerms.includes(name));
     if (nameHit || termHit) {
       hits.push({ name: entity.name, type: entity.type, supportCount: entity.supportCount });
@@ -417,12 +417,27 @@ export interface NoveltyCombined {
   })[];
 }
 
-/** Unicode-aware content-word set; CJK single characters stay searchable. */
+/** Unicode-aware content-word set. Unspaced CJK runs contribute both single
+ *  characters and adjacent bigrams; claims and candidate text use the same
+ *  tokens so reordering and ordinary prose do not collapse coverage to zero. */
 function normalizeClaimWords(text: string): Set<string> {
-  return new Set(
-    text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/)
-      .filter((word) => word.length > 2 || /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(word)),
-  );
+  const words = new Set<string>();
+  const cleaned = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ");
+  const segmentRe = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+  for (const word of cleaned.split(/\s+/)) {
+    for (const segment of word.match(segmentRe) ?? []) {
+      if (!CJK_CHAR_RE.test([...segment][0] ?? "")) {
+        if (segment.length > 2) words.add(segment);
+        continue;
+      }
+      const chars = [...segment];
+      for (let i = 0; i < chars.length; i += 1) {
+        words.add(chars[i]!);
+        if (i + 1 < chars.length) words.add(`${chars[i]}${chars[i + 1]}`);
+      }
+    }
+  }
+  return words;
 }
 
 function claimCoverage(claimWords: ReadonlySet<string>, text: string): number {

@@ -63,6 +63,24 @@ test("texToMarkdown: headings, cite anchors, math, captions, macros", () => {
   assert.match(markdown, /\[@corti2016\]/);
 });
 
+test("texToMarkdown: drops preamble metadata instead of unwrapping it into the body", () => {
+  const markdown = texToMarkdown([
+    "\\documentclass{article}",
+    "\\title{A Singular Title}",
+    "\\author{Alice Example\\thanks{Grant 123}\\and Bob Example}",
+    "\\affil{Example Institute}",
+    "\\date{2026-01-01}",
+    "\\begin{document}",
+    "Only body text.",
+    "\\end{document}",
+  ].join("\n"));
+  assert.equal((markdown.match(/A Singular Title/g) ?? []).length, 1);
+  assert.match(markdown, /Only body text\./);
+  for (const leaked of ["Alice", "Bob", "Grant", "Example Institute", "2026-01-01"]) {
+    assert.equal(markdown.includes(leaked), false, `metadata leaked: ${leaked}`);
+  }
+});
+
 test("texToMarkdown: newcommand applies and overrides an optional first-argument default", () => {
   const markdown = texToMarkdown([
     "\\documentclass{article}",

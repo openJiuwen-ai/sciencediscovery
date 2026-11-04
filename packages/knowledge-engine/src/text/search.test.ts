@@ -152,6 +152,18 @@ test("grepDocuments matches case-insensitively with line numbers and caps", () =
   assert.equal(capped.truncated, true);
 });
 
+test("grepDocuments terminates catastrophic regex backtracking at a hard deadline", () => {
+  const started = Date.now();
+  const result = grepDocuments({
+    kbId: "kb1",
+    pattern: "^(a+)+$",
+    documents: [{ docId: "doc-re2", title: "Adversarial", fulltext: `${"a".repeat(1_500)}!` }],
+  });
+  assert.match(result.error ?? "", /exceeded 100 ms deadline/);
+  assert.equal(result.truncated, true);
+  assert.ok(Date.now() - started < 2_000, "regex worker must be terminated promptly");
+});
+
 test("grepDocuments returns structured errors, never throws", () => {
   const invalid = grepDocuments({ kbId: "kb1", pattern: "([unclosed", documents: [DOC_A] });
   assert.deepEqual(invalid.matches, []);

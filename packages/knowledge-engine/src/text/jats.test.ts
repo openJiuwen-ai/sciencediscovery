@@ -95,6 +95,16 @@ void test("jatsToMarkdown prefers descendant tex-math over MathML alternatives",
   assert.equal(result.markdown.includes("wrong"), false);
 });
 
+void test("jatsToMarkdown emits resolvable anchors for grouped xref rids", () => {
+  const jats = `<article><body><p>Grouped evidence <xref ref-type="bibr" rid="R1 R2">[1,2]</xref>.</p></body>
+    <back><ref-list><ref id="R1"><citation>First 2024</citation></ref><ref id="R2"><citation>Second 2025</citation></ref></ref-list></back></article>`;
+  const result = jatsToMarkdown(jats);
+  assert.match(result.markdown, /Grouped evidence \[@R1\] \[@R2\]\./);
+  assert.equal(result.markdown.includes("[@R1 R2]"), false);
+  assert.match(result.markdown, /- \[R1\] First 2024/);
+  assert.match(result.markdown, /- \[R2\] Second 2025/);
+});
+
 void test("jatsToMarkdown returns empty for non-article input", () => {
   assert.deepEqual(jatsToMarkdown("<html><body>x</body></html>"), { markdown: "", title: null, referenceCount: 0 });
   assert.deepEqual(jatsToMarkdown("not xml at all"), { markdown: "", title: null, referenceCount: 0 });

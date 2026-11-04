@@ -73,7 +73,7 @@ const GENERIC_STOPWORDS = new Set([
 export function isBibliographicOrGeneric(name: string): boolean {
   const value = name.trim();
   if (value.length < 2) return true;
-  if (/^[\d\W]+$/.test(value)) return true; // pure numbers / symbols
+  if (/^[\p{N}\p{P}\p{S}\p{Z}]+$/u.test(value)) return true; // pure numbers / punctuation / symbols
   if (/^[a-zA-Z]$/.test(value)) return true; // single-letter variables
   if (BIBLIOGRAPHIC_RE.test(value)) return true;
   if (GENERIC_STOPWORDS.has(value.toLowerCase())) return true;
