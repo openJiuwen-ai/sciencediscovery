@@ -2326,6 +2326,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const projectArtifactVersionsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
       if (projectArtifactVersionsMatch && request.method === "GET") {
+        // Same 500-on-a-stale-id as the Session-scoped sibling: name the missing project or
+        // artifact instead of letting listProjectArtifactVersions throw a bare Error.
+        if (!store.getProject(projectArtifactVersionsMatch[1]!)) {
+          return sendError(response, 404, `Project not found: ${projectArtifactVersionsMatch[1]!}`);
+        }
+        if (!store.getProjectArtifact(projectArtifactVersionsMatch[1]!, projectArtifactVersionsMatch[2]!)) {
+          return sendError(response, 404, "Artifact not found");
+        }
         sendJson(response, 200, store.listProjectArtifactVersions(
           projectArtifactVersionsMatch[1]!,
           projectArtifactVersionsMatch[2]!,
@@ -3347,6 +3355,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const artifactVersionsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
       if (artifactVersionsMatch && request.method === "GET") {
+        // The store helper throws a bare "Artifact not found", which the top-level mapper does
+        // not recognise: a stale artifact id must read as missing, not as a server fault.
+        const versionsSession = store.getSession(artifactVersionsMatch[1]!);
+        if (!versionsSession) return sendError(response, 404, `Session not found: ${artifactVersionsMatch[1]!}`);
+        if (!store.getProjectArtifact(versionsSession.projectId, artifactVersionsMatch[2]!)) {
+          return sendError(response, 404, "Artifact not found");
+        }
         sendJson(response, 200, store.listArtifactVersions(artifactVersionsMatch[1]!, artifactVersionsMatch[2]!));
         return;
       }
