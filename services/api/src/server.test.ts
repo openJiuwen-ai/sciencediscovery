@@ -7619,6 +7619,22 @@ test("WSP-005 a reserved device name in a session file write answers 400 and nam
     assert.ok(refused.body.error.includes(path.trim()), `the message must name ${path}`);
   }
 
+  // A device name in a directory segment is just as unusable: the route creates the
+  // parent directories, so on Windows `mkdir("…/CON")` fails (an unclassified 500, the
+  // failure this guard exists to remove) and on Linux it creates an unportable `CON/`
+  // directory. The check is per segment, not per basename; the last case is the control
+  // for a clean directory that already worked before the segment rule.
+  for (const [path, segment] of [
+    ["CON/notes.txt", "CON"],
+    ["nul.dir/x.csv", "nul.dir"],
+    ["notes/CON.txt", "CON.txt"],
+  ] as const) {
+    const refused = await write(path);
+    assert.equal(refused.response.status, 400, `${path} must be refused as a bad request`);
+    assert.match(refused.body.error, /reserved device name/, `${path} must say why`);
+    assert.ok(refused.body.error.includes(segment), `the message must name the segment ${segment}`);
+  }
+
   // Nothing was written under a refused name.
   const listed = await jsonRequest<WorkspaceFile[]>(
     `${origin}/api/sessions/${session.body.id}/files`,
