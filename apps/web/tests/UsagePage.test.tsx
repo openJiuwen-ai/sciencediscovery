@@ -66,10 +66,13 @@ test("USG-031 a compact token count never rounds up into a unit it has not reach
   // which reads as a million while the exported field stays 999999. The count
   // passes into the next unit instead, so the printed number never claims more
   // than the data holds.
-  assert.equal(formatCompactTokenValue(999_999), "1.0M");
-  assert.equal(formatCompactTokenValue(999_500), "1.0M");
+  // The tier and the cross-boundary rule are shared with the model badge
+  // (tokenCountFormat.ts), which spells a whole million without a trailing
+  // ".0", so both screens read "1M" here rather than "1.0M".
+  assert.equal(formatCompactTokenValue(999_999), "1M");
+  assert.equal(formatCompactTokenValue(999_500), "1M");
   assert.equal(formatCompactTokenValue(999_499), "999K");
-  assert.equal(formatCompactTokenValue(1_000_000), "1.0M");
+  assert.equal(formatCompactTokenValue(1_000_000), "1M");
   assert.equal(formatCompactTokenValue(10_000), "10K");
   // The chart axis uses the same rule: `999.9K` must not become `1000.0K`.
   assert.equal(formatChartNumber(999_999), "1.0M");

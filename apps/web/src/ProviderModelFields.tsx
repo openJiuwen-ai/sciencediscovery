@@ -29,6 +29,7 @@ import { lookupModelCatalog, resolveModelFacts } from "@sciencediscovery/schema"
 
 import { ImageIcon, SparkleIcon } from "./icons.js";
 import { useLocale } from "./i18n/index.js";
+import { compactTokenParts } from "./tokenCountFormat.js";
 
 export interface ManualModelForm {
   contextWindow: string;
@@ -184,12 +185,13 @@ export function ManualModelFields({
   </div>;
 }
 
-/** Large token counts as integers: 1,000,000 → "1M", 200,000 → "200k". */
+/** The badge's spelling of the shared compact token count (see
+ *  tokenCountFormat.ts): 1,000,000 → "1M", 10,500,000 → "10.5M",
+ *  200,000 → "200k". */
 export function compactTokenCount(value: number | undefined): string | undefined {
   if (value === undefined) return undefined;
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
-  return String(value);
+  const { count, unit } = compactTokenParts(value);
+  return `${count}${unit}`;
 }
 
 /** Compact facts as hover-labelled badges: context/output as 1M/200k, vision
