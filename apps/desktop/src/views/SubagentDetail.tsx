@@ -215,10 +215,13 @@ function FoldCard({ children, className, title }: {
  */
 export function SubagentDetail({
   loading = false,
+  stale = false,
   subagent,
 }: {
   /** The catalog read that fills a replayed child's steps is still in flight. */
   loading?: boolean;
+  /** The record has stopped refreshing: a run of failed catalog reads. */
+  stale?: boolean;
   subagent: Subagent;
 }) {
   // System steps are the runtime's own bookkeeping — turn markers, brief
@@ -259,6 +262,9 @@ export function SubagentDetail({
           <span className="subagent-status-meta">{TEXT.subagent.tokens(subagent.usage.totalTokens)}</span>
         )}
       </div>
+      {stale ? (
+        <div className="subagent-stale" role="status">{TEXT.subagent.stale}</div>
+      ) : null}
       {failed && subagent.error !== undefined ? (
         <div className="subagent-error">
           <div className="subagent-error-title">

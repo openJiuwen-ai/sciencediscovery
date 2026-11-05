@@ -247,6 +247,7 @@ export const ZH = {
     inputFiles: "输入文件",
     emptySteps: "这个 subagent 还没有留下可展示的执行记录。",
     loading: "正在加载执行记录…",
+    stale: "执行记录已停止刷新，当前显示的内容可能滞后。",
     thinking: "思考",
     tool: "工具",
     turns: (count: number) => `${count} 轮`,

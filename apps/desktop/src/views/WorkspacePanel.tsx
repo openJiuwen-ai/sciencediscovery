@@ -56,6 +56,9 @@ interface Props {
   subagent?: Subagent;
   /** The catalog read that fills a replayed child's steps is still in flight. */
   subagentLoading?: boolean;
+  /** The record has stopped refreshing: a run of failed catalog reads. The
+   *  steps shown may be behind what the child has done. */
+  subagentStale?: boolean;
   /** One input or result block of a tool call, opened from the run. It is the
    *  same mode as `subagent`: the panel shows only that text. */
   tool?: ToolDetailData;
@@ -462,6 +465,7 @@ export function WorkspacePanel({
   sessions = [],
   subagent,
   subagentLoading,
+  subagentStale,
   tool,
   tabs,
 }: Props) {
@@ -832,7 +836,12 @@ export function WorkspacePanel({
           {/* Keyed by the record: a fold's mounted body belongs to the child it
               was opened for, and reusing the component for the next child would
               mount that child's whole timeline while it is still folded. */}
-          <SubagentDetail key={subagent.id} loading={subagentLoading ?? false} subagent={subagent} />
+          <SubagentDetail
+            key={subagent.id}
+            loading={subagentLoading ?? false}
+            stale={subagentStale ?? false}
+            subagent={subagent}
+          />
         </div>
       )}
     </aside>

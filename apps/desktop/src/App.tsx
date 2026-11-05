@@ -25,6 +25,7 @@ import {
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
 import type { Subagent, SubagentStep } from "./api/types.js";
+import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
@@ -67,15 +68,6 @@ interface Props {
   /** Read once in `main.tsx`, before the tree mounts. */
   initialToken: string;
 }
-
-/** How often an open, running child's catalog record is re-read.
- *
- *  The child's own stream is the live path when it exists. This poll is what
- *  keeps a continuation visible that was published under a run the panel does
- *  not tail — a wake turn's. It re-reads the whole record, so it is slower than
- *  the stream's own cadence: enough to watch the record grow, not to hammer a
- *  long one. */
-const SUBAGENT_CATALOG_POLL_MS = 5000;
 
 export function App({ initialToken }: Props) {
   const [token, setToken] = useState(initialToken);
@@ -232,18 +224,23 @@ export function App({ initialToken }: Props) {
    *
    *  Only the open child is read: the panel shows one record at a time, and
    *  the roster route carried every sibling's steps — megabytes for a long
-   *  run — to choose one of them. A running child is read too, once. The
-   *  followed stream below carries the steps emitted while this window is
-   *  attached, but a child continued by a wake turn publishes its continuation
-   *  under the wake run, not the run that named it, so it is not on the stream
-   *  this panel tails. The catalog is where the run loop flushes those steps;
-   *  skipping it left the panel without them until the child settled. */
+   *  run — to choose one of them. A running child is read on open and then
+   *  polled until it settles (see the effect below). The followed stream below
+   *  carries the steps emitted while this window is attached, but a child
+   *  continued by a wake turn publishes its continuation under the wake run,
+   *  not the run that named it, so it is not on the stream this panel tails.
+   *  The catalog is where the run loop flushes those steps; skipping it left
+   *  the panel without them until the child settled. */
   const [subagentCatalog, setSubagentCatalog] = useState<Subagent | undefined>(undefined);
   const [subagentLoading, setSubagentLoading] = useState(false);
+  /** Set when the record has stopped being refreshed — a run of failed polls.
+   *  The held copy stands, but the panel says it may be behind. */
+  const [subagentStale, setSubagentStale] = useState(false);
   useEffect(() => {
     if (openSubagentId === undefined || state.sessionId === undefined) {
       setSubagentCatalog(undefined);
       setSubagentLoading(false);
+      setSubagentStale(false);
       return;
     }
     // While the child runs this is the only source for a continuation the
@@ -253,29 +250,43 @@ export function App({ initialToken }: Props) {
     // reads the complete record one last time.
     const polling = foundSubagent?.status === "running";
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     setSubagentLoading(true);
-    const read = () => {
-      void getSubagent(client, state.sessionId!, openSubagentId)
-        .then((child) => {
-          if (cancelled) return;
-          setSubagentCatalog(child);
-          setSubagentLoading(false);
-        })
-        .catch(() => {
-          // The run-state copy still names the task and shows its status; only
-          // the steps are missing, so this is not worth an error banner. The
-          // copy already held stands: a failed poll says nothing about the child.
-          if (!cancelled) setSubagentLoading(false);
-        })
-        .finally(() => {
-          if (!cancelled && polling) timer = setTimeout(read, SUBAGENT_CATALOG_POLL_MS);
-        });
-    };
-    read();
+    setSubagentStale(false);
+    const read = () => getSubagent(client, state.sessionId!, openSubagentId).then((child) => {
+      if (cancelled) return;
+      setSubagentCatalog(child);
+      setSubagentStale(false);
+      setSubagentLoading(false);
+    });
+    if (!polling) {
+      // Terminal record: one read, no cadence. A failure leaves the held copy
+      // in place; there is no longer anything to expect it to grow.
+      void read().catch(() => {
+        if (!cancelled) setSubagentLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    // A poll reads the whole record, so it runs only while the window is
+    // shown; a hidden window waits for `visibilitychange` and reads once on
+    // return. A failed read keeps the copy already held — the run-state copy
+    // still names the task and shows its status, so this is not worth an
+    // error banner — but failures in a row mean the record is frozen, and
+    // after a few the panel says so instead of looking live.
+    const poll = createCatalogPoll(read, {
+      onFailing: (count) => {
+        if (cancelled) return;
+        setSubagentLoading(false);
+        if (count >= CATALOG_FAILURES_BEFORE_STALE) setSubagentStale(true);
+      },
+    });
+    const onVisibilityChange = () => poll.visibilityChanged();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       cancelled = true;
-      if (timer !== undefined) clearTimeout(timer);
+      poll.stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [client, foundSubagent?.parentTurnId, foundSubagent?.status, openSubagentId, state.sessionId]);
 
@@ -638,6 +649,7 @@ export function App({ initialToken }: Props) {
           sessions={state.recent}
           subagent={openSubagent}
           subagentLoading={subagentLoading && (openSubagent?.steps.length ?? 0) === 0}
+          subagentStale={subagentStale}
           tabs={state.tabs}
           tool={openTool}
         />

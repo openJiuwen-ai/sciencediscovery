@@ -232,6 +232,7 @@ export const EN: Text = {
     inputFiles: "Input files",
     emptySteps: "This subagent has not recorded any execution to show yet.",
     loading: "Loading the execution record…",
+    stale: "The execution record is not refreshing, so what is shown may be behind.",
     thinking: "Reasoning",
     tool: "Tool",
     turns: (count: number) => `${count} ${count === 1 ? "turn" : "turns"}`,
