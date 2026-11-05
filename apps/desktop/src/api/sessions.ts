@@ -131,6 +131,23 @@ export function listSubagents(client: ApiClient, sessionId: string): Promise<Sub
   return client.request<Subagent[]>(`/api/sessions/${encodeURIComponent(sessionId)}/subagents`);
 }
 
+/**
+ * One child's record, with the steps it recorded.
+ *
+ * The panel shows a single child, so reading the catalog to pick from it would
+ * move every sibling's steps over the wire for text no one opened. The list
+ * route stays for callers that need the roster.
+ */
+export function getSubagent(
+  client: ApiClient,
+  sessionId: string,
+  subagentId: string,
+): Promise<Subagent> {
+  return client.request<Subagent>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}`,
+  );
+}
+
 export function cancelRun(client: ApiClient, sessionId: string, runId: string): Promise<SessionRun> {
   return client.request<SessionRun>(
     `/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/cancel`,

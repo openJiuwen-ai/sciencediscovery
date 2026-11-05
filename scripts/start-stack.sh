@@ -257,17 +257,74 @@ configure_endpoints() {
   runner_url="${SCIENCE_AGENT_RUNNER_URL:-http://$runner_host:$runner_port}"
 }
 
+# Restore the lockfile a mirror sync backed up. Driven by a trap rather than by
+# a trailing statement: `uv sync` against a custom index runs for tens of seconds
+# to minutes, and an interrupt inside that window (Ctrl-C, terminal close, CI
+# timeout kill) used to skip the restore entirely. That left uv.lock holding
+# mirror-resolved content plus an untracked uv.lock.stack-backup in the
+# repository root, and the next run copied the dirty lock over the backup, so a
+# later clean run restored dirty content and froze it as the baseline.
+#
+# Copy-then-remove, never rename: renaming the lockfile away would leave the tree
+# with no lockfile at all if the process were killed outside the trap (power
+# loss, taskkill), and on Windows a rename onto a target uv still holds a handle
+# to fails outright. Same reasoning as the .mjs twin's finally block.
+#
+# The paths live in globals, not in the caller's locals: an EXIT trap can fire
+# after uv_sync_project has returned, when a local would be out of scope.
+stack_lockfile_target=""
+stack_lockfile_backup=""
+
+restore_stack_lockfile() {
+  trap - EXIT INT TERM
+  if [[ -n "$stack_lockfile_backup" && -f "$stack_lockfile_backup" ]]; then
+    if cp "$stack_lockfile_backup" "$stack_lockfile_target"; then
+      rm -f "$stack_lockfile_backup"
+    else
+      echo "WARNING: could not restore $stack_lockfile_target from $stack_lockfile_backup; the lockfile may hold mirror-resolved versions." >&2
+    fi
+  fi
+  stack_lockfile_backup=""
+}
+
+# INT/TERM need the restore AND an exit. A trap on INT does not terminate the
+# script on its own — it only interrupts the foreground child — so restoring
+# without exiting would leave the start carrying on after Ctrl-C. The EXIT trap
+# stays pointed at the bare restore: the interrupt path already restored and
+# cleared the backup, so the EXIT re-entry is a no-op, and the plain-exit path
+# still gets its restore.
+interrupt_stack_lockfile() { # <signal>
+  restore_stack_lockfile
+  [[ "$1" == TERM ]] && exit 143
+  exit 130
+}
+
 # Sync one uv project into its service environment. With a custom PyPI index
 # (SCIENCE_AGENT_PYPI_INDEX), `--locked` fails and uv re-resolves because
 # uv.lock records index URLs; back up and restore the checked-in lockfile so
 # the mirror never dirties the working tree.
+#
+# The lockfile backed up is the WORKSPACE ROOT's, not one under $project_dir:
+# the five per-service `services/<member>/uv.lock` files are gone (one root lock
+# now resolves every member), and `uv sync` run inside a member walks up to the
+# workspace root and rewrites THAT lock. Copying "$project_dir/uv.lock" named a
+# file this repository no longer has, so under `set -e` any local start with a
+# mirror configured died in cp before reaching uv.
+#
+# Called once per member, so the restore is re-entrant: each call re-arms the
+# same trap over the same pair of paths.
 uv_sync_project() { # <project-dir> <env-dir> <locked: 0|1>
   local project_dir="$1" env_dir="$2" locked="$3"
   if [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]]; then
-    cp "$project_dir/uv.lock" "$project_dir/uv.lock.stack-backup"
+    stack_lockfile_target="$repository_root/uv.lock"
+    stack_lockfile_backup="$repository_root/uv.lock.stack-backup"
+    cp "$stack_lockfile_target" "$stack_lockfile_backup"
+    trap restore_stack_lockfile EXIT
+    trap 'interrupt_stack_lockfile INT' INT
+    trap 'interrupt_stack_lockfile TERM' TERM
     local sync_failed=0
     (cd "$project_dir" && UV_PROJECT_ENVIRONMENT="$env_dir" uv sync) || sync_failed=1
-    mv "$project_dir/uv.lock.stack-backup" "$project_dir/uv.lock"
+    restore_stack_lockfile
     [[ "$sync_failed" -eq 0 ]]
   elif [[ "$locked" -eq 1 ]]; then
     (cd "$project_dir" && UV_PROJECT_ENVIRONMENT="$env_dir" uv sync --locked)

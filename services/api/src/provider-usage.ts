@@ -20,6 +20,7 @@ export interface ProviderUsageBreakdown {
   cacheWriteTokens: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  reasoningTokens: number | null;
   totalTokens: number | null;
   usageStatus: ModelUsageStatus;
   aliasConflict?: UsageAliasConflict;
@@ -33,6 +34,7 @@ export function parseProviderUsage(value: unknown, protocol?: ModelApiProtocol):
     cacheWriteTokens: null,
     inputTokens: null,
     outputTokens: null,
+    reasoningTokens: null,
     totalTokens: null,
     usageStatus: "provider-not-reported",
   };
@@ -40,6 +42,7 @@ export function parseProviderUsage(value: unknown, protocol?: ModelApiProtocol):
     ...usage,
     cacheReadTokens: usage.cacheReadTokens ?? null,
     cacheWriteTokens: usage.cacheWriteTokens ?? null,
+    reasoningTokens: usage.reasoningTokens ?? null,
     usageStatus: "reported",
   };
 }

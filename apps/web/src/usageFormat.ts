@@ -16,7 +16,10 @@ import type { ModelInvocationUsage, ModelUsageBucket } from "@sciencediscovery/s
 
 export function formatCompactTokenValue(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  // 999_999 tokens round to 1000K under the thousands rule, which reads as a
+  // million while the exported field still says 999999. Cross the unit boundary
+  // instead of printing a count the data has not reached.
+  if (value >= 1_000_000 || Math.round(value / 1_000) >= 1_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 10_000) return `${Math.round(value / 1_000)}K`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return new Intl.NumberFormat().format(value);
@@ -44,20 +47,22 @@ export function usageInOutLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "
   return parts.join(" · ");
 }
 
-export function usageBreakdownLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "totalTokens" | "unreportedInvocationCount">): string {
+export function usageBreakdownLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "reasoningTokens" | "totalTokens" | "unreportedInvocationCount">): string {
   const parts: string[] = [];
   pushTokenPart(parts, "in", bucket.inputTokens);
   pushTokenPart(parts, "out", bucket.outputTokens);
+  pushTokenPart(parts, "reasoning", bucket.reasoningTokens);
   pushTokenPart(parts, "cache-read", bucket.cacheReadTokens);
   pushTokenPart(parts, "cache-write", bucket.cacheWriteTokens);
   return parts.join(" · ");
 }
 
 /** Per-message inline usage: omit fields the API did not return. */
-export function usageInlineLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "totalTokens" | "unreportedInvocationCount">): string {
+export function usageInlineLabel(bucket: Pick<ModelUsageBucket, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "reasoningTokens" | "totalTokens" | "unreportedInvocationCount">): string {
   const parts: string[] = [];
   pushTokenPart(parts, "input", bucket.inputTokens);
   pushTokenPart(parts, "output", bucket.outputTokens);
+  pushTokenPart(parts, "reasoning", bucket.reasoningTokens);
   pushTokenPart(parts, "cache read", bucket.cacheReadTokens);
   pushTokenPart(parts, "cache write", bucket.cacheWriteTokens);
   return parts.join(" / ");

@@ -90,7 +90,7 @@ test("paper vision persists Chat usage and leaves incomplete usage unknown", asy
   await mkdir(root, { recursive: true });
   await writeFile(resolve(root, "page.png"), Buffer.from("image"));
   const samples = [
-    { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 0, output_tokens: 0, total_tokens: 30477 },
+    { prompt_tokens: 30393, completion_tokens: 84, completion_tokens_details: { reasoning_tokens: 80 }, input_tokens: 0, output_tokens: 0, total_tokens: 30477 },
     { prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 },
     { prompt_tokens: 10 },
   ];
@@ -101,8 +101,8 @@ test("paper vision persists Chat usage and leaves incomplete usage unknown", asy
   for (let i = 0; i < 3; i++) await service.analyzeVision({ modelId: model.id, paperId: "paper-usage", sessionId: session.id });
   const runs = await store.listPaperVisionRuns(session.id);
   assert.deepEqual(runs.map((run) => run.modelUsage), [
-    { inputTokens: 30393, outputTokens: 84, totalTokens: 30477 },
-    { inputTokens: 10, outputTokens: 0, totalTokens: 10 },
+    { inputTokens: 30393, outputTokens: 84, reasoningTokens: 80, totalTokens: 30477 },
+    { inputTokens: 10, outputTokens: 0, reasoningTokens: null, totalTokens: 10 },
     undefined,
   ]);
 });

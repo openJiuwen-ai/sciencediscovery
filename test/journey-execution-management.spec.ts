@@ -48,7 +48,7 @@ test("执行日志、取消与一次性提醒可管理", { tag: "@mocked" }, asy
   const fixture = await createProjectAndSession(page, { projectName: `Activity ${Date.now()}`, sessionTitle: "Execution management" });
   const activity = { executions: [{ id: "execution-1", agentId: "main", runnerId: "local", workspaceId: "ws_main_local", state: "running", provenance: "pending" }],
     transfers: [{ id: "transfer-1", sourceWorkspaceId: "ws_child_remote", targetWorkspaceId: "ws_main_local", state: "partial", files: [{ sourcePath: "result.txt", targetPath: "result.txt" }, { sourcePath: "missing.txt", targetPath: "missing.txt" }],
-      progress: [{ targetPath: "result.txt", state: "completed", bytes: 42 }], error: "One file was unavailable; committed files were retained." }],
+      progress: [{ targetPath: "result.txt", state: "completed", bytes: 42 }, { targetPath: "missing.txt", state: "failed", bytes: 0 }], error: "One file was unavailable; committed files were retained." }],
     timers: [{ id: "timer-1", agentId: "main", message: "Inspect training output", dueAt: Date.now() + 60000, state: "pending" }],
     agents: [] as Array<{ agentId: string; stopped: boolean }> };
   let logsRead = false;

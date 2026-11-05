@@ -2442,6 +2442,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listSubagents(sessionSubagentsMatch[1]!));
         return;
       }
+      // The panel opens one child at a time. Reading the whole roster to show
+      // one record moves every sibling's steps over the wire and clones them
+      // first, which for a long run is several megabytes nobody asked for.
+      const sessionSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)$/);
+      if (sessionSubagentMatch && request.method === "GET") {
+        const sessionId = decodeURIComponent(sessionSubagentMatch[1]!);
+        const subagentId = decodeURIComponent(sessionSubagentMatch[2]!);
+        if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
+        const child = store.getSubagent(sessionId, subagentId);
+        if (child === undefined) return sendError(response, 404, `Subagent not found: ${subagentId}`);
+        sendJson(response, 200, child);
+        return;
+      }
       const stopSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/stop$/);
       if (stopSubagentMatch && request.method === "POST") {
         const sessionId = decodeURIComponent(stopSubagentMatch[1]!);
@@ -2798,6 +2811,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           modelProfileId: run.modelId,
           modelProfileName: run.modelName,
           outputTokens: run.modelUsage?.outputTokens ?? null,
+          reasoningTokens: run.modelUsage?.reasoningTokens ?? null,
           ...(session?.projectId ? { projectId: session.projectId } : {}),
           sessionId: run.sessionId,
           startedAt,

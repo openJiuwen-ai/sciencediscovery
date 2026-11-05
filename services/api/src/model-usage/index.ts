@@ -29,6 +29,7 @@ export interface CapturedModelUsage {
   cacheWriteTokens: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  reasoningTokens: number | null;
   totalTokens: number | null;
   usageStatus: ModelUsageStatus;
 }
@@ -39,6 +40,7 @@ export function unreportedModelUsage(): CapturedModelUsage {
     cacheWriteTokens: null,
     inputTokens: null,
     outputTokens: null,
+    reasoningTokens: null,
     totalTokens: null,
     usageStatus: "provider-not-reported",
   };
@@ -50,6 +52,7 @@ export function capturedModelUsage(event: {
     cacheWriteTokens?: number | null;
     inputTokens: number;
     outputTokens: number;
+    reasoningTokens?: number | null;
     totalTokens: number;
   };
   usageReported: boolean;
@@ -60,6 +63,7 @@ export function capturedModelUsage(event: {
     cacheWriteTokens: event.usage.cacheWriteTokens ?? null,
     inputTokens: event.usage.inputTokens,
     outputTokens: event.usage.outputTokens,
+    reasoningTokens: event.usage.reasoningTokens ?? null,
     totalTokens: event.usage.totalTokens,
     usageStatus: "reported",
   };
@@ -93,6 +97,7 @@ export async function appendModelUsageForManifest(
     modelProfileName: options.manifest.modelProfileName,
     outcome: options.outcome ?? "completed",
     outputTokens: options.usage.outputTokens,
+    reasoningTokens: options.usage.reasoningTokens,
     promptManifestId: options.manifest.id,
     ...(session?.projectId ? { projectId: session.projectId } : {}),
     ...(options.runId ? { runId: options.runId } : {}),

@@ -63,6 +63,53 @@ export function finalSteps(steps: readonly SubagentStep[]): SubagentStep[] {
 }
 
 /**
+ * Every field of a step, so the comparison cannot silently ignore one.
+ *
+ * The `satisfies` clause fails the build when `SubagentStep` gains a field and
+ * this record does not, which is the only change that would otherwise let two
+ * different snapshots compare as equal. Adding the field here is enough to
+ * bring it into the comparison.
+ */
+const STEP_FIELDS = {
+  args: true,
+  content: true,
+  createdAt: true,
+  details: true,
+  id: true,
+  input: true,
+  kind: true,
+  progress: true,
+  status: true,
+  toolCallId: true,
+  toolName: true,
+} satisfies Record<keyof SubagentStep, true>;
+
+/** The fields that may hold nested structure, and so are compared as JSON. */
+const JSON_FIELDS: ReadonlySet<keyof SubagentStep> = new Set<keyof SubagentStep>(["args", "details"]);
+
+/**
+ * Whether two snapshots of one step say the same thing.
+ *
+ * The wire is plain JSON, so a structural check keeps an unchanged step's
+ * identity and avoids a needless re-render. Prose is compared as the string it
+ * is: `content` can be hundreds of kilobytes, and stringifying both copies of
+ * every step on every stream tick allocates that much twice over. Only the
+ * small structured fields still go through JSON.
+ */
+function sameStep(left: SubagentStep, right: SubagentStep): boolean {
+  if (left === right) return true;
+  for (const field of Object.keys(STEP_FIELDS) as (keyof SubagentStep)[]) {
+    const same = JSON_FIELDS.has(field) ? sameJson(left[field], right[field]) : left[field] === right[field];
+    if (!same) return false;
+  }
+  return true;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
  * Fold one snapshot's steps onto the ones already shown.
  *
  * A step keeps the position it first appeared in: the coordinator emits a
@@ -76,10 +123,7 @@ export function mergeSubagentSteps(current: SubagentStep[], incoming: SubagentSt
   let changed = false;
   const merged = current.map((step) => {
     const next = byId.get(step.id);
-    if (next === undefined || next === step) return step;
-    // The wire is plain JSON, so structural equality is enough to keep an
-    // unchanged step's identity and avoid a needless re-render.
-    if (JSON.stringify(next) === JSON.stringify(step)) return step;
+    if (next === undefined || sameStep(next, step)) return step;
     changed = true;
     return next;
   });
@@ -90,6 +134,35 @@ export function mergeSubagentSteps(current: SubagentStep[], incoming: SubagentSt
     changed = true;
   }
   return changed ? merged : current;
+}
+
+/**
+ * The steps the panel draws for one open child.
+ *
+ * Three copies can exist, and they are not equally fresh:
+ *
+ * - the catalog, which the run loop flushes on a timer. It is the only one
+ *   that holds a continuation a wake turn publishes under a run this panel does
+ *   not tail, and the only one a replayed child has at all;
+ * - the child's own stream, which the panel follows while it runs — a direct
+ *   read, so fresher than the catalog for the ids both have;
+ * - the live snapshot the run stream broadcast, which updates as each step
+ *   lands and is therefore fresher still.
+ *
+ * The catalog supplies the order — the order the run loop wrote — and the rest
+ * are folded on freshest-last, so a step that is in flight when the panel opens
+ * is not pinned to the flushed copy until the child settles.
+ */
+export function mergedSubagentSteps(
+  snapshot: SubagentStep[],
+  catalog: readonly SubagentStep[] | undefined,
+  followed: readonly SubagentStep[] = [],
+): SubagentStep[] {
+  if ((catalog === undefined || catalog.length === 0) && followed.length === 0) return snapshot;
+  const base = catalog === undefined || catalog.length === 0
+    ? [...followed]
+    : mergeSubagentSteps([...catalog], [...followed]);
+  return mergeSubagentSteps(base, [...snapshot]);
 }
 
 /** Merge a full snapshot onto the copy already held.
@@ -117,6 +190,7 @@ function sameUsage(left: SubagentUsage | undefined, right: SubagentUsage | undef
     && left.cacheWriteTokens === right.cacheWriteTokens
     && left.inputTokens === right.inputTokens
     && left.outputTokens === right.outputTokens
+    && left.reasoningTokens === right.reasoningTokens
     && left.totalTokens === right.totalTokens);
 }
 

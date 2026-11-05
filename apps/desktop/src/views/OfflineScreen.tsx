@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { formatErrorDiagnostic } from "@sciencediscovery/operational-logging/diagnostics";
+
+import { openFeedback } from "../feedback/open.js";
 import { TEXT } from "../text.js";
 
 interface Props {
@@ -19,6 +22,29 @@ interface Props {
   /** `auth` when the health probe reached the server but the app has no token
    *  it can use, so the two very different causes are not merged into one. */
   reason: "auth" | "unreachable";
+}
+
+/** Hand the failure to the feedback dialog with the diagnostic block already
+ *  filled in, so the report carries what the shell could see. */
+function reportProblem(reason: Props["reason"]): void {
+  const detail = [
+    `boot: offline (${reason})`,
+    "app: desktop",
+    `origin: ${window.location.origin}`,
+    `user agent: ${navigator.userAgent}`,
+  ].join("\n");
+  openFeedback({
+    kind: "bug",
+    title: TEXT.boot.offlineTitle,
+    body: `${TEXT.boot.offlineTitle}\n\n${TEXT.boot.offlineBody}`,
+    diagnostics: formatErrorDiagnostic({
+      title: TEXT.boot.offlineTitle,
+      detail,
+      version: "desktop",
+      os: navigator.platform || navigator.userAgent,
+      locale: TEXT.languageTag,
+    }),
+  });
 }
 
 /**
@@ -41,6 +67,9 @@ export function OfflineScreen({ onRetry, reason }: Props) {
         <div className="boot-actions">
           <button className="primary-button" onClick={onRetry} type="button">
             {TEXT.boot.retry}
+          </button>
+          <button className="secondary-button" onClick={() => reportProblem(reason)} type="button">
+            {TEXT.feedback.entry}
           </button>
         </div>
       </div>
