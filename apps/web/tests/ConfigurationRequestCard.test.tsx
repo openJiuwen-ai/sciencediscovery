@@ -114,6 +114,16 @@ test("CFG-X04b: a saved Memory backend states restart required without implying 
   await act(async () => renderer.unmount());
 });
 
+test("CFG-X04b: Chinese Memory backend field uses the catalog label", async () => {
+  const renderer = await mount(request({ capabilityId: "memory.backend", runId: undefined, scope: { kind: "global" },
+    fields: [{ id: "backend", label: "Workbench memory graph backend", kind: "enum", required: true, value: "local",
+      choices: [{ id: "local", label: "Local graph" }, { id: "neo4j", label: "Configured Neo4j" }] }] }), actions(), () => undefined, "zh");
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /记忆图谱后端/);
+  assert.doesNotMatch(content, /Workbench memory graph backend/);
+  await act(async () => renderer.unmount());
+});
+
 function memoryConnectionRequest(overrides: Partial<ConfigurationRequestView> = {}) {
   return request({ capabilityId: "memory.connection", runId: undefined, scope: { kind: "global" },
     fields: [{ id: "neo4jHttp", label: "Neo4j HTTP origin", kind: "url", required: true, value: "https://owned.invalid" },
