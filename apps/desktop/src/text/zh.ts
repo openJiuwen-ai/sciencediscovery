@@ -1148,14 +1148,25 @@ export const ZH = {
        外壳：序号、等谁回答、两个按钮。 */
     checkpoint: {
       eyebrow: (step: number, total?: number) => (total === undefined ? `检查点 ${step}` : `检查点 ${step}/${total}`),
+      /* 不等待审批的卡片不是检查点：没有人需要在这里做决定，它只是记录一步
+         已经做完的事。所以它不叫「检查点」，也不带「自动」之类的角标。 */
+      stepEyebrow: (step: number, total?: number) => (total === undefined ? `步骤 ${step}` : `步骤 ${step}/${total}`),
       waiting: "等待确认",
       answered: "已回答",
-      auto: "自动",
       confirm: "确认，继续",
       adjust: "需要调整",
       send: "发送",
       cancel: "取消",
-      confirmReply: "确认，继续。",
+      /* 每张卡的确认都是同一句话时，模型只看到「继续」，分不清回答的是哪一步：
+         一次跑动里它因此把检查点 3 重新问了一遍。把步号带出去，回复本身
+         就说明了它答的是哪张卡。 */
+      confirmReply: (step: number, total?: number) =>
+        total === undefined ? `确认检查点 ${step}，继续。` : `确认检查点 ${step}/${total}，继续。`,
+      /* 不需要审批时，卡片画完、模型却结束回合，整段设计就停在这一步。客户端
+         替用户把流程推下去，发出的这句话只说明"第 N 步已记录，继续"，不是
+         一次确认。 */
+      autoContinue: (step: number, total?: number) =>
+        total === undefined ? `继续步骤 ${step}。` : `继续步骤 ${step}/${total}。`,
       adjustDraft: "我想调整这一步：",
       busy: "这条回复还没结束，等它完成后再操作。",
     },

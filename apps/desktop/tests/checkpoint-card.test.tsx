@@ -23,6 +23,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Markdown } from "../src/Markdown.js";
+import { TEXT } from "../src/text.js";
 import {
   CheckpointAnsweredProvider,
   CheckpointReplyProvider,
@@ -90,12 +91,35 @@ test("a waiting checkpoint offers the two answers the flow expects", () => {
   assert.match(html, /需要调整/);
 });
 
-test("an automatic checkpoint is a record: it says so and asks nothing", () => {
+test("a record is a step, not a checkpoint: no badge, nothing to press", () => {
   const html = render(card({ pace: "auto", step: 3 }));
   assert.match(html, /class="evolve-checkpoint is-auto"/);
-  assert.match(html, /自动/);
+  assert.match(html, /class="evolve-checkpoint-step">步骤 3\/4</);
+  assert.doesNotMatch(html, /检查点 3\/4/);
+  assert.doesNotMatch(html, /自动/);
   assert.doesNotMatch(html, /确认，继续/);
   assert.doesNotMatch(html, /evolve-checkpoint-actions/);
+});
+
+test("the last step is a record: the run already started", () => {
+  // A live run labelled step 4 `confirm` and offered 「确认，继续」 eight
+  // seconds after the search started. There is nothing to confirm at that
+  // point, so the card is drawn as a record whatever pace the model wrote.
+  const html = render(card({ step: 4, title: "探针结果" }));
+  assert.match(html, /class="evolve-checkpoint is-auto"/);
+  assert.match(html, /data-pace="confirm"/);
+  assert.match(html, /class="evolve-checkpoint-step">步骤 4\/4</);
+  assert.doesNotMatch(html, /已启动|自动|等待确认/);
+  assert.doesNotMatch(html, /evolve-checkpoint-actions/);
+  assert.doesNotMatch(html, /确认，继续/);
+});
+
+test("a confirmation names the step it answers", () => {
+  // Six identical 「确认，继续。」 left the model unable to tell which card it
+  // was answering, and it re-opened step 3. The step number travels with the
+  // reply now.
+  assert.equal(TEXT.evolve.checkpoint.confirmReply(3, 4), "确认检查点 3/4，继续。");
+  assert.equal(TEXT.evolve.checkpoint.confirmReply(2), "确认检查点 2，继续。");
 });
 
 test("a card with no one to answer it still shows its content", () => {
@@ -125,9 +149,10 @@ test("a checkpoint the conversation has moved past folds to its header", () => {
   assert.doesNotMatch(html, /需要调整/);
 });
 
-test("an answered automatic checkpoint folds too, still saying it was automatic", () => {
+test("an answered record folds too, and does not claim a pace", () => {
   const html = render(card({ pace: "auto" }), values, true);
   assert.match(html, /class="evolve-checkpoint is-auto is-answered"/);
-  assert.match(html, /自动/);
+  assert.match(html, /class="evolve-checkpoint-step">步骤 1\/4</);
+  assert.doesNotMatch(html, /自动|已回答/);
   assert.doesNotMatch(html, /<button/);
 });
