@@ -793,6 +793,7 @@ export function App({ initialToken }: Props) {
     running: state.running,
     seededCommand,
     selectedModelId: state.selectedModelId,
+    unavailableModel: Boolean(state.detail?.settingsOverrides.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
   };

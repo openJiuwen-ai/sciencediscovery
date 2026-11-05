@@ -69,6 +69,7 @@ import type {
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
+  RuntimeSettingsDetails,
   PermissionDecision,
   Project,
   Session,
@@ -101,8 +102,9 @@ export interface Toast {
 export interface ConfirmRequest {
   accept: string;
   body: string;
+  modelReplacement?: { label: string; emptyLabel: string; models: ModelProfile[] };
   eyebrow?: string;
-  onAccept: () => void | Promise<void>;
+  onAccept: (replacementModelId?: string) => void | Promise<void>;
   title: string;
 }
 
@@ -366,8 +368,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   /** The inbox, for the paths that write a Session before a render can hand
    *  them one. `refreshSessionLists` is the only reader that may not fail. */
   const inboxRef = useRef<Project | undefined>(undefined);
-  const defaultModelRef = useRef<string | undefined>(undefined);
-  const selectedModelRef = useRef<string | undefined>(undefined);
+  const draftModelOverride = useRef<string | undefined>(undefined);
+  const modelSelectionEpoch = useRef(0);
+  const modelSelectionQueue = useRef(Promise.resolve());
   const runningRef = useRef(false);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const runRef = useRef<RunStreamState>(emptyRunStream());
@@ -426,8 +429,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   projectRef.current = activeProjectId;
   inboxRef.current = inboxProject;
   sessionsByProjectRef.current = sessionsByProject;
-  defaultModelRef.current = defaultModelId;
-  selectedModelRef.current = selectedModelId;
 
   const toast = useCallback((message: string, tone: Toast["tone"] = "error") => {
     const id = (toastSeq.current += 1);
@@ -574,14 +575,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         setModels(profiles);
         setPresets(catalog.presets);
         setProviders(catalog.providers);
-        const decision = resolveCatalog(profiles, settings.overrides);
+        let hasHistory = false;
+        if (!profiles.length) {
+          const [projects, inbox] = await Promise.all([listProjects(client), ensureInbox(client)]);
+          hasHistory = projects.length > 0 || (await listSessions(client, inbox.id, "all")).length > 0;
+          if (cancelled) return;
+        }
+        const decision = resolveCatalog(profiles, settings.overrides, hasHistory);
         if (decision.boot === "setup") {
           setBoot("setup");
           return;
         }
         setDefaultModelId(decision.defaultModelId);
         setSelectedModelId(decision.defaultModelId);
-        if (decision.adopt !== undefined) await setGlobalModel(client, decision.adopt);
         if (cancelled) return;
         setBoot("ready");
       } catch (reason) {
@@ -601,41 +607,40 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   const retryBoot = useCallback(() => setAttempt((current) => current + 1), []);
 
-  /**
-   * Re-read the model catalog.
-   *
-   * Called after the model form writes anything, so the new profile shows up in
-   * the composer's list. The default is read back from the server too, so the
-   * card's 默认 tag follows a write the form just made; merely adding a profile
-   * changes nothing, because the server's default is still the old one. When
-   * the stored default names no profile at all it falls back to the first,
-   * which is the only case where the catalog itself decides.
-   */
+  /** Restore catalog and selection together after a local or another window's write. */
   const refreshModels = useCallback(
-    async (withProviders = false) => {
+    async () => {
+      const target = sessionRef.current;
+      const projectId = projectRef.current;
+      const epoch = modelSelectionEpoch.current;
+      const view = viewEpoch.current;
       try {
-        const [profiles, settings, catalog] = await Promise.all([
-          listModels(client),
-          withProviders ? getSettings(client).catch(() => undefined) : Promise.resolve(undefined),
-          withProviders
-            ? listProviders(client).catch(() => ({ presets: [], providers: [] }))
+        const [profiles, settings, catalog, fresh, projectSettings] = await Promise.all([
+          listModels(client), getSettings(client), listProviders(client).catch(() => undefined),
+          target ? client.request<RuntimeSettingsDetails>(`/api/sessions/${encodeURIComponent(target)}/settings`) : Promise.resolve(undefined),
+          !target && projectId
+            ? client.request<RuntimeSettingsDetails>(`/api/projects/${encodeURIComponent(projectId)}/settings`)
             : Promise.resolve(undefined),
         ]);
+        if (viewEpoch.current !== view || modelSelectionEpoch.current !== epoch) return;
         setModels(profiles);
         if (catalog) {
           setPresets(catalog.presets);
           setProviders(catalog.providers);
         }
-        const current = defaultModelRef.current;
-        const stored = settings?.overrides.modelId;
-        if (stored !== undefined && profiles.some((profile) => profile.id === stored)) {
-          setDefaultModelId(stored);
-          return;
-        }
-        const fallback = profiles[0]?.id;
-        if (fallback !== undefined && !profiles.some((profile) => profile.id === current)) {
-          setDefaultModelId(fallback);
-          setSelectedModelId(fallback);
+        setDefaultModelId(settings.overrides.modelId);
+        if (fresh && target) {
+          setDetail(current => {
+            if (!current || current.id !== target) return current;
+            const next = { ...current, modelId: fresh.effective.modelId, reviewModelId: fresh.effective.reviewModelId,
+              settingsOverrides: fresh.overrides, thinkingMode: fresh.effective.thinkingMode, thinkingEffort: fresh.effective.thinkingEffort };
+            rememberBounded(detailsBySession.current, target, next);
+            return next;
+          });
+          setSelectedModelId(fresh.effective.modelId);
+        } else {
+          const inherited = projectSettings ? projectSettings.effective.modelId : settings.overrides.modelId;
+          setSelectedModelId(draftModelOverride.current ?? inherited);
         }
       } catch (reason) {
         report(reason);
@@ -755,22 +760,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     const inFlight = sessionCreation.current;
     if (inFlight !== undefined && inFlight.projectId === projectId) return inFlight.promise;
     const epoch = viewEpoch.current;
-    const candidateModelId = selectedModelRef.current ?? defaultModelRef.current;
+    const explicitModelId = draftModelOverride.current;
     const token = {};
     const creation = (async () => {
       try {
-        const modelId = models.some((model) => model.id === candidateModelId) ? candidateModelId : undefined;
-        if (modelId === undefined) {
-          toast(TEXT.errors.modelRequired);
-          return undefined;
-        }
-        const created = await createSession(client, projectId, { modelId });
+        const created = await createSession(client, projectId, explicitModelId ? { modelId: explicitModelId } : {});
         if (viewEpoch.current === epoch) {
           setSessionId(created.id);
           sessionRef.current = created.id;
           const fresh = { ...created, messages: [] };
           rememberBounded(detailsBySession.current, created.id, fresh);
           setDetail(fresh);
+          draftModelOverride.current = undefined;
+          setSelectedModelId(created.modelId);
         }
         await refreshSessionLists();
         return created.id;
@@ -785,7 +787,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     })();
     sessionCreation.current = { projectId, promise: creation, token };
     return creation;
-  }, [client, models, refreshSessionLists, report, toast]);
+  }, [client, refreshSessionLists, report, toast]);
 
   /**
    * The session a write should land in, created if the app has none open.
@@ -1101,6 +1103,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           rememberBounded(detailsBySession.current, target, fresh);
           if (sessionRef.current === target) {
             setDetail(fresh);
+            setSelectedModelId(fresh.modelId);
             // A send that started while these reads were in flight has already
             // closed the finished run and opened its own; resetting here would
             // erase the stream it is writing.
@@ -1319,11 +1322,14 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     setSessionId(undefined);
     setDraftEpoch((epoch) => epoch + 1);
     sessionRef.current = undefined;
-    setSelectedModelId(defaultModelRef.current);
+    draftModelOverride.current = undefined;
+    modelSelectionEpoch.current += 1;
+    setSelectedModelId(undefined);
+    void refreshModels();
     // A draft is not waiting on anything: an open that was still reading its
     // Session has been abandoned above, and will not clear this itself.
     setLoadingSession(false);
-  }, [clearSession]);
+  }, [clearSession, refreshModels]);
 
   /**
    * The welcome page's project picker: point the *next* conversation
@@ -1393,8 +1399,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // is what says which Project it is in.
         projectRef.current = fresh.projectId;
         setActiveProjectId(fresh.projectId);
-        const validModelId = models.some((model) => model.id === fresh.modelId) ? fresh.modelId : undefined;
-        setSelectedModelId(validModelId ?? defaultModelRef.current);
+        draftModelOverride.current = undefined;
+        setSelectedModelId(fresh.modelId);
         void refreshPanel(id);
         setLoadingSession(false);
         // Replaying a run is the only way its thinking block comes back — the
@@ -1417,7 +1423,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         report(reason);
       }
     },
-    [buildReplays, clearSession, client, commitReplays, follow, models, refreshPanel, report],
+    [buildReplays, clearSession, client, commitReplays, follow, refreshPanel, report],
   );
 
   /**
@@ -1488,17 +1494,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   const selectModel = useCallback(
     async (modelId: string) => {
-      setSelectedModelId(modelId);
-      selectedModelRef.current = modelId;
+      modelSelectionEpoch.current += 1;
+      const epoch = modelSelectionEpoch.current;
       const target = sessionRef.current;
       // With no Session yet there is nothing to point at; the choice rides
       // into the Session this app is about to create.
-      if (!target) return;
+      if (!target) {
+        draftModelOverride.current = modelId;
+        setSelectedModelId(modelId);
+        return;
+      }
       try {
-        await updateSession(client, target, { modelId });
+        const write = modelSelectionQueue.current.then(() => updateSession(client, target, { modelId }));
+        modelSelectionQueue.current = write.then(() => undefined, () => undefined);
+        const updated = await write;
+        if (sessionRef.current !== target || modelSelectionEpoch.current !== epoch) return;
+        modelSelectionEpoch.current += 1;
+        setSelectedModelId(updated.modelId);
         setDetail((current) => {
           if (!current) return current;
-          const next = { ...current, modelId };
+          const next = { ...current, ...updated };
           rememberBounded(detailsBySession.current, target, next);
           return next;
         });
@@ -1575,11 +1590,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           return;
         }
         setDefaultModelId(modelId);
+        await refreshModels();
       } catch (reason) {
         report(reason);
       }
     },
-    [client, report],
+    [client, refreshModels, report],
   );
 
   // ── mutations ────────────────────────────────────────────────────────────
@@ -1747,7 +1763,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   /** After the model form writes a provider or a profile, both halves of the
    *  catalog are stale: the composer reads `models`, the form reads `providers`. */
-  const refreshCatalog = useCallback(() => refreshModels(true), [refreshModels]);
+  const refreshCatalog = useCallback(() => refreshModels(), [refreshModels]);
 
   // ── data loading once the app is usable ──────────────────────────────────
   const usable = boot === "ready";
@@ -1792,6 +1808,21 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   useEffect(() => {
     if (!usable) return;
     void refreshModels();
+  }, [refreshModels, usable]);
+
+  useEffect(() => {
+    if (!usable) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible" && !runningRef.current) void refreshModels();
+    };
+    const timer = window.setInterval(refresh, 5_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [refreshModels, usable]);
 
   // The upload ceiling is a quota setting, so it can only be read from the

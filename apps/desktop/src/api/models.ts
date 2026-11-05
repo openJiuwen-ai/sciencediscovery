@@ -158,11 +158,10 @@ export function listProviderModels(
   );
 }
 
-/** Remove one model profile. The service refuses while any settings or session
- *  still names it, which comes back as an error rather than a silent no-op. */
-export function deleteModel(client: ApiClient, modelId: string): Promise<{ deleted: string }> {
-  return client.request<{ deleted: string }>(`/api/models/${encodeURIComponent(modelId)}`, {
-    method: "DELETE",
+/** Remove a profile and optionally replace the global default in the same write. */
+export function deleteModel(client: ApiClient, modelId: string, replacementModelId?: string): Promise<{ deleted: string }> {
+  return client.request(`/api/models/${encodeURIComponent(modelId)}`, {
+    method: "DELETE", body: JSON.stringify({ replacementModelId: replacementModelId ?? null }),
   });
 }
 

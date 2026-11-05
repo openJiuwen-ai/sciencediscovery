@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import type { ConfirmRequest } from "../app/use-workspace.js";
 import { TEXT } from "../text.js";
@@ -32,6 +32,7 @@ export function ConfirmDialog({
   onDismiss: () => void;
   request: ConfirmRequest;
 }) {
+  const [replacement, setReplacement] = useState(request.modelReplacement?.models.length === 1 ? request.modelReplacement.models[0]?.id ?? "" : "");
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!claimsEscape(event)) return;
@@ -60,7 +61,13 @@ export function ConfirmDialog({
             ×
           </button>
         </header>
-        <div className="modal-body">{request.body}</div>
+        <div className="modal-body"><p>{request.body}</p>{request.modelReplacement ? <label className="form-field">
+          <span>{request.modelReplacement.label}</span>
+          <select value={replacement} onChange={(event) => setReplacement(event.target.value)}>
+            <option value="">{request.modelReplacement.emptyLabel}</option>
+            {request.modelReplacement.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+          </select>
+        </label> : null}</div>
         <footer className="modal-footer">
           <button className="secondary-button" onClick={onDismiss} type="button">
             {TEXT.menu.cancel}
@@ -71,7 +78,7 @@ export function ConfirmDialog({
               // Dismiss first: the work may replace the screen underneath, and
               // a modal that outlives its own action is a trap.
               onDismiss();
-              void request.onAccept();
+              void request.onAccept(replacement || undefined);
             }}
             type="button"
           >

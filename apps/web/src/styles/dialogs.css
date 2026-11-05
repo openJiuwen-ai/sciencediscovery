@@ -304,3 +304,7 @@
 .workspace-preview-code:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .workspace-preview-notice { padding: 8px 12px; border: 1px solid var(--accent-border); border-radius: 6px; background: var(--accent-softer); }
 .workspace-preview-error { color: var(--danger); }
+.model-deletion-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; color: var(--text); background: var(--surface); overflow: auto; }
+.model-deletion-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.model-deletion-dialog h2 { overflow-wrap: anywhere; }
+.model-deletion-dialog select { width: 100%; min-width: 0; }

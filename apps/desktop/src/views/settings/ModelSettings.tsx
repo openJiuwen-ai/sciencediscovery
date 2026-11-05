@@ -50,8 +50,8 @@ const TONES = ["tone-1", "tone-2", "tone-3", "tone-4", "tone-5", "tone-6"];
  * A row's actions are the lifecycle this service actually exposes: test the
  * connection, make the profile the default, and delete. Deletion goes through
  * the app's confirmation dialog because it is the one action here that cannot
- * be undone, and the service can still refuse it while a project or session
- * names the profile.
+ * be undone. A primary model can be replaced in the same confirmation; explicit
+ * session choices remain unavailable until the user chooses another model.
  *
  * A row opens in place onto the one field `PUT /api/models` changes without
  * touching the provider, the token, or any session: which model the profile
@@ -79,10 +79,11 @@ export function ModelSettings({ actions, adding, client, onAddingChange, state }
       accept: TEXT.settings.model.delete,
       body: TEXT.settings.model.deleteBody,
       eyebrow: name,
-      onAccept: async () => {
+      ...(isDefault(profile) ? { modelReplacement: { label: TEXT.settings.model.replacement, emptyLabel: TEXT.settings.model.leaveUnset, models: state.models.filter(model => model.id !== profile.id) } } : {}),
+      onAccept: async (replacementModelId) => {
         setRowFailure(undefined);
         try {
-          await deleteModel(client, profile.id);
+          await deleteModel(client, profile.id, replacementModelId);
           await actions.refreshCatalog();
         } catch (reason) {
           setRowFailure({

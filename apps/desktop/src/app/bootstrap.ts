@@ -27,38 +27,18 @@ export function resolveConnection(health: HealthReport): "degraded" | "online" {
 export interface CatalogDecision {
   /** "setup" means there is no model at all, which is the first-run condition. */
   boot: "ready" | "setup";
-  /** The profile the global default should be pointed at, or undefined when the
-   *  stored selection is already valid and must be left alone. */
-  adopt?: string;
   defaultModelId?: string;
 }
 
-/**
- * Decide what to do with the model catalog at startup.
- *
- * Two rules, both about not writing when writing would lose something:
- *
- *  - An empty catalog is the wizard's gate. Nothing can be sent without a
- *    model, so this is not a degraded workspace to be tolerated.
- *  - An existing global selection is never overwritten. It is read back through
- *    the live catalog first, because a `modelId` naming a profile that no longer
- *    exists would be silently dropped by `PUT /api/settings` — writing it back
- *    would look like a successful no-op forever.
- *
- * Pulled out of the hook because these are the two decisions a wrong answer
- * would be expensive to notice: a spurious write rewrites the whole settings
- * object, and a missed wizard leaves a composer that cannot send.
- */
+/** Restore the saved default without choosing or persisting another profile. */
 export function resolveCatalog(
   profiles: ModelProfile[],
   overrides: RuntimeSettingsOverrides,
+  hasHistory = false,
 ): CatalogDecision {
   const first = profiles[0];
-  if (first === undefined) return { boot: "setup" };
+  if (first === undefined) return { boot: hasHistory ? "ready" : "setup" };
   const configured = overrides.modelId;
   const known = configured !== undefined && profiles.some((profile) => profile.id === configured);
-  // When the configured default points at a deleted profile, do not silently
-  // adopt the first available model. The user must explicitly pick one.
-  if (configured !== undefined && !known) return { boot: "setup" };
-  return { boot: "ready", defaultModelId: known ? configured : first.id };
+  return { boot: "ready", ...(known ? { defaultModelId: configured } : {}) };
 }

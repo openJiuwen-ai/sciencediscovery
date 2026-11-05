@@ -304,7 +304,7 @@ import { modelUsageAnalyticsToCsv } from "../model-usage.js";
 import { UsageExchangeRateProvider } from "../exchange-rates.js";
 import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
-import { readBytes, readJson, readMultipartSkill } from "./body.js";
+import { readBytes, readJson, readMultipartSkill, readOptionalJson } from "./body.js";
 import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
@@ -400,6 +400,16 @@ function usageAnalyticsFilters(url: URL) {
 function usageDisplayCurrency(url: URL): "CNY" | "USD" | undefined {
   const value = url.searchParams.get("displayCurrency");
   return value === "CNY" || value === "USD" ? value : undefined;
+}
+
+function extractReplacementModelId(body: unknown): string | null | undefined {
+  if (body === undefined) return undefined;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new ApiStatusError(400, "Deletion options must be an object");
+  if (!("replacementModelId" in body)) return undefined;
+  if (body.replacementModelId === null) return null;
+  if (typeof body.replacementModelId === "string") return body.replacementModelId;
+  if (body.replacementModelId === undefined) return undefined;
+  throw new ApiStatusError(400, "replacementModelId must be a string or null");
 }
 
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
@@ -2462,7 +2472,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (modelMatch && request.method === "DELETE") {
-        await store.deleteModel(modelMatch[1]!);
+        const body = await readOptionalJson<{ replacementModelId?: unknown }>(request);
+        const replacementModelId = extractReplacementModelId(body);
+        await store.deleteModel(modelMatch[1]!, replacementModelId);
         sendJson(response, 200, { deleted: modelMatch[1] });
         return;
       }
@@ -2529,7 +2541,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (providerMatch && request.method === "DELETE") {
-        await store.deleteProvider(providerMatch[1]!);
+        const body = await readOptionalJson<{ replacementModelId?: unknown }>(request);
+        const replacementModelId = extractReplacementModelId(body);
+        await store.deleteProvider(providerMatch[1]!, replacementModelId);
         providerModelListCache.delete(providerMatch[1]!);
         sendJson(response, 200, { deleted: providerMatch[1] });
         return;
