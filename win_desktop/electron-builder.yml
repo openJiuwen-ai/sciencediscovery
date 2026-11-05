@@ -11,6 +11,9 @@ directories:
   output: release
   buildResources: build
 
+# SIZEOPT W4: trim Electron locales to en-US + zh-CN after packing
+afterPack: scripts/after-pack-trim-locales.cjs
+
 # Only the shell code goes into the asar; the backend payload is plain files
 # under resources/ (staged by scripts/assemble-backend.mjs).
 files:

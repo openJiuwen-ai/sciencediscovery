@@ -67,3 +67,40 @@ test("local runtime and browser-test data never enter the image context", () => 
   assert.ok(ignored.has(".e2e-data/"));
   assert.ok(ignored.has("data/"));
 });
+
+// One interpreter version, stated once. The image pins it with
+// `ARG PYTHON_VERSION`; the Windows payload picks it up from the root
+// `.python-version`, because start-stack.mjs:309 syncs the whole workspace
+// from the repository root and uv reads that file there — a workspace root
+// sync does NOT consult the members' own `.python-version`. Both feed the
+// same pyvenv.cfg minor-version gate in
+// win_desktop/scripts/assemble-backend.mjs:124-139, which hard-fails when a
+// bundled venv drifts a minor from its siblings. That gate fires at package
+// time, so a one-sided edit here only surfaces on a machine whose default
+// interpreter differs from the pinned one — expensive to discover by hand.
+const workspaceMembers = () => {
+  const block = /\[tool\.uv\.workspace\]\s*members\s*=\s*\[([^\]]*)\]/s.exec(read("pyproject.toml"));
+  assert.ok(block, "root pyproject.toml should declare [tool.uv.workspace] members");
+  return [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+};
+
+test("the image and the workspace agree on one Python minor", () => {
+  const pinned = read(".python-version").trim();
+  const image = /\bARG PYTHON_VERSION=([0-9.]+)/.exec(read("Dockerfile"))?.[1];
+  assert.match(pinned, /^[0-9]+\.[0-9]+$/, "root .python-version should pin a minor");
+  assert.equal(image, pinned, "Dockerfile ARG PYTHON_VERSION drifted from .python-version");
+
+  const members = workspaceMembers();
+  assert.equal(members.length, 5, `expected the five sidecar services, got ${members.length}`);
+  for (const member of members) {
+    assert.ok(onDisk(`${member}/.python-version`), `${member}/.python-version went missing`);
+    assert.equal(read(`${member}/.python-version`).trim(), pinned,
+      `${member}/.python-version drifted from the root pin`);
+  }
+});
+
+test("the Python lockfile admits exactly the pinned minor", () => {
+  const required = /requires-python = ">=(\d+\.\d+)"/.exec(read("uv.lock"))?.[1];
+  assert.equal(required, read(".python-version").trim(),
+    "uv.lock requires-python drifted from the interpreter the image installs");
+});

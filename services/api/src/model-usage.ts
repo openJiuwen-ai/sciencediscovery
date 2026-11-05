@@ -42,6 +42,7 @@ export function createUsageBucket(key: string, label: string): ModelUsageBucket 
     key,
     label,
     outputTokens: null,
+    reasoningTokens: null,
     reportedInvocationCount: 0,
     totalTokens: null,
     unreportedInvocationCount: 0,
@@ -59,6 +60,7 @@ export function addUsageToBucket(bucket: ModelUsageBucket, usage: ModelInvocatio
     bucket.reportedInvocationCount += 1;
     bucket.inputTokens = addNullable(bucket.inputTokens, usage.inputTokens);
     bucket.outputTokens = addNullable(bucket.outputTokens, usage.outputTokens);
+    bucket.reasoningTokens = addNullable(bucket.reasoningTokens ?? null, usage.reasoningTokens);
     bucket.totalTokens = addNullable(bucket.totalTokens, usage.totalTokens);
     bucket.cacheReadTokens = addNullable(bucket.cacheReadTokens, usage.cacheReadTokens);
     bucket.cacheWriteTokens = addNullable(bucket.cacheWriteTokens, usage.cacheWriteTokens);
@@ -94,6 +96,7 @@ function normalizeInvocation(usage: ModelInvocationUsage): ModelInvocationUsage 
     ...usage,
     cacheReadTokens: usage.cacheReadTokens ?? null,
     cacheWriteTokens: usage.cacheWriteTokens ?? null,
+    reasoningTokens: usage.reasoningTokens ?? null,
     outcome: usage.outcome ?? "completed",
   };
 }

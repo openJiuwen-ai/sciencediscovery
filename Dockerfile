@@ -69,10 +69,22 @@ RUN node scripts/fetch-managed-micromamba.mjs \
 # extract stays byte-identical while only application source changes, so the
 # pnpm install layer below keeps its cache. Architecture-independent, so this
 # stage also runs on the build host.
+#
+# The Python side is extracted separately into /pymanifests for the same reason,
+# and for a second one: since SIZEOPT W2 the five sidecar services resolve
+# against ONE root uv.lock, so a member cannot be synced from its own directory
+# alone. uv needs the root pyproject.toml to learn the workspace exists AND
+# every member manifest the root declares — omit one and uv re-resolves, after
+# which --locked fails with "lockfile needs to be updated". Keeping the two
+# extracts in separate directories lets the Python manifests be copied in below
+# the pnpm install layer, so a Python-only manifest change does not invalidate
+# the Node dependency cache.
 FROM --platform=$BUILDPLATFORM ${NODE_RUNTIME_IMAGE} AS manifests
 WORKDIR /source
 COPY . .
 RUN find . -name node_modules -prune -o -name package.json -exec install -D {} /manifests/{} \;
+RUN find . -name node_modules -prune \
+      -o \( -name pyproject.toml -o -name uv.lock \) -exec install -D {} /pymanifests/{} \;
 
 # The model catalog is deliberately not committed. One snapshot is downloaded
 # here and baked into the image so a first container start with no network
@@ -119,31 +131,32 @@ COPY --from=manifests /manifests/ ./
 COPY pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
-# Install managed Python and third-party Python dependencies before application
-# source is copied. Bind-mounted manifests participate in the cache key without
-# becoming part of the layer.
-RUN mkdir -p \
-      services/paper \
-      services/gateway \
-      services/adapter \
-      services/memory-graph \
-      services/evolve
+# Install managed Python and the third-party Python dependencies before
+# application source is copied. Since W2 the five sidecars resolve against ONE
+# root uv.lock, so a member can no longer be synced from its own directory
+# alone: uv needs the workspace-root pyproject.toml to learn the workspace
+# exists AND every member manifest the root declares. Omit any one and uv
+# re-resolves, after which --locked fails with "lockfile needs to be updated"
+# (reproduced with uv: a member-only tree errors, the full manifest set
+# resolves). The manifests stage extracts all of them from the build context
+# and they are copied in here as one atomic set. They land in the layer rather
+# than being bind-mounted per-sync because a partial set is exactly what breaks
+# resolution; the extract is tiny and stays byte-identical across source-only
+# edits, so the cache still holds. Adding a workspace member needs no change
+# here — the find in the manifests stage picks up its pyproject.toml.
+COPY --from=manifests /pymanifests/ ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv python install "${PYTHON_VERSION}"
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=services/paper/pyproject.toml,target=/app/services/paper/pyproject.toml \
-    --mount=type=bind,source=services/paper/uv.lock,target=/app/services/paper/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/paper \
       uv sync --project services/paper --locked --no-install-project --python "${PYTHON_VERSION}"
 
-# Install the gateway's third-party dependencies from its lock before the local
-# sources exist, skipping the local package itself; the final locked sync below
-# validates the result once the full tree is present.
+# Install the gateway's third-party dependencies from the root lock before the
+# local sources exist, skipping the local package itself; the final locked sync
+# below validates the result once the full tree is present.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=services/gateway/pyproject.toml,target=/app/services/gateway/pyproject.toml \
-    --mount=type=bind,source=services/gateway/uv.lock,target=/app/services/gateway/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/gateway \
       uv sync --project services/gateway --frozen --no-install-project \
         --python "${PYTHON_VERSION}"
@@ -151,23 +164,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # The adapter, same treatment: our own code, a locked third-party dependency
 # tree (compiled extensions among them, e.g. uvloop, httptools, pydantic-core).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=services/adapter/pyproject.toml,target=/app/services/adapter/pyproject.toml \
-    --mount=type=bind,source=services/adapter/uv.lock,target=/app/services/adapter/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/adapter \
       uv sync --project services/adapter --frozen --no-install-project \
         --python "${PYTHON_VERSION}"
 
 # UI-accessible sidecars must be present in the one-image deployment too.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=services/memory-graph/pyproject.toml,target=/app/services/memory-graph/pyproject.toml \
-    --mount=type=bind,source=services/memory-graph/uv.lock,target=/app/services/memory-graph/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/memory-graph \
       uv sync --project services/memory-graph --frozen --no-install-project \
         --python "${PYTHON_VERSION}"
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=services/evolve/pyproject.toml,target=/app/services/evolve/pyproject.toml \
-    --mount=type=bind,source=services/evolve/uv.lock,target=/app/services/evolve/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/evolve \
       uv sync --project services/evolve --frozen --no-install-project --extra candidates \
         --python "${PYTHON_VERSION}"

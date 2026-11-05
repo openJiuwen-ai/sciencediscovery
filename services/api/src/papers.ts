@@ -304,7 +304,7 @@ export class PaperService {
     const content = responseBody.choices?.[0]?.message?.content?.trim();
     if (!content) throw new Error("Vision model returned no content");
     const usage = normalizeUsage(responseBody.usage, "openai-chat-completions");
-    const modelUsage = usage && { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens };
+    const modelUsage = usage && { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, reasoningTokens: usage.reasoningTokens ?? null, totalTokens: usage.totalTokens };
 
     const id = randomUUID();
     const resultPath = `${dirname(acquisition.pdfPath)}/vision/${id}.md`;

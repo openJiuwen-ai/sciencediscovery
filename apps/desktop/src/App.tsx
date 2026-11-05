@@ -23,8 +23,9 @@ import {
 } from "react";
 
 import { ApiClient } from "./api/client.js";
-import { listSubagents } from "./api/sessions.js";
+import { getSubagent } from "./api/sessions.js";
 import type { Subagent, SubagentStep } from "./api/types.js";
+import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
 import { useJiuwenReadiness, jwReadyFromBridge, wizardIntroHandled } from "./app/shell-bridge.js";
@@ -36,7 +37,7 @@ import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
 import { allSubagents } from "./run-stream/model.js";
-import { mergeSubagentSteps } from "./run-stream/subagent.js";
+import { mergedSubagentSteps } from "./run-stream/subagent.js";
 import {
   GUIDE_STORAGE_KEY,
   RIGHT_PANEL_STORAGE_KEY,
@@ -45,6 +46,7 @@ import {
   writeStoredFlag,
 } from "./state/storage.js";
 import { applyDocumentLanguage, TEXT } from "./text.js";
+import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
 import { Composer } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
@@ -219,37 +221,77 @@ export function App({ initialToken }: Props) {
 
   /** The run's event log stores subagent snapshots without their steps, so a
    *  replayed child arrives empty. The catalog has them, and is re-read when
-   *  the open child reaches a terminal status so the last steps are complete. */
-  const [subagentCatalog, setSubagentCatalog] = useState<Subagent[]>([]);
+   *  the open child reaches a terminal status so the last steps are complete.
+   *
+   *  Only the open child is read: the panel shows one record at a time, and
+   *  the roster route carried every sibling's steps — megabytes for a long
+   *  run — to choose one of them. A running child is read on open and then
+   *  polled until it settles (see the effect below). The followed stream below
+   *  carries the steps emitted while this window is attached, but a child
+   *  continued by a wake turn publishes its continuation under the wake run,
+   *  not the run that named it, so it is not on the stream this panel tails.
+   *  The catalog is where the run loop flushes those steps; skipping it left
+   *  the panel without them until the child settled. */
+  const [subagentCatalog, setSubagentCatalog] = useState<Subagent | undefined>(undefined);
   const [subagentLoading, setSubagentLoading] = useState(false);
+  /** Set when the record has stopped being refreshed — a run of failed polls.
+   *  The held copy stands, but the panel says it may be behind. */
+  const [subagentStale, setSubagentStale] = useState(false);
   useEffect(() => {
     if (openSubagentId === undefined || state.sessionId === undefined) {
-      setSubagentCatalog([]);
+      setSubagentCatalog(undefined);
       setSubagentLoading(false);
+      setSubagentStale(false);
       return;
     }
+    // While the child runs this is the only source for a continuation the
+    // wake run published, and the run loop keeps flushing it, so a read at
+    // open would be a still image: poll it until the child settles. Once it
+    // settles the effect runs again — `foundSubagent.status` changed — and
+    // reads the complete record one last time.
+    const polling = foundSubagent?.status === "running";
     let cancelled = false;
     setSubagentLoading(true);
-    void listSubagents(client, state.sessionId)
-      .then((children) => {
-        if (!cancelled) setSubagentCatalog(children);
-      })
-      .catch(() => {
-        // The run-state copy still names the task and shows its status; only
-        // the steps are missing, so this is not worth an error banner.
-        if (!cancelled) setSubagentCatalog([]);
-      })
-      .finally(() => {
+    setSubagentStale(false);
+    const read = () => getSubagent(client, state.sessionId!, openSubagentId).then((child) => {
+      if (cancelled) return;
+      setSubagentCatalog(child);
+      setSubagentStale(false);
+      setSubagentLoading(false);
+    });
+    if (!polling) {
+      // Terminal record: one read, no cadence. A failure leaves the held copy
+      // in place; there is no longer anything to expect it to grow.
+      void read().catch(() => {
         if (!cancelled) setSubagentLoading(false);
       });
+      return () => {
+        cancelled = true;
+      };
+    }
+    // A poll reads the whole record, so it runs only while the window is
+    // shown; a hidden window waits for `visibilitychange` and reads once on
+    // return. A failed read keeps the copy already held — the run-state copy
+    // still names the task and shows its status, so this is not worth an
+    // error banner — but failures in a row mean the record is frozen, and
+    // after a few the panel says so instead of looking live.
+    const poll = createCatalogPoll(read, {
+      onFailing: (count) => {
+        if (cancelled) return;
+        setSubagentLoading(false);
+        if (count >= CATALOG_FAILURES_BEFORE_STALE) setSubagentStale(true);
+      },
+    });
+    const onVisibilityChange = () => poll.visibilityChanged();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       cancelled = true;
+      poll.stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [client, foundSubagent?.status, openSubagentId, state.sessionId]);
+  }, [client, foundSubagent?.parentTurnId, foundSubagent?.status, openSubagentId, state.sessionId]);
 
-  const catalogSubagent = openSubagentId === undefined
-    ? undefined
-    : subagentCatalog.find((subagent) => subagent.id === openSubagentId);
+  const catalogSubagent = subagentCatalog?.id === openSubagentId ? subagentCatalog : undefined;
   const resolvedSubagent = foundSubagent
     ?? catalogSubagent
     ?? (lastSubagent.current?.id === openSubagentId ? lastSubagent.current : undefined);
@@ -260,8 +302,8 @@ export function App({ initialToken }: Props) {
    * timeline keeps only the milestones. The live copy on the run stream reaches
    * whoever is attached at the moment it is emitted, so a child that started
    * before this window did, or that was continued by a later process, is not on
-   * it at all — and the catalog read above answers only once the child settles.
-   * Following the child's stream is what keeps 执行详情 filling while it runs. */
+   * it at all. The catalog read above covers what was already flushed; following
+   * the child's stream is what keeps 执行详情 filling after it. */
   /** The followed stream's steps, bound to the record they were read for. A
    *  snapshot outlives the selection that asked for it by one render, so it
    *  carries its own id: another child's steps are never drawn under this one. */
@@ -282,25 +324,22 @@ export function App({ initialToken }: Props) {
     });
   }, [client, followedRunId, openSubagentId, state.sessionId]);
 
-  // Live snapshots are fresher and already carry steps. A replay's copy is the
-  // terminal state but says nothing about what the child did, so its steps come
-  // from the catalog. The followed stream is the base: its order is the order
-  // the work happened in, and whatever this window already holds wins on an id
-  // it shares, because that copy is the fresher one.
+  // The record's steps come from three copies of unequal freshness — see
+  // `mergedSubagentSteps`. A replay's snapshot is the terminal state but says
+  // nothing about what the child did, so its steps come from the catalog; a
+  // running child's snapshot carries what this window saw, the followed stream
+  // carries what the child wrote, and the catalog carries the continuation a
+  // wake turn published elsewhere. The snapshot stays the copy shown for an id
+  // it shares, because it is the freshest of the three.
   const openSubagent = useMemo(() => {
     if (resolvedSubagent === undefined) return undefined;
-    const held = resolvedSubagent.steps.length === 0 && catalogSubagent !== undefined
-      ? catalogSubagent.steps
-      : resolvedSubagent.steps;
     const followedSteps = followed !== undefined
       && followed.subagentId === openSubagentId
       && followed.runId === followedRunId
       ? followed.steps
       : [];
-    if (followedSteps.length === 0) {
-      return held === resolvedSubagent.steps ? resolvedSubagent : { ...resolvedSubagent, steps: held };
-    }
-    return { ...resolvedSubagent, steps: mergeSubagentSteps(followedSteps, held) };
+    const steps = mergedSubagentSteps(resolvedSubagent.steps, catalogSubagent?.steps, followedSteps);
+    return steps === resolvedSubagent.steps ? resolvedSubagent : { ...resolvedSubagent, steps };
   }, [catalogSubagent, followed, followedRunId, openSubagentId, resolvedSubagent]);
 
   // A selection belongs to one session's transcript. Carrying it into another
@@ -309,7 +348,7 @@ export function App({ initialToken }: Props) {
     setOpenSubagentId(undefined);
     setOpenTool(undefined);
     lastSubagent.current = undefined;
-    setSubagentCatalog([]);
+    setSubagentCatalog(undefined);
   }, [state.sessionId]);
 
   // Pressing a line opens the child it belongs to, and pressing the same line
@@ -424,7 +463,14 @@ export function App({ initialToken }: Props) {
   }
 
   if (boot === "offline") {
-    return <OfflineScreen onRetry={actions.retryBoot} reason="unreachable" />;
+    // The dialog still mounts here: the offline screen offers a feedback entry
+    // that carries the failure's diagnostics, so it must have a listener.
+    return (
+      <>
+        <OfflineScreen onRetry={actions.retryBoot} reason="unreachable" />
+        <FeedbackDialog />
+      </>
+    );
   }
 
   // The wizard replaces the shell rather than sitting over it: with no model
@@ -611,6 +657,7 @@ export function App({ initialToken }: Props) {
           sessions={state.recent}
           subagent={openSubagent}
           subagentLoading={subagentLoading && (openSubagent?.steps.length ?? 0) === 0}
+          subagentStale={subagentStale}
           tabs={state.tabs}
           tool={openTool}
         />
@@ -673,6 +720,8 @@ export function App({ initialToken }: Props) {
       {state.confirm ? (
         <ConfirmDialog onDismiss={actions.dismissConfirm} request={state.confirm} />
       ) : null}
+
+      <FeedbackDialog />
     </>
   );
 }

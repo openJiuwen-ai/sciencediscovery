@@ -1,0 +1,108 @@
+diff --git a/jiuwenswarm/server/app_agentserver.py b/jiuwenswarm/server/app_agentserver.py
+index 6416ffe..ab7464f 100644
+--- a/jiuwenswarm/server/app_agentserver.py
++++ b/jiuwenswarm/server/app_agentserver.py
+@@ -328,13 +328,42 @@ async def _run(host: str, port: int) -> None:
+     if _should_apply_sse_invoke_patch():
+         apply_openai_sse_invoke_patch()
+ 
+-    # 观测 hook 只会在后续创建子 Agent 时生效，不是首页 RPC 的前置条件。
+-    # 延后其依赖导入可让冻结进程先开放 AgentServer 端口；在事件循环处理首个
+-    # 请求前仍会同步安装完成，保持所有执行路径的 span 归属不变。
+-    from openjiuwen.harness.observability import install_subagent_observability_hook
++    # [windows-desktop] reason (SD-patch 0020): the observability hook import
++    # (openjiuwen.harness.observability) drags in 3,946 modules — measured
++    # 12.4s hot / 15.1s cold on the installed tree, the single largest item on
++    # the hot-start critical path (problems W7: 39% of end-to-end). The hook
++    # only affects sub-agents created later and is no prerequisite for any
++    # handshake RPC, so the install moves to a background worker: to_thread
++    # because the cost is IO-bound .pyc loading that releases the GIL — the
++    # loop keeps serving handshakes while the import runs. Correctness is
++    # preserved by the synchronous idempotent backstop at
++    # AgentManager.get_agent() (the single entry point for agent creation),
++    # so no sub-agent can be dispatched before the hook is in place — span
++    # attribution is unchanged on every execution path. The install itself is
++    # idempotent (marker attribute) and best-effort (never raises), so warmup
++    # and backstop may race harmlessly. Shutdown cancels the task handle
++    # (see the _run finally block); a cancelled import only costs sub-agent
++    # spans, exactly the hook's own failure mode.
++    async def _install_observability_warmup() -> None:
++        def _install() -> None:
++            from openjiuwen.harness.observability import (
++                install_subagent_observability_hook,
++            )
++
++            install_subagent_observability_hook()
+ 
+-    install_subagent_observability_hook()
+-    log_startup_stage("observability_installed")
++        try:
++            await asyncio.to_thread(_install)
++        except Exception as exc:  # noqa: BLE001
++            logger.warning(
++                "[AgentServer] observability warmup failed; get_agent() backstop will retry: %s",
++                exc,
++            )
++        log_startup_stage("observability_installed")
++
++    _observability_task: asyncio.Task | None = asyncio.create_task(
++        _install_observability_warmup(), name="observability-warmup"
++    )
+ 
+     # ---------- 图像模态探针预热 ----------
+     # listen 之后后台 fire-and-forget:探针只往进程级缓存写 (api_base, model_name)
+@@ -439,6 +468,20 @@ async def _run(host: str, port: int) -> None:
+                 pass
+             except Exception as exc:
+                 logger.warning("[AgentServer] teammate bootstrap daemon stop failed: %s", exc)
++        # (SD-patch 0020): the observability warmup runs in a worker thread via
++        # to_thread — cancel() stops awaiting it here; the thread itself is
++        # non-interruptible but its result (an idempotent hook install) is
++        # harmless if it lands after shutdown begins. A cancelled install only
++        # costs sub-agent spans, exactly the hook's own best-effort failure
++        # mode, so this cancel is safe.
++        if _observability_task is not None:
++            _observability_task.cancel()
++            try:
++                await _observability_task
++            except asyncio.CancelledError:
++                pass
++            except Exception as exc:
++                logger.warning("[AgentServer] observability warmup stop failed: %s", exc)
+         # 图像模态预热任务在 server 的统一槽位里,由下方 server.stop() 内的
+         # _stop_main_services cancel 回收,这里不重复处理。
+         if zen_free_models_task is not None:
+diff --git a/jiuwenswarm/server/runtime/agent_manager.py b/jiuwenswarm/server/runtime/agent_manager.py
+index b986cec..f825448 100644
+--- a/jiuwenswarm/server/runtime/agent_manager.py
++++ b/jiuwenswarm/server/runtime/agent_manager.py
+@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
+ # (SD-patch 0015) lazy-import caches — populated on first runtime use:
+ _install_shell_tool_safety_hooks = None
+ _get_team_manager = None
++# (SD-patch 0020) observability hook cache — same pattern as above.
++_install_subagent_observability_hook = None
+ 
+ 
+ ACP_DEFAULT_CAPABILITIES: dict[str, Any] = build_acp_initialize_result()
+@@ -1002,6 +1004,20 @@ class AgentManager:
+         )
+ 
+         await asyncio.to_thread(_provider_patches_impl)
++        # (SD-patch 0020): the sub-agent observability hook is installed after
++        # listen by a warmup task; this synchronous, idempotent guard closes
++        # the race window for any agent created before that task finishes, so
++        # no sub-agent can be dispatched without its span rail. The hook is
++        # itself idempotent (marker attribute) and best-effort (never raises);
++        # the import runs in a worker thread so the first call's heavy chain
++        # (~12s on the installed tree, problems W7) never blocks the loop.
++        global _install_subagent_observability_hook
++        if _install_subagent_observability_hook is None:
++            from openjiuwen.harness.observability import (
++                install_subagent_observability_hook as _observability_impl,
++            )
++            _install_subagent_observability_hook = _observability_impl
++        await asyncio.to_thread(_install_subagent_observability_hook)
+         channel_key = _normalize_channel_id(channel_id)
+         mode_key = _normalize_mode(mode)
+         sub_mode_key = collapse_plan_sub_mode(mode_key, sub_mode)
