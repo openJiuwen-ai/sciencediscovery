@@ -36,6 +36,7 @@ import type {
 
 import { MemoryGraphClient, type ArtifactProvenanceGraphResult } from "@sciencediscovery/memory";
 import { effectiveExecutionRuns, ProvenanceRecorder } from "@sciencediscovery/provenance";
+import { ApiStatusError } from "../runs/index.js";
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 
 export function classifyWorkspaceFilePreview(path: string): WorkspaceFile["previewKind"] {
@@ -356,7 +357,13 @@ export async function artifactVersionDiff(
   if (!from) throw new Error("A previous artifact version is unavailable for comparison");
   const isText = (mediaType: string) => mediaType.startsWith("text/")
     || /\b(?:json|javascript|xml|yaml)\b/i.test(mediaType);
-  if (!isText(from.mediaType) || !isText(to.mediaType)) throw new Error("Diff is available only for textual or comparable artifact versions");
+  // Both versions exist, so this is not a missing resource: the pair just cannot be compared
+  // line by line. Reject it as a client input problem here, where the rule lives, so every
+  // caller of the helper answers the same 400 instead of a 500 with a false
+  // unclassified_request_error log.
+  if (!isText(from.mediaType) || !isText(to.mediaType)) {
+    throw new ApiStatusError(400, "Diff is available only for textual or comparable artifact versions");
+  }
   const [before, after] = await Promise.all([
     recorder.cas.read(from.content.hash),
     recorder.cas.read(to.content.hash),
