@@ -137,24 +137,32 @@ export function mergeSubagentSteps(current: SubagentStep[], incoming: SubagentSt
 }
 
 /**
- * The steps the panel holds before the followed stream is folded in.
+ * The steps the panel draws for one open child.
  *
- * Two copies can exist for an open child: the live snapshot the run stream
- * carried, and the catalog the run loop writes. The snapshot is fresher on the
- * ids they share, but it is not the whole record — a child continued by a wake
- * turn publishes its continuation under the wake run, which is not the stream
- * this panel tails, so those steps only reach it through the catalog. Keeping
- * both is what shows the continuation; keeping only the snapshot left a running
- * child looking stuck at whatever it had finished before the wake.
+ * Three copies can exist, and they are not equally fresh:
+ *
+ * - the catalog, which the run loop flushes on a timer. It is the only one
+ *   that holds a continuation a wake turn publishes under a run this panel does
+ *   not tail, and the only one a replayed child has at all;
+ * - the child's own stream, which the panel follows while it runs — a direct
+ *   read, so fresher than the catalog for the ids both have;
+ * - the live snapshot the run stream broadcast, which updates as each step
+ *   lands and is therefore fresher still.
+ *
+ * The catalog supplies the order — the order the run loop wrote — and the rest
+ * are folded on freshest-last, so a step that is in flight when the panel opens
+ * is not pinned to the flushed copy until the child settles.
  */
-export function heldSubagentSteps(
+export function mergedSubagentSteps(
   snapshot: SubagentStep[],
   catalog: readonly SubagentStep[] | undefined,
+  followed: readonly SubagentStep[] = [],
 ): SubagentStep[] {
-  if (catalog === undefined || catalog.length === 0) return snapshot;
-  // The catalog is the base, so its order — the order the run loop wrote — is
-  // what the timeline follows; the snapshot then wins on an id both copies have.
-  return mergeSubagentSteps([...catalog], snapshot);
+  if ((catalog === undefined || catalog.length === 0) && followed.length === 0) return snapshot;
+  const base = catalog === undefined || catalog.length === 0
+    ? [...followed]
+    : mergeSubagentSteps([...catalog], [...followed]);
+  return mergeSubagentSteps(base, [...snapshot]);
 }
 
 /** Merge a full snapshot onto the copy already held.
