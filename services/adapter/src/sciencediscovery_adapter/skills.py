@@ -35,6 +35,7 @@ import logging
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,13 @@ Rpc = Callable[..., Awaitable[dict[str, Any]]]
 MARKER = ".sciencediscovery.json"
 RENAMED_PREFIX = "sciencediscovery-"
 _NAME_LINE = re.compile(r"^name:.*$", re.MULTILINE)
+# [first-message-latency] S3b: how long a skills.list answer serves reads before
+# re-fetching. JiuwenSwarm's skill set changes far less often than runs arrive
+# (E1 measured three skills.list RPCs on the first-message path); the adapter
+# performs every write itself and invalidates on each one, so a hit is only
+# ever younger than the last write and the TTL bounds external edits (a direct
+# JW-web change) before a read sees them. 0 disables the cache entirely.
+DEFAULT_LIST_CACHE_TTL_S = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -69,18 +77,42 @@ def _renamed(skill_md: str, name: str) -> str:
 
 
 class SkillSync:
-    def __init__(self, rpc: Rpc, mgmt_url: str) -> None:
+    def __init__(self, rpc: Rpc, mgmt_url: str, list_cache_ttl_s: float = DEFAULT_LIST_CACHE_TTL_S) -> None:
         self._rpc = rpc
         self._url = mgmt_url
         self._lock = asyncio.Lock()
         # JiuwenSwarm's directory of each imported skill -> its ScienceDiscovery id, for sandbox_skill_paths.
         self.directories: dict[str, str] = {}
+        self._list_cache_ttl_s = list_cache_ttl_s
+        # (cached answer, expiry) — the answer is the raw skills list both
+        # _installed() and listed() derive from; None means "fetch next read".
+        self._list_cache: tuple[list[dict[str, Any]] | None, float] = (None, 0.0)
+
+    async def _raw_listed(self) -> list[dict[str, Any]]:
+        """The skills.list RPC answer, shared by _installed() and listed(), cached for _list_cache_ttl_s.
+
+        A cache hit never changes what JiuwenSwarm receives: every write path
+        (import_local, toggle) runs through this adapter and invalidates on
+        success, so the cached answer is always at least as fresh as the last
+        write. TTL=0 disables the cache and every read re-fetches (today's
+        behaviour, kept as the kill switch).
+        """
+        if self._list_cache_ttl_s > 0:
+            cached, expires = self._list_cache
+            if cached is not None and expires > time.monotonic():
+                return cached
+        listed = (await self._rpc(self._url, "skills.list", {})).get("skills", [])
+        if self._list_cache_ttl_s > 0:
+            self._list_cache = (listed, time.monotonic() + self._list_cache_ttl_s)
+        return listed
+
+    def _invalidate_list_cache(self) -> None:
+        self._list_cache = (None, 0.0)
 
     async def _installed(self) -> dict[str, Path]:
         """Every skill JiuwenSwarm has, by name, with its directory."""
-        listed = (await self._rpc(self._url, "skills.list", {})).get("skills", [])
         found: dict[str, Path] = {}
-        for skill in listed:
+        for skill in await self._raw_listed():
             name, path = skill.get("name"), skill.get("path")
             if isinstance(name, str) and isinstance(path, str) and path:
                 found[name] = Path(path).parent
@@ -89,9 +121,8 @@ class SkillSync:
     async def listed(self) -> list[dict[str, Any]]:
         """The skills JiuwenSwarm has installed, each with where it came from: `sciencediscovery` (imported from
         ScienceDiscovery, with its id there), `builtin` (shipped with JiuwenSwarm) or JiuwenSwarm's own source name."""
-        listed = (await self._rpc(self._url, "skills.list", {})).get("skills", [])
         skills: list[dict[str, Any]] = []
-        for skill in listed:
+        for skill in await self._raw_listed():
             name, path = skill.get("name"), skill.get("path")
             if not isinstance(name, str) or skill.get("installed") is False:
                 continue
@@ -111,6 +142,8 @@ class SkillSync:
         answer = await self._rpc(self._url, "skills.toggle", {"name": name, "enabled": enabled})
         if not answer.get("success", False):
             raise RuntimeError(str(answer.get("detail") or answer)[:300])
+        # Write-through: the cached list is stale from here.
+        self._invalidate_list_cache()
 
     async def sync(self, skills: list[dict[str, str]]) -> dict[str, dict[str, str]]:
         """Import each `{id, path, hash}` that JiuwenSwarm lacks or has at another hash.
@@ -171,6 +204,8 @@ class SkillSync:
             answer = await self._rpc(self._url, "skills.import_local", {"path": str(package), "force": True}, timeout=120)
         if not answer.get("success", False):
             raise RuntimeError(str(answer.get("detail") or answer)[:300])
+        # Write-through: the cached list predates this import.
+        self._invalidate_list_cache()
 
 
 SKILLS_VARIABLE = "SCIENCEDISCOVERY_SKILLS_DIR"

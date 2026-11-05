@@ -174,6 +174,57 @@ async def test_a_sync_that_imports_relists_to_refresh_the_directories_map(tmp_pa
     assert sync.directories == {str(jw.root / "evolve-design"): "evolve-design"}
 
 
+async def test_two_listed_calls_within_the_ttl_share_one_rpc(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.listed()
+    await sync.listed()
+    assert calls.get("skills.list") == 1
+
+
+async def test_a_no_import_sync_and_the_next_listed_share_one_rpc(tmp_path):
+    # The steady state this cache is for: back-to-back runs stage the same
+    # skills, so _sync's listing already answers the reconcile's listed().
+    jw = jiuwenswarm(tmp_path)
+    skill = {"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}
+    await SkillSync(jw.rpc, URL).sync([skill])  # first adapter life: imports
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.sync([skill])  # no import -> one listing
+    await sync.listed()  # same answer within the TTL -> no second RPC
+    assert calls.get("skills.list") == 1
+
+
+async def test_an_import_invalidates_the_list_cache(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
+    assert calls.get("skills.list") == 2  # pre-import + post-import refresh
+    await sync.listed()  # cache was invalidated by the import, then repopulated by the refresh
+    assert calls.get("skills.list") == 2
+
+
+async def test_a_toggle_invalidates_the_list_cache(tmp_path):
+    jw = jiuwenswarm(tmp_path, "xlsx")
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.listed()
+    await sync.set_enabled("xlsx", False)
+    await sync.listed()
+    assert calls.get("skills.list") == 2  # one per side of the write
+
+
+async def test_a_zero_ttl_disables_the_list_cache(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL, list_cache_ttl_s=0)
+    await sync.listed()
+    await sync.listed()
+    assert calls.get("skills.list") == 2  # today's behaviour: every read re-fetches
+
+
 def test_a_command_reading_jiuwenswarms_copy_of_a_skill_reads_the_sandbox_package():
     # Observed: skill_tool pointed the model at JiuwenSwarm's skills directory and it ran
     # `cat <that>/references/custom-script.md`, which the sandbox does not have.
