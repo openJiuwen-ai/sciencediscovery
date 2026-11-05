@@ -496,14 +496,14 @@ test("chat variants map thinking controls without cross-provider fields", async 
   assert.equal(requests[6]!.reasoning_split, undefined);
 });
 
-test("retries once without thinking controls when an OpenAI-compatible gateway rejects them", async () => {
+test("remembers rejected thinking controls for an OpenAI-compatible gateway", async () => {
   const requests: Record<string, unknown>[] = [];
   await withServer(async (request, response) => {
     const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
     requests.push(body);
     if (body.thinking) {
       response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "Unsupported gateway parameters: thinking, reasoning_effort" } }));
+      response.end(JSON.stringify({ error: { message: "Unknown parameter: thinking" } }));
       return;
     }
     sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
@@ -513,11 +513,17 @@ test("retries once without thinking controls when an OpenAI-compatible gateway r
       "s", [{ role: "user", content: "hi" }], [], policy, new AbortController().signal,
     );
     assert.equal(turn.assistantMessage.content, "ok");
+    const next = await streamModelTurn(
+      { apiProtocol: "openai-chat-completions", apiVariant: "deepseek", baseUrl, model: "stub", thinkingMode: "enabled" },
+      "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal,
+    );
+    assert.equal(next.assistantMessage.content, "ok");
   });
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.deepEqual(requests[0]!.thinking, { type: "enabled" });
   assert.equal(requests[1]!.thinking, undefined);
   assert.equal(requests[1]!.reasoning_effort, undefined);
+  assert.equal(requests[2]!.thinking, undefined);
 });
 
 test("explicit protocol changes the endpoint even when the saved URL has an old suffix", async () => {
