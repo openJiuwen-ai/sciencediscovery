@@ -1686,6 +1686,24 @@ test("a wide line past the row window does not become the file's column count", 
       `a row's field count must not be announced as the file's column count: ${warning}`,
     );
   }
+
+  // A two-column file without an outlier stays two columns wide: the cap is for
+  // a wider line, not a width every table is padded up to.
+  const narrowVid = await seedArtifact(fixture, {
+    content: ["a,b", ...Array.from({ length: 100 }, () => "1,2")].join("\n"),
+    kind: "dataset",
+    logicalName: "narrow.csv",
+    mediaType: "text/csv",
+  });
+  const narrow = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, narrowVid,
+  );
+  if (narrow.mode !== "dataset-table") assert.fail(`unexpected mode ${narrow.mode}`);
+  assert.equal(narrow.columns.length, 2, "a narrow table is not widened to the cap");
+  assert.deepEqual(narrow.columns, ["a", "b"]);
+  assert.deepEqual(narrow.clippedColumns, { shown: 2, total: 2 });
+  assert.equal(narrow.clippedCells, 0);
+  assert.deepEqual(narrow.warnings, []);
 });
 
 test("the surplus cap never takes a named column and scales with the header", async (context) => {
@@ -1712,6 +1730,26 @@ test("the surplus cap never takes a named column and scales with the header", as
   assert.deepEqual(namedPayload.clippedColumns, { shown: 40, total: 40 });
   assert.equal(namedPayload.clippedCells, 0);
   assert.deepEqual(namedPayload.warnings, [], "a whole table warns about nothing");
+
+  // A twenty-column header keeps every named column: the cap applies to the
+  // unnamed surplus on top of the header, so the grid may reach 36 columns and
+  // all twenty names stay, in order.
+  const twenty = Array.from({ length: 20 }, (_, index) => `t${index}`);
+  const outlier = Array.from({ length: 200_001 }, () => "x").join(",");
+  const twentyVid = await seedArtifact(fixture, {
+    content: [twenty.join(","), "1,2,3", outlier].join("\n"),
+    kind: "dataset",
+    logicalName: "twenty-with-outlier.csv",
+    mediaType: "text/csv",
+  });
+  const twentyPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, twentyVid,
+  );
+  if (twentyPayload.mode !== "dataset-table") assert.fail(`unexpected mode ${twentyPayload.mode}`);
+  assert.equal(twentyPayload.columns.length, 36, "the header plus the capped surplus, never less than the header");
+  assert.deepEqual(twentyPayload.columns.slice(0, 20), twenty, "every named column is kept, in order");
+  assert.equal(twentyPayload.clippedCells, 199_965, "the cells past the width are counted, not hidden");
+  assert.deepEqual(twentyPayload.clippedColumns, { shown: 20, total: 20 });
 
   // The cap is min(16, max(2, header)): an eight-column header accepts at most
   // eight unnamed surplus columns, so a 100-field row renders 16 columns and the
