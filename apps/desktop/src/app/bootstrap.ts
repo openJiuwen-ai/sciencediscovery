@@ -57,9 +57,8 @@ export function resolveCatalog(
   if (first === undefined) return { boot: "setup" };
   const configured = overrides.modelId;
   const known = configured !== undefined && profiles.some((profile) => profile.id === configured);
-  // `PUT /api/settings` replaces the whole object, so this goes through the
-  // read-merge-write helper in `api/models.ts`.
-  return known
-    ? { boot: "ready", defaultModelId: configured }
-    : { adopt: first.id, boot: "ready", defaultModelId: first.id };
+  // When the configured default points at a deleted profile, do not silently
+  // adopt the first available model. The user must explicitly pick one.
+  if (configured !== undefined && !known) return { boot: "setup" };
+  return { boot: "ready", defaultModelId: known ? configured : first.id };
 }

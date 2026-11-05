@@ -7097,7 +7097,11 @@ test("model registry persists multiple profiles and assigns them per session", a
     headers: authorization,
     method: "DELETE",
   });
-  assert.equal(assignedDelete.status, 400);
+  assert.equal(assignedDelete.status, 200);
+  const reopenedAnalysis = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${analysis.body.id}`, { headers: authorization });
+  assert.equal(reopenedAnalysis.body.modelId, fast.body.id);
+  const reopenedReview = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${review.body.id}`, { headers: authorization });
+  assert.equal(reopenedReview.body.modelId, reviewer.body.id);
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalog = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
   database.close();

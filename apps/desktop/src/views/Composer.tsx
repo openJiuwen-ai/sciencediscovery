@@ -716,11 +716,11 @@ export function Composer({
     node.setSelectionRange(end, end);
   };
 
-  const selected = models.find((model) => model.id === selectedModelId) ?? models[0];
+  const selected = models.find((model) => model.id === selectedModelId);
   /** The stored name is the server's; the pill shows it in the interface's
    *  language. */
   const selectedName = selected ? providerName(selected.name) : undefined;
-  const canSend = text.trim() !== "" && !running && jwBlocked === undefined;
+  const canSend = text.trim() !== "" && !running && jwBlocked === undefined && selected !== undefined;
 
   // Grow with the content up to the CSS max-height, then scroll. Done by hand
   // because a textarea cannot size to its content.

@@ -232,6 +232,44 @@ test("run snapshots preserve explicit effort for an unknown DeepSeek gateway", a
 });
 
 
+test("computeSettingsSnapshot rejects a session whose effective model was deleted", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-missing-model-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
+  const model = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const otherProvider = await store.createProvider({ apiToken: "test-token-2", presetId: "openai" });
+  const other = await store.materializeProviderModel(otherProvider.id, "gpt-5.5");
+  const project = await store.createProject("Project");
+  const session = await store.createSession(project.id, "Session", model.id);
+  await store.deleteModel(model.id);
+
+  // Sanity: the session still records the historical model.
+  assert.equal(store.getSession(session.id).modelId, model.id);
+  // The deleted model must not silently switch to the remaining one.
+  assert.equal(store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+  // Creating a run should fail early with a structured error.
+  try {
+    computeSettingsSnapshot(store, session.id);
+    assert.fail("expected rejection");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "The session model is not available");
+  }
+
+  // After the user explicitly selects another model, the session works again.
+  await store.updateSession(session.id, { modelId: other.id, reviewModelId: other.id });
+  const snapshot = computeSettingsSnapshot(store, session.id);
+  assert.equal(snapshot.modelId, other.id);
+});
+
+
 test("completed subagent tools retain intermediate output beside their final result", () => {
   const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "search", toolName: "search_pubmed", isError: false,
     result: { content: [{ type: "text", text: "5 papers" }] },

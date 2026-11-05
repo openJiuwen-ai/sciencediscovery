@@ -275,7 +275,19 @@ export async function runCommand(context: RunContext, log: (message: string) => 
   }
 
   // 6. 发任务
-  const run = await client.createRun(sessionId, { content: input.content, references: input.references ?? [] });
+  let run: SessionRun;
+  try {
+    run = await client.createRun(sessionId, { content: input.content, references: input.references ?? [] });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const code = err instanceof ApiRequestError ? err.code : undefined;
+    if (outputMode === "text") {
+      process.stderr.write(`[error] ${msg}\n`);
+    } else {
+      emitJsonlError({ message: msg, code: code ?? "CREATE_RUN_ERROR", sessionId });
+    }
+    return { exitCode: 1 };
+  }
   if (outputMode === "text") {
     log(`[run] run=${run.id} status=${run.status}`);
   } else {

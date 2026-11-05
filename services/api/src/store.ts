@@ -550,7 +550,7 @@ function buildWorkspaceProvenanceIndex(
 }
 
 export class SessionStoreHttpError extends Error {
-  constructor(message: string, readonly statusCode: 400 | 404 | 409) {
+  constructor(message: string, readonly statusCode: 400 | 404 | 409, readonly code?: string) {
     super(message);
     this.name = "SessionStoreHttpError";
   }
@@ -1155,10 +1155,11 @@ export class SessionStore {
       if (!Array.isArray(session.enabledConnectorIds)
         || !Array.isArray(session.enabledSkillIds)
         || session.semanticReviewEnabled === undefined) migratedSessionSettings = true;
-      const modelId = session.modelId && modelIds.has(session.modelId) ? session.modelId : fallbackModelId;
-      const reviewModelId = session.reviewModelId && modelIds.has(session.reviewModelId)
-        ? session.reviewModelId
-        : modelId ?? fallbackModelId;
+      // Preserve historical model references even when the profile no longer
+      // exists. Runtime resolution will surface the missing model to the user
+      // instead of silently switching to another profile.
+      const modelId = session.modelId;
+      const reviewModelId = session.reviewModelId;
       if (modelId !== session.modelId || reviewModelId !== session.reviewModelId) migratedSessionAssignments = true;
       const enabledConnectorIds = Array.isArray(session.enabledConnectorIds)
         ? session.enabledConnectorIds.filter((id): id is ConnectorId => this.connectorIds.has(id))
@@ -1182,8 +1183,8 @@ export class SessionStore {
         ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds)
         : {
             enabledConnectorIds,
-            ...(modelId ? { modelId } : {}),
-            ...(reviewModelId ? { reviewModelId } : {}),
+            ...(modelId && modelIds.has(modelId) ? { modelId } : {}),
+            ...(reviewModelId && modelIds.has(reviewModelId) ? { reviewModelId } : {}),
             semanticReviewEnabled,
           };
       const savedApproval = session as Omit<Session, "approvalMode"> & {
@@ -2254,6 +2255,12 @@ export class SessionStore {
         if (!hasOwn(overrides, field)) continue;
         const value = overrides[field];
         if (value === undefined) continue;
+        // Model references that no longer resolve to an installed profile are
+        // treated as unset. This keeps a deleted model from being silently
+        // inherited by a session and surfaces the missing model to the user.
+        if ((field === "modelId" || field === "reviewModelId") && typeof value === "string" && !this.getModel(value)) {
+          continue;
+        }
         if (field === "plugins") effective.plugins = mergePluginSettings(effective.plugins, value as RuntimeSettingsOverrides["plugins"]);
         else if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
@@ -2290,11 +2297,18 @@ export class SessionStore {
     const { effective } = this.resolveRuntimeSettings(session.id);
     session.enabledConnectorIds = [...effective.enabledConnectorIds];
     session.enabledSkillIds = [...effective.enabledSkillIds];
-    session.modelId = effective.modelId;
-    session.reviewModelId = effective.reviewModelId;
     session.semanticReviewEnabled = effective.semanticReviewEnabled;
     session.thinkingEffort = effective.thinkingEffort;
     session.thinkingMode = effective.thinkingMode;
+    // Preserve historical model references when the resolved model is no longer
+    // available (e.g. the profile was deleted). Only update compatibility mirrors
+    // when the resolved model still exists.
+    if (effective.modelId && this.getModel(effective.modelId)) {
+      session.modelId = effective.modelId;
+    }
+    if (effective.reviewModelId && this.getModel(effective.reviewModelId)) {
+      session.reviewModelId = effective.reviewModelId;
+    }
   }
 
   private syncSessionCompatibilityForProject(projectId?: string): void {
@@ -3088,10 +3102,22 @@ export class SessionStore {
     if (!session) throw new Error("Session not found");
     const project = this.getProject(session.projectId);
     if (!project) throw new Error("Project not found");
-    return this.resolveSettingsLayers([
+    const resolved = this.resolveSettingsLayers([
       ...this.projectSettingsLayers(project),
       { overrides: session.settingsOverrides, source: "session" },
     ]);
+    // The model that was actually used by this session is the final fallback.
+    // This keeps a deleted-model reference from silently switching to the
+    // current global/project default when the session is reopened.
+    if (!resolved.effective.modelId && session.modelId && this.getModel(session.modelId)) {
+      resolved.effective.modelId = session.modelId;
+      resolved.sources.modelId = "session";
+    }
+    if (!resolved.effective.reviewModelId && session.reviewModelId && this.getModel(session.reviewModelId)) {
+      resolved.effective.reviewModelId = session.reviewModelId;
+      resolved.sources.reviewModelId = "session";
+    }
+    return resolved;
   }
 
   /** Serialize inherited settings before reading or mutating the shared catalog. */
@@ -3723,17 +3749,23 @@ export class SessionStore {
   async deleteModel(modelId: string): Promise<void> {
     const profile = this.getModel(modelId);
     if (!profile) throw new Error("Model not found");
-    const referencesModel = (settings: RuntimeSettingsOverrides) =>
-      settings.modelId === modelId || settings.reviewModelId === modelId;
-    if (referencesModel(this.catalog.globalSettings)
-      || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides))
-      || this.catalog.sessions.some((session) =>
-        session.modelId === modelId || session.reviewModelId === modelId || referencesModel(session.settingsOverrides))) {
-      throw new Error("Model is referenced by runtime settings and cannot be deleted");
-    }
+    this.clearRuntimeModelReferences(modelId);
     this.setModelApiToken(modelId, undefined);
     this.catalog.models = this.catalog.models.filter((model) => model.id !== modelId);
     await this.saveCatalog();
+  }
+
+  /** Remove a model id from all runtime configuration layers. Sessions keep their
+   *  historical references intact so old runs/messages remain understandable;
+   *  global and project overrides are cleared so new sessions do not inherit a
+   *  deleted model. */
+  private clearRuntimeModelReferences(modelId: string): void {
+    if (this.catalog.globalSettings.modelId === modelId) delete this.catalog.globalSettings.modelId;
+    if (this.catalog.globalSettings.reviewModelId === modelId) delete this.catalog.globalSettings.reviewModelId;
+    for (const project of this.catalog.projects) {
+      if (project.settingsOverrides.modelId === modelId) delete project.settingsOverrides.modelId;
+      if (project.settingsOverrides.reviewModelId === modelId) delete project.settingsOverrides.reviewModelId;
+    }
   }
 
   listProviders(): ModelProvider[] {
@@ -3826,16 +3858,7 @@ export class SessionStore {
     const provider = this.getProvider(providerId);
     if (!provider) throw new Error("Provider not found");
     const children = this.catalog.models.filter((model) => model.providerId === providerId);
-    const referencesModel = (settings: RuntimeSettingsOverrides, id: string) =>
-      settings.modelId === id || settings.reviewModelId === id;
-    for (const child of children) {
-      if (referencesModel(this.catalog.globalSettings, child.id)
-        || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides, child.id))
-        || this.catalog.sessions.some((session) =>
-          session.modelId === child.id || session.reviewModelId === child.id || referencesModel(session.settingsOverrides, child.id))) {
-        throw new Error("Provider models are referenced by runtime settings and cannot be deleted");
-      }
-    }
+    for (const child of children) this.clearRuntimeModelReferences(child.id);
     for (const child of children) this.setModelApiToken(child.id, undefined);
     this.setProviderApiToken(providerId, undefined);
     this.catalog.models = this.catalog.models.filter((model) => model.providerId !== providerId);
@@ -4228,7 +4251,9 @@ export class SessionStore {
       { overrides: settingsOverrides, source: "session" },
     ]);
     const selectedModel = this.getModel(resolved.effective.modelId);
-    if (!selectedModel && !options.allowUnconfiguredModel) throw new Error("A task model is required");
+    if (!selectedModel && !options.allowUnconfiguredModel) {
+      throw new SessionStoreHttpError("A task model is required", 400, "SESSION_MODEL_UNAVAILABLE");
+    }
     if (selectedModel && !this.getModelApiToken(selectedModel.id)
       && !this.modelAllowsMissingToken(selectedModel) && !options.allowUnconfiguredModel) {
       throw new Error("The task model must have a saved API token");
