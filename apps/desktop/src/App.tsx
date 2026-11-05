@@ -696,6 +696,7 @@ export function App({ initialToken }: Props) {
     providers: state.providers,
     running: state.running,
     selectedModelId: state.selectedModelId,
+    unavailableModel: Boolean(state.detail?.settingsOverrides.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
     selectedSpecialistId: state.detail?.specialistId,
     uploading: state.uploading,
   };

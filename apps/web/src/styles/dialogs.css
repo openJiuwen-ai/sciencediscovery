@@ -201,3 +201,8 @@
 .codex-config-card input { width: 100%; min-width: 0; min-height: 42px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); padding: 9px 11px; }
 .codex-config-card p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
 .codex-config-card .primary-button { justify-self: start; }
+
+.model-deletion-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; color: var(--text); background: var(--surface); overflow: auto; }
+.model-deletion-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.model-deletion-dialog h2 { overflow-wrap: anywhere; }
+.model-deletion-dialog select { width: 100%; min-width: 0; }

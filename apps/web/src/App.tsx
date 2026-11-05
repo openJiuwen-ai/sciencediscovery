@@ -1168,8 +1168,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const latestMessageRef = useRef(message);
   latestMessageRef.current = message;
   const configurationPreflightPendingRef = useRef(false);
-  const pendingModelConfiguration = useRef<{ requestId: string; sessionId: string; content: string } | undefined>(undefined);
-  const modelConfigurationEntry = useRef<{ sessionId: string; key: string; busy: boolean } | undefined>(undefined);
+  const pendingModelSelection = useRef<{ sessionId: string; content: string } | undefined>(undefined);
+  const [modelPickerRequest, setModelPickerRequest] = useState(0);
+  const modelSelectionEpoch = useRef(0);
+  const modelSelectionQueue = useRef(Promise.resolve());
   const [connectorConfigurationRequests, setConnectorConfigurationRequests] = useState<ConnectorConfigurationRequest[]>([]);
   const [configurationRequests, setConfigurationRequests] = useState<ConfigurationRequestView[]>([]);
   const [configurationReceipt, setConfigurationReceipt] = useState<{
@@ -1456,8 +1458,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }, [activeSessionId]);
 
   useEffect(() => {
-    pendingModelConfiguration.current = undefined;
-    modelConfigurationEntry.current = undefined;
+    pendingModelSelection.current = undefined;
     scheduledConfigurationSubmission.current = undefined;
   }, [activeSessionId]);
 
@@ -2061,22 +2062,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       }).catch(() => undefined);
     }
   }
-  useEffect(() => {
-    const pending = pendingModelConfiguration.current;
-    if (!pending || pending.sessionId !== activeSessionId) return;
-    const request = configurationRequests.find(item => item.id === pending.requestId);
-    if (!request || request.state !== "applied") return;
-    pendingModelConfiguration.current = undefined;
-    void Promise.all([client.getSession(request.sessionId), client.listModels()]).then(([updated, modelItems]) => {
-      if (!shouldApplySessionScopedUpdate(request.sessionId, activeSessionIdRef.current)) return;
-      const model = modelItems.find(item => item.id === updated.modelId);
-      if (!model || updated.archivedAt || latestMessageRef.current.trim() !== pending.content) return;
-      pendingConfigurationContinuation.current = { sessionId: request.sessionId, modelId: model.id, content: pending.content };
-      setConfigurationReceipt({ sessionId: request.sessionId, modelName: model.name, globalDefault: request.scope.kind === "global", continuation: "submitting" });
-      setModels(modelItems);
-      syncSessionSummary(updated);
-    }).catch(() => setError(t("error.updateSession")));
-  }, [activeSessionId, configurationRequests]);
   const pendingAutoConfigurationIds = [...connectorConfigurationRequests
     .filter((request) => request.sessionId === activeSessionId && request.state === "awaiting_confirmation" && request.autoApplyAt)
     .map((request) => request.id), ...configurationRequests.filter((request) => request.sessionId === activeSessionId
@@ -2864,6 +2849,45 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
   }
 
+  async function refreshModelState(): Promise<void> {
+    const target = activeSessionIdRef.current;
+    const projectId = activeProjectIdRef.current;
+    const revision = (target ? latestSessionSummaries.current.get(target)?.revision : undefined) ?? 0;
+    const [items, registry, settings, project, fresh] = await Promise.all([
+      client.listModels(), client.listProviders(), client.getGlobalSettings(),
+      projectId ? client.getProjectSettings(projectId) : Promise.resolve(undefined),
+      target ? client.getSessionSettings(target) : Promise.resolve(undefined),
+    ]);
+    setModels(items);
+    setModelProviders(registry.providers);
+    setGlobalSettings(settings);
+    if (projectId === activeProjectIdRef.current) setProjectSettings(project);
+    if (fresh && target && target === activeSessionIdRef.current
+      && revision === (latestSessionSummaries.current.get(target)?.revision ?? 0)) {
+      const selection = { modelId: fresh.effective.modelId, reviewModelId: fresh.effective.reviewModelId,
+        settingsOverrides: fresh.overrides, thinkingMode: fresh.effective.thinkingMode, thinkingEffort: fresh.effective.thinkingEffort };
+      const latest = latestSessionSummaries.current.get(target);
+      if (latest) latestSessionSummaries.current.set(target, { revision: latest.revision + 1, summary: { ...latest.summary, ...selection } });
+      setSession(current => current?.id === target ? { ...current, ...selection } : current);
+      setSessions(current => current.map(item => item.id === target ? { ...item, ...selection } : item));
+      setArtifactSessions(current => current.map(item => item.id === target ? { ...item, ...selection } : item));
+    }
+  }
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible" && !isRunning) void refreshModelState().catch(reason => setError(reason));
+    };
+    const timer = window.setInterval(refresh, 5_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [client, activeSessionId, activeProjectId, isRunning]);
+
   async function updateConversationModel(modelId: string): Promise<void> {
     const nextModel = models.find((model) => model.id === modelId);
     const currentMode = session?.thinkingMode ?? nextModel?.thinkingMode ?? "auto";
@@ -2872,27 +2896,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       modelId,
       ...normalizeSessionThinking(nextModel, modelProviders, currentMode, currentEffort),
     };
-    await updateSessionSettings(changes);
+    if (!activeSessionId || isRunning || session?.archivedAt) return;
+    const epoch = ++modelSelectionEpoch.current;
+    const target = activeSessionId;
+    try {
+      const write = modelSelectionQueue.current.then(() => client.updateSession(target, changes));
+      modelSelectionQueue.current = write.then(() => undefined, () => undefined);
+      const updated = await write;
+      if (activeSessionIdRef.current !== target || epoch !== modelSelectionEpoch.current) return;
+      syncSessionSummary(updated);
+      const pending = pendingModelSelection.current;
+      pendingModelSelection.current = undefined;
+      if (pending && pending.sessionId === updated.id && activeSessionIdRef.current === updated.id
+        && latestMessageRef.current.trim() === pending.content && nextModel) {
+        pendingConfigurationContinuation.current = { ...pending, modelId: nextModel.id };
+        setConfigurationReceipt({ sessionId: updated.id, modelName: nextModel.name, globalDefault: false, continuation: "submitting" });
+      }
+      setError(undefined);
+    } catch (reason) { setError(reason instanceof Error ? reason : t("error.updateSession")); }
   }
 
-  async function openModelConfiguration(capabilityId: "model.select" | "model.connect" | "model.repair_credential" = models.length ? "model.select" : "model.connect", continueDraft = true): Promise<void> {
+  function openModelSelection(continueDraft = false): void {
     if (!session || session.archivedAt || isRunning) return;
-    const existing = configurationRequests.find(item => item.sessionId === session.id && item.capabilityId.startsWith("model.") && !["applied", "dismissed", "cancelled", "expired"].includes(item.state));
-    if (existing) { if (continueDraft && message.trim()) pendingModelConfiguration.current = { requestId: existing.id, sessionId: session.id, content: message.trim() }; document.getElementById(`configuration-request-${existing.id}`)?.scrollIntoView({ block: "nearest" }); return; }
-    let entry = modelConfigurationEntry.current;
-    if (!entry || entry.sessionId !== session.id) entry = modelConfigurationEntry.current = { sessionId: session.id, key: crypto.randomUUID(), busy: false };
-    if (entry.busy) return;
-    entry.busy = true;
-    try {
-      const modelId = session.modelId && models.some((model) => model.id === session.modelId) ? session.modelId : undefined;
-      const request = await client.createConfigurationRequest(session.id, { protocolVersion: 3, capabilityId, values: capabilityId !== "model.connect" && modelId ? { modelId } : {} }, entry.key);
-      if (session.id !== activeSessionIdRef.current) return;
-      if (continueDraft && message.trim()) pendingModelConfiguration.current = { requestId: request.id, sessionId: session.id, content: message.trim() };
-      receiveConfigurationRequest(request);
-      modelConfigurationEntry.current = undefined;
-      requestAnimationFrame(() => document.getElementById(`configuration-request-${request.id}`)?.scrollIntoView({ block: "nearest" }));
-    } catch (reason) { setError(reason instanceof Error ? reason : t("error.updateSession")); }
-    finally { entry.busy = false; }
+    pendingModelSelection.current = continueDraft && message.trim() ? { sessionId: session.id, content: message.trim() } : undefined;
+    if (models.length) setModelPickerRequest(current => current + 1);
+    else openSystemSettings("models", { wizard: true });
   }
 
   async function decideConversationalConnector(request: ConnectorConfigurationRequest, decision: "apply" | "dismiss"): Promise<void> {
@@ -3629,7 +3657,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
     const selectedModel = models.find((item) => item.id === session.modelId);
     if (!selectedModel) {
-      await openModelConfiguration();
+      openModelSelection(true);
       return;
     }
     const selectedProvider = modelProviders.find((provider) => provider.id === selectedModel.providerId);
@@ -5062,8 +5090,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     event.currentTarget.form?.requestSubmit();
                   }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
                   {composerRunAction.noModelReason && !showModelConfigurationCard ? <ComposerNoModelNotice
-                    onOpenConfiguration={() => void openModelConfiguration()}
+                    onOpenConfiguration={openModelSelection}
                     reason={composerRunAction.noModelReason}
+                    modelUnavailable={Boolean(session.settingsOverrides.modelId && !models.some(model => model.id === session.settingsOverrides.modelId))}
                   /> : null}
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
@@ -5074,6 +5103,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
+                      openRequest={modelPickerRequest}
                       controls={activeThinkingControls}
                       disabled={isRunning || sessionArchived}
                       models={models}
@@ -5551,7 +5581,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   }}
                   onDraftStateChange={setProviderDraftDirty}
                   onError={reportSystemSettingsError}
-                  onModelsChange={setModels}
+                  onModelsChange={(items) => { setModels(items); void refreshModelState().catch(reportSystemSettingsError); }}
                   onNotice={(message, detail) => pushToast("success", message, detail)}
                   onProvidersChange={setModelProviders}
                   presets={modelProviderPresets}

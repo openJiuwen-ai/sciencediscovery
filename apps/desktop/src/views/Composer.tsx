@@ -100,6 +100,7 @@ interface Props {
   /** A starter prompt chosen on the welcome page, to be placed in the input. */
   seed?: LandingSeed;
   selectedModelId?: string;
+  unavailableModel?: boolean;
   /** The expert the open session is bound to, if any. */
   selectedSpecialistId?: string;
   /** The category the welcome page attached to this turn. */
@@ -631,6 +632,7 @@ export function Composer({
   running,
   seed,
   selectedModelId,
+  unavailableModel = false,
   selectedSpecialistId,
   tag,
   uploading,
@@ -937,7 +939,7 @@ export function Composer({
             type="button"
           >
             <span className="model-name">
-              {selectedName ?? TEXT.errors.modelRequired}
+              {selectedName ?? (unavailableModel ? TEXT.errors.modelUnavailable : TEXT.errors.modelRequired)}
             </span>
             <Chevron down={menu !== "model"} />
           </button>

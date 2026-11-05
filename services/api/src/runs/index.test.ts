@@ -250,8 +250,9 @@ test("computeSettingsSnapshot rejects a session whose effective model was delete
   const session = await store.createSession(project.id, "Session", model.id);
   await store.deleteModel(model.id);
 
-  // Sanity: the session still records the historical model.
-  assert.equal(store.getSession(session.id).modelId, model.id);
+  // The explicit unavailable choice persists while the effective mirror is empty.
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, model.id);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
   // The deleted model must not silently switch to the remaining one.
   assert.equal(store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
   // Creating a run should fail early with a structured error.

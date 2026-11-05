@@ -450,7 +450,9 @@ export const EN: Text = {
       testOk: (latency: number) => `✓ Available (${latency} ms)`,
       delete: "Delete",
       deleteConfirm: (name: string) => `Delete the model "${name}"?`,
-      deleteBody: "It stops appearing in this list and in a session's model menu. The service refuses while a project or session still names it, and says why.",
+      deleteBody: "Sessions explicitly using this model will need a new selection. Historical runs are preserved.",
+      replacement: "New primary model",
+      leaveUnset: "Leave unset",
       deleteFailed: "Could not delete this model. Try again.",
       expand: "Expand model settings",
       name: "Model name",
@@ -1266,6 +1268,7 @@ export const EN: Text = {
     generic: "Something went wrong",
     sessionCreate: "Could not create the session",
     noStream: "The response has no readable stream",
+    modelUnavailable: "Selected model deleted; choose another",
     modelRequired: "No model is available yet. Configure one in Settings.",
     rename: "Rename failed",
     deleteWarning: (title: string) =>

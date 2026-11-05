@@ -607,6 +607,12 @@ test("request errors after headers terminate the response without rejecting the 
     headers: authorization, method: "POST", body: JSON.stringify({ name: "Streaming failure" }),
   });
   assert.equal(project.response.status, 201);
+  const model = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    headers: authorization, method: "POST", body: JSON.stringify({
+      apiToken: randomUUID(), baseUrl: "http://127.0.0.1:1/v1", model: "stream-fixture", name: "Stream fixture",
+    }),
+  });
+  assert.equal(model.response.status, 201);
   testApiOrigins.set(root, { origin, close: () => closeApiServer(server) });
   for (const code of [undefined, "ENOENT"]) {
     let writes = 0;
@@ -7101,7 +7107,8 @@ test("model registry persists multiple profiles and assigns them per session", a
   const reopenedAnalysis = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${analysis.body.id}`, { headers: authorization });
   assert.equal(reopenedAnalysis.body.modelId, fast.body.id);
   const reopenedReview = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${review.body.id}`, { headers: authorization });
-  assert.equal(reopenedReview.body.modelId, reviewer.body.id);
+  assert.equal(reopenedReview.body.modelId, undefined);
+  assert.equal(reopenedReview.body.settingsOverrides.modelId, reviewer.body.id);
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalog = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
   database.close();
@@ -8609,4 +8616,42 @@ test("the recent-sessions Project is reachable by name, absent from the project 
     headers: authorization,
     method: "DELETE",
   })).status, 409);
+});
+
+test("model deletion HTTP validates replacement options and preserves explicit unavailable choices", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-deletion-http-${randomUUID()}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const create = async (name: string) => (await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    method: "POST", headers,
+    body: JSON.stringify({ name, model: name, baseUrl: "https://models.example.test/v1", apiToken: randomUUID() }),
+  })).body;
+  const a = await create("A"), b = await create("B");
+  const project = await jsonRequest<{ project: Project; firstSession: Session }>(`${origin}/api/projects`, {
+    method: "POST", headers, body: JSON.stringify({ name: "Deletion HTTP" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.project.id}/sessions`, {
+    method: "POST", headers, body: JSON.stringify({ modelId: a.id }),
+  });
+  for (const body of [null, [], "bad", { replacementModelId: false }, { replacementModelId: a.id }, { replacementModelId: randomUUID() }]) {
+    const response = await fetch(`${origin}/api/models/${a.id}`, { method: "DELETE", headers, body: JSON.stringify(body) });
+    assert.equal(response.status, 400);
+    const settings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers });
+    assert.equal(settings.body.overrides.modelId, a.id);
+    assert.equal((await jsonRequest<ModelProfile[]>(`${origin}/api/models`, { headers })).body.length, 2);
+  }
+  const deletion = await fetch(`${origin}/api/models/${a.id}`, { method: "DELETE", headers, body: JSON.stringify({ replacementModelId: b.id }) });
+  assert.equal(deletion.status, 200);
+  assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, b.id);
+  const fresh = (await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers })).body;
+  assert.equal(fresh.modelId, undefined);
+  assert.equal(fresh.settingsOverrides.modelId, a.id);
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "Do not silently switch models" }) });
+  assert.equal(run.status, 400);
+  assert.equal(((await run.json()) as { code: string }).code, "SESSION_MODEL_UNAVAILABLE");
+  // Legacy DELETE callers can omit a body and leave the removed default unset.
+  assert.equal((await fetch(`${origin}/api/models/${b.id}`, { method: "DELETE", headers })).status, 200);
+  assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, undefined);
 });

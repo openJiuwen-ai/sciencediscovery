@@ -39,6 +39,8 @@ function render(
     projects?: { id: string; name: string }[];
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
+    selectedModelId?: string | null;
+    unavailableModel?: boolean;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -63,7 +65,8 @@ function render(
       projectName={options.projectName}
       projects={(options.projects ?? []) as never}
       running={running}
-      selectedModelId="m1"
+      selectedModelId={options.selectedModelId === null ? undefined : options.selectedModelId ?? "m1"}
+      unavailableModel={options.unavailableModel}
       tag={options.tag === undefined ? undefined : { ...options.tag, onClear: () => {} }}
       uploading={options.uploading ?? false}
     />,
@@ -322,4 +325,11 @@ test("a row's mark comes from its provider, then from its name", () => {
   assert.equal(modelBrand({ model: "my-model", name: "my-model" }), "custom");
   assert.equal(modelLabel("月之暗面 · Kimi-K3"), "Kimi-K3");
   assert.equal(modelLabel("Kimi-K3"), "Kimi-K3");
+});
+
+
+test("a deleted model is shown as unavailable instead of selecting the first profile", () => {
+  const markup = render(false, { selectedModelId: null, unavailableModel: true });
+  assert.match(markup, /原模型已删除，请重新选择/u);
+  assert.doesNotMatch(markup, /class="model-name">测试模型/u);
 });

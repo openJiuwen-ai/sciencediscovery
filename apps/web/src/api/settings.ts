@@ -370,8 +370,8 @@ export class SettingsApiClient extends ArtifactsApiClient {
     });
   }
 
-  deleteProvider(providerId: string): Promise<{ deleted: string }> {
-    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+  deleteProvider(providerId: string, replacementModelId?: string | null): Promise<{ deleted: string }> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}`, { method: "DELETE", body: JSON.stringify({ replacementModelId }) });
   }
 
   listProviderModels(providerId: string, refresh = false): Promise<ProviderModelList> {
@@ -459,8 +459,8 @@ export class SettingsApiClient extends ArtifactsApiClient {
     });
   }
 
-  deleteModel(modelId: string): Promise<{ deleted: string }> {
-    return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
+  deleteModel(modelId: string, replacementModelId?: string | null): Promise<{ deleted: string }> {
+    return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: JSON.stringify({ replacementModelId }) });
   }
 
   testModel(modelId: string, compatibility = false, expectedDestination?: ManualModelDestination): Promise<ModelConnectivityTestResult> {

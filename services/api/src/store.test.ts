@@ -1862,7 +1862,7 @@ test("SessionStore preserves provider model context across user turns", async (c
   assert.deepEqual((await reopened.readMessages(session.id))[0]!.modelContext, modelContext);
 });
 
-test("SessionStore removes the legacy demo profile and preserves historical session references", async (context) => {
+test("SessionStore removes the legacy demo profile and preserves unavailable session choices", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-demo-migration-${Date.now()}-${process.pid}`);
   await mkdir(resolve(tempRoot, "messages"), { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -1920,10 +1920,9 @@ test("SessionStore removes the legacy demo profile and preserves historical sess
   await store.load();
 
   assert.deepEqual(store.listModels().map((model) => model.id), ["configured-model"]);
-  // The legacy demo profile is gone, but the session keeps its historical
-  // reference; it is not silently reassigned to another model.
-  assert.equal(store.getSession("session-1")?.modelId, "builtin-demo");
-  assert.equal(store.getSession("session-1")?.reviewModelId, "builtin-demo");
+  // The deleted choice survives in overrides; compatibility mirrors show availability.
+  assert.equal(store.getSession("session-1")?.modelId, undefined);
+  assert.equal(store.getSession("session-1")?.reviewModelId, undefined);
   assert.equal(store.getSession("session-1")?.approvalMode, "always_allow");
   assert.equal(store.getSession("session-2")?.approvalMode, "always_allow");
   assert.ok(store.getSession("session-1")?.permissionEpochId);
@@ -1932,13 +1931,15 @@ test("SessionStore removes the legacy demo profile and preserves historical sess
   assert.equal(migrated.models[0]?.id, "configured-model");
   assert.equal("builtin" in migrated.models[0]!, false);
   assert.equal("demoMode" in migrated.models[0]!, false);
-  assert.equal(migrated.sessions[0]?.modelId, "builtin-demo");
-  assert.equal(migrated.sessions[0]?.reviewModelId, "builtin-demo");
+  assert.equal(migrated.sessions[0]?.modelId, undefined);
+  assert.equal(migrated.sessions[0]?.reviewModelId, undefined);
   assert.equal(migrated.sessions[0]?.approvalMode, "always_allow");
   const migratedNeverAsk = migrated.sessions.find((session) => session.id === "session-2");
   assert.equal(migratedNeverAsk?.approvalMode, "always_allow");
   assert.deepEqual(migrated.sessions[0]?.settingsOverrides, {
     enabledConnectorIds: [],
+    modelId: "builtin-demo",
+    reviewModelId: "builtin-demo",
     semanticReviewEnabled: true,
   });
   assert.deepEqual(migrated.projects[0]?.settingsOverrides, {});
@@ -2555,7 +2556,7 @@ test("skill selection defaults to all, is configured from Project down, and igno
   assert.deepEqual(store.getSession(session.id)?.enabledSkillIds, [...availableSkills, "late-skill"]);
 });
 
-test("SessionStore rejects invalid settings atomically and protects referenced models", async (context) => {
+test("SessionStore rejects invalid settings atomically and retains deleted session choices", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-settings-validation-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2607,7 +2608,8 @@ test("SessionStore rejects invalid settings atomically and protects referenced m
   });
   const session = await store.createSession(project.id, "Explicit model", { modelId: model3.id });
   await store.deleteModel(model3.id);
-  assert.equal(store.getSession(session.id).modelId, model3.id);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, model3.id);
   assert.equal(store.getModel(model3.id), undefined);
 });
 
@@ -2651,7 +2653,7 @@ test("SessionStore reports an unavailable model with a structured code", async (
   }
 });
 
-test("SessionStore deletes a referenced model and preserves historical session references", async (context) => {
+test("SessionStore deletes a referenced model and preserves its explicit session choice", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-delete-referenced-model-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
@@ -2677,10 +2679,11 @@ test("SessionStore deletes a referenced model and preserves historical session r
 
   await store.deleteModel(model.id);
 
-  // Global and project overrides are cleared; the session keeps its history.
+  // Defaults are cleared; the explicit session choice remains unavailable.
   assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
   assert.equal(store.getProjectSettings(project.id).overrides.modelId, undefined);
-  assert.equal(store.getSession(session.id).modelId, model.id);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, model.id);
   assert.equal(store.getModel(model.id), undefined);
 
   // The session can no longer resolve an effective model because the saved
@@ -2714,7 +2717,8 @@ test("SessionStore deletes a provider and clears references to its child models"
   assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
   assert.equal(store.getGlobalSettings().overrides.reviewModelId, undefined);
   assert.equal(store.getProjectSettings(project.id).overrides.modelId, undefined);
-  assert.equal(store.getSession(session.id).modelId, first.id);
+  assert.equal(store.getSession(session.id)?.modelId, undefined);
+  assert.equal(store.getSession(session.id)?.settingsOverrides.modelId, first.id);
   assert.equal(store.listModels().length, 0);
   assert.equal(store.listProviders().length, 0);
 });
@@ -2749,8 +2753,7 @@ test("SessionStore defaults the global task model to the first configured model"
   });
   assert.equal(store.getGlobalSettings().overrides.modelId, first.id);
 
-  // Legacy catalogs (models configured before auto-defaulting) heal when a
-  // usable model is re-saved.
+  // Editing a profile must not undo an explicitly cleared default.
   await store.replaceGlobalSettings({});
   assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
   await store.updateModel(second.id, {
@@ -2759,7 +2762,7 @@ test("SessionStore defaults the global task model to the first configured model"
     model: "model-2",
     name: "Second model",
   });
-  assert.equal(store.getGlobalSettings().overrides.modelId, second.id);
+  assert.equal(store.getGlobalSettings().overrides.modelId, undefined);
 });
 
 test("SessionStore clears an auto-default only while the attempted model still owns it", async (context) => {

@@ -478,7 +478,9 @@ export const ZH = {
       testOk: (latency: number) => `✓ 可用（${latency} ms）`,
       delete: "删除",
       deleteConfirm: (name: string) => `删除模型「${name}」？`,
-      deleteBody: "删除后它不再出现在列表和会话的模型菜单里。仍有项目或会话在用它时，服务会拒绝删除并说明原因。",
+      deleteBody: "删除后，明确指定此模型的会话需要重新选择模型。历史运行记录保留。",
+      replacement: "新主模型",
+      leaveUnset: "暂不设置",
       deleteFailed: "没能删除这个模型，请重试。",
       expand: "展开模型设置",
       name: "模型名称",
@@ -1314,6 +1316,7 @@ export const ZH = {
     sessionCreate: "创建会话失败",
     /** A response that claims to be an event stream but has no body. */
     noStream: "响应没有可读的流",
+    modelUnavailable: "原模型已删除，请重新选择",
     modelRequired: "还没有可用的模型，请先在设置里配置。",
     rename: "重命名失败",
     deleteWarning: (title: string) => `删除「${title}」会连同它的工作区数据一起清掉，且无法恢复。`,

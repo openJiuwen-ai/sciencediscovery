@@ -15,6 +15,7 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -42,8 +43,11 @@ async function fixture() {
   const store = new SessionStore(dataDir);
   store.setAvailableSkillIds(skillCatalog.ids());
   await store.load();
+  await store.createModel({
+    apiToken: randomUUID(), baseUrl: "http://127.0.0.1:1/v1", model: "queue-fixture", name: "Queue fixture",
+  });
   const project = await store.createProject("Idea Tree queue");
-  const session = await store.createSession(project.id, "Queue", {}, {}, { allowUnconfiguredModel: true });
+  const session = await store.createSession(project.id, "Queue");
   let resumedExecutor: import("@sciencediscovery/schema").SessionRun["settingsSnapshot"]["ideaTreeExecutor"];
   const calls: string[] = [];
   const unexpected = async (): Promise<never> => { throw new Error("Queueing must not read or mutate tree state"); };
@@ -66,7 +70,7 @@ async function fixture() {
 
 test("standard queued runs freeze standard mode without creating Idea Tree state", async (context) => {
   const { dataDir, persistence, calls, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
-  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  context.after(async () => { store.close(); await rm(dataDir, { force: true, recursive: true }); });
   const run = await createQueuedRun(
     store,
     skillCatalog,
@@ -83,7 +87,7 @@ test("standard queued runs freeze standard mode without creating Idea Tree state
 
 test("both Idea Tree commands queue Lead preparation without legacy tree execution", async (context) => {
   const { dataDir, persistence, calls, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
-  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  context.after(async () => { store.close(); await rm(dataDir, { force: true, recursive: true }); });
   for (const content of ["/idea-tree-team research", "/idea-tree research"]) {
     const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog,
       createIdeaTreeAuthorityRegistry(), session.id, { content }, persistence);
@@ -96,7 +100,7 @@ test("both Idea Tree commands queue Lead preparation without legacy tree executi
 
 test("ordinary follow-ups never recover the old tree executor", async (context) => {
   const { dataDir, persistence, calls, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
-  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  context.after(async () => { store.close(); await rm(dataDir, { force: true, recursive: true }); });
   const first = await createQueuedRun(store, skillCatalog, skillLibraryCatalog,
     createIdeaTreeAuthorityRegistry(), session.id, { content: "ordinary task" }, persistence);
   await store.updateSessionRun(session.id, first.id, {
