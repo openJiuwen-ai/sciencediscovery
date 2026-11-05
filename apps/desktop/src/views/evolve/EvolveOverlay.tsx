@@ -54,6 +54,16 @@ import { CandidateTable } from "./CandidateTable.js";
 import { ScoreChart } from "./ScoreChart.js";
 import { claimsEscape } from "../dialog-escape.js";
 
+/** How many times a dropped event stream is reopened from the last sequence
+ *  that arrived. The server replays the log, so a resume costs one request
+ *  and folds only what the panel missed; a search that keeps dropping still
+ *  has to report the failure instead of asking forever. */
+const RESUME_ATTEMPTS = 3;
+
+/** Between resumes: long enough for a restarting server to listen again,
+ *  short enough that a live search does not look frozen while it waits. */
+const RESUME_DELAY_MS = 2_000;
+
 export interface EvolveOverlayProps {
   client: ApiClient;
   /** Overlay-level failures — a lost stream, a refused stop. */
@@ -88,23 +98,53 @@ export function EvolveOverlay({ client, onClose, onError, onRunChanged, run }: E
     const controller = new AbortController();
     setView({ ...emptyRunView(), status: run.status });
     setSelectedIndex(undefined);
-    // Always resume from 0: the log is the source of truth, and replaying it
-    // is how a panel opened after the fact renders exactly what a panel that
-    // watched the whole search shows.
-    void subscribeEvolveEvents(client, run.id, 0, (record) => {
-      setView((current) => reduceEvolveRecord(current, record));
-    }, controller.signal)
-      .then(() => {
-        // Re-read the record however the stream ended, not only on a terminal
-        // event: a run whose sidecar died settles without one, and the shelf
-        // is where the status that names the failure comes from.
-        callbacks.current.onRunChanged();
-      })
-      .catch((reason: unknown) => {
-        if (controller.signal.aborted) return;
-        callbacks.current.onError(reason instanceof Error ? reason.message : String(reason));
-      });
-    return () => controller.abort();
+    // Open from 0: the log is the source of truth, and replaying it is how a
+    // panel opened after the fact renders exactly what a panel that watched
+    // the whole search shows. A stream that drops under a live search then
+    // resumes from the last sequence folded, so a reconnect replays only the
+    // records it missed — the reducer ignores anything at or below its
+    // watermark.
+    let cursor = 0;
+    let resumes = 0;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const connect = () => {
+      let received = 0;
+      void subscribeEvolveEvents(client, run.id, cursor, (record) => {
+        received += 1;
+        if (record.sequence > cursor) cursor = record.sequence;
+        setView((current) => reduceEvolveRecord(current, record));
+      }, controller.signal)
+        .then(() => {
+          // Re-read the record however the stream ended, not only on a terminal
+          // event: a run whose sidecar died settles without one, and the shelf
+          // is where the status that names the failure comes from.
+          callbacks.current.onRunChanged();
+          // A stream that delivered records and then closed (a restarted
+          // server, a sleeping laptop, a dropped proxy) is picked up where it
+          // stopped. A close that delivered nothing is the server saying the
+          // log is complete, so it is not retried.
+          if (disposed || received === 0 || resumes >= RESUME_ATTEMPTS) return;
+          resumes += 1;
+          connect();
+        })
+        .catch((reason: unknown) => {
+          if (controller.signal.aborted || disposed) return;
+          if (resumes >= RESUME_ATTEMPTS) {
+            callbacks.current.onError(reason instanceof Error ? reason.message : String(reason));
+            return;
+          }
+          resumes += 1;
+          timer = setTimeout(connect, RESUME_DELAY_MS);
+        });
+    };
+    connect();
+    return () => {
+      disposed = true;
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [client, run.id]);
 
   // The record is the authority on whether the search is over. A run that
