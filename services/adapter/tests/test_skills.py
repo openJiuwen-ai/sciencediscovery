@@ -15,6 +15,7 @@
 import json
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from sciencediscovery_adapter.skills import MARKER, SkillSync, sandbox_skill_paths
@@ -140,6 +141,37 @@ async def test_sync_records_where_jiuwenswarm_keeps_each_imported_skill(tmp_path
     sync = SkillSync(jw.rpc, URL)
     await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
     assert sync.directories == {str(jw.root / "sciencediscovery-evolve-design"): "evolve-design"}
+
+
+def counting_rpc(jw: FakeJiuwenSwarm) -> tuple[Callable, dict[str, int]]:
+    calls: dict[str, int] = {}
+
+    async def rpc(url, method, params=None, **kwargs):
+        calls[method] = calls.get(method, 0) + 1
+        return await jw.rpc(url, method, params, **kwargs)
+
+    return rpc, calls
+
+
+async def test_a_sync_that_imports_nothing_lists_the_skills_only_once(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    skill = {"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}
+    await SkillSync(jw.rpc, URL).sync([skill])  # first adapter life: imports
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)  # fresh adapter, empty directories map
+    assert await sync.sync([skill]) == {"evolve-design": {"name": "evolve-design"}}
+    assert calls.get("skills.list") == 1
+    # the single listing still populated the directories map for path rewriting
+    assert sync.directories == {str(jw.root / "evolve-design"): "evolve-design"}
+
+
+async def test_a_sync_that_imports_relists_to_refresh_the_directories_map(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
+    assert calls.get("skills.list") == 2  # unchanged: pre-import listing + post-import refresh
+    assert sync.directories == {str(jw.root / "evolve-design"): "evolve-design"}
 
 
 def test_a_command_reading_jiuwenswarms_copy_of_a_skill_reads_the_sandbox_package():

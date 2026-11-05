@@ -118,9 +118,14 @@ class SkillSync:
         Returns, by id, the name JiuwenSwarm lists it under, or the reason it could not be imported.
         """
         async with self._lock:
-            result = await self._sync(skills)
+            result, installed, imported_any = await self._sync(skills)
             try:
-                for directory in (await self._installed()).values():
+                # [first-message-latency] S3a: one skills.list per sync in the steady state.
+                # The directories map only carries SD-marked skills, and those can only appear
+                # through this adapter's own imports — a run that imports nothing changes no
+                # directory, so the listing _sync already took is the whole answer.
+                directories = (await self._installed()).values() if imported_any else installed.values()
+                for directory in directories:
                     marker = _marker(directory)
                     if marker and isinstance(marker.get("id"), str):
                         self.directories[str(directory)] = marker["id"]
@@ -128,9 +133,10 @@ class SkillSync:
                 logger.warning("could not list JiuwenSwarm's skill directories: %s", error)
             return result
 
-    async def _sync(self, skills: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    async def _sync(self, skills: list[dict[str, str]]) -> tuple[dict[str, dict[str, str]], dict[str, Path], bool]:
         installed = await self._installed()
         result: dict[str, dict[str, str]] = {}
+        imported_any = False
         for skill in skills:
             skill_id, source, digest = skill["id"], Path(skill["path"]), skill["hash"]
             name = skill_id
@@ -142,11 +148,12 @@ class SkillSync:
                 continue
             try:
                 await self._import(source, skill_id, name, digest)
+                imported_any = True
                 result[skill_id] = {"name": name}
             except Exception as error:  # a refused package must not stop the run
                 logger.warning("could not import skill %s into JiuwenSwarm: %s", skill_id, error)
                 result[skill_id] = {"error": str(error)[:300]}
-        return result
+        return result, installed, imported_any
 
     async def _import(self, source: Path, skill_id: str, name: str, digest: str) -> None:
         if not (source / "SKILL.md").is_file():
