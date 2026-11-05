@@ -33,6 +33,7 @@ import { isEvolveRunActive, type EvolveRun } from "@sciencediscovery/schema";
 import type { ApiClient } from "../../api/client.js";
 import { stopEvolveRun, subscribeEvolveEvents } from "../../api/evolve.js";
 import {
+  adoptRunStatus,
   bestCandidate,
   emptyRunView,
   evolveShortTitle,
@@ -87,16 +88,17 @@ export function EvolveOverlay({ client, onClose, onError, onRunChanged, run }: E
     const controller = new AbortController();
     setView({ ...emptyRunView(), status: run.status });
     setSelectedIndex(undefined);
-    let finished = false;
     // Always resume from 0: the log is the source of truth, and replaying it
     // is how a panel opened after the fact renders exactly what a panel that
     // watched the whole search shows.
     void subscribeEvolveEvents(client, run.id, 0, (record) => {
-      if (record.event.type === "search_finished") finished = true;
       setView((current) => reduceEvolveRecord(current, record));
     }, controller.signal)
       .then(() => {
-        if (finished) callbacks.current.onRunChanged();
+        // Re-read the record however the stream ended, not only on a terminal
+        // event: a run whose sidecar died settles without one, and the shelf
+        // is where the status that names the failure comes from.
+        callbacks.current.onRunChanged();
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
@@ -104,6 +106,16 @@ export function EvolveOverlay({ client, onClose, onError, onRunChanged, run }: E
       });
     return () => controller.abort();
   }, [client, run.id]);
+
+  // The record is the authority on whether the search is over. A run that
+  // fails before the sidecar sends `search_finished` settles without an event,
+  // so the header — and the stop button it keeps enabled — has to follow
+  // `run.status` rather than the last status an event carried. Without this a
+  // failed run showed its error banner under a "运行中" badge that never
+  // cleared.
+  useEffect(() => {
+    setView((current) => adoptRunStatus(current, run.status));
+  }, [run.status]);
 
   const active = isEvolveRunActive(view.status);
   useEffect(() => {
