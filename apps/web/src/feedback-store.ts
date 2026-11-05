@@ -12,123 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { FeedbackKind } from "@sciencediscovery/operational-logging/feedback";
+// The implementation lives in the shared package so the desktop app cannot
+// drift from this one; this module keeps the import path and the key prefix.
 
-const FEEDBACK_INSTALL_KEY = "sciencediscovery-feedback-install";
-const FEEDBACK_DRAFT_KEY = "sciencediscovery-feedback-draft";
-const FEEDBACK_HISTORY_KEY = "sciencediscovery-feedback-history";
+import { createFeedbackStore } from "@sciencediscovery/operational-logging/feedback-client";
 
-export interface FeedbackDraft {
-  kind: FeedbackKind;
-  body: string;
-  contact: string;
-  reproducibility: string;
-  impact: string;
-  includeDiagnostics: boolean;
-}
+const store = createFeedbackStore("sciencediscovery-feedback");
 
-export interface FeedbackRecord {
-  receipt: string;
-  kind: FeedbackKind;
-  title: string;
-  submittedAt: string;
-  status: "submitted";
-}
+export const {
+  clearFeedbackDraft,
+  emptyFeedbackDraft,
+  loadFeedbackDraft,
+  loadFeedbackHistory,
+  readFeedbackInstallId,
+  removeFeedbackRecord,
+  saveFeedbackDraft,
+  saveFeedbackRecord,
+} = store;
 
-/** Narrower-than-`Storage` surface, matching the browser-storage conventions. */
-export interface FeedbackStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem?(key: string): void;
-}
-
-function uuid(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
-    const random = Math.floor(Math.random() * 16);
-    const value = char === "x" ? random : (random & 0x3) | 0x8;
-    return value.toString(16);
-  });
-}
-
-/** A stable per-install id, generated once and reused for rate limiting identity. */
-export function readFeedbackInstallId(storage: FeedbackStorage): string {
-  const existing = storage.getItem(FEEDBACK_INSTALL_KEY);
-  if (existing) return existing;
-  const id = uuid();
-  try { storage.setItem(FEEDBACK_INSTALL_KEY, id); } catch { /* keep serving the id */ }
-  return id;
-}
-
-const EMPTY_DRAFT: FeedbackDraft = {
-  kind: "bug",
-  body: "",
-  contact: "",
-  reproducibility: "",
-  impact: "",
-  includeDiagnostics: true,
-};
-
-export function emptyFeedbackDraft(): FeedbackDraft {
-  return { ...EMPTY_DRAFT };
-}
-
-function isFeedbackKind(value: unknown): value is FeedbackKind {
-  return value === "bug" || value === "idea" || value === "other";
-}
-
-export function loadFeedbackDraft(storage: FeedbackStorage): FeedbackDraft {
-  try {
-    const raw = storage.getItem(FEEDBACK_DRAFT_KEY);
-    if (!raw) return emptyFeedbackDraft();
-    const parsed = JSON.parse(raw) as Partial<FeedbackDraft>;
-    return {
-      kind: isFeedbackKind(parsed.kind) ? parsed.kind : "bug",
-      body: typeof parsed.body === "string" ? parsed.body : "",
-      contact: typeof parsed.contact === "string" ? parsed.contact : "",
-      reproducibility: typeof parsed.reproducibility === "string" ? parsed.reproducibility : "",
-      impact: typeof parsed.impact === "string" ? parsed.impact : "",
-      includeDiagnostics: parsed.includeDiagnostics !== false,
-    };
-  } catch {
-    return emptyFeedbackDraft();
-  }
-}
-
-export function saveFeedbackDraft(storage: FeedbackStorage, draft: FeedbackDraft): void {
-  try { storage.setItem(FEEDBACK_DRAFT_KEY, JSON.stringify(draft)); } catch { /* quota or private mode */ }
-}
-
-export function clearFeedbackDraft(storage: FeedbackStorage): void {
-  try { storage.removeItem?.(FEEDBACK_DRAFT_KEY); } catch { /* ignore */ }
-}
-
-function isFeedbackRecord(value: unknown): value is FeedbackRecord {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Partial<FeedbackRecord>;
-  return typeof record.receipt === "string" && typeof record.submittedAt === "string";
-}
-
-export function loadFeedbackHistory(storage: FeedbackStorage): FeedbackRecord[] {
-  try {
-    const raw = storage.getItem(FEEDBACK_HISTORY_KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isFeedbackRecord);
-  } catch {
-    return [];
-  }
-}
-
-export function saveFeedbackRecord(storage: FeedbackStorage, record: FeedbackRecord): FeedbackRecord[] {
-  const history = [record, ...loadFeedbackHistory(storage)].slice(0, 50);
-  try { storage.setItem(FEEDBACK_HISTORY_KEY, JSON.stringify(history)); } catch { /* ignore */ }
-  return history;
-}
-
-export function removeFeedbackRecord(storage: FeedbackStorage, receipt: string): FeedbackRecord[] {
-  const history = loadFeedbackHistory(storage).filter((item) => item.receipt !== receipt);
-  try { storage.setItem(FEEDBACK_HISTORY_KEY, JSON.stringify(history)); } catch { /* ignore */ }
-  return history;
-}
+export type {
+  FeedbackDraft,
+  FeedbackRecord,
+  FeedbackStorage,
+} from "@sciencediscovery/operational-logging/feedback-client";
