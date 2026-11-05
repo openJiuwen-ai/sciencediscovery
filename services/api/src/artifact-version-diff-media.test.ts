@@ -128,6 +128,9 @@ test("a non-textual artifact pair answers a client error instead of 500", async 
   // rather than driving an execution, because the media-type rule is checked before any CAS
   // read. Two `.zip` versions are the case the issue measured.
   const { fixture, origin } = await startHttpFixture(context);
+  // Settle the server's `ready` chain before seeding, so the ordering under test is explicit and
+  // does not depend on how long connector/MCP initialisation happens to take on this machine.
+  await fetch(`${origin}/api/projects`, { headers: { authorization: "Bearer test-token" } });
   const binaryFirst = await seedVersion(fixture, {
     content: "PK\u0003\u0004 first bundle",
     kind: "other",
