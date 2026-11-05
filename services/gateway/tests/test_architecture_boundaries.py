@@ -176,6 +176,29 @@ class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
         self.assertNotIn(f"content: {self.relative_probe()}", failures)
         self.assertNotIn(f"path: {self.relative_probe()}", failures)
 
+    def test_a_vendor_reference_outside_a_generated_workspace_is_still_reported(self) -> None:
+        """The cases above only prove the walk stays quiet; this proves it still speaks.
+
+        Both of them assert a negative, so narrowing the walk would keep them green
+        while vendor naming escaped the boundary entirely. Pin the positive half:
+        a file the walk should report is reported.
+        """
+        self.probe = self.API_ROOT / "src" / f"probe-boundary-{os.getpid()}.ts"
+        self.addCleanup(self.probe.unlink, missing_ok=True)
+        self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
+        original = _files
+
+        def only_the_probe(root: Path):
+            # Keep the real listing (so IGNORED_DIRECTORIES still governs) and drop
+            # every other file, so the assertion cannot depend on the working tree.
+            if root == self.API_ROOT:
+                return (path for path in original(root) if path == self.probe)
+            return original(root)
+
+        with mock.patch.object(sys.modules[__name__], "_files", only_the_probe):
+            failures = _node_boundary_failures()
+        self.assertIn(f"content: {self.relative_probe()}", failures)
+
 
 if __name__ == "__main__":
     unittest.main()
