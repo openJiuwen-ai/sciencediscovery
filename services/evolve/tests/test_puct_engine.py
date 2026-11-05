@@ -88,6 +88,18 @@ def spec(**overrides: Any) -> RunSpec:
     return RunSpec(**base)
 
 
+def test_default_completion_inherits_low_effort_and_judge_remains_independent(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(puct_engine, "completion_for", lambda *_args, **kwargs: captured.update(kwargs))
+    frozen = spec(thinking="enabled", thinking_effort="low", judge_url="http://judge", judge_token="judge")
+    puct_engine._default_completion(frozen, None, lambda: False)
+    assert captured["thinking"] == "enabled" and captured["thinking_effort"] == "low"
+    judge = puct_engine._judge_spec(frozen)
+    assert judge.llm_token == "judge"
+    assert judge.thinking == "" and judge.thinking_effort == ""
+    assert frozen.thinking_effort == "low"
+
+
 class Harness:
     """A fake model and a fake measurement; everything between them is real."""
 

@@ -12,24 +12,35 @@ export async function ideaResearchModel() {
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString());
     const system = body.messages[0].content as string;
-    if (body.stream) {
-      const hasTool = body.tools?.some((t: any) => t.function?.name === 'create_idea_research');
+    const reply = (message: object, finishReason = "stop") => {
+      const usage = { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 };
+      if (body.stream) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ id: "idea-stub", object: "chat.completion.chunk", choices: [{ index: 0, delta: message, finish_reason: null }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ id: "idea-stub", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage })}\n\n`);
+        res.end("data: [DONE]\n\n");
+      } else {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message, finish_reason: finishReason }], usage }));
+      }
+    };
+    // Streaming is a transport choice for both the lead and research roles.
+    // Only the lead advertises the tool; research calls carry a JSON payload.
+    const hasTool = body.tools?.some((t: any) => t.function?.name === 'create_idea_research');
+    if (hasTool) {
       const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
       const latestUserIndex = body.messages.lastIndexOf(lastUser);
       const handedOff = body.messages.slice(latestUserIndex + 1).some((m: any) => m.role === 'tool');
       const objective = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content);
-      const action = hasTool && !handedOff;
-      const delta = action ? {role: 'assistant', tool_calls: [{index: 0, id: 'create-research', type: 'function', function: {name: 'create_idea_research', arguments: JSON.stringify({objective, materials: 'User supplied: near-neutral water, recovery and leaching matter. Retrieval explicitly skipped for this demo.'})}}]} : {role: 'assistant', content: hasTool ? '已启动 Idea Tree 研究，请查看树卡片。' : 'Catalyst research'};
-      res.writeHead(200, {'content-type': 'text/event-stream'});
-      res.write(`data: ${JSON.stringify({id:'lead', object:'chat.completion.chunk', choices:[{index:0, delta, finish_reason:null}]})}\n\n`);
-      res.write(`data: ${JSON.stringify({id:'lead', object:'chat.completion.chunk', choices:[{index:0, delta:{}, finish_reason:action ? 'tool_calls' : 'stop'}],usage:{prompt_tokens:100,completion_tokens:50,total_tokens:150}})}\n\n`);
-      res.end('data: [DONE]\n\n');
+      const action = !handedOff;
+      const message = action ? {role: 'assistant', tool_calls: [{index: 0, id: 'create-research', type: 'function', function: {name: 'create_idea_research', arguments: JSON.stringify({objective, materials: 'User supplied: near-neutral water, recovery and leaching matter. Retrieval explicitly skipped for this demo.'})}}]} : {role: 'assistant', content: '已启动 Idea Tree 研究，请查看树卡片。'};
+      reply(message, action ? "tool_calls" : "stop");
       return;
     }
-    // Session title generation is an ordinary non-streaming model call.
+    // Session title generation has no structured research payload.
     let payload: any;
     try { payload = JSON.parse(body.messages[1].content); }
-    catch { res.writeHead(200, {'content-type':'application/json'}); res.end(JSON.stringify({choices:[{message:{role:'assistant',content:'Catalyst research'},finish_reason:'stop'}]})); return; }
+    catch { reply({ role: "assistant", content: "Catalyst research" }); return; }
     requests.push({ system, payload });
     if (hold && payload.hypothesis && !payload.candidate && !payload.children) {
       await new Promise<void>(resolve => { release = resolve; });
@@ -73,8 +84,7 @@ export async function ideaResearchModel() {
     } else {
       answer = { text: "Fe/Mn catalyst on recyclable support; supplied evidence only." };
     }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify(answer) }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } }));
+    reply({ role: "assistant", content: JSON.stringify(answer) });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as { port: number };

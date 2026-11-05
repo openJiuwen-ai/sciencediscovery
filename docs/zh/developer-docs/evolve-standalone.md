@@ -104,6 +104,8 @@ POST /runs/{search_id}/stop  → 停止
 
 `search_id`、`algorithm`、`expansions`、`workers`、`statement`、`scorecard`（冻结的评分卡正文）、`scorecard_hash`、`baseline_code`、`rubric`、`script`（评测脚本原文）、`source_material`、`candidate_timeout_seconds`、`max_tokens_per_call`、`thinking`、`packages`、`baseline_score`、`resume_from_sequence`、`engine`、`options`。
 
+其中 `thinking` 可以是 `auto`、`enabled` 或 `disabled`。`auto` 不向模型服务发送 thinking 控制字段，沿用服务商默认行为；只有显式 `enabled` 时才把 `thinking_effort` 传给模型。effort 会保留在冻结的 Run 配置中，但在 `auto` 模式下不会覆盖服务商默认值。
+
 评分卡正文和评测脚本是**按值传的**，不是引用。原因是侧车没有 CAS，而评测器只是一页 Python，
 比一个候选更小。这个决定让侧车不需要访问内容库，是它能独立的重要一步。
 

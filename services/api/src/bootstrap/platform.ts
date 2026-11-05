@@ -438,7 +438,9 @@ export function createPlatformServices(
     // Read before the spend checkpoint. The same function that prices the run
     // answers here, so the number the agent shows the user is the number the
     // run gets — including the thinking setting an endpoint cannot honor.
-    getEvolveBudget: async ({ thinking }) => describeEvolveBudget(store.getModel(turn.modelId), thinking),
+    getEvolveBudget: async ({ thinking, thinkingEffort }) => describeEvolveBudget(
+      store.getModel(turn.modelId), thinking ?? turn.thinkingMode ?? "auto", thinkingEffort ?? turn.thinkingEffort,
+    ),
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
@@ -467,6 +469,8 @@ export function createPlatformServices(
           modelId: turn.modelId,
           orchestrator: evolveOrchestrator,
           sessionId: turn.sessionId,
+          thinking: turn.thinkingMode ?? "auto",
+          thinkingEffort: turn.thinkingEffort,
           store: storeEvolveInput(turn.sessionId),
           // A custom gateway is configured as the plain OpenAI dialect unless
           // its operator names another, and that dialect has no thinking

@@ -76,6 +76,9 @@ POST /runs/{search_id}/stop  → stop a run
   scorecard, scorecard hash, baseline code and score, rubric, evaluator script, source material,
   limits, packages, and resume sequence. Scorecard and script are passed by value so the sidecar
   needs no CAS access.
+- Thinking settings: `thinking` is `auto`, `enabled`, or `disabled`; `auto` leaves the provider
+  default untouched, while an explicit `enabled` mode may carry `thinking_effort`. The effort is
+  retained in the frozen run record even when the mode is `auto`, but is not sent on that wire.
 - Filesystem paths: `dataset_dir` and `workspace_dir`. This is the sole hard coupling.
 - Callback URLs and temporary credentials: `llm: {url, token}` and `judge: {url, token}`. URLs
   must be absolute so a remote sidecar need not guess an API origin.

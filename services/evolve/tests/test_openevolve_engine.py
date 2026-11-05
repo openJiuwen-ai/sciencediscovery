@@ -142,6 +142,40 @@ def test_default_completion_forwards_explicit_temperature(monkeypatch):
     assert captured["temperature"] == 0.6
 
 
+def test_default_completion_forwards_low_effort(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(openevolve_engine, "completion_for", lambda *_args, **kwargs: captured.update(kwargs))
+    openevolve_engine._default_completion(_spec(thinking="enabled", thinking_effort="low"), MagicMock(), lambda: False)
+    assert captured["thinking"] == "enabled"
+    assert captured["thinking_effort"] == "low"
+
+
+def test_capped_empty_reply_is_not_retried_by_openevolve():
+    from sciencediscovery_evolve.completion import CompletionUsage
+    calls = []
+
+    def factory(*_args):
+        def complete(_prompt, sink, _on_failure):
+            calls.append(1)
+            sink(CompletionUsage(total=16010, completion=16000, capped=True))
+            return ""
+        return complete
+
+    spec = _spec(options={"model_retries": 5})
+    usage = _Usage()
+    collector = _Collector()
+    reporter = _Reporter(spec, None, MagicMock(), MagicMock(), usage, collector)
+    engine = OpenEvolveEngine(completion_factory=factory)
+    assert engine._model_call(spec, usage, reporter, lambda: False)("mutate", 1) == ("", "")
+    assert calls == [1]
+    assert usage.of(1).total == 16010
+    assert "16000 output tokens" in next(e for e in collector.events if e["type"] == "expanded")["error"]
+    assert [e["tokens"] for e in collector.events if e["type"] == "cost"] == [16010]
+    assert engine._model_call(spec, usage, reporter, lambda: False)("mutate again", 2) == ("", "")
+    assert calls == [1, 1]
+    assert [e["tokens"] for e in collector.events if e["type"] == "cost"] == [16010, 32020]
+
+
 
 class _Collector:
     """Collects every event the reporter emits, in order."""

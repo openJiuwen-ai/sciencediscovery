@@ -255,6 +255,10 @@ function toolDeltaEmitter(callbacks: ModelStreamCallbacks) {
 }
 
 export interface ModelClientPolicy {
+  /** Optional transport injection; protocol assembly remains shared. */
+  fetchImpl?: typeof fetch;
+  /** Auxiliary completions may normalize a provider JSON response to a stream request. */
+  acceptJsonResponse?: boolean;
   maxRetries: number;
   maxTokens: number;
   requestTimeoutMs: number;
@@ -262,6 +266,14 @@ export interface ModelClientPolicy {
   temperature?: number;
   topP?: number;
   thinking?: { type: string };
+}
+
+/** Internal response handoff to the auxiliary completion normalizer, not a retryable failure. */
+export class ModelJsonResponse extends Error {
+  constructor(readonly body: string) {
+    super("Model returned a JSON response to a streaming request");
+    this.name = "ModelJsonResponse";
+  }
 }
 
 export class ModelRequestError extends Error {
@@ -535,9 +547,10 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
     let statusCode: number;
     let responseBody: AsyncIterable<Uint8Array> & { dump(): Promise<void> };
     let retryAfterMs: number | undefined;
+    let contentType: string | undefined;
     try {
       recorder.dispatch();
-      const response = await request(options.url, {
+      const init = {
         method: "POST",
         headers: options.headers,
         body: options.body,
@@ -545,11 +558,33 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
         bodyTimeout: 0,
         headersTimeout: options.policy.requestTimeoutMs,
         ...(dispatcher ? { dispatcher } : {}),
-      });
-      statusCode = response.statusCode;
-      responseBody = response.body;
-      recorder.headers(statusCode, response.headers as Record<string, string | string[] | undefined>);
-      const retryAfter = response.headers["retry-after"];
+      } as const;
+      let headers: Record<string, string | string[] | undefined>;
+      if (options.policy.fetchImpl) {
+        const response = await options.policy.fetchImpl(options.url, init);
+        statusCode = response.status;
+        headers = Object.fromEntries(response.headers);
+        const stream = response.body;
+        responseBody = Object.assign((async function* () {
+          const reader = stream?.getReader();
+          if (!reader) return;
+          try {
+            for (;;) {
+              const part = await reader.read();
+              if (part.done) return;
+              yield part.value;
+            }
+          } finally { await reader.cancel(); }
+        })(), { dump: async () => {} });
+      } else {
+        const response = await request(options.url, init);
+        statusCode = response.statusCode;
+        responseBody = response.body;
+        headers = response.headers as Record<string, string | string[] | undefined>;
+      }
+      contentType = String(headers["content-type"] ?? "");
+      recorder.headers(statusCode, headers);
+      const retryAfter = headers["retry-after"];
       if (typeof retryAfter === "string" && Number.isFinite(Number(retryAfter))) {
         retryAfterMs = Number(retryAfter) * 1_000;
       }
@@ -564,7 +599,20 @@ async function requestWithRetry(options: RequestOptions, recorder: ModelWireReco
       await dispatcher?.close();
       throw new Error(`Model endpoint is unavailable: ${lastError.message}`);
     }
-    if (statusCode >= 200 && statusCode < 300) return { body: boundedModelBody(responseBody, dispatcher, options.policy.maxResponseBytes) };
+    if (statusCode >= 200 && statusCode < 300) {
+      const body = boundedModelBody(responseBody, dispatcher, options.policy.maxResponseBytes);
+      if (options.policy.acceptJsonResponse && /^application\/(?:[\w.-]+\+)?json(?:\s*;|$)/i.test(contentType ?? "")) {
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of body) {
+          recorder.byte(chunk.byteLength);
+          chunks.push(chunk);
+        }
+        // Consume this same response under the stream's byte/cancellation limits.
+        // Never issue a second request or reinterpret a partial SSE stream as JSON.
+        throw new ModelJsonResponse(Buffer.concat(chunks).toString("utf8"));
+      }
+      return { body };
+    }
     let detail = (await collectBounded(responseBody, 2_000)).trim();
     for (const [key, value] of Object.entries(options.headers)) {
       if (["authorization", "x-api-key"].includes(key.toLowerCase())) {
@@ -1405,7 +1453,7 @@ export async function streamModelTurn(
         break;
     }
   } catch (error) {
-    const diagnostics = emit(classifyModelWireError(error));
+    const diagnostics = emit(error instanceof ModelJsonResponse ? undefined : classifyModelWireError(error));
     if (typeof error === "object" && error !== null) wireDiagnosticsByError.set(error, diagnostics);
     throw error;
   }
