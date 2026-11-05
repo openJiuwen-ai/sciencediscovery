@@ -2936,7 +2936,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (entry.busy) return;
     entry.busy = true;
     try {
-      const modelId = session.modelId ?? models[0]?.id;
+      const modelId = session.modelId && models.some((model) => model.id === session.modelId) ? session.modelId : undefined;
       const request = await client.createConfigurationRequest(session.id, { protocolVersion: 3, capabilityId, values: capabilityId !== "model.connect" && modelId ? { modelId } : {} }, entry.key);
       if (session.id !== activeSessionIdRef.current) return;
       if (continueDraft && message.trim()) pendingModelConfiguration.current = { requestId: request.id, sessionId: session.id, content: message.trim() };

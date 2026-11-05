@@ -3229,7 +3229,9 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   if (!pluginEnabled(snapshot.plugins, "skill")) { snapshot.enabledSkillIds = []; snapshot.enabledSkillLibraries = []; }
   snapshot.enabledConnectorIds = filterEnabledMcpSources(snapshot.enabledConnectorIds, snapshot.plugins);
   const model = store.getModel(snapshot.modelId);
-  if (!model) return snapshot;
+  if (!model) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
     ? "anthropic-messages"
     : "openai-chat-completions");
