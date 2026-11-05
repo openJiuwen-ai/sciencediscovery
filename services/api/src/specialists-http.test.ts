@@ -5,16 +5,18 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test, describe, before, after } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
+import type { Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 
 import type { ServerConfig } from "./bootstrap/config.js";
-import { createApiServer } from "./http/index.js";
+import { createApiServer, specialistErrorStatus } from "./http/index.js";
 
 type Reply = { status: number; body: { error?: string } & Record<string, unknown> };
 
 describe("the Specialist routes answer a rejected input as a client error", () => {
   const cleanups: Array<() => unknown> = [];
+  let server: Server;
   let request!: (method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown) => Promise<Reply>;
   after(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); });
   before(async () => {
@@ -30,7 +32,7 @@ describe("the Specialist routes answer a rejected input as a client error", () =
       memoryGraph: { url: "http://127.0.0.1:1", internalToken: "test" },
       evolve: { url: "http://127.0.0.1:1", internalToken: "test" },
     };
-    const server = createApiServer(config);
+    server = createApiServer(config);
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     cleanups.push(async () => {
       await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); });
@@ -89,4 +91,35 @@ describe("the Specialist routes answer a rejected input as a client error", () =
     assert.equal(response.status, 400);
     assert.equal(response.body.error, "Built-in specialists cannot be deleted");
   });
+
+  test("an unexpected fault inside the block is still a 500, not a relabelled 400", async (context) => {
+    // The settings store has no injection seam, so fail the HTTPS response
+    // itself: it throws from inside the guarded block, which is exactly the
+    // "anything else" branch the route must rethrow to the catch-all.
+    server.prependOnceListener("request", (_request, response) => {
+      const writeHead = response.writeHead.bind(response as ServerResponse);
+      let injected = false;
+      context.mock.method(response as ServerResponse, "writeHead", (...args: Parameters<ServerResponse["writeHead"]>) => {
+        if (!injected) { injected = true; throw new Error("injected internal failure"); }
+        return writeHead(...args);
+      });
+    });
+    const response = await request("POST", "/api/specialists", {
+      connectorIds: [], description: "d", enabledSkillIds: [], instructions: "i", name: "internal-fault subject",
+    });
+    assert.equal(response.status, 500, "an unexpected fault must not be claimed as client input");
+    assert.equal(response.body.error, "Internal server error");
+  });
+});
+
+test("a store fault that is not the store's own rejection is never relabelled 400", () => {
+  assert.equal(specialistErrorStatus(new Error("Specialist not found")), 404);
+  assert.equal(specialistErrorStatus(new Error("Specialist name already exists")), 400);
+  assert.equal(specialistErrorStatus(new Error("Built-in specialists are read-only; only their enabled flag can be toggled")), 400);
+  assert.equal(specialistErrorStatus(new Error("Specialist skills are unavailable: nope")), 400);
+  assert.equal(specialistErrorStatus(new Error("enabled must be a boolean")), 400);
+  for (const fault of [new Error("Catalog database is not initialized"), new TypeError("database is locked"), new Error("ENOTDIR: not a directory")]) {
+    assert.equal(specialistErrorStatus(fault), undefined,
+      `an unexpected fault must reach the catch-all and read 500, not be claimed as client input: ${fault.message}`);
+  }
 });
