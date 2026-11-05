@@ -18,9 +18,12 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
+import os
 import re
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -67,20 +70,25 @@ def _files(root: Path):
             yield path
 
 
+def _node_boundary_failures() -> list[str]:
+    failures: list[str] = []
+    for root in NODE_ROOTS:
+        for path in _files(root):
+            relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+            if VENDOR_NAME.search(relative):
+                failures.append(f"path: {relative}")
+                continue
+            if path.suffix.lower() not in TEXT_SUFFIXES:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if VENDOR_NAME.search(text):
+                failures.append(f"content: {relative}")
+    return failures
+
+
 class ArchitectureBoundaryTests(unittest.TestCase):
     def test_node_and_browser_sources_use_only_product_names(self) -> None:
-        failures: list[str] = []
-        for root in NODE_ROOTS:
-            for path in _files(root):
-                relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-                if VENDOR_NAME.search(relative):
-                    failures.append(f"path: {relative}")
-                    continue
-                if path.suffix.lower() not in TEXT_SUFFIXES:
-                    continue
-                text = path.read_text(encoding="utf-8", errors="replace")
-                if VENDOR_NAME.search(text):
-                    failures.append(f"content: {relative}")
+        failures = _node_boundary_failures()
         self.assertEqual(failures, [], "vendor naming escaped the Gateway boundary:\n" + "\n".join(failures))
 
     def test_gateway_package_has_no_vendor_dependency(self) -> None:
@@ -119,6 +127,48 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             [],
             "bundled MCP HTTP clients bypassed the injected proxy environment:\n" + "\n".join(failures),
         )
+
+
+class GeneratedWorkspaceBoundaryTests(unittest.TestCase):
+    """`services/api/.tmp` is a live workspace root, not source.
+
+    Other suites create session trees there while this walk runs, so a generated
+    file can be both present at the listing and gone at the read.
+    """
+
+    TEMP_ROOT = REPOSITORY_ROOT / "services" / "api" / ".tmp"
+    API_ROOT = REPOSITORY_ROOT / "services" / "api"
+
+    def setUp(self) -> None:
+        self.TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        self.probe = self.TEMP_ROOT / f"probe-boundary-{os.getpid()}.ts"
+        self.addCleanup(self.probe.unlink, missing_ok=True)
+
+    def relative_probe(self) -> str:
+        return self.probe.relative_to(REPOSITORY_ROOT).as_posix()
+
+    def test_a_generated_workspace_is_not_walked(self) -> None:
+        self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
+        failures = _node_boundary_failures()
+        self.assertNotIn(f"content: {self.relative_probe()}", failures)
+        self.assertNotIn(f"path: {self.relative_probe()}", failures)
+
+    def test_a_workspace_file_removed_after_listing_is_skipped(self) -> None:
+        # The CI failure lists a path and then cannot read it. Reproduce that exactly:
+        # the listing hands the walk a path that no longer exists when it is read.
+        self.probe.write_text("// deerflow vendor token\n", encoding="utf-8")
+        self.probe.unlink()
+        original = _files
+
+        def listed_then_gone(root: Path):
+            if root == self.API_ROOT:
+                return iter([self.probe])
+            return original(root)
+
+        with mock.patch.object(sys.modules[__name__], "_files", listed_then_gone):
+            failures = _node_boundary_failures()
+        self.assertNotIn(f"content: {self.relative_probe()}", failures)
+        self.assertNotIn(f"path: {self.relative_probe()}", failures)
 
 
 if __name__ == "__main__":
