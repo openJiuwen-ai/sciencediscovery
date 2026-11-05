@@ -226,6 +226,9 @@ test("a typed design command on a host with no sandbox detours through the confi
   // so a command typed straight into the composer does not skip it — the goal
   // is carried over rather than sent to an agent that would design a run the
   // server then refuses.
+  // The landing page is remounted when the boot finishes opening the session,
+  // which clears a draft typed before that; wait for the reads to settle.
+  await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design --algorithm openevolve 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
@@ -258,6 +261,7 @@ test("a pasted --allow-direct does not answer the warning in the user's place", 
 
   // A pasted flag is a word typed without the warning on screen. The dialog
   // still asks, and the flag leaves only after the answer is given here.
+  await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design --allow-direct 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
@@ -301,6 +305,9 @@ test("picking the evolve skill from the slash palette opens the setup dialog", a
   });
   await page.goto("/");
 
+  // The landing page is remounted when the boot finishes opening the session,
+  // which clears a draft typed before that; wait for the reads to settle.
+  await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve");
   const row = page.locator(".composer-skills .expert-row").first();
   await expect(row).toContainText("程序演进设计");
@@ -369,6 +376,7 @@ test("a checkpoint arrives as a card and its confirmation is sent as the reply",
   });
   await page.goto("/");
 
+  await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
@@ -402,6 +410,7 @@ test("an automatic checkpoint is shown but asks for nothing, and the flow carrie
   });
   await page.goto("/");
 
+  await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design --no-confirm 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
@@ -435,6 +444,7 @@ test("a checkpoint's change button writes the note in the card and sends it from
   });
   await page.goto("/");
 
+  await page.waitForLoadState("networkidle");
   await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
