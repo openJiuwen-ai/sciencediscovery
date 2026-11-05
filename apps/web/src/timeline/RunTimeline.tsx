@@ -39,7 +39,7 @@ import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
 import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
-import { translateActive, useLocale } from "../i18n/index.js";
+import { translateActive, useLocale, type MessageKey } from "../i18n/index.js";
 import { ErrorDiagnosticActions } from "../ErrorDiagnosticActions.js";
 import { formatRunFailure } from "../run-failure.js";
 import type { ApiClient } from "../api.js";
@@ -767,6 +767,14 @@ export function collectTimelineSubagentIds(entries: RunTimelineEntry[]): Set<str
     : []));
 }
 
+/** The badge is named in the UI language; its class keeps the raw status, because
+ * `timeline.css` styles it and the status comparisons read the raw value. A status
+ * the catalogues do not carry keeps its token rather than blanking out. */
+const TIMELINE_STATUS_KEYS: Record<string, MessageKey> = {
+  completed: "timeline.status.completed",
+  failed: "timeline.status.failed",
+  running: "timeline.status.running",
+};
 function statusIcon(status: ToolTrace["status"] | "completed" | "running") {
   if (status === "running") return <SpinnerIcon size={14} />;
   if (status === "failed") return <WarningIcon size={14} />;
@@ -851,6 +859,10 @@ export function RunTimeline({
   workspaceSessionId?: string;
 }) {
   const { locale, t } = useLocale();
+  const statusLabel = (status: string) => {
+    const key = TIMELINE_STATUS_KEYS[status];
+    return key ? t(key) : status;
+  };
   const [decidingPermissionIds, setDecidingPermissionIds] = useState<string[]>([]);
   const [decidingPermissionMatchers, setDecidingPermissionMatchers] = useState<string[]>([]);
   const [toolOutputs, setToolOutputs] = useState<Record<string, string>>({});
@@ -1042,7 +1054,7 @@ export function RunTimeline({
                 <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
                 <span className="timeline-icon">{statusIcon(entry.status)}</span>
                 <span className="timeline-label"><strong>{label}</strong><small>{entry.status === "running" ? t("timeline.modelDeciding") : t("timeline.modelReasoning")}</small></span>
-                <span className={`timeline-status ${entry.status}`}>{entry.status}</span>
+                <span className={`timeline-status ${entry.status}`}>{statusLabel(entry.status)}</span>
               </summary>
               <div className="timeline-content reasoning-content">
                 {entry.content
@@ -1099,7 +1111,7 @@ export function RunTimeline({
               <span className="timeline-icon">{statusIcon(entry.trace.status)}</span>
               <span className="timeline-label"><strong><span className="timeline-title-text">{entry.trace.status === "running" ? label : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: label })}</span></strong><small>{entry.trace.name}</small>{failure ? <span className="timeline-failure-summary">{failure}</span> : null}{command ? <code className="timeline-command">{t(entry.trace.status === "running" ? "timeline.runningCommand" : "timeline.ranCommand")} · {command}</code> : null}{preview ? <pre className="timeline-evidence">{preview}</pre> : null}</span>
               {(entry.trace.status === "running" || entry.expanded) && entries.some((candidate) => candidate.type === "permission" && candidate.request.state === "allowed" && candidate.request.toolCallId === entry.trace.id) ? <small className="tool-authorization">{t("record.authorized")}</small> : null}
-              <span className={`timeline-status ${entry.trace.status}`}>{entry.trace.status}</span>
+              <span className={`timeline-status ${entry.trace.status}`}>{statusLabel(entry.trace.status)}</span>
             </summary>
             <div className="timeline-content tool-content">
               <ToolIoSections outputText={outputText} trace={entry.trace} />
