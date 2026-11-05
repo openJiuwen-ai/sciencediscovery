@@ -1395,3 +1395,24 @@ for (const [locale, allowLabel] of [["en", "Allow these hosts for this run"], ["
     assert.ok(html.includes(">Allow once</button>") || html.includes(">仅允许一次</button>"));
   });
 }
+
+test("a timeline badge names the run status while its class keeps the raw token", () => {
+  const render = (entries: RunTimelineEntry[], locale: "en" | "zh-CN") => renderToStaticMarkup(
+    createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+  const thinking = apply([{ type: "assistant.thinking.delta", turn: 2, delta: "Plain private reasoning" }]);
+  const tool = (status: "completed" | "failed") => apply([
+    { type: "tool.started", trace: { id: `tool-${status}`, name: "run_shell", status: "running" } },
+    { type: "tool.completed", trace: { id: `tool-${status}`, name: "run_shell", status, summary: "Done" } },
+  ]);
+
+  assert.match(render(thinking, "zh-CN"), /<span class="timeline-status running">运行中<\/span>/);
+  assert.match(render(tool("completed"), "zh-CN"), /<span class="timeline-status completed">已完成<\/span>/);
+  assert.match(render(tool("failed"), "zh-CN"), /<span class="timeline-status failed">失败<\/span>/);
+  assert.match(render(thinking, "en"), /<span class="timeline-status running">Running<\/span>/);
+  assert.match(render(tool("completed"), "en"), /<span class="timeline-status completed">Completed<\/span>/);
+  assert.match(render(tool("failed"), "en"), /<span class="timeline-status failed">Failed<\/span>/);
+
+  // A status the catalogues do not name keeps its raw token instead of blanking out.
+  const unknown = [{ id: "odd", type: "thinking", status: "queued", expanded: false, content: "", turn: 1 }] as unknown as RunTimelineEntry[];
+  assert.match(render(unknown, "zh-CN"), /<span class="timeline-status queued">queued<\/span>/);
+});
