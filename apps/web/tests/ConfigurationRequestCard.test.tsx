@@ -70,6 +70,60 @@ test("CFG-X68-734: the shared card gates a proxy default request from a sibling 
   await act(async () => { renderer.unmount(); });
 });
 
+test("CFG-X10e: an unknown capability still blocks Apply until the server security acknowledgement is confirmed", async () => {
+  const plain = request({ runId: undefined, capabilityId: "security.future_control" as ConfigurationRequestView["capabilityId"], fields: [] });
+  const open = await mount(plain);
+  assert.equal(button(open, "Confirm this change").props.disabled, false);
+  assert.doesNotMatch(JSON.stringify(open.toJSON()), /Independent security policy confirmation/);
+  await act(async () => { open.unmount(); });
+
+  const submitted: unknown[] = [];
+  const view = request({ ...plain, securityConsent: { revision: 2, targetDigest: "sha256:future-policy", statement: "A later control needs an exact human review.", status: "required" } });
+  const confirmed = { ...view, securityConsent: { ...view.securityConsent!, status: "confirmed" as const } };
+  const api = actions({ securityConsent: async input => { submitted.push(input); return confirmed; } });
+  const renderer = await mount(view, api);
+  const text = JSON.stringify(renderer.toJSON());
+  assert.match(text, /A later control needs an exact human review/);
+  assert.match(text, /I have reviewed this exact security change and the consequences stated in this request/);
+  assert.doesNotMatch(text, /deployment-wide access changes|new default route for inheriting outbound traffic/);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  const independent = () => button(renderer, "Independently approve this exact security policy");
+  assert.equal(independent().props.disabled, true);
+  await act(async () => { renderer.root.findByProps({ type: "checkbox" }).props.onChange({ target: { checked: true } }); });
+  assert.equal(independent().props.disabled, false);
+  await act(async () => { independent().props.onClick(); });
+  assert.deepEqual(submitted, [{ revision: 2, targetDigest: "sha256:future-policy", acknowledged: true }]);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true, "The parent must supply the confirmed server snapshot");
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => { renderer.unmount(); });
+});
+
+test("CFG-X10e: stale unknown consent, a saved required record, and the Chinese fallback stay honest", async () => {
+  const capabilityId = "security.future_control" as ConfigurationRequestView["capabilityId"];
+  const stale = await mount(request({ runId: undefined, capabilityId, revision: 3, fields: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:old-future", statement: "Old target.", status: "confirmed" } }));
+  assert.equal(button(stale, "Confirm this change").props.disabled, true);
+  assert.match(JSON.stringify(stale.toJSON()), /A separate human security acknowledgement is required/);
+  await act(async () => { stale.unmount(); });
+
+  const saved = await mount(request({ runId: undefined, capabilityId, state: "applied", fields: [], allowedActions: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:future", statement: "Reviewed later.", status: "required" } }));
+  const savedText = JSON.stringify(saved.toJSON());
+  assert.match(savedText, /A separate human security acknowledgement is required/);
+  assert.doesNotMatch(savedText, /independently confirmed/);
+  await act(async () => { saved.unmount(); });
+
+  const zh = await mount(request({ runId: undefined, capabilityId, fields: [],
+    securityConsent: { revision: 2, targetDigest: "sha256:future-zh", statement: "后续策略需要人工核对。", status: "required" } }),
+    actions({ securityConsent: async () => request() }), () => undefined, "zh");
+  const zhText = JSON.stringify(zh.toJSON());
+  assert.match(zhText, /我已核对这项精确的安全变更，以及本请求中说明的影响/);
+  assert.match(zhText, /后续策略需要人工核对/);
+  assert.equal(button(zh, "确认此项变更").props.disabled, true);
+  await act(async () => { zh.unmount(); });
+});
+
 test("CFG-X10d: current Session approval needs its own acknowledgement and never uses deployment-wide consent wording", async () => {
   const view = request({ runId: undefined, capabilityId: "security.approval_mode", protocolVersion: 3,
     options: [{ id: "persist", kind: "persisted_apply", label: "Apply", description: "Save", available: true }], selectedOptionId: "persist",

@@ -5,6 +5,7 @@ import { securityConsentMessages } from "./security-consent-messages.js";
 
 const en = {
   securityAcknowledgement: securityConsentMessages.en,
+  securityAcknowledgementFallback: "I have reviewed this exact security change and the consequences stated in this request.",
   sessionApprovalActive: "Session policy saved; the new permission epoch is installed and reported retired local kernels are cleaned. Future action enforcement remains with the normal permission controls.",
   securityActive: "Policy saved and epoch fence installed; reported retired local kernels cleaned. Network connectivity was not tested.", securityCleanupFailed: "Policy saved and epochs rotated; old-kernel cleanup remains unverified.",
   securityTitle: "Independent security policy confirmation", securityConfirm: "Independently approve this exact security policy", securityConfirmed: "This exact security policy was independently confirmed. Review the changes, then confirm the configuration.", securityRequired: "A separate human security acknowledgement is required. Ordinary Apply and tool Always allow do not authorize this change.",
@@ -67,6 +68,7 @@ const en = {
 
 const zh: typeof en = {
   securityAcknowledgement: securityConsentMessages.zh,
+  securityAcknowledgementFallback: "我已核对这项精确的安全变更，以及本请求中说明的影响。",
   sessionApprovalActive: "当前会话策略已保存，新权限代次已建立，已清理本机报告的旧 kernel。后续动作仍由原有权限机制检查。",
   securityActive: "策略已保存且新权限代次已建立；已清理本机 Runner 报告的旧 kernel。未验证真实网络连接。", securityCleanupFailed: "策略已保存且权限代次已轮换；旧 kernel 清理尚未核实。",
   securityTitle: "独立确认安全策略", securityConfirm: "独立确认此精确安全策略", securityConfirmed: "此精确安全策略已独立确认。请核对修改内容，再确认配置。", securityRequired: "必须先由人工独立确认安全影响。普通 Apply 或工具的 Always allow 不构成本次授权。",

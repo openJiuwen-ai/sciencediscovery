@@ -26,6 +26,13 @@ function fieldValues(request: ConfigurationRequestView): ConfigurationValues {
     ? [[field.id, field.value]] : []));
 }
 
+/** Known capabilities keep their typed wording. A server-first id still needs a readable acknowledgement. */
+function securityAcknowledgementText(capabilityId: string, copy: object, fallback: string): string {
+  if (!Object.hasOwn(copy, capabilityId)) return fallback;
+  const text = (copy as Record<string, unknown>)[capabilityId];
+  return typeof text === "string" && text.length > 0 ? text : fallback;
+}
+
 export function isConfigurationRequestView(request: object): request is ConfigurationRequestView {
   return "capabilityId" in request;
 }
@@ -107,8 +114,11 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const securityConsent = request.securityConsent;
-  const securityCapability = configurationNeedsSecurityConsent(request.capabilityId) ? request.capabilityId : undefined;
-  const securityReady = !securityCapability || securityConsent?.status === "confirmed" && securityConsent.revision === request.revision;
+  // A listed capability and any consent payload the server actually sent both block Apply.
+  // The local list alone would hide a newer gated id and leave confirmation unreachable.
+  const securityReady = !(configurationNeedsSecurityConsent(request.capabilityId) || securityConsent)
+    || (securityConsent?.status === "confirmed" && securityConsent.revision === request.revision);
+  const securityAcknowledgement = securityAcknowledgementText(request.capabilityId, m.securityAcknowledgement, m.securityAcknowledgementFallback);
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
@@ -362,7 +372,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
         title={m.closeAndReturn} disabled={busy || runActive || readOnly || mutationsBlocked} onClick={dismiss}>×</button> : null}
     </div>
     {details}
-    {securityConsent && securityCapability ? <section className="configuration-endpoint" aria-label={m.securityTitle}>
+    {securityConsent ? <section className="configuration-endpoint" aria-label={m.securityTitle}>
       <strong>{m.securityTitle}</strong><p>{securityConsent.statement}</p>
       <p role="status">{securityReady && !dirty ? m.securityConfirmed : m.securityRequired}</p>
       {(!securityReady || securityConsent.status !== "confirmed") && actions.securityConsent ? <>
@@ -370,7 +380,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           <input id={`${id}-security-ack`} type="checkbox" checked={securityAcknowledged}
             disabled={!editable || dirty || runActive || request.state !== "awaiting_confirmation"}
             onChange={event => setSecurityAcknowledged(event.target.checked)} />
-          <span>{m.securityAcknowledgement[securityCapability]}</span>
+          <span>{securityAcknowledgement}</span>
         </label>
         <button type="button" className="secondary-button" disabled={!editable || !securityAcknowledged || dirty || runActive || request.state !== "awaiting_confirmation"}
           onClick={() => void perform(() => actions.securityConsent!({ revision: request.revision, targetDigest: securityConsent.targetDigest, acknowledged: true }, operationKey(`security:${request.revision}:${securityConsent.targetDigest}`)))}>{m.securityConfirm}</button>
