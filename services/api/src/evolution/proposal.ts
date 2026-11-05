@@ -51,6 +51,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
+import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
@@ -67,6 +68,12 @@ export interface ProposalDeps {
   modelId: string;
   orchestrator: EvolveOrchestrator;
   sessionId: string;
+  /** Whether the run's model can be told to stop thinking. False when its API
+   *  variant has no thinking-control field, or a toggle but no "disabled" stop:
+   *  the request is accepted and ignored, and the quiet ceiling then pays for
+   *  reasoning nobody sees. Required: a caller that cannot answer must not
+   *  silently inherit the quiet ceiling. */
+  thinkingSupported: boolean;
 }
 
 /** The gate is what every candidate's score is measured on — the number the
@@ -160,6 +167,7 @@ export async function startProposedRun(
     goal,
     model: deps.model?.(goal.modelId) as never,
     sandbox: await deps.orchestrator.sandboxCapability(),
+    thinkingSupported: deps.thinkingSupported,
   });
   if (issues.length) return { refusedBecause: describe(issues) };
 
@@ -325,7 +333,16 @@ async function assembleGoal(
   // the right default on its merits: with thinking on, one whole-program rewrite
   // has been measured taking longer than the proxy's ceiling and returning
   // nothing at all.
-  const thinking = proposal.thinking ?? "disabled";
+  const requestedThinking = proposal.thinking ?? "disabled";
+  // "Off" is a budget plan only if the endpoint carries the request. A model on
+  // a dialect with no thinking-control field ignores it and reasons anyway, and
+  // the ceiling is then spent on hidden tokens: a custom gateway returned
+  // exactly at 16k with no content on every expansion. Record what will
+  // actually happen, so the ceiling and pre-flight's floor agree with the
+  // model's behaviour rather than with the setting it was asked for.
+  const thinking = requestedThinking === "disabled" && deps.thinkingSupported === false
+    ? "enabled"
+    : requestedThinking;
 
   const startCas = proposal.mode === "test_gate"
     ? ""
@@ -352,19 +369,22 @@ async function assembleGoal(
     weight: 1,
   };
 
+  const algorithm = proposal.algorithm ?? "puct";
   return {
-    algorithm: proposal.algorithm ?? "puct",
+    algorithm,
     baselineProgramCas: startCas,
     budget: {
       candidateTimeoutSeconds: 180,
       expansions: proposal.expansions,
       maxCostCents: 0,
-      maxSeconds: 7_200,
-      maxTokens: 600_000,
+      maxSeconds: DEFAULT_MAX_SECONDS,
+      maxTokens: DEFAULT_MAX_TOKENS,
       // Enough for a reasoning model to think *and* answer when thinking is on;
       // a ceiling below that produced whole runs of hidden reasoning and no
-      // program, which read as a model that could not write code.
-      maxTokensPerCall: thinking === "enabled" ? 96_000 : 16_000,
+      // program, which read as a model that could not write code. Keyed on the
+      // algorithm because OpenEvolve's floor is higher than PUCT's — written as
+      // one number once, the path refused its own default.
+      maxTokensPerCall: perCallCeiling(algorithm, thinking),
       workers: proposal.workers,
     },
     frozen: scoringCas ? [scoringCas] : [],

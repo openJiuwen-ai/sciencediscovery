@@ -53,8 +53,14 @@ export function packagedPaths(resourcesPath: string): PackagedPaths {
     python: join(resourcesPath, "python"),
     micromamba: join(resourcesPath, "micromamba", "micromamba.exe"),
     envsTemplate: join(resourcesPath, "envs-template"),
-    venvNames: ["gateway", "memory-graph", "evolve", "adapter", "paper"],
-    jwSrc: join(resourcesPath, "backend", ".sciencediscovery-data", "jiuwenswarm", "src"),
+    // SIZEOPT W2: the five Python sidecars share one venv ("sd-services",
+    // staged by assemble-backend from the uv workspace lock) — see
+    // sizeopt\agent-knowledge\design\D1 for the 6→2 merge decision.
+    venvNames: ["sd-services"],
+    // SIZEOPT W6 / design D11: short payload layout backend\jw (was
+    // backend\.sciencediscovery-data\jiuwenswarm\src) — the deep path burned
+    // all MAX_PATH headroom under the default install root (problems W6).
+    jwSrc: join(resourcesPath, "backend", "jw"),
   };
 }
 
@@ -91,8 +97,9 @@ export function packagedEnv(paths: PackagedPaths, dataDir: string): NodeJS.Proce
     JIUWENSWARM_ROOT: join(dataDir, "jiuwenswarm"),
     JIUWENSWARM_SRC: paths.jwSrc,
     // The api defaults paper's interpreter to a POSIX-style venv path that
-    // never exists on Windows; point it at the bundled paper venv.
-    SCIENCE_AGENT_PAPER_PYTHON_PATH: join(envsRoot, "paper", "Scripts", "python.exe"),
+    // never exists on Windows; point it at the shared sidecar venv
+    // (SIZEOPT W2: one "sd-services" venv for all five Python sidecars).
+    SCIENCE_AGENT_PAPER_PYTHON_PATH: join(envsRoot, "sd-services", "Scripts", "python.exe"),
     // Tell the stack where to find the sidecar venvs (in-place or copied).
     SCIENCE_AGENT_ENVS_DIR: envsRoot,
     // Ship the new desktop UI as the renderer payload.

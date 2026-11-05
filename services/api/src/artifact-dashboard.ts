@@ -28,6 +28,8 @@ import type {
   Session,
 } from "@sciencediscovery/schema";
 
+import { randomUUID } from "node:crypto";
+
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { SessionStore } from "./store.js";
 
@@ -139,6 +141,25 @@ export type ArtifactPreviewPayload =
       totalRows: number;
       truncated: boolean;
       /**
+       * How many cells of the returned rows were left out of the preview
+       * because the grid's width is capped (see MAX_PREVIEW_COLUMNS). Zero for
+       * a table that came back whole; the count is a user-visible loss, so the
+       * viewer can say it instead of showing a silently shorter row.
+       */
+      clippedCells: number;
+      /**
+       * The file's own column count and the count the preview shows. They differ
+       * only when a line is wider than MAX_PREVIEW_COLUMNS; the viewer names both
+       * rather than quietly showing a narrower table.
+       */
+      clippedColumns: { total: number; shown: number };
+      /**
+       * Human-readable sentences for everything the preview left out: a clipped
+       * column set, clipped row cells, both, or nothing. Empty when the preview
+       * is whole, so a consumer can show them verbatim.
+       */
+      warnings: string[];
+      /**
        * The re-indented source document, carried only for JSON-backed tables so
        * the viewer can offer a raw-JSON view of the same version. Absent for
        * csv/tsv, which have no JSON form to switch to.
@@ -215,6 +236,22 @@ export type ArtifactPreviewPayload =
 const DEFAULT_MAX_ROWS = 100;
 const DEFAULT_MAX_CHARS = 100_000;
 const DEFAULT_MAX_CELLS = 200;
+/**
+ * The widest table a preview renders. 1001 is the widest legitimate header the
+ * preview contract covers (the regression test previews a 1001-column table
+ * whole), so a wider line is an outlier, not a table: a 400 KB file holding one
+ * 200k-field line used to ask for 100 x 200001 cells and a 60.8 MB response.
+ * 1001 columns also keeps the payload bound near the existing text budget: with
+ * MAX_PREVIEW_ROWS it caps a table at 100 x 1001 = 100,100 cells, the same
+ * order as DEFAULT_MAX_CHARS (one cell is a few bytes of JSON).
+ */
+const MAX_PREVIEW_COLUMNS = 1_001;
+/**
+ * The most rows one table preview returns. `maxRows` may lower it and never
+ * raise it, so a client query parameter cannot lift the payload bound; the
+ * widest and tallest preview is MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS.
+ */
+const MAX_PREVIEW_ROWS = DEFAULT_MAX_ROWS;
 const FIGURE_TRUNCATION_BYTES = 5 * 1024 * 1024;
 const IFRAME_TRUNCATION_BYTES = 2 * 1024 * 1024;
 
@@ -254,7 +291,12 @@ async function readCasText(recorder: ProvenanceRecorder, hash: string): Promise<
  * field over the whole file: built character by character that is quadratic
  * string garbage on a preview request, and it stays linear here.
  */
-function splitDelimited(source: string, delimiter: string): string[][] {
+function splitDelimited(rawSource: string, delimiter: string): string[][] {
+  // Excel writes "CSV UTF-8" and "TSV UTF-8" with a leading byte-order mark. It
+  // is an encoding marker, not part of the first header cell, so a client that
+  // matches columns by name must never see it. Strip exactly one U+FEFF, and
+  // only at the start of the file: a U+FEFF anywhere else is ordinary data.
+  const source = rawSource.startsWith("\uFEFF") ? rawSource.slice(1) : rawSource;
   const records: string[][] = [];
   let record: string[] = [];
   // Completed spans of the field being read; `spanStart` opens the one still
@@ -334,14 +376,58 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   columns: string[];
   rows: string[][];
   totalRows: number;
+  clippedCells: number;
+  clippedColumns: { total: number; shown: number };
+  warnings: string[];
 } {
   const delimiter = subtype === ".csv" ? "," : "\t";
   const lines = splitDelimited(source, delimiter);
-  if (!lines.length) return { columns: [], rows: [], totalRows: 0 };
+  if (!lines.length) {
+    return { columns: [], clippedCells: 0, clippedColumns: { shown: 0, total: 0 }, rows: [], totalRows: 0, warnings: [] };
+  }
+  const header = lines[0] ?? [];
+  const totalRows = Math.max(0, lines.length - 1);
+  // The width is the widest line of the whole file, capped by a constant, and
+  // never a function of how many rows the caller asked for: maxRows is a client
+  // query parameter, and the same file must show the same columns at maxRows=1
+  // and maxRows=1000. A wide line past the window therefore still sets the width
+  // and the returned rows are padded to it, because the renderer prints one <th>
+  // per column and one <td> per cell.
+  const widest = lines.reduce((widestLine, line) => Math.max(widestLine, line.length), 0);
+  const totalColumns = Math.max(header.length, widest);
+  const width = Math.min(totalColumns, MAX_PREVIEW_COLUMNS);
+  // The row count is bounded by its own constant, so the payload stays inside
+  // MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS cells. `maxRows` only lowers it.
+  const rows = lines.slice(1, Math.min(maxRows, MAX_PREVIEW_ROWS) + 1);
+  // Columns past the width leave the preview: the header keeps its first names
+  // and the payload says how many columns the file had, so a cut table is never
+  // mistaken for a narrow one.
+  const clippedColumns = { shown: width, total: totalColumns };
+  let clippedCells = 0;
+  const paddedRows = rows.map((row) => {
+    if (row.length === width) return row;
+    if (row.length > width) {
+      clippedCells += row.length - width;
+      return row.slice(0, width);
+    }
+    return [...row, ...Array.from({ length: width - row.length }, () => "")];
+  });
+  const warnings: string[] = [];
+  if (clippedColumns.total > clippedColumns.shown) {
+    warnings.push(`The file has ${clippedColumns.total} columns; the preview shows the first ${clippedColumns.shown}.`);
+  }
+  if (clippedCells > 0) {
+    warnings.push(`${clippedCells} cells past the preview width are not shown.`);
+  }
   return {
-    columns: lines[0] ?? [],
-    rows: lines.slice(1, maxRows + 1),
-    totalRows: Math.max(0, lines.length - 1),
+    clippedCells,
+    clippedColumns,
+    columns: header.length >= width
+      ? header.slice(0, width)
+      : [...header, ...Array.from({ length: width - header.length }, () => "")],
+    rows: paddedRows,
+    totalRows,
+    warnings,
   };
 }
 
@@ -366,6 +452,9 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
   columns: string[];
   rows: string[][];
   totalRows: number;
+  clippedCells: number;
+  clippedColumns: { total: number; shown: number };
+  warnings: string[];
 } {
   const columns = records.reduce<string[]>((acc, record) => {
     for (const key of Object.keys(record)) {
@@ -378,13 +467,120 @@ function recordArrayTable(records: Record<string, unknown>[], maxRows: number): 
     if (value === undefined || value === null) return "";
     return typeof value === "object" ? JSON.stringify(value) : String(value);
   }));
-  return { columns, rows, totalRows: records.length };
+  return {
+    clippedCells: 0,
+    clippedColumns: { shown: columns.length, total: columns.length },
+    columns,
+    rows,
+    totalRows: records.length,
+    warnings: [],
+  };
 }
 
-/** Apply the char budget to one text form of a JSON document. */
+/**
+ * JSON.parse rounds every integer beyond 2^53 to the nearest double, so a
+ * document that stores a 64-bit identifier would preview with different digits
+ * than it holds. Keep the stored literal: a linear scan rewrites exactly those
+ * integer tokens to placeholders before parsing, and the renderers put the
+ * digits back. Strings are copied verbatim, so a row that merely looks like a
+ * big number is left alone.
+ *
+ * Each placeholder is minted for one document: a random uuid makes it
+ * unforgeable by text a user wrote, a counter keeps the placeholders inside one
+ * document distinct, and the surrounding U+0001/U+0002 controls cannot appear
+ * in a JSON string without an escape. The closing control also keeps one
+ * placeholder from being a prefix of another once the counter reaches 10.
+ */
+export function createBigIntegerMarker(): string {
+  return `\u0001sd-bigint-${randomUUID()}:`;
+}
+
+function protectBigIntegers(source: string): { text: string; placeholders: Map<string, string> } {
+  const marker = createBigIntegerMarker();
+  const placeholders = new Map<string, string>();
+  let text = "";
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index] ?? "";
+    if (char === '"') {
+      const start = index;
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        index += 1;
+        if (source[index - 1] === '"') break;
+      }
+      text += source.slice(start, index);
+      continue;
+    }
+    // Outside a string a digit or a leading minus can only open a number token.
+    const number = char === "-" || (char >= "0" && char <= "9")
+      ? /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(source.slice(index))
+      : null;
+    if (!number) {
+      text += char;
+      index += 1;
+      continue;
+    }
+    const literal = number[0];
+    const integer = !/[.eE]/.test(literal);
+    if (integer && !Number.isSafeInteger(Number(literal))) {
+      const token = `${marker}${placeholders.size}\u0002`;
+      placeholders.set(token, literal);
+      // JSON.stringify adds the quotes and escapes the U+0001 prefix: an
+      // unescaped control character is not a valid JSON string.
+      text += JSON.stringify(token);
+    } else {
+      text += literal;
+    }
+    index += literal.length;
+  }
+  return { text, placeholders };
+}
+
+/**
+ * Write the stored digits back over the placeholders a render path produced.
+ *
+ * A placeholder reaches the renderers in two shapes: `JSON.stringify` quotes it
+ * and escapes its U+0001 prefix (the raw JSON and source views), while the
+ * table renderer carries the bare string (String(value)). The quoted shape goes
+ * first so the digits become a JSON number again rather than a string holding
+ * the same digits. Only a placeholder this document minted is restored, and its
+ * exact text is known from the map, so user text is never rewritten.
+ */
+function restoreBigIntegers(text: string, placeholders: Map<string, string>): string {
+  if (placeholders.size === 0) return text;
+  let restored = text;
+  for (const [placeholder, literal] of placeholders) {
+    restored = restored.split(JSON.stringify(placeholder)).join(literal);
+    restored = restored.split(placeholder).join(literal);
+  }
+  return restored;
+}
+
+/**
+ * Apply the char budget to one text form of a JSON document.
+ *
+ * The budget is counted in UTF-16 code units (that is what `totalChars` reports),
+ * but the cut itself must not land inside a surrogate pair: a preview ending on an
+ * unpaired high surrogate is invalid UTF-16 and renders as a replacement glyph in
+ * every consumer that does not patch it. A character that would straddle the cut
+ * is dropped whole, so the result is never longer than the budget.
+ */
+function truncateAtCodePoint(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const last = text.charCodeAt(maxChars - 1);
+  const next = text.charCodeAt(maxChars);
+  const splitsPair = last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+  return text.slice(0, splitsPair ? maxChars - 1 : maxChars);
+}
+
 function jsonSourceOf(text: string, maxChars: number): ArtifactJsonSource {
   const truncated = text.length > maxChars;
-  return { source: truncated ? text.slice(0, maxChars) : text, totalChars: text.length, truncated };
+  return { source: truncated ? truncateAtCodePoint(text, maxChars) : text, totalChars: text.length, truncated };
 }
 
 /**
@@ -403,10 +599,17 @@ function buildJsonPreview(
   maxRows: number,
   maxChars: number,
 ): ArtifactPreviewPayload {
+  // The delimited path treats a leading U+FEFF as an encoding marker rather than
+  // as the first character of its first cell (splitDelimited), and a JSON file
+  // written by a Windows tool carries the same marker. Apply that same rule here
+  // before parsing: exactly one U+FEFF, and only at the start, or a valid
+  // document is reported as unparseable text.
+  const document = source.startsWith("\uFEFF") ? source.slice(1) : source;
+  const protectedJson = protectBigIntegers(document);
   let parsed: unknown;
   let valid = true;
   try {
-    parsed = JSON.parse(source) as unknown;
+    parsed = JSON.parse(protectedJson.text) as unknown;
   } catch {
     valid = false;
   }
@@ -420,8 +623,14 @@ function buildJsonPreview(
         mode: "dataset-table",
         mediaSubtype: "json",
         ...table,
+        rows: table.rows.map((row) => row.map((cell) => (
+          restoreBigIntegers(cell, protectedJson.placeholders)
+        ))),
         truncated: table.totalRows > maxRows,
-        rawJson: jsonSourceOf(JSON.stringify(parsed, null, 2), maxChars),
+        rawJson: jsonSourceOf(
+          restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.placeholders),
+          maxChars,
+        ),
       };
     }
   }
@@ -429,7 +638,10 @@ function buildJsonPreview(
     version,
     kind: "json",
     mode: "json-source",
-    ...jsonSourceOf(valid ? JSON.stringify(parsed, null, 2) : source, maxChars),
+    ...jsonSourceOf(
+      valid ? restoreBigIntegers(JSON.stringify(parsed, null, 2), protectedJson.placeholders) : source,
+      maxChars,
+    ),
     parsed: valid,
   };
 }
@@ -502,7 +714,9 @@ export async function buildArtifactVersionPreview(
   if (!artifact) {
     throw new ArtifactDashboardError("ARTIFACT_NOT_FOUND", "Artifact not found");
   }
-  const maxRows = parsePositiveInt(maxRowsParam, DEFAULT_MAX_ROWS);
+  // maxRows may ask for fewer rows, never for more: the row constant is what
+  // makes the payload bound a constant instead of a function of the request.
+  const maxRows = Math.min(MAX_PREVIEW_ROWS, parsePositiveInt(maxRowsParam, DEFAULT_MAX_ROWS));
   const maxChars = parsePositiveInt(maxCharsParam, DEFAULT_MAX_CHARS);
   const maxCells = parsePositiveInt(maxCellsParam, DEFAULT_MAX_CELLS);
   const size = version.content.size;
@@ -529,7 +743,7 @@ export async function buildArtifactVersionPreview(
         version,
         kind,
         mode: "markdown-source",
-        source: truncated ? source.slice(0, maxChars) : source,
+        source: truncated ? truncateAtCodePoint(source, maxChars) : source,
         totalChars: source.length,
         truncated,
       };
@@ -541,7 +755,7 @@ export async function buildArtifactVersionPreview(
         version,
         kind,
         mode: "latex-source",
-        source: truncated ? source.slice(0, maxChars) : source,
+        source: truncated ? truncateAtCodePoint(source, maxChars) : source,
         totalChars: source.length,
         truncated,
       };
@@ -587,7 +801,7 @@ export async function buildArtifactVersionPreview(
         version,
         kind,
         mode: "structure-source",
-        source: charTruncated ? source.slice(0, maxChars) : source,
+        source: charTruncated ? truncateAtCodePoint(source, maxChars) : source,
         atomCount,
         totalChars: source.length,
         truncated: charTruncated,

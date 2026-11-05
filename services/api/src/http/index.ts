@@ -3881,6 +3881,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       sendError(response, 404, "Not found");
     } catch (error) {
+      // A streaming response has already committed its status and headers.
+      // Sending a JSON error here would reject the async HTTP listener.
+      if (response.headersSent) {
+        apiLog.error("request_error_after_headers", {
+          errorMessage: shortErrorMessage(error),
+          method: request.method ?? "UNKNOWN",
+          path: requestPath,
+          status: response.statusCode,
+        });
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);

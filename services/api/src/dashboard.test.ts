@@ -331,6 +331,94 @@ test("dataset preview keeps an unclosed quote as one field", async (context) => 
   assert.equal(payload.truncated, false);
 });
 
+test("a csv dataset preview strips the UTF-8 BOM from the first header cell", async (context) => {
+  const fixture = await createFixture(context);
+  // What Excel writes for "CSV UTF-8": the marker precedes the first header.
+  const vid = await seedArtifact(fixture, {
+    content: "\uFEFFname,note\nAlice,1\n",
+    kind: "dataset",
+    logicalName: "bom.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.deepEqual(payload.columns, ["name", "note"]);
+  assert.equal(payload.totalRows, 1);
+  assert.deepEqual(payload.rows[0], ["Alice", "1"]);
+});
+
+test("a csv dataset preview strips the BOM before a quoted header, so the quote still opens the cell", async (context) => {
+  const fixture = await createFixture(context);
+  // Excel's marker sits in front of the opening quote, not inside the cell: once
+  // the marker is gone the quote is back at the start of the record and must
+  // still open a field. Otherwise the header arrives as the literal `"name"`,
+  // quotes included, and the column disappears for name-based clients.
+  const vid = await seedArtifact(fixture, {
+    content: "\uFEFF\"name\",note\nAlice,1\n",
+    kind: "dataset",
+    logicalName: "bom-quoted.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.deepEqual(payload.columns, ["name", "note"]);
+  assert.equal(payload.totalRows, 1);
+  assert.deepEqual(payload.rows[0], ["Alice", "1"]);
+});
+
+test("a tsv dataset preview strips the UTF-8 BOM from the first header cell", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: "\uFEFFname\tnote\nAlice\t1\n",
+    kind: "dataset",
+    logicalName: "bom.tsv",
+    mediaType: "text/tab-separated-values",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.deepEqual(payload.columns, ["name", "note"]);
+  assert.deepEqual(payload.rows[0], ["Alice", "1"]);
+});
+
+test("a dataset preview without a BOM keeps every header cell unchanged", async (context) => {
+  const fixture = await createFixture(context);
+  for (const [logicalName, mediaType, content, columns] of [
+    ["plain.csv", "text/csv", "name,note\nAlice,1\n", ["name", "note"]],
+    ["plain.tsv", "text/tab-separated-values", "name\tnote\nAlice\t1\n", ["name", "note"]],
+  ] as const) {
+    const vid = await seedArtifact(fixture, { content, kind: "dataset", logicalName, mediaType });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+    assert.deepEqual(payload.columns, [...columns]);
+  }
+});
+
+test("a dataset preview keeps a BOM that starts a data row, because only the file prefix is a marker", async (context) => {
+  const fixture = await createFixture(context);
+  // Only the leading marker is encoding metadata; the same code point inside the
+  // document is a character the cell really contains, so it must survive.
+  const vid = await seedArtifact(fixture, {
+    content: "\uFEFFname,note\n\uFEFFAlice,1\n",
+    kind: "dataset",
+    logicalName: "bom-row.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.deepEqual(payload.columns, ["name", "note"]);
+  assert.deepEqual(payload.rows[0], ["\uFEFFAlice", "1"]);
+});
+
 test("json preview keeps the dataset table for record arrays", async (context) => {
   const fixture = await createFixture(context);
   const vid = await seedArtifact(fixture, {
@@ -439,6 +527,64 @@ test("a json artifact of empty objects renders as JSON text, not an empty grid",
     assert.equal(payload.totalChars, payload.source.length);
     assert.equal(payload.truncated, false);
   }
+});
+
+// -- A leading UTF-8 BOM is an encoding marker in JSON too -------------------
+
+test("a JSON document saved with a UTF-8 BOM still previews as a table", async (context) => {
+  const fixture = await createFixture(context);
+  // Excel and several exporters write a byte-order mark in front of the payload.
+  // The delimited path strips exactly one leading U+FEFF as an encoding marker
+  // (splitDelimited), so a JSON document must be read under the same rule before
+  // JSON.parse: otherwise a valid document is reported as unparseable text.
+  const bom = "\uFEFF";
+  const shape = (payload: { mode: string; parsed?: boolean }): string =>
+    `BOM-JSON ${JSON.stringify({ mode: payload.mode, parsed: payload.parsed })}`;
+
+  const records = [
+    { name: "af3", value: 1 },
+    { name: "af3b", value: 2 },
+  ];
+  const tableVersion = await seedArtifact(fixture, {
+    content: bom + JSON.stringify(records),
+    kind: "json",
+    logicalName: "bom-records.json",
+    mediaType: "application/json",
+  });
+  const table = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, tableVersion,
+  );
+  if (table.mode !== "dataset-table") assert.fail(shape(table));
+  assert.deepEqual(table.columns, ["name", "value"]);
+  assert.deepEqual(table.rows, [["af3", "1"], ["af3b", "2"]]);
+
+  const scalarVersion = await seedArtifact(fixture, {
+    content: `${bom}{"name":"af3"}`,
+    kind: "json",
+    logicalName: "bom-scalar.json",
+    mediaType: "application/json",
+  });
+  const scalar = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarVersion,
+  );
+  if (scalar.mode !== "json-source") assert.fail(shape(scalar));
+  assert.equal(scalar.parsed, true, "a leading U+FEFF is an encoding marker, not part of the document");
+  assert.equal(scalar.source, JSON.stringify({ name: "af3" }, null, 2));
+  assert.equal(scalar.totalChars, scalar.source.length);
+
+  // Only the leading marker is syntax: a U+FEFF inside a string is ordinary data.
+  const interiorVersion = await seedArtifact(fixture, {
+    content: `${bom}${JSON.stringify({ note: "A\uFEFFB" })}`,
+    kind: "json",
+    logicalName: "bom-interior.json",
+    mediaType: "application/json",
+  });
+  const interior = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, interiorVersion,
+  );
+  if (interior.mode !== "json-source") assert.fail(shape(interior));
+  assert.equal(interior.parsed, true);
+  assert.ok(interior.source.includes("A\uFEFFB"), "a U+FEFF inside a string must survive the strip");
 });
 
 test("json preview keeps the table when record arrays carry keys", async (context) => {
@@ -649,6 +795,118 @@ test("structure preview at exactly maxChars returns the whole source without tru
   assert.equal(payload.truncated, false);
   assert.equal(payload.source, source);
 });
+
+// A cut inside a surrogate pair leaves invalid UTF-16 in the payload; every
+// truncating preview path must cut at a code point boundary instead.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const SPLIT_AT_LIMIT = `${"a".repeat(9)}\u{1F600}tail`;
+
+function assertCodePointCut(source: string): void {
+  assert.equal(LONE_SURROGATE.test(source), false, `source carries a lone surrogate: ${JSON.stringify(source)}`);
+  // Either the whole character is kept or it is dropped; never half of it.
+  assert.ok([`${"a".repeat(9)}`, `${"a".repeat(9)}\u{1F600}`].includes(source), `unexpected cut: ${JSON.stringify(source)}`);
+}
+
+test("markdown preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "markdown",
+    logicalName: "notes.md",
+    mediaType: "text/markdown",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "markdown-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("latex preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "latex",
+    logicalName: "paper.tex",
+    mediaType: "application/x-tex",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "latex-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("structure preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "structure",
+    logicalName: "protein.pdb",
+    mediaType: "chemical/x-pdb",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "structure-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("json-source preview truncation never splits a surrogate pair", async (context) => {
+  const fixture = await createFixture(context);
+  const vid = await seedArtifact(fixture, {
+    content: SPLIT_AT_LIMIT,
+    kind: "json",
+    logicalName: "notes.json",
+    mediaType: "application/json",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "json-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assertCodePointCut(payload.source);
+  assert.equal(payload.totalChars, SPLIT_AT_LIMIT.length);
+  assert.equal(payload.truncated, true);
+});
+
+test("an ascii markdown preview still cuts at exactly maxChars", async (context) => {
+  const fixture = await createFixture(context);
+  const ascii = "x".repeat(20);
+  const vid = await seedArtifact(fixture, {
+    content: ascii,
+    kind: "markdown",
+    logicalName: "plain.md",
+    mediaType: "text/markdown",
+  });
+  const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, "10");
+  if (payload.mode !== "markdown-source") assert.fail(`unexpected mode: ${payload.mode}`);
+  assert.equal(payload.source, "x".repeat(10));
+  assert.equal(payload.totalChars, 20);
+  assert.equal(payload.truncated, true);
+});
+
+// The budget is counted in UTF-16 units, so maxChars 1 or 2 cannot hold a first
+// character that is a surrogate pair. These are the only budgets where the cut
+// removes a whole unit instead of measuring a boundary, and they are the first
+// thing a simplification of `splitsPair` would break: `charCodeAt(maxChars) >=
+// 0xdc00` would leave half a pair or read out of bounds here while every
+// existing case (all maxChars = 10) stayed green. maxChars = 0 never reaches
+// the cut (parsePositiveInt requires > 0), so 1 is the degenerate boundary.
+for (const [maxChars, expected] of [["1", ""], ["2", "😀"]] as const) {
+  test(`a markdown preview with maxChars=${maxChars} drops a straddling emoji whole`, async (context) => {
+    const fixture = await createFixture(context);
+    const vid = await seedArtifact(fixture, {
+      content: "😀abcdef",
+      kind: "markdown",
+      logicalName: "emoji.md",
+      mediaType: "text/markdown",
+    });
+    const payload = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, undefined, maxChars);
+    if (payload.mode !== "markdown-source") assert.fail(`unexpected mode: ${payload.mode}`);
+    assert.equal(payload.source, expected);
+    assert.equal(payload.source.length, expected.length, "a surviving emoji keeps both of its units");
+    assert.equal(payload.totalChars, 8);
+    assert.equal(payload.truncated, true);
+  });
+}
 
 test("figure preview surfaces the content URL without reading CAS bytes", async (context) => {
   const fixture = await createFixture(context);
@@ -905,4 +1163,600 @@ test("preview endpoint returns 422 when the CAS blob is missing", async (context
     headers: { authorization },
   });
   assert.equal(response.status, 422);
+});
+
+// -- Integers beyond 2^53 keep the digits that are stored -------------------
+
+test("json preview shows integers beyond 2^53 without rounding them", async (context) => {
+  const fixture = await createFixture(context);
+  // JSON.parse turns 9007199254740993 into 9007199254740992: the preview must
+  // display what the document says, not what a double can hold.
+  const tableVersion = await seedArtifact(fixture, {
+    content: '[{"sample_id":9007199254740993,"label":"x"}]',
+    kind: "json",
+    logicalName: "samples.json",
+    mediaType: "application/json",
+  });
+  const table = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, tableVersion,
+  );
+  if (table.mode !== "dataset-table") assert.fail(`unexpected mode: ${table.mode}`);
+  assert.deepEqual(table.columns, ["sample_id", "label"]);
+  assert.deepEqual(table.rows, [["9007199254740993", "x"]], "the cell must keep the stored digits");
+  if (!table.rawJson) assert.fail("a json-backed table must carry rawJson");
+  assert.ok(
+    table.rawJson.source.includes("9007199254740993"),
+    `rawJson must keep the stored digits: ${table.rawJson.source}`,
+  );
+
+  // A document that is not a record array goes to the source view, same rule.
+  const scalarVersion = await seedArtifact(fixture, {
+    content: '{"run_id":12345678901234567890}',
+    kind: "json",
+    logicalName: "run.json",
+    mediaType: "application/json",
+  });
+  const scalar = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarVersion,
+  );
+  if (scalar.mode !== "json-source") assert.fail(`unexpected mode: ${scalar.mode}`);
+  assert.equal(scalar.parsed, true);
+  assert.ok(
+    scalar.source.includes("12345678901234567890"),
+    `the source view must keep the stored digits: ${scalar.source}`,
+  );
+});
+
+test("json preview leaves safe numbers, strings and nested values unchanged", async (context) => {
+  const fixture = await createFixture(context);
+  const safeVersion = await seedArtifact(fixture, {
+    content: JSON.stringify([{ n: 42, text: "9007199254740993" }]),
+    kind: "json",
+    logicalName: "safe.json",
+    mediaType: "application/json",
+  });
+  const safe = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, safeVersion);
+  if (safe.mode !== "dataset-table") assert.fail(`unexpected mode: ${safe.mode}`);
+  assert.deepEqual(safe.rows, [["42", "9007199254740993"]], "a safe number and a string that looks like one stay put");
+
+  const nested = { config: { seed: 7, tags: ["a", "b"] }, ratio: 0.5 };
+  const nestedVersion = await seedArtifact(fixture, {
+    content: JSON.stringify(nested),
+    kind: "json",
+    logicalName: "nested.json",
+    mediaType: "application/json",
+  });
+  const nestedPreview = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, nestedVersion,
+  );
+  if (nestedPreview.mode !== "json-source") assert.fail(`unexpected mode: ${nestedPreview.mode}`);
+  assert.equal(nestedPreview.parsed, true);
+  assert.equal(nestedPreview.source, JSON.stringify(nested, null, 2));
+});
+
+test("json preview keeps big integers as numbers in the raw and source views", async (context) => {
+  const fixture = await createFixture(context);
+  // JSON.stringify writes a placeholder back as a quoted string, so restoring
+  // only the bare shape would hand the client "9007199254740993" (a string)
+  // where the document holds 9007199254740993 (a number).
+  const tableVersion = await seedArtifact(fixture, {
+    content: '[{"sample_id":9007199254740993,"label":"x"}]',
+    kind: "json",
+    logicalName: "samples.json",
+    mediaType: "application/json",
+  });
+  const table = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, tableVersion,
+  );
+  if (table.mode !== "dataset-table") assert.fail(`unexpected mode: ${table.mode}`);
+  assert.deepEqual(table.rows, [["9007199254740993", "x"]], "the cell keeps the stored digits");
+  if (!table.rawJson) assert.fail("a json-backed table must carry rawJson");
+  assert.match(
+    table.rawJson.source,
+    /"sample_id": 9007199254740993/,
+    `rawJson must hold the number, not a string: ${table.rawJson.source}`,
+  );
+  assert.ok(
+    !table.rawJson.source.includes('"9007199254740993"'),
+    `rawJson must not quote the stored digits: ${table.rawJson.source}`,
+  );
+  // Compare the digit string itself: JSON.parse rounds both sides the same way,
+  // so only the text proves that the precise digits are the stored ones.
+  assert.equal(
+    /"sample_id":\s*(\d+)/.exec(table.rawJson.source)?.[1],
+    "9007199254740993",
+    `rawJson must carry the stored digit string: ${table.rawJson.source}`,
+  );
+
+  const objectVersion = await seedArtifact(fixture, {
+    content: '{"run_id":12345678901234567890}',
+    kind: "json",
+    logicalName: "run.json",
+    mediaType: "application/json",
+  });
+  const objectPreview = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, objectVersion,
+  );
+  if (objectPreview.mode !== "json-source") assert.fail(`unexpected mode: ${objectPreview.mode}`);
+  assert.equal(objectPreview.parsed, true);
+  assert.match(
+    objectPreview.source,
+    /"run_id": 12345678901234567890/,
+    `the source view must hold the number, not a string: ${objectPreview.source}`,
+  );
+  assert.ok(
+    !objectPreview.source.includes('"12345678901234567890"'),
+    `the source view must not quote the stored digits: ${objectPreview.source}`,
+  );
+  assert.equal(
+    /"run_id":\s*(\d+)/.exec(objectPreview.source)?.[1],
+    "12345678901234567890",
+    `the source view must carry the stored digit string: ${objectPreview.source}`,
+  );
+
+  // A scalar document has no surrounding syntax: the view is just the digits.
+  const bareVersion = await seedArtifact(fixture, {
+    content: "9007199254740993",
+    kind: "json",
+    logicalName: "scalar.json",
+    mediaType: "application/json",
+  });
+  const bare = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, bareVersion,
+  );
+  if (bare.mode !== "json-source") assert.fail(`unexpected mode: ${bare.mode}`);
+  assert.equal(bare.source, "9007199254740993", "a bare scalar must stay a bare number");
+  assert.equal(
+    /^(\d+)$/.exec(bare.source)?.[1],
+    "9007199254740993",
+    `a bare scalar is exactly the stored digits: ${bare.source}`,
+  );
+
+  const scalarArrayVersion = await seedArtifact(fixture, {
+    content: "[9007199254740993]",
+    kind: "json",
+    logicalName: "scalar-array.json",
+    mediaType: "application/json",
+  });
+  const scalarArray = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarArrayVersion,
+  );
+  if (scalarArray.mode !== "json-source") assert.fail(`unexpected mode: ${scalarArray.mode}`);
+  assert.equal(scalarArray.source, "[\n  9007199254740993\n]", "an array of one big integer stays numeric");
+  assert.equal(
+    /\[\s*(\d+)\s*\]/.exec(scalarArray.source)?.[1],
+    "9007199254740993",
+    `an array element is exactly the stored digits: ${scalarArray.source}`,
+  );
+});
+
+test("json preview leaves user text that spells an old placeholder untouched", async (context) => {
+  const fixture = await createFixture(context);
+  // `sd-bigint:` was an internal detail of an earlier revision; as far as a
+  // document is concerned it is ordinary text and must survive verbatim.
+  const textOnly = await seedArtifact(fixture, {
+    content: '{"note":"sd-bigint:9007199254740993"}',
+    kind: "json",
+    logicalName: "note.json",
+    mediaType: "application/json",
+  });
+  const noteOnly = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, textOnly,
+  );
+  if (noteOnly.mode !== "json-source") assert.fail(`unexpected mode: ${noteOnly.mode}`);
+  assert.match(
+    noteOnly.source,
+    /"note": "sd-bigint:9007199254740993"/,
+    `a note that spells the old prefix must not be rewritten: ${noteOnly.source}`,
+  );
+
+  // The same document beside a real big integer: restoring the number must not
+  // reach into the neighbouring string.
+  const mixed = await seedArtifact(fixture, {
+    content: '{"note":"sd-bigint:9007199254740993","id":9007199254740993}',
+    kind: "json",
+    logicalName: "mixed.json",
+    mediaType: "application/json",
+  });
+  const mixedPreview = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, mixed,
+  );
+  if (mixedPreview.mode !== "json-source") assert.fail(`unexpected mode: ${mixedPreview.mode}`);
+  assert.match(
+    mixedPreview.source,
+    /"note": "sd-bigint:9007199254740993"/,
+    `the note must keep every character: ${mixedPreview.source}`,
+  );
+  assert.match(
+    mixedPreview.source,
+    /"id": 9007199254740993/,
+    `the id must still be restored: ${mixedPreview.source}`,
+  );
+
+  // A document that writes the marker shape itself, with a token this call did
+  // not mint, is still ordinary text.
+  const fabricatedContent = '{"note":"\\u0001sd-bigint-00000000-0000-0000-0000-000000000000:0","id":9007199254740993}';
+  const fabricatedVersion = await seedArtifact(fixture, {
+    content: fabricatedContent,
+    kind: "json",
+    logicalName: "fabricated.json",
+    mediaType: "application/json",
+  });
+  const fabricated = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, fabricatedVersion,
+  );
+  if (fabricated.mode !== "json-source") assert.fail(`unexpected mode: ${fabricated.mode}`);
+  const fabricatedShown = JSON.parse(fabricated.source) as { id: number; note: string };
+  const fabricatedStored = JSON.parse(fabricatedContent) as { id: number; note: string };
+  assert.equal(fabricatedShown.note, fabricatedStored.note, "a token the call never minted must survive verbatim");
+  assert.match(fabricated.source, /"id": 9007199254740993/, `the real big integer is still restored: ${fabricated.source}`);
+});
+
+test("json preview round-trips a big integer document through JSON.parse", async (context) => {
+  const fixture = await createFixture(context);
+  // Parsing both sides pins the type of every value: digits rendered as a JSON
+  // string would compare as a string here, while the digits themselves survive
+  // the same double rounding on both sides.
+  const recordSource = '[{"sample_id":9007199254740993,"label":"x"}]';
+  const recordVersion = await seedArtifact(fixture, {
+    content: recordSource,
+    kind: "json",
+    logicalName: "round-trip.json",
+    mediaType: "application/json",
+  });
+  const record = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, recordVersion,
+  );
+  if (record.mode !== "dataset-table") assert.fail(`unexpected mode: ${record.mode}`);
+  if (!record.rawJson) assert.fail("a json-backed table must carry rawJson");
+  assert.deepEqual(
+    JSON.parse(record.rawJson.source),
+    JSON.parse(recordSource),
+    `rawJson must parse back to the stored document: ${record.rawJson.source}`,
+  );
+
+  const objectSource = '{"run_id":12345678901234567890,"nested":{"id":9007199254740993}}';
+  const objectVersion = await seedArtifact(fixture, {
+    content: objectSource,
+    kind: "json",
+    logicalName: "round-trip-object.json",
+    mediaType: "application/json",
+  });
+  const object = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, objectVersion,
+  );
+  if (object.mode !== "json-source") assert.fail(`unexpected mode: ${object.mode}`);
+  assert.deepEqual(
+    JSON.parse(object.source),
+    JSON.parse(objectSource),
+    `the source view must parse back to the stored document: ${object.source}`,
+  );
+
+  const scalarSource = "9007199254740993";
+  const scalarVersion = await seedArtifact(fixture, {
+    content: scalarSource,
+    kind: "json",
+    logicalName: "round-trip-scalar.json",
+    mediaType: "application/json",
+  });
+  const scalar = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, scalarVersion,
+  );
+  if (scalar.mode !== "json-source") assert.fail(`unexpected mode: ${scalar.mode}`);
+  assert.deepEqual(JSON.parse(scalar.source), JSON.parse(scalarSource), "a bare scalar parses back as a number");
+});
+
+test("big integer placeholders are generated per document and are not the old prefix", async () => {
+  // The placeholder must be unpredictable: text a user wrote cannot be mistaken
+  // for a protected number, and two documents can never share one.
+  const dashboard = await import("./artifact-dashboard.js") as unknown as {
+    createBigIntegerMarker?: () => string;
+  };
+  assert.equal(
+    typeof dashboard.createBigIntegerMarker,
+    "function",
+    "artifact-dashboard must export createBigIntegerMarker so the contract is testable",
+  );
+  const first = dashboard.createBigIntegerMarker?.() ?? "";
+  const second = dashboard.createBigIntegerMarker?.() ?? "";
+  assert.notEqual(first, second, "each document must get its own placeholder");
+  assert.ok(!first.startsWith("sd-bigint:"), `the marker must not be the retired constant: ${first}`);
+  assert.ok(first.includes("\u0001"), `the marker must carry the U+0001 prefix: ${JSON.stringify(first)}`);
+});
+
+test("json preview keeps placeholders for many big integers apart", async (context) => {
+  const fixture = await createFixture(context);
+  // Twelve distinct literals make the placeholder counters share prefixes
+  // (1, 10, 11, 12): restoring one placeholder must never eat another.
+  const literals = Array.from({ length: 12 }, (_, index) => `900719925474${993 + index}`);
+  const source = `[${literals.map((value) => `{"id":${value}}`).join(",")}]`;
+  const version = await seedArtifact(fixture, {
+    content: source,
+    kind: "json",
+    logicalName: "many.json",
+    mediaType: "application/json",
+  });
+  const preview = await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, version);
+  if (preview.mode !== "dataset-table") assert.fail(`unexpected mode: ${preview.mode}`);
+  assert.deepEqual(preview.rows, literals.map((value) => [value]), "every cell keeps its own digits");
+  if (!preview.rawJson) assert.fail("a json-backed table must carry rawJson");
+  for (const value of literals) {
+    assert.match(
+      preview.rawJson.source,
+      new RegExp(`"id": ${value}`),
+      `rawJson must keep ${value} as a number: ${preview.rawJson.source}`,
+    );
+  }
+  assert.deepEqual(
+    JSON.parse(preview.rawJson.source),
+    JSON.parse(source),
+    `rawJson must parse back to the stored document: ${preview.rawJson.source}`,
+  );
+});
+
+test("a delimited preview keeps every row as wide as the columns it advertises", async (context) => {
+  const fixture = await createFixture(context);
+  // An uneven file used to ship rows of their own width: the renderer prints one
+  // <th> per column and one <td> per cell, so a short row left cells under the
+  // wrong header and an extra cell had no header at all.
+  for (const [name, mediaType, content, columns, rows] of [
+    ["short.csv", "text/csv", "a,b,c\n1,2\n", ["a", "b", "c"], [["1", "2", ""]]],
+    ["long.csv", "text/csv", "a,b\n1,2,3\n", ["a", "b", ""], [["1", "2", "3"]]],
+    ["short.tsv", "text/tab-separated-values", "a\tb\tc\n1\t2\n", ["a", "b", "c"], [["1", "2", ""]]],
+    ["long.tsv", "text/tab-separated-values", "a\tb\n1\t2\t3\n", ["a", "b", ""], [["1", "2", "3"]]],
+  ] as const) {
+    const vid = await seedArtifact(fixture, { content, kind: "dataset", logicalName: name, mediaType });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`${name}: unexpected mode ${payload.mode}`);
+    assert.deepEqual(payload.columns, [...columns], `${name}: header text keeps its order, an extra column is blank`);
+    assert.deepEqual(
+      payload.rows,
+      rows.map((row) => [...row]),
+      `${name}: rows are padded or carried over, never dropped`,
+    );
+    assert.ok(
+      payload.rows.every((row) => row.length === payload.columns.length),
+      `${name}: every row must match the advertised width`,
+    );
+    assert.equal(payload.totalRows, 1, `${name}: totalRows must not change`);
+    assert.equal(payload.truncated, false, `${name}: truncated must not change`);
+  }
+
+  // A quoted cell that contains the delimiter is parsed by the field splitter,
+  // not by the width rule, and stays exactly as wide as the header.
+  const quoted = await seedArtifact(fixture, {
+    content: 'a,b\n"x,y",2\n',
+    kind: "dataset",
+    logicalName: "quoted.csv",
+    mediaType: "text/csv",
+  });
+  const quotedPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, quoted,
+  );
+  if (quotedPayload.mode !== "dataset-table") assert.fail(`unexpected mode: ${quotedPayload.mode}`);
+  assert.deepEqual(quotedPayload.columns, ["a", "b"]);
+  assert.deepEqual(quotedPayload.rows, [["x,y", "2"]]);
+
+  // The column set comes from the whole file, not from the rows a caller asked
+  // for: the same file must show the same columns at maxRows=1 and maxRows=1000,
+  // so a wide row past the window still sets the width and the returned rows are
+  // padded to it.
+  const truncated = await seedArtifact(fixture, {
+    content: "a,b\n1,2\n3,4,5\n",
+    kind: "dataset",
+    logicalName: "truncated.csv",
+    mediaType: "text/csv",
+  });
+  const truncatedPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, truncated, "1",
+  );
+  if (truncatedPayload.mode !== "dataset-table") assert.fail(`unexpected mode: ${truncatedPayload.mode}`);
+  assert.deepEqual(
+    truncatedPayload.columns,
+    ["a", "b", ""],
+    "the width is the file's widest line, whatever maxRows returns",
+  );
+  assert.deepEqual(truncatedPayload.rows, [["1", "2", ""]], "the returned row is padded to that width");
+  assert.equal(truncatedPayload.totalRows, 2);
+  assert.equal(truncatedPayload.truncated, true);
+});
+
+test("a long file does not cost a legitimate table its columns", async (context) => {
+  const fixture = await createFixture(context);
+  // The width is the widest line capped by a constant, never the file's row
+  // count over the budget: 20,000 rows of six cells still pad to 100 x 6 cells,
+  // so the sixth column must not disappear from a long file.
+  for (const rowCount of [20_000, 50_000]) {
+    const lines = ["title"];
+    for (let index = 0; index < rowCount; index += 1) lines.push(`${index},a,b,c,d,e`);
+    const vid = await seedArtifact(fixture, {
+      content: lines.join("\n"),
+      kind: "dataset",
+      logicalName: `long-${rowCount}.csv`,
+      mediaType: "text/csv",
+    });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+    assert.equal(payload.columns.length, 6, `${rowCount} rows must not cost the sixth column`);
+    assert.equal(payload.rows.length, 100);
+    for (const row of payload.rows) assert.equal(row.length, 6, `${rowCount}: rows are six cells wide`);
+    assert.deepEqual(payload.clippedColumns, { shown: 6, total: 6 });
+    assert.equal(payload.clippedCells, 0, `${rowCount}: nothing is past the width`);
+    assert.deepEqual(payload.warnings, [], `${rowCount}: a whole table warns about nothing`);
+  }
+});
+
+test("a delimited preview caps a pathological line and counts what it leaves out", async (context) => {
+  const fixture = await createFixture(context);
+  // One 200k-field line may widen the grid only up to the column constant; the
+  // payload says how many columns and cells did not make it, instead of hiding
+  // the loss behind a shorter row.
+  const wide = Array.from({ length: 200_001 }, () => "w").join(",");
+  const lines = ["a,b"];
+  for (let index = 0; index < 99; index += 1) lines.push("1,2");
+  lines.push(wide);
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "pathological.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+  assert.equal(payload.columns.length, 1_001, "the width stops at the column constant");
+  assert.equal(payload.rows.length, 100);
+  // Compare lengths and short slices: diffing a 200k-element array against a
+  // 1001-element one is what the assertion itself must never do.
+  for (const row of payload.rows) {
+    assert.equal(row.length, payload.columns.length, "every row is as wide as the grid");
+  }
+  const cells = payload.rows.reduce((total, row) => total + row.length, 0);
+  assert.ok(cells <= 100_100, `the grid must fit the preview bound, got ${cells}`);
+  assert.deepEqual(payload.rows[99]?.slice(0, 2), ["w", "w"], "the leading cells of the wide line are kept");
+  assert.equal(payload.clippedCells, 199_000, "the cells past the width are counted, not hidden");
+  assert.deepEqual(
+    payload.clippedColumns,
+    { shown: 1_001, total: 200_001 },
+    "the payload reports the file's width and the shown width",
+  );
+  assert.equal(payload.warnings.length, 2, "a clipped preview says so in warnings");
+  assert.ok(
+    JSON.stringify(payload).length < 1_000_000,
+    `the response must stay small, got ${JSON.stringify(payload).length} chars`,
+  );
+  // `maxRows` may lower the row count, never raise it past the constant.
+  const asked = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "10000",
+  );
+  if (asked.mode !== "dataset-table") assert.fail(`unexpected mode ${asked.mode}`);
+  assert.equal(asked.rows.length, 100, "maxRows cannot lift the row constant");
+  assert.deepEqual(asked.columns, payload.columns);
+  assert.equal(payload.totalRows, 100);
+  assert.equal(payload.truncated, false);
+});
+
+test("a header wider than the preview is clipped with an explicit signal", async (context) => {
+  const fixture = await createFixture(context);
+  // A 200k-column header is not a table; keeping every named column made the
+  // payload unbounded (20M cells, 60 MB). The cap keeps the first constant
+  // number of columns and says how many columns the file actually had.
+  const header = Array.from({ length: 200_001 }, (_, index) => `h${index}`);
+  const lines = [header.join(",")];
+  for (let index = 0; index < 600; index += 1) lines.push("1,2");
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "wide-header.csv",
+    mediaType: "text/csv",
+  });
+  for (const [label, maxRows] of [["default", undefined], ["maxRows=500", "500"]] as const) {
+    const payload = maxRows === undefined
+      ? await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid)
+      : await buildArtifactVersionPreview(fixture.store, fixture.recorder, fixture.session.id, vid, maxRows);
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+    assert.equal(payload.columns.length, 1_001, `${label}: the width stops at the column constant`);
+    assert.deepEqual(payload.columns.slice(0, 2), ["h0", "h1"], `${label}: the leading names are kept`);
+    assert.equal(payload.rows.length, 100, `${label}: the row constant holds`);
+    for (const row of payload.rows) assert.equal(row.length, 1_001, `${label}: every row is square`);
+    assert.deepEqual(payload.clippedColumns, { shown: 1_001, total: 200_001 }, `${label}: both widths are reported`);
+    assert.equal(payload.clippedCells, 0, `${label}: the lost columns are reported as columns, not cells`);
+    assert.ok(
+      JSON.stringify(payload).length < 1_000_000,
+      `${label}: the response must stay small, got ${JSON.stringify(payload).length} chars`,
+    );
+  }
+});
+
+test("a delimited preview shows the same columns whatever maxRows it is asked for", async (context) => {
+  const fixture = await createFixture(context);
+  // The width comes from every line of the file plus a constant, so a wide line
+  // past the window cannot make maxRows=1 and maxRows=1000 disagree about the
+  // columns; maxRows only decides how many of those rows come back.
+  const wide = Array.from({ length: 200_001 }, () => "w").join(",");
+  const lines = ["a,b", "1,2", "3,4", wide];
+  for (let index = 0; index < 100; index += 1) lines.push("5,6");
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "outlier-beyond-window.csv",
+    mediaType: "text/csv",
+  });
+  const first = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "1",
+  );
+  const many = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "1000",
+  );
+  const some = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "50",
+  );
+  if (first.mode !== "dataset-table" || many.mode !== "dataset-table" || some.mode !== "dataset-table") {
+    assert.fail("every call must answer a dataset-table");
+  }
+  assert.deepEqual(first.columns, many.columns, "maxRows cannot change the column set");
+  assert.deepEqual(first.columns, some.columns, "maxRows cannot change the column set");
+  assert.equal(first.columns.length, 1_001);
+  assert.equal(first.rows.length, 1);
+  assert.equal(first.rows[0]?.length, 1_001, "a returned row is padded to the file-wide width");
+  assert.equal(many.rows.length, 100, "maxRows above the row constant is clamped");
+  assert.equal(some.rows.length, 50, "maxRows below the row constant still lowers the count");
+  assert.equal(many.totalRows, 103);
+});
+
+test("a delimited preview keeps a header wider than the budget whole", async (context) => {
+  const fixture = await createFixture(context);
+  // 1001 named columns is the widest header the preview contract covers, and
+  // MAX_PREVIEW_COLUMNS is chosen so it is previewed whole: a legitimate table
+  // keeps every named column, and only a line wider than that constant is cut.
+  const columns = Array.from({ length: 1_001 }, (_, index) => `c${index}`);
+  const lines = [columns.join(",")];
+  for (let index = 0; index < 100; index += 1) lines.push("1,2,3");
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "wide-header.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+  assert.equal(payload.columns.length, 1_001, "not one named column is dropped");
+  assert.deepEqual(payload.columns.slice(0, 3), ["c0", "c1", "c2"]);
+  assert.equal(payload.rows.length, 100);
+  for (const row of payload.rows) assert.equal(row.length, 1_001, "every row is padded to the header");
+  assert.deepEqual(payload.rows[0]?.slice(0, 3), ["1", "2", "3"]);
+  assert.equal(payload.rows[0]?.[1_000], "", "the padding columns stay empty");
+  assert.equal(payload.clippedCells, 0, "nothing left the preview, so nothing is reported as clipped");
+});
+
+test("a delimited preview returns a legitimately wide table whole", async (context) => {
+  const fixture = await createFixture(context);
+  // The cell budget must never be spent by cutting columns: a well-formed table
+  // of 100 or 200 named columns is previewed exactly, as it was before.
+  for (const columnCount of [100, 200]) {
+    const columns = Array.from({ length: columnCount }, (_, index) => `c${index}`);
+    const values = Array.from({ length: columnCount }, (_, index) => `v${index}`);
+    const vid = await seedArtifact(fixture, {
+      content: [columns.join(","), values.join(","), values.join(",")].join("\n"),
+      kind: "dataset",
+      logicalName: `wide-${columnCount}.csv`,
+      mediaType: "text/csv",
+    });
+    const payload = await buildArtifactVersionPreview(
+      fixture.store, fixture.recorder, fixture.session.id, vid,
+    );
+    if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+    assert.deepEqual(payload.columns, columns, `${columnCount}: every named column is kept in order`);
+    assert.deepEqual(payload.rows, [values, values], `${columnCount}: every row keeps all its cells`);
+    assert.equal(payload.totalRows, 2, `${columnCount}: totalRows must not change`);
+    assert.equal(payload.truncated, false, `${columnCount}: truncated must not change`);
+    assert.equal(payload.clippedCells, 0, `${columnCount}: a whole wide table clips nothing`);
+  }
 });

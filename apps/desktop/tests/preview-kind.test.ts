@@ -61,6 +61,44 @@ test("a text page, a listing and anything unknown keep to themselves", () => {
   assert.equal(documentKind("", "text/plain"), "source");
 });
 
+test("a container this build cannot draw is unrenderable, not source", () => {
+  for (const name of [
+    "report.docx", "deck.pptx", "notes.odt", "sheet.ods", "slides.odp",
+    "old.doc", "old.xls", "legacy.xlsb", "bundle.zip", "archive.tar",
+    "archive.gz", "archive.7z", "archive.rar", "book.epub",
+  ]) {
+    assert.equal(documentKind(name), "unrenderable", name);
+  }
+});
+
+test("a log, a config, a script and a text page keep reading as text", () => {
+  const cases: Array<[string, string]> = [
+    ["run.log", "source"],
+    ["pyproject.toml", "source"],
+    ["plot.py", "python"],
+    ["notes.txt", "prose"],
+    ["samples.csv", "csv"],
+  ];
+  for (const [name, kind] of cases) assert.equal(documentKind(name), kind, name);
+});
+
+test("the media type names an unrenderable container when the name has no extension", () => {
+  for (const type of [
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/zip",
+  ]) {
+    assert.equal(documentKind("attachment", type), "unrenderable", type);
+  }
+});
+
+test("a workbook is still a sheet, by name and by media type", () => {
+  assert.equal(documentKind("results.xlsx"), "sheet");
+  assert.equal(documentKind("attachment", XLSX_MEDIA_TYPE), "sheet");
+  assert.equal(isBinaryDocument(documentKind("results.xlsx")), true);
+});
+
 test("only a .tsv insists on its own separator", () => {
   assert.equal(delimitedSeparator("samples.tsv"), "\t");
   assert.equal(delimitedSeparator("samples.csv"), undefined);

@@ -54,6 +54,24 @@ function close(server: http.Server): Promise<void> {
 
 // --- Read endpoints --------------------------------------------------------
 
+test("health requests carry a timeout signal", async () => {
+  const originalFetch = globalThis.fetch;
+  const signals: AbortSignal[] = [];
+  globalThis.fetch = async (_input, init) => {
+    assert.ok(init?.signal instanceof AbortSignal);
+    signals.push(init.signal);
+    return Response.json({ status: "healthy", backend: "neo4j" });
+  };
+  try {
+    const client = new MemoryGraphClient({ url: "http://memory-graph.test", token: "t" });
+    assert.deepEqual(await client.healthInfo(), { status: "healthy", backend: "neo4j" });
+    assert.equal(await client.health(), "healthy");
+    assert.equal(signals.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("queryMatch degrades to an empty result with a reason when the sidecar errors", async () => {
   const server = await startFakeMemoryGraph(() => ({ status: 500, json: { detail: "boom" } }));
   const url = `http://127.0.0.1:${portOf(server)}`;

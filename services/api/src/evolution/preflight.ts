@@ -28,6 +28,7 @@
 
 import type { EvolveGoal, ModelProfile } from "@sciencediscovery/schema";
 
+import { MIN_TOKENS_PER_CALL } from "./call-budget.js";
 import { casHash, needsData, validateSplit } from "./dataset.js";
 import { hasBlockingIssue, validateScorecard } from "./scorecard.js";
 import type { EvolveSandboxCapability } from "./sandbox.js";
@@ -47,29 +48,13 @@ export interface PreflightInput {
   goal: EvolveGoal;
   model: ModelProfile | undefined;
   sandbox: EvolveSandboxCapability;
+  /** Whether this endpoint can actually be told to stop thinking. A dialect
+   *  with no thinking-control field accepts the setting and ignores it, so the
+   *  quiet floor would under-budget every call while the run reports that
+   *  thinking is off. Absent means the caller could not tell, and the goal's
+   *  own setting stands. */
+  thinkingSupported?: boolean;
 }
-
-/**
- * Floor for one mutation call, which depends on the *thinking* setting far more
- * than on the algorithm.
- *
- * Measured, not guessed, on GLM5.2 rewriting a small program:
- *
- * * thinking on, 16k ceiling: 16001 output tokens, **no content at all**, six
- *   expansions in a row — every one recorded as a candidate that would not run.
- * * thinking on, 64k ceiling: 11k–64k per call, and **two of eight still hit
- *   the cap**. So 64k is not comfortable either.
- * * thinking off: ~1.2k per call.
- *
- * Hence the two columns. With thinking on the budget must hold the reasoning
- * *and* the program, and the observed spread says six figures; with it off, a
- * few thousand is plenty and demanding more would refuse runs that work.
- */
-const MIN_TOKENS_PER_CALL: Record<string, { thinking: number; quiet: number }> = {
-  puct: { quiet: 8_000, thinking: 96_000 },
-  // OpenEvolve rewrites the whole genome rather than editing it.
-  openevolve: { quiet: 16_000, thinking: 128_000 },
-};
 
 /** Below this the held-out set is too small for the acceptance gate to say
  *  anything: four shards is the floor the split design settles on. */
@@ -100,18 +85,30 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   }
 
   const floors = MIN_TOKENS_PER_CALL[input.goal.algorithm] ?? MIN_TOKENS_PER_CALL.puct!;
-  const quiet = input.goal.thinking === "disabled";
+  // Asking for thinking off only lowers the floor when the endpoint can carry
+  // the request. On a dialect with no thinking-control field the model reasons
+  // anyway — observed on a custom gateway, where every call returned exactly at
+  // the quiet ceiling with no content at all — so the thinking floor applies
+  // whatever the goal declares.
+  const canTurnThinkingOff = input.thinkingSupported !== false;
+  const quiet = input.goal.thinking === "disabled" && canTurnThinkingOff;
   const floor = quiet ? floors.quiet : floors.thinking;
   if (budget.maxTokensPerCall < floor) {
     issues.push({
       code: "max_tokens_too_low",
       fix: quiet
         ? `raise the per-call ceiling above ${floor}`
-        : `raise the per-call ceiling above ${floor}, or turn thinking off (which lowers the floor to ${floors.quiet})`,
+        : canTurnThinkingOff
+          ? `raise the per-call ceiling above ${floor}, or turn thinking off (which lowers the floor to ${floors.quiet})`
+          : `raise the per-call ceiling above ${floor}; this endpoint has no thinking control, so the model reasons no matter what the run asks for`,
       // The failure is silent: the reply comes back empty, the node is recorded
       // as failed, and the run looks like a search that could not find anything.
       message: `the per-call ceiling ${budget.maxTokensPerCall} is below the ${floor} floor `
         + `for ${input.goal.algorithm}${quiet ? "" : " with thinking on"}; `
+        + (input.goal.thinking === "disabled" && !canTurnThinkingOff
+          ? "this model's API variant has no thinking-control field, so asking it to stop "
+            + "thinking is ignored and the budget goes to hidden reasoning; "
+          : "")
         + "the model spends the budget on hidden thinking and returns an empty reply, "
         + "and an empty reply is recorded as a failed candidate",
     });

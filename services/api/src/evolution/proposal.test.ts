@@ -26,8 +26,10 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { EvolveRunProposal } from "@sciencediscovery/schema";
+import type { EvolveGoal, EvolveRunProposal, ModelProfile } from "@sciencediscovery/schema";
 
+import { describeEvolveBudget } from "./call-budget.js";
+import { endpointCanDisableThinking } from "./model-thinking.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { startProposedRun, summariseRun, type ProposalDeps } from "./proposal.js";
 
@@ -65,6 +67,7 @@ function deps(over: Partial<ProposalDeps> = {}) {
       start: async () => ({ id: "run-1", status: "running" }),
     } as never,
     sessionId: "s1",
+    thinkingSupported: true,
     store: async (input) => {
       stored.push(input);
       return `sha256:${"a".repeat(64)}`;
@@ -81,6 +84,81 @@ test("a coherent proposal becomes a run, and the probe's numbers come back with 
   assert.equal(result.run?.id, "run-1");
   assert.equal(result.probe?.baseline, 0.4);
   assert.equal(result.refusedBecause, undefined);
+});
+
+test("a model with no thinking control is budgeted as a thinking model", async () => {
+  // The proposal's default asks for thinking off, and the ceiling follows that
+  // setting. On a dialect with no thinking-control field the request is
+  // ignored: the model reasons anyway and spends the quiet ceiling on it, which
+  // is a whole run of empty replies. Record what will happen and budget for it.
+  const startWith = async (thinkingSupported: boolean) => {
+    let started: EvolveGoal | undefined;
+    const { deps: d } = deps({
+      thinkingSupported,
+      orchestrator: {
+        probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
+        sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+        start: async (input: { goal: EvolveGoal }) => {
+          started = input.goal;
+          return { id: "run-1", status: "running" };
+        },
+      } as never,
+    });
+    const result = await startProposedRun(proposal(), d);
+    assert.equal(result.refusedBecause, undefined);
+    return started;
+  };
+
+  const quiet = await startWith(true);
+  assert.equal(quiet?.thinking, "disabled");
+  assert.equal(quiet?.budget.maxTokensPerCall, 16_000);
+
+  const loud = await startWith(false);
+  assert.equal(loud?.thinking, "enabled");
+  assert.ok((loud?.budget.maxTokensPerCall ?? 0) >= 96_000,
+    "the ceiling has to hold the reasoning and the program when thinking cannot be turned off");
+});
+
+test("the budget the checkpoint shows is the budget the run starts with", async () => {
+  // The agent reads `get_evolve_budget` and states it to the user before asking
+  // to spend. That sentence is only true if the plan and the started goal come
+  // from the same model and the same rule. The original defect was exactly this
+  // gap: the checkpoint promised "thinking off" while the run recorded, and
+  // paid for, thinking.
+  for (const apiVariant of [undefined, "openai", "deepseek", "gemini", "kimi-k3"] as const) {
+    const model: ModelProfile = {
+      apiVariant, baseUrl: "http://127.0.0.1:1/v1", createdAt: "", hasApiToken: true,
+      id: "m1", model: "some-gateway-model", name: "Gateway", proxyPolicy: "inherit" as never,
+      updatedAt: "", vision: false,
+    };
+    let started: EvolveGoal | undefined;
+    const { deps: d } = deps({
+      model: () => model,
+      thinkingSupported: endpointCanDisableThinking(model),
+      orchestrator: {
+        probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
+        sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+        start: async (input: { goal: EvolveGoal }) => {
+          started = input.goal;
+          return { id: "run-1", status: "running" };
+        },
+      } as never,
+    });
+    const result = await startProposedRun(proposal({ algorithm: "openevolve" }), d);
+    assert.equal(result.refusedBecause, undefined, `proposal on ${apiVariant ?? "the default variant"}`);
+
+    const plan = describeEvolveBudget(model);
+    const where = `${apiVariant ?? "the default variant"}`;
+    assert.equal(started?.thinking, plan.thinking.effective, `${where}: the setting shown is the setting recorded`);
+    assert.equal(started?.budget.maxTokensPerCall, plan.perCallCeiling.openevolve,
+      `${where}: the ceiling shown is the ceiling applied`);
+    assert.equal(started?.budget.maxTokens, plan.totalTokenCap);
+    assert.equal(started?.budget.maxSeconds, plan.maxSeconds);
+    if (plan.thinking.note) {
+      assert.equal(started?.thinking, "enabled",
+        `${where}: saying "thinking off" was overridden obliges the run to actually be a thinking run`);
+    }
+  }
 });
 
 test("the probe's own verdict reaches the agent unwrapped", async () => {

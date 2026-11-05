@@ -15,8 +15,8 @@
 //   in local mode the API runs in the foreground and Ctrl-C tears down the
 //   whole stack.
 
-import { existsSync } from "node:fs";
-import { copyFile, rename, rm } from "node:fs/promises";
+import { existsSync, copyFileSync, rmSync } from "node:fs";
+import { copyFile, rename } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -249,6 +249,13 @@ const envsDir = process.env.SCIENCE_AGENT_ENVS_DIR
   ? resolve(process.env.SCIENCE_AGENT_ENVS_DIR)
   : join(dataDir, "envs");
 
+// SIZEOPT W2 (2026-11-03): the five Python sidecars share ONE venv — a uv
+// workspace at the repository root resolves their constraints together
+// (highest compatible version wins; see sizeopt\agent-knowledge\design\D1).
+// "sd-services" is that shared venv both in dev (.sciencediscovery-data\envs)
+// and in the payload (envs-template\sd-services, staged by assemble-backend).
+const SHARED_ENV = join(envsDir, "sd-services");
+
 // Build (--no-build skips it). Registry overrides apply to this process only
 // and never touch user/global configuration.
 const runOpts = { cwd: repositoryRoot };
@@ -257,6 +264,29 @@ async function runStep(label, command, args, extraEnv = {}, cwd) {
   const child = spawnService(command, args, { ...runOpts, ...(cwd ? { cwd } : {}), env: extraEnv });
   const code = await new Promise(resolveExit => child.once("exit", resolveExit));
   if (code !== 0) fail(`${label} failed with exit code ${code}.`);
+}
+
+// Active mirror-sync lockfile/backup pair, set only for the window a `uv sync`
+// is running against a custom index. cleanup() restores it synchronously: the
+// async finally in uvSyncProject cannot run under the SIGINT/SIGTERM handlers
+// here, which call process.exit and never await it, so an interrupt mid-sync
+// would otherwise leave uv.lock holding mirror-resolved versions plus a stray
+// uv.lock.stack-backup — exactly the failure the bash twin's trap closes.
+let activeLockRestore = null;
+
+function restoreActiveLockfile() {
+  const pending = activeLockRestore;
+  if (!pending) return;
+  activeLockRestore = null;
+  try {
+    if (existsSync(pending.backup)) {
+      copyFileSync(pending.backup, pending.lockfile);
+      rmSync(pending.backup, { force: true });
+    }
+  } catch {
+    // Best effort: an unreadable backup must not mask the real shutdown. The
+    // working tree keeps whatever uv wrote; that is recoverable with a checkout.
+  }
 }
 
 async function uvSyncProject(projectDir, envDir, { locked, extraArgs = [] }) {
@@ -278,25 +308,53 @@ async function uvSyncProject(projectDir, envDir, { locked, extraArgs = [] }) {
     // handle to the rewritten lockfile, while an overwrite copy degrades
     // gracefully.
     await copyFile(lockfile, backup);
+    // Publish the pair so the signal handlers' cleanup() can restore it if the
+    // process is torn down before the finally below runs.
+    activeLockRestore = { lockfile, backup };
     try {
       await runStep(`uv sync ${projectDir}`, "uv", ["sync", ...extraArgs], env, projectDir);
     } finally {
-      await copyFile(backup, lockfile);
-      await rm(backup, { force: true });
+      // Synchronous and idempotent, and it clears the global as its first step:
+      // there is no window in which the pair is forgotten but not yet restored,
+      // and nothing here can be abandoned by process.exit the way an awaited
+      // copyFile could be.
+      restoreActiveLockfile();
     }
     return;
   }
   await runStep(`uv sync ${projectDir}`, "uv", ["sync", ...(locked ? ["--locked"] : []), ...extraArgs], env, projectDir);
 }
 
+// Registered BEFORE the build block below, not after it. The mirror syncs run
+// at top level inside that block, and a handler installed afterwards cannot
+// catch an interrupt that lands while uv is resolving: Node's default SIGINT
+// behaviour terminates the process, and the sync's async finally never runs.
+const children = [];
+let cleanedUp = false;
+function cleanup() {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  // Restore a lockfile an interrupted mirror sync left backed up before killing
+  // the children, so a Ctrl-C mid-sync cannot strand uv.lock on mirror-resolved
+  // versions.
+  restoreActiveLockfile();
+  for (const child of children.splice(0)) killTree(child);
+}
+process.on("SIGINT", () => { cleanup(); process.exit(130); });
+process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+process.on("exit", cleanup);
+
 if (!options.noBuild) {
   if (!options.noNodeBuild) {
     const registryArgs = process.env.SCIENCE_AGENT_NPM_REGISTRY ? ["--registry", process.env.SCIENCE_AGENT_NPM_REGISTRY] : [];
     await runStep("pnpm install", "pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", ...registryArgs]);
   }
-  await uvSyncProject(join(repositoryRoot, "services", "paper"), join(envsDir, "paper"), { locked: true });
-  // Pinned to Python 3.12 via services/gateway/.python-version.
-  await uvSyncProject(join(repositoryRoot, "services", "gateway"), join(envsDir, "gateway"), { locked: false });
+  // One workspace sync provisions all five sidecar services into the shared
+  // venv (paper is a non-package member; its deps ride along). --extra
+  // candidates carries the evolve candidate runtime (the AST gate admits
+  // pandas/numpy/scipy/sklearn) unless stub-only was requested.
+  const workspaceExtraArgs = process.env.SCIENCE_AGENT_EVOLVE_STUB_ONLY === "1" ? [] : ["--extra", "candidates"];
+  await uvSyncProject(repositoryRoot, SHARED_ENV, { locked: true, extraArgs: workspaceExtraArgs });
   if (!options.noNodeBuild) {
     await runStep("pnpm build", "pnpm", ["build"]);
     if (!isWindows && !isMac) await runStep("pnpm runner:binary", "pnpm", ["runner:binary"]);
@@ -308,44 +366,38 @@ if (!options.noBuild) {
 // internally.
 let gatewayPython = process.env.SCIENCE_AGENT_GATEWAY_PYTHON_PATH;
 if (!gatewayPython || !existsSync(gatewayPython)) {
-  const candidates = [venvPython(join(envsDir, "gateway")), venvPython(join(repositoryRoot, "services", "gateway", ".venv"))];
+  const candidates = [venvPython(SHARED_ENV), venvPython(join(repositoryRoot, "services", "gateway", ".venv"))];
   gatewayPython = candidates.find(existsSync);
 }
 if (!gatewayPython) {
   fail(packaged
-    ? `${join(envsDir, "gateway")} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`
-    : `${join(envsDir, "gateway")} is missing (needed for the bundled Python MCP servers). Run without --no-build once to provision it.`);
+    ? `${SHARED_ENV} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`
+    : `${SHARED_ENV} is missing (needed for the bundled Python MCP servers). Run without --no-build once to provision it.`);
 }
 
 // memory-graph: provision unconditionally (the feature toggle lives in
 // System Settings; the environment must be ready)
-let memoryGraphPython = venvPython(join(envsDir, "memory-graph"));
+let memoryGraphPython = venvPython(SHARED_ENV);
 if (!existsSync(memoryGraphPython)) {
-  if (packaged) fail(`${join(envsDir, "memory-graph")} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`);
-  say("Provisioning the memory-graph Python environment...");
-  await uvSyncProject(join(repositoryRoot, "services", "memory-graph"), join(envsDir, "memory-graph"), { locked: false });
+  if (packaged) fail(`${SHARED_ENV} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`);
+  say("Provisioning the shared Python environment (workspace)...");
+  await uvSyncProject(repositoryRoot, SHARED_ENV, { locked: true, extraArgs: ["--extra", "candidates"] });
 }
 if (!existsSync(memoryGraphPython)) memoryGraphPython = "";
 
-// evolve: --extra candidates installs the candidate runtimes (the AST gate
-// admits pandas/numpy/scipy/sklearn)
-let evolvePython = venvPython(join(envsDir, "evolve"));
-if (!existsSync(evolvePython)) {
-  if (packaged) fail(`${join(envsDir, "evolve")} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`);
-  say("Provisioning the evolve Python environment...");
-  const extraArgs = process.env.SCIENCE_AGENT_EVOLVE_STUB_ONLY === "1" ? [] : ["--extra", "candidates"];
-  await uvSyncProject(join(repositoryRoot, "services", "evolve"), join(envsDir, "evolve"), { locked: false, extraArgs });
-}
+// evolve: the candidate runtime lives in the shared venv via the workspace's
+// candidates extra (synced above).
+let evolvePython = venvPython(SHARED_ENV);
 if (!existsSync(evolvePython)) evolvePython = "";
 
 // adapter: the JiuwenSwarm front door (on by default)
 let adapterPython = "";
 if (process.env.SCIENCE_AGENT_ADAPTER === "1") {
-  adapterPython = venvPython(join(envsDir, "adapter"));
+  adapterPython = venvPython(SHARED_ENV);
   if (!existsSync(adapterPython)) {
-    if (packaged) fail(`${join(envsDir, "adapter")} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`);
-    say("Provisioning the adapter Python environment...");
-    await uvSyncProject(join(repositoryRoot, "services", "adapter"), join(envsDir, "adapter"), { locked: false });
+    if (packaged) fail(`${SHARED_ENV} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`);
+    say("Provisioning the shared Python environment (workspace)...");
+    await uvSyncProject(repositoryRoot, SHARED_ENV, { locked: true });
   }
   if (!existsSync(adapterPython)) adapterPython = "";
 }
@@ -377,11 +429,20 @@ for (const name of [
   }
 }
 
-// pnpm api runs with the service directory as cwd, so these two resolutions
+// pnpm api runs with the service directory as cwd, so these three resolutions
 // must be given explicitly
 process.env.SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH =
   absoluteFromRepository(repositoryRoot, process.env.SCIENCE_AGENT_EXTENSIONS_CONFIG_PATH ?? "extensions_config.json");
 process.env.SCIENCE_AGENT_GATEWAY_PYTHON_PATH ??= gatewayPython;
+// SIZEOPT W2: the paper sidecar shares the one sd-services workspace venv
+// with the gateway, so export its interpreter too. Without this the api falls
+// through to its <data-dir>/envs/paper default
+// (services/api/src/bootstrap/config.ts:225) — a per-member layout W2 no
+// longer provisions on the dev path. The packaged and image layouts set the
+// variable themselves (bootstrap.ts / Dockerfile) and are unaffected.
+// gatewayPython is the already-existence-checked interpreter for that shared
+// venv (resolved and gated above at the gateway step), so paper reuses it.
+process.env.SCIENCE_AGENT_PAPER_PYTHON_PATH ??= gatewayPython;
 
 // ---------------------------------------------------------------------------
 // Port pre-flight: the Windows reserved ranges' EACCES must surface before
@@ -440,16 +501,6 @@ if (portFailures.length) {
 // Spawn phase (the start_stack equivalent: order and supervision semantics
 // are the product contract)
 
-const children = [];
-let cleanedUp = false;
-function cleanup() {
-  if (cleanedUp) return;
-  cleanedUp = true;
-  for (const child of children.splice(0)) killTree(child);
-}
-process.on("SIGINT", () => { cleanup(); process.exit(130); });
-process.on("SIGTERM", () => { cleanup(); process.exit(143); });
-process.on("exit", cleanup);
 
 const healthTimeoutSeconds = Number(process.env.SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS ?? 20);
 const runnerUrl = process.env.SCIENCE_AGENT_RUNNER_URL ?? `http://${runnerHost}:${runnerPort}`;

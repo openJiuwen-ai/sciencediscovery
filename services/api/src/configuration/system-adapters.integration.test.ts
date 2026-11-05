@@ -106,3 +106,36 @@ test("CFG-T35: opening the card without a change stays editable and shows the cu
   assert.equal(idle.value, h.store.getTimeoutSettings().gatewayIdleTimeoutMs);
   assert.equal(view.changes.length, 0);
 });
+
+test("CFG-X11a: finite template selection preserves other settings and only applies after manual confirmation", async context => {
+  const h = await harness(context);
+  const before = h.store.getIdeaTreeSettings();
+  await assert.rejects(h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "idea_tree.configure", values: { templateId: "custom-template" } }), { code: "INVALID_CONFIGURATION_INPUT" });
+  const view = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "idea_tree.configure", values: { templateId: "water-treatment-materials/v1" } });
+  const field = view.fields.find(field => field.id === "templateId");
+  assert.equal(field?.kind, "enum"); assert.equal(view.scope.kind, "global");
+  assert.deepEqual(h.store.getIdeaTreeSettings(), before);
+  assert.equal((await approve(h.framework, view)).state, "applied");
+  assert.deepEqual(h.store.getIdeaTreeSettings(), { ...before, templateId: "water-treatment-materials/v1" });
+});
+
+test("CFG-X11a: formal changes fence old template approvals; an empty card shows the current finite choice", async context => {
+  const h = await harness(context);
+  const empty = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "idea_tree.configure", values: {} });
+  assert.equal(empty.state, "collecting_input"); assert.equal(empty.fields.find(field => field.id === "templateId")?.kind, "enum");
+  const view = await h.framework.preview(h.session.id, empty.id, { expectedRevision: empty.revision, selectedOptionId: "persist", values: { templateId: "water-treatment-materials/v1" } });
+  await h.store.updateIdeaTreeSettings({ explorationIntensity: "deep" });
+  await assert.rejects(h.framework.decide(h.session.id, view.id, { revision: view.revision, previewDigest: view.previewDigest!, decision: "apply", selectedOptionId: "persist" }), { code: "RESOURCE_VERSION_CONFLICT" });
+  assert.equal(h.store.getIdeaTreeSettings().templateId, "scientific-hypothesis-general/v1");
+});
+
+test("CFG-X11a: receipt failure rolls the template back and an unchanged template needs no decision", async context => {
+  const h = await harness(context), before = h.store.getIdeaTreeSettings();
+  await assert.rejects(h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "idea_tree.configure", values: { templateId: before.templateId } }), { code: "CONFIGURATION_NO_CHANGE" });
+  const view = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "idea_tree.configure", values: { templateId: "water-treatment-materials/v1" } });
+  const db = h.store.getConfigurationDatabase();
+  db.exec("CREATE TRIGGER reject_template_receipt BEFORE INSERT ON configuration_receipts_v2 BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END");
+  assert.equal((await approve(h.framework, view)).state, "failed");
+  assert.deepEqual(h.store.getIdeaTreeSettings(), before); assert.equal(h.framework.repository.getReceipt(view.id), undefined);
+  db.exec("DROP TRIGGER reject_template_receipt");
+});

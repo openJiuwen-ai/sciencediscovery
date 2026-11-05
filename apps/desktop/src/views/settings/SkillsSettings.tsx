@@ -116,6 +116,11 @@ export function SkillsSettings({ activeProjectId, adding, client, onAddingChange
     ]);
     const effective = project.effective as { enabledSkillIds?: string[] } | undefined;
     return { enabled: effective?.enabledSkillIds ?? [], overrides: project.overrides, skills };
+  }, {
+    // The enabled set belongs to one Project, so the Project is part of the
+    // key: switching Projects must not paint the previous one's switches.
+    client,
+    key: `skills:${activeProjectId ?? "none"}`,
   });
 
   const toggle = async (skill: SkillDescriptor, next: boolean) => {

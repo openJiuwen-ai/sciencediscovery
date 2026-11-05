@@ -192,10 +192,15 @@ export function serviceCommand(command, env) {
 export function spawnService(command, args, { env, cwd, stdio = "inherit" } = {}) {
   const resolved = serviceCommand(command, env);
   if (!resolved) throw new Error(`command not found on PATH: ${command}`);
+  // Windows: .cmd/.bat shims (pnpm, corepack, npm-installed CLIs) cannot be
+  // spawned directly — Node >= 20.12 rejects them with spawn EINVAL
+  // (CVE-2024-27980). Route them through the shell so a bare `pnpm` resolves.
+  const viaShell = isWindows && /\.(cmd|bat)$/i.test(resolved);
   return spawn(resolved, args, {
     cwd,
     env: { ...process.env, ...env },
     stdio,
+    ...(viaShell ? { shell: true } : {}),
     // Windows: no POSIX signals, children die via killTree (taskkill /T).
     // posix: keep default (same process group semantics as the bash script).
     windowsHide: true,

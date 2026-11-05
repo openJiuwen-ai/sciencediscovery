@@ -582,6 +582,66 @@ test("closing the API server drains active connections before closing the MCP tr
   assert.equal(closeCalls, 1);
 });
 
+test("request errors after headers terminate the response without rejecting the HTTP listener", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `sent-headers-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const server = createApiServer(testConfig(root));
+  context.after(async () => {
+    await removeTestRoot(root);
+    await closeApiServer(server);
+  });
+  // Capture escaped rejections so the unfixed handler fails an assertion instead
+  // of crashing the test process with ERR_HTTP_HEADERS_SENT.
+  const handler = server.listeners("request")[0]!;
+  const escaped: unknown[] = [];
+  server.removeListener("request", handler);
+  server.on("request", (request, response) => {
+    void Promise.resolve(handler(request, response)).catch((error) => {
+      escaped.push(error);
+      response.destroy();
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    headers: authorization, method: "POST", body: JSON.stringify({ name: "Streaming failure" }),
+  });
+  assert.equal(project.response.status, 201);
+  testApiOrigins.set(root, { origin, close: () => closeApiServer(server) });
+  for (const code of [undefined, "ENOENT"]) {
+    let writes = 0;
+    let contentType: string | number | string[] | undefined;
+    server.prependOnceListener("request", (_request, response) => {
+      const writeHead = response.writeHead.bind(response);
+      context.mock.method(response, "writeHead", (...args: Parameters<typeof response.writeHead>) => {
+        writes += 1;
+        writeHead(...args);
+        contentType = response.getHeader("content-type");
+        // Fault injection after a real response has committed its headers:
+        // exercise both the unclassified and classified catch branches.
+        response.flushHeaders();
+        throw Object.assign(new Error("injected streaming failure"), { code });
+      });
+    });
+    await assert.rejects(async () => {
+      const response = await fetch(`${origin}/api/sessions/${project.body.firstSession.id}/messages`, {
+        headers: authorization, method: "POST", body: JSON.stringify({ content: "hello" }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      await response.text();
+    });
+    assert.deepEqual(escaped, [], "the async HTTP listener must not reject");
+    assert.match(String(contentType), /^text\/event-stream/, "inject the failure into the actual SSE response");
+    assert.equal(writes, 1, "error handling must not write a second response header");
+    const response = await fetch(`${origin}/api/projects`, { headers: authorization });
+    assert.equal(response.status, 200, "the server must continue serving requests");
+    await response.json();
+  }
+  const missing = await fetch(`${origin}/api/not-a-route`, { headers: authorization });
+  assert.equal(missing.status, 404);
+  assert.match(await missing.text(), /Not found/);
+});
+
 async function startScientificTestApi(
   context: TestContext,
   dataDir: string,

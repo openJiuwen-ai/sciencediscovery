@@ -59,6 +59,10 @@ export type {
 
 import { mgLog } from "./log.js";
 
+// Keep a wedged sidecar connection from outliving the API health probe's
+// degraded fallback (1.5 s in services/api/src/http/index.ts).
+const HEALTH_REQUEST_TIMEOUT_MS = 1_500;
+
 /** Aggregated provenance addressing info for one Artifact version, returned
  * by the sidecar's ``GET /query/artifact-provenance``. Every field is a hash or
  * a routing key — never a content blob (graph = directory, CAS/store =
@@ -330,7 +334,9 @@ export class MemoryGraphClient {
    *  notice a sidecar that restarted and fell back to its `local` default. */
   async healthInfo(): Promise<{ status: string; backend?: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`);
+      const response = await fetch(`${this.baseUrl}/health`, {
+        signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
+      });
       if (!response.ok) return { status: "degraded" };
       const body = (await response.json()) as { status?: string; backend?: string };
       return { status: body.status ?? "degraded", backend: body.backend };
@@ -341,7 +347,9 @@ export class MemoryGraphClient {
 
   async health(): Promise<string> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`);
+      const response = await fetch(`${this.baseUrl}/health`, {
+        signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
+      });
       if (!response.ok) {
         mgLog.warn("health check failed: memory-graph returned HTTP %s", response.status);
         return "degraded";

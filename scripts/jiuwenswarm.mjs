@@ -6,9 +6,9 @@
 // scripts/lib/stack-platform.mjs（0.B2 分层约定）。
 
 import { execFile, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { get } from "node:http";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -282,34 +282,84 @@ async function applyCompatibilityPatches(cfg) {
 
 const PATCHES_VERIFIED_MARKER = ".sd-patches-verified";
 
-function getVerifiedTag(cfg) {
+/**
+ * [windows-desktop] SIZEOPT W11#2 —— verifyPatches 指纹缓存。
+ * 旧 marker 只记 "tag:src"：补丁文件内容变了（新增 0020、修订任一 patch）
+ * 或 src 树被外部改动时缓存不失效，装机树与补丁链脱钩也照样跳过校验。
+ * 现在 marker 记 JSON 指纹：补丁目录每个 .patch 的 name+size+mtimeMs，
+ * 外加 src 侧 .sciencediscovery-patches.json（manifest）的同款指纹——
+ * 任何一项变化即重跑完整 verify。保守取向与 W4 一致：缓存只是跳过
+ * "已经证明过没变" 的重复校验，失效判定宁可多跑不可漏跑。
+ * 逃生口：--force-verify 参数或 JIUWENSWARM_FORCE_VERIFY=1 强制重校验。
+ *
+ * （历史注记：旧实现 recordVerified 里用了 writeFileSync 却从未 import，
+ * ReferenceError 被 try/catch 吞掉 → marker 从未落盘 → 缓存从未命中，
+ * 每次启动都重付 0.87s verify——这正是 W11#2 量到的开销本身。）
+ */
+export function patchesDirFor(cfg) {
+  return join(scriptDir, "..", "jiuwen_swarm", "patches", cfg.tag);
+}
+
+export function fileFingerprint(path) {
   try {
-    const marker = join(cfg.root, PATCHES_VERIFIED_MARKER);
-    const text = readFileSync(marker, "utf8").trim();
-    // "tag:srcPath" — if either changes, re-verify.
-    return text.startsWith(`${cfg.tag}:${cfg.src}`) ? cfg.tag : null;
+    const st = statSync(path);
+    return { name: basename(path), size: st.size, mtimeMs: Math.round(st.mtimeMs) };
   } catch {
-    return null;
+    return null; // missing file — represent as null so the comparison fails closed
   }
 }
 
-function recordVerified(cfg) {
+export function verifyFingerprint(cfg, patchesDir = patchesDirFor(cfg)) {
+  let names;
+  try {
+    names = readdirSync(patchesDir).filter(n => n.endsWith(".patch")).sort();
+  } catch {
+    return null; // no patch dir → no trustworthy fingerprint → always re-verify
+  }
+  return {
+    tag: cfg.tag,
+    src: cfg.src,
+    patches: names.map(n => fileFingerprint(join(patchesDir, n))),
+    manifest: fileFingerprint(join(cfg.src, ".sciencediscovery-patches.json")),
+  };
+}
+
+export const fingerprintEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+export function getVerifiedFingerprint(cfg) {
   try {
     const marker = join(cfg.root, PATCHES_VERIFIED_MARKER);
-    writeFileSync(marker, `${cfg.tag}:${cfg.src}`, "utf8");
+    const parsed = JSON.parse(readFileSync(marker, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null; // absent/legacy("tag:src" 纯文本)/corrupt → re-verify
+  }
+}
+
+export function recordVerified(cfg, fingerprint) {
+  try {
+    const marker = join(cfg.root, PATCHES_VERIFIED_MARKER);
+    writeFileSync(marker, JSON.stringify(fingerprint), "utf8");
   } catch { /* marker is best-effort */ }
 }
 
+const forceVerifyRequested = process.argv.includes("--force-verify")
+  || process.env.JIUWENSWARM_FORCE_VERIFY === "1";
+
 async function verifyCompatibilityPatches(cfg) {
-  if (getVerifiedTag(cfg) === cfg.tag) {
-    process.stderr.write("JiuwenSwarm: compatibility patches already verified; skipping.\n");
+  const fingerprint = verifyFingerprint(cfg);
+  if (!forceVerifyRequested && fingerprint !== null
+      && fingerprintEqual(getVerifiedFingerprint(cfg), fingerprint)) {
+    process.stderr.write("JiuwenSwarm: compatibility patches already verified (fingerprint match); skipping.\n");
     return;
   }
   const { stdout } = await runLogged(cfg, "verify-locate", jwPython(cfg), [
     "-c", "import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec('jiuwenswarm').origin).parent.parent)",
   ]);
   await runLogged(cfg, "verify", jwPython(cfg), [join(scriptDir, "swarm-patches.py"), "verify", stdout.trim().split(/\r?\n/).pop(), cfg.tag]);
-  recordVerified(cfg);
+  // fingerprint 为 null（补丁目录缺失等异常态）时不落 marker：verify 虽然过了，
+  // 但下次仍应重新校验——缓存只覆盖"指纹可计算且匹配"这一种可信状态。
+  if (fingerprint !== null) recordVerified(cfg, fingerprint);
 }
 
 /** The three settings the adapter depends on, applied idempotently.
@@ -377,7 +427,16 @@ export async function cmdSetup(cfg = jwConfig()) {
     }
     await applyCompatibilityPatches(cfg);
     process.stderr.write("Installing JiuwenSwarm (Python 3.12, its own virtualenv)...\n");
-    await run("uv", ["sync", "--python", "3.12"], {
+    // SIZEOPT 1A-1: --no-default-groups keeps the dev/lint groups (mypy,
+    // ruff, pylint, pytest, ...) out of the shipped venv — they are build-time
+    // tooling the runtime never imports (size scan 2026-11-02: ~40 MB). This
+    // is the Node twin of scripts/jiuwenswarm.sh cmd_setup; the two must stay
+    // in step, and the payload ships this one (assemble-backend copies it to
+    // backend/scripts), so whatever the bash path measures is what must land
+    // here too. The CI contract check restores pytest itself
+    // (.ci/run-research-python.sh) and drives the bash path, so nothing
+    // consumes the dev groups from this venv.
+    await run("uv", ["sync", "--python", "3.12", "--no-default-groups"], {
       cwd: cfg.src,
       env: {
         UV_HTTP_TIMEOUT: process.env.UV_HTTP_TIMEOUT ?? "300",

@@ -63,10 +63,17 @@ function attribute(attributes: string, name: string): string | undefined {
   return match?.[1] === undefined ? undefined : decodeEntities(match[1]);
 }
 
-/** The text inside an `<si>` or `<is>`: rich text holds one `<t>` per run. */
+/**
+ * The text inside an `<si>` or `<is>`: rich text holds one `<t>` per run, and a
+ * phonetic guide holds a `<t>` too. That guide is the reading Excel draws above
+ * the cell — furigana, pinyin — and not part of the value, so its subtree is
+ * dropped before the runs are collected; reading it would double every guided
+ * cell. Both the paired and the self-closing form occur in written workbooks.
+ */
 function textRuns(xml: string): string {
+  const withoutPhonetics = xml.replace(/<rPh\b[^>]*\/>|<rPh\b[^>]*>[\s\S]*?<\/rPh>/gu, "");
   let text = "";
-  for (const match of xml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gu)) text += decodeEntities(match[1]!);
+  for (const match of withoutPhonetics.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gu)) text += decodeEntities(match[1]!);
   return text;
 }
 

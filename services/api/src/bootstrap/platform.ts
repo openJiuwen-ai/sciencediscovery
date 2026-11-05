@@ -47,6 +47,8 @@ import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
+import { describeEvolveBudget } from "../evolution/call-budget.js";
+import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
@@ -413,6 +415,10 @@ export function createPlatformServices(
    */
   const evolveRuntimeFactory: EvolveRuntimeFactory = (turn) => !evolveAvailability.ready ? undefined : ({
     approvalMode: turn.approvalMode,
+    // Read before the spend checkpoint. The same function that prices the run
+    // answers here, so the number the agent shows the user is the number the
+    // run gets — including the thinking setting an endpoint cannot honor.
+    getEvolveBudget: async ({ thinking }) => describeEvolveBudget(store.getModel(turn.modelId), thinking),
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
@@ -431,6 +437,12 @@ export function createPlatformServices(
           orchestrator: evolveOrchestrator,
           sessionId: turn.sessionId,
           store: storeEvolveInput(turn.sessionId),
+          // A custom gateway is configured as the plain OpenAI dialect unless
+          // its operator names another, and that dialect has no thinking
+          // control: "thinking off" is accepted and ignored. Budgeting it as a
+          // quiet model then spends every call's ceiling on hidden reasoning
+          // and records the result as a candidate that would not run.
+          thinkingSupported: endpointCanDisableThinking(store.getModel(turn.modelId)),
         });
         if (result.run) await turn.emit({ run: result.run, type: "evolve_run.created" });
         return result;

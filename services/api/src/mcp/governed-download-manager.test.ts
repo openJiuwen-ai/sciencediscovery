@@ -399,3 +399,109 @@ test("artifact paths reject traversal and an existing symlink parent", async (co
   await assert.rejects(assertSafeArtifactPath(root, resolve(root, "linked", "file.txt")), /symbolic link/);
   await assert.rejects(assertSafeArtifactPath(root, resolve(root, "..", "outside.txt")), /escapes/);
 });
+
+test("governed download of a chunked response reports no total and never claims 100% early", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `artifact-chunked-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+    vision: false,
+  });
+  const project = await store.createProject("Chunked download");
+  const session = await store.createSession(project.id, "Chunked", model.id);
+  const registry = createBuiltinMcpSourceRegistry();
+  const gateway = unusedTransport();
+  const broker = new McpGovernanceBroker(
+    dataDir,
+    store,
+    registry,
+    new McpSourceCatalog(registry, gateway),
+    gateway,
+  );
+  const timestamp = new Date().toISOString();
+  const plan: ArtifactPlan = {
+    candidates: [{
+      attribution: "NCBI",
+      format: "csv",
+      id: "candidate-chunked",
+      kind: "dataset",
+      license: "public-domain",
+      logicalName: "records.csv",
+      mimeType: "text/csv",
+      sourceId: "pubmed",
+      sourceRecordId: "record-chunked",
+      sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/records.csv",
+    }],
+    createdAt: timestamp,
+    destination: { path: "downloads/records.csv", type: "workspace" },
+    id: "plan-chunked",
+    mcpInvocationId: "invocation-chunked",
+    permissionAuthorizationId: "authorization-chunked",
+    permissionRequestId: "request-chunked",
+    selectedCandidateId: "candidate-chunked",
+    sessionId: session.id,
+    sourceId: "pubmed",
+    sourceRecordId: "record-chunked",
+    state: "approved",
+    toolId: "search",
+  };
+  const job: ArtifactJob = {
+    attempts: 0,
+    createdAt: timestamp,
+    id: "job-chunked",
+    maxAttempts: 3,
+    permissionAuthorizationId: "authorization-chunked",
+    planId: plan.id,
+    progress: { bytesDownloaded: 0, filesCompleted: 0, filesTotal: 1 },
+    projectId: project.id,
+    sessionId: session.id,
+    sourceId: "pubmed",
+    sourceRecordId: "record-chunked",
+    state: "queued",
+    updatedAt: timestamp,
+  };
+  await store.appendArtifactPlan(plan);
+  await store.appendArtifactJob(job);
+
+  const chunk = Buffer.alloc(1024 * 1024, 0x61);
+  const manager = new GovernedDownloadManager(
+    store,
+    registry,
+    broker,
+    async () => new Response(new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new Uint8Array(chunk));
+        await new Promise((wait) => setTimeout(wait, 600));
+        controller.enqueue(new Uint8Array(chunk));
+        controller.close();
+      },
+    }), { headers: { "content-type": "text/csv" }, status: 200 }),
+    10 * 1024 * 1024,
+  );
+  await manager.resumeInterrupted();
+
+  // The body is chunked: no content-length, no expectedBytes, no checksum. While
+  // the second chunk is still in flight there is no total, so no percentage.
+  let running: ArtifactJob | undefined;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    running = (await store.listArtifactJobs(session.id)).find((item) => item.id === job.id);
+    if (running && running.state === "running" && running.progress.bytesDownloaded >= chunk.length) break;
+    await new Promise((wait) => setTimeout(wait, 10));
+  }
+  assert.ok(running);
+  assert.equal(running.state, "running");
+  assert.equal(running.progress.totalBytes, undefined);
+  assert.equal("percent" in running.progress, false);
+
+  const completed = await waitForCompleted(store, session.id, job.id);
+  assert.equal(completed.state, "completed");
+  assert.equal(completed.progress.bytesDownloaded, 2 * chunk.length);
+  assert.equal(completed.progress.totalBytes, undefined);
+});

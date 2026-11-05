@@ -13,6 +13,9 @@
 // limitations under the License.
 
 import { ErrorDiagnosticActions, ErrorDiagnosticClient } from "./ErrorDiagnosticActions.js";
+import { FeedbackDialog } from "./FeedbackDialog.js";
+import { openFeedback } from "./feedback-open.js";
+import { commitsOnEnter } from "./ime-enter.js";
 import { RuntimeConfigClient } from "./CodexConfigCard.js";
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useMcpReadiness } from "./composer/useMcpReadiness.js";
@@ -143,6 +146,7 @@ import {
   CodeFileIcon,
   DownloadIcon,
   EditIcon,
+  FeedbackIcon,
   FileIcon,
   ImageIcon,
   InfoIcon,
@@ -4739,6 +4743,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
           <span><SettingsIcon size={17} /></span><span>{t("app.systemConfiguration")}</span><span className="mode-chip">{models.length}</span>
         </button>
+        <button className="settings-button feedback-entry" onClick={() => openFeedback()}>
+          <span><FeedbackIcon size={17} /></span><span>{t("feedback.entry")}</span>
+        </button>
       </aside>
 
       <main className="main-area">
@@ -5034,8 +5041,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       : configurationReceipt.continuation === "submitting" ? "configuration.card.submitting"
                         : configurationReceipt.continuation === "submitted" ? "configuration.card.submitted" : configurationReceipt.continuation === "waiting_configuration" ? "configuration.card.waitingConfiguration" : "configuration.card.continuationFailed")}</span>
                   </div> : null}
-                  {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
+                {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
                   {evolveCommandBlocked ? <EvolveSetup client={client} status={evolveStatus} onStatus={setEvolveStatus} /> : null}
@@ -5048,7 +5055,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     setMessage(value);
                     if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
                   }} onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                    if (event.shiftKey || !commitsOnEnter(event)) return;
                     if (composerTrigger) return;
                     event.preventDefault();
                     if (!message.trim() || sessionArchived) return;
@@ -5717,6 +5724,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       /> : null}
 
     </div>
+
+      <FeedbackDialog />
     </PluginWebHost></RuntimeConfigClient.Provider></ErrorDiagnosticClient.Provider>
   );
 }

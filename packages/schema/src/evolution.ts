@@ -309,6 +309,31 @@ export interface EvolveBudget {
 }
 
 /**
+ * What a run on a given model will be budgeted at, read before the user is
+ * asked to spend.
+ *
+ * Present because the agent designs the run and shows the user its shape, and a
+ * shape without numbers is a promise nobody can check: the per-call ceiling
+ * times the expansion count is what decides whether the search can finish.
+ * `thinking.effective` is what the run will *record*, which on an endpoint with
+ * no thinking-control field is not what was asked for — the note says so, so
+ * the checkpoint cannot claim a setting the run will not have.
+ */
+export interface EvolveBudgetPlan {
+  maxSeconds: number;
+  /** The model the run will call, as the user configured it. */
+  model: string | null;
+  /** Applied by `create_evolve_run`, keyed by algorithm. */
+  perCallCeiling: Record<EvolveAlgorithm, number>;
+  thinking: {
+    effective: "enabled" | "disabled";
+    /** Present only when the requested setting could not be honored. */
+    note?: string;
+  };
+  totalTokenCap: number;
+}
+
+/**
  * One evolution run, as the main agent proposes it.
  *
  * Deliberately *not* `EvolveGoal`: a goal names content by hash and carries a

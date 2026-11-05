@@ -1,0 +1,14 @@
+# Virtual uv workspace root for the five Python sidecar services.
+# SIZEOPT W2 (2026-11-03): one shared venv + one lockfile replaces five
+# per-service venvs/locks — uv resolves the union of member constraints and
+# takes the highest compatible version of each package (see
+# sizeopt\agent-knowledge\design\D1 for the conflict matrix and evidence).
+# The root is virtual (no [project]) so it is never itself installed.
+[tool.uv.workspace]
+members = [
+    "services/gateway",
+    "services/paper",
+    "services/evolve",
+    "services/memory-graph",
+    "services/adapter",
+]

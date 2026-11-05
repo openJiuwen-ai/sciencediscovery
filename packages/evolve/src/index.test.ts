@@ -22,6 +22,13 @@ import { createEvolveTools, type EvolveToolRuntime } from "./index.js";
 function runtime(overrides: Partial<EvolveToolRuntime> = {}): EvolveToolRuntime {
   return {
     createEvolveRun: async () => ({ refusedBecause: "probe" }),
+    getEvolveBudget: async () => ({
+      maxSeconds: 7_200,
+      model: "test-model",
+      perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+      thinking: { effective: "enabled" },
+      totalTokenCap: 600_000,
+    }),
     getEvolveRun: async () => ({
       baselineScore: null, bestChange: undefined, bestScore: null, bestTestScore: null,
       candidates: 0, id: "run-1", status: "running" as const, tokens: 0,
@@ -37,9 +44,9 @@ test("no runtime means no tools at all", () => {
   assert.deepEqual(createEvolveTools(undefined).map((tool) => tool.name), []);
 });
 
-test("a runtime contributes both tools, visible from the first step", () => {
+test("a runtime contributes every tool, visible from the first step", () => {
   const names = createEvolveTools(runtime()).map((tool) => tool.name);
-  assert.deepEqual(names.sort(), ["create_evolve_run", "get_evolve_run"]);
+  assert.deepEqual(names.sort(), ["create_evolve_run", "get_evolve_budget", "get_evolve_run"]);
 });
 
 test("the create tool names the approval the user will actually see", () => {
@@ -137,4 +144,30 @@ test("Idea Tree handoff sends prepared evidence to Python and returns its run id
   const result = await tool.execute("create", input as never, new AbortController().signal);
   assert.deepEqual(received, input);
   assert.deepEqual(result.details, {researchId: "research-new", status: "running"});
+});
+
+test("the budget tool reports what the run will record, including a setting it cannot honor", async () => {
+  // The checkpoint that asks for money is only honest if it carries the ceiling
+  // the run will actually get. On an endpoint with no thinking control that
+  // ceiling is the thinking one, and the reply has to say why rather than echo
+  // the setting the agent asked for.
+  const asked: Array<{ thinking?: string }> = [];
+  const tool = createEvolveTools(runtime({
+    getEvolveBudget: async (input) => {
+      asked.push(input);
+      return {
+        maxSeconds: 7_200, model: "DeepSeek-V4.1",
+        perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+        thinking: { effective: "enabled", note: "this endpoint's API variant has no thinking-control field" },
+        totalTokenCap: 600_000,
+      };
+    },
+  })).find((tool) => tool.name === "get_evolve_budget")!;
+  const result = await tool.execute("call", { thinking: "disabled" } as never, new AbortController().signal);
+  assert.deepEqual(asked, [{ thinking: "disabled" }]);
+  const text = (result.content[0] as { text: string }).text;
+  assert.match(text, /Thinking the run will record: enabled — this endpoint's API variant has no thinking-control field/);
+  assert.match(text, /openevolve 128000, puct 96000/);
+  assert.match(text, /Run total: 600000 tokens, 7200s/);
+  assert.match(text, /say so there instead of promising it/);
 });

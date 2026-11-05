@@ -17,6 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
+import { normalizeUsage } from "@sciencediscovery/model";
 import type { ModelInvocationUsage } from "@sciencediscovery/schema";
 
 import {
@@ -25,6 +26,7 @@ import {
   summarizeGlobalModelUsage,
   summarizeModelUsage,
   summarizeModelUsageAnalytics,
+  usageDialectOf,
 } from "./model-usage.js";
 
 function usage(overrides: Partial<ModelInvocationUsage>): ModelInvocationUsage {
@@ -259,6 +261,119 @@ test("USG-015 analytics estimates costs from pricing and keeps unpriced models e
   assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "model-a")?.estimatedCost?.amount, 2.7);
   assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "model-a")?.estimatedCosts[0]?.amount, 2.7);
   assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "model-b")?.estimatedCost, undefined);
+});
+
+test("USG-018 the chat dialect prices the cached prompt span once", () => {
+  // DeepSeek/OpenAI Chat Completions: prompt_tokens already contains the cache
+  // hits, and prompt_cache_miss_tokens is the ordinary prompt, not a cache write.
+  const reported = normalizeUsage({
+    completion_tokens: 500,
+    prompt_cache_hit_tokens: 800_000,
+    prompt_cache_miss_tokens: 200_000,
+    prompt_tokens: 1_000_000,
+    total_tokens: 1_000_500,
+  }, "openai-chat-completions");
+  assert.ok(reported);
+  const record = usage({
+    cacheReadTokens: reported.cacheReadTokens ?? null,
+    cacheWriteTokens: reported.cacheWriteTokens ?? null,
+    inputTokens: reported.inputTokens,
+    outputTokens: reported.outputTokens,
+    totalTokens: reported.totalTokens,
+  });
+  assert.deepEqual(estimateInvocationCost(record, {
+    cachedInput: 0.5,
+    currency: "CNY",
+    input: 2,
+    output: 8,
+    unit: "per-1m-tokens",
+  }, "openai-chat-completions"), { amount: 0.804, currency: "CNY" });
+  assert.deepEqual(estimateInvocationCost(record, {
+    currency: "CNY",
+    input: 2,
+    output: 8,
+    unit: "per-1m-tokens",
+  }, "openai-chat-completions"), { amount: 2.004, currency: "CNY" });
+
+  // Anthropic Messages reports input_tokens outside the cached span, so its
+  // estimate must not change: 1M input + 800k cache read + 500 output.
+  const anthropic = normalizeUsage({
+    cache_read_input_tokens: 800_000,
+    input_tokens: 1_000_000,
+    output_tokens: 500,
+  }, "anthropic-messages");
+  assert.ok(anthropic);
+  assert.deepEqual(estimateInvocationCost(usage({
+    cacheReadTokens: anthropic.cacheReadTokens ?? null,
+    cacheWriteTokens: anthropic.cacheWriteTokens ?? null,
+    inputTokens: anthropic.inputTokens,
+    outputTokens: anthropic.outputTokens,
+    totalTokens: anthropic.totalTokens,
+  }), {
+    cachedInput: 0.5,
+    currency: "CNY",
+    input: 2,
+    output: 8,
+    unit: "per-1m-tokens",
+  }, "anthropic-messages"), { amount: 2.404, currency: "CNY" });
+});
+
+test("USG-019 analytics prices each profile with that profile's dialect", () => {
+  const chat = normalizeUsage({
+    completion_tokens: 500,
+    prompt_cache_hit_tokens: 800_000,
+    prompt_cache_miss_tokens: 200_000,
+    prompt_tokens: 1_000_000,
+    total_tokens: 1_000_500,
+  }, "openai-chat-completions");
+  const anthropic = normalizeUsage({
+    cache_read_input_tokens: 800_000,
+    input_tokens: 1_000_000,
+    output_tokens: 500,
+  }, "anthropic-messages");
+  assert.ok(chat);
+  assert.ok(anthropic);
+  const summary = summarizeModelUsageAnalytics([
+    usage({
+      cacheReadTokens: chat.cacheReadTokens ?? null,
+      cacheWriteTokens: chat.cacheWriteTokens ?? null,
+      inputTokens: chat.inputTokens,
+      modelProfileId: "chat-model",
+      modelProfileName: "Chat Model",
+      outputTokens: chat.outputTokens,
+      totalTokens: chat.totalTokens,
+    }),
+    usage({
+      cacheReadTokens: anthropic.cacheReadTokens ?? null,
+      cacheWriteTokens: anthropic.cacheWriteTokens ?? null,
+      inputTokens: anthropic.inputTokens,
+      modelProfileId: "anthropic-model",
+      modelProfileName: "Anthropic Model",
+      outputTokens: anthropic.outputTokens,
+      startedAt: "2026-01-01T00:00:01.000Z",
+      totalTokens: anthropic.totalTokens,
+    }),
+  ], {
+    pricingByModelProfileId: new Map([
+      ["chat-model", { cachedInput: 0.5, currency: "CNY", input: 2, output: 8, unit: "per-1m-tokens" as const }],
+      ["anthropic-model", { cachedInput: 0.5, currency: "CNY", input: 2, output: 8, unit: "per-1m-tokens" as const }],
+    ]),
+    protocolByModelProfileId: new Map([
+      ["chat-model", "openai-chat-completions" as const],
+      ["anthropic-model", "anthropic-messages" as const],
+    ]),
+    projectIdBySessionId: new Map([["session-a", "project-a"]]),
+    projectNameById: new Map([["project-a", "Alpha"]]),
+    sessionTitleById: new Map([["session-a", "Session A"]]),
+  });
+
+  assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "chat-model")?.estimatedCost?.amount, 0.804);
+  assert.equal(summary.dailyByModel.find((row) => row.modelProfileId === "anthropic-model")?.estimatedCost?.amount, 2.404);
+
+  // A profile without an explicit protocol resolves the way the model client does.
+  assert.equal(usageDialectOf({ apiProtocol: "openai-responses", baseUrl: "https://api.openai.com/v1" }), "openai-responses");
+  assert.equal(usageDialectOf({ baseUrl: "https://gateway.example.com/api/plan" }), "anthropic-messages");
+  assert.equal(usageDialectOf({ baseUrl: "https://api.deepseek.com/v1" }), "openai-chat-completions");
 });
 
 test("USG-016 analytics buckets and filters days in the configured time zone", () => {

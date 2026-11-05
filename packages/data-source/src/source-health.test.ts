@@ -244,12 +244,19 @@ test("cancelling a recovery probe releases both its slot and the single probe pe
   t.mock.timers.enable({ apis: ["Date"] });
   f.setFault(async () => failure("rate-limited", 1_000)); await assert.rejects(f.invoke("first"));
   t.mock.timers.tick(1_001);
+  let entered!: () => void;
+  const probeStarted = new Promise<void>(resolve => { entered = resolve; });
   f.setFault(async (_request, signal) => new Promise((_resolve, reject) => {
     signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+    entered();
   }));
   const controller = new AbortController();
   const probe = f.invoke("cancel-probe", "arxiv", "session", controller.signal);
-  await waitFor(() => f.calls() === 2); controller.abort(new DOMException("Cancelled", "AbortError"));
+  // Cancel only after the transport has installed its abort listener, without
+  // coupling this ordering assertion to CI filesystem/scheduling latency.
+  await Promise.race([probeStarted, probe]);
+  assert.equal(f.calls(), 2);
+  controller.abort(new DOMException("Cancelled", "AbortError"));
   await assert.rejects(probe);
   assert.equal(f.invocations.at(-1)!.error!.code, "CANCELLED");
   f.setFault(async () => success()); await f.invoke("replacement-probe");

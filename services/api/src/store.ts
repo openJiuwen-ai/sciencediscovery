@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { ConfigurationCapabilityId, ConfigurationValues, SkillLibrary } from "@sciencediscovery/schema";
+import { INHERITABLE_CONFIGURATION_FIELDS } from "./configuration/inherit-fields.js";
 import { canonical as canonicalConfiguration } from "./configuration/validation.js";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationLiveActivation, ConfigurationSnapshot } from "./configuration/types.js";
@@ -25,6 +26,7 @@ import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat,
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
+import { installedPlugins } from "./plugins/catalog.js";
 import { PluginControl } from "./plugins/control.js";
 import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement, checkpointRetiredWorkspace } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
@@ -83,6 +85,7 @@ import type {
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
   McpInvocation,
+  ModelApiProtocol,
   ModelFactOverrides,
   ModelUsageAnalyticsFilters,
   ModelUsageAnalyticsSummary,
@@ -214,7 +217,7 @@ import {
 } from "@sciencediscovery/executor";
 import { toolOutputStoreRoot } from "@sciencediscovery/tools";
 import { normalizeWorkspaceRelativePath } from "@sciencediscovery/workspace";
-import { summarizeGlobalModelUsage, summarizeModelUsage, summarizeModelUsageAnalytics } from "./model-usage.js";
+import { summarizeGlobalModelUsage, summarizeModelUsage, summarizeModelUsageAnalytics, usageDialectOf } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
 import { BUILTIN_SPECIALISTS } from "@sciencediscovery/specialist";
@@ -2375,6 +2378,17 @@ export class SessionStore {
           }
         }
       }
+      // Global/Project plugin edits also notify Project-only UI hosts after commit.
+      if (canonicalConfiguration(previous.persisted.globalSettings.plugins) !== canonicalConfiguration(this.catalog.globalSettings.plugins)) {
+        this.pluginControl?.changed();
+      } else {
+        for (const project of this.catalog.projects) {
+          const before = previous.persisted.projects.find(item => item.id === project.id);
+          if (before && canonicalConfiguration(before.settingsOverrides.plugins) !== canonicalConfiguration(project.settingsOverrides.plugins)) {
+            this.pluginControl?.changed(project.id);
+          }
+        }
+      }
       return result;
     });
   }
@@ -2404,6 +2418,16 @@ export class SessionStore {
     if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
     else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
     else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
+    else if (capabilityId === "environment.sources") systemVersions = { environmentSources: version(this.catalog.environmentSourceSettings) };
+    if (capabilityId === "runner.assign") systemVersions = {
+      runnerSelection: version([project.runnerIds, project.remoteRunnerHostIds, session.runnerIds, session.remoteRunnerHostIds]),
+      registeredRunners: version([this.catalog.remoteHosts, this.getConfigurationDatabase().prepare("SELECT host_id, kind, encrypted_value FROM remote_host_credentials ORDER BY host_id, kind").all()]),
+    };
+    else if (capabilityId === "reviewer.enable") systemVersions = { globalReviewer: version([this.getReviewerSpecialistSettings(), this.catalog.reviewerSpecialistDefaultOnMigrated]) };
+    if (capabilityId === "plugin.json_viewer") {
+      const json = this.configurationJsonViewerSettings(sessionId);
+      systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
+    }
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2415,7 +2439,7 @@ export class SessionStore {
         autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
       } : resourceVersions),
       data: {
-        capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
+        capabilityId, target, sessionId, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
@@ -2430,6 +2454,10 @@ export class SessionStore {
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
         timeoutSettings, quotaSettings, ideaTreeSettings,
+        ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
+        ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "reviewer.enable" ? { globalReviewer: this.getReviewerSpecialistSettings() } : {}),
+        ...(capabilityId === "plugin.json_viewer" ? { jsonViewerSettings: this.configurationJsonViewerSettings(sessionId) } : {}),
       },
     };
   }
@@ -2497,12 +2525,48 @@ export class SessionStore {
     return { rotatedSessionIds, settings: this.getSandboxNetworkSettings() };
   }
 
+  configurationInheritanceCandidate(sessionId: string, scope: ConfigurationScope, fields: readonly string[]) {
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    if (scope.kind === "global" || scope.kind === "project" && scope.id !== project.id || scope.kind === "session" && scope.id !== sessionId) throw new Error("Unsupported inherited settings scope");
+    if (fields.some(field => !(INHERITABLE_CONFIGURATION_FIELDS as readonly string[]).includes(field))) throw new Error("Unsupported inherited setting");
+    const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const next = structuredClone(current);
+    for (const field of INHERITABLE_CONFIGURATION_FIELDS) {
+      if (fields.includes(field)) delete next[field];
+    }
+    // Only remove requested overrides. Keep unrelated stored values, including
+    // stale references that resolution already ignores.
+    const layers: Array<{ overrides: RuntimeSettingsOverrides; source: "global" | "project" | "session" }> = [
+      { overrides: this.catalog.globalSettings, source: "global" },
+      { overrides: scope.kind === "project" ? next : project.settingsOverrides, source: "project" },
+    ];
+    if (scope.kind === "session") layers.push({ overrides: next, source: "session" });
+    const resolved = this.resolveSettingsLayers(layers);
+    return { before: structuredClone(current), next, effective: resolved.effective, sources: resolved.sources };
+  }
+
+  applyConfigurationInheritanceSync(sessionId: string, scope: ConfigurationScope, fields: readonly string[]): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Inheritance configuration requires the shared transaction");
+    const candidate = this.configurationInheritanceCandidate(sessionId, scope, fields), session = this.assertSessionWritable(sessionId);
+    if (scope.kind === "project") {
+      const project = this.getProject(scope.id);
+      if (!project) throw new Error("Project not found");
+      project.settingsOverrides = candidate.next;
+      this.syncSessionCompatibilityForProject(scope.id);
+    } else {
+      session.settingsOverrides = candidate.next;
+      this.syncSessionCompatibility(session);
+    }
+    session.updatedAt = new Date().toISOString();
+  }
+
   /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
   applySystemConfigurationSync(capabilityId: ConfigurationCapabilityId, values: ScopedConfigurationValues): void {
     if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
     if (capabilityId === "timeouts.configure") this.catalog.timeoutSettings = normalizeTimeoutSettings({ ...this.getTimeoutSettings(), ...values });
     else if (capabilityId === "quotas.configure") this.catalog.quotaSettings = normalizeQuotaSettings({ ...this.getQuotaSettings(), ...values });
     else if (capabilityId === "idea_tree.configure") this.catalog.ideaTreeSettings = normalizeIdeaTreeSettings(values as Parameters<typeof normalizeIdeaTreeSettings>[0], this.getIdeaTreeSettings());
+    else if (capabilityId === "environment.sources") this.catalog.environmentSourceSettings = normalizeEnvironmentSourceSettings({ ...this.getEnvironmentSourceSettings(), ...values });
     else throw new Error("Unsupported system configuration");
   }
 
@@ -2602,7 +2666,12 @@ export class SessionStore {
     };
   }
 
-  async updateReviewerSpecialistSettings(value: unknown): Promise<ReviewerSpecialistSettings> {
+  applyReviewerParticipationSync(enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Reviewer configuration requires the shared transaction");
+    this.applyReviewerSpecialistSettingsSync({ enabled });
+  }
+
+  private applyReviewerSpecialistSettingsSync(value: unknown): void {
     if (!isRecord(value) || typeof value.enabled !== "boolean") {
       throw new Error("Reviewer Specialist enabled must be a boolean");
     }
@@ -2614,6 +2683,10 @@ export class SessionStore {
     // Record that the user (or API) chose a value so the default-on migration
     // will not override an intentional opt-out on the next load.
     this.catalog.reviewerSpecialistDefaultOnMigrated = true;
+  }
+
+  async updateReviewerSpecialistSettings(value: unknown): Promise<ReviewerSpecialistSettings> {
+    this.applyReviewerSpecialistSettingsSync(value);
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
   }
@@ -3326,11 +3399,52 @@ export class SessionStore {
     return run;
   }
 
+  private replaceRuntimeOverridesSync(scope: ConfigurationScope, value: unknown): void {
+    const normalized = this.normalizeSettings(value);
+    if (scope.kind === "global") {
+      this.catalog.globalSettings = withoutSkillSelection(normalized);
+      this.syncSessionCompatibilityForProject();
+    } else if (scope.kind === "project") {
+      const project = this.getProject(scope.id);
+      if (!project) throw new Error("Project not found");
+      project.settingsOverrides = normalized;
+      this.syncSessionCompatibilityForProject(project.id);
+    } else {
+      const session = this.assertSessionWritable(scope.id);
+      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
+      session.settingsOverrides = normalized;
+      session.updatedAt = new Date().toISOString();
+      this.syncSessionCompatibility(session);
+    }
+  }
+
+  configurationJsonViewerSettings(sessionId: string) {
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    const mode = (settings: RuntimeSettingsOverrides) => settings.plugins?.["artifact-json"]?.enabled === undefined ? "inherit" : settings.plugins["artifact-json"]!.enabled ? "enabled" : "disabled";
+    return { installed: installedPlugins.some(plugin => plugin.id === "artifact-json"),
+      modes: { global: mode(this.catalog.globalSettings), project: mode(project.settingsOverrides), session: mode(session.settingsOverrides) },
+      inherited: { global: true, project: this.getGlobalSettings().effective.plugins?.["artifact-json"]?.enabled !== false,
+        session: this.getProjectSettings(project.id).effective.plugins?.["artifact-json"]?.enabled !== false } };
+  }
+
+  applyJsonViewerConfigurationSync(sessionId: string, mode: "enabled" | "disabled" | "inherit", scope: ConfigurationScope): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Plugin configuration requires the shared transaction");
+    const session = this.assertSessionWritable(sessionId), project = this.getProject(session.projectId)!;
+    if (scope.kind === "project" && scope.id !== project.id || scope.kind === "session" && scope.id !== sessionId) throw new Error("Plugin scope does not belong to this session");
+    if (!this.configurationJsonViewerSettings(sessionId).installed || !["enabled", "disabled", "inherit"].includes(mode)) throw new Error("Unsupported JSON viewer configuration");
+    const current = scope.kind === "global" ? this.catalog.globalSettings : scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const plugins = structuredClone(current.plugins ?? {}), entry = { ...plugins["artifact-json"] };
+    if (mode === "inherit") delete entry.enabled; else entry.enabled = mode === "enabled";
+    if (Object.keys(entry).length) plugins["artifact-json"] = entry;
+    else delete plugins["artifact-json"];
+    const next: RuntimeSettingsOverrides = { ...current, plugins };
+    if (!Object.keys(plugins).length) delete next.plugins;
+    this.replaceRuntimeOverridesSync(scope, next);
+  }
+
   async replaceGlobalSettings(value: unknown): Promise<RuntimeSettingsDetails> {
     return this.withSettingsMutation(async () => {
-      const normalized = withoutSkillSelection(this.normalizeSettings(value));
-      this.catalog.globalSettings = normalized;
-      this.syncSessionCompatibilityForProject();
+      this.replaceRuntimeOverridesSync({ kind: "global" }, value);
       await this.saveCatalog();
       this.pluginControl?.changed();
       return this.getGlobalSettings();
@@ -3355,9 +3469,7 @@ export class SessionStore {
       assertCurrent?.();
       const project = this.getProject(projectId);
       if (!project) throw new Error("Project not found");
-      const normalized = this.normalizeSettings(value);
-      project.settingsOverrides = normalized;
-      this.syncSessionCompatibilityForProject(projectId);
+      this.replaceRuntimeOverridesSync({ kind: "project", id: projectId }, value);
       await this.saveCatalog();
       this.pluginControl?.changed(projectId);
       return this.getProjectSettings(projectId);
@@ -3403,11 +3515,7 @@ export class SessionStore {
     return this.withSettingsMutation(async () => {
       assertCurrent?.();
       const session = this.assertSessionWritable(sessionId);
-      const normalized = this.normalizeSettings(value);
-      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
-      session.settingsOverrides = normalized;
-      session.updatedAt = new Date().toISOString();
-      this.syncSessionCompatibility(session);
+      this.replaceRuntimeOverridesSync({ kind: "session", id: sessionId }, value);
       await this.saveCatalog();
       this.pluginControl?.changed(session.projectId, sessionId);
       return this.getSessionSettings(sessionId);
@@ -3927,6 +4035,22 @@ export class SessionStore {
     }
     const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
     const description = normalizeProjectDescription(changes.description);
+    // Validate the full request before changing Runner admission in memory.
+    // A rejected rename must not leave an allocation for a later save to persist.
+    if (name !== undefined) this.assertProjectNameFree(name, project.id);
+    this.applyProjectRunnerSelection(project, changes);
+    if (name !== undefined) {
+      project.name = name;
+    }
+    if (changes.description !== undefined) {
+      if (description) project.description = description;
+      else delete project.description;
+    }
+    await this.saveCatalog();
+    return project;
+  }
+
+  private applyProjectRunnerSelection(project: Project, changes: Pick<UpdateProjectRequest, "runnerIds" | "remoteRunnerHostIds">): void {
     if (changes.runnerIds !== undefined) {
       const ids = this.validateRunnerIds(changes.runnerIds);
       project.runnerIds = ids;
@@ -3936,17 +4060,6 @@ export class SessionStore {
       delete project.runnerIds;
       project.remoteRunnerHostIds = ids;
     }
-    if (name !== undefined) {
-      // A rename is the same collision as a create: the name is the handle.
-      this.assertProjectNameFree(name, project.id);
-      project.name = name;
-    }
-    if (changes.description !== undefined) {
-      if (description) project.description = description;
-      else delete project.description;
-    }
-    await this.saveCatalog();
-    return project;
   }
 
   private validateProjectRemoteRunnerHosts(hostIds: string[]): string[] {
@@ -3973,6 +4086,55 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     const project = session && this.getProject(session.projectId);
     return project && session ? effectiveRunnerIds(project, session) : [];
+  }
+
+  /** Selection discovery deliberately avoids the credential-decrypting host description API. */
+  configurationRunnerResources(): Array<{ id: string; name: string; available: boolean }> {
+    const tokenIds = new Set((this.getConfigurationDatabase().prepare("SELECT host_id FROM remote_host_credentials WHERE kind = 'token'").all() as Array<{ host_id: string }>).map(row => row.host_id));
+    return [{ id: "local", name: "Built-in local Runner", available: true }, ...this.catalog.remoteHosts.map(host => ({
+      id: host.id, name: (host.runnerName ?? host.id).slice(0, 180), available: !remoteRunnerUnusableReason({ ...host, hasToken: tokenIds.has(host.id) }),
+    }))];
+  }
+
+  configurationRunnerSelection(sessionId: string) {
+    const session = this.assertSessionWritable(sessionId);
+    const project = this.getProject(session.projectId)!;
+    const inherited = session.runnerIds === undefined && session.remoteRunnerHostIds === undefined;
+    return { projectRunnerIds: effectiveRunnerIds(project).sort(), selectionMode: inherited ? "inherit" as const : "selected" as const,
+      runnerIds: inherited ? [] : effectiveRunnerIds(project, session).sort(), effectiveRunnerIds: effectiveRunnerIds(project, session).sort() };
+  }
+
+  applyRunnerConfigurationSync(sessionId: string, scope: ConfigurationScope, selectionMode: "inherit" | "selected", runnerIds: string[]): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    if (scope.kind === "project" && scope.id === session.projectId && selectionMode === "selected") {
+      this.applyProjectRunnerSelection(this.getProject(session.projectId)!, { runnerIds });
+    } else if (scope.kind === "session" && scope.id === session.id) {
+      const patch = this.sessionRunnerSelectionPatch(session.projectId, { runnerIds: selectionMode === "inherit" ? null : runnerIds });
+      this.applySessionRunnerSelection(session, patch);
+      session.updatedAt = new Date().toISOString();
+    } else throw new Error("Unsupported Runner configuration scope");
+  }
+
+  private sessionRunnerSelectionPatch(projectId: string, changes: Pick<UpdateSessionRequest, "runnerIds" | "remoteRunnerHostIds">): Pick<Session, "runnerIds" | "remoteRunnerHostIds"> {
+    const { runnerIds, remoteRunnerHostIds } = changes;
+    if (runnerIds === null) return { runnerIds: undefined, remoteRunnerHostIds: undefined };
+    if (runnerIds !== undefined) {
+      const ids = this.validateRunnerIds(runnerIds);
+      return { runnerIds: ids, remoteRunnerHostIds: ids.filter(id => id !== "local") };
+    }
+    if (remoteRunnerHostIds !== undefined) {
+      const hosts = remoteRunnerHostIds === null ? undefined : this.validateSessionRemoteRunnerHosts(projectId, remoteRunnerHostIds);
+      return { runnerIds: undefined, remoteRunnerHostIds: hosts };
+    }
+    return {};
+  }
+
+  private applySessionRunnerSelection(session: Session, patch: Pick<Session, "runnerIds" | "remoteRunnerHostIds">): void {
+    for (const name of ["runnerIds", "remoteRunnerHostIds"] as const) if (hasOwn(patch, name)) {
+      if (patch[name] === undefined) delete session[name];
+      else session[name] = patch[name];
+    }
   }
 
   assertSessionAllowsRunner(sessionId: string, runnerId: string): void {
@@ -5725,10 +5887,7 @@ export class SessionStore {
       }
       if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
       if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
-      const nextRunnerIds = runnerIds == null ? undefined : this.validateRunnerIds(runnerIds);
-      const nextRemoteRunnerHostIds = remoteRunnerHostIds === undefined || remoteRunnerHostIds === null
-        ? undefined
-        : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
+      const runnerSelection = this.sessionRunnerSelectionPatch(session.projectId, { runnerIds, remoteRunnerHostIds });
       session.settingsOverrides = nextSettings;
       if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
@@ -5750,17 +5909,7 @@ export class SessionStore {
       else if (specialistId !== undefined) session.specialistId = specialistId;
       // `null` drops the override so the Session follows the Project again; an
       // empty runnerIds array disables all Runner execution for this Session.
-      if (runnerIds === null) {
-        delete session.runnerIds;
-        delete session.remoteRunnerHostIds;
-      } else if (nextRunnerIds !== undefined) {
-        session.runnerIds = nextRunnerIds;
-        session.remoteRunnerHostIds = nextRunnerIds.filter((id) => id !== "local");
-      } else if (remoteRunnerHostIds !== undefined) {
-        delete session.runnerIds;
-        if (remoteRunnerHostIds === null) delete session.remoteRunnerHostIds;
-        else session.remoteRunnerHostIds = nextRemoteRunnerHostIds;
-      }
+      this.applySessionRunnerSelection(session, runnerSelection);
       session.updatedAt = new Date().toISOString();
       this.syncSessionCompatibility(session);
       await this.saveCatalog();
@@ -6778,6 +6927,13 @@ export class SessionStore {
     return pricingByModelProfileId;
   }
 
+  /** Dialect per profile, because recorded counts are shaped by it and cost depends on that shape. */
+  private modelUsageProtocolByProfileId(): Map<string, ModelApiProtocol> {
+    const protocolByModelProfileId = new Map<string, ModelApiProtocol>();
+    for (const model of this.catalog.models) protocolByModelProfileId.set(model.id, usageDialectOf(model));
+    return protocolByModelProfileId;
+  }
+
   async getModelUsageAnalyticsSummary(filters: ModelUsageAnalyticsFilters = {}): Promise<ModelUsageAnalyticsSummary> {
     const projectNameById = new Map(this.catalog.projects.map((project) => [project.id, project.name]));
     const projectIdBySessionId = new Map(this.catalog.sessions.map((session) => [session.id, session.projectId]));
@@ -6786,6 +6942,7 @@ export class SessionStore {
       pricingByModelProfileId: this.modelUsagePricingByProfileId(),
       projectIdBySessionId,
       projectNameById,
+      protocolByModelProfileId: this.modelUsageProtocolByProfileId(),
       sessionTitleById,
     }, filters);
   }

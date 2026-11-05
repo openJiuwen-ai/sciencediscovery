@@ -45,6 +45,7 @@ import {
   writeStoredFlag,
 } from "./state/storage.js";
 import { applyDocumentLanguage, TEXT } from "./text.js";
+import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
 import { Composer } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
@@ -424,7 +425,14 @@ export function App({ initialToken }: Props) {
   }
 
   if (boot === "offline") {
-    return <OfflineScreen onRetry={actions.retryBoot} reason="unreachable" />;
+    // The dialog still mounts here: the offline screen offers a feedback entry
+    // that carries the failure's diagnostics, so it must have a listener.
+    return (
+      <>
+        <OfflineScreen onRetry={actions.retryBoot} reason="unreachable" />
+        <FeedbackDialog />
+      </>
+    );
   }
 
   // The wizard replaces the shell rather than sitting over it: with no model
@@ -673,6 +681,8 @@ export function App({ initialToken }: Props) {
       {state.confirm ? (
         <ConfirmDialog onDismiss={actions.dismissConfirm} request={state.confirm} />
       ) : null}
+
+      <FeedbackDialog />
     </>
   );
 }

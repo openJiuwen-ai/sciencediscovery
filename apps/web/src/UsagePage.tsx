@@ -147,9 +147,14 @@ function formatChartDate(date: string, locale: string): string {
     .format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-function formatChartNumber(value: number): string {
+export function formatChartNumber(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  if (value >= 1_000) {
+    // The same boundary as the compact token count: one decimal of thousands
+    // must not round a 999.9K axis label up into `1000.0K`.
+    const thousands = value / 1_000;
+    return thousands >= 999.95 ? `${(value / 1_000_000).toFixed(1)}M` : `${thousands.toFixed(1)}K`;
+  }
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 

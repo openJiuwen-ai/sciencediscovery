@@ -13,8 +13,9 @@ import { join } from "node:path";
 import { createTest } from "../test/support/tagged/compat.mjs";
 
 import {
-  diag, instanceConfigPath, jwConfig, parseInstanceEnvPorts, readInstancePorts, resolveVenvEntry,
-  startupDiagPath, stderrTail,
+  diag, fingerprintEqual, getVerifiedFingerprint, instanceConfigPath, jwConfig,
+  parseInstanceEnvPorts, readInstancePorts, recordVerified, resolveVenvEntry,
+  startupDiagPath, stderrTail, verifyFingerprint,
 } from "./jiuwenswarm.mjs";
 
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
@@ -185,5 +186,110 @@ test("readInstancePorts returns null when the instance has no .env yet", async (
     assert.equal(await readInstancePorts(cfg), null);
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+// --- verifyPatches fingerprint cache (SIZEOPT W11#2) ------------------------
+// The old marker recorded only "tag:src" and — because recordVerified used
+// writeFileSync without importing it — never landed at all, so every start
+// repaid the full verify (0.87s measured on the installed tree). These tests
+// pin the replacement contract: the marker is JSON, it survives a round trip,
+// and ANY change to a patch file or the src manifest invalidates it.
+
+async function fakePatchTree() {
+  const root = await mkdtemp(join(tmpdir(), "jw-verify-root-"));
+  const patchesDir = join(root, "patches", "workswarm0.2.6");
+  const src = join(root, "src");
+  await mkdir(patchesDir, { recursive: true });
+  await mkdir(src, { recursive: true });
+  await writeFile(join(patchesDir, "0001-one.patch"), "--- a/x\n+++ b/x\n", "utf8");
+  await writeFile(join(patchesDir, "0002-two.patch"), "--- a/y\n+++ b/y\n", "utf8");
+  await writeFile(join(src, ".sciencediscovery-patches.json"), '{"tag":"workswarm0.2.6"}', "utf8");
+  const cfg = jwConfig({
+    JIUWENSWARM_ROOT: root,
+    JIUWENSWARM_SRC: src,
+    JIUWENSWARM_TAG: "workswarm0.2.6",
+  });
+  return { root, patchesDir, src, cfg };
+}
+
+test("verifyFingerprint round-trips through the marker file (cache hit)", async () => {
+  const { root, patchesDir, cfg } = await fakePatchTree();
+  try {
+    const fp = verifyFingerprint(cfg, patchesDir);
+    assert.equal(fp.tag, "workswarm0.2.6");
+    assert.equal(fp.patches.length, 2);
+    assert.deepEqual(fp.patches.map(p => p.name), ["0001-one.patch", "0002-two.patch"]);
+    assert.equal(getVerifiedFingerprint(cfg), null, "no marker yet → miss");
+    recordVerified(cfg, fp);
+    assert.ok(fingerprintEqual(getVerifiedFingerprint(cfg), fp), "marker must survive the round trip");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verifyFingerprint invalidates when a patch is added, edited, or removed", async () => {
+  const { root, patchesDir, cfg } = await fakePatchTree();
+  try {
+    const before = verifyFingerprint(cfg, patchesDir);
+    recordVerified(cfg, before);
+
+    // (a) new patch appears (the 0020 case: chain grows 16 → 17)
+    await writeFile(join(patchesDir, "0020-new.patch"), "--- a/z\n+++ b/z\n", "utf8");
+    assert.ok(!fingerprintEqual(getVerifiedFingerprint(cfg), verifyFingerprint(cfg, patchesDir)),
+      "an added patch must invalidate the cache");
+
+    // (b) an existing patch is edited in place (same name, different size)
+    await writeFile(join(patchesDir, "0001-one.patch"), "--- a/x\n+++ b/x\n+extra line\n", "utf8");
+    assert.ok(!fingerprintEqual(before, verifyFingerprint(cfg, patchesDir)),
+      "an edited patch must invalidate the cache");
+
+    // (c) a patch disappears
+    await rm(join(patchesDir, "0002-two.patch"));
+    const afterRemove = verifyFingerprint(cfg, patchesDir);
+    assert.equal(afterRemove.patches.length, 2);
+    assert.ok(!fingerprintEqual(before, afterRemove), "a removed patch must invalidate the cache");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verifyFingerprint invalidates when the src manifest changes", async () => {
+  const { root, patchesDir, src, cfg } = await fakePatchTree();
+  try {
+    const before = verifyFingerprint(cfg, patchesDir);
+    await writeFile(join(src, ".sciencediscovery-patches.json"), '{"tag":"workswarm0.2.6","patches":{}}', "utf8");
+    assert.ok(!fingerprintEqual(before, verifyFingerprint(cfg, patchesDir)),
+      "a rewritten manifest (re-applied tree) must invalidate the cache");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verifyFingerprint fails closed: no patch dir, legacy or corrupt marker", async () => {
+  const { root, src, cfg } = await fakePatchTree();
+  try {
+    // No patch dir → null, so the caller always re-verifies.
+    assert.equal(verifyFingerprint(cfg, join(root, "no-such-patches")), null);
+
+    // Legacy plain-text marker ("tag:src") must not parse as a fingerprint.
+    await writeFile(join(root, ".sd-patches-verified"), `workswarm0.2.6:${src}`, "utf8");
+    assert.equal(getVerifiedFingerprint(cfg), null, "legacy marker → miss (re-verify)");
+
+    // Corrupt JSON likewise.
+    await writeFile(join(root, ".sd-patches-verified"), "{not json", "utf8");
+    assert.equal(getVerifiedFingerprint(cfg), null, "corrupt marker → miss (re-verify)");
+
+    // A JSON non-object (e.g. a bare number) is not a fingerprint either.
+    await writeFile(join(root, ".sd-patches-verified"), "17", "utf8");
+    assert.equal(getVerifiedFingerprint(cfg), null, "non-object JSON → miss (re-verify)");
+
+    // A missing file inside the patch set reads as null → never equal.
+    assert.ok(!fingerprintEqual(
+      { name: "0001-one.patch", size: 1, mtimeMs: 1 },
+      null,
+    ));
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -14,7 +14,7 @@
 
 import Papa from "papaparse";
 
-import type { DataRow, DataValue, FilterSpec } from "../types.js";
+import type { ColumnProfile, DataRow, DataValue, FilterSpec } from "../types.js";
 
 function sameValue(left: DataValue, right: DataValue): boolean {
   if (left === null || right === null) return left === right;
@@ -57,9 +57,31 @@ function safeSpreadsheetValue(value: DataValue): DataValue {
   return /^[\t\r ]*[=+\-@]/.test(value) ? `'${value}` : value;
 }
 
-export function rowsToCsv(rows: DataRow[], fields: string[]): string {
-  return Papa.unparse(rows.map((row) =>
-    Object.fromEntries(fields.map((field) => [field, safeSpreadsheetValue(row[field] ?? null)]))));
+/**
+ * Header text for a column: a real column shows the header the file wrote (its
+ * field id unless Papa had to make a duplicate unique), while an unnamed column
+ * (a CSV cell with no header) shows an empty header instead of an internal key.
+ * `label` is "" only for those unnamed columns; every real label is its header
+ * with underscores spaced, so this stays an equality check, not `||`.
+ */
+export function columnHeaderName(column: ColumnProfile): string {
+  return column.label === "" ? "" : column.header ?? column.id;
+}
+
+/**
+ * Export CSV with the same header text the grid shows: a real column keeps its
+ * field id, an unnamed column exports an empty header while its values stay in
+ * place. Papa's object-record form keys columns by name, so two unnamed columns
+ * would collide; build the header row and the body positionally instead. Header
+ * names reach Papa as data values, so they get the same formula neutralization
+ * as the cells.
+ */
+export function tableToCsv(rows: readonly DataRow[], columns: readonly ColumnProfile[]): string {
+  const header = Papa.unparse([columns.map((column) => safeSpreadsheetValue(columnHeaderName(column)))]);
+  if (!rows.length) return header;
+  const body = Papa.unparse(rows.map((row) =>
+    columns.map((column) => safeSpreadsheetValue(row[column.id] ?? null))));
+  return `${header}\r\n${body}`;
 }
 
 export function downloadText(content: string, fileName: string, mediaType: string): void {

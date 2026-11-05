@@ -177,6 +177,37 @@ test("reports a decided download instead of an approval that will never arrive",
   }
 });
 
+test("a download whose size is unknown prints no percentage, only the bytes moved", () => {
+  for (const state of ["running", "completed"] as const) {
+    const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
+      ...common,
+      candidates: [],
+      expandedCards: { "governed-downloads:run-1": true },
+      jobs: [{ ...job(state), progress: { bytesDownloaded: 1_048_576, filesCompleted: 0, filesTotal: 1 } }],
+      plans: [{ candidates: [], id: "plan-1", state: "approved" } as unknown as ArtifactPlan],
+    }));
+
+    // A chunked download has no total, so `percent` is absent; printing a zero
+    // for it says "not started" while the byte counter climbs.
+    assert.doesNotMatch(html, /\d+%/, `a ${state} download of unknown size must not print a percentage`);
+    assert.match(html, /1,048,576 bytes/, `a ${state} download still knows how many bytes moved`);
+    assert.match(html, new RegExp(`governed-download-item ${state}`), `the ${state} state is still shown`);
+  }
+});
+
+test("a download whose size is known still prints its percentage", () => {
+  const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
+    ...common,
+    candidates: [],
+    expandedCards: { "governed-downloads:run-1": true },
+    jobs: [{ ...job("running"), progress: { bytesDownloaded: 1_024, filesCompleted: 0, filesTotal: 1, percent: 42 } }],
+    plans: [{ candidates: [], id: "plan-1", state: "approved" } as unknown as ArtifactPlan],
+  }));
+
+  assert.match(html, /42%/);
+  assert.match(html, /1,024 bytes/);
+});
+
 test("keeps a decided download out of the actions-needed count", () => {
   const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
     ...common,

@@ -125,7 +125,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     const targetChanged = previousTarget.current !== targetIdentity(next);
     if (targetChanged) {
       setSecrets({}); credentialDraft.current = undefined; operationKeys.current.clear();
-      submittedPreview.current = { revision: -1 };
+      // An explicit preview already binds this new target. Invalidate only a
+      // prior preview; endpoint consent must not strand the fresh one.
+      if (submittedPreview.current?.revision !== next.revision || submittedPreview.current.digest !== next.previewDigest)
+        submittedPreview.current = { revision: -1 };
     }
     latestRequest.current = next;
     previousTarget.current = targetIdentity(next);
@@ -276,7 +279,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+  const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${m.mode[request.activation.mode]}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];

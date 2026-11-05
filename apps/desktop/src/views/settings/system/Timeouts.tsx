@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { commitsOnEnter } from "../../../app/ime-enter.js";
 import type { ApiClient } from "../../../api/client.js";
 import { getTimeoutSettings, updateTimeoutSettings } from "../../../api/settings.js";
 import type { SystemTimeoutSettings } from "../../../api/types.js";
@@ -155,7 +156,7 @@ export function TimeoutSettings({ client }: { client: ApiClient }) {
                       }}
                       onChange={(event) => setMilliseconds(field, event.target.value)}
                       onKeyDown={(event) => {
-                        if (event.key !== "Enter") return;
+                        if (!commitsOnEnter(event)) return;
                         event.preventDefault();
                         event.currentTarget.blur();
                       }}

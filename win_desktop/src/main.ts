@@ -77,6 +77,25 @@ function shellLogDir(): string {
     : join(app.getPath("userData"), "logs");
 }
 
+/**
+ * The install root the data-dir wizard must keep the user's data clear of, or
+ * null in dev (where the shell lives in the repo and there is no install dir).
+ *
+ * This is the directory NSIS's uninstall tail deletes UNCONDITIONALLY
+ * (build/installer.nsh customUnInstall → DeleteFastThenHelper "$INSTDIR"), even
+ * with "also delete user data" left unticked. The packaged shell exe sits
+ * directly in $INSTDIR, so its dirname is that directory — the same reasoning
+ * shellLogDir() above already uses for <install>\logs.
+ *
+ * Without this the two DEFAULTS colliding (problems W16: the old
+ * $LOCALAPPDATA\ScienceDiscovery install root was literally defaultDataDir())
+ * would only be fixed by the rename, and a user typing the install dir into the
+ * wizard would reproduce the same silent data loss.
+ */
+function installRootForWizard(): string | null {
+  return app.isPackaged ? dirname(app.getPath("exe")) : null;
+}
+
 function ensureShellLog(): string | null {
   if (shellLogFile) return shellLogFile;
   try {
@@ -958,12 +977,13 @@ function registerWizardIpc(proxyEnv: NodeJS.ProcessEnv | null): void {
     return picked.canceled ? null : picked.filePaths[0] ?? null;
   });
 
-  ipcMain.handle("sd-shell:wizard-check-dir", (_event, path: unknown) => probeDataDir(String(path ?? "")));
+  ipcMain.handle("sd-shell:wizard-check-dir",
+    (_event, path: unknown) => probeDataDir(String(path ?? ""), installRootForWizard()));
 
   ipcMain.handle("sd-shell:wizard-confirm-dir", async (_event, path: unknown) => {
     const clean = String(path ?? "").trim();
     if (!clean) return { ok: false, message: "路径不能为空。" };
-    const check = probeDataDir(clean);
+    const check = probeDataDir(clean, installRootForWizard());
     if (!check.ok) return { ok: false, message: check.reason ?? "目录不可用。" };
     // Wizard half-takeover: confirming the data dir is all the shell wizard
     // still owns — the SPA takes over model config and boot waiting from
