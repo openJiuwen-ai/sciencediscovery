@@ -670,10 +670,17 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     let finalText = "";
     let failure: string | undefined;
     let receivedTerminal = false;
+    let releaseUserInputWait: (() => void) | undefined;
     for await (const line of ndjson(response.body)) {
       if (receivedTerminal) throw new Error("Swarm adapter sent data after its terminal result");
       this.markProgress("event" in line ? `adapter:${line.event.type}` : "adapter:done");
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
+      if ("event" in line && line.event.type === "user_input.required") {
+        releaseUserInputWait ??= this.beginExternalWait();
+        continue;
+      }
+      releaseUserInputWait?.();
+      releaseUserInputWait = undefined;
       if ("done" in line) {
         receivedTerminal = true;
         finalText = line.done.finalText;

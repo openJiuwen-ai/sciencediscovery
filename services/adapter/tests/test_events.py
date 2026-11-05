@@ -223,11 +223,14 @@ def test_decide_deny_and_allow_matching():
     assert answer["selected_options"] == ["B"] and resolved["request"]["decision"] == "allowed"
 
 
-def test_other_question_sources_are_reported_as_unmapped():
+def test_ask_user_question_is_reported_as_an_external_user_wait():
     mapper = RunEventMapper()
-    assert mapper.feed({"type": "event", "event": "chat.ask_user_question",
-                        "payload": {"request_id": "r", "source": "ask_user_interrupt"}}) == []
-    assert mapper.unmapped == ["chat.ask_user_question:ask_user_interrupt"]
+    assert mapper.feed({"type": "event", "event": "chat.ask_user_question", "payload": {
+        "request_id": "r", "source": "ask_user_interrupt", "questions": [{"question": "Choose a goal"}],
+    }}) == [{"type": "user_input.required", "request": {
+        "id": "r", "question": "Choose a goal", "source": "ask_user_interrupt",
+    }}]
+    assert mapper.unmapped == []
 
 
 def test_tool_result_without_the_trailing_fields_is_still_parsed():
