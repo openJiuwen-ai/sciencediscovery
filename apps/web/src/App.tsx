@@ -1293,6 +1293,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [artifactArchiveBusy, setArtifactArchiveBusy] = useState(false);
   const [workspaceFileSelectionMode, setWorkspaceFileSelectionMode] = useState(false);
   const [selectedWorkspaceFilePaths, setSelectedWorkspaceFilePaths] = useState<ReadonlySet<string>>(() => new Set());
+  const [workspaceArtifactRegistrationBusy, setWorkspaceArtifactRegistrationBusy] = useState(false);
   const [workspaceResizing, setWorkspaceResizing] = useState(false);
   const [workspaceMaxWidth, setWorkspaceMaxWidth] = useState(() => measureWorkspaceMaxWidth());
   const [workspaceWidth, setWorkspaceWidth] = useState(() => {
@@ -3965,6 +3966,23 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setSelectedWorkspaceFilePaths(new Set());
   }
 
+  async function registerSelectedWorkspaceArtifacts(): Promise<void> {
+    if (!activeSessionId || workspaceArtifactRegistrationBusy || !selectedUndeclaredAgentWorkspacePaths.length) return;
+    setWorkspaceArtifactRegistrationBusy(true);
+    try {
+      const result = await client.registerWorkspaceArtifacts(activeSessionId, selectedUndeclaredAgentWorkspacePaths);
+      setArtifacts((current) => [...result.artifacts.map((item) => item.artifact), ...current]
+        .filter((artifact, index, items) => items.findIndex((candidate) => candidate.id === artifact.id) === index));
+      setSelectedWorkspaceFilePaths(new Set());
+      setWorkspaceFileSelectionMode(false);
+      pushToast("success", t("app.workspaceArtifactsRegistered"), t("app.selectedArtifacts", { count: result.artifacts.length }));
+    } catch (reason) {
+      if (!isAuthFailure(reason)) pushToast("error", t("app.workspaceArtifactsRegistrationFailed"), reason instanceof Error ? reason.message : undefined);
+    } finally {
+      setWorkspaceArtifactRegistrationBusy(false);
+    }
+  }
+
   async function downloadSelectedArtifacts(): Promise<void> {
     if (!activeProjectId || artifactArchiveBusy) return;
     const selected = sessionArtifacts.filter((artifact) => selectedArtifactIds.has(artifact.id));
@@ -4343,6 +4361,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
   const sessionArtifacts = artifactsForSession(artifacts, activeSessionId, artifactOutputs);
+  const declaredWorkspacePaths = new Set(sessionArtifacts
+    .map((artifact) => artifact.originMeta?.declaredPath)
+    .filter((path): path is string => typeof path === "string"));
+  const undeclaredAgentWorkspaceFiles = files.filter((file) => file.provenance?.origin === "agent" && !declaredWorkspacePaths.has(file.path));
+  const selectedUndeclaredAgentWorkspacePaths = undeclaredAgentWorkspaceFiles
+    .filter((file) => selectedWorkspaceFilePaths.has(file.path))
+    .map((file) => file.path);
   const artifactGroups = groupArtifactsBySession({
     artifacts: sessionArtifacts,
     catalogProjectId: artifactSessionCatalogProjectId,
@@ -5257,6 +5282,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               </div>
             </details> : null}
 
+            {undeclaredAgentWorkspaceFiles.length ? <p className="muted workspace-artifact-notice">{t("app.undeclaredAgentOutputs", { count: undeclaredAgentWorkspaceFiles.length })}</p> : null}
             {files.length > 0 ? <details className="workspace-fold physical-files" open={showPhysicalFiles} onToggle={(event) => { if (event.currentTarget.open !== showPhysicalFiles) setShowPhysicalFiles(event.currentTarget.open); }}>
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
@@ -5279,6 +5305,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     title={workspaceFileSelectionMode ? t("app.cancelWorkspaceFileSelection") : t("app.selectWorkspaceFiles")}
                     type="button"
                   >{workspaceFileSelectionMode ? <CloseIcon size={14} /> : <CheckIcon size={14} />}</button> : null}
+                  {workspaceFileSelectionMode ? <button
+                    aria-label={t("app.registerSelectedWorkspaceArtifacts")}
+                    className="artifact-header-action"
+                    disabled={!selectedUndeclaredAgentWorkspacePaths.length || workspaceArtifactRegistrationBusy}
+                    onClick={(event) => { event.preventDefault(); event.stopPropagation(); void registerSelectedWorkspaceArtifacts(); }}
+                    title={t("app.registerSelectedWorkspaceArtifacts")}
+                    type="button"
+                  ><ArchiveIcon size={14} /></button> : null}
                   <span className="fold-meta">{files.length}</span>
                 </span>
               </summary>

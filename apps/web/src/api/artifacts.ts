@@ -521,6 +521,13 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
   }
 
+  registerWorkspaceArtifacts(sessionId: string, paths: string[]): Promise<{ artifacts: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }> }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/workspace/artifacts`, {
+      body: JSON.stringify({ paths }),
+      method: "POST",
+    });
+  }
+
   uploadFile(sessionId: string, body: UploadFileRequest): Promise<WorkspaceFile> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/files`, {
       body: JSON.stringify(body),

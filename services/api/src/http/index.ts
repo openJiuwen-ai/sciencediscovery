@@ -3078,6 +3078,39 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const workspaceArtifactsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/workspace\/artifacts$/);
+      if (workspaceArtifactsMatch && request.method === "POST") {
+        const sessionId = workspaceArtifactsMatch[1]!;
+        const session = store.getSession(sessionId);
+        if (!session) return sendError(response, 404, "Session not found");
+        const body = await readJson<{ paths?: unknown }>(request);
+        if (!Array.isArray(body.paths) || body.paths.length < 1 || body.paths.length > 50
+          || body.paths.some((path) => typeof path !== "string" || !path.trim())) {
+          return sendError(response, 400, "paths must contain between 1 and 50 workspace file paths");
+        }
+        const paths = [...new Set((body.paths as string[]).map((path) => path.trim()))];
+        const workspaceRoot = store.workspacePath(sessionId);
+        const provenance = await Promise.all(paths.map((path) => workspaceFileProvenance(store, sessionId, path)));
+        if (provenance.some((item) => item.currentRevision.origin !== "agent")) {
+          return sendError(response, 422, "Only agent-created workspace files can be registered here");
+        }
+        if (provenance.some((item) => item.currentRevision.artifactVersionIds.length)) {
+          return sendError(response, 409, "One or more workspace files are already registered as artifacts");
+        }
+        const artifacts = [];
+        for (const path of paths) {
+          artifacts.push(await provenanceRecorder.declareWorkspaceArtifact({
+            name: path,
+            path,
+            sessionId,
+            sourcePath: path,
+            workspaceRoot,
+          }));
+        }
+        sendJson(response, 201, { artifacts });
+        return;
+      }
+
       const trajectoryMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/trajectory(?:\/(detail|export))?$/);
       if (trajectoryMatch && request.method === "GET") {
         const sessionId = decodeURIComponent(trajectoryMatch[1]!);
