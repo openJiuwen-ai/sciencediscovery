@@ -242,6 +242,18 @@ test("web_fetch judges NAT64, 6to4, IPv4-translated and site-local literals by t
     "::ffff:0:a9fe:a9fe",     // IPv4-translated -> 169.254.169.254
     "fec0::1",                // deprecated site-local
     "2001:0:808:808::80ff:fffe", // Teredo, obfuscated client 127.0.0.1
+    // 64:ff9b:1::/48 is wider than the /96 an embedded IPv4 address needs, and RFC 8215 allows
+    // deployments to use other suffix lengths. Every non-canonical suffix is rejected outright,
+    // whether its last 32 bits look public (they are not the address in those deployments) or
+    // private. Decoding hextets 6-7 only is right for the /96 forms above.
+    "64:ff9b:1:0:7f00:1:808:808",
+    "64:ff9b:1:1:0:0:808:808",
+    "64:ff9b:1:0:1:0:808:808",
+    "64:ff9b:1:0:0:1:808:808",
+    "64:ff9b:1:dead:beef:cafe:808:808",
+    "64:ff9b:1:1:0:0:7f00:1",
+    "64:ff9b:1:1:0:0:a9fe:a9fe",
+    "64:ff9b:1::a9fe:a9fe",
   ]) {
     assert.equal(isBlockedAddress(address), true, address);
   }
@@ -275,6 +287,16 @@ test("web_fetch judges NAT64, 6to4, IPv4-translated and site-local literals by t
   assert.equal(
     await assertPublicUrl("http://[64:ff9b::808:808]/"),
     "http://[64:ff9b::808:808]/",
+  );
+  // Tightening the local-use prefix must not cost ordinary public egress: a domain whose
+  // resolver answer is a public NAT64 or native IPv6 address still goes through.
+  assert.equal(
+    await assertPublicUrl("http://example.com/", async () => ["64:ff9b::808:808"]),
+    "http://example.com/",
+  );
+  assert.equal(
+    await assertPublicUrl("http://example.com/", async () => ["2606:4700:4700::1111"]),
+    "http://example.com/",
   );
 });
 
