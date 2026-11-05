@@ -69,7 +69,8 @@ export function useCheckpointAnswered(): boolean {
  * the step asks and the body is the few lines a person waves through, so the
  * conversation around it stays short. The pace decides the shape — `confirm`
  * offers the two answers the flow expects, `auto` says the run was started
- * with `--no-confirm` and this is a record of a step that did not wait.
+ * with `--no-confirm` and this is a record of a step that did not wait. The
+ * last checkpoint is a record either way: it is written after the run started.
  *
  * The label is read at render time, like every other string: `TEXT` is a proxy
  * over the language store, and a label captured at import would stay in the
@@ -79,8 +80,23 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   const reply = useCheckpointReply();
   const answered = useCheckpointAnswered();
   const text = TEXT.evolve.checkpoint;
-  const label = text.eyebrow(checkpoint.step, checkpoint.total);
   const auto = checkpoint.pace === "auto";
+  /**
+   * The last checkpoint reports a run that is already going. Even if the model
+   * labelled it `confirm`, there is nothing left to wait for: the press would
+   * arrive after the search started, and the transcript then shows a question
+   * whose answer changes nothing. So it is drawn as a record — the same shape
+   * as `auto` — and never offers the buttons.
+   */
+  const final = checkpoint.total !== undefined && checkpoint.step === checkpoint.total;
+  const record = auto || final;
+  const shade = record ? "auto" : checkpoint.pace;
+  // A record is not a checkpoint: nobody is being asked to approve it, so it
+  // says "step" and drops the pace badge instead of advertising that it did
+  // not wait.
+  const label = record
+    ? text.stepEyebrow(checkpoint.step, checkpoint.total)
+    : text.eyebrow(checkpoint.step, checkpoint.total);
   /** 需要调整 opens the note in the card instead of handing the composer a
    *  sentence: the change is described where the step is, and sending it does
    *  not take the reader's eyes or the caret down to the bottom of the window. */
@@ -110,7 +126,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
     return (
       <details
         aria-label={label}
-        className={`evolve-checkpoint is-${checkpoint.pace} is-answered`}
+        className={`evolve-checkpoint is-${shade} is-answered`}
         data-pace={checkpoint.pace}
         data-step={checkpoint.step}
       >
@@ -119,7 +135,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
           {checkpoint.title === undefined ? null : (
             <span className="evolve-checkpoint-title">{checkpoint.title}</span>
           )}
-          <span className="evolve-checkpoint-pace">{auto ? text.auto : text.answered}</span>
+          {record ? null : <span className="evolve-checkpoint-pace">{text.answered}</span>}
           <span aria-hidden="true" className="collapse-chev">›</span>
         </summary>
         {body}
@@ -129,19 +145,19 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   return (
     <section
       aria-label={label}
-      className={`evolve-checkpoint is-${checkpoint.pace}`}
+      className={`evolve-checkpoint is-${shade}`}
       data-pace={checkpoint.pace}
       data-step={checkpoint.step}
     >
       <header className="evolve-checkpoint-head">
         <span className="evolve-checkpoint-step">{label}</span>
-        <span className="evolve-checkpoint-pace">{auto ? text.auto : text.waiting}</span>
+        {record ? null : <span className="evolve-checkpoint-pace">{text.waiting}</span>}
       </header>
       {checkpoint.title === undefined ? null : (
         <h4 className="evolve-checkpoint-title">{checkpoint.title}</h4>
       )}
       {body}
-      {auto || reply === undefined ? null : adjusting ? (
+      {record || reply === undefined ? null : adjusting ? (
         <form
           className="evolve-checkpoint-adjust-form"
           onSubmit={(event) => {
@@ -193,7 +209,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
           <button
             className="evolve-checkpoint-confirm"
             disabled={reply.busy}
-            onClick={() => reply.reply(text.confirmReply)}
+            onClick={() => reply.reply(text.confirmReply(checkpoint.step, checkpoint.total))}
             title={reply.busy ? text.busy : undefined}
             type="button"
           >

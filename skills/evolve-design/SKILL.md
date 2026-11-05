@@ -37,10 +37,12 @@ carries `--allow-direct`, written by the setup dialog when the user turned the w
 run — correctly, because the candidate would run with the user's own file and network access.
 Never add it to make a refusal go away, and never say the run is sandboxed when it is not.
 
-Four checkpoints. **Do the work for a step, show the result, wait for the user, then go on.**
-A checkpoint is a glance, not a form: a few lines they can wave through, with a recommended
-default for every open question so "looks right" is always a valid answer. Do the work between
-checkpoints yourself; do not narrate it.
+Four checkpoints, numbered 1 to 4. **Do the work for a step, show the result, wait for the user,
+then go on.** A checkpoint is a glance, not a form: a few lines they can wave through, with a
+recommended default for every open question so "looks right" is always a valid answer. Do the work
+between checkpoints yourself; do not narrate it. Each step is shown exactly once, in order: a
+confirmed step is behind you, and re-emitting it asks a question the user has already answered —
+two cards with the same number, and neither of them clearly the live one.
 
 ## How a checkpoint is written
 
@@ -67,8 +69,15 @@ title: 什么算“更好”
 - `title` is the question this step is asking, in one line, in the user's language.
 - `pace` is `confirm` when you are waiting for a reply, and `auto` when the command carried
   `--no-confirm`. In auto the card records a step that did not wait; there is no reply to read.
+  **Checkpoint 4 is always `auto`**, whatever pace the command asked for: by the time that card
+  is written the search is already running, and buttons there ask the user to confirm something
+  that has already happened.
 - The prose after `---` is the checkpoint itself — the few lines described below, in Markdown.
   Keep it to what they must read to answer; the work behind it is not narrated.
+- Never open a bare fence inside the card. If the body needs a code block, give it an info string
+  (`text`, `yaml`, `json`) and close it with its own fence **before** the card's closing fence.
+  Two fences close a block, three close a block and the card. An untagged fence ends the card
+  early: the reader sees half a card, a stray code block, and raw `**` from everything after it.
 - Nothing may follow the fence in that message. A partial or malformed block is shown as a code
   block instead of a card, and text after a card reads like an afterthought. In auto, the card
   closes that message and you go on with the next step.
@@ -78,9 +87,25 @@ title: 什么算“更好”
 
 Write the card once, when the step is done — not while you are still working on it.
 
+The card's confirm button answers with the step it confirms: 「确认检查点 N/4，继续。」 or, when the
+client's language is English, "Confirm checkpoint N/4, continue." Treat that as an answer to that
+step and nothing else — continue from it, and do not show the step again.
+
+In auto the client keeps the flow moving: when a turn ends on an auto card before step 4, it sends
+「继续步骤 N/4。」 or "Continue with step N/4.". That is not a new instruction and not a
+confirmation — the step is recorded and the next one is due. Continue from it, do not show that
+card again, and do not answer it as if the user had asked something. Better still, do not end a
+turn on an auto card at all: do the next step's work in the same turn whenever you can.
+
+Both sentences are the client's, not the user's, and they come in the **client's** language, which
+need not be the conversation's: a Chinese conversation can receive the English form. Read them by
+their step number — the only part that is fixed — and continue in the language you have been
+writing in.
+
 If the user says "you decide" or "just go", state your choices for the remaining steps in one
 message and run them without stopping. If they correct something, apply it and re-show that step
-only.
+only, with `修订：` at the start of its title, so the second card reads as a revision rather than a
+step that came back.
 
 Do not design the whole thing in one thinking pass. Ask (when confirming), write files, run them,
 then decide the numbers — a turn spent planning it all produces no candidate and no result. Auto
@@ -214,13 +239,18 @@ the command carried — `"auto"` for `--no-confirm`, `"confirm"` otherwise. Set
 `howScored` is **one sentence** for the user: what it measures, how much is held out. `risks`: at
 most two, only ones that change a decision; empty is fine.
 
-> **Checkpoint 4** (`step: 4`). Report what came back — the probe's two numbers and what the
-> search will do — in the card, and then **end the turn**. Do not wait for it, do not call
+> **Checkpoint 4** (`step: 4`, `pace: auto`). Report what came back — the probe's two numbers and
+> what the search will do — in the card, and then **end the turn**. Do not wait for it, do not call
 > `get_evolve_run` to check on it, do not loop. The search runs for minutes to hours; its card
 > streams live progress, and sitting on
 > the turn shows the user nothing they cannot already see and burns the run's own budget.
 > `get_evolve_run` is for **later**, when the user asks how it went — then report the actual
 > numbers, never an improvement you have not read.
+>
+> After this card the design is over. If a message from the user arrives after it, they are asking
+> about the run, not restarting the design: call `get_evolve_run` **first** and answer from its
+> numbers. Never reopen a step — 3, 2 or 4 — once the run has started; the search is already doing
+> what it was going to do, and another card asks for a decision that changes nothing.
 
 A refusal is design feedback, not an error. "Cannot discriminate" means the scoring needs harder
 cases or a more mechanical rubric; "no slope" means the starting point is too strong. Fix it and

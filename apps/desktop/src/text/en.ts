@@ -1103,14 +1103,21 @@ export const EN: Text = {
        words and arrive in the conversation's language already. */
     checkpoint: {
       eyebrow: (step: number, total?: number) => (total === undefined ? `Checkpoint ${step}` : `Checkpoint ${step}/${total}`),
+      /* A card nobody is asked to approve is not a checkpoint: it records a step
+         that is already done, so it is not called one and carries no badge. */
+      stepEyebrow: (step: number, total?: number) => (total === undefined ? `Step ${step}` : `Step ${step}/${total}`),
       waiting: "Waiting for you",
       answered: "Answered",
-      auto: "Auto",
       confirm: "Looks right — continue",
       adjust: "Needs a change",
       send: "Send",
       cancel: "Cancel",
-      confirmReply: "Looks right — continue.",
+      /* Every confirmation reading the same left the model unable to tell which
+         step it was answering; naming the step in the reply fixes that. */
+      confirmReply: (step: number, total?: number) =>
+        total === undefined ? `Confirm checkpoint ${step}, continue.` : `Confirm checkpoint ${step}/${total}, continue.`,
+      autoContinue: (step: number, total?: number) =>
+        total === undefined ? `Continue with step ${step}.` : `Continue with step ${step}/${total}.`,
       adjustDraft: "I'd like to change this step: ",
       busy: "This reply is still running; wait for it to finish.",
     },

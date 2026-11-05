@@ -354,13 +354,15 @@ test("a checkpoint arrives as a card and its confirmation is sent as the reply",
       (call) =>
         call.method === "POST" &&
         call.path === "/api/sessions/session-1/messages" &&
-        call.body?.includes("确认，继续。") === true,
+        // The reply names the step: six identical "继续" left the model unable
+        // to tell which checkpoint it was answering.
+        call.body?.includes("确认检查点 1/4，继续。") === true,
     ),
   ).toBe(true);
 });
 
-test("an automatic checkpoint is shown but asks for nothing", async ({ page }) => {
-  await installMockApi(page, {
+test("an automatic checkpoint is shown but asks for nothing, and the flow carries on", async ({ page }) => {
+  const mock = await installMockApi(page, {
     assistantAnswer: checkpointAnswer({ pace: "auto", step: 3 }),
     sessions: [makeSession()],
   });
@@ -369,12 +371,27 @@ test("an automatic checkpoint is shown but asks for nothing", async ({ page }) =
   await page.locator("#composer-textarea").fill("/evolve-design --no-confirm 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
-  const card = page.locator(".evolve-checkpoint");
+  const card = page.locator(".evolve-checkpoint").first();
   await expect(card).toBeVisible();
   await expect(card).toHaveAttribute("data-pace", "auto");
-  await expect(card).toContainText("检查点 3/4");
-  await expect(card).toContainText("自动");
+  // A card nobody approves is a step, not a checkpoint, and carries no badge.
+  await expect(card).toContainText("步骤 3/4");
+  await expect(card).not.toContainText("自动");
   await expect(card.getByRole("button")).toHaveCount(0);
+
+  // Nobody is going to press anything, so the client starts the next turn: a
+  // design that ends its turn on an auto card would otherwise stop at step 3.
+  await expect.poll(() =>
+    mock.calls.filter(
+      (call) => call.method === "POST" && call.body?.includes("继续步骤 3/4。") === true,
+    ).length,
+  ).toBe(1);
+  // Once. The mock answers the continuation with the same card, and a second
+  // carry-forward would be a loop.
+  await expect(page.locator(".evolve-checkpoint").nth(1)).toBeVisible();
+  expect(
+    mock.calls.filter((call) => call.body?.includes("继续步骤 3/4。") === true),
+  ).toHaveLength(1);
 });
 
 test("a checkpoint's change button writes the note in the card and sends it from there", async ({ page }) => {

@@ -56,6 +56,7 @@ export type CheckpointSegment =
 // card. Anything else stays a code block.
 const OPEN = /^```(?:evolve-checkpoint|evolve-design)[ \t]*$/u;
 const CLOSE = /^```[ \t]*$/u;
+const FENCE = /^```/u;
 const FIELD = /^([A-Za-z]+)[ \t]*:[ \t]*(.*)$/u;
 
 /**
@@ -100,6 +101,72 @@ export function parseEvolveCheckpoint(raw: string): EvolveCheckpoint | undefined
 }
 
 /**
+ * Where the card opened at `open` ends, or `-1` if it has not ended yet.
+ *
+ * The first bare fence is the obvious answer and the wrong one whenever the
+ * card's own body contains a code block: ` ```text ` opens one, and the bare
+ * fence that closes it would cut the card in half. So a fence carrying an info
+ * string is treated as a nested opener and skipped with its close, the way
+ * CommonMark would.
+ *
+ * The harder shape is a body that opens a **bare** fence by mistake — the one
+ * fence the parser cannot tell from the card's own close. Such a block is
+ * supposed to be paired, so an odd count of bare fences left after the
+ * candidate means the candidate was itself an opener and the last fence is the
+ * card's real end. That is how a message which forgot to close the card still
+ * renders as a card followed by its prose instead of a card that stops at the
+ * first line of a code block.
+ */
+function findClose(lines: string[], open: number): number {
+  let depth = 0;
+  let candidate = -1;
+  let nextCard = lines.length;
+  for (let cursor = open + 1; cursor < lines.length; cursor += 1) {
+    const line = lines[cursor]!;
+    // A second card at depth 0 is the boundary: whatever this one left open
+    // belongs to this message, not to the next card's body.
+    if (depth === 0 && OPEN.test(line)) {
+      nextCard = cursor;
+      break;
+    }
+    if (!FENCE.test(line)) continue;
+    // Past the candidate the only thing left to find is the next card; the
+    // fences in between are what the count below measures.
+    if (candidate !== -1) continue;
+    if (depth > 0) {
+      if (CLOSE.test(line)) depth -= 1;
+      continue;
+    }
+    if (CLOSE.test(line)) {
+      candidate = cursor;
+      continue;
+    }
+    depth += 1;
+  }
+  if (candidate === -1) {
+    // A body that opens a block it never closes — observed live: the model
+    // tagged a ```yaml block and then used the card's own fence to end it, so
+    // the depth never returned to zero. The last fence in the message is the
+    // card's end; the block inside stays open and renders as code to the end
+    // of the body, which is what the model meant by it.
+    for (let cursor = nextCard - 1; cursor > open; cursor -= 1) {
+      if (CLOSE.test(lines[cursor]!)) return cursor;
+    }
+    return -1;
+  }
+  const remaining = lines
+    .slice(candidate + 1, nextCard)
+    .filter((line) => CLOSE.test(line))
+    .length;
+  if (remaining % 2 === 1) {
+    for (let cursor = nextCard - 1; cursor > candidate; cursor -= 1) {
+      if (CLOSE.test(lines[cursor]!)) return cursor;
+    }
+  }
+  return candidate;
+}
+
+/**
  * Cut an answer into prose and checkpoints.
  *
  * Line-based rather than a regex over the whole string: the closing fence has
@@ -123,13 +190,7 @@ export function splitEvolveCheckpoints(text: string): CheckpointSegment[] {
       prose.push(line);
       continue;
     }
-    let close = -1;
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      if (CLOSE.test(lines[cursor]!)) {
-        close = cursor;
-        break;
-      }
-    }
+    const close = findClose(lines, index);
     if (close === -1) {
       prose.push(...lines.slice(index));
       break;
@@ -146,4 +207,23 @@ export function splitEvolveCheckpoints(text: string): CheckpointSegment[] {
   }
   flush();
   return segments;
+}
+
+/** The step an answer ended on, when the design still has steps to run.
+ *
+ *  An auto card is a record — nothing to press — and the skill asks the model
+ *  to go on with the next step in the same turn. Models end the turn on a
+ *  formatted block often enough that "asks for nothing" turned into "the whole
+ *  design stops at step 1", so the desktop reads this and carries the flow
+ *  forward itself. Only an answer that *ends* on a non-final auto card counts:
+ *  a card with prose after it, a confirm card, or the last step (the search is
+ *  already running) means the turn ended for a reason.
+ */
+export function trailingAutoStep(text: string): { step: number; total?: number } | undefined {
+  const last = splitEvolveCheckpoints(text).at(-1);
+  if (last?.kind !== "checkpoint") return undefined;
+  const { pace, step, total } = last.checkpoint;
+  if (pace !== "auto") return undefined;
+  if (total !== undefined && step >= total) return undefined;
+  return { step, total };
 }
