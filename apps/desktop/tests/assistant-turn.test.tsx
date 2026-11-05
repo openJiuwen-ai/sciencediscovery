@@ -196,7 +196,9 @@ describe("a run folds into one line", () => {
     });
     assert.doesNotMatch(html, /<div class="role">/u);
     assert.doesNotMatch(html, /run-fold/u);
+    // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
+    assert.match(html, /class="run-failure-details"/u);
   });
 
   it("says what it is waiting for rather than that it is thinking", () => {
@@ -310,6 +312,20 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     assert.match(html, /is-notice/u);
     assert.match(html, /gateway died/u);
     assert.doesNotMatch(html, /is-divider/u);
+  });
+
+  it("surfaces a localized run-failure summary and tucks raw diagnostics into details", () => {
+    const html = render({
+      error: { code: "timeout", message: "no gateway progress for 1000 ms" },
+      status: "failed",
+      terminal: true,
+    });
+    assert.match(html, /is-notice/u);
+    // Localized Chinese summary for timeout.
+    assert.match(html, /请求超时/u);
+    // Raw diagnostic is inside the expandable technical-details block.
+    assert.match(html, /class="run-failure-details"/u);
+    assert.match(html, /no gateway progress for 1000 ms/u);
   });
 });
 

@@ -348,3 +348,14 @@ test("a question without files keeps the bare bubble", () => {
   assert.doesNotMatch(markup, /class="upload-cards"/u);
   assert.match(markup, /class="message user"><div class="body"><div class="text">QUESTION-A<\/div><\/div>/u);
 });
+
+test("a timeout notice shows a localized summary and hides raw diagnostics in details", () => {
+  const markup = render({
+    detail: detail([
+      message("timeout-1", "assistant", "Request stopped because the Agent idle timeout was reached after 1 seconds. Agent run stalled: no gateway progress for 1000 ms", "timeout_notice"),
+    ]),
+  });
+  assert.match(markup, /请求超时/u);
+  assert.match(markup, /class="run-failure-details"/u);
+  assert.match(markup, /Agent idle timeout was reached/u);
+});

@@ -27,6 +27,7 @@ import type {
 import type { RunStreamState } from "../run-stream/model.js";
 import { placeReplays, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
+import { formatRunFailure } from "../run-failure.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
@@ -77,6 +78,28 @@ const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "revi
  */
 function NoticeRow({ message }: { message: ChatMessage }) {
   const label = message.kind ? (TEXT.conversation.notices[message.kind] ?? message.kind) : "";
+  // Timeout notices carry the same failure class as a run timeout, so surface
+  // the localized summary and keep the raw provider message in an expandable
+  // technical-details block instead of repeating the English diagnostic.
+  if (message.kind === "timeout_notice") {
+    return (
+      <div className="message assistant is-notice">
+        <div aria-hidden="true" className="avatar-mini">
+          ⌁
+        </div>
+        <div className="body">
+          <div className="role">
+            <span>{label}</span>
+          </div>
+          <div className="status-strip">{formatRunFailure("timeout")}</div>
+          <details className="run-failure-details">
+            <summary>{TEXT.runFailure.technicalDetails}</summary>
+            <pre>{message.content}</pre>
+          </details>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="message assistant is-notice">
       <div aria-hidden="true" className="avatar-mini">
