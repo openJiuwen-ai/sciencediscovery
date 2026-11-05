@@ -66,6 +66,7 @@ export interface SubagentUsage {
   cacheWriteTokens?: number | null;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens?: number | null;
   totalTokens: number;
 }
 

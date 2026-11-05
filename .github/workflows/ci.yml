@@ -96,8 +96,11 @@ jobs:
       backend: ${{ steps.policy.outputs.backend }}
       real: ${{ steps.policy.outputs.real }}
       distribution: ${{ steps.policy.outputs.distribution }}
+      docs_only: ${{ steps.policy.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
@@ -105,6 +108,9 @@ jobs:
         env:
           CI_REQUESTED_PROFILE: ${{ inputs.profile || 'pr' }}
           CI_REQUESTED_BACKEND: ${{ inputs.backend || vars.CI_E2E_BACKEND || 'jiuwenswarm' }}
+          # Dispatch/call always have a profile input, even if explicitly empty.
+          # A called workflow retains its caller's event_name (for example push).
+          CI_DIFF_ENABLED: ${{ !contains(toJSON(inputs), '"profile"') }}
         run: node .ci/tier-policy.mjs
 
   l1:
@@ -120,9 +126,15 @@ jobs:
           node-version: 22.19.0
           cache: pnpm
       - name: Run the frozen L1 slice
+        if: ${{ needs.policy.outputs.docs_only != 'true' }}
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
         run: pnpm ci:l1
+      - name: Run documentation checks
+        if: ${{ needs.policy.outputs.docs_only == 'true' }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm docs:check
       - name: Upload L1 results
         if: always()
         uses: actions/upload-artifact@v4
@@ -135,7 +147,7 @@ jobs:
   e2e-plan:
     name: Freeze mocked E2E matrix
     needs: [policy, l1]
-    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -174,7 +186,7 @@ jobs:
     name: L3 real E2E
     needs: [policy, l1, ut, st, e2e-plan, e2e]
     if: >-
-      ${{ !cancelled() && github.event_name != 'pull_request' &&
+      ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && github.event_name != 'pull_request' &&
           needs.policy.outputs.profile == 'merge' && needs.policy.result == 'success' &&
           needs.l1.result == 'success' && needs.ut.result == 'success' && needs.st.result == 'success' &&
           needs.e2e-plan.result == 'success' && needs.e2e.result == 'success' }}
@@ -189,7 +201,7 @@ jobs:
     name: L4/L5 real E2E
     needs: [policy]
     if: >-
-      ${{ !cancelled() && github.event_name != 'pull_request' && needs.policy.result == 'success' &&
+      ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && github.event_name != 'pull_request' && needs.policy.result == 'success' &&
           (needs.policy.outputs.profile == 'daily' || needs.policy.outputs.profile == 'release') }}
     uses: ./.github/workflows/real-e2e.yml
     secrets: inherit
@@ -201,7 +213,7 @@ jobs:
   ut:
     needs: [policy, l1]
     name: UT
-    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -299,8 +311,8 @@ jobs:
     # as well, to report what that run uploaded; a cancelled pipeline has
     # nothing to report. Release calls skip it: a tagged build publishes no
     # coverage.
-    needs: [ut, st]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
+    needs: [policy, ut, st]
+    if: ${{ !cancelled() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -377,7 +389,7 @@ jobs:
   st:
     needs: [policy, l1]
     name: ST
-    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -448,7 +460,7 @@ jobs:
   e2e:
     needs: [policy, l1, e2e-plan]
     name: L2 E2E (mocked, ${{ matrix.shard }})
-    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    if: ${{ success() && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -567,7 +579,7 @@ jobs:
   # the four entry points end to end.
   binary:
     needs: [policy, l1]
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
+    if: ${{ needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -652,7 +664,7 @@ jobs:
   # comes out actually serves.
   docker:
     needs: [policy, l1]
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
+    if: ${{ needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -826,17 +838,20 @@ jobs:
         with:
           node-version: 22.19.0
       - uses: actions/download-artifact@v4
+        if: ${{ needs.policy.outputs.docs_only != 'true' }}
         with:
           name: mocked-e2e-plan
           path: .ci-mocked-plan
       - uses: actions/download-artifact@v4
+        if: ${{ needs.policy.outputs.docs_only != 'true' }}
         with:
           pattern: mocked-e2e-results-*
           path: .ci-mocked-results
       - name: Reconcile mocked results
+        if: ${{ needs.policy.outputs.docs_only != 'true' }}
         run: node .ci/mocked-report.mjs .ci-mocked-plan/plan.json .ci-mocked-results .ci-results
       - name: Upload combined E2E results
-        if: always()
+        if: ${{ always() && needs.policy.outputs.docs_only != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results

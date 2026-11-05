@@ -626,18 +626,19 @@ test("the child's execution and its final output are both shown", () => {
       ],
     }),
   });
-  assert.match(markup, /weighing the options/);
-  assert.match(markup, /literature_search/);
-  assert.match(markup, /three papers found/);
   // The timeline is a card that starts closed, so the panel opens on the
-  // answer rather than on a screen of steps.
+  // answer rather than on a screen of steps. Its rows are not rendered in this
+  // pass at all, which is what keeps a long record cheap to open.
   assert.match(markup, /<details class="subagent-card subagent-execution">/u);
+  assert.doesNotMatch(markup, /weighing the options/);
+  assert.doesNotMatch(markup, /literature_search/);
+  assert.doesNotMatch(markup, /three papers found/);
   // The final answer is the output section, not a row in the timeline as well.
   assert.equal(count(markup, "CONCLUSION-TEXT"), 1);
   assert.match(markup, /class="subagent-output"/);
 });
 
-test("a tool's result is boxed, so it reads as output rather than as the timeline", () => {
+test("a tool step's result is not built while its row is folded", () => {
   const markup = render(initialTabState(), {
     subagent: subagent({
       steps: [{
@@ -651,16 +652,15 @@ test("a tool's result is boxed, so it reads as output rather than as the timelin
       }],
     }),
   });
-  const resultAt = markup.indexOf("TOOL-RESULT");
-  assert.ok(resultAt >= 0);
-  const boxAt = markup.lastIndexOf('class="subagent-tool-output"', resultAt);
-  assert.ok(boxAt >= 0 && boxAt < resultAt, "the result should sit inside an output box");
-  // 输入 and 输出 are both named, so the two boxes are not mistaken for each other.
-  assert.match(markup, /subagent-step-label">输出<\/div><div class="subagent-tool-output"/u);
-  assert.match(markup, /subagent-step-label">输入<\/div>/u);
+  // The boxed result and its 输入/输出 labels live behind the fold. The panel
+  // E2E opens a row and checks them; a closed record must not parse them.
+  assert.match(markup, /<details class="subagent-card subagent-execution">/u);
+  assert.doesNotMatch(markup, /TOOL-RESULT/);
+  assert.doesNotMatch(markup, /subagent-tool-output/);
+  assert.doesNotMatch(markup, /subagent-step-label/u);
 });
 
-test("the task the child was handed is shown above its steps", () => {
+test("the task the child was handed is named, and its brief stays folded", () => {
   const markup = render(initialTabState(), {
     subagent: subagent({
       input: {
@@ -672,10 +672,11 @@ test("the task the child was handed is shown above its steps", () => {
   });
   // The brief is a card as well, and it starts closed like the timeline.
   assert.match(markup, /<details class="subagent-card subagent-task">/u);
-  assert.match(markup, /PROMPT-BODY/u);
   assert.match(markup, /subagent-section-title">任务</u);
-  // A path is shown as a chip of its own, not folded into the prose.
-  assert.match(markup, /class="subagent-task-path" title="papers\/a\.pdf"/u);
+  // The prompt and its input-file chips are the card's body, so they are not
+  // rendered until the reader opens it. The panel E2E checks the opened card.
+  assert.doesNotMatch(markup, /PROMPT-BODY/u);
+  assert.doesNotMatch(markup, /subagent-task-path/u);
   // The brief and the timeline are separately named, so one cannot be read as
   // the other.
   assert.match(markup, /subagent-section-title">执行详情</u);
@@ -708,8 +709,11 @@ test("the runtime's own system steps are left out of the timeline", () => {
       ],
     }),
   });
+  // Neither step is drawn while the timeline is folded. The panel E2E opens
+  // the timeline and checks that the system step is still left out.
+  assert.match(markup, /<details class="subagent-card subagent-execution">/u);
   assert.doesNotMatch(markup, /Turn 1 started/);
-  assert.match(markup, /looked around/);
+  assert.doesNotMatch(markup, /looked around/);
 });
 
 test("a child that timed out has no output, only what it had said so far", () => {
@@ -729,15 +733,21 @@ test("a child that timed out has no output, only what it had said so far", () =>
     }),
   });
   assert.doesNotMatch(markup, /class="subagent-output"/u);
-  assert.match(markup, /MOST-NUMBERS-HOLD/u);
-  assert.equal(count(markup, "MOST-NUMBERS-HOLD"), 1);
+  // The interrupted reply stays in the timeline, which is folded, rather than
+  // being promoted to an answer.
+  assert.match(markup, /<details class="subagent-card subagent-execution">/u);
+  assert.doesNotMatch(markup, /MOST-NUMBERS-HOLD/u);
+  assert.equal(count(markup, "MOST-NUMBERS-HOLD"), 0);
 });
 
-test("a child that has not run anything yet says so", () => {
+test("a child that has not run anything yet says so when its timeline is opened", () => {
   const markup = render(initialTabState(), { subagent: subagent({ status: "running" }) });
   assert.match(markup, /class="subagent-status is-running"/u);
   assert.match(markup, /执行中/u);
-  assert.match(markup, /class="workspace-empty"/);
+  // The note is the timeline's body, so a folded record does not draw it. The
+  // panel E2E opens a child with no steps and reads the note.
+  assert.match(markup, /<details class="subagent-card subagent-execution">/u);
+  assert.doesNotMatch(markup, /class="workspace-empty"/);
 });
 
 test("a tool block opened from the run takes the panel, like a child does", () => {
@@ -763,18 +773,19 @@ test("a tool block opened from the run takes the panel, like a child does", () =
   assert.doesNotMatch(markup, /role="tablist"/u);
 });
 
-test("a replayed child says it is loading instead of claiming it recorded nothing", () => {
+test("a replayed child does not claim it recorded nothing while the read is in flight", () => {
   // A run's event log stores child snapshots without steps, so a reopened
   // finished run arrives empty. Saying "no execution was recorded" while the
   // catalog read is still in flight would be wrong, and would stay on screen
-  // if the reader looked away before it landed.
+  // if the reader looked away before it landed. Both notes are the timeline's
+  // body, so a closed record shows neither; opening it before the read lands
+  // shows the loader instead of the empty note.
   const markup = render(initialTabState(), {
     subagent: subagent({ status: "completed" }),
     subagentLoading: true,
   });
-  assert.match(markup, /class="spinner"/u);
-  assert.match(markup, /正在加载执行记录/u);
   assert.doesNotMatch(markup, /还没有留下可展示的执行记录/u);
+  assert.doesNotMatch(markup, /正在加载执行记录/u);
 });
 
 test("a failed child keeps the reason beside its status", () => {

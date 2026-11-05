@@ -443,6 +443,30 @@ test("opens a requested CSV workspace only for the loaded immutable version", ()
   }), false);
 });
 
+test("a zero-byte CSV version is loaded, not still loading", () => {
+  // Readiness tracks whether the immutable version arrived, not how many bytes
+  // it holds: an empty `.csv` is a valid artifact, and gating on `Boolean(source)`
+  // leaves its panel on "Loading CSV Artifact" forever.
+  assert.equal(isCsvWorkspaceReady({
+    detected: true,
+    loadedVersionId: "version-1",
+    source: "",
+    versionId: "version-1",
+  }), true);
+  // An empty buffer still does not make the workspace ready before its version loads.
+  assert.equal(isCsvWorkspaceReady({
+    detected: true,
+    source: "",
+    versionId: "version-1",
+  }), false);
+  assert.equal(isCsvWorkspaceReady({
+    detected: true,
+    loadedVersionId: "version-1",
+    source: "gene,value\nCD3D,4.2",
+    versionId: "version-1",
+  }), true);
+});
+
 test("renders the embedded scientific artifact selectors", () => {
   const artifact: ScientificArtifact = {
     createdAt: "2026-07-27T02:47:21.000Z",

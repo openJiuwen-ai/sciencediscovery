@@ -37,6 +37,12 @@ case "${1:-}" in
     [[ "$JIUWENSWARM_HOME" == /* ]] || export JIUWENSWARM_HOME="$PWD/$JIUWENSWARM_HOME"
     bash scripts/jiuwenswarm.sh setup
     swarm_python="${JIUWENSWARM_SRC:-${JIUWENSWARM_ROOT:-$PWD/.sciencediscovery-data/jiuwenswarm}/src}/.venv/bin/python"
+    # setup syncs slim (jiuwenswarm.sh passes --no-default-groups) so the
+    # shipped venv carries no pytest or lint tooling. The contract suite below
+    # runs against that same venv, so put the test runner back here. This
+    # script is CI-only and never runs on an installed product, so the payload
+    # keeps the slim venv while the check gets what it needs.
+    uv pip install --python "$swarm_python" "pytest>=8.3.5"
     report_dir="${CI_RESULTS_DIR:-$PWD/.test-runs}/swarm-contract"
     mkdir -p "$report_dir"
     PYTHONPATH="$PWD/services/adapter/src" "$swarm_python" -m pytest -q --tb=short jiuwen_swarm/tests --junitxml="$report_dir/results.xml"

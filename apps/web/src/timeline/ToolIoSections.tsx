@@ -17,8 +17,8 @@ import { useState } from "react";
 
 import { CopyButton } from "../CopyButton.js";
 import { ChevronRightIcon } from "../icons.js";
-import { formatToolInput, parseToolResultSections } from "./tool-result-sections.js";
-import { useLocale } from "../i18n/index.js";
+import { formatToolInput, parseToolResultSections, type ToolResultSectionId } from "./tool-result-sections.js";
+import { useLocale, type MessageKey } from "../i18n/index.js";
 
 function ToolIoSection({
   content,
@@ -53,6 +53,21 @@ function ToolIoSection({
   );
 }
 
+/**
+ * The headings the renderer owns, in the reader's language.
+ *
+ * A section's `label` is produced by the parser, and two of them are the text's
+ * own (`stdout:` / `stderr:` are protocol stream names, so they stay verbatim in
+ * every locale). The rest are headings this app mints — the two summary sections
+ * the runner labels in English and the residual `Result` / `Error` — so they are
+ * translated here, at render time, rather than in the parser: the parser's output
+ * is a contract the tests and the copy button both read.
+ */
+const SECTION_LABEL_KEYS: Partial<Record<ToolResultSectionId, MessageKey>> = {
+  "created-files": "timeline.createdFiles",
+  "produced-artifacts": "timeline.producedArtifacts",
+};
+
 /** Shared raw, sectioned tool I/O renderer for main and nested subagent cards. */
 export function ToolIoSections({
   outputText,
@@ -63,6 +78,11 @@ export function ToolIoSections({
 }) {
   const { t } = useLocale();
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const sectionLabel = (sectionId: ToolResultSectionId, fallback: string): string => {
+    if (sectionId === "result") return t(trace.status === "failed" ? "timeline.error" : "timeline.result");
+    const key = SECTION_LABEL_KEYS[sectionId];
+    return key === undefined ? fallback : t(key);
+  };
   const inputText = formatToolInput(trace);
   const outputSections = outputText ? parseToolResultSections(outputText, trace.status) : [];
   const renderSection = (sectionId: string, label: string, content: string) => (
@@ -79,7 +99,7 @@ export function ToolIoSections({
     {inputText ? renderSection("input", t("timeline.input"), inputText) : null}
     {trace.inputTruncated ? <p className="muted">{t("timeline.inputTruncated")}</p> : null}
     {outputSections.length > 0
-      ? outputSections.map((section) => renderSection(section.id, section.label, section.content))
+      ? outputSections.map((section) => renderSection(section.id, sectionLabel(section.id, section.label), section.content))
       : (
         <pre>{trace.status === "running"
           ? t("timeline.toolRunning")

@@ -46,7 +46,10 @@ jw_instance="${JIUWENSWARM_INSTANCE:-sciencediscovery}"
 # (created below by cmd_setup, same as local mode) lands on the persisted
 # volume instead of inside the image.
 jw_src="${JIUWENSWARM_SRC:-$jw_root/src}"
+# Windows venvs put launchers in Scripts/, POSIX in bin/ — pick whichever
+# exists (Git Bash on Windows runs setup natively; Docker/WSL uses bin/).
 jw_bin="$jw_src/.venv/bin"
+[[ -d "$jw_src/.venv/Scripts" ]] && jw_bin="$jw_src/.venv/Scripts"
 # Keep the embedded registry separate even when a standalone instance has the
 # same name. Explicit alternate roots must also belong exclusively to SD.
 export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$HOME/.sciencediscovery/jiuwenswarm}"
@@ -186,7 +189,10 @@ cmd_setup() {
       cd "$jw_src"
       export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
       [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]] && export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
-      uv sync --python 3.12
+      # SIZEOPT 1A-1: --no-default-groups keeps the dev/lint groups (mypy,
+      # ruff, pylint, pytest, ...) out of the shipped venv — they are build-time
+      # tooling the runtime never imports (size scan 2026-11-02: ~40 MB).
+      uv sync --python 3.12 --no-default-groups
     )
   fi
   mkdir -p "$jw_data_dir"

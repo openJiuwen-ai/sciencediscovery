@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sciencediscovery/operational-logging": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
     "fflate": "^0.8.3",
     "molstar": "^5.11.0",

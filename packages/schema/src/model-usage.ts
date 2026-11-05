@@ -181,6 +181,8 @@ export interface ModelInvocationUsage {
   outputTokens: number | null;
   projectId?: string;
   promptManifestId?: string;
+  /** Provider-reported hidden reasoning tokens, when the provider exposes them. */
+  reasoningTokens?: number | null;
   runId?: string;
   sessionId: string;
   startedAt: string;
@@ -197,6 +199,7 @@ export interface ModelUsageBucket {
   key: string;
   label: string;
   outputTokens: number | null;
+  reasoningTokens?: number | null;
   reportedInvocationCount: number;
   totalTokens: number | null;
   unreportedInvocationCount: number;

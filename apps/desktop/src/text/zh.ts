@@ -247,6 +247,7 @@ export const ZH = {
     inputFiles: "输入文件",
     emptySteps: "这个 subagent 还没有留下可展示的执行记录。",
     loading: "正在加载执行记录…",
+    stale: "执行记录已停止刷新，当前显示的内容可能滞后。",
     thinking: "思考",
     tool: "工具",
     turns: (count: number) => `${count} 轮`,
@@ -1131,6 +1132,90 @@ export const ZH = {
     localOnline: "本地运行时 · 在线",
     localDegraded: "本地运行时 · 降级",
     localOffline: "本地运行时 · 离线",
+  },
+
+  /** 用户反馈：填表、历史与回执。与 Web 端共用同一份共享层契约。 */
+  feedback: {
+    entry: "我要反馈",
+    dialogTitle: "提交反馈",
+    selectPlaceholder: "请选择",
+    requiredHint: "出现频率和影响程度为必填项",
+    close: "关闭",
+    tab: {
+      compose: "填写反馈",
+      history: "我的反馈",
+    },
+    kind: {
+      label: "类型",
+      bug: "遇到问题",
+      idea: "有想法",
+      other: "其他",
+    },
+    body: {
+      label: "描述",
+      placeholder: "请描述你遇到的情况或想法（10–2000 字）",
+      counter: (count: number, max: number) => `${count}/${max}`,
+      tooShort: (min: number) => `请至少写 ${min} 个字`,
+    },
+    contact: {
+      label: "联系方式（可选）",
+      placeholder: "邮箱或 GitHub 用户名",
+      invalid: "这看起来不像邮箱或 GitHub 用户名",
+    },
+    reproducibility: {
+      label: "出现频率",
+      always: "总是出现",
+      sometimes: "偶尔出现",
+      once: "只出现一次",
+    },
+    impact: {
+      label: "影响程度",
+      blocker: "无法使用",
+      major: "影响工作效率",
+      minor: "影响使用体验",
+    },
+    diagnostics: {
+      label: "附带诊断信息",
+      preview: "预览将要发送的内容",
+      none: "本条反馈没有可用诊断信息",
+    },
+    submit: "提交",
+    submitting: "提交中…",
+    success: {
+      title: "感谢你的反馈",
+      note: "以下是你的回执码，我们用它向你更新处理进展。",
+      copyReceipt: "复制回执码",
+      copied: "已复制",
+      done: "完成",
+    },
+    failure: {
+      network: "无法连接反馈服务，内容已保留。",
+      timeout: "请求超时，内容已保留。",
+      forbidden: "服务拒绝了这次请求。",
+      rateLimited: "你提交得太频繁了，请稍后再试。",
+      duplicate: "这条内容你已经提交过了。",
+      tooLarge: "内容太长，请精简后再试。",
+      unavailable: "服务暂时不可用，请稍后再试。",
+      invalid: "部分字段需要检查。",
+      kept: "内容已保留，你可以复制或改用 GitHub 提交。",
+      copyAll: "复制全部内容",
+      openIssue: "改用 GitHub 提交",
+    },
+    back: "返回",
+    history: {
+      empty: "还没有提交过反馈",
+      delete: "删除",
+      status: {
+        submitted: "已提交",
+      },
+    },
+    pii: {
+      warning: (kinds: string) => `正文中可能包含个人信息（${kinds}）。请删除或确认可以提交。`,
+      confirm: "我确认可以提交",
+      phone: "手机号",
+      idCard: "身份证号",
+      email: "邮箱",
+    },
   },
 };
 
