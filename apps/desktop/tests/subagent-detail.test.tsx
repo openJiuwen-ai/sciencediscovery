@@ -96,7 +96,10 @@ describe("the subagent panel's 输出", () => {
       steps: [step({ content: "Now I have everything I need. Writing the audit.", id: "a" })],
     }));
     assert.equal(outputOf(markup), "", "a reply mid-run is progress, not a deliverable");
-    assert.match(markup, /Now I have everything I need/, "and it stays where it was said");
+    // It is still in the timeline, but the timeline and every step row start
+    // folded and a folded body is not rendered until it is opened. That the
+    // text is there once opened is covered by the panel E2E test.
+    assert.doesNotMatch(markup, /Now I have everything I need/);
   });
 
   it("shows the whole answer when the runtime split it across steps", () => {
@@ -112,7 +115,7 @@ describe("the subagent panel's 输出", () => {
     assert.equal((markup.match(/轮失败/g) ?? []).length, 1, "and is not also left in the timeline");
   });
 
-  it("keeps the rest of the child's prose in the timeline", () => {
+  it("keeps the rest of the child's prose out of the answer", () => {
     const markup = html(child({
       status: "completed",
       steps: [
@@ -121,7 +124,6 @@ describe("the subagent panel's 输出", () => {
         step({ content: "结论是 A", id: "b" }),
       ],
     }));
-    assert.match(markup, /先看看数据/);
     assert.doesNotMatch(outputOf(markup), /先看看数据/);
     assert.match(outputOf(markup), /结论是 A/);
   });
@@ -132,5 +134,29 @@ describe("the subagent panel's 输出", () => {
       steps: [step({ content: "结论是 A", id: "a" })],
     }));
     assert.match(outputOf(markup), new RegExp(TEXT.subagent.output));
+  });
+});
+
+describe("the subagent panel's folded timeline", () => {
+  it("keeps a folded body out of the DOM until it is opened", () => {
+    const markup = html(child({
+      steps: [
+        step({ content: "先看看数据", id: "a" }),
+        step({
+          content: "file contents",
+          id: "t",
+          kind: "tool",
+          status: "completed",
+          toolName: "read_file",
+        }),
+      ],
+    }));
+    // The fold's own label is drawn, so the reader knows there is a record to
+    // open; the rows and their text are parsed and mounted only when it opens.
+    // The opened state is a DOM interaction and is covered by the panel E2E.
+    assert.match(markup, new RegExp(TEXT.subagent.detail));
+    assert.doesNotMatch(markup, /先看看数据/);
+    assert.doesNotMatch(markup, /file contents/);
+    assert.doesNotMatch(markup, /read_file/);
   });
 });

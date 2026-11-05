@@ -197,6 +197,46 @@ test("web_fetch refuses private and loopback targets", async () => {
   );
 });
 
+test("web_fetch judges IPv4-mapped and IPv4-compatible IPv6 literals by their embedded IPv4", async () => {
+  // Hex forms carry no dotted quad, so they exercise the IPv4 extraction, not the existing regex.
+  for (const address of ["::ffff:7f00:1", "0:0:0:0:0:ffff:a9fe:a9fe", "::7f00:1", "::a9fe:a9fe"]) {
+    assert.equal(isBlockedAddress(address), true, address);
+  }
+  // The dotted-quad path keeps its behaviour.
+  assert.equal(isBlockedAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isBlockedAddress("::ffff:93.184.216.34"), false);
+  // The gate rejects the hex forms too.
+  await assert.rejects(assertPublicUrl("http://[::ffff:7f00:1]/"), PublicUrlError);
+  await assert.rejects(assertPublicUrl("http://[0:0:0:0:0:ffff:a9fe:a9fe]/latest/meta-data/"), PublicUrlError);
+  await assert.rejects(assertPublicUrl("http://[::7f00:1]/"), PublicUrlError);
+  // And public IPv6 is still accepted, so the guard cannot become "reject everything".
+  for (const address of ["2606:4700:4700::1111", "2001:4860:4860::8888"]) {
+    assert.equal(isBlockedAddress(address), false, address);
+  }
+  // Reverse direction for the mapped/compatible forms: a public embedded IPv4 must stay public.
+  assert.equal(isBlockedAddress("::ffff:808:808"), false);
+  assert.equal(isBlockedAddress("::808:808"), false);
+  assert.equal(
+    await assertPublicUrl("http://[::ffff:8.8.8.8]/"),
+    "http://[::ffff:8.8.8.8]/",
+  );
+  // The embedded IPv4 is judged by ipv4Blocked itself, so its whole range table applies.
+  assert.equal(isBlockedAddress("::ffff:6440:1"), true, "CGNAT 100.64.0.1");
+  assert.equal(isBlockedAddress("::ffff:c612:1"), true, "benchmark 198.18.0.1");
+  assert.equal(
+    await assertPublicUrl("https://[2606:4700:4700::1111]/x"),
+    "https://[2606:4700:4700::1111]/x",
+  );
+});
+
+test("web_fetch applies the same judgement to resolved addresses, not only literals", async () => {
+  // The DNS path runs the same predicate, so a mapped literal returned by a resolver must reject.
+  await assert.rejects(
+    assertPublicUrl("http://example.com/", async () => ["::ffff:7f00:1"]),
+    PublicUrlError,
+  );
+});
+
 test("normalizers reduce each vendor payload to its documented shape", async () => {
   const { normalizeBraveResults, normalizeExaResults, normalizeTavilyResults } = await import("./search.js");
   const { renderExaContents, renderTavilyExtract } = await import("./fetch.js");

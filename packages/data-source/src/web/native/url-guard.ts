@@ -55,6 +55,29 @@ function normalizeIpv6(address: string): string {
   return address.toLowerCase().replace(/^\[|\]$/g, "");
 }
 
+/** Expand an IPv6 literal to eight hextets; undefined when it is not a plain IPv6 address. */
+function ipv6Hextets(value: string): number[] | undefined {
+  const text = value.split("%")[0] ?? "";                      // drop a zone id, e.g. fe80::1%eth0
+  const halves = text.split("::");
+  if (halves.length > 2) return undefined;
+  const parse = (part: string): number[] | undefined => {
+    if (part === "") return [];
+    const hextets: number[] = [];
+    for (const group of part.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/i.test(group)) return undefined;
+      hextets.push(Number.parseInt(group, 16));
+    }
+    return hextets;
+  };
+  const head = parse(halves[0] ?? "");
+  const tail = halves.length === 2 ? parse(halves[1] ?? "") : [];
+  if (!head || !tail) return undefined;
+  if (halves.length === 1) return head.length === 8 ? head : undefined;
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return undefined;
+  return [...head, ...Array<number>(missing).fill(0), ...tail];
+}
+
 function ipv6Blocked(address: string): boolean {
   const value = normalizeIpv6(address);
   if (value === "::" || value === "::1") return true;          // unspecified / loopback
@@ -62,10 +85,18 @@ function ipv6Blocked(address: string): boolean {
     || value.startsWith("fea") || value.startsWith("feb")) return true; // link-local
   if (value.startsWith("fc") || value.startsWith("fd")) return true;    // unique-local
   if (value.startsWith("ff")) return true;                     // multicast
-  // IPv4-mapped/compatible forms must be judged by their embedded IPv4.
+  // IPv4-mapped/compatible forms must be judged by their embedded IPv4. The dotted spelling is
+  // matched directly; the hex spelling (no dots) is rebuilt from the last two hextets so it cannot
+  // slip past the guard as "public IPv6".
   const embedded = value.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
   if (embedded?.[1]) return ipv4Blocked(embedded[1]);
-  return false;
+  const hextets = ipv6Hextets(value);
+  if (!hextets) return false;
+  const mapped = hextets.slice(0, 5).every((hextet) => hextet === 0) && hextets[5] === 0xffff;
+  const compatible = hextets.slice(0, 6).every((hextet) => hextet === 0);
+  if (!mapped && !compatible) return false;
+  const high = hextets[6]!; const low = hextets[7]!;
+  return ipv4Blocked(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`);
 }
 
 /** True when the literal address is not routable public space. */

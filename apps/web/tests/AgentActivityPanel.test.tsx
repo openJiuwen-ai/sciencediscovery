@@ -154,3 +154,50 @@ test("an open session keeps its execution list when the activity poll's session 
     context.mock.timers.reset();
   }
 });
+
+test("a directory transfer counts the files it expands to, not the mappings", async () => {
+  const progressed = (name: string, state: "completed" | "pending") => ({
+    sourcePath: `data/${name}`, targetPath: `data/${name}`,
+    size: 1, sha256: "a".repeat(64), bytes: 1, state,
+  });
+  const transfer = (fields: Record<string, unknown>) => ({
+    id: "t1", sessionId: "session", agentId: "main", state: "completed",
+    sourceWorkspaceId: "ws_a", targetWorkspaceId: "ws_b",
+    files: [{ sourcePath: "data", targetPath: "data" }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...fields,
+  });
+  const render = async (item: Record<string, unknown>) => {
+    const client = { getAgentActivity: async () => ({ executions: [], transfers: [item], timers: [], agents: [] }) } as unknown as ApiClient;
+    let view: ReactTestRenderer | undefined;
+    await act(async () => { view = create(createElement(AgentActivityPanel, { client, sessionId: "session" })); });
+    const text = JSON.stringify(view!.toJSON());
+    await act(async () => view!.unmount());
+    return text;
+  };
+
+  // One declared mapping is a directory; the API expands it to three files, and
+  // the total must count that same expanded collection as the committed count.
+  const directory = await render(transfer({
+    progress: [progressed("a.csv", "completed"), progressed("b.csv", "completed"), progressed("c.csv", "completed")],
+  }));
+  assert.match(directory, /3\/3 files committed/);
+  assert.doesNotMatch(directory, /3\/1 files committed/);
+
+  // Before the API expands the mappings there is no file list to count yet.
+  assert.match(await render(transfer({ state: "queued", progress: [] })), /0\/0 files committed/);
+
+  // A single-file transfer stays 1/1.
+  const single = await render(transfer({
+    files: [{ sourcePath: "data/a.csv", targetPath: "data/a.csv" }],
+    progress: [progressed("a.csv", "completed")],
+  }));
+  assert.match(single, /1\/1 files committed/);
+
+  // A partial transfer reads 2/3: two of the three expanded files are committed.
+  const partial = await render(transfer({
+    state: "partial",
+    progress: [progressed("a.csv", "completed"), progressed("b.csv", "completed"), progressed("c.csv", "pending")],
+  }));
+  assert.match(partial, /2\/3 files committed/);
+});

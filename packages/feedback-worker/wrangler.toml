@@ -1,0 +1,33 @@
+# Cloudflare Worker that relays in-app feedback into a private GitHub issue.
+#
+# Deploy flow (owner-only, needs a Cloudflare account):
+#   1. pnpm build            (build @sciencediscovery/operational-logging + this worker)
+#   2. npx wrangler secret put GITHUB_TOKEN
+#        -> fine-grained PAT with ONLY `issues: write` on the private repo below.
+#           Never place the PAT here or in client code.
+#   3. Fill REPO_OWNER / REPO_NAME below with the private `sciencediscovery-feedback` repo.
+#   4. npx wrangler deploy
+#
+# The endpoint is `https://sciencediscovery-feedback.sciencediscovery.workers.dev` (see `FEEDBACK_ENDPOINT`
+# in packages/operational-logging/src/feedback.ts).
+
+name = "sciencediscovery-feedback"
+main = "src/index.ts"
+compatibility_date = "2026-11-03"
+
+[vars]
+# Private repo the feedback lands in. Owner is filled by the maintainer at deploy time.
+REPO_OWNER = "ScienceDiscovery"
+REPO_NAME = "sciencediscovery-feedback"
+# Hard cap on issues created per day; exceeded requests return 503 (scheme §5.3 guardrail).
+DAILY_ISSUE_LIMIT = "200"
+# Comma-separated extra origins to allow (non-default ports, published builds, etc.).
+# Defaults always allow 127.0.0.1/localhost on 4310/5173/5174.
+# ALLOWED_ORIGINS = "http://127.0.0.1:4310,https://science-discovery.example.com"
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "FEEDBACK_KV"
+id = "47aee115f6dc4b628e0a85ef13c4bc95"

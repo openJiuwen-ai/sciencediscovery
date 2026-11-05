@@ -180,6 +180,7 @@ function sameSubagentUsage(left: SubagentUsage | undefined, right: SubagentUsage
     && left.cacheWriteTokens === right.cacheWriteTokens
     && left.inputTokens === right.inputTokens
     && left.outputTokens === right.outputTokens
+    && left.reasoningTokens === right.reasoningTokens
     && left.totalTokens === right.totalTokens);
 }
 

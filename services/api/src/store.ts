@@ -4467,6 +4467,20 @@ export class SessionStore {
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
+  /** One child of a Session, with its steps.
+   *
+   * The panel shows one child at a time, so a reader opening a record should
+   * not pay for copying every sibling's text. Deliberately not implemented as
+   * `listSubagents(...).find(...)`: that clones the whole roster before
+   * choosing from it, which is the cost this method exists to avoid. */
+  getSubagent(sessionId: string, subagentId: string): Subagent | undefined {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    const child = this.catalog.subagents.find(
+      (subagent) => subagent.sessionId === sessionId && subagent.id === subagentId,
+    );
+    return child === undefined ? undefined : structuredClone(child);
+  }
+
   /** Immutable audit references; filter before copying or serializing trajectories. */
   async captureSubagentAuthorities(sessionId: string, subagentId?: string) {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
@@ -6941,6 +6955,7 @@ export class SessionStore {
       ...usage,
       cacheReadTokens: usage.cacheReadTokens ?? null,
       cacheWriteTokens: usage.cacheWriteTokens ?? null,
+      reasoningTokens: usage.reasoningTokens ?? null,
       outcome: usage.outcome ?? "completed",
       ...(usage.projectId || session?.projectId ? { projectId: usage.projectId ?? session?.projectId } : {}),
     };

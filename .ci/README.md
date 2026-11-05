@@ -180,6 +180,27 @@ public only after a person publishes the draft from the Releases page.
 No extra accounting job or human approval is added. The combined `e2e-results`
 artifact preserves worker HTML/image links and the suite-level plan/summary.
 
+### Documentation-only changes
+
+For direct PR, push and merge-group events, `policy` checks the complete Git
+diff. Only `README.md`, `README_zh.md`, `CONTRIBUTING.md`, `LICENSE`,
+`Third_Party_Open_Source_Software_Notice.txt`, paths under `docs/`, and paths
+under `.agents/skills/` ending in `.md` qualify. The skill path prefix and
+extension are case-sensitive; other `.agents/` paths and non-Markdown files
+under `.agents/skills/` keep the full profile.
+Renames check both paths. Empty or unavailable diffs keep the full profile;
+Markdown elsewhere (including `skills/`) also keeps it. PR diffs use the merge
+base; push and merge-group diffs use the event's base and head SHAs.
+
+For a documentation-only change, L1 runs only `pnpm docs:check` (`check:docs`).
+UT, ST, mocked planning/E2E, coverage, real E2E, binary and Docker are skipped.
+The stable `merge-gate` still requires successful policy and documentation
+checks on non-draft PRs, pushes and merge groups, without downloading E2E
+artifacts. Drafts still check documentation and keep their existing gate skip.
+Manual dispatch and reusable workflow calls always run their requested profile,
+even when the caller's event is a documentation-only push. All other diffs
+retain the profile's existing job and artifact requirements.
+
 ### Merge queue and credentials: repository setup
 
 The workflow defines a stable **merge-gate** check. In the default branch

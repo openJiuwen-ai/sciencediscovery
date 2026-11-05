@@ -680,6 +680,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         return json(route, 200, options.subagentsBySession?.[subagents[1]!] ?? []);
       }
 
+      // The panel reads only the child it is about to show; the roster above
+      // stays for callers that need every one.
+      const subagent = /^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)$/.exec(path);
+      if (subagent && method === "GET") {
+        const child = (options.subagentsBySession?.[subagent[1]!] ?? [])
+          .find((entry) => entry.id === subagent[2]);
+        return child === undefined
+          ? json(route, 404, { error: "Subagent not found" })
+          : json(route, 200, child);
+      }
+
       const artifacts = /^\/api\/sessions\/([^/]+)\/artifacts$/.exec(path);
       if (artifacts && method === "GET") return json(route, 200, []);
 

@@ -438,7 +438,7 @@ test("openai stream assembles text, thinking, split tool calls, and usage", asyn
     assert.equal((calls[0]!.function as Record<string, unknown>).arguments, '{"q":"TP53"}');
     assert.equal(calls[0]!.thought_signature, "sig-9");
     assert.deepEqual(turn.toolCalls[0]!.args, { q: "TP53" });
-    assert.deepEqual(turn.usage, { inputTokens: 12, outputTokens: 7, totalTokens: 19, cacheReadTokens: 4, cacheWriteTokens: null });
+    assert.deepEqual(turn.usage, { inputTokens: 12, outputTokens: 7, reasoningTokens: null, totalTokens: 19, cacheReadTokens: 4, cacheWriteTokens: null });
 
     // Request carried system prompt, tools, streaming usage option, and auth.
     assert.match(requestPath, /\/chat\/completions$/);
@@ -663,7 +663,7 @@ test("anthropic dialect translates history and assembles tool_use turns", async 
     assert.match(requestPath, /\/api\/plan\/v1\/messages$/);
     assert.equal(turn.assistantMessage.content, "Running lookup");
     assert.deepEqual(turn.toolCalls[0]!.args, { q: "TP53" });
-    assert.deepEqual(turn.usage, { inputTokens: 30, outputTokens: 9, totalTokens: 39, cacheReadTokens: 10, cacheWriteTokens: null });
+    assert.deepEqual(turn.usage, { inputTokens: 30, outputTokens: 9, reasoningTokens: null, totalTokens: 39, cacheReadTokens: 10, cacheWriteTokens: null });
 
     // History translation: assistant tool call → tool_use; tool result merged
     // into a user message with a tool_result block; tools use input_schema.
@@ -983,7 +983,7 @@ test("toAnthropicMessages merges consecutive tool results into one user message"
 
 test("usage normalization tolerates provider spellings", () => {
   assert.deepEqual(normalizeUsage({ input_tokens: 1, output_tokens: 2 }), {
-    inputTokens: 1, outputTokens: 2, totalTokens: 3, cacheReadTokens: null, cacheWriteTokens: null,
+    inputTokens: 1, outputTokens: 2, reasoningTokens: null, totalTokens: 3, cacheReadTokens: null, cacheWriteTokens: null,
   });
   assert.equal(normalizeUsage({ prompt_tokens: 1 }), undefined);
   assert.equal(normalizeUsage(null), undefined);
@@ -1035,6 +1035,6 @@ test("model proxy policy selects the right dispatcher", () => {
 
 test("OpenAI usage aliases with zero placeholders do not erase reported token counts", () => {
   assert.deepEqual(normalizeUsage({ input_tokens: 0, output_tokens: 0, prompt_tokens: 15, completion_tokens: 64, total_tokens: 79 }),
-    { inputTokens: 15, outputTokens: 64, totalTokens: 79, cacheReadTokens: null, cacheWriteTokens: null,
+    { inputTokens: 15, outputTokens: 64, reasoningTokens: null, totalTokens: 79, cacheReadTokens: null, cacheWriteTokens: null,
       aliasConflict: { prompt_tokens: 15, completion_tokens: 64, input_tokens: 0, output_tokens: 0 } });
 });
