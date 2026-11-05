@@ -87,9 +87,14 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
         .catch(() => {
           if (!live) return;
           statusRead.current = true;
-          // A read failure is not "no runtime": saying `error` is what stops
+          // A read failure is not "no runtime", and a ready runtime that
+          // missed one poll is still ready: keep the state the last good read
+          // established so the shelf keeps its list through a blip. Only a
+          // state nobody has read yet settles as `error`, which is what stops
           // the panel from offering an install the server would refuse anyway.
-          setStatus({ canInitialize: false, state: "error" });
+          setStatus((current) => current.state === "ready"
+            ? current
+            : { canInitialize: false, state: "error" });
           timer = setTimeout(load, STATUS_POLL_MS);
         });
     };
@@ -145,7 +150,11 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
       statusRead.current = true;
       setStatus(next);
     } catch (reason) {
-      setStatus({ canInitialize: false, state: "error" });
+      // Same rule as the poll: a failure to re-read does not revoke what the
+      // last good read established.
+      setStatus((current) => current.state === "ready"
+        ? current
+        : { canInitialize: false, state: "error" });
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   }, [client]);
