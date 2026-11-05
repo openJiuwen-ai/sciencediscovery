@@ -476,6 +476,40 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts, [0, 31, 31, 1, 1])
         self.assertEqual(len(result["records"]), 1)
 
+    async def test_preprint_search_keeps_pages_that_answered_before_the_budget(self) -> None:
+        total = 100
+
+        def page(cursor: int) -> dict[str, Any]:
+            return {
+                "messages": [{"status": "ok", "total": total}],
+                "collection": [{
+                    "abstract": "",
+                    "authors": "A. Author",
+                    "date": "2026-01-01",
+                    "doi": f"10.1101/2026.01.01.{cursor}",
+                    # The newest page does not match, so the scan moves on.
+                    "title": "Other" if cursor == 70 else "Preprint",
+                    "version": "1",
+                }],
+            }
+
+        async def fake_get_json(url: str, *, params=None, client=None):
+            cursor = int(url.rsplit("/", 2)[1])
+            if cursor not in (0, 70, 40):
+                await asyncio.sleep(30)
+            return page(cursor)
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.5):
+            result = await _preprint_search("biorxiv", "preprint", 30, 10, None)
+
+        # Offset 40 answered inside the budget and is matched; offset 10 hangs
+        # and is dropped, and the warning says the scan stopped early.
+        self.assertEqual([record["identifier"] for record in result["records"]], ["10.1101/2026.01.01.40"])
+        self.assertIn("time budget", result["warnings"][0])
+
     async def test_preprint_search_fetches_scan_pages_concurrently(self) -> None:
         in_flight = 0
         peak = 0
