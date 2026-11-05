@@ -526,6 +526,29 @@ test("remembers rejected thinking controls for an OpenAI-compatible gateway", as
   assert.equal(requests[2]!.thinking, undefined);
 });
 
+test("does not permanently suppress thinking controls after an ambiguous 400", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.thinking && requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "reasoning is required for audit metadata" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "ambiguous", thinkingMode: "enabled" as const };
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [], policy, new AbortController().signal);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[0]!.thinking, { type: "enabled" });
+  assert.equal(requests[1]!.thinking, undefined);
+  assert.deepEqual(requests[2]!.thinking, { type: "enabled" });
+});
+
 test("explicit protocol changes the endpoint even when the saved URL has an old suffix", async () => {
   const paths: string[] = [];
   await withServer(async (request, response) => {
