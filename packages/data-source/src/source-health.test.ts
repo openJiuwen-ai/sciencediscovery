@@ -104,6 +104,15 @@ async function waitFor(predicate: () => boolean) {
   assert.fail("Timed out waiting for local fault injection");
 }
 
+test("the fault wait tolerates a loaded runner instead of a 200 ms budget", async () => {
+  // CI runs sixteen UT workers with coverage instrumentation, so the injected fault
+  // can land hundreds of milliseconds late. A fixed wall-clock budget turns that
+  // into a red gate on an unrelated pull request; a deadline does not.
+  let observed = false;
+  const timer = setTimeout(() => { observed = true; }, 500);
+  try { await waitFor(() => observed); } finally { clearTimeout(timer); }
+});
+
 test("parallel 429 callers share cooldown, drain their queue and do not retry inside one slot", async t => {
   const f = await fixture(t);
   let finish!: () => void;
