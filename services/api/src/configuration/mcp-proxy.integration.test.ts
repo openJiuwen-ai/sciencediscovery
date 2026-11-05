@@ -9,6 +9,8 @@ import { createTest } from "../../../../test/support/tagged/compat.mjs";
 import { SessionStore } from "../store.js";
 import { configurationFramework } from "./framework.js";
 import { discoverConfiguration } from "./discovery.js";
+import { createMcpProxyAdapter } from "./mcp-proxy-adapter.js";
+import type { ConfigurationAdapterContext } from "./types.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 async function fixture(context: { after(action: () => Promise<void>): void }) {
   const parent = resolve(process.cwd(), ".tmp"), root = resolve(parent, "mcp-proxy-" + randomUUID()), store = new SessionStore(root);
@@ -76,4 +78,10 @@ test("CFG-X03e: safe discovery includes shared connectors; refusal and Stop leav
   let card = await h.propose({ mcpServerId: "shared-server", proxyPolicy: "none" }); card = await h.framework.preview(h.session.id, card.id, { expectedRevision: card.revision, values: {}, selectedOptionId: "dismiss" });
   assert.equal((await h.framework.decide(h.session.id, card.id, { ...h.approval(card), selectedOptionId: "dismiss", decision: "dismiss" })).state, "dismissed");
   card = await h.propose({ mcpServerId: "shared-server", proxyPolicy: "none" }); h.store.notifications.stop(h.session.id); await assert.rejects(h.framework.decide(h.session.id, card.id, h.approval(card))); assert.equal(h.store.mcpProxyPolicy("shared-server"), "inherit");
+});
+test("CFG-X03e: apply rechecks previewed proxy choices and does not persist an unlisted policy", async context => {
+  const h = await fixture(context), apply = createMcpProxyAdapter(h.store).apply; assert.ok(apply);
+  const call = (proxyPolicy: string) => apply({ sessionId: h.session.id, requestId: "request", revision: 1, input: { mcpServerId: "shared-server", proxyPolicy }, plan: { fields: [], changes: [], impact: { resourceLocation: "Shared MCP server proxy policy", effectiveScope: "shared-server", message: "Saved" }, verificationPlan: { targets: [], actions: [], maxRequests: 0, mayCharge: false }, activationMode: "next_run", ready: true }, snapshot: { projectId: h.project.id, stopGeneration: 0, writable: true, resourceVersions: {}, data: {} }, scope: { kind: "global" } } satisfies ConfigurationAdapterContext);
+  for (const proxyPolicy of ["undefined", "proxy:missing"]) assert.throws(() => call(proxyPolicy), { code: "INVALID_CONFIGURATION_INPUT" });
+  assert.throws(() => call(`proxy:${h.proxy.id}`), /shared transaction/); assert.equal(h.store.mcpProxyPolicy("shared-server"), "inherit");
 });

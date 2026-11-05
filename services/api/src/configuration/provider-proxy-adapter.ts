@@ -1,8 +1,9 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationValues, ProxyPolicy } from "@sciencediscovery/schema";
+import type { ConfigurationValues } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
 import type { ConfigurationAdapter } from "./types.js";
+import { previewedProxyPolicy } from "./proxy-policy-choice.js";
 import { ConfigurationError, digest, invalid, object } from "./validation.js";
 export function createProviderProxyAdapter(store: SessionStore): ConfigurationAdapter {
   return {
@@ -15,12 +16,7 @@ export function createProviderProxyAdapter(store: SessionStore): ConfigurationAd
         }
         output.providerId = input.providerId.trim();
       }
-      if (input.proxyPolicy !== undefined) {
-        if (typeof input.proxyPolicy !== "string" || !["inherit", "none", ...store.configurationProviderProxySettings().servers.map(server => `proxy:${server.id}`)].includes(input.proxyPolicy)) {
-          invalid("Choose inherit, none or an existing registered proxy", "proxyPolicy");
-        }
-        output.proxyPolicy = input.proxyPolicy;
-      }
+      if (input.proxyPolicy !== undefined) output.proxyPolicy = previewedProxyPolicy(input.proxyPolicy, store.configurationProviderProxySettings().servers);
       return output;
     }, target: input=>String(input.providerId??""),
     preview: (input,snapshot)=>{
@@ -36,7 +32,8 @@ export function createProviderProxyAdapter(store: SessionStore): ConfigurationAd
         verificationPlan:{targets:[],actions:[],maxRequests:0,mayCharge:false},activationMode:"next_run",disposition:!provider||input.proxyPolicy===undefined?"missing_input":changes.length?"change":"no_change",ready:changes.length>0};
     },
     apply: context=>{
-      store.applyProviderProxyConfigurationSync(String(context.input.providerId),String(context.input.proxyPolicy) as ProxyPolicy);
+      const policy=previewedProxyPolicy(context.input.proxyPolicy,store.configurationProviderProxySettings().servers);
+      store.applyProviderProxyConfigurationSync(String(context.input.providerId),policy);
       return {resourceRevision:digest(store.configurationSnapshot(context.sessionId,"proxy.provider",String(context.input.providerId)).resourceVersions),summary:"Shared provider proxy policy saved; connectivity and existing clients remain unverified"};
     },
   };
