@@ -78,8 +78,12 @@ async function seedVersion(
   return { artifactId: artifact.id, versionId: version.id };
 }
 
-async function startHttpFixture(context: TestContext): Promise<{ fixture: Fixture; origin: string }> {
-  const fixture = await createFixture(context);
+/**
+ * Start the API server over an already-seeded fixture. Kept separate from `createFixture` so the
+ * caller can write the artifact versions first: `createApiServer`'s `ready` chain loads the
+ * catalog once, and a version written after that load is never seen by the route.
+ */
+async function startHttpServer(context: TestContext, fixture: Fixture): Promise<{ origin: string }> {
   const config: ServerConfig = {
     authToken: "test-token",
     dataDir: fixture.dataDir,
@@ -110,10 +114,7 @@ async function startHttpFixture(context: TestContext): Promise<{ fixture: Fixtur
   const server = createApiServer(config, { mcpTransport: offlineMcpTransport });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
-  return {
-    fixture,
-    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-  };
+  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
 
 async function diff(origin: string, sessionId: string, versionId: string): Promise<{ body: { error?: string }; status: number }> {
@@ -127,10 +128,7 @@ test("a non-textual artifact pair answers a client error instead of 500", async 
   // The route is reachable with any seeded versions: build the pair in the store's catalog
   // rather than driving an execution, because the media-type rule is checked before any CAS
   // read. Two `.zip` versions are the case the issue measured.
-  const { fixture, origin } = await startHttpFixture(context);
-  // Settle the server's `ready` chain before seeding, so the ordering under test is explicit and
-  // does not depend on how long connector/MCP initialisation happens to take on this machine.
-  await fetch(`${origin}/api/projects`, { headers: { authorization: "Bearer test-token" } });
+  const fixture = await createFixture(context);
   const binaryFirst = await seedVersion(fixture, {
     content: "PK\u0003\u0004 first bundle",
     kind: "other",
@@ -172,6 +170,12 @@ test("a non-textual artifact pair answers a client error instead of 500", async 
     logicalName: "diffable.md",
     mediaType: "text/markdown",
   }, textFirst);
+
+  // Seed first, start second: the `ready` chain loads the catalog exactly once, so a version
+  // written after that load is invisible to the route and the request answers 500 whenever the
+  // load wins. Writing the versions before the server exists removes the race instead of waiting
+  // for the other side of it.
+  const { origin } = await startHttpServer(context, fixture);
 
   // The comparison is a client-input problem: the pair exists, it just cannot be diffed. A
   // 500 reads as "the server is broken", hides the reason, and logs a false
