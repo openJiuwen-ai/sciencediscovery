@@ -66,8 +66,9 @@ export interface EvolveRunSpec {
   scorecardHash: string;
   searchId: string;
   statement?: string;
-  /** `"disabled"` / `"enabled"`, or absent for the provider's own default. */
+  /** `"auto"`, `"disabled"` or `"enabled"`; auto is omitted at the provider boundary. */
   thinking?: string;
+  thinkingEffort?: string;
   workers?: number;
 }
 
@@ -124,6 +125,7 @@ export class EvolveSidecarClient {
         script: spec.script ?? "",
         statement: spec.statement ?? "",
         thinking: spec.thinking ?? "",
+        thinking_effort: spec.thinkingEffort ?? "",
         workspace_dir: spec.workspaceDir ?? "",
         workers: spec.workers ?? 1,
     };

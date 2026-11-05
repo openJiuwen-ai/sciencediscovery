@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,7 @@ import { generationTokens, judgeTokens, machineIdentity, MEASUREMENT_VERSION, se
 import { manifestHash, validateMetrics } from "../.ci/biomni-gate.mjs";
 import { biomniCase } from "./support/tagged/execution.mjs";
 import { validatePlan } from "./support/tagged/plan.mjs";
+import { THINKING_CONTROL_VARIANTS, THINKING_EFFORT_VARIANTS } from "../packages/schema/src/model-usage.ts";
 
 const execute = promisify(execFile);
 const scripts = fileURLToPath(new URL("./benchmarks/biomnibench-da/", import.meta.url));
@@ -96,10 +98,13 @@ for (const sample of cases) {
     journey.scenario({ goal: `Complete and score public task ${sample.id}; record score, tool rounds, memory, latency and tokens.`, preconditions: ["isolated Swarm", "pinned authorized inputs", "candidate baseline mode"] });
     try {
       await journey.step("Prepare the scientific task", "Verify the pinned task and place only input data in the disposable workspace.", async () => {
+        const apiVariant = realModelApiVariant();
+        const thinking = realModelThinking();
         await execute(python, [join(scripts, "prepare.py"), "verify", "--root", env.BIOMNI_DATA_ROOT!, "--case", sample.id], { timeout: preparationBudget });
         await requireRealStack(testInfo);
-        fixture = await createProjectAndSession(page, { approvalMode: "always_allow",
-          model: { apiToken: env.E2E_LLM_TOKEN!, baseUrl: env.E2E_LLM_BASE_URL!, model: env.E2E_LLM_MODEL!, name: `BiomniBench ${sample.id} ${Date.now()}` },
+        fixture = await createProjectAndSession(page, { approvalMode: "always_allow", ...thinking,
+          model: { apiToken: env.E2E_LLM_TOKEN!, baseUrl: env.E2E_LLM_BASE_URL!, model: env.E2E_LLM_MODEL!, name: `BiomniBench ${sample.id} ${Date.now()}`,
+            apiVariant, ...thinking },
           projectName: `BiomniBench ${sample.id} ${Date.now()}`, sessionTitle: sample.title });
         await execute(python, [join(scripts, "prepare.py"), "stage", "--root", env.BIOMNI_DATA_ROOT!, "--case", sample.id,
           "--data-root", env.E2E_BIOMNI_FIXTURE_ROOT!, "--project", fixture.project.id, "--session", fixture.session.id], { timeout: preparationBudget });
@@ -108,6 +113,8 @@ for (const sample of cases) {
       const prefix = `/api/sessions/${fixture!.session.id}`;
       let finished: Awaited<ReturnType<typeof waitForResearch>>;
       await journey.step("Run the complete research task", "Wait for final delivery after tools, children and automatic wake-ups settle.", async () => {
+        const apiVariant = realModelApiVariant();
+        const thinking = realModelThinking();
         const before = await drbApi<any>(page, `${prefix}/usage`);
         const prompt = await loadAnalysisPrompt(env.BIOMNI_DATA_ROOT!, sample.id);
         await writeFile(testInfo.outputPath("prompt.txt"), prompt);
@@ -120,9 +127,17 @@ for (const sample of cases) {
         const runBody = await runResponse.text();
         expect(runResponse.status(), runBody).toBe(201);
         const initialRun = JSON.parse(runBody) as { id: string; references: Array<{ id: string; kind: string; label: string }>;
-          settingsSnapshot: { enabledSkillIds: string[] } };
+          settingsSnapshot: { enabledSkillIds: string[]; thinkingMode?: string; thinkingEffort?: string } };
         expect(initialRun.references).toContainEqual(researchTeamReference);
         expect(initialRun.settingsSnapshot.enabledSkillIds).toContain(researchTeamReference.id);
+        const supportsThinking = THINKING_CONTROL_VARIANTS.includes(apiVariant);
+        const supportsEffort = THINKING_EFFORT_VARIANTS.includes(apiVariant);
+        const actualThinking = { thinkingMode: initialRun.settingsSnapshot.thinkingMode,
+          ...(supportsEffort && thinking.thinkingMode === "enabled" ? { thinkingEffort: initialRun.settingsSnapshot.thinkingEffort } : {}) };
+        const expectedThinking = { thinkingMode: supportsThinking ? thinking.thinkingMode : "auto",
+          ...(supportsEffort && thinking.thinkingMode === "enabled" ? { thinkingEffort: thinking.thinkingEffort } : {}) };
+        metrics.generator_thinking = { requested: thinking, snapshot: actualThinking };
+        expect(actualThinking, "Run must retain the settings supported by the configured model variant").toEqual(expectedThinking);
         metrics.initial_run_id = initialRun.id;
         finished = await waitForResearch(page, fixture!.session.id, initialRun.id, Math.max(1, budget - (performance.now() - start)));
         const e2eMs = performance.now() - start;

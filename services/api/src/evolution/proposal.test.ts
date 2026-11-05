@@ -159,7 +159,7 @@ test("a model with no thinking control is budgeted as a thinking model", async (
         },
       } as never,
     });
-    const result = await startProposedRun(proposal(), d);
+    const result = await startProposedRun(proposal({ thinking: "disabled" }), d);
     assert.equal(result.refusedBecause, undefined);
     return started;
   };
@@ -236,6 +236,48 @@ test("the pace the user chose is recorded on the run, and silence means confirm"
 
   await startProposedRun(proposal({ checkpointMode: "auto" }), world().deps);
   assert.equal(seen?.checkpointMode, "auto");
+});
+
+test("background goals freeze inherited effort, explicit overrides and the high fallback", async () => {
+  for (const [parent, explicit, expected] of [
+    ["low", undefined, "low"], ["low", "medium", "medium"], [undefined, undefined, "high"],
+  ] as const) {
+    let goal: EvolveGoal | undefined;
+    const { deps: d } = deps({ thinking: "enabled", thinkingEffort: parent });
+    d.orchestrator.start = (async (input: { goal: EvolveGoal }) => {
+      goal = input.goal;
+      return { id: "run-1", status: "running" };
+    }) as never;
+    const result = await startProposedRun(proposal({ thinkingEffort: explicit }), d);
+    assert.equal(result.refusedBecause, undefined);
+    assert.equal(goal?.thinking, "enabled");
+    assert.equal(goal?.thinkingEffort, expected);
+    const plan = describeEvolveBudget(undefined, "enabled", expected);
+    assert.equal(goal?.budget.maxTokensPerCall, plan.perCallCeiling.puct);
+    assert.equal(goal?.thinkingEffort, plan.thinking.effort);
+    d.thinkingEffort = "max";
+    assert.equal(goal?.thinkingEffort, expected, "later settings cannot alter a frozen goal");
+  }
+});
+
+test("automatic goals retain effort for the snapshot but stay provider-default on the wire", async () => {
+  let goal: EvolveGoal | undefined;
+  const { deps: d } = deps({ thinking: "auto" });
+  d.orchestrator.start = (async (input: { goal: EvolveGoal }) => {
+    goal = input.goal;
+    return { id: "run-1", status: "running" };
+  }) as never;
+  const result = await startProposedRun(proposal(), d);
+  assert.equal(result.refusedBecause, undefined);
+  assert.equal(goal?.thinking, "auto");
+  assert.equal(goal?.thinkingEffort, "high");
+});
+
+test("automatic budget keeps auto mode while retaining the high effort fallback", () => {
+  const plan = describeEvolveBudget(undefined, "auto");
+  assert.equal(plan.thinking.effective, "auto");
+  assert.equal(plan.thinking.effort, "high");
+  assert.equal(plan.perCallCeiling.puct, 96_000);
 });
 
 test("the probe's own verdict reaches the agent unwrapped", async () => {

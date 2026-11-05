@@ -280,6 +280,7 @@ export class EvolveOrchestrator {
         searchId: probeId,
         statement: goal.statement,
         ...(goal.thinking ? { thinking: goal.thinking } : {}),
+        ...(goal.thinkingEffort ? { thinkingEffort: goal.thinkingEffort } : {}),
       });
     } finally {
       this.runTokens?.revoke(probeId);
@@ -480,6 +481,8 @@ export class EvolveOrchestrator {
     if (!entry) return false;
     if (entry.stopping) return true;
     entry.stopping = true;
+    // Stop paid model work immediately, including calls waiting for headers.
+    this.runTokens?.revoke(runId);
     const stopped = await this.sidecar.stop(runId);
     if (!stopped) {
       // The sidecar does not know this search (it may have just finished, or
@@ -501,7 +504,10 @@ export class EvolveOrchestrator {
       // Issued here and revoked in `finally`: the token's lifetime is the
       // search's, so a leaked one cannot outlive the thing it was for. The
       // provider key stays in this process and is never part of the spec.
-      const llmToken = this.runTokens?.issue(run.id, run.sessionId, run.goal.modelId ?? "");
+      const llmToken = this.runTokens?.issue(run.id, run.sessionId, run.goal.modelId ?? "", {
+        thinkingMode: run.goal.thinking,
+        thinkingEffort: run.goal.thinkingEffort,
+      });
       // Staged before the stream opens: a search whose dataset cannot be built
       // has nothing to measure, and finding that out at the first expansion
       // costs a model call and tells the user their candidate failed.
@@ -555,6 +561,7 @@ export class EvolveOrchestrator {
         searchId: run.id,
         statement: run.goal.statement,
         ...(run.goal.thinking ? { thinking: run.goal.thinking } : {}),
+        ...(run.goal.thinkingEffort ? { thinkingEffort: run.goal.thinkingEffort } : {}),
         workers: run.goal.budget.workers,
       };
       for await (const record of this.sidecar.stream(spec, abort.signal, (message) => {
