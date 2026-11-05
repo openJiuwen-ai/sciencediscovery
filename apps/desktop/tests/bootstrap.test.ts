@@ -56,21 +56,19 @@ test("an existing global selection is kept and never rewritten", () => {
   assert.equal(decision.defaultModelId, "b");
   // No `adopt`: rewriting the settings object here would be a write that can
   // only lose information.
-  assert.equal(decision.adopt, undefined);
+  assert.equal(decision.defaultModelId, "b");
 });
 
-test("no selection adopts the first profile", () => {
-  const decision = resolveCatalog([profile("a"), profile("b")], {});
-  assert.equal(decision.defaultModelId, "a");
-  assert.equal(decision.adopt, "a");
+test("an unset default stays unset even when profiles are available", () => {
+  assert.deepEqual(resolveCatalog([profile("a"), profile("b")], {}), { boot: "ready" });
 });
 
-test("a selection naming a deleted profile is replaced, not trusted", () => {
-  // `PUT /api/settings` normalizes through the live catalog and drops an
-  // unknown modelId, so keeping "gone" would leave a default that never exists.
-  const decision = resolveCatalog([profile("a")], { modelId: "gone" });
-  assert.equal(decision.defaultModelId, "a");
-  assert.equal(decision.adopt, "a");
+test("a deleted default stays unset without blocking the workspace", () => {
+  assert.deepEqual(resolveCatalog([profile("a")], { modelId: "gone" }), { boot: "ready" });
+});
+
+test("deleting the last model does not hide existing history on restart", () => {
+  assert.deepEqual(resolveCatalog([], {}, true), { boot: "ready" });
 });
 
 test("a service that reports a subsystem off is degraded, not offline", () => {

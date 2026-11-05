@@ -451,47 +451,33 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         const modelUrl = (url: URL) => url.pathname === modelPath;
         await page.route(modelUrl, async (route) => {
           await route.fulfill({
-            body: JSON.stringify({ error: "fixture model is still referenced" }),
+            body: JSON.stringify({ error: "fixture model deletion failed" }),
             contentType: "application/json",
             status: 409,
           });
         });
-        // Deleting a model asks for confirmation through window.confirm, and
-        // Playwright dismisses a dialog nobody listens for. Without this the
-        // request is never sent and the step waits for an error that the
-        // product had no reason to raise.
-        page.once("dialog", (confirmation) => void confirmation.accept());
         await modelRow.getByRole("button", { name: "删除" }).click();
-        await expect(dialog.getByText(/无法删除模型.*fixture model is still referenced/)).toBeVisible();
+        await page.getByRole("dialog", { name: /删除模型配置/ }).getByRole("button", { name: "删除", exact: true }).click();
+        await expect(dialog.getByText(/无法删除模型.*fixture model deletion failed/)).toBeVisible();
         await expect(modelRow).toBeVisible();
         await page.unroute(modelUrl);
 
-        // The first usable model becomes the global task default. Exercise
-        // the real success path only after removing that public settings
-        // reference; deleting a referenced model is correctly rejected.
-        const settingsResponse = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
-          headers: authorizationHeader(),
-        });
-        expect(settingsResponse.ok()).toBe(true);
-        const settings = await settingsResponse.json() as { overrides?: Record<string, unknown> };
-        const overrides = { ...(settings.overrides ?? {}) };
-        for (const key of ["modelId", "reviewModelId"]) {
-          if (overrides[key] === modelId) delete overrides[key];
-        }
-        const updateResponse = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
-          data: overrides,
-          headers: authorizationHeader(),
-          method: "PUT",
-        });
-        expect(updateResponse.ok()).toBe(true);
+        // Delete the real global default without clearing its reference first.
+        await dialog.getByLabel("全局默认任务模型").selectOption(modelId);
+        await expect(dialog.getByLabel("全局默认任务模型")).toHaveValue(modelId);
 
         const responsePromise = page.waitForResponse((response) => response.request().method() === "DELETE"
           && new URL(response.url()).pathname === modelPath);
-        page.once("dialog", (confirmation) => void confirmation.accept());
         await modelRow.getByRole("button", { name: "删除" }).click();
+        const confirmation = page.getByRole("dialog", { name: /删除模型配置/ });
+        await confirmation.getByLabel("新的全局默认任务模型").selectOption("");
+        await confirmation.getByRole("button", { name: "删除", exact: true }).click();
         expect((await responsePromise).ok()).toBe(true);
         await expect(modelRow).toHaveCount(0);
         await expect(row).toContainText("已添加 0");
+        const settingsResponse = await page.request.get(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader() });
+        expect(settingsResponse.ok()).toBe(true);
+        expect(((await settingsResponse.json()) as { overrides: { modelId?: string } }).overrides.modelId).toBeUndefined();
         createdModelId = undefined;
       },
     );

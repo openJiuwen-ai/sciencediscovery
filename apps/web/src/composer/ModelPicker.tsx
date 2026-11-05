@@ -187,6 +187,7 @@ function ModelPickerRow({
 
 export function ModelPicker({
   activeModelId,
+  openRequest = 0,
   controls,
   disabled = false,
   models,
@@ -199,6 +200,7 @@ export function ModelPicker({
   thinkingSummary,
 }: {
   activeModelId?: string | undefined;
+  openRequest?: number;
   controls: ModelThinkingControls;
   disabled?: boolean;
   models: ModelProfile[];
@@ -213,6 +215,10 @@ export function ModelPicker({
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (openRequest > 0 && !disabled) setOpen(true);
+  }, [openRequest]);
 
   useEffect(() => {
     if (!open) return;
@@ -274,7 +280,7 @@ export function ModelPicker({
               active={model.id === activeModelId}
               key={model.id}
               model={model}
-              onSelect={onSelect}
+              onSelect={(id) => { setOpen(false); onSelect(id); }}
               {...(group.provider ? { provider: group.provider } : {})}
             />)}
           </ul>
