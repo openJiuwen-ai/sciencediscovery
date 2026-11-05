@@ -231,15 +231,24 @@ def npu_domain(
     """A domain whose score comes back from the Runner."""
     criteria = list(scorecard.get("criteria") or [])
     metric_key = str(criteria[0].get("id") or "score") if criteria else "score"
+    seen: dict[str, Tuple[bool, dict[str, Any], str]] = {}
 
     def evaluate(code: str, shards) -> Tuple[bool, dict[str, Any], str]:
         del shards
+        cached = seen.get(code)
+        if cached is not None:
+            valid, metrics, error = cached
+            return valid, dict(metrics), error
         try:
             job, artifact = client.run(code, should_stop)
         except NpuJobError as error:
-            return False, with_search_score({"job_status": "fault"}), str(error)
-        valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric_key)
-        return valid, with_search_score(metrics), error
+            result = (False, with_search_score({"job_status": "fault"}), str(error))
+        else:
+            valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric_key)
+            result = (valid, with_search_score(metrics), error)
+        seen[code] = result
+        valid, metrics, error = result
+        return valid, dict(metrics), error
 
     def reward(metrics: Mapping[str, Any]) -> float:
         return score_for_search(metrics)

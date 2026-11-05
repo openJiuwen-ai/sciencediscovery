@@ -303,16 +303,27 @@ class PuctEngine:
             )
 
         from .direction import bound_domain
+        from .directed_memory import EditMemory, guard_evaluate, guard_tree, redraw_known, watch_events
 
-        domain = bound_domain(domain, spec.baseline_code, spec.scorecard.get("direction"))
+        direction = spec.scorecard.get("direction")
+        domain = bound_domain(domain, spec.baseline_code, direction)
+        memory = EditMemory()
+        if isinstance(direction, dict) and direction.get("editable"):
+            domain = guard_evaluate(domain, memory)
         tree = PuctTree(c_puct=float(spec.options.get("c_puct", 1.0)),
                         prior_exponent=_prior_exponent(spec.options),
                         candidate_limit=spec.expansions)
+        if isinstance(direction, dict) and direction.get("editable"):
+            guard_tree(tree, memory)
         store = CandidateStore(self._store_root)
         usage = _Usage()
         reporter = _Reporter(spec, tree, domain, store, usage, emit)
 
         complete = self._model_call(spec, usage, reporter, should_stop, tree)
+        if isinstance(direction, dict) and direction.get("editable"):
+            complete = redraw_known(
+                complete, memory, lambda message: reporter.emit(events.log("info", message)),
+            )
         tasks = (_tasks(dataset, spec.search_id) if _stages_rows(mode)
                  else _group_tasks(spec))
         # No colon: the engine refuses an artifact id that is not a safe
@@ -328,6 +339,10 @@ class PuctEngine:
             )
             # Seeded here so the root's numbers are what everything after is
             # normalised against — the domain's baseline is empty until now.
+            if isinstance(direction, dict) and direction.get("editable"):
+                aggregator.on_event = watch_events(
+                    aggregator.on_event, lambda level, message: reporter.emit(events.log(level, message)), memory,
+                )
             aggregator.seed()
             baseline.update({
                 key: float(value) for key, value in tree.root().program.metrics.items()
@@ -985,9 +1000,13 @@ def _group_tasks(spec: RunSpec) -> List[Any]:
     from agentdescent.evolution import Task
 
     if _mode_of(spec) == "npu_job":
-        # One measurement. Repeating it to fill a hold-out would spend the card
-        # four times on the same candidate.
-        return [Task(id=f"{spec.search_id}:npu", prompt="npu", meta={"shard": 0})]
+        # The search library refuses fewer than four tasks, and a hold-out
+        # fraction of 0 or 1. The domain scores a program once and reuses that
+        # result, so these four ids do not mean four trips to the card.
+        return [
+            Task(id=f"{spec.search_id}:npu-{index}", prompt="npu", meta={"shard": index})
+            for index in range(4)
+        ]
 
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
@@ -1031,7 +1050,9 @@ def _tasks(dataset: Dataset, search_id: str) -> List[Any]:
 
 def _group_held_out_frac(spec: RunSpec) -> float:
     if _mode_of(spec) == "npu_job":
-        return 1.0
+        # One of the four ids is held out. The fraction has to sit strictly
+        # between 0 and 1 or the search library will not start.
+        return 0.25
     counts = _case_groups(spec) if _mode_of(spec) == "test_gate" else _split_of(spec)
     total = counts["rollout"] + counts["gate"]
     if not counts["gate"] or not total:

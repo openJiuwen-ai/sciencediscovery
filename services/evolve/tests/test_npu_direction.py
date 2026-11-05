@@ -284,6 +284,170 @@ def test_an_npu_search_is_one_measurement():
         "search_id": "search",
     })()
     tasks = _group_tasks(spec)
-    assert len(tasks) == 1
-    assert tasks[0].meta["shard"] == 0
-    assert _group_held_out_frac(spec) == 1.0
+    assert len(tasks) == 4
+    assert len({task.id for task in tasks}) == 4
+    assert _group_held_out_frac(spec) == 0.25
+
+
+def _program(code, iteration, metrics, valid=True, error=""):
+    from sciencediscovery_evolve.vendor.puct.program import Program
+
+    return Program("p", iteration, None, code, "", metrics, valid, error)
+
+
+def test_a_seen_edit_is_asked_again_inside_the_same_call():
+    from sciencediscovery_evolve.directed_memory import REDRAW_LIMIT, EditMemory, redraw_known
+
+    memory = EditMemory()
+    memory.note_seed('{"model":"fixed","pos_2":"T"}', 0.2)
+    prompts = []
+    logs = []
+
+    def complete(prompt, iteration):
+        del iteration
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return '{"model":"fixed","pos_2":"T"}', "same", None
+        return '{"model":"fixed","pos_2":"A"}', "new", None
+
+    code, summary, promise = redraw_known(complete, memory, logs.append)("start", 1)
+    assert code == '{"model":"fixed","pos_2":"A"}'
+    assert summary == "new" and promise is None
+    assert len(prompts) == 2
+    assert "does not take another run" in prompts[1]
+    assert logs == ["this edit was already measured, so it does not take a run; asking for a different one"]
+
+    prompts.clear()
+
+    def stuck(prompt, iteration):
+        del prompt, iteration
+        prompts.append(1)
+        return '{"model":"fixed","pos_2":"T"}', "same", None
+
+    redraw_known(stuck, memory, logs.append)("start", 1)
+    assert len(prompts) == REDRAW_LIMIT + 1
+
+
+def test_a_measured_edit_is_not_sent_to_the_runner_again():
+    from sciencediscovery_evolve.directed_memory import EditMemory, guard_evaluate
+    from sciencediscovery_evolve.vendor.puct.domain import Domain
+
+    memory = EditMemory()
+    memory.note_seed('{"model":"fixed","pos_2":"T"}', 0.2)
+    calls = []
+
+    def evaluate(text, shards):
+        del shards
+        calls.append(text)
+        return True, {"job_status": "completed", "score": 0.2}, ""
+
+    domain = guard_evaluate(Domain(
+        name="probe", entrypoint="main", metric_key="score", metric_better="higher",
+        initial_program="{}", initial_summary="", evaluate=evaluate,
+        reward=lambda metrics: 0.0, prompt=lambda program: program.code,
+        task_prompt=lambda shard: str(shard), test_shards=(),
+    ), memory)
+    valid, metrics, error = domain.evaluate('{"pos_2":"T","model":"fixed"}', ())
+    assert valid is False and calls == []
+    assert metrics["job_status"] == "rejected"
+    assert "does not take another run" in error
+
+
+def test_a_seen_edit_is_not_a_new_node_unless_the_score_improves():
+    from sciencediscovery_evolve.directed_memory import guard_tree, EditMemory
+    from sciencediscovery_evolve.vendor.puct.tree import PuctTree
+
+    tree = PuctTree(candidate_limit=4)
+    memory = EditMemory()
+    guard_tree(tree, memory)
+    seed = '{"model":"fixed","pos_2":"T"}'
+    tree.seed(_program(seed, 0, {"score": 0.2}), 0.2)
+    tree._next_iteration = 2
+    same = tree.add_node(_program(seed, 1, {"job_status": "completed", "score": 0.2}), 0.2, 0)
+    assert getattr(same, "skipped", False) is True
+    assert len(tree.nodes) == 1
+    assert tree._next_iteration == 1
+
+    tree._next_iteration = 2
+    better = tree.add_node(_program(seed, 1, {"job_status": "completed", "score": 0.8}), 0.8, 0)
+    assert getattr(better, "skipped", False) is False
+    assert better.index == 0
+    assert len(tree.nodes) == 1
+    assert tree.nodes[0].score == 0.8
+
+
+def test_waiting_and_a_fault_retry_do_not_take_another_slot():
+    from sciencediscovery_evolve.directed_memory import FAULT_LIMIT, guard_evaluate, guard_tree, EditMemory
+    from sciencediscovery_evolve.vendor.puct.domain import Domain
+    from sciencediscovery_evolve.vendor.puct.tree import PuctTree
+
+    tree = PuctTree(candidate_limit=4)
+    memory = EditMemory()
+    guard_tree(tree, memory)
+    tree.seed(_program('{"model":"fixed","pos_2":"T"}', 0, {"score": 0.2}), 0.2)
+    tree.nodes[0].num_visits = 2
+    tree._next_iteration = 2
+    waiting = tree.add_node(
+        _program('{"model":"fixed","pos_2":"A"}', 1, {"job_status": "waiting"}, valid=False, error="job not finished"),
+        float("-inf"),
+        0,
+    )
+    assert getattr(waiting, "skipped", False) is True
+    assert len(tree.nodes) == 1
+    assert tree._next_iteration == 1
+    assert tree.nodes[0].num_visits == 1
+
+    code = '{"model":"fixed","pos_2":"Q"}'
+    tree._next_iteration = 2
+    first = tree.add_node(_program(code, 1, {"job_status": "fault"}, valid=False, error="job failed"), float("-inf"), 0)
+    assert getattr(first, "skipped", False) is True
+    assert tree._next_iteration == 2
+    tree._next_iteration = 3
+    second = tree.add_node(_program(code, 2, {"job_status": "fault"}, valid=False, error="job failed"), float("-inf"), 0)
+    assert getattr(second, "skipped", False) is True
+    assert tree._next_iteration == 2
+
+    calls = []
+
+    def evaluate(text, shards):
+        del shards
+        calls.append(text)
+        return False, {"job_status": "fault"}, "job failed"
+
+    domain = guard_evaluate(Domain(
+        name="probe", entrypoint="main", metric_key="score", metric_better="higher",
+        initial_program="{}", initial_summary="", evaluate=evaluate,
+        reward=lambda metrics: 0.0, prompt=lambda program: program.code,
+        task_prompt=lambda shard: str(shard), test_shards=(),
+    ), memory)
+    assert memory.faults[json.dumps(json.loads(code), sort_keys=True, separators=(",", ":"))] == FAULT_LIMIT
+    valid, _metrics, error = domain.evaluate(code, ())
+    assert valid is False and calls == [] and "already failed" in error
+
+
+def test_a_completed_score_of_zero_stays_a_score():
+    from sciencediscovery_evolve.directed_memory import EditMemory, guard_archive
+
+    class Archive:
+        def __init__(self):
+            self.stored = []
+
+        def add_program(self, program, baseline=False):
+            del baseline
+            self.stored.append(program)
+            return True
+
+    class Program:
+        def __init__(self, code, metrics, iteration):
+            self.code = code
+            self.metrics = metrics
+            self.valid = True
+            self.iteration = iteration
+            self.error = ""
+            self.change_summary = ""
+
+    archive = Archive()
+    guard_archive(archive, EditMemory())
+    assert archive.add_program(Program('{"model":"fixed","pos_2":"T"}', {"score": 0.0}, 0), baseline=True)
+    assert archive.add_program(Program('{"model":"fixed","pos_2":"A"}', {"job_status": "completed", "score": 0.0}, 1))
+    assert len(archive.stored) == 2

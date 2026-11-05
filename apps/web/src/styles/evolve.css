@@ -551,6 +551,24 @@
 .evolve-budget { display: flex; flex-direction: column; gap: 6px; }
 .evolve-stream { display: flex; flex-direction: column; gap: 4px; }
 
+.evolve-fields { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.evolve-fields-scroll { overflow-x: auto; }
+.evolve-fields table { border-collapse: collapse; width: 100%; }
+.evolve-fields th,
+.evolve-fields td {
+  border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.evolve-fields th { color: var(--muted); font-size: 13px; font-weight: 600; }
+.evolve-fields code { font-family: ui-monospace, monospace; word-break: break-word; }
+.evolve-fields-tick {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
 /* --- The wizard ------------------------------------------------------------
    Four steps that stay reachable in both directions: going back to fix
    something must not lose what is ahead, so the nav is buttons rather than a

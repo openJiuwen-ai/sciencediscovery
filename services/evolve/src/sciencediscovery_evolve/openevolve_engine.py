@@ -229,8 +229,13 @@ class OpenEvolveEngine:
             )
 
         from .direction import bound_domain
+        from .directed_memory import EditMemory, guard_archive, guard_evaluate, redraw_known, watch_events
 
-        domain = bound_domain(domain, spec.baseline_code, spec.scorecard.get("direction"))
+        direction = spec.scorecard.get("direction")
+        domain = bound_domain(domain, spec.baseline_code, direction)
+        memory = EditMemory()
+        if isinstance(direction, dict) and direction.get("editable"):
+            domain = guard_evaluate(domain, memory)
         # --- Algorithm state: OpenEvolveArchive instead of PuctTree ---
         archive = OpenEvolveArchive(
             archive_size=int(spec.options.get("archive_size", 20)),
@@ -242,6 +247,8 @@ class OpenEvolveEngine:
             rng_seed=int(spec.options.get("seed", 0) or 0),
             candidate_limit=spec.expansions,
         )
+        if isinstance(direction, dict) and direction.get("editable"):
+            guard_archive(archive, memory)
         strategy = OpenEvolveStrategy(domain)
         store = CandidateStore(self._store_root)
         usage = _Usage()
@@ -249,6 +256,10 @@ class OpenEvolveEngine:
         archive.on_event = reporter.on_event
 
         complete = self._model_call(spec, usage, reporter, should_stop)
+        if isinstance(direction, dict) and direction.get("editable"):
+            complete = redraw_known(
+                complete, memory, lambda message: reporter.emit(events.log("info", message)),
+            )
         tasks = (_tasks(dataset, spec.search_id) if _stages_rows(mode)
                  else _group_tasks(spec))
 
@@ -261,6 +272,10 @@ class OpenEvolveEngine:
                 ledger, verifier, archive, config, policy,
                 domain=domain, artifact_id=artifact_id, on_event=reporter.on_event,
             )
+            if isinstance(direction, dict) and direction.get("editable"):
+                aggregator.on_event = watch_events(
+                    aggregator.on_event, lambda level, message: reporter.emit(events.log(level, message)), memory,
+                )
             aggregator.seed()
             baseline.update({
                 key: float(value) for key, value in archive.best().metrics.items()
