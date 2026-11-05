@@ -399,7 +399,14 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // line: one 5,000-field row is a wide row, not a 5,000-column schema, and
   // announcing it as one tells the reader something false about the file.
   const totalColumns = header.length;
-  const width = Math.min(Math.max(totalColumns, widest), MAX_PREVIEW_COLUMNS);
+  // A wider line may contribute a few unnamed surplus columns, so a ragged table
+  // does not lose cells it really has — but only up to the cap the CSV importer
+  // uses, min(16, max(2, header)): one outlier line cannot turn a two-column file
+  // into a 1,001-column grid. The header's own columns are never capped by this,
+  // and MAX_PREVIEW_COLUMNS stays the absolute limit on the payload.
+  const surplusLimit = Math.min(16, Math.max(2, header.length));
+  const surplusShown = Math.min(Math.max(0, widest - totalColumns), surplusLimit);
+  const width = Math.min(totalColumns + surplusShown, MAX_PREVIEW_COLUMNS);
   // The row count is bounded by its own constant, so the payload stays inside
   // MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS cells. `maxRows` only lowers it.
   const rows = lines.slice(1, Math.min(maxRows, MAX_PREVIEW_ROWS) + 1);
@@ -407,7 +414,9 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // and the payload says how many columns the file had, so a cut table is never
   // mistaken for a narrow one. A data line wider than the header widens the grid
   // without changing the column count; its lost cells are reported as cells.
-  const clippedColumns = { shown: width, total: totalColumns };
+  // `shown` counts named columns, so it never exceeds the header; unnamed
+  // surplus columns are padding, not part of the file's schema.
+  const clippedColumns = { shown: Math.min(totalColumns, width), total: totalColumns };
   let clippedCells = 0;
   const paddedRows = rows.map((row) => {
     if (row.length === width) return row;
