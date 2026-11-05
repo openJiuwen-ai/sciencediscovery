@@ -466,6 +466,43 @@ test.describe("子代理的运行记录", () => {
     await expect(outputs).toHaveCount(2);
   });
 
+  test("a running child shows the steps the catalog has flushed, not only its own stream", async ({ page }) => {
+    // The run that delegated this child is over; the child is not. A wake turn
+    // continues it under a run of its own, and those steps are published on
+    // that run's child stream — which this panel does not tail, because it
+    // follows the one the child was delegated from. The catalog is where the
+    // run loop flushes them, and reading it only after the child settled left
+    // the whole continuation missing while it ran.
+    const options = recorded();
+    const updated = options.runsBySession![SESSION]![0]!.events
+      .find((event) => event.type === "subagent.updated")!;
+    updated.subagent = { ...(updated.subagent as JsonRecord), status: "running" };
+    const catalog = options.subagentsBySession![SESSION]![0]!;
+    options.subagentsBySession = {
+      [SESSION]: [{
+        ...catalog,
+        steps: [
+          { content: "先看三组候选结构。", createdAt: CREATED_AT, id: "step-1", kind: "assistant", status: "completed" },
+          { content: "续跑：第二轮又核对了剩下的结构。", createdAt: CREATED_AT, id: "step-wake", kind: "assistant", status: "completed" },
+        ],
+      }],
+    };
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+
+    const panel = page.locator(".workspace-panel");
+    await expect(panel).toBeVisible();
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    // Both steps are in the catalog, and the run's own log has neither of
+    // them: the milestone it persists is slim. Seeing the second one proves
+    // the catalog was read while the child was still running.
+    await expect(panel.getByText("先看三组候选结构。")).toBeVisible({ timeout: 10_000 });
+    await expect(panel.getByText("续跑：第二轮又核对了剩下的结构。")).toBeVisible();
+  });
+
   test("a child with no steps says so once its timeline is opened", async ({ page }) => {
     const options = recorded();
     const catalog = options.subagentsBySession![SESSION]![0]!;
