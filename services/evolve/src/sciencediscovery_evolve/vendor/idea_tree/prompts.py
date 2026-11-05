@@ -15,7 +15,9 @@ a targeted insight exist and can be cited. An empty candidates list
 means there are no substantively different executable ideas; explain why. Do not plan a fixed
 number of rounds, execute tools, or produce the final material design here."""
 IDEATE_EXPLORE_ONLY = """This tree has no prior candidates or no recorded insights.
-Every proposal must use these fields: {"explorationType":"explore","basedOnCandidateIds":[],"addressesInsightIds":[]}.
+Every proposal must use explorationType=explore. For an empty tree, use:
+{"explorationType":"explore","basedOnCandidateIds":[],"addressesInsightIds":[]}.
+If prior candidates exist, you may cite their IDs in basedOnCandidateIds.
 Use explore even when correcting a previous exploit proposal."""
 DESIGN = """You are the creative material designer. Develop the assigned hypothesis into a
 concrete, simple laboratory candidate. Include composition, structure, active sites, preparation,

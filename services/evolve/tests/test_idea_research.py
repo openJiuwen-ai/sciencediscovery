@@ -55,6 +55,14 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             value = dict(text=f'{role} output')
         return json.dumps(value), 100
 
+    def test_initial_exploit_requires_explore_even_with_fabricated_lineage(self):
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        for ids in ([], ['ROOT']):
+            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'Use explorationType=explore'):
+                engine.validate_proposal(dict(parentId='ROOT', direction='New direction', hypothesis='H',
+                                              explorationType='exploit', basedOnCandidateIds=ids,
+                                              addressesInsightIds=ids), ['ROOT'])
+
     async def test_initial_ideation_corrects_exploit_to_explicit_explore(self):
         ideate_calls = []
 
@@ -77,7 +85,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Use explorationType=explore', ideate_calls[1]['correction'])
         candidate = next(n for n in self.state['nodes'] if n['kind'] == 'candidate')
         self.assertEqual(candidate['explorationType'], 'explore')
-        self.assertNotIn('Every proposal must use these fields', engine.role_prompt('ideate'))
+        self.assertNotIn('Every proposal must use explorationType=explore', engine.role_prompt('ideate'))
         proposal = dict(parentId='ROOT', direction='Follow-up', hypothesis='New H',
                         explorationType='exploit', basedOnCandidateIds=[candidate['id']],
                         addressesInsightIds=[candidate['insightRecords'][0]['id']],
