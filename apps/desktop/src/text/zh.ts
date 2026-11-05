@@ -1310,7 +1310,9 @@ export const ZH = {
     /** Plain-language cause and recovery action per stable failure class. */
     timeout: "请求超时，请重试，或拆小任务、调大超时预算。",
     "rate-limited": "模型服务正在限流，请稍候重试。",
-    "semantic-error": "模型服务拒绝了本次请求，请检查模型配置和输入内容后重试。",
+    /** `semantic-error` is the backend's catch-all classification, so keep the
+     *  wording neutral and actionable rather than blaming the model service. */
+    "semantic-error": "运行中遇到了意外问题。请检查输入内容或模型配置后重试；若持续出现，可尝试其他模型。",
     "server-error": "模型服务出现服务器错误，请稍候重试；若持续失败，请检查服务状态。",
     "transport-error": "无法连接模型服务，请检查网络或代理设置后重试。",
     unauthorized: "模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。",

@@ -1264,7 +1264,9 @@ export const EN: Text = {
     /** Plain-language cause and recovery action per stable failure class. */
     timeout: "The request timed out. Retry, or split the task / raise the timeout budget.",
     "rate-limited": "The model service is limiting requests. Wait a moment and try again.",
-    "semantic-error": "The model service rejected the request. Check the model configuration and input, then retry.",
+    /** `semantic-error` is the backend's catch-all classification, so keep the
+     *  wording neutral and actionable rather than blaming the model service. */
+    "semantic-error": "The run encountered an unexpected issue. Check your input or model configuration and retry; if it keeps happening, try another model.",
     "server-error": "The model service reported a server error. Wait a moment and retry; if it keeps failing, check the service status.",
     "transport-error": "The model service could not be reached. Check the network or proxy settings and retry.",
     unauthorized: "The model service rejected the credentials. Check the API key in the model registry and retry.",

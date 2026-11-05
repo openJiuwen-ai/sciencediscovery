@@ -343,6 +343,11 @@ function RunFailureDetails({ code, message }: { code: string | undefined; messag
       <div className="status-strip">{formatRunFailure(code)}</div>
       <details className="run-failure-details">
         <summary>{TEXT.runFailure.technicalDetails}</summary>
+        {code !== undefined && (
+          <p className="run-failure-code">
+            <code>{code}</code>
+          </p>
+        )}
         <pre>{message}</pre>
       </details>
     </div>

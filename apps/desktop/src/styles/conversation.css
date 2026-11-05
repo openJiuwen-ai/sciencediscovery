@@ -429,6 +429,20 @@
   user-select: none;
 }
 
+.run-failure-details .run-failure-code {
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.run-failure-details .run-failure-code code {
+  padding: 1px 4px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunk);
+}
+
 .run-failure-details pre {
   margin-top: 8px;
   white-space: pre-wrap;
