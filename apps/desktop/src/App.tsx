@@ -43,6 +43,7 @@ import {
   evolveCommandGoal,
   isEvolveSkill,
 } from "./evolve/command.js";
+import { useAutoContinue } from "./evolve/use-auto-continue.js";
 import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
 import { mergedSubagentSteps } from "./run-stream/subagent.js";
@@ -523,6 +524,16 @@ export function App({ initialToken }: Props) {
     busy: state.running,
     reply: (text) => latestSend.current(text),
   }), [state.running]);
+
+  // A no-confirm design that ends its turn on an auto card is carried forward
+  // here — the model cannot start the next turn by itself, and the card offers
+  // nothing to press. See the hook for what it refuses to act on.
+  useAutoContinue({
+    running: state.running,
+    run: state.run,
+    send: (text) => latestSend.current(text),
+    sessionId: state.sessionId,
+  });
 
   // No token is its own screen, ahead of the boot states: without one nothing
   // the app can say about the server is knowable, including whether it is up.
