@@ -3080,17 +3080,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const workspaceArtifactsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/workspace\/artifacts$/);
       if (workspaceArtifactsMatch && request.method === "POST") {
-        const sessionId = workspaceArtifactsMatch[1]!;
-        const session = store.getSession(sessionId);
-        if (!session) return sendError(response, 404, "Session not found");
+        const sessionId = decodeURIComponent(workspaceArtifactsMatch[1]!);
+        store.assertSessionWritable(sessionId);
         const body = await readJson<{ paths?: unknown }>(request);
         if (!Array.isArray(body.paths) || body.paths.length < 1 || body.paths.length > 50
           || body.paths.some((path) => typeof path !== "string" || !path.trim())) {
           return sendError(response, 400, "paths must contain between 1 and 50 workspace file paths");
         }
-        const paths = [...new Set((body.paths as string[]).map((path) => path.trim()))];
+        const requestedPaths = [...new Set((body.paths as string[]).map((path) => path.trim()))];
         const workspaceRoot = store.workspacePath(sessionId);
-        const provenance = await Promise.all(paths.map((path) => workspaceFileProvenance(store, sessionId, path)));
+        const provenance = await Promise.all(requestedPaths.map((path) => workspaceFileProvenance(store, sessionId, path)));
+        const paths = [...new Set(provenance.map((item) => item.file.path))];
         if (provenance.some((item) => item.currentRevision.origin !== "agent")) {
           return sendError(response, 422, "Only agent-created workspace files can be registered here");
         }

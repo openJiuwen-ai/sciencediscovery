@@ -21,7 +21,7 @@ import { existsSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { connect, type AddressInfo } from "node:net";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { TestContext } from "node:test";
 
 import { DatabaseSync } from "node:sqlite";
