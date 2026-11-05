@@ -436,16 +436,21 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         requested: list[int] = []
 
         async def fake_get_json(url: str, *, params=None, client=None):
-            requested.append(int(url.rsplit("/", 2)[1]))
+            cursor = int(url.rsplit("/", 2)[1])
+            requested.append(cursor)
+            if cursor:
+                await asyncio.sleep(30)
             return {"messages": [{"status": "ok", "total": 66376}], "collection": []}
 
         with patch(
             "sciencediscovery_gateway.public_biomed_mcp._get_json",
             new=AsyncMock(side_effect=fake_get_json),
-        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.0):
+        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.5):
             result = await _preprint_search("biorxiv", "liver", 365, 5, None)
 
-        self.assertEqual(requested, [0])
+        # The probe answered; the scan pages did not, and are dropped.
+        self.assertEqual(requested[0], 0)
+        self.assertEqual(requested[1], 66376 - 30)
         self.assertIn("time budget", result["warnings"][0])
         self.assertIn("older matches may be missing", result["warnings"][0])
 
@@ -508,6 +513,22 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         # Offset 40 answered inside the budget and is matched; offset 10 hangs
         # and is dropped, and the warning says the scan stopped early.
         self.assertEqual([record["identifier"] for record in result["records"]], ["10.1101/2026.01.01.40"])
+        self.assertIn("time budget", result["warnings"][0])
+
+    async def test_preprint_search_bounds_the_probe_by_the_budget(self) -> None:
+        async def fake_get_json(url: str, *, params=None, client=None):
+            await asyncio.sleep(30)
+            return {"messages": [{"status": "ok", "total": 61}], "collection": []}
+
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(side_effect=fake_get_json),
+        ), patch("sciencediscovery_gateway.public_biomed_mcp._PREPRINT_SCAN_SECONDS", 0.2):
+            result = await _preprint_search("biorxiv", "liver", 30, 5, None)
+
+        self.assertEqual(result["records"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("did not answer the first page", result["warnings"][0])
         self.assertIn("time budget", result["warnings"][0])
 
     async def test_preprint_search_fetches_scan_pages_concurrently(self) -> None:

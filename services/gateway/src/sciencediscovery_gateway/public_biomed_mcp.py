@@ -557,7 +557,20 @@ async def _preprint_search(server: str, query: str, days: int, limit: int, categ
                     if attempt:
                         raise
 
-        pages[0] = await fetch(0)
+        try:
+            # The probe is the first thing the search does, so it has to be
+            # inside the same budget; otherwise a slow first page alone can put
+            # the call past the transport deadline before any scan begins.
+            pages[0] = await asyncio.wait_for(
+                fetch(0), timeout=max(0.0, deadline - time.monotonic())
+            )
+        except TimeoutError:
+            window = f"{start.isoformat()} to {end.isoformat()}"
+            return _result(server, "search_preprints", [], warnings=[
+                f"The provider did not answer the first page for {window} within the "
+                f"{_PREPRINT_SCAN_SECONDS:.0f}-second time budget, so no preprints were scanned; "
+                "try again or narrow the window."
+            ])
         _require_preprint_provider_ok(server, pages[0])
         total = _preprint_total(pages[0])
         if total is None and _preprint_status(pages[0]) == _PREPRINT_EMPTY_STATUS:
