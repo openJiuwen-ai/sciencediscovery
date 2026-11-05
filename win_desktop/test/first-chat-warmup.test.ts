@@ -6,12 +6,13 @@ import {
   firstChatWarmupHeaders, firstChatWarmupUrl, runFirstChatWarmup,
 } from "../src/first-chat-warmup.ts";
 
-test("warmup URL keeps the origin and drops the fragment", () => {
+test("warmup URL targets the reload endpoint and drops the fragment", () => {
   assert.equal(
     firstChatWarmupUrl("http://127.0.0.1:4310/#token=abc"),
     `http://127.0.0.1:4310${FIRST_CHAT_WARMUP_PATH}`,
   );
   assert.equal(firstChatWarmupUrl("http://127.0.0.1:4310"), `http://127.0.0.1:4310${FIRST_CHAT_WARMUP_PATH}`);
+  assert.ok(FIRST_CHAT_WARMUP_PATH.endsWith("/reload"), "GET /api/mcp/sources only reads the cache; reload loads it");
 });
 
 test("warmup headers carry a trimmed bearer token, empty without one", () => {
@@ -20,12 +21,13 @@ test("warmup headers carry a trimmed bearer token, empty without one", () => {
   assert.deepEqual(firstChatWarmupHeaders("   "), {});
 });
 
-test("runFirstChatWarmup asks the catalog endpoint and returns the status", async () => {
-  const seen: { url: string; headers: Record<string, string>; signal: AbortSignal | null }[] = [];
+test("runFirstChatWarmup POSTs to the reload endpoint and returns the status", async () => {
+  const seen: { url: string; method: string; headers: Record<string, string>; signal: AbortSignal | null }[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     seen.push({
       url: String(input),
+      method: init?.method ?? "GET",
       headers: (init?.headers ?? {}) as Record<string, string>,
       signal: (init?.signal ?? null) as AbortSignal | null,
     });
@@ -36,6 +38,7 @@ test("runFirstChatWarmup asks the catalog endpoint and returns the status", asyn
     assert.equal(status, 200);
     assert.equal(seen.length, 1);
     assert.equal(seen[0]!.url, `http://127.0.0.1:4310${FIRST_CHAT_WARMUP_PATH}`);
+    assert.equal(seen[0]!.method, "POST");
     assert.equal(seen[0]!.headers.authorization, "Bearer tok");
     assert.ok(seen[0]!.signal instanceof AbortSignal, "a timeout aborts a hung catalog");
   } finally {
