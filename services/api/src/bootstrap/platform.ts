@@ -51,7 +51,7 @@ import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
-import { evolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
+import { latestEvolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
@@ -394,14 +394,17 @@ export function createPlatformServices(
     },
   );
 
-  /** Whether the user's own command in this session turned the no-isolation
-   *  warning on. On a Windows install the server runs candidates directly, so
-   *  this flag is the only thing between a search and unconfined model-written
-   *  code; the model's tool argument alone is not the user's answer. */
+  /** Whether the user's own command approved unconfined candidates. On a
+   *  Windows install the server runs candidates directly, so this flag is the
+   *  only thing between a search and unconfined model-written code; the
+   *  model's tool argument alone is not the user's answer.
+   *
+   *  The latest command wins: a second design started with a plain
+   *  `/evolve-design` inherits nothing from an earlier approval. A checkpoint
+   *  answer does not move the anchor — it is not a command — so the design
+   *  this run belongs to is still the latest one there. */
   const userApprovedUnisolated = async (sessionId: string) =>
-    (await store.readMessages(sessionId)).some(
-      (message) => message.role === "user" && evolveCommandApprovesUnisolated(message.content),
-    );
+    latestEvolveCommandApprovesUnisolated(await store.readMessages(sessionId));
 
   const casHasEvolve = async (hash: string) => {
     try {
@@ -445,9 +448,8 @@ export function createPlatformServices(
       // carried `--allow-direct`; otherwise drop it and let pre-flight's
       // `unisolated_run_unconfirmed` refusal say what is missing.
       const requested = input.allowUnisolated === true;
-      const confirmed = requested && await userApprovedUnisolated(turn.sessionId);
-      const proposal = requested && !confirmed ? { ...input, allowUnisolated: false } : input;
-      if (requested && !confirmed) {
+      const approvedUnisolated = requested && await userApprovedUnisolated(turn.sessionId);
+      if (requested && !approvedUnisolated) {
         apiLog.warn("evolve_unisolated_not_confirmed", { sessionId: turn.sessionId });
       }
       // The probe runs real evaluations in the sandbox — two or three, each
@@ -458,7 +460,8 @@ export function createPlatformServices(
       // permission prompt gets, for the same reason — the wait is real work.
       const releaseWait = turn.beginExternalWait?.();
       try {
-        const result = await startProposedRun(proposal, {
+        const result = await startProposedRun(input, {
+          approvedUnisolated,
           casHas: casHasEvolve,
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,
