@@ -36,7 +36,7 @@ import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
 import { allSubagents } from "./run-stream/model.js";
-import { mergeSubagentSteps } from "./run-stream/subagent.js";
+import { heldSubagentSteps, mergeSubagentSteps } from "./run-stream/subagent.js";
 import {
   GUIDE_STORAGE_KEY,
   RIGHT_PANEL_STORAGE_KEY,
@@ -223,8 +223,12 @@ export function App({ initialToken }: Props) {
    *
    *  Only the open child is read: the panel shows one record at a time, and
    *  the roster route carried every sibling's steps — megabytes for a long
-   *  run — to choose one of them. A running child is skipped entirely because
-   *  `followSubagent` below is already reading its steps incrementally. */
+   *  run — to choose one of them. A running child is read too, once. The
+   *  followed stream below carries the steps emitted while this window is
+   *  attached, but a child continued by a wake turn publishes its continuation
+   *  under the wake run, not the run that named it, so it is not on the stream
+   *  this panel tails. The catalog is where the run loop flushes those steps;
+   *  skipping it left the panel without them until the child settled. */
   const [subagentCatalog, setSubagentCatalog] = useState<Subagent | undefined>(undefined);
   const [subagentLoading, setSubagentLoading] = useState(false);
   useEffect(() => {
@@ -233,13 +237,10 @@ export function App({ initialToken }: Props) {
       setSubagentLoading(false);
       return;
     }
-    // The followed stream is the steps while the child runs. Once it settles
-    // the effect runs again, with `foundSubagent.status` changed, and the
-    // complete record is read.
-    if (foundSubagent?.status === "running" && foundSubagent.parentTurnId !== undefined) {
-      setSubagentLoading(false);
-      return;
-    }
+    // While the child runs this reads what the catalog has flushed so far;
+    // the followed stream keeps filling in after it. Once the child settles
+    // the effect runs again, with `foundSubagent.status` changed, and reads
+    // the complete record.
     let cancelled = false;
     setSubagentLoading(true);
     void getSubagent(client, state.sessionId, openSubagentId)
@@ -270,8 +271,8 @@ export function App({ initialToken }: Props) {
    * timeline keeps only the milestones. The live copy on the run stream reaches
    * whoever is attached at the moment it is emitted, so a child that started
    * before this window did, or that was continued by a later process, is not on
-   * it at all — and the catalog read above answers only once the child settles.
-   * Following the child's stream is what keeps 执行详情 filling while it runs. */
+   * it at all. The catalog read above covers what was already flushed; following
+   * the child's stream is what keeps 执行详情 filling after it. */
   /** The followed stream's steps, bound to the record they were read for. A
    *  snapshot outlives the selection that asked for it by one render, so it
    *  carries its own id: another child's steps are never drawn under this one. */
@@ -294,14 +295,15 @@ export function App({ initialToken }: Props) {
 
   // Live snapshots are fresher and already carry steps. A replay's copy is the
   // terminal state but says nothing about what the child did, so its steps come
-  // from the catalog. The followed stream is the base: its order is the order
-  // the work happened in, and whatever this window already holds wins on an id
-  // it shares, because that copy is the fresher one.
+  // from the catalog. The catalog is also where a running child's flushed steps
+  // are, including the continuation a wake turn publishes under another run,
+  // so both copies are kept: the catalog gives the order the run loop wrote,
+  // and the live copy wins on an id it shares, because that copy is the fresher
+  // one. The followed stream is the base: its order is the order the work
+  // happened in, and whatever is held wins on an id it shares.
   const openSubagent = useMemo(() => {
     if (resolvedSubagent === undefined) return undefined;
-    const held = resolvedSubagent.steps.length === 0 && catalogSubagent !== undefined
-      ? catalogSubagent.steps
-      : resolvedSubagent.steps;
+    const held = heldSubagentSteps(resolvedSubagent.steps, catalogSubagent?.steps);
     const followedSteps = followed !== undefined
       && followed.subagentId === openSubagentId
       && followed.runId === followedRunId

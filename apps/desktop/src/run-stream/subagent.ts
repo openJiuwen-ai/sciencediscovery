@@ -136,6 +136,27 @@ export function mergeSubagentSteps(current: SubagentStep[], incoming: SubagentSt
   return changed ? merged : current;
 }
 
+/**
+ * The steps the panel holds before the followed stream is folded in.
+ *
+ * Two copies can exist for an open child: the live snapshot the run stream
+ * carried, and the catalog the run loop writes. The snapshot is fresher on the
+ * ids they share, but it is not the whole record — a child continued by a wake
+ * turn publishes its continuation under the wake run, which is not the stream
+ * this panel tails, so those steps only reach it through the catalog. Keeping
+ * both is what shows the continuation; keeping only the snapshot left a running
+ * child looking stuck at whatever it had finished before the wake.
+ */
+export function heldSubagentSteps(
+  snapshot: SubagentStep[],
+  catalog: readonly SubagentStep[] | undefined,
+): SubagentStep[] {
+  if (catalog === undefined || catalog.length === 0) return snapshot;
+  // The catalog is the base, so its order — the order the run loop wrote — is
+  // what the timeline follows; the snapshot then wins on an id both copies have.
+  return mergeSubagentSteps([...catalog], snapshot);
+}
+
 /** Merge a full snapshot onto the copy already held.
  *
  *  The newer snapshot owns the status, including a `running` one: the server

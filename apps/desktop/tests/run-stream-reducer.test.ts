@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import type { RunStreamEvent, Subagent, SubagentStep } from "../src/api/types.js";
 import { closeRunStream, reduceRunStream } from "../src/run-stream/reducer.js";
 import { emptyRunStream, hasVisibleAnswer, thinkingSteps, type RunStreamState } from "../src/run-stream/model.js";
-import { mergeSubagentSteps } from "../src/run-stream/subagent.js";
+import { heldSubagentSteps, mergeSubagentSteps } from "../src/run-stream/subagent.js";
 
 /** Fold a script of events, which is what both a live stream and a replay are. */
 function fold(events: RunStreamEvent[], start: RunStreamState = emptyRunStream()): RunStreamState {
@@ -556,6 +556,29 @@ test("a snapshot that says nothing new leaves the steps alone", () => {
     step("s1", { args: { path: "a.pdf" }, content, status: "running" }),
   ]);
   assert.deepEqual(withArgs[0]!.args, { path: "a.pdf" });
+});
+
+test("a running child's held steps include what only the catalog flushed", () => {
+  // The live snapshot is what the run stream carried, so it has no steps from
+  // a wake turn: that continuation is published under the wake run, which this
+  // panel does not tail. The catalog has it, and dropping it is what made a
+  // running child look stuck before it settled.
+  const early = step("s1", { content: "before the wake" });
+  const wake = step("wake", { content: "after the wake" });
+  const held = heldSubagentSteps([early], [step("s1", { content: "before the wake" }), wake]);
+  assert.deepEqual(held.map((entry) => entry.id), ["s1", "wake"]);
+  assert.deepEqual(held[1], wake);
+
+  // The snapshot is fresher on an id both copies have, and its order stands
+  // when the catalog has nothing to add.
+  const running = step("s1", { content: "still going", status: "running" });
+  assert.deepEqual(
+    heldSubagentSteps([running], [step("s1", { content: "half done", status: "completed" })]),
+    [running],
+  );
+  const alone = [early];
+  assert.equal(heldSubagentSteps(alone, undefined), alone);
+  assert.equal(heldSubagentSteps(alone, []), alone);
 });
 
 test("a resumed child goes back to running on the same line", () => {
