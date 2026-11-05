@@ -1611,25 +1611,29 @@ test("a delimited preview caps a pathological line and counts what it leaves out
     fixture.store, fixture.recorder, fixture.session.id, vid,
   );
   if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
-  assert.equal(payload.columns.length, 1_001, "the width stops at the column constant");
+  assert.equal(
+    payload.columns.length,
+    4,
+    "the header's two columns plus the capped surplus, not the outlier's 200,001 fields",
+  );
   assert.equal(payload.rows.length, 100);
   // Compare lengths and short slices: diffing a 200k-element array against a
-  // 1001-element one is what the assertion itself must never do.
+  // four-element one is what the assertion itself must never do.
   for (const row of payload.rows) {
     assert.equal(row.length, payload.columns.length, "every row is as wide as the grid");
   }
   const cells = payload.rows.reduce((total, row) => total + row.length, 0);
   assert.ok(cells <= 100_100, `the grid must fit the preview bound, got ${cells}`);
   assert.deepEqual(payload.rows[99]?.slice(0, 2), ["w", "w"], "the leading cells of the wide line are kept");
-  assert.equal(payload.clippedCells, 199_000, "the cells past the width are counted, not hidden");
+  assert.equal(payload.clippedCells, 199_997, "the cells past the width are counted, not hidden");
   assert.deepEqual(
     payload.clippedColumns,
-    { shown: 1_001, total: 2 },
+    { shown: 2, total: 2 },
     "the column count comes from the header; the wide row is cells, not columns",
   );
   assert.deepEqual(
     payload.warnings,
-    ["199000 cells past the preview width are not shown."],
+    ["199997 cells past the preview width are not shown."],
     "one sentence for one loss: the row's cells, not a schema the file does not have",
   );
   assert.ok(
@@ -1652,8 +1656,8 @@ test("a wide line past the row window does not become the file's column count", 
   // The header is the schema: this file has two columns. One outlier line that
   // falls outside the default row window is a row with many fields, not
   // evidence that the file has 5,000 columns, and no returned row is padded or
-  // cut because of it. The grid width itself is the separate question the issue
-  // leaves open, so columns.length is deliberately not pinned to 2 here.
+  // cut because of it. The width may carry the capped unnamed surplus, never the
+  // outlier's field count.
   const outlier = Array.from({ length: 5_000 }, (_, index) => `c${index}`).join(",");
   const lines = ["a,b"];
   for (let index = 0; index < 100; index += 1) lines.push("1,2");
@@ -1668,6 +1672,7 @@ test("a wide line past the row window does not become the file's column count", 
     fixture.store, fixture.recorder, fixture.session.id, vid,
   );
   if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+  assert.equal(payload.columns.length, 4, "two named columns plus two unnamed surplus columns");
   assert.equal(payload.rows.length, 100);
   for (const row of payload.rows) {
     assert.equal(row.length, payload.columns.length, "every returned row is as wide as the grid");
@@ -1681,6 +1686,53 @@ test("a wide line past the row window does not become the file's column count", 
       `a row's field count must not be announced as the file's column count: ${warning}`,
     );
   }
+});
+
+test("the surplus cap never takes a named column and scales with the header", async (context) => {
+  const fixture = await createFixture(context);
+  // 40 named columns stay 40 even though every data row has three fields: the
+  // cap applies to unnamed surplus only, and a short row is padded to the
+  // header, never the other way round.
+  const named = Array.from({ length: 40 }, (_, index) => `c${index}`);
+  const namedVid = await seedArtifact(fixture, {
+    content: [named.join(","), ...Array.from({ length: 10 }, () => "1,2,3")].join("\n"),
+    kind: "dataset",
+    logicalName: "ragged-header.csv",
+    mediaType: "text/csv",
+  });
+  const namedPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, namedVid,
+  );
+  if (namedPayload.mode !== "dataset-table") assert.fail(`unexpected mode ${namedPayload.mode}`);
+  assert.deepEqual(namedPayload.columns, named, "every named column is kept, in order");
+  assert.equal(namedPayload.rows.length, 10);
+  for (const row of namedPayload.rows) {
+    assert.equal(row.length, 40, "a short row is padded to the header, not the header cut to it");
+  }
+  assert.deepEqual(namedPayload.clippedColumns, { shown: 40, total: 40 });
+  assert.equal(namedPayload.clippedCells, 0);
+  assert.deepEqual(namedPayload.warnings, [], "a whole table warns about nothing");
+
+  // The cap is min(16, max(2, header)): an eight-column header accepts at most
+  // eight unnamed surplus columns, so a 100-field row renders 16 columns and the
+  // remaining 84 cells are reported as cells.
+  const eight = Array.from({ length: 8 }, (_, index) => `h${index}`);
+  const wide = Array.from({ length: 100 }, (_, index) => `v${index}`).join(",");
+  const cappedVid = await seedArtifact(fixture, {
+    content: [eight.join(","), wide].join("\n"),
+    kind: "dataset",
+    logicalName: "capped-surplus.csv",
+    mediaType: "text/csv",
+  });
+  const cappedPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, cappedVid,
+  );
+  if (cappedPayload.mode !== "dataset-table") assert.fail(`unexpected mode ${cappedPayload.mode}`);
+  assert.equal(cappedPayload.columns.length, 16, "eight named columns plus the eight-column surplus cap");
+  assert.deepEqual(cappedPayload.columns.slice(0, 8), eight, "the named columns come first, uncut");
+  assert.deepEqual(cappedPayload.columns.slice(8), Array.from({ length: 8 }, () => ""), "surplus columns are unnamed");
+  assert.equal(cappedPayload.clippedCells, 84, "the cells past the cap are counted, not hidden");
+  assert.deepEqual(cappedPayload.clippedColumns, { shown: 8, total: 8 });
 });
 
 test("a header wider than the preview is clipped with an explicit signal", async (context) => {
@@ -1743,9 +1795,9 @@ test("a delimited preview shows the same columns whatever maxRows it is asked fo
   }
   assert.deepEqual(first.columns, many.columns, "maxRows cannot change the column set");
   assert.deepEqual(first.columns, some.columns, "maxRows cannot change the column set");
-  assert.equal(first.columns.length, 1_001);
+  assert.equal(first.columns.length, 4, "the width is header plus capped surplus, whatever maxRows asks");
   assert.equal(first.rows.length, 1);
-  assert.equal(first.rows[0]?.length, 1_001, "a returned row is padded to the file-wide width");
+  assert.equal(first.rows[0]?.length, 4, "a returned row is padded to the file-wide width");
   assert.equal(many.rows.length, 100, "maxRows above the row constant is clamped");
   assert.equal(some.rows.length, 50, "maxRows below the row constant still lowers the count");
   assert.equal(many.totalRows, 103);
