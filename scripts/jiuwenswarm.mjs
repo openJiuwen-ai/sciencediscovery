@@ -6,9 +6,9 @@
 // scripts/lib/stack-platform.mjs（0.B2 分层约定）。
 
 import { execFile, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { get } from "node:http";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -127,6 +127,17 @@ export function startupDiagPath(cfg) {
 export function diag(cfg, message) {
   const line = `${new Date().toISOString()} ${message}\n`;
   return appendFile(startupDiagPath(cfg), line, "utf8").catch(() => {});
+}
+
+// [SD-PERF instrumentation] 统一毫秒级打点：同一时刻戳双写（stderr →
+// shell.log 供拼接时间线；startup-diagnostics.log 供独立取证）。格式固定为
+// `[SD-PERF] jw <event> +<ms>ms`，<ms> 为距 cmdStart 进入的墙钟毫秒。
+// 移除打点时 git checkout 本文件即可。
+function perfMark(cfg, event, baseAt, extra = "") {
+  const elapsed = Date.now() - baseAt;
+  const line = `[SD-PERF] jw ${event} +${elapsed}ms${extra ? ` ${extra}` : ""}`;
+  process.stderr.write(`${line}\n`);
+  return diag(cfg, line);
 }
 
 /** 错误摘要：message + 命令退出信息 + stderr 尾部（截断），供诊断文件定位"卡在哪条命令"。 */
@@ -271,34 +282,84 @@ async function applyCompatibilityPatches(cfg) {
 
 const PATCHES_VERIFIED_MARKER = ".sd-patches-verified";
 
-function getVerifiedTag(cfg) {
+/**
+ * [windows-desktop] SIZEOPT W11#2 —— verifyPatches 指纹缓存。
+ * 旧 marker 只记 "tag:src"：补丁文件内容变了（新增 0020、修订任一 patch）
+ * 或 src 树被外部改动时缓存不失效，装机树与补丁链脱钩也照样跳过校验。
+ * 现在 marker 记 JSON 指纹：补丁目录每个 .patch 的 name+size+mtimeMs，
+ * 外加 src 侧 .sciencediscovery-patches.json（manifest）的同款指纹——
+ * 任何一项变化即重跑完整 verify。保守取向与 W4 一致：缓存只是跳过
+ * "已经证明过没变" 的重复校验，失效判定宁可多跑不可漏跑。
+ * 逃生口：--force-verify 参数或 JIUWENSWARM_FORCE_VERIFY=1 强制重校验。
+ *
+ * （历史注记：旧实现 recordVerified 里用了 writeFileSync 却从未 import，
+ * ReferenceError 被 try/catch 吞掉 → marker 从未落盘 → 缓存从未命中，
+ * 每次启动都重付 0.87s verify——这正是 W11#2 量到的开销本身。）
+ */
+export function patchesDirFor(cfg) {
+  return join(scriptDir, "..", "jiuwen_swarm", "patches", cfg.tag);
+}
+
+export function fileFingerprint(path) {
   try {
-    const marker = join(cfg.root, PATCHES_VERIFIED_MARKER);
-    const text = readFileSync(marker, "utf8").trim();
-    // "tag:srcPath" — if either changes, re-verify.
-    return text.startsWith(`${cfg.tag}:${cfg.src}`) ? cfg.tag : null;
+    const st = statSync(path);
+    return { name: basename(path), size: st.size, mtimeMs: Math.round(st.mtimeMs) };
   } catch {
-    return null;
+    return null; // missing file — represent as null so the comparison fails closed
   }
 }
 
-function recordVerified(cfg) {
+export function verifyFingerprint(cfg, patchesDir = patchesDirFor(cfg)) {
+  let names;
+  try {
+    names = readdirSync(patchesDir).filter(n => n.endsWith(".patch")).sort();
+  } catch {
+    return null; // no patch dir → no trustworthy fingerprint → always re-verify
+  }
+  return {
+    tag: cfg.tag,
+    src: cfg.src,
+    patches: names.map(n => fileFingerprint(join(patchesDir, n))),
+    manifest: fileFingerprint(join(cfg.src, ".sciencediscovery-patches.json")),
+  };
+}
+
+export const fingerprintEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+export function getVerifiedFingerprint(cfg) {
   try {
     const marker = join(cfg.root, PATCHES_VERIFIED_MARKER);
-    writeFileSync(marker, `${cfg.tag}:${cfg.src}`, "utf8");
+    const parsed = JSON.parse(readFileSync(marker, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null; // absent/legacy("tag:src" 纯文本)/corrupt → re-verify
+  }
+}
+
+export function recordVerified(cfg, fingerprint) {
+  try {
+    const marker = join(cfg.root, PATCHES_VERIFIED_MARKER);
+    writeFileSync(marker, JSON.stringify(fingerprint), "utf8");
   } catch { /* marker is best-effort */ }
 }
 
+const forceVerifyRequested = process.argv.includes("--force-verify")
+  || process.env.JIUWENSWARM_FORCE_VERIFY === "1";
+
 async function verifyCompatibilityPatches(cfg) {
-  if (getVerifiedTag(cfg) === cfg.tag) {
-    process.stderr.write("JiuwenSwarm: compatibility patches already verified; skipping.\n");
+  const fingerprint = verifyFingerprint(cfg);
+  if (!forceVerifyRequested && fingerprint !== null
+      && fingerprintEqual(getVerifiedFingerprint(cfg), fingerprint)) {
+    process.stderr.write("JiuwenSwarm: compatibility patches already verified (fingerprint match); skipping.\n");
     return;
   }
   const { stdout } = await runLogged(cfg, "verify-locate", jwPython(cfg), [
     "-c", "import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec('jiuwenswarm').origin).parent.parent)",
   ]);
   await runLogged(cfg, "verify", jwPython(cfg), [join(scriptDir, "swarm-patches.py"), "verify", stdout.trim().split(/\r?\n/).pop(), cfg.tag]);
-  recordVerified(cfg);
+  // fingerprint 为 null（补丁目录缺失等异常态）时不落 marker：verify 虽然过了，
+  // 但下次仍应重新校验——缓存只覆盖"指纹可计算且匹配"这一种可信状态。
+  if (fingerprint !== null) recordVerified(cfg, fingerprint);
 }
 
 /** The three settings the adapter depends on, applied idempotently.
@@ -366,7 +427,16 @@ export async function cmdSetup(cfg = jwConfig()) {
     }
     await applyCompatibilityPatches(cfg);
     process.stderr.write("Installing JiuwenSwarm (Python 3.12, its own virtualenv)...\n");
-    await run("uv", ["sync", "--python", "3.12"], {
+    // SIZEOPT 1A-1: --no-default-groups keeps the dev/lint groups (mypy,
+    // ruff, pylint, pytest, ...) out of the shipped venv — they are build-time
+    // tooling the runtime never imports (size scan 2026-11-02: ~40 MB). This
+    // is the Node twin of scripts/jiuwenswarm.sh cmd_setup; the two must stay
+    // in step, and the payload ships this one (assemble-backend copies it to
+    // backend/scripts), so whatever the bash path measures is what must land
+    // here too. The CI contract check restores pytest itself
+    // (.ci/run-research-python.sh) and drives the bash path, so nothing
+    // consumes the dev groups from this venv.
+    await run("uv", ["sync", "--python", "3.12", "--no-default-groups"], {
       cwd: cfg.src,
       env: {
         UV_HTTP_TIMEOUT: process.env.UV_HTTP_TIMEOUT ?? "300",
@@ -390,10 +460,12 @@ export async function cmdStart(cfg = jwConfig()) {
   const startedAt = Date.now();
   await diag(cfg, `──── start begin: instance=${cfg.instance} pid=${process.pid}`);
   await diag(cfg, `config: root=${cfg.root} src=${cfg.src} dataDir=${cfg.dataDir} log=${cfg.logFile} home=${cfg.home ?? "(unset)"}`);
+  await perfMark(cfg, "cmdStart-enter", startedAt);
   try {
     if (!jwInstalled(cfg)) {
       throw new Error("Not installed; run: node scripts/jiuwenswarm.mjs setup");
     }
+    await perfMark(cfg, "jwInstalled-check", startedAt);
     // [windows-desktop] F10 —— packaged 首启（或源码模式忘记 init）没有 instance
     // workspace：applyConfig 需要它的 config.yaml。jiuwenswarm-init 是离线脚手架
     // （从包内模板生成 config），与 cmdSetup 末段同一条命令，幂等。
@@ -410,45 +482,52 @@ export async function cmdStart(cfg = jwConfig()) {
       await runLogged(cfg, "init", entry.exe, [...entry.args, "--name", cfg.instance], {
         env: { JIUWENSWARM_DATA_DIR: cfg.dataDir, ...(cfg.home ? { JIUWENSWARM_HOME: cfg.home } : {}) },
       });
-      await diag(cfg, `[perf] jiuwenswarm-init elapsed=${Date.now() - initStarted}ms`);
+      await perfMark(cfg, "jiuwenswarm-init", startedAt, `self=${Date.now() - initStarted}ms`);
+    } else {
+      await perfMark(cfg, "init-skip-config-exists", startedAt);
     }
     const configStarted = Date.now();
     // [windows-desktop] F10.6l ① —— applyConfig 同为环前静默步，进入即打一行。
     process.stderr.write("JiuwenSwarm: applying instance config...\n");
     await applyConfig(cfg);
-    await diag(cfg, `applyConfig: ok in ${((Date.now() - configStarted) / 1000).toFixed(1)}s`);
+    await perfMark(cfg, "applyConfig", startedAt, `self=${Date.now() - configStarted}ms`);
 
     // [windows-desktop] F10.6 —— 起前快查：TCP 直探 .env 里的 GATEWAY_PORT；
     // 不通直接视为未启动（省一次冷 python status —— 冷机一次就是一个完整
     // jw import，30-60s+）。TCP 通了才用 python status 确认真在跑（防端口
     // 恰好被别的进程占用）。
     const ports = await readInstancePorts(cfg);
+    await perfMark(cfg, "readInstancePorts", startedAt, ports ? `gateway=${ports.gateway} web=${ports.web} agent=${ports.agentServer}` : "no-env");
     await diag(cfg, `instance ports (.env): ${ports ? `gateway=${ports.gateway} web=${ports.web} agent=${ports.agentServer}` : "unavailable (fallback: python status probes)"}`);
     // [windows-desktop] F10.6 —— 前置阶段心跳：预检/补丁校验在冷机上要数
     // 分钟（每个 exec 180s 超时但串行），此前零输出，8/10 表现为冻结
     // （2026-10-17 外机实测截图证实）。探测环的「已等 Ns」管不到这里。
     process.stderr.write("JiuwenSwarm: pre-checking instance status (cold machine: this can take a few minutes)...\n");
+    const precheckStarted = Date.now();
     let alreadyUp;
     if (ports?.gateway) {
       alreadyUp = (await probeTcp("127.0.0.1", ports.gateway)) && (await isUp(cfg));
     } else {
       alreadyUp = await isUp(cfg);
     }
+    await perfMark(cfg, "precheck-isUp", startedAt, `self=${Date.now() - precheckStarted}ms alreadyUp=${alreadyUp}`);
     if (alreadyUp) {
       process.stderr.write(`JiuwenSwarm instance ${cfg.instance} is already up.\n`);
       await diag(cfg, "pre-check: already up");
+      await perfMark(cfg, "done-already-up", startedAt);
       return;
     }
     process.stderr.write("JiuwenSwarm: verifying compatibility patches (cold machine: this can take a few minutes)...\n");
     const verifyStarted = Date.now();
     await verifyCompatibilityPatches(cfg);
-    await diag(cfg, `[perf] verifyCompatibilityPatches elapsed=${Date.now() - verifyStarted}ms`);
+    await perfMark(cfg, "verifyPatches", startedAt, `self=${Date.now() - verifyStarted}ms`);
     // Detached completely (the nohup/disown equivalent): a background job that
     // keeps the caller's stdout open makes piping scripts wait forever.
     // [windows-desktop] F10.6 —— spawnDetached 以追加模式打开日志文件；当
     // instance 工作区还在但 jw root（打包模式 = dataDir\jiuwenswarm）被清空
     // 时该目录可能不存在，openSync 直接抛错 → 先确保目录存在。
     await mkdir(dirname(cfg.logFile), { recursive: true });
+    await perfMark(cfg, "logdir-mkdir", startedAt);
     const bootstrapPath = join(repositoryRoot, "services", "adapter", "src", "sciencediscovery_adapter");
     const startEntry = jwEntry(cfg, "jiuwenswarm-start");
     const spawnStarted = Date.now();
@@ -462,6 +541,7 @@ export async function cmdStart(cfg = jwConfig()) {
         ...(cfg.home ? { JIUWENSWARM_HOME: cfg.home } : {}),
       },
     });
+    await perfMark(cfg, "spawn-jw-app", startedAt, `self=${Date.now() - spawnStarted}ms pid=${child.pid ?? "?"}`);
     await diag(cfg, `spawn: detached pid=${child.pid ?? "?"} log=${cfg.logFile} elapsed=${Date.now() - spawnStarted}ms`);
 
     // [windows-desktop] F10.6 —— 等待环：真·墙钟 deadline（240s）+ TCP 直探
@@ -472,6 +552,7 @@ export async function cmdStart(cfg = jwConfig()) {
     const deadline = loopStartedAt + PROBE_DEADLINE_MS;
     let attempt = 0;
     let lastProgressAt = 0;
+    let gatewayFirstTcp = null; // [SD-PERF] gateway 端口首次 TCP 可达时刻
     for (;;) {
       if (Date.now() >= deadline) break;
       attempt += 1;
@@ -479,6 +560,10 @@ export async function cmdStart(cfg = jwConfig()) {
         ? await probeTcp("127.0.0.1", ports.gateway, 2000)
         : await isUp(cfg); // 无 .env 端口的兜底：python status（单次有超时，总时长被 deadline 罩住）
       if (listening) {
+        if (gatewayFirstTcp === null) {
+          gatewayFirstTcp = Date.now();
+          await perfMark(cfg, "gateway-first-tcp", startedAt, `wait=${gatewayFirstTcp - loopStartedAt}ms probe#${attempt}`);
+        }
         // Gateway binds first; web + agent_server follow seconds later. Poll
         // those two tightly (no fixed 6s sleep, no cold-python status — the
         // old confirmation was a full jw import that cost 30-60s on every
@@ -511,6 +596,7 @@ export async function cmdStart(cfg = jwConfig()) {
         }
         if (httpOk) {
           process.stderr.write(`JiuwenSwarm instance ${cfg.instance} is up (gateway ${ports?.gateway ?? "?"}, web ${ports?.web ?? "?"}, agent ${ports?.agentServer ?? "?"}).\n`);
+          await perfMark(cfg, "IS-UP", startedAt, `loopTotal=${Date.now() - loopStartedAt}ms probe#${attempt}`);
           await diag(cfg, `up: attempt #${attempt} gateway=${ports?.gateway ?? "?"} web=${ports?.web ?? "?"} agent=${ports?.agentServer ?? "?"} (tcp+http, no python status)`);
           return;
         }
@@ -550,6 +636,7 @@ export async function cmdStart(cfg = jwConfig()) {
       `; diagnostics: ${startupDiagPath(cfg)}; instance log: ${cfg.logFile}`,
     );
   } finally {
+    await perfMark(cfg, "cmdStart-exit", startedAt);
     await diag(cfg, `──── start end: total=${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
   }
 }
