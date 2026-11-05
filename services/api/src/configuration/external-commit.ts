@@ -90,7 +90,9 @@ export class ConfigurationExternalCommitCoordinator {
         current.view.activation.state = "suppressed"; current.view.resumption.state = "suppressed";
         current.view.error = { code: outcome.code, message: outcome.code === "MCP_CONFIGURATION_JOURNAL_FULL"
           ? "The MCP configuration journal is full. The change was not saved."
-          : "The external authority confirmed that this operation was not saved. Refresh the preview and confirm a new revision if still needed.", retryable: false };
+          : outcome.code === "MCP_CONFIGURATION_JOURNAL_ROW_UNREADABLE"
+            ? "An unreadable MCP configuration journal row was ignored. Saved servers were kept. Refresh the preview and confirm a new revision if this change is still needed."
+            : "The external authority confirmed that this operation was not saved. Refresh the preview and confirm a new revision if still needed.", retryable: false };
         lease.state = "done";
       } else {
         this.repository.saveReceipt({ id: randomUUID(), requestId, revision: current.view.revision, previewDigest: approvedDigest, capabilityId: current.view.capabilityId,

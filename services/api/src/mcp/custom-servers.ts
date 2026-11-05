@@ -118,6 +118,11 @@ function entry(config: CustomMcpServerConfig): McpServerEntry {
 }
 
 const CONFIGURATION_JOURNAL_CAPACITY = 10_000;
+const UNREADABLE_CONFIGURATION_JOURNAL_ROW = "MCP_CONFIGURATION_JOURNAL_ROW_UNREADABLE";
+
+function journalRowLabel(operationId: string): string {
+  return /^[a-f0-9-]{36}:[1-9][0-9]{0,15}:external_submit$/.test(operationId) ? operationId : "unrecognised-id";
+}
 
 export class CustomMcpServers {
   readonly oauth: McpOAuthManager;
@@ -153,13 +158,8 @@ export class CustomMcpServers {
       const servers = envelope ? envelope.servers : saved;
       if (!object(servers) || envelope && !object(envelope.operations)) throw new Error("Invalid saved MCP configuration envelope");
       if (envelope) for (const [operationId, value] of Object.entries(envelope.operations as Record<string, unknown>)) {
-        if (!object(value)) throw new Error("Invalid saved MCP operation");
-        this.validateConfigurationOperation({ operationId, bindingDigest: String(value.bindingDigest) });
-        if (value.operationId !== operationId || !(value.status === "rejected" && typeof value.code === "string" && /^[A-Z][A-Z0-9_]{2,99}$/.test(value.code)
-          || value.status === "applied" && object(value.resourceVersions) && Object.keys(value.resourceVersions).length === 1 && typeof value.resourceVersions.mcpMetadata === "string" && /^[a-f0-9]{64}$/.test(value.resourceVersions.mcpMetadata))) throw new Error("Invalid saved MCP operation outcome");
-        this.configurationOperations[operationId] = value.status === "rejected"
-          ? { operationId, bindingDigest: String(value.bindingDigest), status: "rejected", code: String(value.code) }
-          : { operationId, bindingDigest: String(value.bindingDigest), status: "applied", resourceVersions: { mcpMetadata: String((value.resourceVersions as Record<string, unknown>).mcpMetadata) } };
+        const outcome = this.configurationOperationFromSaved(operationId, value);
+        if (outcome) this.configurationOperations[operationId] = outcome;
       }
       if (Object.keys(this.configurationOperations).length > CONFIGURATION_JOURNAL_CAPACITY) throw new Error("MCP configuration operation journal exceeds capacity");
       for (const [id, value] of Object.entries(servers)) {
@@ -169,7 +169,12 @@ export class CustomMcpServers {
       if (this.deletionJournal) {
         if (!object(envelope?.pendingDeletions)) throw new Error("Invalid pending MCP deletions");
         for (const [operationId, id] of Object.entries(envelope.pendingDeletions)) {
-          if (typeof id !== "string" || !/^custom-[a-f0-9]{12}$/u.test(id) || this.configs[id] || this.configurationOperations[operationId]?.status !== "applied") throw new Error("Invalid pending MCP deletion binding");
+          const outcome = this.configurationOperations[operationId];
+          const recoverable = outcome?.status === "applied" || outcome?.status === "rejected" && outcome.code === UNREADABLE_CONFIGURATION_JOURNAL_ROW;
+          if (typeof id !== "string" || !/^custom-[a-f0-9]{12}$/u.test(id) || this.configs[id] || !recoverable) {
+            console.warn(`mcp_configuration_pending_deletion_skipped: ${journalRowLabel(operationId)}`);
+            continue;
+          }
           this.pendingConfigurationDeletions[operationId] = id;
         }
       }
@@ -418,6 +423,35 @@ export class CustomMcpServers {
   private configurationMetadataRevision(serverId: string, config = this.configs[serverId]): string {
     if (!this.key) throw new Error("MCP storage is not initialized");
     return createHmac("sha256", this.key).update(JSON.stringify([serverId, config ?? null, this.oauth.configurationRevision([serverId])])).digest("hex");
+  }
+
+  /** A journal row is an idempotency fence, not the server list. One unreadable
+   * row must not block startup. A readable identity stays rejected so the same
+   * operation cannot be applied again; an identity this build cannot name is
+   * dropped because nothing here can replay it. */
+  private configurationOperationFromSaved(operationId: string, value: unknown): ConfigurationExternalOutcome | undefined {
+    if (!object(value)) {
+      console.warn(`mcp_configuration_journal_row_skipped: ${journalRowLabel(operationId)}`);
+      return undefined;
+    }
+    const bindingDigest = typeof value.bindingDigest === "string" ? value.bindingDigest : "";
+    try { this.validateConfigurationOperation({ operationId, bindingDigest }); } catch {
+      console.warn(`mcp_configuration_journal_row_skipped: ${journalRowLabel(operationId)}`);
+      return undefined;
+    }
+    if (value.operationId !== operationId) {
+      console.warn(`mcp_configuration_journal_row_skipped: ${operationId}`);
+      return undefined;
+    }
+    if (value.status === "rejected" && typeof value.code === "string" && /^[A-Z][A-Z0-9_]{2,99}$/.test(value.code)) {
+      return { operationId, bindingDigest, status: "rejected", code: value.code };
+    }
+    const versions = value.resourceVersions;
+    if (value.status === "applied" && object(versions) && Object.keys(versions).length === 1 && typeof versions.mcpMetadata === "string" && /^[a-f0-9]{64}$/.test(versions.mcpMetadata)) {
+      return { operationId, bindingDigest, status: "applied", resourceVersions: { mcpMetadata: versions.mcpMetadata } };
+    }
+    console.warn(`mcp_configuration_journal_row_unreadable: ${operationId}`);
+    return { operationId, bindingDigest, status: "rejected", code: UNREADABLE_CONFIGURATION_JOURNAL_ROW };
   }
 
   private validateConfigurationOperation(operation: ConfigurationExternalOperation): void {

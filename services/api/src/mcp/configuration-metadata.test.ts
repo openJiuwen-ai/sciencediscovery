@@ -101,3 +101,68 @@ test("CFG-X03a: operation identity/binding mismatch cannot overwrite an existing
   const h = await harness(context), op = operation(), first = await h.manager.resolveConfigurationMetadata(op); await assert.rejects(h.manager.resolveConfigurationMetadata({ ...op, bindingDigest: digest("different") })); assert.deepEqual(await h.manager.resolveConfigurationMetadata(op), first);
   await assert.rejects(h.manager.resolveConfigurationMetadata({ operationId: "__proto__", bindingDigest: op.bindingDigest }));
 });
+
+test("CFG-X03a: an empty operation journal persists the legacy bare custom-server map", async context => {
+  const h = await harness(context);
+  await h.manager.save({ name: "Owned STDIO metadata", description: "Still legacy", transport: "stdio", enabled: true, command: "owned-must-never-execute", args: ["--owned"], cwd: h.root, env: { OWNED_SECRET: null }, timeoutSeconds: 37 }, h.server.id);
+  const key = await loadOrCreateModelSecretKey(resolve(h.root, "model-secrets.key"));
+  const saved = JSON.parse(decryptSecretValue(key, "custom-mcp-servers", await readFile(resolve(h.root, "custom-mcp-servers.enc"), "utf8"))) as Record<string, unknown>;
+  for (const field of ["format", "servers", "operations", "pendingDeletions"]) assert.equal(Object.hasOwn(saved, field), false, field);
+  assert.ok(Object.keys(saved).length > 0);
+  for (const id of Object.keys(saved)) assert.match(id, /^custom-[a-f0-9]{12}$/u);
+  assert.equal((saved[h.server.id] as { description?: string }).description, "Still legacy");
+});
+
+test("CFG-X03a: the first deletion keeps the v3 envelope after no deletion is pending", async context => {
+  const h = await harness(context);
+  const deleted = await h.manager.submitConfigurationDeletion(operation(), h.server.id, metadataVersion(h.manager, h.server.id));
+  assert.equal(deleted.status, "applied");
+  const key = await loadOrCreateModelSecretKey(resolve(h.root, "model-secrets.key"));
+  const readSaved = async () => JSON.parse(decryptSecretValue(key, "custom-mcp-servers", await readFile(resolve(h.root, "custom-mcp-servers.enc"), "utf8"))) as { format?: string; pendingDeletions?: Record<string, string>; servers?: Record<string, unknown> };
+  const saved = await readSaved();
+  assert.equal(saved.format, "sciencediscovery-custom-mcp-v3");
+  assert.deepEqual(saved.pendingDeletions, {});
+  assert.equal(saved.servers?.[h.server.id], undefined);
+  const other = await h.manager.save({ name: "After deletion", transport: "stdio", command: "never-run", enabled: false });
+  const again = await readSaved();
+  assert.equal(again.format, "sciencediscovery-custom-mcp-v3");
+  assert.deepEqual(again.pendingDeletions, {});
+  assert.ok(again.servers?.[other.id]);
+});
+
+test("CFG-X03a: one unreadable journal row does not block loading the saved servers", async context => {
+  const h = await harness(context);
+  const key = await loadOrCreateModelSecretKey(resolve(h.root, "model-secrets.key"));
+  const file = resolve(h.root, "custom-mcp-servers.enc");
+  const servers = JSON.parse(decryptSecretValue(key, "custom-mcp-servers", await readFile(file, "utf8"))) as Record<string, unknown>;
+  const kept: ConfigurationExternalOutcome = { ...operation(), status: "rejected", code: "EXTERNAL_OPERATION_NOT_SAVED" };
+  const bad = operation();
+  const short = operation();
+  const operations: Record<string, unknown> = {
+    [kept.operationId]: kept,
+    [bad.operationId]: { ...bad, status: "archived", code: "FUTURE_STATUS" },
+    [short.operationId]: { ...short, status: "applied", resourceVersions: { mcpMetadata: "abcd", extra: "field" } },
+    "not-an-operation": { status: "applied" },
+  };
+  await writeFile(file, encryptSecretValue(key, "custom-mcp-servers", JSON.stringify({
+    format: "sciencediscovery-custom-mcp-v3", servers, operations,
+    pendingDeletions: { [bad.operationId]: h.server.id, "not-an-operation": "nope" },
+  })));
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+  const manager = new CustomMcpServers(h.root, createMcpSourceRegistry(), () => undefined, async () => undefined);
+  try { await manager.load(); } finally { console.warn = original; }
+  assert.equal(manager.configurationMetadata(h.server.id).current?.name, "Owned STDIO metadata");
+  assert.deepEqual(await manager.resolveConfigurationMetadata(kept), kept);
+  const version = metadataVersion(manager, h.server.id);
+  const fence = (op: ReturnType<typeof operation>): ConfigurationExternalOutcome => ({ ...op, status: "rejected", code: "MCP_CONFIGURATION_JOURNAL_ROW_UNREADABLE" });
+  assert.deepEqual(await manager.submitConfigurationMetadata(bad, h.server.id, version, { name: "Must not apply" }), fence(bad));
+  assert.deepEqual(await manager.submitConfigurationMetadata(short, h.server.id, version, { description: "Must not apply" }), fence(short));
+  assert.equal(manager.configurationMetadata(h.server.id).current?.name, "Owned STDIO metadata");
+  assert.ok(warnings.some(line => line === `mcp_configuration_journal_row_unreadable: ${bad.operationId}`));
+  assert.ok(warnings.some(line => line === `mcp_configuration_journal_row_unreadable: ${short.operationId}`));
+  assert.ok(warnings.some(line => line === "mcp_configuration_journal_row_skipped: unrecognised-id"));
+  assert.ok(warnings.some(line => line === `mcp_configuration_pending_deletion_skipped: ${bad.operationId}`));
+  assert.ok(warnings.some(line => line === "mcp_configuration_pending_deletion_skipped: unrecognised-id"));
+});
