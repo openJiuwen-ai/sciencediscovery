@@ -591,20 +591,27 @@ async def _preprint_search(server: str, query: str, days: int, limit: int, categ
             batch: list[int] = []
             while queue and len(batch) < width and queue[0] not in pages:
                 batch.append(queue.pop(0))
-            try:
-                payloads = await asyncio.wait_for(
-                    asyncio.gather(*(fetch(cursor) for cursor in batch)),
-                    timeout=max(0.0, deadline - time.monotonic()),
-                )
-            except TimeoutError:
-                truncated = True
-                break
-            for cursor, payload in zip(batch, payloads):
-                _require_preprint_provider_ok(server, payload)
-                pages[cursor] = payload
+            # Each page gets the budget that is left; a page that does not
+            # answer in time is dropped, but the rest of the batch is still
+            # used rather than thrown away with it.
+            remaining = max(0.0, deadline - time.monotonic())
+            outcomes = await asyncio.gather(
+                *(asyncio.wait_for(fetch(cursor), timeout=remaining) for cursor in batch),
+                return_exceptions=True,
+            )
+            for cursor, outcome in zip(batch, outcomes):
+                if isinstance(outcome, (TimeoutError, httpx.TimeoutException)):
+                    truncated = True
+                    continue
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                _require_preprint_provider_ok(server, outcome)
+                pages[cursor] = outcome
             for cursor in batch:
-                if absorb(cursor):
+                if cursor in pages and absorb(cursor):
                     break
+            if truncated:
+                break
 
     scanned = len(covered)
     window = f"{start.isoformat()} to {end.isoformat()}"
