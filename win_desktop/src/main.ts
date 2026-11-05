@@ -293,7 +293,7 @@ function watchAgentReady(endpoints: Endpoints, dataDir: string | null): void {
         if (body.jiuwenswarm?.reachable) {
           SD_PERF("AGENT-READY", `watchAttempts=${attempt}`);
           // [first-message-latency] fire-and-forget MCP catalog warmup: the
-          // catalog refresh (stdio spawn + tools/list) overlaps the ready screen
+          // catalog load (stdio spawn + tools/list) overlaps the ready screen
           // instead of the first chat run. Best-effort, off the critical path;
           // failures are logged only and never surface to the user.
           void runFirstChatWarmup(endpoints.ui, token).then(
