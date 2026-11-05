@@ -12,7 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { FeedbackSubmission } from "@sciencediscovery/operational-logging/feedback";
+import type { FeedbackImage, FeedbackSubmission } from "@sciencediscovery/operational-logging/feedback";
+import { sanitizeFeedbackImageName } from "@sciencediscovery/operational-logging/feedback";
+
+/** URLs for the screenshots that made it into the repository, index-aligned
+ *  with `submission.images` (an empty string marks a failed upload), plus the
+ *  failure count so the issue can say so instead of silently dropping them. */
+export interface FeedbackAttachments {
+  urls: string[];
+  failed: number;
+}
 
 export interface CreateIssueRequest {
   token: string;
@@ -20,12 +29,24 @@ export interface CreateIssueRequest {
   repo: string;
   receipt: string;
   submission: FeedbackSubmission;
+  attachments?: FeedbackAttachments;
+}
+
+export interface ImageUploadRequest {
+  token: string;
+  owner: string;
+  repo: string;
+  receipt: string;
+  index: number;
+  image: FeedbackImage;
 }
 
 export interface IssueResult {
   number: number;
   htmlUrl: string;
 }
+
+const GITHUB_API = "https://api.github.com";
 
 /** Title prefix carries the receipt so P2 status lookup can find the issue by code. */
 export function issueTitle(receipt: string, title: string): string {
@@ -43,14 +64,102 @@ function field(value: string | undefined, fallback = "-"): string {
   return trimmed ? trimmed : fallback;
 }
 
+function imageExtension(mime: FeedbackImage["mime"]): string {
+  switch (mime) {
+    case "image/png": return "png";
+    case "image/jpeg": return "jpg";
+    case "image/webp": return "webp";
+  }
+}
+
+function githubHeaders(token: string): Record<string, string> {
+  return {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "User-Agent": "sciencediscovery-feedback",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+/**
+ * Store one screenshot in the repository through the Contents API. The path is
+ * derived from the receipt and the position, never from the user's filename, so
+ * it cannot escape the folder or collide across reports. Returns the raw URL to
+ * embed in the issue and the path needed to remove the file again.
+ */
+export async function uploadFeedbackImage(
+  fetchImpl: typeof fetch,
+  request: ImageUploadRequest,
+): Promise<{ url: string; path: string }> {
+  const { token, owner, repo, receipt, index, image } = request;
+  const path = `feedback-images/${receipt}/${index + 1}.${imageExtension(image.mime)}`;
+  const response = await fetchImpl(`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`, {
+    method: "PUT",
+    headers: githubHeaders(token),
+    body: JSON.stringify({
+      message: `chore(feedback): attach screenshot for ${receipt}`,
+      content: image.data,
+    }),
+  });
+  if (!response.ok) throw new Error(`GitHub image upload failed: ${response.status}`);
+  const data = (await response.json()) as { content?: { html_url?: string; download_url?: string } };
+  const htmlUrl = data.content?.html_url;
+  // `download_url` is only present on some responses; both point at the raw
+  // bytes, which is what Markdown needs.
+  const url = htmlUrl ? htmlUrl.replace("/blob/", "/raw/") : data.content?.download_url;
+  if (!url) throw new Error("GitHub image upload returned no URL");
+  return { url, path };
+}
+
+/** Remove one screenshot that was uploaded for an issue that never got created.
+ *  Best effort: the caller only logs a failure here, because the report itself
+ *  has already failed for a more important reason. */
+export async function deleteFeedbackImage(
+  fetchImpl: typeof fetch,
+  request: { token: string; owner: string; repo: string; path: string },
+): Promise<void> {
+  const { token, owner, repo, path } = request;
+  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`;
+  const headers = githubHeaders(token);
+  const lookup = await fetchImpl(url, { headers });
+  if (!lookup.ok) throw new Error(`GitHub image lookup failed: ${lookup.status}`);
+  const { sha } = (await lookup.json()) as { sha?: string };
+  if (!sha) throw new Error("GitHub image lookup returned no sha");
+  const response = await fetchImpl(url, {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({
+      message: `chore(feedback): drop orphaned screenshot ${path}`,
+      sha,
+    }),
+  });
+  if (!response.ok) throw new Error(`GitHub image delete failed: ${response.status}`);
+}
+
 /** Markdown body stamped with a version marker so future tools can re-parse it. */
-export function issueBody(receipt: string, submission: FeedbackSubmission): string {
+export function issueBody(
+  receipt: string,
+  submission: FeedbackSubmission,
+  attachments: FeedbackAttachments = { urls: [], failed: 0 },
+): string {
   const meta = submission.meta ?? {};
   const installId = field(meta.installId).slice(0, 8);
   const contactLines = submission.contact
     ? `- type: ${submission.contact.type}\n- value: ${submission.contact.value}`
     : "- none";
   const diagnostics = submission.diagnostics ? `\`\`\`text\n${submission.diagnostics}\n\`\`\`` : "_(not attached)_";
+  const images = (submission.images ?? []).map((image, index) => {
+    const url = attachments.urls[index];
+    // An upload that failed leaves a gap in the array; say which image is
+    // missing rather than rendering a broken link.
+    return url
+      ? `![${sanitizeFeedbackImageName(image.name)}](${url})`
+      : `- ${sanitizeFeedbackImageName(image.name)}（上传失败，见 Worker 日志）`;
+  });
+  const imageFailureNote = attachments.failed > 0
+    ? [`> ${attachments.failed} 张截图上传失败，已在下方标注。`, ""]
+    : [];
   return [
     "<!-- sd-feedback:v1 -->",
     "",
@@ -61,7 +170,7 @@ export function issueBody(receipt: string, submission: FeedbackSubmission): stri
     `| 版本 | ${field(meta.version)} |`,
     `| 系统 | ${field(meta.os)} |`,
     `| 语言 | ${field(meta.locale)} |`,
-    `| installId | ${installId} |`,
+    `| install Id | ${installId} |`,
     "",
     "### 用户描述",
     "",
@@ -71,6 +180,7 @@ export function issueBody(receipt: string, submission: FeedbackSubmission): stri
     "",
     diagnostics,
     "",
+    ...(images.length > 0 ? ["### 截图", "", ...imageFailureNote, ...images, ""] : []),
     "### 联系方式（私有，勿外传）",
     "",
     contactLines,
@@ -82,19 +192,13 @@ export async function createIssue(
   fetchImpl: typeof fetch,
   request: CreateIssueRequest,
 ): Promise<IssueResult> {
-  const url = `https://api.github.com/repos/${request.owner}/${request.repo}/issues`;
+  const url = `${GITHUB_API}/repos/${request.owner}/${request.repo}/issues`;
   const send = (labels: string[] | undefined) => fetchImpl(url, {
     method: "POST",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${request.token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "sciencediscovery-feedback",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
+    headers: githubHeaders(request.token),
     body: JSON.stringify({
       title: issueTitle(request.receipt, request.submission.title),
-      body: issueBody(request.receipt, request.submission),
+      body: issueBody(request.receipt, request.submission, request.attachments),
       ...(labels ? { labels } : {}),
     }),
   });

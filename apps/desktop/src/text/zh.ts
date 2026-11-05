@@ -1179,6 +1179,19 @@ export const ZH = {
       preview: "预览将要发送的内容",
       none: "本条反馈没有可用诊断信息",
     },
+    images: {
+      label: "截图（可选）",
+      add: "上传图片",
+      limit: (max: number) => `最多 ${max} 张`,
+      remove: "移除截图",
+      preparing: "正在处理图片…",
+      privacy: "截图对仓库协作者可见，请先遮挡敏感信息。",
+      error: {
+        type: "仅支持 PNG、JPEG 或 WebP 图片。",
+        size: "图片压缩后仍然过大，请换一张。",
+        decode: "无法读取这张图片。",
+      },
+    },
     submit: "提交",
     submitting: "提交中…",
     success: {
@@ -1197,6 +1210,7 @@ export const ZH = {
       tooLarge: "内容太长，请精简后再试。",
       unavailable: "服务暂时不可用，请稍后再试。",
       invalid: "部分字段需要检查。",
+      fieldsTitle: "需要检查的字段",
       kept: "内容已保留，你可以复制或改用 GitHub 提交。",
       copyAll: "复制全部内容",
       openIssue: "改用 GitHub 提交",

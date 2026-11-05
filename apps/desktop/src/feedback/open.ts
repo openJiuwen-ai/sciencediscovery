@@ -12,32 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { FeedbackKind, FeedbackMeta } from "@sciencediscovery/operational-logging/feedback";
+import { createFeedbackOpenHook } from "@sciencediscovery/operational-logging/feedback-client";
 
-/**
- * Pre-fill for a feedback dialog opened from a specific context. The sidebar
- * entry opens without a seed; an error context may open with a title, body and
- * diagnostics when the desktop builds a diagnostics hand-off.
- */
-export interface FeedbackSeed {
-  kind?: FeedbackKind;
-  title?: string;
-  body?: string;
-  diagnostics?: string;
-  meta?: FeedbackMeta;
-}
-
-type OpenFeedbackListener = (seed?: FeedbackSeed) => void;
-
-let openListener: OpenFeedbackListener | undefined;
+const hook = createFeedbackOpenHook();
 
 /** Imperative open hook used by entry points that are not the dialog itself. */
-export function openFeedback(seed?: FeedbackSeed): void {
-  openListener?.(seed);
-}
+export const openFeedback = hook.openFeedback;
 
 /** The single mounted dialog subscribes here; returns an unsubscribe function. */
-export function subscribeFeedbackOpen(listener: OpenFeedbackListener): () => void {
-  openListener = listener;
-  return () => { if (openListener === listener) openListener = undefined; };
-}
+export const subscribeFeedbackOpen = hook.subscribeFeedbackOpen;
+
+export type { FeedbackSeed } from "@sciencediscovery/operational-logging/feedback-client";
