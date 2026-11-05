@@ -168,9 +168,6 @@ export const ZH = {
     } as Record<string, string>,
     /** Fills in a cancellation whose reason the stream did not carry. */
     cancelledReason: "运行已取消",
-    /** A run that ended in an error, with and without the server's code. */
-    errorLine: (message: string) => `运行失败：${message}`,
-    errorWithCode: (code: string, message: string) => `运行失败（${code}）：${message}`,
     thinking: "思考过程",
     thinkingSteps: (count: number) => `${count} 步`,
     /** The folded line standing in for a run that has not finished yet. */
@@ -1307,6 +1304,23 @@ export const ZH = {
         `计划 ${planned} 次扩展，实际完成 ${made} 次（${reason}）。`,
       log: "引擎日志",
     },
+  },
+
+  runFailure: {
+    /** Plain-language cause and recovery action per stable failure class. */
+    timeout: "请求超时，请重试，或拆小任务、调大超时预算。",
+    "rate-limited": "模型服务正在限流，请稍候重试。",
+    "semantic-error": "模型服务拒绝了本次请求，请检查模型配置和输入内容后重试。",
+    "server-error": "模型服务出现服务器错误，请稍候重试；若持续失败，请检查服务状态。",
+    "transport-error": "无法连接模型服务，请检查网络或代理设置后重试。",
+    unauthorized: "模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。",
+    "invalid-tool-call":
+      "模型生成的工具调用参数无法解析，该调用没有执行，运行已停止。请重试任务；若反复出现，可换用其他模型。",
+    /** Fallback when the server returns a code the client does not recognise. */
+    unknown:
+      "任务未能完成，运行已停止。请重试任务；若再次失败，可展开技术详情以排查原因。",
+    /** Label for the expandable block that exposes raw provider diagnostics. */
+    technicalDetails: "技术详情",
   },
 
   errors: {

@@ -163,8 +163,6 @@ export const EN: Text = {
       timeout_notice: "Timeout",
     },
     cancelledReason: "The run was cancelled",
-    errorLine: (message: string) => `Run failed: ${message}`,
-    errorWithCode: (code: string, message: string) => `Run failed (${code}): ${message}`,
     thinking: "Reasoning",
     thinkingSteps: (count: number) => `${count} ${count === 1 ? "step" : "steps"}`,
     thinkingNow: "Planning the next step",
@@ -1260,6 +1258,23 @@ export const EN: Text = {
         `Planned ${planned} expansions, completed ${made} (${reason}).`,
       log: "Engine log",
     },
+  },
+
+  runFailure: {
+    /** Plain-language cause and recovery action per stable failure class. */
+    timeout: "The request timed out. Retry, or split the task / raise the timeout budget.",
+    "rate-limited": "The model service is limiting requests. Wait a moment and try again.",
+    "semantic-error": "The model service rejected the request. Check the model configuration and input, then retry.",
+    "server-error": "The model service reported a server error. Wait a moment and retry; if it keeps failing, check the service status.",
+    "transport-error": "The model service could not be reached. Check the network or proxy settings and retry.",
+    unauthorized: "The model service rejected the credentials. Check the API key in the model registry and retry.",
+    "invalid-tool-call":
+      "The model wrote a tool call whose arguments could not be read, so it was not run and the run stopped. Retry the task; if it keeps happening, try another model.",
+    /** Fallback when the server returns a code the client does not recognise. */
+    unknown:
+      "The task stopped before it could finish. Retry the task; if it fails again, open the technical details to help diagnose the problem.",
+    /** Label for the expandable block that exposes raw provider diagnostics. */
+    technicalDetails: "Technical details",
   },
 
   errors: {

@@ -411,6 +411,34 @@
   letter-spacing: .03em;
 }
 
+/* Expandable technical details for a run failure. Kept inside the notice row
+   so the raw provider diagnostics are available on request without cluttering
+   the transcript. */
+.run-failure-details {
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-subtle);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.run-failure-details summary {
+  padding-top: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.run-failure-details pre {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
 /* A short note where a body would go: a truncated answer, or a section with
    nothing in it yet. */
 .workspace-empty {
