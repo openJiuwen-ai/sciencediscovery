@@ -189,15 +189,22 @@ test("a host with no sandbox asks for the no-isolation confirmation before sendi
 
   await page.getByRole("button", { name: "程序演进" }).click();
   const dialog = page.getByRole("dialog");
+  // The risk is stated before anything is typed, not hidden behind a switch.
+  await expect(dialog.getByRole("note")).toContainText("没有沙箱的情况下运行候选代码");
   await dialog.getByLabel("优化目标").fill("让压缩比更高");
 
-  // Off by default: the switch cannot give consent on the user's behalf.
-  const consent = dialog.getByRole("switch", { name: /允许无隔离直接运行候选代码/ });
-  await expect(consent).toBeVisible();
-  await expect(consent).not.toBeChecked();
-
-  await consent.click();
+  // Starting asks first, and a dismissed alert sends nothing.
   await dialog.getByRole("button", { name: "开始设计" }).click();
+  const alert = page.getByRole("alertdialog");
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText("没有沙箱、没有 CPU / 内存限制");
+  await alert.getByRole("button", { name: "返回" }).click();
+  await expect(alert).toBeHidden();
+  await expect(dialog).toBeVisible();
+  expect(posts(mock)).toHaveLength(0);
+
+  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" }).click();
   await expect.poll(() =>
     mock.calls.some(
       (call) =>
@@ -208,7 +215,7 @@ test("a host with no sandbox asks for the no-isolation confirmation before sendi
   ).toBe(true);
 });
 
-test("a typed design command on a host with no sandbox detours through the consent switch", async ({ page }) => {
+test("a typed design command on a host with no sandbox detours through the confirmation", async ({ page }) => {
   const mock = await installMockApi(page, {
     evolveStatus: { canInitialize: true, sandbox: "direct", state: "ready" },
     sessions: [makeSession()],
@@ -225,12 +232,11 @@ test("a typed design command on a host with no sandbox detours through the conse
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("优化目标")).toHaveValue("让压缩比更高");
-  const consent = dialog.getByRole("switch", { name: /允许无隔离直接运行候选代码/ });
-  await expect(consent).not.toBeChecked();
+  await expect(dialog.getByRole("note")).toContainText("没有沙箱的情况下运行候选代码");
   expect(posts(mock)).toHaveLength(0);
 
-  await consent.click();
   await dialog.getByRole("button", { name: "开始设计" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" }).click();
   await expect.poll(() =>
     mock.calls.some(
       (call) =>

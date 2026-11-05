@@ -91,12 +91,6 @@ function switchTag(html: string): string {
   return html.match(/<input[^>]*role="switch"[^>]*>/)?.[0] ?? "";
 }
 
-/** The unisolated switch is the second one in the dialog, so the generic
- *  helper above would read the checkpoint switch instead. */
-function unisolatedSwitch(html: string): string {
-  const after = html.split("is-unisolated")[1] ?? "";
-  return after.match(/<input[^>]*>/)?.[0] ?? "";
-}
 
 function view(over: Partial<EvolveRunView> = {}): EvolveRunView {
   return {
@@ -294,13 +288,12 @@ test("the create dialog pauses at checkpoints unless the command said otherwise"
   assert.equal(switchTag(auto).includes("checked"), false);
 });
 
-test("only a host with no sandbox offers the direct-execution warning", () => {
-  // The switch is the user's per-run consent, and a switch on a host that has
-  // a sandbox would be a choice the deployment cannot honour.
-  const render = (sandbox: EvolveStatus["sandbox"], initialAllowUnisolated?: boolean) => renderToStaticMarkup(
+test("only a host with no sandbox warns that candidates run unconfined", () => {
+  // The warning is a statement under the title, not a switch: consent is asked
+  // when the search is started, so the form must not offer to give it early.
+  const render = (sandbox: EvolveStatus["sandbox"]) => renderToStaticMarkup(
     <EvolveCreateDialog
       archived={false}
-      initialAllowUnisolated={initialAllowUnisolated}
       initializing={false}
       onClose={() => {}}
       onInitialize={() => {}}
@@ -311,18 +304,23 @@ test("only a host with no sandbox offers the direct-execution warning", () => {
   );
 
   const direct = render("direct");
-  assert.match(direct, /evolve-create-confirm is-unisolated/);
-  assert.match(direct, /允许无隔离直接运行候选代码/);
-  // Off unless the detour carried an approval: a default cannot give consent.
-  assert.equal(unisolatedSwitch(direct).includes("checked"), false);
-  assert.match(direct, /会在启动前被拒绝/);
-  assert.match(unisolatedSwitch(render("direct", true)), /checked/);
+  assert.match(direct, /class="evolve-create-alert"/);
+  assert.match(direct, /role="note"/);
+  assert.match(direct, /没有沙箱的情况下运行候选代码/);
+  assert.match(direct, /可以读写你的文件、访问网络/);
+  assert.match(direct, /会再确认一次/);
+  // The warning sits above the first field, where a title-adjacent banner is
+  // read before anything is typed.
+  assert.equal(direct.indexOf("evolve-create-alert") < direct.indexOf("优化目标"), true);
+  // No control carries the consent: the only switch left is the checkpoint one.
+  assert.equal(direct.includes("允许无隔离直接运行候选代码"), false);
+  assert.equal((direct.match(/role="switch"/g) ?? []).length, 1);
 
   for (const sandbox of ["bwrap", "seatbelt", null, undefined] as const) {
     assert.equal(
-      render(sandbox).includes("允许无隔离直接运行候选代码"),
+      render(sandbox).includes("evolve-create-alert"),
       false,
-      `${String(sandbox)}: a sandboxed host must not offer to run unconfined`,
+      `${String(sandbox)}: a sandboxed host must not warn about unconfined runs`,
     );
   }
 });

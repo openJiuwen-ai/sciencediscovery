@@ -402,28 +402,42 @@
   outline-offset: 2px;
 }
 
-/* The no-isolation switch is a caution, not another setting: it is only drawn
-   where no sandbox exists at all, and it stays warm even before it is on. */
-.evolve-create-confirm.is-unisolated {
-  border-color: var(--warning-border);
+/* The no-isolation warning sits directly under the title, before any field:
+   it is only drawn where no sandbox exists at all, so its presence is itself
+   the message. It is a statement, not a control — the consent is asked at the
+   moment of sending. */
+.evolve-create-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 28px 4px;
+  padding: 11px 13px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-m);
   background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 
-.evolve-create-confirm.is-unisolated .evolve-create-confirm-text strong {
+.evolve-create-alert strong {
+  color: var(--warning-strong);
+  font-weight: 650;
+}
+
+/* The alert is the topmost surface; it darkens the dialog it was opened from
+   rather than replacing it, so returning costs nothing. */
+.evolve-confirm-backdrop { z-index: 1310; }
+
+.modal-panel.evolve-unisolated-confirm .modal-header h2 {
   color: var(--warning-strong);
 }
 
-.evolve-create-confirm.is-unisolated input:checked {
-  border-color: #e0b56a;
-  background: #f6e3bd;
-}
-
-.evolve-create-confirm.is-unisolated input:checked::after {
-  background: #b1781a;
-}
-
-.evolve-create-confirm.is-unisolated input:focus-visible {
-  outline-color: #b1781a;
+.evolve-unisolated-body {
+  padding: 0 28px 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .evolve-create-confirm-text {
@@ -1554,6 +1568,8 @@
   .evolve-create-algorithms > div { grid-template-columns: 1fr; }
   .evolve-create-body { padding: 16px 20px 0; }
   .evolve-create-body .modal-footer { margin-inline: -20px; padding-inline: 20px; }
+  .evolve-create-alert { margin-inline: 20px; }
+  .evolve-unisolated-body { padding-inline: 20px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
