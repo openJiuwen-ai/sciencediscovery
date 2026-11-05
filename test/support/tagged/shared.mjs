@@ -42,7 +42,19 @@ function run(command,args,env,log,cwd=root,{echo=false}={}) {
     child.on('error',reject);child.on('close',code=>{writeFileSync(log,output);done(code??1);});
   });
 }
-function python(project){return join(root,'services',project,'.venv/bin/python');}
+/**
+ * Where a project's virtualenv lives. Since SIZEOPT W2 the five sidecars share
+ * ONE root uv.lock, so `uv sync --project services/<member>` resolves from the
+ * repository root and puts its environment at the root `.venv` unless told
+ * otherwise — which left `services/<member>/.venv/bin/python` (what every
+ * python() caller below expects) missing entirely. Naming the environment per
+ * member keeps the five suites on their own closure instead of on whichever
+ * member synced last: without it each sync *replaces* the shared root venv and
+ * uninstalls the previous member's unique packages. Same idiom as
+ * scripts/with-jiuwenswarm.sh and start-stack.mjs uvSyncProject.
+ */
+function pythonVenv(project){return join(root,'services',project,'.venv');}
+function python(project){return join(pythonVenv(project),'bin/python');}
 function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services',project,'tests'),join(root,'services',project,'src')].join(':')};}
 /**
  * How many cases are repeated when a whole batch faulted early. A batch that
@@ -211,7 +223,9 @@ export async function main(args=process.argv.slice(2)) {
   if(prepared && process.env.CI_E2E_PREPARE_ONLY==='1')throw new Error('CI_E2E_PREPARE_ONLY and CI_E2E_PREPARED are mutually exclusive');
   if(action!=='list' && !prepared) {
     const steps=[['pnpm',['install','--frozen-lockfile']],...(!light?[['pnpm',['build']]]:[])];
-    if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','adapter'].includes(project)?['--extra','test']:[])]]);
+    // A step may carry environment overrides as a third element; they merge
+    // over the run-wide `env`.
+    if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','adapter'].includes(project)?['--extra','test']:[])],{UV_PROJECT_ENVIRONMENT:pythonVenv(project)}]);
     // Into the project's own environment, after the locked sync, so the tests
     // run on exactly the interpreter and packages they run on without it.
     if(needUT&&coverage)for(const project of pythonProjects)steps.push(['uv',['pip','install','--python',python(project),coverageRequirement]]);
@@ -219,7 +233,7 @@ export async function main(args=process.argv.slice(2)) {
     // code a test reaches through `dist/` is credited to the file it came from.
     if(coverage)steps.push(['pnpm',['--recursive','--filter','./packages/*','--filter','./services/*','--filter','./config','exec','tsc','-p','tsconfig.json','--sourceMap']]);
     if(needPW)steps.push(['node',['test/sync-e2e.mjs','--write']],['npm',['ci','--prefix','.e2e']],['.e2e/node_modules/.bin/playwright',['install','chromium']]);
-    for(let i=0;i<steps.length;i++){const [cmd,argv]=steps[i];console.log(`Prepare: ${cmd} ${argv.join(' ')}`);if(await run(cmd,argv,env,join(outputDir,`prepare-${i}.log`)))throw new Error(`PREPARATION_FAILED: inspect ${join(outputDir,`prepare-${i}.log`)}`);}
+    for(let i=0;i<steps.length;i++){const [cmd,argv,stepEnv]=steps[i];console.log(`Prepare: ${cmd} ${argv.join(' ')}`);if(await run(cmd,argv,{...env,...stepEnv},join(outputDir,`prepare-${i}.log`)))throw new Error(`PREPARATION_FAILED: inspect ${join(outputDir,`prepare-${i}.log`)}`);}
   }
   if(prepareOnly){console.log(`Prepared ${slice}; no test was collected or executed here.`);return 0;}
   // Source scopes follow workspace layout, never installed capabilities or environment gates.

@@ -32,8 +32,11 @@ test("packagedPaths maps the installer layout", () => {
   assert.equal(p.python, join("C:\\Program Files\\SD\\resources", "python"));
   assert.equal(p.micromamba, join("C:\\Program Files\\SD\\resources", "micromamba", "micromamba.exe"));
   assert.equal(p.envsTemplate, join("C:\\Program Files\\SD\\resources", "envs-template"));
-  assert.ok(p.venvNames.includes("gateway"));
-  assert.ok(p.jwSrc.endsWith(join("jiuwenswarm", "src")));
+  // SIZEOPT W2: one shared venv for all five Python sidecars.
+  assert.ok(p.venvNames.includes("sd-services"));
+  // SIZEOPT W6 / design D11: short payload layout backend\jw (was
+  // backend\.sciencediscovery-data\jiuwenswarm\src) to reclaim MAX_PATH budget.
+  assert.equal(p.jwSrc, join("C:\\Program Files\\SD\\resources", "backend", "jw"));
 });
 
 // --- packagedEnv ---------------------------------------------------------------
@@ -47,8 +50,8 @@ test("packagedEnv injects the packaged-mode contract", () => {
   // No PYTHONPYCACHEPREFIX: the payload's in-place __pycache__ must be used.
   assert.equal(env.PYTHONPYCACHEPREFIX, undefined);
   assert.equal(env.JIUWENSWARM_ROOT, join("D:\\data", "jiuwenswarm"));
-  assert.equal(env.JIUWENSWARM_SRC, join("C:\\res", "backend", ".sciencediscovery-data", "jiuwenswarm", "src"));
-  assert.equal(env.SCIENCE_AGENT_PAPER_PYTHON_PATH, join("D:\\data", "envs", "paper", "Scripts", "python.exe"));
+  assert.equal(env.JIUWENSWARM_SRC, join("C:\\res", "backend", "jw"));
+  assert.equal(env.SCIENCE_AGENT_PAPER_PYTHON_PATH, join("D:\\data", "envs", "sd-services", "Scripts", "python.exe"));
 });
 
 // --- rewriteEditablePth --------------------------------------------------------
@@ -93,7 +96,7 @@ test("precompileTargets: before unpack only template-phase targets exist; after 
   await mkdir(join(resources, "python", "Lib"), { recursive: true });
   await writeFile(join(resources, "python", "python.exe"), "", "utf8");
   // jw venv lives in the read-only payload → template phase too.
-  const jwVenv = join(resources, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv");
+  const jwVenv = join(resources, "backend", "jw", ".venv");
   await mkdir(join(jwVenv, "Scripts"), { recursive: true });
   await writeFile(join(jwVenv, "Scripts", "python.exe"), "", "utf8");
   const paths = packagedPaths(resources);
@@ -103,16 +106,16 @@ test("precompileTargets: before unpack only template-phase targets exist; after 
   assert.deepEqual(before.map((x) => [x.label, x.phase]),
     [["python stdlib", "template"], ["jiuwenswarm venv", "template"]]);
 
-  // The copied venvs appear as unpacked-phase targets once they exist.
-  await mkdir(join(envsDir, "gateway", "Scripts"), { recursive: true });
-  await writeFile(join(envsDir, "gateway", "Scripts", "python.exe"), "", "utf8");
+  // The copied shared venv appears as an unpacked-phase target once it exists.
+  await mkdir(join(envsDir, "sd-services", "Scripts"), { recursive: true });
+  await writeFile(join(envsDir, "sd-services", "Scripts", "python.exe"), "", "utf8");
   const after = precompileTargets(paths, envsDir);
   assert.deepEqual(after.map((x) => [x.label, x.phase]), [
     ["python stdlib", "template"],
-    ["gateway venv", "unpacked"],
+    ["sd-services venv", "unpacked"],
     ["jiuwenswarm venv", "template"],
   ]);
-  assert.equal(after[1].target, join(envsDir, "gateway", "Lib", "site-packages"));
+  assert.equal(after[1].target, join(envsDir, "sd-services", "Lib", "site-packages"));
 });
 
 // --- Concurrent tree copy -----------------------------------------------
@@ -180,16 +183,16 @@ test("bootstrapPackaged unpacks once, rewrites venv homes, and re-runs after a r
   t.after(() => rm(root, { recursive: true, force: true }));
   const resources = join(root, "resources");
   const template = join(resources, "envs-template");
-  await mkdir(join(template, "gateway"), { recursive: true });
-  await mkdir(join(template, "evolve"), { recursive: true });
-  await writeFile(join(template, "gateway", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
-  // Editable .pth with the assemble-time backend placeholder.
-  const gatewaySp = join(template, "gateway", "Lib", "site-packages");
-  await mkdir(gatewaySp, { recursive: true });
-  await writeFile(join(gatewaySp, "_editable_impl_sciencediscovery_gateway.pth"),
+  // SIZEOPT W2: the payload stages one shared venv (the five sidecars' union).
+  await mkdir(join(template, "sd-services"), { recursive: true });
+  await writeFile(join(template, "sd-services", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
+  // Editable .pth with the assemble-time backend placeholder (the shared venv
+  // carries one such file per editable sidecar).
+  const sharedSp = join(template, "sd-services", "Lib", "site-packages");
+  await mkdir(sharedSp, { recursive: true });
+  await writeFile(join(sharedSp, "_editable_impl_sciencediscovery_gateway.pth"),
     "@@SD_BACKEND_ROOT@@\\services\\gateway\\src\n", "utf8");
-  // The other template venvs can be empty dirs here; fixVenvHome warns and skips.
-  const jwVenv = join(resources, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv");
+  const jwVenv = join(resources, "backend", "jw", ".venv");
   await mkdir(jwVenv, { recursive: true });
   await writeFile(join(jwVenv, "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
 
@@ -202,10 +205,10 @@ test("bootstrapPackaged unpacks once, rewrites venv homes, and re-runs after a r
   assert.equal(first.unpacked, true);
   // Fixture venvs carry no Scripts/python.exe → precompile skips cleanly.
   assert.equal(first.precompiled, 0);
-  assert.equal((await readFile(join(dataDir, "envs", "gateway", "pyvenv.cfg"), "utf8")).trim(),
+  assert.equal((await readFile(join(dataDir, "envs", "sd-services", "pyvenv.cfg"), "utf8")).trim(),
     `home = ${join(resources, "python")}`);
   assert.equal(
-    (await readFile(join(dataDir, "envs", "gateway", "Lib", "site-packages", "_editable_impl_sciencediscovery_gateway.pth"), "utf8")).trim(),
+    (await readFile(join(dataDir, "envs", "sd-services", "Lib", "site-packages", "_editable_impl_sciencediscovery_gateway.pth"), "utf8")).trim(),
     join(resources, "backend", "services", "gateway", "src"));
   assert.equal((await readFile(join(jwVenv, "pyvenv.cfg"), "utf8")).trim(),
     `home = ${join(resources, "python")}`);
@@ -224,11 +227,11 @@ test("bootstrapPackaged unpacks once, rewrites venv homes, and re-runs after a r
 
   // Reinstall to a different directory: stamp mismatch → re-unpack.
   const movedResources = join(root, "resources2");
-  await mkdir(join(movedResources, "envs-template", "gateway"), { recursive: true });
-  await writeFile(join(movedResources, "envs-template", "gateway", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
+  await mkdir(join(movedResources, "envs-template", "sd-services"), { recursive: true });
+  await writeFile(join(movedResources, "envs-template", "sd-services", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
   const third = await bootstrapPackaged(packagedPaths(movedResources), dataDir, log);
   assert.equal(third.unpacked, true);
-  assert.equal((await readFile(join(dataDir, "envs", "gateway", "pyvenv.cfg"), "utf8")).trim(),
+  assert.equal((await readFile(join(dataDir, "envs", "sd-services", "pyvenv.cfg"), "utf8")).trim(),
     `home = ${join(movedResources, "python")}`);
 
   // needsUnpack mirrors the same decision.
@@ -252,16 +255,13 @@ test("bootstrapPackaged in-place mode skips copy and fixes bundled venvs directl
   t.after(() => rm(root, { recursive: true, force: true }));
   const resources = join(root, "resources");
   const template = join(resources, "envs-template");
-  await mkdir(join(template, "gateway"), { recursive: true });
-  await writeFile(join(template, "gateway", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
-  const gatewaySp = join(template, "gateway", "Lib", "site-packages");
-  await mkdir(gatewaySp, { recursive: true });
-  await writeFile(join(gatewaySp, "_editable_impl_sciencediscovery_gateway.pth"),
+  await mkdir(join(template, "sd-services"), { recursive: true });
+  await writeFile(join(template, "sd-services", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
+  const sharedSp = join(template, "sd-services", "Lib", "site-packages");
+  await mkdir(sharedSp, { recursive: true });
+  await writeFile(join(sharedSp, "_editable_impl_sciencediscovery_gateway.pth"),
     "@@SD_BACKEND_ROOT@@\\services\\gateway\\src\n", "utf8");
-  // paper is required by packagedPaths.venvNames.
-  await mkdir(join(template, "paper"), { recursive: true });
-  await writeFile(join(template, "paper", "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
-  const jwVenv = join(resources, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv");
+  const jwVenv = join(resources, "backend", "jw", ".venv");
   await mkdir(jwVenv, { recursive: true });
   await writeFile(join(jwVenv, "pyvenv.cfg"), "home = C:\\builder\\python\n", "utf8");
 
@@ -274,12 +274,12 @@ test("bootstrapPackaged in-place mode skips copy and fixes bundled venvs directl
   assert.equal(result.unpacked, true);
   assert.equal(result.jwFixed, true);
   // In-place mode must not copy venvs into the data directory.
-  assert.equal(existsSync(join(dataDir, "envs", "gateway")), false);
+  assert.equal(existsSync(join(dataDir, "envs", "sd-services")), false);
   // The template venv should be fixed in place.
-  assert.equal((await readFile(join(template, "gateway", "pyvenv.cfg"), "utf8")).trim(),
+  assert.equal((await readFile(join(template, "sd-services", "pyvenv.cfg"), "utf8")).trim(),
     `home = ${join(resources, "python")}`);
   assert.equal(
-    (await readFile(join(template, "gateway", "Lib", "site-packages", "_editable_impl_sciencediscovery_gateway.pth"), "utf8")).trim(),
+    (await readFile(join(template, "sd-services", "Lib", "site-packages", "_editable_impl_sciencediscovery_gateway.pth"), "utf8")).trim(),
     join(resources, "backend", "services", "gateway", "src"));
   // A stamp should still be written to the data dir for diagnostics.
   assert.equal(existsSync(stampPath(dataDir)), true);
@@ -303,5 +303,5 @@ test("packagedEnv uses in-place venv paths when SCIENCE_AGENT_IN_PLACE_ENVS=1", 
   const paths = packagedPaths(join(root, "resources"));
   const env = packagedEnv(paths, join(root, "data"));
   assert.equal(env.SCIENCE_AGENT_ENVS_DIR, join(root, "resources", "envs-template"));
-  assert.equal(env.SCIENCE_AGENT_PAPER_PYTHON_PATH, join(root, "resources", "envs-template", "paper", "Scripts", "python.exe"));
+  assert.equal(env.SCIENCE_AGENT_PAPER_PYTHON_PATH, join(root, "resources", "envs-template", "sd-services", "Scripts", "python.exe"));
 });

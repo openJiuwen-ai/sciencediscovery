@@ -294,5 +294,142 @@ class SwarmPatchesTest(unittest.TestCase):
 
 
 
+    # --- SIZEOPT follow-up (PR #834): the patch set gained root-level targets.
+    # 0018 slims the dependency set and 0019 aligns workspace versions, both of
+    # which live in the checkout's root pyproject.toml and uv.lock. Neither file
+    # is inside the package, so a wheel install (site-packages) carries neither,
+    # and the required-paths check hard-failed on exactly the form the release
+    # builds install:
+    #   ValueError: missing patch target(s): ..., pyproject.toml, uv.lock
+    # The existing wheel-form cases above only ever touch pkg/a.py, so they
+    # could not catch it. These pin a patch that reaches the repository root. ---
+
+    @staticmethod
+    def _init_tagged_tree_with_root_manifests(root: Path):
+        """A tagged tree carrying package files AND root build metadata."""
+        import subprocess
+
+        src = root / "src"
+        (src / "pkg").mkdir(parents=True)
+        (src / "tests").mkdir()
+        (src / "pkg" / "a.py").write_text("one\n", encoding="utf-8")
+        (src / "tests" / "t.py").write_text("t\n", encoding="utf-8")
+        (src / "pyproject.toml").write_text("[project]\ndependencies = ['heavy']\n", encoding="utf-8")
+        (src / "uv.lock").write_text("version = 1\nheavy = '1.0'\n", encoding="utf-8")
+        git = ["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+        subprocess.run(["git", "init", "-q", str(src)], check=True, capture_output=True)
+        subprocess.run(git + ["add", "."], check=True, capture_output=True)
+        subprocess.run(git + ["commit", "-q", "-m", "pinned"], check=True, capture_output=True)
+        subprocess.run(git + ["tag", "pinned"], check=True, capture_output=True)
+        return src
+
+    @staticmethod
+    def _root_manifest_patches(patch_dir: Path):
+        """The 0018/0019 shape: one mixed patch, one root-only patch."""
+        # Mixed, like 0018: an in-package hunk plus root build metadata.
+        (patch_dir / "0018-slim-deps.patch").write_text(
+            "diff --git a/pkg/a.py b/pkg/a.py\n"
+            "--- a/pkg/a.py\n"
+            "+++ b/pkg/a.py\n"
+            "@@ -1 +1 @@\n"
+            "-one\n"
+            "+two\n"
+            "diff --git a/pyproject.toml b/pyproject.toml\n"
+            "--- a/pyproject.toml\n"
+            "+++ b/pyproject.toml\n"
+            "@@ -1,2 +1,2 @@\n"
+            " [project]\n"
+            "-dependencies = ['heavy']\n"
+            "+dependencies = []\n",
+            encoding="utf-8",
+        )
+        # Root-only, like 0019: nothing of it survives into a wheel.
+        (patch_dir / "0019-align-versions.patch").write_text(
+            "diff --git a/uv.lock b/uv.lock\n"
+            "--- a/uv.lock\n"
+            "+++ b/uv.lock\n"
+            "@@ -1,2 +1,2 @@\n"
+            " version = 1\n"
+            "-heavy = '1.0'\n"
+            "+heavy = '1.1'\n",
+            encoding="utf-8",
+        )
+
+    def test_root_manifest_targets_are_optional_on_a_wheel_tree(self):
+        # Wheel form: site-packages carries the package but no root
+        # pyproject.toml / uv.lock. Apply must not report them missing; the
+        # in-package hunk still applies, the root-only patch no-ops, and
+        # verify stays green with the manifest recording only carried files.
+        import json
+        import shutil
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = self._init_tagged_tree_with_root_manifests(root)
+            patch_dir = root / "patches"
+            patch_dir.mkdir()
+            self._root_manifest_patches(patch_dir)
+
+            wheel_form = root / "site-packages"
+            shutil.copytree(src / "pkg", wheel_form / "pkg")
+            shutil.rmtree(wheel_form / "pkg" / "__pycache__", ignore_errors=True)
+            self.assertFalse((wheel_form / "pyproject.toml").exists())
+            self.assertFalse((wheel_form / "uv.lock").exists())
+
+            # Pre-fix this raised ValueError: missing patch target(s).
+            swarm_patches.process("apply", wheel_form, "pinned", patch_dir)
+            swarm_patches.process("verify", wheel_form, "pinned", patch_dir)
+            self.assertEqual((wheel_form / "pkg" / "a.py").read_text(encoding="utf-8"), "two\n")
+            manifest = json.loads((wheel_form / ".sciencediscovery-patches.json")
+                                   .read_text(encoding="utf-8"))
+            self.assertNotIn("pyproject.toml", manifest["files"])
+            self.assertNotIn("uv.lock", manifest["files"])
+            self.assertIn("pkg/a.py", manifest["files"])
+
+    def test_root_manifest_targets_still_apply_on_a_source_tree(self):
+        # Optional means "a wheel legitimately lacks it", never "skip it when
+        # it is there". The source checkout carries both files, so both hunks
+        # must land and both must be recorded in the manifest.
+        import json
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = self._init_tagged_tree_with_root_manifests(root)
+            patch_dir = root / "patches"
+            patch_dir.mkdir()
+            self._root_manifest_patches(patch_dir)
+
+            swarm_patches.process("apply", src, "pinned", patch_dir)
+            swarm_patches.process("verify", src, "pinned", patch_dir)
+            self.assertIn("dependencies = []", (src / "pyproject.toml").read_text(encoding="utf-8"))
+            self.assertIn("heavy = '1.1'", (src / "uv.lock").read_text(encoding="utf-8"))
+            manifest = json.loads((src / ".sciencediscovery-patches.json").read_text(encoding="utf-8"))
+            self.assertIn("pyproject.toml", manifest["files"])
+            self.assertIn("uv.lock", manifest["files"])
+
+    def test_a_missing_root_target_outside_the_optional_list_still_fails(self):
+        # The optional list is exact, so a root-level target outside it keeps
+        # the diagnostic that catches a genuinely stale JIUWENSWARM_ROOT.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            src = self._init_tagged_tree_with_root_manifests(root)
+            patch_dir = root / "patches"
+            patch_dir.mkdir()
+            (patch_dir / "0020-other-root-file.patch").write_text(
+                "diff --git a/setup.cfg b/setup.cfg\n"
+                "--- a/setup.cfg\n"
+                "+++ b/setup.cfg\n"
+                "@@ -1 +1 @@\n"
+                "-old\n"
+                "+new\n",
+                encoding="utf-8",
+            )
+            # setup.cfg is root-level but not optional metadata: a tree that
+            # lacks it is the wrong JiuwenSwarm, not a wheel.
+            self.assertFalse((src / "setup.cfg").exists())
+            with self.assertRaisesRegex(ValueError, r"missing patch target\(s\): setup\.cfg"):
+                swarm_patches.process("apply", src, "pinned", patch_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

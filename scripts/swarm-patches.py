@@ -20,9 +20,19 @@ PATCH_ENCODING = "utf-8"
 # moment any patch touches tests/ (0016b ships test-side adapters).
 OPTIONAL_PATH_PREFIXES = ("tests/",)
 
+# Build metadata a wheel install never ships either. 0018/0019 (SIZEOPT W1/W2)
+# slim the dependency set and align workspace versions, which lives in the
+# checkout's root pyproject.toml and uv.lock — neither of which is inside the
+# package, so neither survives into site-packages. A wheel therefore cannot and
+# must not carry those hunks: 0019 is root-only and no-ops there, and 0018 still
+# applies its in-package hunk. Exact names, not prefixes, so nothing under
+# jiuwenswarm/ can be swept up by accident.
+OPTIONAL_ROOT_PATHS = ("pyproject.toml", "uv.lock")
+
 
 def is_optional(name):
-    return any(name.startswith(prefix) for prefix in OPTIONAL_PATH_PREFIXES)
+    return name in OPTIONAL_ROOT_PATHS or any(
+        name.startswith(prefix) for prefix in OPTIONAL_PATH_PREFIXES)
 
 
 def digest(path):
