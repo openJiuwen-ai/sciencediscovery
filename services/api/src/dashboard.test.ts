@@ -1641,6 +1641,42 @@ test("a delimited preview caps a pathological line and counts what it leaves out
   assert.equal(payload.truncated, false);
 });
 
+test("a wide line past the row window does not become the file's column count", async (context) => {
+  const fixture = await createFixture(context);
+  // The header is the schema: this file has two columns. One outlier line that
+  // falls outside the default row window is a row with many fields, not
+  // evidence that the file has 5,000 columns, and no returned row is padded or
+  // cut because of it. The grid width itself is the separate question the issue
+  // leaves open, so columns.length is deliberately not pinned to 2 here.
+  const outlier = Array.from({ length: 5_000 }, (_, index) => `c${index}`).join(",");
+  const lines = ["a,b"];
+  for (let index = 0; index < 100; index += 1) lines.push("1,2");
+  lines.push(outlier);
+  const vid = await seedArtifact(fixture, {
+    content: lines.join("\n"),
+    kind: "dataset",
+    logicalName: "outlier-past-window.csv",
+    mediaType: "text/csv",
+  });
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid,
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+  assert.equal(payload.rows.length, 100);
+  for (const row of payload.rows) {
+    assert.equal(row.length, payload.columns.length, "every returned row is as wide as the grid");
+  }
+  assert.equal(payload.clippedCells, 0, "a line outside the window clips no returned cell");
+  assert.equal(payload.clippedColumns.total, 2, "the file has as many columns as its header");
+  for (const warning of payload.warnings) {
+    assert.doesNotMatch(
+      warning,
+      /has \d+ columns/,
+      `a row's field count must not be announced as the file's column count: ${warning}`,
+    );
+  }
+});
+
 test("a header wider than the preview is clipped with an explicit signal", async (context) => {
   const fixture = await createFixture(context);
   // A 200k-column header is not a table; keeping every named column made the
