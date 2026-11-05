@@ -738,19 +738,28 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
   }
 }
 
-const rejectedThinkingControlEndpoints = new Set<string>();
 const thinkingControlFields = ["thinking", "reasoning_effort", "reasoning_split", "chat_template_kwargs"];
+const rejectedThinkingControls = new Map<string, Set<string>>();
 
 function thinkingControlEndpointKey(endpoint: ModelEndpoint): string {
   return [endpointRoot(endpoint.baseUrl), endpoint.model, endpointProtocol(endpoint), endpointVariant(endpoint)].join("\0");
 }
 
-function withoutThinkingControls(request: { body: string; headers: Record<string, string>; url: string }) {
+function withoutThinkingControls(request: { body: string; headers: Record<string, string>; url: string }, fields = thinkingControlFields) {
   let body: Record<string, unknown>;
   try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return undefined; }
-  if (!thinkingControlFields.some((field) => field in body)) return undefined;
-  for (const field of thinkingControlFields) delete body[field];
+  if (!fields.some((field) => field in body)) return undefined;
+  for (const field of fields) delete body[field];
   return { ...request, body: JSON.stringify(body) };
+}
+
+function rejectedThinkingFields(request: { body: string }, detail: string): Set<string> {
+  let body: Record<string, unknown>;
+  try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return new Set(); }
+  const lower = detail.toLowerCase();
+  return new Set(thinkingControlFields.filter((field) => field in body && (
+    lower.includes(field) || (field === "chat_template_kwargs" && lower.includes("enable_thinking"))
+  )));
 }
 
 function retryWithoutRejectedThinkingFields(
@@ -761,7 +770,8 @@ function retryWithoutRejectedThinkingFields(
   if (!(error instanceof ModelRequestError) || error.statusCode !== 400
     || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(error.responseDetail)) return undefined;
   const fallback = withoutThinkingControls(request);
-  if (fallback) rejectedThinkingControlEndpoints.add(thinkingControlEndpointKey(endpoint));
+  const fields = rejectedThinkingFields(request, error.responseDetail);
+  if (fallback && fields.size) rejectedThinkingControls.set(thinkingControlEndpointKey(endpoint), fields);
   return fallback;
 }
 
@@ -830,8 +840,9 @@ async function streamOpenAiTurn(
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
   let request = createModelRequest(endpoint, systemPrompt, history, tools, policy, true);
-  if (rejectedThinkingControlEndpoints.has(thinkingControlEndpointKey(endpoint))) {
-    request = withoutThinkingControls(request) ?? request;
+  const rejectedFields = rejectedThinkingControls.get(thinkingControlEndpointKey(endpoint));
+  if (rejectedFields) {
+    request = withoutThinkingControls(request, [...rejectedFields]) ?? request;
   }
   let streamed: Awaited<ReturnType<typeof requestWithRetry>>;
   try {
