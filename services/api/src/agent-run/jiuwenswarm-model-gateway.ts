@@ -77,6 +77,12 @@ interface ChatRequest {
   temperature?: number;
   top_p?: number;
   thinking?: { type: string };
+  // JiuwenSwarm sends these legacy OpenAI-compatible controls with its
+  // tool-less image-modality probe. The ScienceDiscovery model configuration
+  // remains authoritative, so the loopback gateway accepts but does not
+  // forward them.
+  enable_thinking?: boolean;
+  reasoning?: boolean;
   tool_choice?: unknown;
   parallel_tool_calls?: boolean;
   stream_options?: { include_usage?: boolean };
@@ -271,12 +277,19 @@ export async function startModelGateway(
     let requestPolicy = policy;
     let requestEndpoint = endpoint;
     try {
-      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "reasoning_split", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
+      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "reasoning_split", "enable_thinking", "reasoning", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
       if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
       if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
       if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
       if (body.stream_options && body.stream_options.include_usage !== true) throw new Error("Gateway supports include_usage=true only");
       if (body.messages.some(hasNonText)) throw new Error("images are not supported by this gateway");
+      if ((body.enable_thinking !== undefined && typeof body.enable_thinking !== "boolean")
+        || (body.reasoning !== undefined && typeof body.reasoning !== "boolean")) {
+        throw new Error("Gateway capability controls must be boolean");
+      }
+      if ((body.enable_thinking !== undefined || body.reasoning !== undefined) && (body.tools?.length ?? 0) > 0) {
+        throw new Error("Gateway capability controls are only supported for tool-less probes");
+      }
       const budget = body.max_completion_tokens ?? body.max_tokens ?? policy.maxTokens;
       if (!Number.isInteger(budget) || budget <= 0 || budget > policy.maxTokens || (body.max_completion_tokens !== undefined && body.max_tokens !== undefined && body.max_tokens !== body.max_completion_tokens)) throw new Error("Requested token limit must be positive and within the configured gateway ceiling");
       if (body.temperature !== undefined && !Number.isFinite(body.temperature)) throw new Error("Invalid gateway temperature");

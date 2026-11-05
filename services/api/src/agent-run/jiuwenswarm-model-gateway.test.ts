@@ -137,6 +137,22 @@ const post = (g: { url: string; token: string }, body: unknown, token = g.token)
 const events = async (response: Response) => (await response.text()).split("\n\n").filter((part) => part.startsWith("data: ") && !part.includes("[DONE]"))
   .map((part) => JSON.parse(part.slice(6)));
 
+test("gateway accepts Swarm's tool-less modality probe controls without changing the configured model", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, {
+      enable_thinking: true,
+      messages: [{ role: "user", content: "capability probe" }],
+      reasoning: false,
+      stream: false,
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]?.endpoint, ENDPOINT, "the configured endpoint controls thinking for real turns");
+  } finally { await g.close(); }
+});
+
 test("gateway diagnostics report an active model request without logging its payload", async () => {
   let release!: () => void;
   let started!: () => void;
