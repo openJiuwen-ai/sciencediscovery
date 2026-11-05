@@ -55,6 +55,37 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             value = dict(text=f'{role} output')
         return json.dumps(value), 100
 
+    async def test_initial_ideation_corrects_exploit_to_explicit_explore(self):
+        ideate_calls = []
+
+        async def model(role, payload):
+            raw, tokens = await self.model(role, payload)
+            if role == 'ideate':
+                ideate_calls.append(payload)
+                result = json.loads(raw)
+                result['candidates'][0]['rationale'] = 'Test a distinct mechanism'
+                result['candidates'][0]['explorationType'] = 'explore' if 'correction' in payload else 'exploit'
+                return json.dumps(result), tokens
+            return raw, tokens
+
+        self.state['settings']['maxSearchRounds'] = 1
+        engine = IdeaTreeEngine(self.state, self.store, {}, model)
+        self.assertIn('"explorationType":"explore"', engine.role_prompt('ideate'))
+        await engine.run()
+        self.assertEqual(self.state['status'], 'completed', self.state['reason'])
+        self.assertEqual(len(ideate_calls), 2)
+        self.assertIn('Use explorationType=explore', ideate_calls[1]['correction'])
+        candidate = next(n for n in self.state['nodes'] if n['kind'] == 'candidate')
+        self.assertEqual(candidate['explorationType'], 'explore')
+        self.assertNotIn('Every proposal must use these fields', engine.role_prompt('ideate'))
+        proposal = dict(parentId='ROOT', direction='Follow-up', hypothesis='New H',
+                        explorationType='exploit', basedOnCandidateIds=[candidate['id']],
+                        addressesInsightIds=[candidate['insightRecords'][0]['id']],
+                        targetedWeakness='Weakness', expectedImprovement='Improvement', newRisk='Risk')
+        engine.validate_proposal(proposal, ['ROOT'])
+        with self.assertRaisesRegex(ValueError, 'unknown candidate or insight'):
+            engine.validate_proposal({**proposal, 'addressesInsightIds': ['unknown']}, ['ROOT'])
+
     async def test_three_rounds_and_weighted_score(self):
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
         await engine.run()

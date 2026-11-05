@@ -10,9 +10,13 @@ provide direction; refinements are optional progressively more specific subdirec
 the path to maxDepth: it is a safety ceiling, and the tree grows only when evidence calls for it.
 For every proposal include expectedImprovement, newRisk and rationale. For every exploit proposal,
 include basedOnCandidateIds, addressesInsightIds and targetedWeakness.
-Use explorationType=explore only for a deliberately novel path; otherwise use exploit. An empty candidates list
+Use explorationType=explore for a novel path. Use exploit only when both a source candidate and
+a targeted insight exist and can be cited. An empty candidates list
 means there are no substantively different executable ideas; explain why. Do not plan a fixed
 number of rounds, execute tools, or produce the final material design here."""
+IDEATE_EXPLORE_ONLY = """This tree has no prior candidates or no recorded insights.
+Every proposal must use these fields: {"explorationType":"explore","basedOnCandidateIds":[],"addressesInsightIds":[]}.
+Use explore even when correcting a previous exploit proposal."""
 DESIGN = """You are the creative material designer. Develop the assigned hypothesis into a
 concrete, simple laboratory candidate. Include composition, structure, active sites, preparation,
 proposed mechanism, operating conditions, recovery, reuse and limitations. Respect every user
