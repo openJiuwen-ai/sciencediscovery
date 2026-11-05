@@ -14,6 +14,7 @@
 
 /** Actual public research entry -> authenticated Python sidecar -> run-pinned proxy -> native provider.
  * Run: node test/api/idea-research-protocol-journey.mjs
+ * Exported runner also accepts responseFormat: 'json' to verify JSON replies to streamed requests.
  * Requires built API and the repository's locked services/evolve/.venv (UT preparation supplies it).
  * Isolated API + real research sidecar only; no Runner, SDK, full stack, research content or paid calls.
  * Steps: start isolated services/auth controls; register each native model without probes; create research;
@@ -28,7 +29,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolve(repoRoot, 'services/evolve/.venv/bin/python') } = {}) {
+export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolve(repoRoot, 'services/evolve/.venv/bin/python'), responseFormat = 'sse' } = {}) {
+  assert.ok(['sse', 'json'].includes(responseFormat));
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', cwd: repoRoot }).trim();
   const root = resolve(repoRoot, '.tmp', `idea-research-protocol-${randomUUID()}`);
   await mkdir(root, { recursive: true });
@@ -44,14 +46,14 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
     child.once('error', error => { state.error = error; });
     child.once('close', () => { state.closed = true; });
     for (const stream of [child.stdout, child.stderr]) stream.on('data', b => { state.log += redact(b); state.url ||= b.toString().match(pattern)?.[1] ?? ''; });
-    await until(() => { if (state.error) throw new Error(`${name} could not start: ${redact(state.error.message)}`); if (state.closed) throw new Error(`${name} exited: ${state.log}`); return state.url; });
+    await until(() => { if (state.error) throw new Error(`${name} could not start: ${redact(state.error.message)}`); if (state.closed) throw new Error(`${name} exited: ${state.log}`); return state.url; }, 120000);
     return state.url;
   };
   const provider = createServer(async (req, res) => {
     let raw = ''; for await (const b of req) raw += b;
     const body = JSON.parse(raw), protocol = req.url === '/v1/messages' ? 'anthropic-messages' : req.url === '/v1/responses' ? 'openai-responses' : 'openai-chat-completions';
     assert.equal(req.headers[protocol === 'anthropic-messages' ? 'x-api-key' : 'authorization'], protocol === 'anthropic-messages' ? providerKey : `Bearer ${providerKey}`);
-    requests.push({ protocol, path: req.url, model: body.model });
+    requests.push({ protocol, path: req.url, model: body.model, stream: body.stream, responseFormat });
     if (gate) { const held = gate; gate = undefined; await held; }
     const system = protocol === 'anthropic-messages' ? body.system : protocol === 'openai-responses' ? body.instructions : body.messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
     const value = system.includes('matching: {"candidates"') ? { candidates: [{ parentId: 'ROOT', hypothesis: 'Synthetic hypothesis' }], reason: 'One bounded synthetic comparison' }
@@ -59,6 +61,20 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
       : system.includes('"strengths":[]') ? { text: 'Synthetic aggregation', strengths: [], failureModes: [], uncertainties: [], evidenceGaps: [], recommendedNextMoves: [], constraintFlags: [], confidence: 0.5 }
       : { text: 'Synthetic design or propagation' };
     const text = JSON.stringify(value);
+    if (body.stream && responseFormat === 'sse') {
+      const frames = protocol === 'anthropic-messages' ? [
+        { type: 'message_start', message: { role: 'assistant', content: [] } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' },
+      ] : protocol === 'openai-responses' ? [
+        { type: 'response.output_text.delta', delta: text },
+        { type: 'response.completed', response: { status: 'completed' } },
+      ] : [{ choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] }];
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(''));
+      return;
+    }
     const reply = protocol === 'anthropic-messages' ? { type: 'message', role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'end_turn' }
       : protocol === 'openai-responses' ? { object: 'response', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] }
       : { choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] };
@@ -105,10 +121,10 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
         const view = await until(async () => { const r = await api(`/api/sessions/${session.id}/idea-tree/research`, { operation: 'get', researchId: research.id }); assert.equal(r.status, 200); return ['running', 'pausing'].includes(r.body.research.status) ? null : r.body; });
         assert.equal(view.research.status, 'completed', JSON.stringify(view.research)); assert.equal(view.research.usageKnown, false); assert.ok(view.research.unreportedBudgetEstimate > 0);
         const candidate = view.graph.nodes.find(n => n.kind === 'candidate'); assert.ok(candidate); assert.equal(candidate.score, 8); assert.equal(candidate.cycleComplete, true);
-        assert.ok(requests.length - before >= 6); assert.ok(requests.slice(before).every(r => r.protocol === apiProtocol && r.model === `synthetic-${apiProtocol}`));
+        assert.ok(requests.length - before >= 6); assert.ok(requests.slice(before).every(r => r.protocol === apiProtocol && r.model === `synthetic-${apiProtocol}` && r.stream === true));
         const persisted = await api(`/api/sessions/${session.id}/idea-tree/research`); assert.equal(persisted.body.items[0].research.status, 'completed');
         const usage = await api(`/api/sessions/${session.id}/usage`); assert.equal(usage.status, 200); assert.ok(JSON.stringify(usage.body).includes('provider-not-reported')); assert.ok(!JSON.stringify(usage.body).includes('"costUsd":0'));
-        return `Completed with scored persisted candidate; ${requests.length - before} selected native calls; usage/cost unknown`;
+        return `Completed with scored persisted candidate; ${requests.length - before} streamed requests with ${responseFormat} responses; usage/cost unknown`;
       });
       await step(`4. Check ${apiProtocol} research isolation and ended lifecycle`, 'API user token cannot buy run completions; completed research never auto-resumes', async () => {
         const before = requests.length;
@@ -128,7 +144,7 @@ export async function runIdeaResearchProtocolJourney({ pythonExecutable = resolv
     provider.closeAllConnections(); await new Promise(r => provider.close(r));
     for (const state of children) await writeFile(resolve(root, `${state.name}.log`), state.log);
     await writeFile(resolve(root, 'steps.json'), JSON.stringify({ sha, outcome, steps, requests, paidRequests: 0 }, null, 2));
-    await writeFile(resolve(root, 'report.md'), `# Public IdeaTree native-family journey: ${outcome}\n\nSHA: ${sha}\nAPI: ${origin}\nSidecar: ${sidecarOrigin}\nNo Runner/full stack or paid providers.\n\n${steps.map(s => `- ${s.name}: ${s.status}\n  Expected: ${s.expected}\n  Actual: ${s.actual}`).join('\n')}\n`);
+    await writeFile(resolve(root, 'report.md'), `# Public IdeaTree native-family journey: ${outcome}\n\nSHA: ${sha}\nProvider responses: ${responseFormat}\nAPI: ${origin}\nSidecar: ${sidecarOrigin}\nNo Runner/full stack or paid providers.\n\n${steps.map(s => `- ${s.name}: ${s.status}\n  Expected: ${s.expected}\n  Actual: ${s.actual}`).join('\n')}\n`);
     console.log(JSON.stringify({ sha, outcome, report: resolve(root, 'report.md') }));
   }
 }

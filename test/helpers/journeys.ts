@@ -21,6 +21,7 @@ import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 import { RunPollRecovery } from "./run-poll-recovery.js";
 import { RunChainSettler } from "./run-chain.ts";
 import { stopAndVerifySession, type SessionActivity, type SessionShutdownResult } from "./session-shutdown.ts";
+import type { ModelApiVariant, ModelThinkingEffort, ModelThinkingMode } from "@sciencediscovery/schema";
 
 export interface JourneyModel {
   id: string;
@@ -387,7 +388,8 @@ export function scriptedModel(
 /** Register either a spec-owned local stub or an explicitly gated real model. */
 export function registerModel(
   page: Page,
-  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" },
+  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: ModelApiVariant;
+    thinkingEffort?: ModelThinkingEffort; thinkingMode?: ModelThinkingMode },
 ): Promise<JourneyModel> {
   return apiJson(page, "/api/models", { data: { vision: false, ...input }, method: "POST" });
 }
@@ -425,10 +427,13 @@ export async function createProjectAndSession(
   page: Page,
   input: {
     approvalMode?: "always_allow" | "ask_for_dangerous";
-    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" };
+    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: ModelApiVariant;
+      thinkingEffort?: ModelThinkingEffort; thinkingMode?: ModelThinkingMode };
     modelId?: string;
     projectName: string;
     sessionTitle: string;
+    thinkingEffort?: ModelThinkingEffort;
+    thinkingMode?: ModelThinkingMode;
   },
 ): Promise<JourneyFixture> {
   const model = input.model ? await registerModel(page, input.model) : undefined;
@@ -443,6 +448,8 @@ export async function createProjectAndSession(
     let session = await apiJson<JourneySession>(page, `/api/sessions/${encodeURIComponent(created.firstSession.id)}`, {
       data: {
         ...(model?.id || input.modelId ? { modelId: model?.id ?? input.modelId } : {}),
+        ...((input.thinkingEffort ?? input.model?.thinkingEffort) ? { thinkingEffort: input.thinkingEffort ?? input.model?.thinkingEffort } : {}),
+        ...((input.thinkingMode ?? input.model?.thinkingMode) ? { thinkingMode: input.thinkingMode ?? input.model?.thinkingMode } : {}),
         title: input.sessionTitle,
       },
       method: "PATCH",

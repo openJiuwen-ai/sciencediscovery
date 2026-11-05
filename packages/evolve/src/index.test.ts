@@ -164,7 +164,7 @@ test("the budget tool reports what the run will record, including a setting it c
     },
   })).find((tool) => tool.name === "get_evolve_budget")!;
   const result = await tool.execute("call", { thinking: "disabled" } as never, new AbortController().signal);
-  assert.deepEqual(asked, [{ thinking: "disabled" }]);
+  assert.deepEqual(asked, [{ thinking: "disabled", thinkingEffort: undefined }]);
   const text = (result.content[0] as { text: string }).text;
   assert.match(text, /Thinking the run will record: enabled — this endpoint's API variant has no thinking-control field/);
   assert.match(text, /openevolve 128000, puct 96000/);

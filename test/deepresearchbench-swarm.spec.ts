@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License").
 import { writeFile } from "node:fs/promises";
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
@@ -72,8 +73,9 @@ for (const sample of drbSamples) {
       await requireRealStack(testInfo);
       fixture = await createProjectAndSession(page, {
         approvalMode: "always_allow",
+        ...realModelThinking(),
         ...(existingModelId ? { modelId: existingModelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!,
-          baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: `DRB-${sample.id} ${Date.now()}` } }),
+          baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: `DRB-${sample.id} ${Date.now()}`, apiVariant: realModelApiVariant(), ...realModelThinking() } }),
         projectName: `DRB-${sample.id} Swarm ${Date.now()}`, sessionTitle: `DRB-${sample.id} autonomous research`,
       });
       metrics.generator_model_id = fixture.session.modelId ?? existingModelId;
