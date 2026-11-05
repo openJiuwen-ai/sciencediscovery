@@ -1569,7 +1569,9 @@ test("a long file does not cost a legitimate table its columns", async (context)
   // count over the budget: 20,000 rows of six cells still pad to 100 x 6 cells,
   // so the sixth column must not disappear from a long file.
   for (const rowCount of [20_000, 50_000]) {
-    const lines = ["title"];
+    // Six named columns, so the header and the rows agree: the file really has
+    // six columns and the length of the file must not take one away.
+    const lines = ["title,a,b,c,d,e"];
     for (let index = 0; index < rowCount; index += 1) lines.push(`${index},a,b,c,d,e`);
     const vid = await seedArtifact(fixture, {
       content: lines.join("\n"),
@@ -1622,10 +1624,14 @@ test("a delimited preview caps a pathological line and counts what it leaves out
   assert.equal(payload.clippedCells, 199_000, "the cells past the width are counted, not hidden");
   assert.deepEqual(
     payload.clippedColumns,
-    { shown: 1_001, total: 200_001 },
-    "the payload reports the file's width and the shown width",
+    { shown: 1_001, total: 2 },
+    "the column count comes from the header; the wide row is cells, not columns",
   );
-  assert.equal(payload.warnings.length, 2, "a clipped preview says so in warnings");
+  assert.deepEqual(
+    payload.warnings,
+    ["199000 cells past the preview width are not shown."],
+    "one sentence for one loss: the row's cells, not a schema the file does not have",
+  );
   assert.ok(
     JSON.stringify(payload).length < 1_000_000,
     `the response must stay small, got ${JSON.stringify(payload).length} chars`,

@@ -148,9 +148,10 @@ export type ArtifactPreviewPayload =
        */
       clippedCells: number;
       /**
-       * The file's own column count and the count the preview shows. They differ
-       * only when a line is wider than MAX_PREVIEW_COLUMNS; the viewer names both
-       * rather than quietly showing a narrower table.
+       * The file's own column count (its header) and the count the preview
+       * shows. They differ when the header is wider than MAX_PREVIEW_COLUMNS; a
+       * data line wider than the header widens the grid but is not a column, so
+       * its lost cells are reported through clippedCells instead.
        */
       clippedColumns: { total: number; shown: number };
       /**
@@ -394,14 +395,18 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // and the returned rows are padded to it, because the renderer prints one <th>
   // per column and one <td> per cell.
   const widest = lines.reduce((widestLine, line) => Math.max(widestLine, line.length), 0);
-  const totalColumns = Math.max(header.length, widest);
-  const width = Math.min(totalColumns, MAX_PREVIEW_COLUMNS);
+  // The file's own column count is a property of its header, never of a data
+  // line: one 5,000-field row is a wide row, not a 5,000-column schema, and
+  // announcing it as one tells the reader something false about the file.
+  const totalColumns = header.length;
+  const width = Math.min(Math.max(totalColumns, widest), MAX_PREVIEW_COLUMNS);
   // The row count is bounded by its own constant, so the payload stays inside
   // MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS cells. `maxRows` only lowers it.
   const rows = lines.slice(1, Math.min(maxRows, MAX_PREVIEW_ROWS) + 1);
   // Columns past the width leave the preview: the header keeps its first names
   // and the payload says how many columns the file had, so a cut table is never
-  // mistaken for a narrow one.
+  // mistaken for a narrow one. A data line wider than the header widens the grid
+  // without changing the column count; its lost cells are reported as cells.
   const clippedColumns = { shown: width, total: totalColumns };
   let clippedCells = 0;
   const paddedRows = rows.map((row) => {
