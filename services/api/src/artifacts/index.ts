@@ -36,7 +36,7 @@ import type {
 
 import { MemoryGraphClient, type ArtifactProvenanceGraphResult } from "@sciencediscovery/memory";
 import { effectiveExecutionRuns, ProvenanceRecorder } from "@sciencediscovery/provenance";
-import { ApiStatusError } from "../runs/index.js";
+import { ApiStatusError } from "../http/api-status-error.js";
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 
 export function classifyWorkspaceFilePreview(path: string): WorkspaceFile["previewKind"] {
