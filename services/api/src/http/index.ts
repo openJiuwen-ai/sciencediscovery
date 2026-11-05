@@ -414,6 +414,36 @@ function extractReplacementModelId(body: unknown): string | null | undefined {
   throw new ApiStatusError(400, "replacementModelId must be a string or null");
 }
 
+/**
+ * The Specialist routes forward plain `Error`s from the store, and the store's
+ * wording is the message the settings pane shows. Only the store's own
+ * rejections may be answered as client errors: anything else is still an
+ * internal fault, so it must reach the catch-all and read 500 rather than be
+ * relabelled 400. Exported for the route test.
+ */
+export function specialistErrorStatus(error: unknown): 400 | 404 | undefined {
+  if (!(error instanceof Error)) return undefined;
+  if (error.message === "Specialist not found") return 404;
+  if (/^(?:Specialist name already exists|Specialist (?:skills|connectors) are unavailable|Built-in specialists are read-only)/
+    .test(error.message)) return 400;
+  return isKnownClientInputError(error) ? 400 : undefined;
+}
+
+/** Answer one Specialist route, keeping the store's message and its status. */
+async function answerSpecialistRoute<T>(
+  response: ServerResponse,
+  status: number,
+  work: () => Promise<T>,
+): Promise<void> {
+  try {
+    sendJson(response, status, await work());
+  } catch (error) {
+    const errorStatus = specialistErrorStatus(error);
+    if (errorStatus === undefined) throw error;
+    sendError(response, errorStatus, error instanceof Error ? error.message : "Specialist request failed");
+  }
+}
+
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
   const platform = createPlatformServices(config, repositoryRoot, dependencies);
   const {
@@ -2232,20 +2262,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/specialists") {
-        sendJson(response, 201, await store.createSpecialist(await readJson<CreateSpecialistRequest>(request)));
+        const body = await readJson<CreateSpecialistRequest>(request);
+        await answerSpecialistRoute(response, 201, () => store.createSpecialist(body));
         return;
       }
       const specialistMatch = url.pathname.match(/^\/api\/specialists\/([^/]+)$/);
       if (specialistMatch && request.method === "PUT") {
-        sendJson(response, 200, await store.updateSpecialist(
-          specialistMatch[1]!,
-          await readJson<UpdateSpecialistRequest>(request),
-        ));
+        const body = await readJson<UpdateSpecialistRequest>(request);
+        await answerSpecialistRoute(response, 200, () => store.updateSpecialist(specialistMatch[1]!, body));
         return;
       }
       if (specialistMatch && request.method === "DELETE") {
-        await store.deleteSpecialist(specialistMatch[1]!);
-        sendJson(response, 200, { deleted: specialistMatch[1] });
+        await answerSpecialistRoute(response, 200, async () => {
+          await store.deleteSpecialist(specialistMatch[1]!);
+          return { deleted: specialistMatch[1] };
+        });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/skills") {
