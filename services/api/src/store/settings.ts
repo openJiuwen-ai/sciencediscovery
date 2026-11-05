@@ -369,13 +369,13 @@ export function normalizeWebSettings(value: unknown): WebSettings {
   // single-provider fields; translate them instead of rejecting the record.
   const migrated = migrateLegacyWebSettings(value);
   const unknown = Object.keys(migrated).find((key) => !WEB_SETTING_FIELDS.has(key));
-  if (unknown) throw new Error(`Unknown web setting: ${unknown}`);
+  if (unknown) throw Object.assign(new Error(`Unknown web setting: ${unknown}`), { code: "INVALID_WEB_SETTINGS" });
   const deepseekEnabled = migrated.deepseekEnabled ?? false;
   if (typeof deepseekEnabled !== "boolean") throw new Error("deepseekEnabled must be a boolean");
   const fetchProvider = migrated.fetchProvider;
   const proxyPolicy = normalizeProxyPolicy(migrated.proxyPolicy ?? "inherit", "proxyPolicy");
   if (!WEB_FETCH_PROVIDERS.has(fetchProvider as WebFetchProvider)) {
-    throw new Error("Unsupported web fetch provider");
+    throw Object.assign(new Error("Unsupported web fetch provider"), { code: "INVALID_WEB_SETTINGS" });
   }
 
   const paidInput = migrated.paidSearchProviders ?? [...PAID_SEARCH_ORDER];
