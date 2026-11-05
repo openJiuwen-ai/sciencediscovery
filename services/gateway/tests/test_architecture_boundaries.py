@@ -44,7 +44,7 @@ HTTPX_CLIENT = re.compile(r"httpx\.(?:Async)?Client\(")
 # environment it injects, so a client that opts out of the environment silently
 # ignores the MCP server's proxy policy.
 PROXY_OPT_OUT = re.compile(r"\b(?:trust_env\s*=\s*(?!True)|proxy\s*=|proxies\s*=|mounts\s*=)")
-IGNORED_DIRECTORIES = {"__pycache__", "dist", "node_modules"}
+IGNORED_DIRECTORIES = {"__pycache__", ".tmp", "dist", "node_modules"}
 TEXT_SUFFIXES = {
     ".cjs", ".css", ".html", ".js", ".json", ".jsx", ".mdx", ".mjs",
     ".sh", ".ts", ".tsx", ".yaml", ".yml",
@@ -80,7 +80,13 @@ def _node_boundary_failures() -> list[str]:
                 continue
             if path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError:
+                # The listing preceded the read: another suite removed its generated
+                # workspace in between, and a file that no longer exists cannot be
+                # asserted on. Treat it as gone rather than as a boundary violation.
+                continue
             if VENDOR_NAME.search(text):
                 failures.append(f"content: {relative}")
     return failures
