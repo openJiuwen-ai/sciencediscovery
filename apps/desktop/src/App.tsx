@@ -21,7 +21,7 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
-import { isEvolveRunActive } from "@sciencediscovery/schema";
+import { isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
@@ -38,7 +38,7 @@ import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
 import {
-  evolveCommandAllowUnisolated,
+  evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveSkill,
@@ -147,6 +147,7 @@ export function App({ initialToken }: Props) {
   /** The create dialog, open with a typed goal when the command was diverted
    *  here because the runtime is not ready. */
   const [evolveCreate, setEvolveCreate] = useState<{
+    algorithm?: EvolveAlgorithm;
     checkpointMode?: "auto" | "confirm";
     goal?: string;
   } | undefined>();
@@ -484,21 +485,23 @@ export function App({ initialToken }: Props) {
   /** The command is a way into the surface, not only a message. While the
    *  runtime is not ready the goal typed after it is carried into the setup
    *  dialog instead of being sent to a server that cannot run it; a bare
-   *  command opens the dialog that asks for one. On a host with no sandbox the
-   *  dialog is also where the per-run consent to run unconfined is asked, so a
-   *  fully typed command detours there too — unless it already carries
-   *  `--allow-direct`, which is the answer that confirmation writes.
+   *  command opens the dialog that asks for one. On a host with no sandbox
+   *  every command detours there, including one that already carries
+   *  `--allow-direct`: a pasted flag is a word the user typed without the
+   *  warning on screen, and the dialog is where that warning is read and
+   *  answered. So the dialog is the only writer of the flag — a command that
+   *  reaches the server with it is one the user confirmed here.
    *
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
   const sendMessage = (content: string) => {
     const goal = evolveCommandGoal(content);
-    const needsConsent = evolve.status.sandbox === "direct"
-      && evolveCommandAllowUnisolated(content) !== true;
     if (goal !== undefined
-        && (goal === "" || evolve.status.state !== "ready" || needsConsent)) {
+        && (goal === "" || evolve.status.state !== "ready"
+            || evolve.status.sandbox === "direct")) {
       setEvolveCreate({
+        algorithm: evolveCommandAlgorithm(content),
         checkpointMode: evolveCommandCheckpointMode(content),
         goal: goal === "" ? undefined : goal,
       });
@@ -826,6 +829,7 @@ export function App({ initialToken }: Props) {
         <EvolveCreateDialog
           archived={state.detail?.archivedAt !== undefined}
           error={evolve.error}
+          initialAlgorithm={evolveCreate.algorithm}
           initialCheckpointMode={evolveCreate.checkpointMode}
           initialGoal={evolveCreate.goal}
           initializing={evolve.initializing}

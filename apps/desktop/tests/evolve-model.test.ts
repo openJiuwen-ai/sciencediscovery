@@ -21,7 +21,7 @@ import type { EvolveEventRecord, EvolveRun } from "@sciencediscovery/schema";
 import type { RunStreamEvent } from "../src/api/types.js";
 import {
   evolveCommand,
-  evolveCommandAllowUnisolated,
+  evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveCommand,
@@ -258,6 +258,13 @@ test("the pace flag is read as a flag, not as part of the goal", () => {
   assert.equal(evolveCommandCheckpointMode("/evolve-design faster"), "confirm");
   assert.equal(evolveCommandCheckpointMode("hello"), undefined);
 
+  assert.equal(evolveCommandAlgorithm("/evolve-design --algorithm openevolve faster"), "openevolve");
+  assert.equal(evolveCommandAlgorithm("/evolve-design --no-confirm --algorithm puct faster"), "puct");
+  // A goal that mentions the flag keeps it as text, and text is not a choice.
+  assert.equal(evolveCommandAlgorithm("/evolve-design explain --algorithm openevolve"), undefined);
+  assert.equal(evolveCommandAlgorithm("/evolve-design faster"), undefined);
+  assert.equal(evolveCommandAlgorithm("hello"), undefined);
+
   assert.equal(
     evolveCommand("openevolve", "faster", "auto"),
     "/evolve-design --algorithm openevolve --no-confirm faster",
@@ -279,7 +286,6 @@ test("a goal that starts with a flag keeps its own text", () => {
   );
   assert.equal(evolveCommandGoal(command), "--no-confirm 是守护进程的参数，不是节奏开关");
   assert.equal(evolveCommandCheckpointMode(command), "confirm");
-  assert.equal(evolveCommandAllowUnisolated(command), false);
 
   // The dialog's own pace is still read from the flags it wrote.
   const auto = evolveCommand("puct", "--algorithm is the goal here", "auto");
@@ -292,20 +298,12 @@ test("a goal that starts with a flag keeps its own text", () => {
     evolveCommandGoal("/evolve-design explain --allow-direct elsewhere"),
     "explain --allow-direct elsewhere",
   );
-  assert.equal(evolveCommandAllowUnisolated("/evolve-design explain --allow-direct elsewhere"), false);
 });
 
-test("the direct-execution approval is a flag, not part of the goal", () => {
-  // The dialog writes it only on Windows, but a detour through setup has to be
-  // able to read it back, and a person may type the flags in any order.
-  assert.equal(evolveCommandAllowUnisolated("/evolve-design --allow-direct faster"), true);
-  assert.equal(
-    evolveCommandAllowUnisolated("/evolve-design --algorithm puct --allow-direct"),
-    true,
-  );
-  assert.equal(evolveCommandAllowUnisolated("/evolve-design --algorithm puct slower"), false);
-  assert.equal(evolveCommandAllowUnisolated("hello"), undefined);
-
+test("the direct-execution flag is a flag, not part of the goal", () => {
+  // The dialog writes it only after the warning is answered, so the client
+  // never reads it back as an approval; it is still flags, not goal text, and
+  // the detour carries the goal without it.
   assert.equal(
     evolveCommandGoal("/evolve-design --algorithm puct --allow-direct fewer bytes"),
     "fewer bytes",

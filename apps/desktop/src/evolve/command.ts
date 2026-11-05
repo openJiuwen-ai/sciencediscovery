@@ -81,14 +81,15 @@ export function evolveCommandCheckpointMode(text: string): EvolveCheckpointMode 
   return /--no-confirm\b/.test(leadingFlags(text)) ? "auto" : "confirm";
 }
 
-/** Whether the command already carries the user's approval to run candidates
- *  without a sandbox.
+/** The search the command names, as `--algorithm` says.
  *
- *  Only Windows needs it, and the dialog is what writes it — reading it back
- *  keeps a setup detour from silently dropping an approval the user gave. */
-export function evolveCommandAllowUnisolated(text: string): boolean | undefined {
+ *  Read here so the setup detour keeps the choice: a command typed with
+ *  `--algorithm openevolve` opens the dialog with that search selected, rather
+ *  than on the dialog's own default, which would replace what was typed. */
+export function evolveCommandAlgorithm(text: string): EvolveAlgorithm | undefined {
   if (!isEvolveCommand(text)) return undefined;
-  return /--allow-direct\b/.test(leadingFlags(text));
+  const match = /--algorithm[ \t]+(puct|openevolve)\b/.exec(leadingFlags(text));
+  return match?.[1] as EvolveAlgorithm | undefined;
 }
 
 /** The message that starts the design conversation. */
