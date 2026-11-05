@@ -17,8 +17,15 @@ const { test } = createTest(import.meta.url, {
   tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"],
 });
 import assert from "node:assert/strict";
+import { createElement } from "react";
 
-import { lastAnswer } from "../src/evolve/use-auto-continue.js";
+import { act, create } from "./support/dom-renderer.js";
+import {
+  autoContinueKey,
+  lastAnswer,
+  useAutoContinue,
+  type AutoContinueInput,
+} from "../src/evolve/use-auto-continue.js";
 import { emptyRunStream } from "../src/run-stream/model.js";
 
 function streamed(content: string) {
@@ -49,4 +56,90 @@ test("a stream with no completion falls back to its last non-empty response", ()
   // Empty turns are skipped rather than returned as "".
   assert.equal(lastAnswer({ ...emptyRunStream(), turns: [streamed("有"), { ...streamed(" "), turn: 2 }] }), "有");
   assert.equal(lastAnswer(emptyRunStream()), undefined);
+});
+
+function Harness(props: AutoContinueInput) {
+  useAutoContinue(props);
+  return null;
+}
+
+function card(title: string): string {
+  return [
+    "```evolve-checkpoint",
+    "step: 1",
+    "total: 4",
+    "pace: auto",
+    `title: ${title}`,
+    "---",
+    "body",
+    "```",
+  ].join("\n");
+}
+
+function ended(answer: string) {
+  return { ...emptyRunStream(), finalContent: answer, status: "completed" as const };
+}
+
+async function mount(
+  update: ReturnType<typeof create>,
+  props: AutoContinueInput,
+): Promise<void> {
+  await act(async () => {
+    update.update(createElement(Harness, props));
+  });
+}
+
+test("a second design ending on the same step is carried forward too", async () => {
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, {
+      running: false,
+      run: emptyRunStream(),
+      send,
+      sessionId: "s",
+    }));
+  });
+
+  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { running: false, run: ended(card("度量")), send, sessionId: "s" });
+  assert.equal(sent.length, 1);
+
+  // A new design in the same conversation stops on the same step number. The
+  // step was already carried once, but this ending is a different one.
+  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { running: false, run: ended(card("冻结")), send, sessionId: "s" });
+  assert.equal(sent.length, 2);
+  renderer!.unmount();
+});
+
+test("the same ending is carried forward once", async () => {
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, {
+      running: false,
+      run: emptyRunStream(),
+      send,
+      sessionId: "s",
+    }));
+  });
+
+  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { running: false, run: ended(card("度量")), send, sessionId: "s" });
+  // The same words again would be another paid call answering a card that has
+  // already been answered.
+  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { running: false, run: ended(card("度量")), send, sessionId: "s" });
+  assert.equal(sent.length, 1);
+  renderer!.unmount();
+});
+
+test("the watermark names the session, the step and the answer", () => {
+  assert.equal(autoContinueKey("s", 1, "a"), autoContinueKey("s", 1, "a"));
+  assert.notEqual(autoContinueKey("s", 1, "a"), autoContinueKey("s", 1, "b"));
+  assert.notEqual(autoContinueKey("s", 1, "a"), autoContinueKey("s", 2, "a"));
+  assert.notEqual(autoContinueKey("s", 1, "a"), autoContinueKey("t", 1, "a"));
 });

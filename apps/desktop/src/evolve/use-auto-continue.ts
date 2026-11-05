@@ -48,6 +48,24 @@ export function lastAnswer(run: RunStreamState): string | undefined {
   return undefined;
 }
 
+/** What one carried-forward ending is remembered by: the session it ended in,
+ *  the step it stopped on, and the words it stopped with.
+ *
+ *  The step alone is not enough. A second no-confirm design in the same
+ *  conversation can end on the same step number — both stop at "checkpoint
+ *  1/4" — and a watermark that only knew the step would read that as a card
+ *  already answered, leaving the new design stalled on a card with nothing to
+ *  press. The answer is what makes the two endings different events; the same
+ *  card written twice is still one reply, and is still refused.
+ */
+export function autoContinueKey(
+  sessionId: string | undefined,
+  step: number,
+  answer: string,
+): string {
+  return `${sessionId ?? ""}\u0000${step}\u0000${answer}`;
+}
+
 export interface AutoContinueInput {
   /** Whether a turn is in flight. The transition to `false` is the signal that
    *  one just ended. */
@@ -60,11 +78,11 @@ export interface AutoContinueInput {
 
 export function useAutoContinue({ running, run, send, sessionId }: AutoContinueInput): void {
   const wasRunning = useRef(false);
-  /** The (session, step) already carried forward. Keyed by session so opening
-   *  another conversation does not inherit this one's watermark, and by step so
-   *  a model that ends on the same card twice is not answered twice — that
-   *  would be a loop with a paid model call in it. */
-  const carried = useRef<{ sessionId?: string; step?: number }>({});
+  /** The ending already carried forward, as `autoContinueKey` spells it. A
+   *  model that ends on the same card twice is not answered twice — that
+   *  would be a loop with a paid model call in it — while a new design that
+   *  happens to stop on the same step number still is. */
+  const carried = useRef<string | undefined>(undefined);
   // Read at fire time so a new `send` identity does not re-run the check.
   const latestSend = useRef(send);
   useEffect(() => {
@@ -81,11 +99,12 @@ export function useAutoContinue({ running, run, send, sessionId }: AutoContinueI
     // its last text happened to end with a card.
     if (run.status !== "completed") return;
     const answer = lastAnswer(run);
-    const next = answer === undefined ? undefined : trailingAutoStep(answer);
+    if (answer === undefined) return;
+    const next = trailingAutoStep(answer);
     if (next === undefined) return;
-    if (carried.current.sessionId !== sessionId) carried.current = { sessionId };
-    if (carried.current.step === next.step) return;
-    carried.current.step = next.step;
+    const key = autoContinueKey(sessionId, next.step, answer);
+    if (carried.current === key) return;
+    carried.current = key;
     latestSend.current(TEXT.evolve.checkpoint.autoContinue(next.step, next.total));
   }, [run, running, sessionId]);
 }
