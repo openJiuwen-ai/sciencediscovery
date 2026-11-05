@@ -12,6 +12,7 @@ import { createConnection, createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { bootstrapPackaged, needsUnpack, packagedEnv, packagedPaths, type PackagedPaths } from "./bootstrap.ts";
 import { healthUrl, resolveDataDir, resolveRepoRoot, tokenFilePath, uiUrl } from "./config.ts";
+import { FIRST_CHAT_WARMUP_PATH, runFirstChatWarmup } from "./first-chat-warmup.ts";
 import { provisioningLineToStage, STAGE_TEXTS, stackLineToStage, stageProgress } from "./loading-stage.ts";
 import {
   epochFromEnv, firstFreeEpoch, healthUrlForPorts, MAX_PORT_EPOCH,
@@ -291,6 +292,14 @@ function watchAgentReady(endpoints: Endpoints, dataDir: string | null): void {
         const body = (await res.json()) as AgentInfo;
         if (body.jiuwenswarm?.reachable) {
           SD_PERF("AGENT-READY", `watchAttempts=${attempt}`);
+          // [first-message-latency] fire-and-forget MCP catalog warmup: the
+          // catalog refresh (stdio spawn + tools/list) overlaps the ready screen
+          // instead of the first chat run. Best-effort, off the critical path;
+          // failures are logged only and never surface to the user.
+          void runFirstChatWarmup(endpoints.ui, token).then(
+            (status) => logToDisk(`[warmup] first-chat ${FIRST_CHAT_WARMUP_PATH} -> ${status}`),
+            (err: unknown) => logToDisk(`[warmup] first-chat ${FIRST_CHAT_WARMUP_PATH} failed: ${String(err)}`),
+          );
           send({ ready: true });
           clearAgentWatch();
           return;
