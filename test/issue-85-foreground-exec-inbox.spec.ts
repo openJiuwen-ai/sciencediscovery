@@ -271,7 +271,10 @@ test("后台执行仍会唤醒一次，运行时提示是可读摘要并能跳�
       const [execution] = (await executions(page, fixture!.session.id)).executions;
       const record = panel.locator("details.process-record[open]").filter({ hasText: execution!.id });
       await expect(record).toHaveCount(1);
-      await expect(record).toContainText("completed");
+      // The badge keeps the raw state as its class for styling; the text beside
+      // it is what a zh-CN reader gets, so the journey asserts that sentence.
+      await expect(record.locator(".activity-badge")).toHaveClass(/completed/);
+      await expect(record).toContainText("已完成");
     });
   } finally {
     try { await closeWakeGateAndCleanup(page, playwright, fixture); }

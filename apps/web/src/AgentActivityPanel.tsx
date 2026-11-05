@@ -6,7 +6,7 @@ import { isAuthFailure } from "./api/auth.js";
 import { classifySessionPollMiss } from "./api/session-miss.js";
 import type { AgentActivity } from "./api/runs.js";
 import { ProcessRecord } from "./ProcessRecord.js";
-import { useLocale } from "./i18n/index.js";
+import { useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronRightIcon } from "./icons.js";
 
 /** A record another part of the page asked to see; `token` changes per request
@@ -27,8 +27,33 @@ const live = (state: string) => state === "queued" || state === "running";
  * resubmitting is not). Only the execution Cancel guard may use this: a transfer
  * is decided by the API itself, so `unknown` leaves nothing out there to stop. */
 const cancellable = (state: string) => live(state) || state === "unknown";
+/** Server values are named in the UI language; a value a newer API adds keeps its
+ * raw token rather than blanking out. `activity-badge ${state}` still carries the
+ * raw value, because the badge styling keys on it. */
+const STATE_KEYS: Record<string, MessageKey> = {
+  cancelled: "activity.state.cancelled",
+  completed: "activity.state.completed",
+  failed: "activity.state.failed",
+  queued: "activity.state.queued",
+  running: "activity.state.running",
+  unknown: "activity.state.unknown",
+};
+/** How far the workspace write of an execution got. `unconfirmed` is not a
+ * bucket the catalogues name, so it keeps its token. */
+const PROVENANCE_KEYS: Record<string, MessageKey> = {
+  committed: "activity.provenance.committed",
+  pending: "activity.provenance.pending",
+};
 export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiClient; focus?: ActivityFocus; sessionId: string }) {
   const { t } = useLocale();
+  const stateLabel = (state: string) => {
+    const key = STATE_KEYS[state];
+    return key ? t(key) : state;
+  };
+  const provenanceLabel = (provenance?: string) => {
+    const key = provenance ? PROVENANCE_KEYS[provenance] : undefined;
+    return key ? t(key) : provenance ?? "";
+  };
   const [activity, setActivity] = useState<AgentActivity>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -93,9 +118,9 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
     <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.executions")}</strong><span className="fold-meta">{activity.executions.length}</span></summary>
     <div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.executions.length ? <p>{t("activity.noExecutions")}</p> : activity.executions.toReversed().map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.runnerId} · ${item.agentId} · ${item.state}`} reveal={reveal("executions", item.id)}><article>
-          <header><strong>{item.runnerId} · {item.agentId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
-          <code>{item.id}</code><small>{t("activity.executionMeta", { provenance: item.provenance, workspace: item.workspaceId })}</small>
+        {!activity.executions.length ? <p>{t("activity.noExecutions")}</p> : activity.executions.toReversed().map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.runnerId} · ${item.agentId} · ${stateLabel(item.state)}`} reveal={reveal("executions", item.id)}><article>
+          <header><strong>{item.runnerId} · {item.agentId}</strong><span className={`activity-badge ${item.state}`}>{stateLabel(item.state)}</span></header>
+          <code>{item.id}</code><small>{t("activity.executionMeta", { provenance: provenanceLabel(item.provenance), workspace: item.workspaceId })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
           <div className="activity-actions"><button type="button" disabled={busy} onClick={() => void action(async () => {
             const result = await client.executionLogs(sessionId, item.id);
@@ -107,8 +132,8 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
     </div></details> : null}
     {activity && activity.transfers.length > 0 ? <details className="workspace-fold" {...fold("transfers")}><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.transfers")}</strong><span className="fold-meta">{activity.transfers.length}</span></summary><div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.transfers.length ? <p>{t("runnerWorkspaces.noTransfers")}</p> : activity.transfers.map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.sourceWorkspaceId} → ${item.targetWorkspaceId} · ${item.state}`}><article>
-          <header><strong>{item.sourceWorkspaceId} → {item.targetWorkspaceId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
+        {!activity.transfers.length ? <p>{t("runnerWorkspaces.noTransfers")}</p> : activity.transfers.map((item) => <ProcessRecord key={item.id} active={live(item.state)} failed={item.state === "failed"} label={`${item.sourceWorkspaceId} → ${item.targetWorkspaceId} · ${stateLabel(item.state)}`}><article>
+          <header><strong>{item.sourceWorkspaceId} → {item.targetWorkspaceId}</strong><span className={`activity-badge ${item.state}`}>{stateLabel(item.state)}</span></header>
           <small>{t("activity.filesCommitted", { committed: item.progress.filter((file) => file.state === "completed").length, total: item.progress.length })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
           <details><summary>{t("activity.fileProgress")}</summary>{item.progress.map((file) => <small key={file.targetPath}>{file.targetPath} · {file.state} · {t("downloads.bytes", { count: file.bytes })}</small>)}</details>
@@ -118,8 +143,8 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
     </div></details> : null}
     {activity && activity.timers.length > 0 ? <details className="workspace-fold" {...fold("timers")}><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.reminders")}</strong><span className="fold-meta">{activity.timers.length}</span></summary><div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.timers.length ? <p>{t("activity.noReminders")}</p> : activity.timers.map((item) => <ProcessRecord key={item.id} active={item.state === "pending"} failed={false} label={`${item.message} · ${item.state}`} reveal={reveal("timers", item.id)}><article>
-          <header><strong>{item.message}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
+        {!activity.timers.length ? <p>{t("activity.noReminders")}</p> : activity.timers.map((item) => <ProcessRecord key={item.id} active={item.state === "pending"} failed={false} label={`${item.message} · ${stateLabel(item.state)}`} reveal={reveal("timers", item.id)}><article>
+          <header><strong>{item.message}</strong><span className={`activity-badge ${item.state}`}>{stateLabel(item.state)}</span></header>
           <small>{item.agentId} · {new Date(item.dueAt).toLocaleString()}</small>
           <button type="button" disabled={busy || item.state !== "pending"} onClick={() => void action(() => client.cancelActivity(sessionId, "timers", item.id))}>{t("activity.cancelReminder")}</button>
         </article></ProcessRecord>)}
