@@ -16,7 +16,11 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { evolveCommandApprovesUnisolated } from "./command.js";
+import {
+  evolveCommandApprovesUnisolated,
+  isEvolveCommand,
+  latestEvolveCommandApprovesUnisolated,
+} from "./command.js";
 
 test("only the command's own leading run carries the approval", () => {
   assert.equal(evolveCommandApprovesUnisolated("/evolve-design --allow-direct compress better"), true);
@@ -33,4 +37,27 @@ test("only the command's own leading run carries the approval", () => {
   assert.equal(evolveCommandApprovesUnisolated("please /evolve-design --allow-direct"), false);
   assert.equal(evolveCommandApprovesUnisolated("/evolve-designer --allow-direct"), false);
   assert.equal(evolveCommandApprovesUnisolated("--allow-direct"), false);
+});
+
+test("only the latest command in the session speaks for the run", () => {
+  const user = (content: string) => ({ content, role: "user" });
+  const approved = user("/evolve-design --algorithm puct --allow-direct compress better");
+  const plain = user("/evolve-design --algorithm puct compress better");
+
+  // A second design started with a plain command inherits nothing.
+  assert.equal(latestEvolveCommandApprovesUnisolated([approved, plain]), false);
+  assert.equal(latestEvolveCommandApprovesUnisolated([plain, approved]), true);
+  // A checkpoint answer is not a command, so the anchor does not move.
+  assert.equal(
+    latestEvolveCommandApprovesUnisolated([approved, user("确认检查点 3/4，继续。")]),
+    true,
+  );
+  // Only the user speaks: an assistant message quoting the command is not consent.
+  assert.equal(
+    latestEvolveCommandApprovesUnisolated([{ content: plain.content, role: "assistant" }]),
+    false,
+  );
+  assert.equal(latestEvolveCommandApprovesUnisolated([]), false);
+  assert.equal(isEvolveCommand(" /evolve-design --allow-direct "), true);
+  assert.equal(isEvolveCommand("confirm /evolve-design"), false);
 });

@@ -40,7 +40,11 @@ import type {
 } from "@sciencediscovery/schema";
 import type { AgentTool } from "@sciencediscovery/tools";
 
-export { evolveCommandApprovesUnisolated } from "./command.js";
+export {
+  evolveCommandApprovesUnisolated,
+  isEvolveCommand,
+  latestEvolveCommandApprovesUnisolated,
+} from "./command.js";
 
 /** What the tools need from the turn that is running them. */
 export interface EvolveToolRuntime {

@@ -68,6 +68,12 @@ export interface ProposalDeps {
   model?: (id: string) => unknown;
   modelId: string;
   orchestrator: EvolveOrchestrator;
+  /** Whether the user's own `/evolve-design` command carried `--allow-direct`.
+   *  Required on purpose: the proposal's `allowUnisolated` is the model's
+   *  argument, and a goal records direct execution only when the model asked
+   *  and the user's command approved. A caller that cannot answer must not
+   *  inherit the approval. */
+  approvedUnisolated: boolean;
   sessionId: string;
   /** Whether the run's model can be told to stop thinking. False when its API
    *  variant has no thinking-control field, or a toggle but no "disabled" stop:
@@ -384,10 +390,11 @@ async function assembleGoal(
     // behaviour.
     checkpointMode: proposal.checkpointMode ?? "confirm",
     // Written only when this run really does execute candidates unconfined.
-    // The proposal's flag alone is not enough: a host with a sandbox that
-    // somehow received it is still isolated, and a goal claiming otherwise
-    // would put a warning badge on a safe run.
-    ...(sandbox.backend === "direct" && proposal.allowUnisolated === true
+    // The proposal's flag alone is not enough, twice over: it is the model's
+    // argument rather than the user's answer, and a host with a sandbox that
+    // somehow received it is still isolated — a goal claiming otherwise would
+    // put a warning badge on a safe run.
+    ...(sandbox.backend === "direct" && proposal.allowUnisolated === true && deps.approvedUnisolated
       ? { allowUnisolated: true }
       : {}),
     budget: {

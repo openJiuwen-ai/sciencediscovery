@@ -31,9 +31,15 @@ const COMMAND = "/evolve-design";
 
 const LEADING_FLAGS = /^[ \t]*(?:--(?:algorithm[ \t]+(?:puct|openevolve)|no-confirm|allow-direct)\b[ \t]*)+/;
 
+/** Whether this text is a `/evolve-design` command at the start of a message. */
+export function isEvolveCommand(content: string): boolean {
+  return new RegExp(`^${COMMAND}(?:\\s|$)`).test(content.trim());
+}
+
 /** The leading run of flags, as written after `/evolve-design`. */
-function leadingFlags(text: string): string {
-  if (!new RegExp(`^${COMMAND}(?:\\s|$)`).test(text)) return "";
+function leadingFlags(content: string): string {
+  if (!isEvolveCommand(content)) return "";
+  const text = content.trim();
   return text.slice(COMMAND.length).match(LEADING_FLAGS)?.[0] ?? "";
 }
 
@@ -44,5 +50,21 @@ function leadingFlags(text: string): string {
  *  A goal that merely mentions the flag keeps it as text and does not count:
  *  only the command's own leading run is a flag. */
 export function evolveCommandApprovesUnisolated(content: string): boolean {
-  return /--allow-direct\b/.test(leadingFlags(content.trim()));
+  return /--allow-direct\b/.test(leadingFlags(content));
+}
+
+/** Whether the latest `/evolve-design` command in a session approved direct
+ *  execution.
+ *
+ *  The latest command is the one the run belongs to: a second design started
+ *  with a plain `/evolve-design` inherits nothing from an earlier yes. A
+ *  checkpoint answer does not move the anchor, because it is not a command —
+ *  so the design this run was created under is still the latest one there. */
+export function latestEvolveCommandApprovesUnisolated(
+  messages: readonly { role: string; content: string }[],
+): boolean {
+  const latest = messages.findLast(
+    (message) => message.role === "user" && isEvolveCommand(message.content),
+  );
+  return latest !== undefined && evolveCommandApprovesUnisolated(latest.content);
 }

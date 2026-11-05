@@ -58,6 +58,7 @@ function proposal(over: Partial<EvolveRunProposal> = {}): EvolveRunProposal {
 function deps(over: Partial<ProposalDeps> = {}) {
   const stored: Array<{ content?: string; path?: string }> = [];
   const base: ProposalDeps = {
+    approvedUnisolated: true,
     casHas: async () => true,
     model: () => ({ hasApiToken: true, id: "m1", name: "M" }),
     modelId: "m1",
@@ -91,9 +92,14 @@ test("a goal records direct execution only when the host has none and the user a
   // anything. Both have to agree before a goal can claim its candidates ran
   // unconfined — one is a checkbox on a machine that has a sandbox, the other
   // is the only place the flag could honestly come from.
-  const startWith = async (backend: "bwrap" | "direct", allowed: boolean | undefined) => {
+  const startWith = async (
+    backend: "bwrap" | "direct",
+    allowed: boolean | undefined,
+    approvedUnisolated = true,
+  ) => {
     let started: EvolveGoal | undefined;
     const { deps: d } = deps({
+      approvedUnisolated,
       orchestrator: {
         probe: async () => ({
           baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1,
@@ -121,6 +127,12 @@ test("a goal records direct execution only when the host has none and the user a
   const refused = await startWith("direct", undefined);
   assert.match(refused.result.refusedBecause ?? "", /without isolation/);
   assert.equal(refused.started, undefined);
+
+  // The model asked, but the user's own command never approved it — the tool
+  // argument is not consent, so the goal gets nothing to run unconfined with.
+  const unapproved = await startWith("direct", true, false);
+  assert.match(unapproved.result.refusedBecause ?? "", /without isolation/);
+  assert.equal(unapproved.started, undefined);
 
   // A host with a real sandbox: the flag is dropped, not merely ignored, so a
   // run card cannot carry a warning badge for a run that was confined.
