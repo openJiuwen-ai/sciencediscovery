@@ -103,9 +103,18 @@ function ipv6Blocked(address: string): boolean {
   // NAT64 keeps the IPv4 address in the last 32 bits: the well-known 64:ff9b::/96 prefix and the
   // local-use 64:ff9b:1::/48 prefix. Judging the prefix as a whole would cut NAT64 egress on the
   // IPv6-only networks that run it, so decode the embedded address and reuse the IPv4 table.
-  const nat64 = first === 0x0064 && second === 0xff9b
-    && (hextets[2] === 1 || hextets.slice(2, 6).every((hextet) => hextet === 0));
-  if (nat64) return ipv4Blocked(dotted(hextets[6]!, hextets[7]!));
+  if (first === 0x0064 && second === 0xff9b) {
+    // Only the /96 sub-layouts put the IPv4 address in hextets 6-7: 64:ff9b::/96 and the
+    // canonical 64:ff9b:1:0:0:0::/96. The local-use prefix is a /48, and RFC 8215 allows
+    // deployments to use other suffix lengths — a 64:ff9b:1::/48 address with the IPv4 bits in
+    // bits 64-95 (e.g. 64:ff9b:1:0:7f00:1:808:808, private in that layout) would be read as the
+    // public 128.8.8.8 here. Reject every non-canonical suffix under that /48 instead of
+    // guessing where its address sits; the canonical forms keep normal NAT64 egress working.
+    const wellKnown = hextets.slice(2, 6).every((hextet) => hextet === 0);
+    const localUseCanonical = hextets[2] === 1 && hextets.slice(3, 6).every((hextet) => hextet === 0);
+    if (wellKnown || localUseCanonical) return ipv4Blocked(dotted(hextets[6]!, hextets[7]!));
+    if (hextets[2] === 1) return true;
+  }
   // 6to4 (2002::/16) puts it in hextets 2-3.
   if (first === 0x2002) return ipv4Blocked(dotted(second, hextets[2]!));
   // IPv4-translated (::ffff:0:0:0/96) is 80 zero bits, ffff, 16 zero bits, then the IPv4 address.
