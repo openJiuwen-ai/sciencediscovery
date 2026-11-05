@@ -468,7 +468,9 @@ const WINDOWS_RESERVED_DEVICE_NAME =
  *
  * Windows ignores a trailing dot or space on a segment, so `nul.` and `CON ` name the
  * device too; the stem is everything before the first dot, because for a reserved name
- * the extension is irrelevant. A workspace is a shared, portable artifact — a file the
+ * the extension is irrelevant. A colon then starts a named stream (`nul:stream`,
+ * `CON:$DATA`), and Windows resolves the part before it as the device, so the stem is cut
+ * at the first colon as well. A workspace is a shared, portable artifact — a file the
  * host cannot create must be refused on every platform, not only where the failure
  * surfaces — so this predicate is platform-independent. It is a per-segment rule, so a
  * path is checked segment by segment rather than by its last one alone: the session file
@@ -476,7 +478,7 @@ const WINDOWS_RESERVED_DEVICE_NAME =
  * {@link assertWorkspacePath}, are not wired to it yet.
  */
 export function isWindowsReservedDeviceName(name: string): boolean {
-  const stem = name.split(".")[0]?.replace(/[. ]+$/, "") ?? "";
+  const stem = name.split(".")[0]?.split(":")[0]?.replace(/[. ]+$/, "") ?? "";
   return WINDOWS_RESERVED_DEVICE_NAME.test(stem);
 }
 
