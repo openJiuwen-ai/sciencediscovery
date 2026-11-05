@@ -544,7 +544,8 @@ async def _preprint_search(server: str, query: str, days: int, limit: int, categ
         warning = f"The provider reports no preprints published between {window}."
     elif total is None:
         warning = (
-            f"Scanned the {scanned} preprints returned for {window}; text filtering was applied client-side."
+            f"The provider did not report a total for {window}, so only the first {scanned} preprints "
+            "(oldest first) were scanned; text filtering was applied client-side."
         )
     else:
         warning = (
