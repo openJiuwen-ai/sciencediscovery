@@ -51,6 +51,10 @@ function ipv4Blocked(address: string): boolean {
   return false;
 }
 
+function dotted(high: number, low: number): string {
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
 function normalizeIpv6(address: string): string {
   return address.toLowerCase().replace(/^\[|\]$/g, "");
 }
@@ -94,9 +98,28 @@ function ipv6Blocked(address: string): boolean {
   if (!hextets) return false;
   const mapped = hextets.slice(0, 5).every((hextet) => hextet === 0) && hextets[5] === 0xffff;
   const compatible = hextets.slice(0, 6).every((hextet) => hextet === 0);
-  if (!mapped && !compatible) return false;
-  const high = hextets[6]!; const low = hextets[7]!;
-  return ipv4Blocked(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`);
+  if (mapped || compatible) return ipv4Blocked(dotted(hextets[6]!, hextets[7]!));
+  const first = hextets[0]!; const second = hextets[1]!;
+  // NAT64 keeps the IPv4 address in the last 32 bits: the well-known 64:ff9b::/96 prefix and the
+  // local-use 64:ff9b:1::/48 prefix. Judging the prefix as a whole would cut NAT64 egress on the
+  // IPv6-only networks that run it, so decode the embedded address and reuse the IPv4 table.
+  const nat64 = first === 0x0064 && second === 0xff9b
+    && (hextets[2] === 1 || hextets.slice(2, 6).every((hextet) => hextet === 0));
+  if (nat64) return ipv4Blocked(dotted(hextets[6]!, hextets[7]!));
+  // 6to4 (2002::/16) puts it in hextets 2-3.
+  if (first === 0x2002) return ipv4Blocked(dotted(second, hextets[2]!));
+  // IPv4-translated (::ffff:0:0:0/96) is 80 zero bits, ffff, 16 zero bits, then the IPv4 address.
+  if (hextets.slice(0, 4).every((hextet) => hextet === 0)
+    && hextets[4] === 0xffff && hextets[5] === 0) {
+    return ipv4Blocked(dotted(hextets[6]!, hextets[7]!));
+  }
+  // Teredo (2001::/32) carries the client's IPv4 in the last 32 bits, bitwise inverted.
+  if (first === 0x2001 && second === 0) {
+    return ipv4Blocked(dotted(~hextets[6]! & 0xffff, ~hextets[7]! & 0xffff));
+  }
+  // Deprecated site-local fec0::/10 is the fec0-feff range the fe80-febf test above does not cover.
+  if ((first & 0xffc0) === 0xfec0) return true;
+  return false;
 }
 
 /** True when the literal address is not routable public space. */
