@@ -57,11 +57,14 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_initial_exploit_requires_explore_even_with_fabricated_lineage(self):
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
-        for ids in ([], ['ROOT']):
-            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'Use explorationType=explore'):
-                engine.validate_proposal(dict(parentId='ROOT', direction='New direction', hypothesis='H',
-                                              explorationType='exploit', basedOnCandidateIds=ids,
-                                              addressesInsightIds=ids), ['ROOT'])
+        with self.assertRaisesRegex(ValueError, 'Use explorationType=explore'):
+            engine.validate_proposal(dict(parentId='ROOT', direction='New direction', hypothesis='H',
+                                          explorationType='exploit', basedOnCandidateIds=[],
+                                          addressesInsightIds=[]), ['ROOT'])
+        with self.assertRaisesRegex(ValueError, 'Use explorationType=explore'):
+            engine.validate_proposal(dict(parentId='ROOT', direction='New direction', hypothesis='H',
+                                          explorationType='exploit', basedOnCandidateIds=['ROOT'],
+                                          addressesInsightIds=['ROOT']), ['ROOT'])
 
     async def test_initial_ideation_corrects_exploit_to_explicit_explore(self):
         ideate_calls = []
