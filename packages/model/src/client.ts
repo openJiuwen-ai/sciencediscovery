@@ -801,14 +801,31 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
   }
 }
 
-function retryWithoutRejectedThinkingFields(request: { body: string; headers: Record<string, string>; url: string }, error: unknown) {
-  if (!(error instanceof ModelRequestError) || error.statusCode !== 400
-    || !/unsupported[^\n]*(thinking|reasoning)|(?:thinking|reasoning)[^\n]*unsupported/i.test(error.responseDetail)) return undefined;
-  const body = JSON.parse(request.body) as Record<string, unknown>;
-  const fields = ["thinking", "reasoning_effort", "reasoning_split", "chat_template_kwargs"];
-  if (!fields.some((field) => field in body)) return undefined;
-  for (const field of fields) delete body[field];
+const rejectedThinkingControlEndpoints = new Set<string>();
+const thinkingControlFields = ["thinking", "reasoning_effort", "reasoning_split", "chat_template_kwargs"];
+
+function thinkingControlEndpointKey(endpoint: ModelEndpoint): string {
+  return [endpointRoot(endpoint.baseUrl), endpoint.model, endpointProtocol(endpoint), endpointVariant(endpoint)].join("\0");
+}
+
+function withoutThinkingControls(request: { body: string; headers: Record<string, string>; url: string }) {
+  let body: Record<string, unknown>;
+  try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return undefined; }
+  if (!thinkingControlFields.some((field) => field in body)) return undefined;
+  for (const field of thinkingControlFields) delete body[field];
   return { ...request, body: JSON.stringify(body) };
+}
+
+function retryWithoutRejectedThinkingFields(
+  endpoint: ModelEndpoint,
+  request: { body: string; headers: Record<string, string>; url: string },
+  error: unknown,
+) {
+  if (!(error instanceof ModelRequestError) || error.statusCode !== 400
+    || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(error.responseDetail)) return undefined;
+  const fallback = withoutThinkingControls(request);
+  if (fallback) rejectedThinkingControlEndpoints.add(thinkingControlEndpointKey(endpoint));
+  return fallback;
 }
 
 interface OpenAiToolCallFragment {
@@ -875,13 +892,17 @@ async function streamOpenAiTurn(
   recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
-  const request = createModelRequest(endpoint, systemPrompt, history, tools, policy, true);
+  let request = createModelRequest(endpoint, systemPrompt, history, tools, policy, true);
+  if (rejectedThinkingControlEndpoints.has(thinkingControlEndpointKey(endpoint))) {
+    request = withoutThinkingControls(request) ?? request;
+  }
   let streamed: Awaited<ReturnType<typeof requestWithRetry>>;
   try {
     streamed = await requestWithRetry({ ...request, policy, proxy: endpoint.proxy, signal }, recorder);
   } catch (error) {
-    const fallback = retryWithoutRejectedThinkingFields(request, error);
+    const fallback = retryWithoutRejectedThinkingFields(endpoint, request, error);
     if (!fallback) throw error;
+    recorder.retry("provider_http");
     streamed = await requestWithRetry({ ...fallback, policy, proxy: endpoint.proxy, signal }, recorder);
   }
   const { body } = streamed;
