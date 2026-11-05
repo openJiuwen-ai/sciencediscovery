@@ -428,6 +428,9 @@ async def europe_pmc_prepare_paper_download(identifier: str) -> dict[str, Any]:
 
 _PREPRINT_PAGE_SIZE = 30
 _PREPRINT_MAX_PAGES = 20
+# The provider uses this status for a window that legitimately holds no posts;
+# it carries no total and an empty collection, exactly like a rejection.
+_PREPRINT_EMPTY_STATUS = "no posts found"
 
 
 def _preprint_provider_message(payload: Any) -> dict[str, Any]:
@@ -435,6 +438,10 @@ def _preprint_provider_message(payload: Any) -> dict[str, Any]:
     if isinstance(messages, list) and messages and isinstance(messages[0], dict):
         return messages[0]
     return {}
+
+
+def _preprint_status(payload: Any) -> str:
+    return str(_preprint_provider_message(payload).get("status", "")).strip().lower()
 
 
 def _preprint_total(payload: Any) -> int | None:
@@ -447,9 +454,11 @@ def _preprint_total(payload: Any) -> int | None:
 
 def _require_preprint_provider_ok(server: str, payload: Any) -> None:
     status = str(_preprint_provider_message(payload).get("status", "")).strip()
-    if status and status.lower() != "ok":
-        # Rejected requests still return HTTP 200 with an empty collection, so
-        # the provider's status message is the only failure signal available.
+    # Rejected requests still return HTTP 200 with an empty collection, so the
+    # provider's status message is the only failure signal available. An empty
+    # window is not a rejection: it reports its own status, and the caller
+    # turns that into "no preprints published between ...".
+    if status and status.lower() not in {"ok", _PREPRINT_EMPTY_STATUS}:
         raise RuntimeError(f"{server} rejected the preprint request: {status}")
 
 
@@ -500,6 +509,8 @@ async def _preprint_search(server: str, query: str, days: int, limit: int, categ
     first_page = await fetch(0)
     _require_preprint_provider_ok(server, first_page)
     total = _preprint_total(first_page)
+    if total is None and _preprint_status(first_page) == _PREPRINT_EMPTY_STATUS:
+        total = 0
     if total is None:
         cursors = [0]
     else:

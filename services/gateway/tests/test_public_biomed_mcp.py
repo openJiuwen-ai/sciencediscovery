@@ -307,6 +307,18 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "Both dates must be in yyyy-mm-dd format"):
                 await _preprint_search("biorxiv", "liver", 30, 5, None)
 
+    async def test_preprint_search_treats_an_empty_window_as_a_result(self) -> None:
+        empty = {"messages": [{"status": "no posts found"}], "collection": []}
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=empty),
+        ):
+            result = await _preprint_search("biorxiv", "liver", 1, 5, "zoology")
+
+        self.assertEqual(result["records"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("no preprints published between", result["warnings"][0])
+
     async def test_preprint_search_names_a_missing_total_as_an_oldest_first_scan(self) -> None:
         payload = {"collection": [{
             "abstract": "Liver abstract",
