@@ -310,7 +310,9 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     // it still owes the reader a mark and the reason.
     const html = render({ error: { message: "gateway died" }, status: "failed", terminal: true });
     assert.match(html, /is-notice/u);
+    // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
+    assert.match(html, /class="run-failure-details"/u);
     assert.doesNotMatch(html, /is-divider/u);
   });
 
@@ -323,9 +325,46 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     assert.match(html, /is-notice/u);
     // Localized Chinese summary for timeout.
     assert.match(html, /请求超时/u);
-    // Raw diagnostic is inside the expandable technical-details block.
+    // The original errorCode and error.message live inside the technical details.
     assert.match(html, /class="run-failure-details"/u);
+    assert.match(html, /class="run-failure-code"/u);
+    assert.match(html, /timeout/u);
     assert.match(html, /no gateway progress for 1000 ms/u);
+  });
+
+  it("uses the unknown summary for an unrecognised error code", () => {
+    const html = render({
+      error: { code: "mystery-code", message: "something odd happened" },
+      status: "failed",
+      terminal: true,
+    });
+    assert.match(html, /任务未能完成/u);
+    assert.match(html, /mystery-code/u);
+    assert.match(html, /something odd happened/u);
+  });
+
+  it("uses the unknown summary when no error code is supplied", () => {
+    const html = render({ error: { message: "no code attached" }, status: "failed", terminal: true });
+    assert.match(html, /任务未能完成/u);
+    assert.match(html, /no code attached/u);
+  });
+
+  it("does not render a run-failure summary when a tool timed out but the run succeeded", () => {
+    // A failed tool call (e.g. execution timeout) is shown by the tool card;
+    // it must not be mistaken for a run failure.
+    const html = render({
+      status: "completed",
+      terminal: true,
+      turns: [
+        turn({
+          responses: [{ content: "done", responseId: "r1", settled: true, truncated: false }],
+          tools: [{ after: 0, id: "t1", trace: { id: "t1", name: "execute", status: "failed" } }],
+        }),
+      ],
+    });
+    assert.doesNotMatch(html, /run-failure-details/u);
+    assert.doesNotMatch(html, /任务未能完成/u);
+    assert.doesNotMatch(html, /请求超时/u);
   });
 });
 

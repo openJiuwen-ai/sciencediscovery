@@ -52,6 +52,17 @@ function answered(runId: string, thinking: string, answer: string): RunStreamSta
   };
 }
 
+function failed(runId: string, code: string, errorMessage: string): RunStreamState {
+  return {
+    ...emptyRunStream(),
+    error: { code, message: errorMessage },
+    modelName: "m",
+    runId,
+    status: "failed",
+    terminal: true,
+  };
+}
+
 function detail(messages: ChatMessage[]): SessionDetail {
   return { id: "session-1", messages } as never;
 }
@@ -357,5 +368,37 @@ test("a timeout notice shows a localized summary and hides raw diagnostics in de
   });
   assert.match(markup, /请求超时/u);
   assert.match(markup, /class="run-failure-details"/u);
+  assert.match(markup, /Agent idle timeout was reached/u);
+});
+
+test("a replayed failed run shows the localized summary and keeps diagnostics in details", () => {
+  const sessionMessages = [
+    message("question-1", "user", "do it"),
+    message("answer-1", "assistant", "I will try"),
+  ];
+  const replays: RunReplay[] = [
+    { messageId: "answer-1", runId: "run-1", state: failed("run-1", "timeout", "no gateway progress for 1000 ms"), userMessageId: "question-1" },
+  ];
+  const markup = render({ detail: detail(sessionMessages), replays });
+  assert.match(markup, /请求超时/u);
+  assert.match(markup, /class="run-failure-details"/u);
+  assert.match(markup, /no gateway progress for 1000 ms/u);
+});
+
+test("a run timeout with a timeout notice renders both notices localized and preserves raw diagnostics", () => {
+  // `timeout_notice` and `run.failed` cannot be reliably associated on the
+  // client side, so both are kept and localized rather than deduplicated.
+  const sessionMessages = [
+    message("question-1", "user", "do it"),
+    message("notice-1", "assistant", "Request stopped because the Agent idle timeout was reached after 1 seconds.", "timeout_notice"),
+    message("answer-1", "assistant", "I will try"),
+  ];
+  const replays: RunReplay[] = [
+    { messageId: "answer-1", runId: "run-1", state: failed("run-1", "timeout", "no gateway progress for 1000 ms"), userMessageId: "question-1" },
+  ];
+  const markup = render({ detail: detail(sessionMessages), replays });
+  assert.match(markup, /请求超时/u);
+  assert.equal((markup.match(/class="run-failure-details"/gu) ?? []).length, 2);
+  assert.match(markup, /no gateway progress for 1000 ms/u);
   assert.match(markup, /Agent idle timeout was reached/u);
 });

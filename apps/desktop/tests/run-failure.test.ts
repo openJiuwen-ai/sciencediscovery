@@ -27,13 +27,35 @@ describe("formatRunFailure", () => {
     setLanguage("en");
   });
 
-  it("maps every known RunFailureCode to an actionable English message", () => {
+  it("maps timeout to an actionable message", () => {
     assert.match(formatRunFailure("timeout"), /timed out/i);
+  });
+
+  it("maps rate-limited to an actionable message", () => {
     assert.match(formatRunFailure("rate-limited"), /limiting requests/i);
-    assert.match(formatRunFailure("semantic-error"), /rejected/i);
+  });
+
+  it("maps semantic-error to a neutral, actionable message", () => {
+    // `semantic-error` is the backend's catch-all, so the message should not
+    // claim the model service explicitly rejected the request.
+    const message = formatRunFailure("semantic-error");
+    assert.doesNotMatch(message, /rejected/i);
+    assert.match(message, /unexpected issue/i);
+  });
+
+  it("maps server-error to an actionable message", () => {
     assert.match(formatRunFailure("server-error"), /server error/i);
+  });
+
+  it("maps transport-error to an actionable message", () => {
     assert.match(formatRunFailure("transport-error"), /could not be reached/i);
+  });
+
+  it("maps unauthorized to an actionable message", () => {
     assert.match(formatRunFailure("unauthorized"), /rejected the credentials/i);
+  });
+
+  it("maps invalid-tool-call to an actionable message", () => {
     assert.match(formatRunFailure("invalid-tool-call"), /tool call/i);
   });
 
@@ -49,5 +71,6 @@ describe("formatRunFailure", () => {
     setLanguage("zh-CN");
     assert.match(formatRunFailure("timeout"), /请求超时/);
     assert.match(formatRunFailure("transport-error"), /无法连接模型服务/);
+    assert.match(formatRunFailure("semantic-error"), /意外问题/);
   });
 });

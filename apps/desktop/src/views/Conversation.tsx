@@ -78,9 +78,15 @@ const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "revi
  */
 function NoticeRow({ message }: { message: ChatMessage }) {
   const label = message.kind ? (TEXT.conversation.notices[message.kind] ?? message.kind) : "";
-  // Timeout notices carry the same failure class as a run timeout, so surface
-  // the localized summary and keep the raw provider message in an expandable
-  // technical-details block instead of repeating the English diagnostic.
+  // Timeout notices share the same failure class as a run timeout. They are
+  // rendered as a localized summary with the raw provider message folded away.
+  //
+  // Note: `timeout_notice` messages are not associated with a specific run on
+  // the client side, so we cannot reliably deduplicate them against the
+  // `run.failed` status line for the same failure. We keep the notice visible
+  // rather than risk dropping useful information; deduplication would require
+  // backend schema changes (e.g. a runId on the message), which is out of scope
+  // for this fix.
   if (message.kind === "timeout_notice") {
     return (
       <div className="message assistant is-notice">
