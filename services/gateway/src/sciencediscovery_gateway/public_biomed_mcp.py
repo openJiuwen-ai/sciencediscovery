@@ -29,7 +29,7 @@ import re
 import ssl
 import time
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -426,45 +426,132 @@ async def europe_pmc_prepare_paper_download(identifier: str) -> dict[str, Any]:
 # bioRxiv / medRxiv
 
 
+_PREPRINT_PAGE_SIZE = 30
+_PREPRINT_MAX_PAGES = 20
+
+
+def _preprint_provider_message(payload: Any) -> dict[str, Any]:
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        return messages[0]
+    return {}
+
+
+def _preprint_total(payload: Any) -> int | None:
+    total = _preprint_provider_message(payload).get("total")
+    try:
+        return max(0, int(total))
+    except (TypeError, ValueError):
+        return None
+
+
+def _require_preprint_provider_ok(server: str, payload: Any) -> None:
+    status = str(_preprint_provider_message(payload).get("status", "")).strip()
+    if status and status.lower() != "ok":
+        # Rejected requests still return HTTP 200 with an empty collection, so
+        # the provider's status message is the only failure signal available.
+        raise RuntimeError(f"{server} rejected the preprint request: {status}")
+
+
+def _preprint_record(server: str, item: dict[str, Any]) -> dict[str, Any]:
+    doi = str(item.get("doi", ""))
+    title = str(item.get("title", doi))
+    url = format_external_url(
+        "data_sources.preprints.content_template", server=server, doi=doi, version=item.get("version", "1")
+    )
+    return _record(
+        server,
+        doi,
+        title,
+        url,
+        item,
+        abstract=str(item.get("abstract", "")) or None,
+        authors=[name.strip() for name in str(item.get("authors", "")).split(";") if name.strip()],
+        role="preprint",
+        scope="abstract",
+        warnings=["This record is a preprint and has not completed peer review."],
+        year=str(item.get("date", ""))[:4] or None,
+    )
+
+
 async def _preprint_search(server: str, query: str, days: int, limit: int, category: str | None) -> dict[str, Any]:
     if not query.strip():
         raise ValueError("query must not be empty")
-    payload = await _get_json(
-        format_external_url("data_sources.preprints.details_by_days_template", server=server, days=days),
-        params={"category": category} if category else None,
-    )
-    terms = query.lower().split()
-    records = []
-    for item in payload.get("collection", []):
-        searchable = " ".join(str(item.get(key, "")) for key in ("title", "abstract", "authors", "category")).lower()
-        if terms and not all(term in searchable for term in terms):
-            continue
-        doi = str(item.get("doi", ""))
-        title = str(item.get("title", doi))
-        url = format_external_url(
-            "data_sources.preprints.content_template", server=server, doi=doi, version=item.get("version", "1")
+    if days < 1:
+        raise ValueError("days must be at least 1")
+    # The provider only accepts yyyy-mm-dd ranges; UTC keeps "today" from
+    # landing in the future for the provider's timezone.
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=days - 1)
+    params = {"category": category} if category else None
+
+    async def fetch(cursor: int) -> Any:
+        return await _get_json(
+            format_external_url(
+                "data_sources.preprints.details_by_range_template",
+                server=server,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                cursor=cursor,
+            ),
+            params=params,
         )
-        records.append(_record(
-            server,
-            doi,
-            title,
-            url,
-            item,
-            abstract=str(item.get("abstract", "")) or None,
-            authors=[name.strip() for name in str(item.get("authors", "")).split(";") if name.strip()],
-            role="preprint",
-            scope="abstract",
-            warnings=["This record is a preprint and has not completed peer review."],
-            year=str(item.get("date", ""))[:4] or None,
-        ))
+
+    first_page = await fetch(0)
+    _require_preprint_provider_ok(server, first_page)
+    total = _preprint_total(first_page)
+    if total is None:
+        cursors = [0]
+    else:
+        # The provider serves the window oldest-first and the trailing path
+        # segment is a record offset (cursor 1 starts one record after cursor
+        # 0), so scan from the newest offset backwards within a bounded budget.
+        newest_cursor = max(0, total - _PREPRINT_PAGE_SIZE)
+        cursors = list(range(newest_cursor, -1, -_PREPRINT_PAGE_SIZE))[:_PREPRINT_MAX_PAGES]
+
+    terms = query.lower().split()
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    fetched = {0: first_page}
+    scanned = 0
+    for cursor in cursors:
+        if cursor in fetched:
+            payload = fetched[cursor]
+        else:
+            payload = await fetch(cursor)
+            _require_preprint_provider_ok(server, payload)
+            fetched[cursor] = payload
+        collection = payload.get("collection", []) if isinstance(payload, dict) else []
+        scanned += len(collection)
+        for item in reversed(collection):
+            doi = str(item.get("doi", ""))
+            if doi in seen:
+                continue
+            searchable = " ".join(
+                str(item.get(key, "")) for key in ("title", "abstract", "authors", "category")
+            ).lower()
+            if terms and not all(term in searchable for term in terms):
+                continue
+            seen.add(doi)
+            records.append(_preprint_record(server, item))
+            if len(records) >= limit:
+                break
         if len(records) >= limit:
             break
-    return _result(
-        server,
-        "search_preprints",
-        records,
-        warnings=["The provider API exposes date/category retrieval; text filtering was applied to the returned recent window."],
-    )
+
+    window = f"{start.isoformat()} to {end.isoformat()}"
+    if total == 0:
+        warning = f"The provider reports no preprints published between {window}."
+    elif total is None:
+        warning = (
+            f"Scanned the {scanned} preprints returned for {window}; text filtering was applied client-side."
+        )
+    else:
+        warning = (
+            f"Scanned {scanned} of {total} preprints published between {window}, newest first; "
+            "text filtering was applied client-side."
+        )
+    return _result(server, "search_preprints", records, warnings=[warning])
 
 
 async def _preprint_lookup(server: str, doi: str) -> dict[str, Any]:
