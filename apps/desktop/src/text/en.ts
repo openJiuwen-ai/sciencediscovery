@@ -1128,12 +1128,17 @@ export const EN: Text = {
       confirmLabel: "Pause at each checkpoint",
       confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
       autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
-      /* Windows has no bwrap/seatbelt. This switch is the user's explicit
-         consent to unconfined execution, and it is off by default; without it
-         the server refuses a run that executes candidate code. */
-      unisolatedLabel: "Allow candidate code to run without a sandbox",
-      unisolatedHint: "Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. Turn this on only if you understand that.",
-      unisolatedOffHint: "Off: any run that has to execute candidate programs is refused before it starts.",
+      /* Windows has no bwrap/seatbelt. There is no switch here, only two
+         warnings: a banner under the title so the risk is seen at a glance,
+         and an alert that asks again when the search is started. The answer
+         travels with this one command (`--allow-direct`); it never becomes a
+         setting someone sets once and forgets. */
+      unisolatedBannerTitle: "This search runs candidate code without a sandbox",
+      unisolatedBannerBody: "This machine has no usable sandbox. Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. You will be asked to confirm when you start the search.",
+      unisolatedConfirmTitle: "Run candidate code without a sandbox?",
+      unisolatedConfirmBody: "The search will execute candidate programs directly: no sandbox, no CPU or memory limits, and access to your files and network. Continue only if you understand those risks and accept them.",
+      unisolatedConfirmCancel: "Back",
+      unisolatedConfirmContinue: "Continue anyway",
       sessionNote: "The run is recorded in this session; once it starts, its progress stays reachable from the session header.",
       send: "Start designing",
       cancel: "Cancel",

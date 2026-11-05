@@ -146,7 +146,6 @@ export function App({ initialToken }: Props) {
   /** The create dialog, open with a typed goal when the command was diverted
    *  here because the runtime is not ready. */
   const [evolveCreate, setEvolveCreate] = useState<{
-    allowUnisolated?: boolean;
     checkpointMode?: "auto" | "confirm";
     goal?: string;
   } | undefined>();
@@ -485,9 +484,9 @@ export function App({ initialToken }: Props) {
    *  runtime is not ready the goal typed after it is carried into the setup
    *  dialog instead of being sent to a server that cannot run it; a bare
    *  command opens the dialog that asks for one. On a host with no sandbox the
-   *  dialog is also the only place the user can give the per-run consent to
-   *  run unconfined, so a fully typed command detours there too — unless it
-   *  already carries the flag, which the dialog itself writes.
+   *  dialog is also where the per-run consent to run unconfined is asked, so a
+   *  fully typed command detours there too — unless it already carries
+   *  `--allow-direct`, which is the answer that confirmation writes.
    *
    *  Defined above the boot screens' early returns because the checkpoint
    *  provider below reads it in an effect: a `const` declared after an early
@@ -499,7 +498,6 @@ export function App({ initialToken }: Props) {
     if (goal !== undefined
         && (goal === "" || evolve.status.state !== "ready" || needsConsent)) {
       setEvolveCreate({
-        allowUnisolated: evolveCommandAllowUnisolated(content),
         checkpointMode: evolveCommandCheckpointMode(content),
         goal: goal === "" ? undefined : goal,
       });
@@ -817,7 +815,6 @@ export function App({ initialToken }: Props) {
         <EvolveCreateDialog
           archived={state.detail?.archivedAt !== undefined}
           error={evolve.error}
-          initialAllowUnisolated={evolveCreate.allowUnisolated}
           initialCheckpointMode={evolveCreate.checkpointMode}
           initialGoal={evolveCreate.goal}
           initializing={evolve.initializing}

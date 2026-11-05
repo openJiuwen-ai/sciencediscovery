@@ -1173,11 +1173,15 @@ export const ZH = {
       confirmLabel: "检查点需要人工确认",
       confirmHint: "每个检查点会停下来，等你确认后再继续。",
       autoHint: "关闭后，助手会连续完成设计与启动；检查点仍会在对话中说明，但不再等待确认。",
-      /* Windows 没有 bwrap/seatbelt。这个开关是用户对“无隔离执行”的明确
-         同意，默认关闭；关闭时执行候选代码的实验会在启动前被服务端拒绝。 */
-      unisolatedLabel: "允许无隔离直接运行候选代码",
-      unisolatedHint: "候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有 CPU / 内存限制。只在你了解风险时开启。",
-      unisolatedOffHint: "不开启时，需要执行候选程序的实验会在启动前被拒绝。",
+      /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
+         横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
+         命令发出（`--allow-direct`），不成为会被忘记的设置。 */
+      unisolatedBannerTitle: "此实验会在没有沙箱的情况下运行候选代码",
+      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有 CPU / 内存限制。点击“开始设计”时会再确认一次。",
+      unisolatedConfirmTitle: "允许无隔离运行候选代码？",
+      unisolatedConfirmBody: "接下来会直接执行候选程序：没有沙箱、没有 CPU / 内存限制，可以读写你的文件并访问网络。只在你了解这些风险并愿意承担时继续。",
+      unisolatedConfirmCancel: "返回",
+      unisolatedConfirmContinue: "仍然继续",
       sessionNote: "实验会记录在当前会话中；开始后可以随时在会话顶部查看进度。",
       send: "开始设计",
       cancel: "取消",
