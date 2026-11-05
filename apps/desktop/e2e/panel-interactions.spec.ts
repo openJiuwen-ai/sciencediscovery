@@ -501,6 +501,70 @@ test.describe("子代理的运行记录", () => {
     // the catalog was read while the child was still running.
     await expect(panel.getByText("先看三组候选结构。")).toBeVisible({ timeout: 10_000 });
     await expect(panel.getByText("续跑：第二轮又核对了剩下的结构。")).toBeVisible();
+
+    // The record keeps growing while the child works, and none of it is on the
+    // stream this panel tails. The panel re-reads the catalog, so a step the
+    // run loop flushes after the open arrives without the child settling.
+    options.subagentsBySession![SESSION]![0]!.steps.push({
+      content: "第三轮：结果写进了报告。",
+      createdAt: CREATED_AT,
+      id: "step-late",
+      kind: "assistant",
+      status: "completed",
+    });
+    await expect(panel.getByText("第三轮：结果写进了报告。")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("an opened fold stays with its child when another record is opened", async ({ page }) => {
+    // `Disclosure` remembers that a body was mounted. The panel draws whichever
+    // child is open at the same position, so without a key that memory carries
+    // over: opening a second child would parse its whole timeline while the
+    // fold is still closed — the cost this panel exists to keep out.
+    const SECOND = "复核第二组候选";
+    const options = recorded();
+    const events = options.runsBySession![SESSION]![0]!.events;
+    const milestone = events.find((event) => event.type === "subagent.updated")!;
+    const first = milestone.subagent as JsonRecord;
+    const second = {
+      ...first,
+      id: "child-2",
+      input: { ...(first.input as JsonRecord), description: SECOND },
+    };
+    events.splice(events.findIndex((event) => event.type === "run.completed"),
+      0, { subagent: second, type: "subagent.updated" });
+    // Both children keep a tool row, which is what their timelines show: the
+    // trailing assistant steps become 输出, not steps of the fold.
+    const catalog = options.subagentsBySession![SESSION]!;
+    catalog[0] = {
+      ...catalog[0]!,
+      steps: [
+        { content: "结果 A", createdAt: CREATED_AT, id: "tool-a", kind: "tool", status: "completed", toolName: "read_file" },
+        ...(catalog[0]!.steps as JsonRecord[]),
+      ],
+    };
+    catalog.push({
+      ...second,
+      steps: [
+        { content: "第二组复核完成。", createdAt: CREATED_AT, id: "tool-b", kind: "tool", status: "completed", toolName: "read_file" },
+        { content: "复核完成：第二组稳定。", createdAt: CREATED_AT, id: "b-1", kind: "assistant", status: "completed" },
+      ],
+    });
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+    const panel = page.locator(".workspace-panel");
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    await expect(panel.locator(".subagent-step.is-tool")).toHaveCount(1);
+
+    await page.getByRole("button", { name: `Subagent ${SECOND}` }).click();
+    // The second record is on screen — its catalog-only answer is under 输出 —
+    // and its timeline is still folded, so nothing behind it may be in the DOM.
+    await expect(panel.getByText("复核完成：第二组稳定。")).toBeVisible({ timeout: 10_000 });
+    await expect(panel.locator(".subagent-step")).toHaveCount(0);
+    await expect(panel.getByText("第二组复核完成。")).toHaveCount(0);
   });
 
   test("a child with no steps says so once its timeline is opened", async ({ page }) => {

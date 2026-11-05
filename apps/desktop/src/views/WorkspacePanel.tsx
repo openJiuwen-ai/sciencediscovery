@@ -829,7 +829,10 @@ export function WorkspacePanel({
         </div>
       ) : (
         <div className="panel-body is-subagent">
-          <SubagentDetail loading={subagentLoading ?? false} subagent={subagent} />
+          {/* Keyed by the record: a fold's mounted body belongs to the child it
+              was opened for, and reusing the component for the next child would
+              mount that child's whole timeline while it is still folded. */}
+          <SubagentDetail key={subagent.id} loading={subagentLoading ?? false} subagent={subagent} />
         </div>
       )}
     </aside>

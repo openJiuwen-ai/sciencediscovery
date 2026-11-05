@@ -36,7 +36,7 @@ import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
 import { allSubagents } from "./run-stream/model.js";
-import { heldSubagentSteps, mergeSubagentSteps } from "./run-stream/subagent.js";
+import { mergedSubagentSteps } from "./run-stream/subagent.js";
 import {
   GUIDE_STORAGE_KEY,
   RIGHT_PANEL_STORAGE_KEY,
@@ -67,6 +67,15 @@ interface Props {
   /** Read once in `main.tsx`, before the tree mounts. */
   initialToken: string;
 }
+
+/** How often an open, running child's catalog record is re-read.
+ *
+ *  The child's own stream is the live path when it exists. This poll is what
+ *  keeps a continuation visible that was published under a run the panel does
+ *  not tail — a wake turn's. It re-reads the whole record, so it is slower than
+ *  the stream's own cadence: enough to watch the record grow, not to hammer a
+ *  long one. */
+const SUBAGENT_CATALOG_POLL_MS = 5000;
 
 export function App({ initialToken }: Props) {
   const [token, setToken] = useState(initialToken);
@@ -237,26 +246,36 @@ export function App({ initialToken }: Props) {
       setSubagentLoading(false);
       return;
     }
-    // While the child runs this reads what the catalog has flushed so far;
-    // the followed stream keeps filling in after it. Once the child settles
-    // the effect runs again, with `foundSubagent.status` changed, and reads
-    // the complete record.
+    // While the child runs this is the only source for a continuation the
+    // wake run published, and the run loop keeps flushing it, so a read at
+    // open would be a still image: poll it until the child settles. Once it
+    // settles the effect runs again — `foundSubagent.status` changed — and
+    // reads the complete record one last time.
+    const polling = foundSubagent?.status === "running";
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     setSubagentLoading(true);
-    void getSubagent(client, state.sessionId, openSubagentId)
-      .then((child) => {
-        if (!cancelled) setSubagentCatalog(child);
-      })
-      .catch(() => {
-        // The run-state copy still names the task and shows its status; only
-        // the steps are missing, so this is not worth an error banner.
-        if (!cancelled) setSubagentCatalog(undefined);
-      })
-      .finally(() => {
-        if (!cancelled) setSubagentLoading(false);
-      });
+    const read = () => {
+      void getSubagent(client, state.sessionId!, openSubagentId)
+        .then((child) => {
+          if (cancelled) return;
+          setSubagentCatalog(child);
+          setSubagentLoading(false);
+        })
+        .catch(() => {
+          // The run-state copy still names the task and shows its status; only
+          // the steps are missing, so this is not worth an error banner. The
+          // copy already held stands: a failed poll says nothing about the child.
+          if (!cancelled) setSubagentLoading(false);
+        })
+        .finally(() => {
+          if (!cancelled && polling) timer = setTimeout(read, SUBAGENT_CATALOG_POLL_MS);
+        });
+    };
+    read();
     return () => {
       cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [client, foundSubagent?.parentTurnId, foundSubagent?.status, openSubagentId, state.sessionId]);
 
@@ -293,26 +312,22 @@ export function App({ initialToken }: Props) {
     });
   }, [client, followedRunId, openSubagentId, state.sessionId]);
 
-  // Live snapshots are fresher and already carry steps. A replay's copy is the
-  // terminal state but says nothing about what the child did, so its steps come
-  // from the catalog. The catalog is also where a running child's flushed steps
-  // are, including the continuation a wake turn publishes under another run,
-  // so both copies are kept: the catalog gives the order the run loop wrote,
-  // and the live copy wins on an id it shares, because that copy is the fresher
-  // one. The followed stream is the base: its order is the order the work
-  // happened in, and whatever is held wins on an id it shares.
+  // The record's steps come from three copies of unequal freshness — see
+  // `mergedSubagentSteps`. A replay's snapshot is the terminal state but says
+  // nothing about what the child did, so its steps come from the catalog; a
+  // running child's snapshot carries what this window saw, the followed stream
+  // carries what the child wrote, and the catalog carries the continuation a
+  // wake turn published elsewhere. The snapshot stays the copy shown for an id
+  // it shares, because it is the freshest of the three.
   const openSubagent = useMemo(() => {
     if (resolvedSubagent === undefined) return undefined;
-    const held = heldSubagentSteps(resolvedSubagent.steps, catalogSubagent?.steps);
     const followedSteps = followed !== undefined
       && followed.subagentId === openSubagentId
       && followed.runId === followedRunId
       ? followed.steps
       : [];
-    if (followedSteps.length === 0) {
-      return held === resolvedSubagent.steps ? resolvedSubagent : { ...resolvedSubagent, steps: held };
-    }
-    return { ...resolvedSubagent, steps: mergeSubagentSteps(followedSteps, held) };
+    const steps = mergedSubagentSteps(resolvedSubagent.steps, catalogSubagent?.steps, followedSteps);
+    return steps === resolvedSubagent.steps ? resolvedSubagent : { ...resolvedSubagent, steps };
   }, [catalogSubagent, followed, followedRunId, openSubagentId, resolvedSubagent]);
 
   // A selection belongs to one session's transcript. Carrying it into another

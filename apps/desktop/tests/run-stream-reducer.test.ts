@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import type { RunStreamEvent, Subagent, SubagentStep } from "../src/api/types.js";
 import { closeRunStream, reduceRunStream } from "../src/run-stream/reducer.js";
 import { emptyRunStream, hasVisibleAnswer, thinkingSteps, type RunStreamState } from "../src/run-stream/model.js";
-import { heldSubagentSteps, mergeSubagentSteps } from "../src/run-stream/subagent.js";
+import { mergeSubagentSteps, mergedSubagentSteps } from "../src/run-stream/subagent.js";
 
 /** Fold a script of events, which is what both a live stream and a replay are. */
 function fold(events: RunStreamEvent[], start: RunStreamState = emptyRunStream()): RunStreamState {
@@ -558,27 +558,31 @@ test("a snapshot that says nothing new leaves the steps alone", () => {
   assert.deepEqual(withArgs[0]!.args, { path: "a.pdf" });
 });
 
-test("a running child's held steps include what only the catalog flushed", () => {
+test("a running child's record keeps the catalog's wake step and the freshest copy of each", () => {
   // The live snapshot is what the run stream carried, so it has no steps from
   // a wake turn: that continuation is published under the wake run, which this
   // panel does not tail. The catalog has it, and dropping it is what made a
   // running child look stuck before it settled.
-  const early = step("s1", { content: "before the wake" });
-  const wake = step("wake", { content: "after the wake" });
-  const held = heldSubagentSteps([early], [step("s1", { content: "before the wake" }), wake]);
-  assert.deepEqual(held.map((entry) => entry.id), ["s1", "wake"]);
-  assert.deepEqual(held[1], wake);
+  const flush = step("msg", { content: "续跑：我先核对前三个", status: "running" });
+  const streamed = step("msg", { content: "续跑：我先核对前三个结构，再核对剩下的。", status: "completed" });
+  const wake = step("wake", { content: "结果写进了报告。" });
+  const folded = mergedSubagentSteps([], [flush, wake], [streamed]);
+  assert.deepEqual(folded.map((entry) => entry.id), ["msg", "wake"]);
+  // The child's own stream is fresher than the flush, so a reply that was
+  // mid-sentence when the panel opened is not cut off at the flushed prefix.
+  assert.deepEqual(folded[0], streamed);
+  assert.deepEqual(folded[1], wake);
 
-  // The snapshot is fresher on an id both copies have, and its order stands
-  // when the catalog has nothing to add.
-  const running = step("s1", { content: "still going", status: "running" });
-  assert.deepEqual(
-    heldSubagentSteps([running], [step("s1", { content: "half done", status: "completed" })]),
-    [running],
-  );
-  const alone = [early];
-  assert.equal(heldSubagentSteps(alone, undefined), alone);
-  assert.equal(heldSubagentSteps(alone, []), alone);
+  // The live snapshot is fresher still: it updates as each step lands, so it
+  // wins over both on an id they share.
+  const live = step("msg", { content: "续跑：我先核对前三个结构，再核对剩下的。", status: "completed", progress: "done" });
+  assert.equal(mergedSubagentSteps([live], [flush, wake], [streamed])[0], live);
+
+  // With no other copy, the snapshot is returned as it is — the panel's memo
+  // relies on that identity to skip a needless re-render.
+  const alone = [step("s1", { content: "still going", status: "running" })];
+  assert.equal(mergedSubagentSteps(alone, undefined), alone);
+  assert.equal(mergedSubagentSteps(alone, [], []), alone);
 });
 
 test("a resumed child goes back to running on the same line", () => {
