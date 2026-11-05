@@ -4763,6 +4763,18 @@ body.is-resizing {
   font-weight: 600;
 }
 
+/* The record has stopped refreshing. A notice, not an error: the steps shown
+   are real, they may just be behind what the child has done. */
+.subagent-stale {
+  margin: 10px 0 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(245, 165, 36, 0.1);
+  color: #8a5a12;
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .subagent-steps {
   padding-top: 4px;
 }
