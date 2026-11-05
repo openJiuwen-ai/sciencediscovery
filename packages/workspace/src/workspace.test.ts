@@ -33,7 +33,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, isWindowsReservedDeviceName, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, scanWorkspaceWithStatus, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -99,6 +99,25 @@ test("normalizeWorkspaceRelativePath preserves nested names within each agent wr
   assert.equal(normalizeWorkspaceRelativePath(sessionRoot, "e/./f/g.md"), "e/f/g.md");
   assert.equal(normalizeWorkspaceRelativePath(subagentRoot, "outputs/result.csv"), "outputs/result.csv");
   assert.throws(() => normalizeWorkspaceRelativePath(subagentRoot, "../escape.csv"), /escapes the workspace/);
+});
+
+test("isWindowsReservedDeviceName treats a named stream as its device", () => {
+  // Windows parses `nul:stream` and `CON:$DATA` as a stream of the device, not as a file
+  // whose name contains a colon: opening it targets the device, so the workspace refuses
+  // it on every platform just like the bare name.
+  for (const name of ["nul:stream", "con:$DATA", "NUL:stream", "con:stream.txt"]) {
+    assert.equal(isWindowsReservedDeviceName(name), true, `${name} names a device stream`);
+  }
+  // A colon that does not follow the device leaves an ordinary name alone, and the `$` in
+  // CONIN$/CONOUT$ belongs to the device name rather than introducing a stream.
+  for (const name of ["stream:con", "conifer:notes", "conifer.csv", "console.log", "auxiliary.csv", "com10.csv"]) {
+    assert.equal(isWindowsReservedDeviceName(name), false, `${name} is an ordinary name`);
+  }
+  // The established forms keep matching: any extension, a trailing dot or space Windows
+  // ignores, and the console device aliases.
+  for (const name of ["CON", "nul.txt", "COM1.log", "CON .csv", "nul.", "conin$", "conout$"]) {
+    assert.equal(isWindowsReservedDeviceName(name), true, `${name} is still a device name`);
+  }
 });
 
 test("run-scoped extra tools are injected before the established allow/deny policy", async () => {
