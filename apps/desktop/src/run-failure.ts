@@ -36,5 +36,5 @@ export function formatRunFailure(code: RunFailureCode | string | undefined): str
     code && Object.hasOwn(FAILURE_MESSAGE_KEYS, code)
       ? FAILURE_MESSAGE_KEYS[code as RunFailureCode]
       : undefined;
-  return key ? (TEXT.runFailure[key] as string) : TEXT.runFailure.unknown;
+  return key ? TEXT.runFailure[key] : TEXT.runFailure.unknown;
 }
