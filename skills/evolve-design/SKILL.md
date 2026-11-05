@@ -30,6 +30,10 @@ that is missing, a goal no default can settle, an approval you cannot give on th
 If the user says stop or asks a question mid-run, stop at the next step and answer. Without the
 flag, confirm at every checkpoint as described below.
 
+Read the command's flags as the run of them directly after `/evolve-design`. A goal that itself
+begins with `--` is written on its own line, after a line break: the break ends the flags, and
+everything after it is the goal, dashes included.
+
 **Isolation last, and never assumed.** Windows has neither bubblewrap nor Seatbelt. There, the
 desktop can run candidates unconfined, but only for a run the user approved: the command then
 carries `--allow-direct`, written by the setup dialog when the user turned the warning on. Pass

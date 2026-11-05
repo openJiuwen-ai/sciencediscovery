@@ -268,6 +268,33 @@ test("the pace flag is read as a flag, not as part of the goal", () => {
   );
 });
 
+test("a goal that starts with a flag keeps its own text", () => {
+  // The dialog hands the goal to the command, and the setup detour reads it
+  // back: a goal whose first word is a flag must not flip the pace or lose
+  // that word. The line break the command writes is what ends its flags.
+  const command = evolveCommand("puct", "--no-confirm 是守护进程的参数，不是节奏开关");
+  assert.equal(
+    command,
+    "/evolve-design --algorithm puct\n--no-confirm 是守护进程的参数，不是节奏开关",
+  );
+  assert.equal(evolveCommandGoal(command), "--no-confirm 是守护进程的参数，不是节奏开关");
+  assert.equal(evolveCommandCheckpointMode(command), "confirm");
+  assert.equal(evolveCommandAllowUnisolated(command), false);
+
+  // The dialog's own pace is still read from the flags it wrote.
+  const auto = evolveCommand("puct", "--algorithm is the goal here", "auto");
+  assert.equal(evolveCommandCheckpointMode(auto), "auto");
+  assert.equal(evolveCommandGoal(auto), "--algorithm is the goal here");
+
+  // A typed goal that merely mentions a flag on one line keeps it too — and
+  // mentioning it is not the same as carrying it.
+  assert.equal(
+    evolveCommandGoal("/evolve-design explain --allow-direct elsewhere"),
+    "explain --allow-direct elsewhere",
+  );
+  assert.equal(evolveCommandAllowUnisolated("/evolve-design explain --allow-direct elsewhere"), false);
+});
+
 test("the direct-execution approval is a flag, not part of the goal", () => {
   // The dialog writes it only on Windows, but a detour through setup has to be
   // able to read it back, and a person may type the flags in any order.

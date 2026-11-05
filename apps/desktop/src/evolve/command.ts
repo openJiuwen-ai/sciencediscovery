@@ -42,9 +42,11 @@ export function isEvolveSkill(skill: { id: string }): boolean {
 }
 
 /** The flags the surface may put after the command, in any order. Only the
- *  leading run of them is consumed: a goal that happens to start with a dash
- *  keeps its own text. */
-const LEADING_FLAGS = /^(?:\s*--(?:algorithm\s+(?:puct|openevolve)|no-confirm|allow-direct)\b)+/;
+ *  leading run of them is consumed, and only across spaces and tabs: a goal
+ *  that itself begins with a flag is introduced by a line break, so the break
+ *  — not the dash — is what ends the flags. A goal that merely mentions a
+ *  flag keeps its own text. */
+const LEADING_FLAGS = /^[ \t]*(?:--(?:algorithm[ \t]+(?:puct|openevolve)|no-confirm|allow-direct)\b[ \t]*)+/;
 
 export function isEvolveCommand(text: string): boolean {
   return new RegExp(`^${EVOLVE_COMMAND}(?:\\s|$)`).test(text.trim());
@@ -54,6 +56,11 @@ function afterCommand(text: string): string {
   return text.trim().slice(EVOLVE_COMMAND.length);
 }
 
+/** The command's own flags: its leading run, before the goal. */
+function leadingFlags(text: string): string {
+  return afterCommand(text).match(LEADING_FLAGS)?.[0] ?? "";
+}
+
 /** What the user typed after the command, without its flags.
  *
  *  A draft that was typed directly has to survive the setup detour: if the
@@ -61,7 +68,7 @@ function afterCommand(text: string): string {
  *  its goal field rather than asking the user to write it twice. */
 export function evolveCommandGoal(text: string): string | undefined {
   if (!isEvolveCommand(text)) return undefined;
-  return afterCommand(text).replace(LEADING_FLAGS, "").trim();
+  return afterCommand(text).slice(leadingFlags(text).length).trim();
 }
 
 /** Whether the design pauses at each checkpoint, as the command says.
@@ -71,7 +78,7 @@ export function evolveCommandGoal(text: string): string | undefined {
  *  quietly putting it back on. */
 export function evolveCommandCheckpointMode(text: string): EvolveCheckpointMode | undefined {
   if (!isEvolveCommand(text)) return undefined;
-  return /(^|\s)--no-confirm\b/.test(afterCommand(text)) ? "auto" : "confirm";
+  return /--no-confirm\b/.test(leadingFlags(text)) ? "auto" : "confirm";
 }
 
 /** Whether the command already carries the user's approval to run candidates
@@ -81,7 +88,7 @@ export function evolveCommandCheckpointMode(text: string): EvolveCheckpointMode 
  *  keeps a setup detour from silently dropping an approval the user gave. */
 export function evolveCommandAllowUnisolated(text: string): boolean | undefined {
   if (!isEvolveCommand(text)) return undefined;
-  return /(^|\s)--allow-direct\b/.test(afterCommand(text));
+  return /--allow-direct\b/.test(leadingFlags(text));
 }
 
 /** The message that starts the design conversation. */
@@ -94,5 +101,10 @@ export function evolveCommand(
   const flags = `${EVOLVE_COMMAND} --algorithm ${algorithm}`
     + (checkpointMode === "auto" ? " --no-confirm" : "")
     + (allowUnisolated ? " --allow-direct" : "");
-  return `${flags} ${goal.trim()}`.trimEnd();
+  const text = goal.trim();
+  // A goal that begins with a flag would otherwise be read back as one — both
+  // by this module, when the setup detour re-opens the dialog, and by the
+  // agent, which reads the command's leading run. A line break ends that run,
+  // so the goal keeps its own text.
+  return text.startsWith("--") ? `${flags}\n${text}` : `${flags} ${text}`.trimEnd();
 }
