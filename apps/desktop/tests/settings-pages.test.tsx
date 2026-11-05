@@ -625,7 +625,7 @@ describe("a skill created from the form", () => {
   });
 });
 
-describe("the MCP servers page", () => {
+describe("the data sources page", () => {
   const page = () =>
     renderToStaticMarkup(
       <McpServers client={client} onConfirm={noConfirm} onToast={noConfirm} />,
@@ -633,10 +633,10 @@ describe("the MCP servers page", () => {
 
   it("reads one card list, not the custom/built-in tabs", () => {
     const markup = page();
-    assert.ok(markup.includes("settings-section"), "MCP 服务器 rendered no section");
-    assert.ok(markup.includes(loading), "MCP 服务器 did not start a read");
+    assert.ok(markup.includes("settings-section"), "数据源 rendered no section");
+    assert.ok(markup.includes(loading), "数据源 did not start a read");
     assert.ok(!markup.includes('role="tablist"'), "the custom/built-in tabs are back");
-    assert.ok(markup.includes(TEXT.settings.system.mcp.help), "the page does not say what 内置 means");
+    assert.ok(markup.includes(TEXT.settings.system.mcp.help), "the page does not explain default selection");
   });
 
   it("opens no blank form", () => {
@@ -645,6 +645,12 @@ describe("the MCP servers page", () => {
     const markup = page();
     assert.ok(!markup.includes("settings-card is-form"), "a form is mounted before a row was picked");
     assert.ok(!markup.includes(TEXT.settings.system.mcp.add), "新增服务器 is still drawn");
+  });
+
+  it("uses checkboxes for default selection, not permission switches", () => {
+    const markup = page();
+    assert.ok(!markup.includes('role="switch"'), "a permission switch is still rendered");
+    assert.ok(!markup.includes(TEXT.settings.system.mcp.enabled), "the old per-server enable label is still used");
   });
 });
 
