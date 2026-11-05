@@ -26,6 +26,7 @@ import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat,
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
+import { replaceFile } from "./atomic-file.js";
 import { installedPlugins } from "./plugins/catalog.js";
 import { PluginControl } from "./plugins/control.js";
 import { canonicalize, type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement, checkpointRetiredWorkspace } from "@sciencediscovery/cas";
@@ -2156,7 +2157,10 @@ export class SessionStore {
     await mkdir(directory, { recursive: true });
     try {
       await writeFile(temporaryPath, `${JSON.stringify(values, null, 2)}\n`, "utf8");
-      await rename(temporaryPath, path);
+      // The same replacement runs for every array this store owns, on the same
+      // machine a scanner is watching; see `replaceFile` for why Windows needs
+      // the retry.
+      await replaceFile(temporaryPath, path);
     } finally {
       await rm(temporaryPath, { force: true });
     }

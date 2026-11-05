@@ -37,7 +37,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type {
@@ -48,6 +48,8 @@ import type {
   EvolveRunStatus,
 } from "@sciencediscovery/schema";
 import { evolveAlgorithm, isEvolveRunActive } from "@sciencediscovery/schema";
+
+import { replaceFile } from "../atomic-file.js";
 
 /** Subdirectories created by `initialize`. Listed rather than derived so a new
  * one is a visible edit and not a silent side effect of the first write. */
@@ -304,13 +306,18 @@ export class EvolutionStore {
   }
 
   /** Write-to-temp-then-rename: a crash leaves either the old record or the new
-   * one, never a half-written file. */
+   * one, never a half-written file.
+   *
+   * `run.json` is rewritten on every event — several times a second on a fast
+   * search — which on Windows is exactly the pattern a virus scanner watches
+   * for. A rename the scanner wins once used to fail the entire run; the
+   * helper retries the transient refusals. */
   private async writeRunFile(run: EvolveRun): Promise<void> {
     const directory = this.runDirectory(run.id);
     const temporary = resolve(directory, `.run-${process.pid}-${randomUUID()}.tmp`);
     await writeFile(temporary, `${JSON.stringify(run, null, 2)}\n`, "utf8");
     try {
-      await rename(temporary, this.runFilePath(run.id));
+      await replaceFile(temporary, this.runFilePath(run.id));
     } catch (error) {
       await rm(temporary, { force: true });
       throw error;
