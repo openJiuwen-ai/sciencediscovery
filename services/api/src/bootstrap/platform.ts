@@ -51,6 +51,7 @@ import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import { evolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
@@ -393,6 +394,15 @@ export function createPlatformServices(
     },
   );
 
+  /** Whether the user's own command in this session turned the no-isolation
+   *  warning on. On a Windows install the server runs candidates directly, so
+   *  this flag is the only thing between a search and unconfined model-written
+   *  code; the model's tool argument alone is not the user's answer. */
+  const userApprovedUnisolated = async (sessionId: string) =>
+    (await store.readMessages(sessionId)).some(
+      (message) => message.role === "user" && evolveCommandApprovesUnisolated(message.content),
+    );
+
   const casHasEvolve = async (hash: string) => {
     try {
       await evolveCas.read(hash);
@@ -429,6 +439,17 @@ export function createPlatformServices(
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
+      // The tool's `allowUnisolated` records the user's answer, but it is the
+      // model that writes it: a goal, a dataset row or a plain mistake can set
+      // it. Accept it only when the session's own `/evolve-design` command
+      // carried `--allow-direct`; otherwise drop it and let pre-flight's
+      // `unisolated_run_unconfirmed` refusal say what is missing.
+      const requested = input.allowUnisolated === true;
+      const confirmed = requested && await userApprovedUnisolated(turn.sessionId);
+      const proposal = requested && !confirmed ? { ...input, allowUnisolated: false } : input;
+      if (requested && !confirmed) {
+        apiLog.warn("evolve_unisolated_not_confirmed", { sessionId: turn.sessionId });
+      }
       // The probe runs real evaluations in the sandbox — two or three, each
       // with the candidate timeout as its ceiling. That is minutes, and the
       // agent's idle clock is four: without pausing it the turn dies with "no
@@ -437,7 +458,7 @@ export function createPlatformServices(
       // permission prompt gets, for the same reason — the wait is real work.
       const releaseWait = turn.beginExternalWait?.();
       try {
-        const result = await startProposedRun(input, {
+        const result = await startProposedRun(proposal, {
           casHas: casHasEvolve,
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,
