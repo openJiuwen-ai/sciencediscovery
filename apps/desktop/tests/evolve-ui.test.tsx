@@ -288,6 +288,31 @@ test("the create dialog pauses at checkpoints unless the command said otherwise"
   assert.equal(switchTag(auto).includes("checked"), false);
 });
 
+test("the create dialog opens on the search the command named", () => {
+  const status: EvolveStatus = { canInitialize: true, state: "ready" };
+  const render = (initialAlgorithm?: "puct" | "openevolve") => renderToStaticMarkup(
+    <EvolveCreateDialog
+      archived={false}
+      initialAlgorithm={initialAlgorithm}
+      initializing={false}
+      onClose={() => {}}
+      onInitialize={() => {}}
+      onSend={() => {}}
+      running={false}
+      status={status}
+    />,
+  );
+
+  // A `--algorithm openevolve` draft that had to detour through setup comes
+  // back with that search selected, not on the dialog's own default.
+  const openEvolve = render("openevolve");
+  assert.match(openEvolve, /aria-checked="true"[^>]*>\s*<span class="evolve-algorithm-name">OpenEvolve/);
+  assert.match(openEvolve, /aria-checked="false"[^>]*>\s*<span class="evolve-algorithm-name">PUCT/);
+
+  const byDefault = render();
+  assert.match(byDefault, /aria-checked="true"[^>]*>\s*<span class="evolve-algorithm-name">PUCT/);
+});
+
 test("only a host with no sandbox warns that candidates run unconfined", () => {
   // The warning is a statement under the title, not a switch: consent is asked
   // when the search is started, so the form must not offer to give it early.

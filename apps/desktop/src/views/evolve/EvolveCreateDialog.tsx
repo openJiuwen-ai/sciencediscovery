@@ -36,6 +36,10 @@ import { claimsEscape } from "../dialog-escape.js";
 export interface EvolveCreateDialogProps {
   archived: boolean;
   error?: string;
+  /** The search the typed command already chose, carried through the setup
+   *  detour so a `--algorithm openevolve` draft does not come back on the
+   *  dialog's own default. */
+  initialAlgorithm?: EvolveAlgorithm;
   /** The pace the typed command already chose, carried through the setup
    *  detour so a `--no-confirm` draft does not come back switched on. */
   initialCheckpointMode?: EvolveCheckpointMode;
@@ -53,6 +57,7 @@ export interface EvolveCreateDialogProps {
 export function EvolveCreateDialog({
   archived,
   error,
+  initialAlgorithm,
   initialCheckpointMode,
   initialGoal,
   initializing,
@@ -63,7 +68,7 @@ export function EvolveCreateDialog({
   status,
 }: EvolveCreateDialogProps) {
   const [goal, setGoal] = useState(initialGoal ?? "");
-  const [algorithm, setAlgorithm] = useState<EvolveAlgorithm>("puct");
+  const [algorithm, setAlgorithm] = useState<EvolveAlgorithm>(initialAlgorithm ?? "puct");
   // Confirm by default: pausing is the safe pace, and an unattended design
   // spends real model calls before the user has seen a single checkpoint.
   const [confirm, setConfirm] = useState(initialCheckpointMode !== "auto");

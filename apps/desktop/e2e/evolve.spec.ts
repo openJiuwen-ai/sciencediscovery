@@ -226,16 +226,50 @@ test("a typed design command on a host with no sandbox detours through the confi
   // so a command typed straight into the composer does not skip it — the goal
   // is carried over rather than sent to an agent that would design a run the
   // server then refuses.
-  await page.locator("#composer-textarea").fill("/evolve-design 让压缩比更高");
+  await page.locator("#composer-textarea").fill("/evolve-design --algorithm openevolve 让压缩比更高");
   await page.locator("#composer-textarea").press("Enter");
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("优化目标")).toHaveValue("让压缩比更高");
+  // The search the command named is selected, not the dialog's own default.
+  await expect(dialog.getByRole("radio", { name: /OpenEvolve/ })).toHaveAttribute("aria-checked", "true");
   await expect(dialog.getByRole("note")).toContainText("没有沙箱的情况下运行候选代码");
   expect(posts(mock)).toHaveLength(0);
 
   await dialog.getByRole("button", { name: "开始设计" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" }).click();
+  await expect.poll(() =>
+    mock.calls.some(
+      (call) =>
+        call.method === "POST" &&
+        call.path === "/api/sessions/session-1/messages" &&
+        call.body?.includes("/evolve-design --algorithm openevolve --allow-direct 让压缩比更高") === true,
+    ),
+  ).toBe(true);
+});
+
+test("a pasted --allow-direct does not answer the warning in the user's place", async ({ page }) => {
+  const mock = await installMockApi(page, {
+    evolveStatus: { canInitialize: true, sandbox: "direct", state: "ready" },
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+
+  // A pasted flag is a word typed without the warning on screen. The dialog
+  // still asks, and the flag leaves only after the answer is given here.
+  await page.locator("#composer-textarea").fill("/evolve-design --allow-direct 让压缩比更高");
+  await page.locator("#composer-textarea").press("Enter");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("优化目标")).toHaveValue("让压缩比更高");
+  expect(posts(mock)).toHaveLength(0);
+
+  await dialog.getByRole("button", { name: "开始设计" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  expect(posts(mock)).toHaveLength(0);
+
   await page.getByRole("alertdialog").getByRole("button", { name: "仍然继续" }).click();
   await expect.poll(() =>
     mock.calls.some(
