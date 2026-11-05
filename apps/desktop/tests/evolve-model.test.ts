@@ -28,6 +28,7 @@ import {
   isEvolveSkill,
 } from "../src/evolve/command.js";
 import {
+  adoptRunStatus,
   bestCandidate,
   emptyRunView,
   evolveShortTitle,
@@ -308,6 +309,18 @@ test("the diff shows an insertion as an insertion, not as a rewritten file", () 
   );
   assert.equal(rows[1]?.rightLine, 2);
   assert.equal(rows[2]?.leftLine, 2);
+});
+
+test("a run whose stream ended without an event still learns it failed", () => {
+  // A failed run used to keep showing 运行中: its error banner came from the
+  // run record the shelf polls, but the header only ever read statuses off
+  // events, and a run the control plane settles emits no terminal event.
+  const running = { ...emptyRunView(), status: "running" as const };
+  const failed = adoptRunStatus(running, "failed");
+  assert.equal(failed.status, "failed");
+  assert.notEqual(failed, running, "the record's status wins");
+  // Nothing new is nothing to redraw: the panel re-renders on every poll.
+  assert.equal(adoptRunStatus(failed, "failed"), failed);
 });
 
 test("an empty before-side reads as all new", () => {

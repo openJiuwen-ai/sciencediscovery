@@ -238,6 +238,20 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
 }
 
 /**
+ * Take the status the run record reports.
+ *
+ * The event log is the source of truth about *what the search did*, but it is
+ * not the authority on whether the run is over: a run the control plane
+ * settles without the sidecar — it failed to persist a record, the sidecar
+ * died — is terminal in `run.json` and has no `search_finished` to say so. The
+ * header therefore follows the record. Returning the same object when nothing
+ * changed keeps this from re-rendering the panel on every poll.
+ */
+export function adoptRunStatus(state: EvolveRunView, status: EvolveRunView["status"]): EvolveRunView {
+  return state.status === status ? state : { ...state, status };
+}
+
+/**
  * Update one candidate, creating a placeholder if its `expanded` has not
  * arrived yet.
  *
