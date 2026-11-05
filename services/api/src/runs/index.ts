@@ -345,6 +345,7 @@ import { reopenSubagentForContinuation, settleSubagentContinuation, SUBAGENT_RES
 import type { NotificationBatch } from "../agent-notifications.js";
 
 import { type ServerConfig } from "../bootstrap/config.js";
+import { ApiStatusError } from "../http/api-status-error.js";
 import { sendError, sendJson } from "../http/response.js";
 
 const SUBAGENT_PROGRESS_FLUSH_MS = 250;
@@ -442,18 +443,11 @@ function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: str
   return store.getSpecialist(sessionSpecialistId);
 }
 
-export class ApiStatusError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-    /** Machine-readable reason, so a client can act on it instead of matching prose. */
-    readonly code?: string,
-    /** Structured payload the client needs to offer a next step. */
-    readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-  }
-}
+// Re-exported so every existing `from "../runs/index.js"` importer keeps working.
+// The class itself moved to a leaf module (which imports nothing) because
+// artifacts needs it too, and artifacts and runs already import each other:
+// importing it from runs would have closed a cycle.
+export { ApiStatusError };
 
 /** Empty match-response shape with a degradation reason (feature off / unreachable). */
 export function emptyMatch(reason: "memory_graph_disabled" | "memory_graph_unreachable") {
