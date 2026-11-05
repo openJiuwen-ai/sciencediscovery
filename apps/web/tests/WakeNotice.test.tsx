@@ -62,6 +62,42 @@ test("each record opens the matching activity record", async () => {
   } finally { await act(async () => view!.unmount()); }
 });
 
+test("a notice under way still summarises as unconfirmed, not as its own bucket", () => {
+  const html = renderToStaticMarkup(createElement(WakeNotice, {
+    notice: {
+      executions: 4, timers: 0, prompt: PROMPT,
+      records: [
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-q", state: "queued" },
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-r", state: "running" },
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-u", state: "unknown" },
+        // `state` is optional on the wire: a record can be persisted without one.
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-n" },
+      ],
+    },
+  }));
+  assert.match(html, /4 unconfirmed/);
+  // The catch-all bucket exists so that every state without a bucket of its own
+  // lands here; reclassifying one of them silently is the regression this pins.
+  assert.doesNotMatch(html, /cancelled/);
+});
+
+test("a mixed notice summarises each outcome bucket instead of collapsing them", () => {
+  const html = renderToStaticMarkup(createElement(WakeNotice, {
+    notice: {
+      executions: 3, timers: 0, prompt: PROMPT,
+      records: [
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-c", state: "completed" },
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-f", state: "failed" },
+        { agentId: "main", kind: "execution", runnerId: "local", sourceId: "exec-x", state: "cancelled" },
+      ],
+    },
+  }));
+  assert.match(html, /1 completed · 1 failed · 1 cancelled/);
+  for (const state of ["completed", "failed", "cancelled"]) {
+    assert.match(html, new RegExp(`activity-badge ${state}`));
+  }
+});
+
 test("a notice persisted without records keeps its count summary and still hides the prompt", () => {
   const html = renderToStaticMarkup(createElement(WakeNotice, { notice: { executions: 3, timers: 0, prompt: PROMPT } }));
   assert.match(html, /Synced 3 background execution result\(s\)/);
