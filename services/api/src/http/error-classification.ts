@@ -27,6 +27,9 @@ export function isKnownClientInputError(error: unknown): boolean {
     /\bcannot\b/i,
     /\bdoes not match\b/i,
     /\binvalid\b/i,
+    // A caller-supplied string over its length limit: `/api/providers` and
+    // `/api/web/settings` reject it in the store, and it is client input there.
+    /\bis too long\b/i,
     /\bunsafe\b.*\b(?:archive|package|path)\b/i,
     /\bplain basename\b/i,
   ].some((pattern) => pattern.test(error.message));
