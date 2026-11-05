@@ -801,6 +801,16 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
   }
 }
 
+function retryWithoutRejectedThinkingFields(request: { body: string; headers: Record<string, string>; url: string }, error: unknown) {
+  if (!(error instanceof ModelRequestError) || error.statusCode !== 400
+    || !/unsupported[^\n]*(thinking|reasoning)|(?:thinking|reasoning)[^\n]*unsupported/i.test(error.responseDetail)) return undefined;
+  const body = JSON.parse(request.body) as Record<string, unknown>;
+  const fields = ["thinking", "reasoning_effort", "reasoning_split", "chat_template_kwargs"];
+  if (!fields.some((field) => field in body)) return undefined;
+  for (const field of fields) delete body[field];
+  return { ...request, body: JSON.stringify(body) };
+}
+
 interface OpenAiToolCallFragment {
   function?: { arguments?: string; name?: string };
   id?: string;
@@ -865,10 +875,16 @@ async function streamOpenAiTurn(
   recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
-  const { body } = await requestWithRetry({
-    ...createModelRequest(endpoint, systemPrompt, history, tools, policy, true),
-    policy, proxy: endpoint.proxy, signal,
-  }, recorder);
+  const request = createModelRequest(endpoint, systemPrompt, history, tools, policy, true);
+  let streamed: Awaited<ReturnType<typeof requestWithRetry>>;
+  try {
+    streamed = await requestWithRetry({ ...request, policy, proxy: endpoint.proxy, signal }, recorder);
+  } catch (error) {
+    const fallback = retryWithoutRejectedThinkingFields(request, error);
+    if (!fallback) throw error;
+    streamed = await requestWithRetry({ ...fallback, policy, proxy: endpoint.proxy, signal }, recorder);
+  }
+  const { body } = streamed;
 
   let text = "";
   let deepseekReasoning = "";
