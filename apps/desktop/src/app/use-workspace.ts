@@ -755,11 +755,16 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     const inFlight = sessionCreation.current;
     if (inFlight !== undefined && inFlight.projectId === projectId) return inFlight.promise;
     const epoch = viewEpoch.current;
-    const modelId = selectedModelRef.current ?? defaultModelRef.current;
+    const candidateModelId = selectedModelRef.current ?? defaultModelRef.current;
     const token = {};
     const creation = (async () => {
       try {
-        const created = await createSession(client, projectId, modelId ? { modelId } : {});
+        const modelId = models.some((model) => model.id === candidateModelId) ? candidateModelId : undefined;
+        if (modelId === undefined) {
+          toast(TEXT.errors.modelRequired);
+          return undefined;
+        }
+        const created = await createSession(client, projectId, { modelId });
         if (viewEpoch.current === epoch) {
           setSessionId(created.id);
           sessionRef.current = created.id;
@@ -780,7 +785,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     })();
     sessionCreation.current = { projectId, promise: creation, token };
     return creation;
-  }, [client, refreshSessionLists, report, toast]);
+  }, [client, models, refreshSessionLists, report, toast]);
 
   /**
    * The session a write should land in, created if the app has none open.
@@ -1388,7 +1393,8 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // is what says which Project it is in.
         projectRef.current = fresh.projectId;
         setActiveProjectId(fresh.projectId);
-        setSelectedModelId(fresh.modelId ?? defaultModelRef.current);
+        const validModelId = models.some((model) => model.id === fresh.modelId) ? fresh.modelId : undefined;
+        setSelectedModelId(validModelId ?? defaultModelRef.current);
         void refreshPanel(id);
         setLoadingSession(false);
         // Replaying a run is the only way its thinking block comes back — the
@@ -1411,7 +1417,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         report(reason);
       }
     },
-    [buildReplays, clearSession, client, commitReplays, follow, refreshPanel, report],
+    [buildReplays, clearSession, client, commitReplays, follow, models, refreshPanel, report],
   );
 
   /**

@@ -4279,7 +4279,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
-      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message, error instanceof SessionEvidenceLockedError ? error.code : undefined);
+      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message, error.code);
       else if (error instanceof IdeaTreePersistenceError || error instanceof IdeaTreeRuntimeError) {
         sendError(
           response,
