@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 
 import { commitsOnEnter } from "../app/ime-enter.js";
 import { TEXT } from "../text.js";
+import { useTopmostEscape } from "./use-dialog-escape.js";
 
 interface Props {
   accept: string;
@@ -62,13 +63,9 @@ export function PromptDialog({
   const [text, setText] = useState(value);
   const [problem, setProblem] = useState<string>();
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+  // Escape cancels, and only the topmost dialog answers it: a field opened
+  // over a settings page leaves that page open behind it.
+  useTopmostEscape(onCancel);
 
   const submit = () => {
     const trimmed = text.trim();
