@@ -682,6 +682,11 @@ async function executeAgentRun(
   }
   const project = store.getProject(session.projectId);
   if (!project) throw new ApiStatusError(404, "Project not found");
+  // Validate the queued run's frozen selection before touching execution services.
+  const selectedModel = store.getModel(settingsSnapshot.modelId);
+  if (!selectedModel) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   // Remote machines are an addition, not a replacement: this run always has the
   // local runner, and each allowed machine is one more place the model may ask
   // to run. A machine that is not connected only fails the calls that name it.
@@ -800,11 +805,7 @@ async function executeAgentRun(
   const enabledBuiltinSpecialists = store
     .listSpecialists()
     .filter((specialist) => specialist.builtIn && specialist.enabled !== false);
-  const selectedModel = store.getModel(settingsSnapshot.modelId);
   const initialPermissionEpoch = store.getSessionPermissionEpoch(sessionId);
-  if (!selectedModel) {
-    throw new ApiStatusError(400, "The session model is not available");
-  }
   if (!initialPermissionEpoch) {
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }

@@ -59,3 +59,12 @@ test("missing and future failure classes have localized recovery guidance", () =
   }
   setActiveLocale("en");
 });
+
+
+test("a deleted queued model offers localized model selection recovery", () => {
+  for (const [locale, messages] of [["en", en], ["zh-CN", zhCN]] as const) {
+    setActiveLocale(locale);
+    assert.equal(formatRunFailure("SESSION_MODEL_UNAVAILABLE"), messages["composer.modelUnavailable"]);
+  }
+  setActiveLocale("en");
+});
