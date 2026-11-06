@@ -114,6 +114,15 @@ export interface ServerConfig {
     internalToken: string;
     controlUrl?: string;
     controlToken?: string;
+    /** Whether candidates may execute without an isolation backend.
+     *
+     *  False everywhere a real sandbox exists. The Windows desktop sets it
+     *  because bubblewrap and Seatbelt have no Windows equivalent; even then a
+     *  run only proceeds when its goal carries the user's confirmation, and
+     *  pre-flight refuses one that does not. Never a default: a server that
+     *  forgot the variable must not quietly run model-written code unconfined.
+     *  Absent means false; the loader always writes it. */
+    unisolated?: boolean;
   };
 }
 
@@ -266,6 +275,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       controlToken: env.SCIENCE_AGENT_EVOLVE_CONTROL_TOKEN?.trim(),
       url: env.SCIENCE_AGENT_EVOLVE_URL?.trim().replace(/\/$/, "") || "",
       internalToken: env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN?.trim() || "",
+      unisolated: parseBooleanFlag(env.SCIENCE_AGENT_EVOLVE_UNISOLATED, false),
     },
   };
 }

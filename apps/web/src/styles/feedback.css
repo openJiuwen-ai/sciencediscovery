@@ -65,38 +65,89 @@
 
 /* --- User feedback dialog --------------------------------------------- */
 
-.feedback-dialog { width: min(560px, 100%); }
-.feedback-dialog > .config-header { margin-bottom: 18px; }
+/* The error toast hosts the "我要反馈" entry point and stacks above dialogs; on
+   a narrow viewport it overlaps this dialog's header, swallowing clicks on the
+   GitHub link. Lift the backdrop over the toast layer while the dialog is open. */
+.config-backdrop.feedback-backdrop { z-index: calc(var(--z-toast) + 1); }
+
+/* Wider than tall: the description carries most of the report, so the dialog
+   spends its area on one broad column instead of a narrow strip. */
+.config-panel.feedback-dialog { width: min(900px, 100%); padding: 22px 28px 24px; }
+.feedback-dialog > .config-header h2 { margin-top: 6px; font-size: 22px; letter-spacing: -.02em; }
+.feedback-dialog > .config-header .icon-button { width: 32px; height: 32px; }
+.feedback-dialog > .config-header { flex-wrap: wrap; row-gap: 10px; margin-bottom: 18px; }
 .feedback-tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
-.feedback-tabs button { flex: 1; border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 8px 4px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.feedback-tabs button { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 8px 14px; color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer; }
 .feedback-tabs button:hover { color: var(--text-strong); }
-.feedback-tabs button.active { color: var(--accent-ink); border-bottom-color: var(--accent); }
-.feedback-kind { display: flex; gap: 6px; margin-bottom: 16px; }
-.feedback-kind button { flex: 1; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 8px 10px; color: var(--text-secondary); font-size: 13px; cursor: pointer; }
-.feedback-kind button:hover { border-color: var(--border-strong); color: var(--text-strong); }
-.feedback-kind button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
-.feedback-body { width: 100%; resize: vertical; min-height: 120px; }
+.feedback-tabs button.active { color: var(--text-strong); border-bottom-color: var(--accent); }
+/* Compact pills, content-width: three short kind labels stretched across a
+   wide dialog read as oversized buttons. */
+.feedback-kind { display: flex; gap: 8px; margin-bottom: 16px; }
+.feedback-kind button { border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface); padding: 6px 14px; color: var(--text-secondary); font-size: 12px; font-weight: 600; cursor: pointer; }
+.feedback-kind button:hover { background: var(--surface-hover); color: var(--text-secondary); }
+.feedback-kind button.active { border-color: var(--accent-soft); background: var(--accent-soft); color: var(--accent-ink); }
+.feedback-body { width: 100%; resize: vertical; min-height: 150px; }
+/* Match the desktop control scale inside this dialog: 38px fields, 14px text. */
+.feedback-dialog .feedback-body,
+.feedback-dialog .feedback-contact,
+.feedback-dialog .feedback-meta-grid select { min-height: 38px; padding: 8px 12px; font-size: 14px; }
+.feedback-dialog label > span { font-weight: 650; }
 .feedback-counter { display: block; margin-top: 6px !important; text-align: right; color: var(--muted); font-size: 11px; font-weight: 400 !important; }
 .feedback-hint { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 400 !important; }
 .feedback-contact { width: 100%; }
 .feedback-inline-error { margin: -12px 0 16px; color: var(--danger); font-size: 12px; }
-.feedback-option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* One row while there is room, fewer columns as the window narrows: the three
+   short fields no longer stack into three full-width rows. */
+.feedback-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .feedback-diagnostics { margin-bottom: 16px; }
 .feedback-checkbox { display: flex; align-items: center; gap: 8px; margin-bottom: 8px !important; }
 .feedback-checkbox > span { display: inline !important; margin: 0 !important; font-weight: 500 !important; }
 .feedback-checkbox input { flex: 0 0 auto; margin: 0; }
-.feedback-diagnostics-preview summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+.feedback-diagnostics-preview summary { cursor: pointer; color: var(--accent-ink); font-size: 12px; margin-bottom: 6px; }
 .feedback-diagnostics-preview pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-soft); padding: 10px; font-size: 11px; }
 .feedback-pii { border: 1px solid var(--danger-border); border-radius: var(--radius-m); background: var(--danger-soft); padding: 12px; margin-bottom: 16px; }
 .feedback-pii p { margin: 0 0 10px; color: var(--danger); font-size: 12px; }
 .feedback-pii .feedback-checkbox { margin-bottom: 0 !important; color: var(--danger-deep); }
-.feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.feedback-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .feedback-actions .primary-button, .feedback-actions .secondary-button { width: auto; flex: 0 0 auto; }
+.feedback-actions .primary-button { min-width: 112px; }
+/* Desktop parity: 32px controls with small corners, and a dark send button
+   that dims as a whole when disabled instead of turning tinted blue. */
+.feedback-dialog .primary-button,
+.feedback-dialog .secondary-button { min-height: 32px; height: 32px; border-radius: var(--radius-s); padding: 0 14px; font-size: 12px; font-weight: 650; }
+.feedback-dialog .primary-button { background: var(--text-strong); border-color: var(--text-strong); color: var(--surface); }
+.feedback-dialog .primary-button:hover:not(:disabled) { background: var(--text-strong); border-color: var(--text-strong); opacity: .88; }
+.feedback-dialog .primary-button:disabled { background: var(--text-strong); border-color: var(--text-strong); color: var(--surface); opacity: .45; }
+/* The GitHub escape hatch sits in the dialog's top-right corner, styled as a
+   prominent link so it reads as an alternative route rather than a footnote. */
+.feedback-header-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 16px; flex: 0 0 auto; }
+.config-header .feedback-issue-link { width: auto; height: auto; padding: 2px 0; border: 0; background: none; color: var(--accent-ink); font-size: 13px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; cursor: pointer; }
+.config-header .feedback-issue-link:hover { border: 0; background: none; color: var(--accent); }
+
+/* Screenshots follow the description; the upload affordance shares its header,
+   so attaching reads as part of writing the report, not as a second send. */
+.feedback-image-input { display: none; }
+.feedback-image-add { margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-s); }
+.feedback-images { margin-bottom: 16px; }
+.feedback-images-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; margin-bottom: 8px; }
+.feedback-images-title { display: grid; gap: 2px; min-width: 0; }
+.feedback-images-title > span { color: var(--text-strong); font-size: 13px; font-weight: 650; }
+.feedback-images-title > small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.feedback-image-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.feedback-image-item { position: relative; width: 96px; height: 72px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-soft); }
+.feedback-image-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.feedback-image-remove { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%; background: rgb(0 0 0 / 55%); color: #fff; cursor: pointer; }
+.feedback-image-remove:hover { background: rgb(0 0 0 / 75%); }
+.feedback-images .feedback-inline-error { margin: 6px 0 0; }
+.feedback-field-errors { margin-bottom: 12px; border: 1px solid var(--danger-border); border-radius: var(--radius-m); background: var(--danger-soft); padding: 10px 12px; }
+.feedback-field-errors p { margin: 0 0 6px; color: var(--danger-deep); font-size: 12px; font-weight: 600; }
+.feedback-field-errors ul { margin: 0; padding-left: 18px; color: var(--danger); font-size: 12px; }
+.feedback-field-errors code { font-family: monospace; }
 .feedback-button-copy { display: inline-flex; align-items: center; gap: 6px; }
 .feedback-result { text-align: left; }
 .feedback-result h3 { margin: 0 0 10px; color: var(--text-strong); font-size: 18px; }
 .feedback-result p { margin: 0 0 16px; color: var(--text-secondary); font-size: 13px; }
-.feedback-receipt-banner { border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface-soft); padding: 14px 16px; margin-bottom: 16px; font-family: monospace; font-size: 20px; letter-spacing: 1px; color: var(--accent-ink); text-align: center; }
+.feedback-receipt-banner { border: 1px dashed var(--border-strong); border-radius: var(--radius-s); background: var(--surface-soft); padding: 12px 14px; margin-bottom: 16px; font-family: monospace; font-size: 15px; letter-spacing: .02em; color: var(--text-strong); text-align: left; overflow-wrap: anywhere; }
 .feedback-failure h3 { color: var(--danger-deep); }
 .feedback-history { display: grid; gap: 8px; }
 .feedback-history-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); padding: 10px 12px; }

@@ -53,6 +53,7 @@ import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
 import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
+import type { EvolveSandboxCapability } from "./sandbox.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
 import { basename } from "node:path";
@@ -67,6 +68,12 @@ export interface ProposalDeps {
   model?: (id: string) => unknown;
   modelId: string;
   orchestrator: EvolveOrchestrator;
+  /** Whether the user's own `/evolve-design` command carried `--allow-direct`.
+   *  Required on purpose: the proposal's `allowUnisolated` is the model's
+   *  argument, and a goal records direct execution only when the model asked
+   *  and the user's command approved. A caller that cannot answer must not
+   *  inherit the approval. */
+  approvedUnisolated: boolean;
   sessionId: string;
   /** Whether the run's model can be told to stop thinking. False when its API
    *  variant has no thinking-control field, or a toggle but no "disabled" stop:
@@ -153,9 +160,13 @@ export async function startProposedRun(
   const shape = shapeOf(proposal);
   if (typeof shape === "string") return { refusedBecause: shape };
 
+  // Probed before the goal is assembled, not after: whether this search runs
+  // unconfined is a property of what the goal records, and a stray
+  // `allowUnisolated` on a host with a real sandbox must not end up in it.
+  const sandbox = await deps.orchestrator.sandboxCapability();
   let goal;
   try {
-    goal = await assembleGoal(proposal, deps);
+    goal = await assembleGoal(proposal, deps, sandbox);
   } catch (error) {
     // A path the agent got wrong is something it can fix, so it comes back as a
     // refusal naming the field. Anything else is this side breaking, and throws.
@@ -166,7 +177,7 @@ export async function startProposedRun(
     casHas: deps.casHas,
     goal,
     model: deps.model?.(goal.modelId) as never,
-    sandbox: await deps.orchestrator.sandboxCapability(),
+    sandbox,
     thinkingSupported: deps.thinkingSupported,
   });
   if (issues.length) return { refusedBecause: describe(issues) };
@@ -323,7 +334,7 @@ const DEFAULT_CASE_SPLIT: EvolveCaseSplit = {
 
 /** The proposal's own text and paths, resolved into a goal. */
 async function assembleGoal(
-  proposal: EvolveRunProposal, deps: ProposalDeps,
+  proposal: EvolveRunProposal, deps: ProposalDeps, sandbox: EvolveSandboxCapability,
 ): Promise<EvolveGoal> {
   const now = new Date().toISOString();
   const split = proposal.split ?? DEFAULT_SPLIT;
@@ -373,6 +384,19 @@ async function assembleGoal(
   return {
     algorithm,
     baselineProgramCas: startCas,
+    // Stated, never omitted: the run card reads this to say whether the search
+    // was designed with pauses, and an absent field would only be read as
+    // "confirm" anyway. An older client that never sends it keeps the old
+    // behaviour.
+    checkpointMode: proposal.checkpointMode ?? "confirm",
+    // Written only when this run really does execute candidates unconfined.
+    // The proposal's flag alone is not enough, twice over: it is the model's
+    // argument rather than the user's answer, and a host with a sandbox that
+    // somehow received it is still isolated — a goal claiming otherwise would
+    // put a warning badge on a safe run.
+    ...(sandbox.backend === "direct" && proposal.allowUnisolated === true && deps.approvedUnisolated
+      ? { allowUnisolated: true }
+      : {}),
     budget: {
       candidateTimeoutSeconds: 180,
       expansions: proposal.expansions,

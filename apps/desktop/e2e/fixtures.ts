@@ -93,6 +93,12 @@ export interface ReplayRecord {
   run: JsonRecord;
 }
 
+/** One evolution run, as the list route and its event stream hand it over. */
+export interface EvolveFixture {
+  events: JsonRecord[];
+  run: JsonRecord;
+}
+
 export interface MockOptions {
   /** Fail the health probe, for the offline screen. */
   healthStatus?: number;
@@ -119,6 +125,19 @@ export interface MockOptions {
    *  place a replayed child's steps live, so a spec that opens one needs both
    *  the snapshot in the run's log and the row here. */
   subagentsBySession?: Record<string, JsonRecord[]>;
+  /** Program-evolution runs per Session, with the event log each replays. A
+   *  Session with no entry has never evolved anything. */
+  evolveRunsBySession?: Record<string, EvolveFixture[]>;
+  /** What `GET /api/evolve/status` answers. The runtime is ready by default:
+   *  the shelf and the panel are about watching a search, and only the setup
+   *  spec is about installing one. */
+  evolveStatus?: JsonRecord;
+  /** What `POST /api/evolve/init` answers, and what the status route answers
+   *  from then on. Defaults to ready. */
+  evolveInit?: JsonRecord;
+  /** Source bodies behind `GET /api/evolve/runs/:id/candidates/:hash`, keyed by
+   *  hash. A hash with no entry reads as an empty program. */
+  evolveSources?: Record<string, string>;
   /** The bytes behind `GET .../file?path=`, keyed by workspace path. A path
    *  with no entry reads as the fixture's small CSV. A string is served as
    *  `text/plain`; `FileContent` carries bytes of its own type. */
@@ -162,6 +181,10 @@ export interface MockOptions {
    *  the guide's own is about a returning user, and the guide covers the page
    *  it would otherwise have to click through. Set `false` to get the guide. */
   guideSeen?: boolean;
+  /** The assistant answer a newly sent message streams back. The default is
+   *  the one-line crystal answer every other spec reads; a spec that wants a
+   *  checkpoint card hands in the fenced block the evolve-design skill writes. */
+  assistantAnswer?: string;
 }
 
 export interface RecordedCall {
@@ -293,6 +316,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     },
   };
   const calls: RecordedCall[] = [];
+  /** The evolution runtime's state, mutable so an install changes what the
+   *  status route answers next — the polling client would otherwise undo it. */
+  let evolveRuntime: JsonRecord = structuredClone(
+    options.evolveStatus ?? { canInitialize: true, state: "ready" },
+  );
 
   // Match the API by its path, not by a `**/api/**` glob: that glob also
   // matches Vite's own module URLs (`/src/api/client.ts`), which would make
@@ -619,7 +647,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         const session = state.sessions.find((entry) => entry.id === messages[1]);
         if (!session) return json(route, 404, { error: "session not found" });
         const prompt = (JSON.parse(body ?? "{}") as { content?: string }).content ?? "";
-        const answer = "晶格常数是 5.43 Å。";
+        const answer = options.assistantAnswer ?? "晶格常数是 5.43 Å。";
         const userMessage = { content: prompt, createdAt: CREATED_AT, id: "message-user", role: "user" };
         const assistantMessage = {
           content: answer,
@@ -673,6 +701,55 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           sequence: index + 1,
           sessionId,
         })));
+      }
+
+      // ── program evolution ──────────────────────────────────────────────────
+      if (path === "/api/evolve/status" && method === "GET") {
+        return json(route, 200, evolveRuntime);
+      }
+      if (path === "/api/evolve/init" && method === "POST") {
+        evolveRuntime = structuredClone(
+          options.evolveInit ?? { canInitialize: true, state: "ready" },
+        );
+        return json(route, 200, evolveRuntime);
+      }
+      if (path === "/api/evolve/runs" && method === "GET") {
+        const sessionId = url.searchParams.get("sessionId") ?? "";
+        return json(route, 200, (options.evolveRunsBySession?.[sessionId] ?? []).map((entry) => entry.run));
+      }
+
+      const evolveEvents = /^\/api\/evolve\/runs\/([^/]+)\/events$/.exec(path);
+      if (evolveEvents && method === "GET") {
+        const runId = evolveEvents[1]!;
+        const entry = Object.values(options.evolveRunsBySession ?? {})
+          .flat()
+          .find((candidate) => candidate.run.id === runId);
+        // The wire carries whole records — sequence and event — because the
+        // client resumes from `sequence`; a bare event body would be read as a
+        // record with no event and counted as a torn frame.
+        return route.fulfill({
+          body: sse((entry?.events ?? []).map((event, index) => ({
+            createdAt: String(entry?.run.createdAt ?? CREATED_AT),
+            event,
+            runId,
+            sequence: index + 1,
+          }))),
+          contentType: "text/event-stream",
+          status: 200,
+        });
+      }
+
+      const evolveStop = /^\/api\/evolve\/runs\/([^/]+)\/stop$/.exec(path);
+      if (evolveStop && method === "POST") {
+        // The run's own record is the fixture's, so the stop answers the
+        // transport shape the client reads and leaves the record alone.
+        return json(route, 200, { runId: evolveStop[1], stopping: true });
+      }
+
+      const evolveCandidate = /^\/api\/evolve\/runs\/([^/]+)\/candidates\/(.+)$/.exec(path);
+      if (evolveCandidate && method === "GET") {
+        const hash = evolveCandidate[2]!;
+        return json(route, 200, { hash, source: options.evolveSources?.[hash] ?? "" });
       }
 
       const subagents = /^\/api\/sessions\/([^/]+)\/subagents$/.exec(path);

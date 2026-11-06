@@ -45,7 +45,9 @@ test.describe("error diagnostics", { tag: ["@isolation:session", "@category:e2e"
         journey.scenario({ goal: "从错误提示中获得可安全分享的诊断，并带到 GitHub 草稿中自行检查和提交。", preconditions: ["独立 API/Web 与 Runner", `${locale}，${zh ? "390×844" : "1440×900"}，DPR 1`, "不访问外部服务"] });
         await page.addInitScript(value => localStorage.setItem("sciencediscovery-locale", value), locale);
         const copy = zh ? "复制关键诊断" : "Copy key diagnostics";
-        const issue = zh ? "打开 GitHub Issue" : "Open GitHub issue";
+        const feedback = zh ? "我要反馈" : "Send feedback";
+        const feedbackDialog = zh ? "提交反馈" : "Send feedback";
+        const issue = zh ? "直接去 GitHub 上提 issue" : "Post on GitHub directly";
         let requestId: string | undefined;
         let bundle = "";
         let issueUrl = "";
@@ -99,18 +101,30 @@ test.describe("error diagnostics", { tag: ["@isolation:session", "@category:e2e"
           const bounds = await toast.boundingBox(); expect(bounds).toBeTruthy();
           expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
         });
-        await journey.step("打开预填 Issue 草稿", "新标签页 URL 指向指定 GitHub 仓；正文包含刚才复制的相同诊断，未调用创建 Issue API。", async () => {
+        await journey.step("打开预填 Issue 草稿", "从错误提示进入反馈弹窗，再选择 GitHub；新标签页 URL 指向指定 GitHub 仓，正文包含刚才复制的相同诊断，未调用创建 Issue API。", async () => {
+          await toast.getByRole("button", { name: feedback }).click();
+          const dialog = page.getByRole("dialog", { name: feedbackDialog });
+          await expect(dialog).toBeVisible();
           const popup = page.waitForEvent("popup");
-          await toast.getByRole("button", { name: issue }).click();
+          await dialog.getByRole("button", { name: issue }).click();
           const tab = await popup;
           await expect.poll(() => issueUrl).not.toBe("");
           const url = new URL(issueUrl);
           expect(url.pathname).toBe("/openJiuwen-ai/sciencediscovery/issues/new");
           expect(url.searchParams.get("title")).toMatch(/^\[Bug\]: /);
-          expect(url.searchParams.get("body")).toContain(bundle);
+          // The issue body now carries the description as well, so the URL cap
+          // can trim the tail of the diagnostics; the identifying header and
+          // correlation line still have to be there.
+          const body = url.searchParams.get("body") ?? "";
+          expect(body).toContain("ScienceDiscovery error diagnostics");
+          expect(body).toContain(`requestId: ${requestId}`);
           expect(decodeURIComponent(url.toString())).not.toMatch(/alice|bob|charlie|synthetic-private-key/);
           expect(await tab.evaluate(() => window.opener === null)).toBe(true);
           await tab.close();
+          // The dialog sits above the toast while it is open, so close it before
+          // driving the toast again.
+          await dialog.getByRole("button", { name: zh ? "关闭" : "Close", exact: true }).click();
+          await expect(dialog).toHaveCount(0);
         });
         await journey.step("处理剪贴板拒绝并关闭错误", "拒绝时显示可重试提示；关闭 Toast 不会再请求日志。", async () => {
           await page.evaluate(() => Object.defineProperty(navigator.clipboard, "writeText", { configurable: true, value: () => Promise.reject(new Error("Denied")) }));
@@ -132,7 +146,7 @@ test.describe("error diagnostics", { tag: ["@isolation:session", "@category:e2e"
           await expect(alert.getByRole("status")).toContainText(zh ? "已复制诊断" : "Diagnostics copied");
           const offline = await page.evaluate(() => navigator.clipboard.readText());
           expect(offline).toContain("Unavailable:"); expect(offline).not.toContain("synthetic-rejected-local-token");
-          await expect(alert.getByRole("button", { name: issue })).toBeVisible();
+          await expect(alert.getByRole("button", { name: feedback })).toBeVisible();
         });
       });
     });

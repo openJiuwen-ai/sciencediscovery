@@ -22,6 +22,7 @@ import type { AssistantTurn as Turn, PermissionEntry, RunStreamState } from "../
 import { permissionMatchingKey, pendingPermissions } from "../run-stream/permission.js";
 import { subagentTask } from "../run-stream/subagent.js";
 import type { PermissionDecision, PermissionRequest, SessionRunStatus, Subagent } from "../api/types.js";
+import { CheckpointAnsweredProvider } from "./CheckpointCard.js";
 import { collapseHint } from "./collapse-hint.js";
 import { PermissionCard } from "./PermissionCard.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
@@ -84,6 +85,7 @@ function AnswerTools({ content }: { content: string }) {
  */
 export function AnswerBlock({
   actions,
+  answered,
   content,
   live,
   truncated,
@@ -91,6 +93,8 @@ export function AnswerBlock({
   /** The copy/feedback row belongs under a finished answer, not under the
    *  prose a folded run wrote on its way to one. */
   actions?: boolean;
+  /** A later turn exists, so a checkpoint card here is history: it folds. */
+  answered?: boolean;
   content: string;
   /** Text still arriving: a cursor follows it and the next frame will be longer. */
   live?: boolean;
@@ -98,7 +102,9 @@ export function AnswerBlock({
 }) {
   return (
     <div className="text">
-      <Markdown>{content}</Markdown>
+      <CheckpointAnsweredProvider value={answered === true}>
+        <Markdown>{content}</Markdown>
+      </CheckpointAnsweredProvider>
       {truncated ? (
         <div className="workspace-empty">{TEXT.conversation.truncatedBody}</div>
       ) : null}
@@ -219,7 +225,12 @@ function TurnBlock({
     if (response && response.content.trim() !== "" && index !== detach) {
       layers.push(
         <div className="text" key={response.responseId ?? index}>
-          <Markdown>{response.content}</Markdown>
+          {/* Anything inside the fold is history — the fold only opens behind
+              the reader's click — so a checkpoint card here is answered by
+              definition and draws folded from the start. */}
+          <CheckpointAnsweredProvider value={true}>
+            <Markdown>{response.content}</Markdown>
+          </CheckpointAnsweredProvider>
           {response.truncated ? (
             <div className="workspace-empty">{TEXT.conversation.truncatedBody}</div>
           ) : null}
@@ -476,6 +487,7 @@ function foldLabel(run: RunStreamState): { icon: string; title: string; working:
  * survive a re-render of the run.
  */
 export function AssistantTurns({
+  answered,
   client,
   onDecide,
   onOpenSubagent,
@@ -483,6 +495,9 @@ export function AssistantTurns({
   run,
   sessionId,
 }: {
+  /** A later turn exists in the transcript, so this run's checkpoint cards
+   *  fold. The conversation is the only place that knows this. */
+  answered?: boolean;
   client: ApiClient;
   onDecide: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   /** Open one child's execution in the right panel. Absent where there is no
@@ -596,12 +611,13 @@ export function AssistantTurns({
           {shown === undefined ? null : (
             <AnswerBlock
               actions={!live}
+              answered={answered}
               content={shown.content}
               live={live && !shown.settled}
               truncated={shown.truncated}
             />
           )}
-          {showFinal ? <AnswerBlock actions content={finalBody} /> : null}
+          {showFinal ? <AnswerBlock actions answered={answered} content={finalBody} /> : null}
         </div>
       </div>
       <RunStatusLine run={run} />

@@ -2,10 +2,15 @@
 #
 # Deploy flow (owner-only, needs a Cloudflare account):
 #   1. pnpm build            (build @sciencediscovery/operational-logging + this worker)
-#   2. npx wrangler secret put GITHUB_TOKEN
-#        -> fine-grained PAT with ONLY `issues: write` on the private repo below.
-#           Never place the PAT here or in client code.
-#   3. Fill REPO_OWNER / REPO_NAME below with the private `sciencediscovery-feedback` repo.
+#   2. Create the KV namespace once (see README) and put its id below.
+#   3. Set every variable in the Cloudflare dashboard — Workers → this worker →
+#      Settings → Variables and Secrets. Nothing operational lives in this file:
+#      a missing value makes the Worker answer 503 `misconfigured` and log the
+#      variable name, so a deployment cannot silently run with an unchosen limit.
+#        REPO_OWNER, REPO_NAME, INSTALL_DAILY_LIMIT, IP_HOURLY_LIMIT,
+#        DAILY_ISSUE_LIMIT, DEDUP_TTL_SECONDS  (plain text variables)
+#        ALLOWED_ORIGINS                        (optional, comma-separated)
+#        GITHUB_TOKEN                           (secret)
 #   4. npx wrangler deploy
 #
 # The endpoint is `https://sciencediscovery-feedback.sciencediscovery.workers.dev` (see `FEEDBACK_ENDPOINT`
@@ -15,15 +20,11 @@ name = "sciencediscovery-feedback"
 main = "src/index.ts"
 compatibility_date = "2026-11-03"
 
-[vars]
-# Private repo the feedback lands in. Owner is filled by the maintainer at deploy time.
-REPO_OWNER = "ScienceDiscovery"
-REPO_NAME = "sciencediscovery-feedback"
-# Hard cap on issues created per day; exceeded requests return 503 (scheme §5.3 guardrail).
-DAILY_ISSUE_LIMIT = "200"
-# Comma-separated extra origins to allow (non-default ports, published builds, etc.).
-# Defaults always allow 127.0.0.1/localhost on 4310/5173/5174.
-# ALLOWED_ORIGINS = "http://127.0.0.1:4310,https://science-discovery.example.com"
+# Every operational value lives in the dashboard, not in this file. Without this
+# flag `wrangler deploy` treats the absent `[vars]` section as "delete them all",
+# which leaves the new deployment answering 503 `misconfigured` even though the
+# dashboard still lists them for the previous version.
+keep_vars = true
 
 [observability]
 enabled = true

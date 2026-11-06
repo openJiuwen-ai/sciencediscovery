@@ -592,7 +592,20 @@ export class EvolveOrchestrator {
         ? error.message
         : String(error);
       apiLog.warn("evolve_run_failed", { reason: message, runId: run.id });
-      await this.finish(run.id, "failed", message).catch(() => undefined);
+      // Whatever ended the loop, the search behind it is no longer being
+      // recorded. A failure to persist a record used to leave the sidecar
+      // expanding and spending with nobody reading it; aborting closes the
+      // connection, which is the sidecar's wind-down signal.
+      abort.abort();
+      await this.finish(run.id, "failed", message).catch((reason: unknown) => {
+        // The run is failed in memory but not on disk. Saying so beats a
+        // silent swallow, which is what made a stuck "running" run look like
+        // a live one.
+        apiLog.warn("evolve_run_settle_failed", {
+          reason: reason instanceof Error ? reason.message : String(reason),
+          runId: run.id,
+        });
+      });
     } finally {
       // Revoked before anyone is told the run is over, not after. "Settled"
       // has to mean the tokens are already dead: a subscriber that reacts to

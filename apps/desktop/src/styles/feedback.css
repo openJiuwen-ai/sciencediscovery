@@ -17,9 +17,10 @@
    styles the form, tabs, result and history lists it adds inside. */
 
 /* Smaller corner than the shared modal shell: this dialog is a form, not a
-   full-page surface, so the square-ish edge reads as more utilitarian. */
-.feedback-dialog {
-  max-width: 560px;
+   full-page surface. Wider than tall, because the description carries most of
+   the report: one broad column instead of a narrow strip. */
+.modal-panel.feedback-dialog {
+  width: min(900px, calc(100vw - 40px));
   border-radius: var(--radius-s);
 }
 
@@ -70,7 +71,7 @@
 
 .feedback-body,
 .feedback-contact,
-.feedback-option-grid select {
+.feedback-meta-grid select {
   width: 100%;
   min-height: 38px;
   padding: 8px 12px;
@@ -81,7 +82,7 @@
   font-size: 14px;
   font-family: inherit;
 }
-.feedback-body { resize: vertical; }
+.feedback-body { resize: vertical; min-height: 150px; }
 
 .feedback-counter {
   align-self: flex-end;
@@ -92,12 +93,13 @@
 .feedback-hint { color: var(--muted); font-size: 11px; }
 .feedback-inline-error { color: var(--danger); font-size: 12px; }
 
-.feedback-option-grid {
+/* One row while there is room, fewer columns as the window narrows. */
+.feedback-meta-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
-.feedback-option-grid select {
+.feedback-meta-grid select {
   appearance: none;
   background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg width='10' height='6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23667085' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -145,6 +147,31 @@
   gap: 10px;
   margin-top: 4px;
 }
+/* Match the upload button's footprint so the send action does not read as a
+   cramped chip, and give both the same smaller corner as the form controls. */
+.feedback-actions .primary-button {
+  min-width: 112px;
+  border-radius: var(--radius-s);
+}
+
+/* Screenshots follow the description; the upload affordance shares its header,
+   so attaching reads as part of writing the report, not as a second send. */
+.feedback-image-input { display: none; }
+.feedback-image-add { margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-s); }
+.feedback-images { display: flex; flex-direction: column; gap: 8px; }
+.feedback-images-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; }
+.feedback-images-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.feedback-images-title > span { color: var(--text-secondary); font-size: 13px; font-weight: 650; }
+.feedback-images-title > small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.feedback-image-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.feedback-image-item { position: relative; width: 96px; height: 72px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-subtle); }
+.feedback-image-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.feedback-image-remove { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%; background: rgb(0 0 0 / 55%); color: #fff; font-size: 13px; line-height: 1; cursor: pointer; }
+.feedback-image-remove:hover { background: rgb(0 0 0 / 75%); }
+.feedback-field-errors { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--danger-soft); border-radius: var(--radius-s); background: var(--danger-soft); }
+.feedback-field-errors p { color: var(--danger); font-size: 12px; font-weight: 650; }
+.feedback-field-errors ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding-left: 18px; color: var(--danger); font-size: 12px; }
+.feedback-field-errors code { font-family: var(--font-mono); }
 
 .feedback-result { display: flex; flex-direction: column; gap: 10px; }
 .feedback-result h3 {

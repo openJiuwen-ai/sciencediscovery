@@ -16,7 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:macos", "os:windows", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
-import { FEEDBACK_API_PATH, FEEDBACK_ENDPOINT, type FeedbackSubmission } from "@sciencediscovery/operational-logging/feedback";
+import { FEEDBACK_API_PATH, FEEDBACK_ENDPOINT, FEEDBACK_MAX_BYTES, type FeedbackSubmission } from "@sciencediscovery/operational-logging/feedback";
 
 import { submitFeedback } from "../src/api/feedback.js";
 
@@ -119,14 +119,14 @@ test("an abort maps to timeout", async () => {
   if (!result.ok) assert.deepEqual(result.failure, { code: "timeout" });
 });
 
-test("a CJK report over the byte limit fails locally as too_large without a request", async () => {
+test("a report over the byte limit fails locally as too_large without a request", async () => {
   let called = false;
   const fetchImpl = async (): Promise<Response> => {
     called = true;
     return json(201, { receipt: RECEIPT });
   };
   const result = await submitFeedback(
-    submission({ body: "中".repeat(2000), diagnostics: "中".repeat(4000) }),
+    submission({ diagnostics: "x".repeat(FEEDBACK_MAX_BYTES + 1) }),
     { fetchImpl },
   );
   assert.equal(result.ok, false);
