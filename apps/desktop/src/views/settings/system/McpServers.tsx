@@ -214,12 +214,6 @@ function catalogTone(status: string): string {
   return "warn";
 }
 
-function sourceStatusTone(status: string): string {
-  if (status === "ready") return "ok";
-  if (status === "disabled" || status === "untested") return "off";
-  return "warn";
-}
-
 function initialOf(name: string): string {
   return name.slice(0, 1).toUpperCase();
 }
