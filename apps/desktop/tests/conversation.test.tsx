@@ -385,12 +385,11 @@ test("a replayed failed run shows the localized summary and keeps diagnostics in
   assert.match(markup, /no gateway progress for 1000 ms/u);
 });
 
-test("a run timeout with a timeout notice renders both notices localized and preserves raw diagnostics", () => {
-  // `timeout_notice` and `run.failed` cannot be reliably associated on the
-  // client side, so both are kept and localized rather than deduplicated.
+test("a run timeout merges its transcript notice into one card without losing diagnostics", () => {
+  // Both records describe the same failure in the same conversational turn.
   const sessionMessages = [
     message("question-1", "user", "do it"),
-    message("notice-1", "assistant", "Request stopped because the Agent idle timeout was reached after 1 seconds.", "timeout_notice"),
+    { ...message("notice-1", "assistant", "Request stopped because the Agent idle timeout was reached after 1 seconds. no gateway progress for 1000 ms", "timeout_notice"), timeout: { kind: "gateway_idle", reason: "no gateway progress for 1000 ms", timeoutMs: 1000 } },
     message("answer-1", "assistant", "I will try"),
   ];
   const replays: RunReplay[] = [
@@ -398,7 +397,78 @@ test("a run timeout with a timeout notice renders both notices localized and pre
   ];
   const markup = render({ detail: detail(sessionMessages), replays });
   assert.match(markup, /请求超时/u);
-  assert.equal((markup.match(/class="run-failure-details"/gu) ?? []).length, 2);
+  assert.equal((markup.match(/class="run-failure-details"/gu) ?? []).length, 1);
   assert.match(markup, /no gateway progress for 1000 ms/u);
   assert.match(markup, /Agent idle timeout was reached/u);
+});
+
+function timeoutNotice(id: string, reason = "no gateway progress for 1000 ms"): ChatMessage {
+  return {
+    ...message(id, "assistant", `TIMEOUT-CONTEXT-${id}: ${reason}`, "timeout_notice"),
+    timeout: { kind: "gateway_idle", reason, timeoutMs: 1000 },
+  };
+}
+
+test("two failed turns keep one card each even with identical timeout reasons", () => {
+  const messages = [message("q1", "user", "first"), timeoutNotice("n1"), message("q2", "user", "second"), timeoutNotice("n2")];
+  const replays = ["1", "2"].map(id => ({ runId: `r${id}`, userMessageId: `q${id}`, state: failed(`r${id}`, "timeout", "no gateway progress for 1000 ms") }));
+  const markup = render({ detail: detail(messages), replays });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 2);
+  assert.match(markup, /TIMEOUT-CONTEXT-n1/);
+  assert.match(markup, /TIMEOUT-CONTEXT-n2/);
+});
+
+test("an unrelated or unmatched timeout is never hidden by another failure", () => {
+  const messages = [message("q1", "user", "first"), timeoutNotice("n1", "different reason"), message("q2", "user", "second"), timeoutNotice("n2")];
+  const replays = [{ runId: "r1", userMessageId: "q1", state: failed("r1", "timeout", "no gateway progress for 1000 ms") }];
+  const markup = render({ detail: detail(messages), replays });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 3);
+  assert.match(markup, /different reason/);
+  assert.match(markup, /TIMEOUT-CONTEXT-n2/);
+});
+
+test("live failure before its first answer is visible and merges its timeout notice", () => {
+  const markup = render({
+    detail: detail([message("q1", "user", "first"), timeoutNotice("n1")]),
+    run: failed("live", "timeout", "no gateway progress for 1000 ms"),
+  });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 1);
+  assert.match(markup, /TIMEOUT-CONTEXT-n1/);
+});
+
+test("a live snapshot and replay of the same run are rendered only once", () => {
+  const run = failed("r1", "timeout", "no gateway progress for 1000 ms");
+  const markup = render({
+    detail: detail([message("q1", "user", "first"), timeoutNotice("n1")]),
+    replays: [{ runId: "r1", userMessageId: "q1", state: run }],
+    run,
+  });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 1);
+});
+
+test("legacy notices without timeout metadata merge only when diagnostics match", () => {
+  const markup = render({
+    detail: detail([message("q1", "user", "first"), message("n1", "assistant", "Timeout: no gateway progress for 1000 ms", "timeout_notice")]),
+    replays: [{ runId: "r1", userMessageId: "q1", state: failed("r1", "timeout", "no gateway progress for 1000 ms") }],
+  });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 1);
+  assert.match(markup, /Timeout: no gateway progress/);
+});
+
+test("multiple records for one failure preserve every diagnostic and source records", () => {
+  const messages = [message("q1", "user", "first"), timeoutNotice("n1"), timeoutNotice("n2")];
+  const run = failed("r1", "timeout", "no gateway progress for 1000 ms");
+  const before = JSON.stringify({ messages, run });
+  const markup = render({ detail: detail(messages), replays: [{ runId: "r1", userMessageId: "q1", state: run }] });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 1);
+  for (const id of ["n1", "n2"]) assert.match(markup, new RegExp(`TIMEOUT-CONTEXT-${id}`));
+  assert.equal(JSON.stringify({ messages, run }), before);
+});
+
+test("ambiguous failures in one user turn retain the standalone notice", () => {
+  const markup = render({
+    detail: detail([message("q1", "user", "first"), timeoutNotice("n1")]),
+    replays: ["r1", "r2"].map(runId => ({ runId, userMessageId: "q1", state: failed(runId, "timeout", "no gateway progress for 1000 ms") })),
+  });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 3);
 });

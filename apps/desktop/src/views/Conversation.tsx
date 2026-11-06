@@ -25,9 +25,10 @@ import type {
   WorkspaceFile,
 } from "../api/types.js";
 import type { RunStreamState } from "../run-stream/model.js";
-import { placeReplays, type RunReplay } from "../run-stream/replay.js";
+import { hasReplayContent, placeReplays, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
-import { formatRunFailure } from "../run-failure.js";
+import { coalesceTimeoutNotices } from "../run-failure.js";
+import { RunFailureCard } from "./RunFailureCard.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
@@ -78,33 +79,8 @@ const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "revi
  */
 function NoticeRow({ message }: { message: ChatMessage }) {
   const label = message.kind ? (TEXT.conversation.notices[message.kind] ?? message.kind) : "";
-  // Timeout notices share the same failure class as a run timeout. They are
-  // rendered as a localized summary with the raw provider message folded away.
-  //
-  // Note: `timeout_notice` messages are not associated with a specific run on
-  // the client side, so we cannot reliably deduplicate them against the
-  // `run.failed` status line for the same failure. We keep the notice visible
-  // rather than risk dropping useful information; deduplication would require
-  // backend schema changes (e.g. a runId on the message), which is out of scope
-  // for this fix.
   if (message.kind === "timeout_notice") {
-    return (
-      <div className="message assistant is-notice">
-        <div aria-hidden="true" className="avatar-mini">
-          ⌁
-        </div>
-        <div className="body">
-          <div className="role">
-            <span>{label}</span>
-          </div>
-          <div className="status-strip">{formatRunFailure("timeout")}</div>
-          <details className="run-failure-details">
-            <summary>{TEXT.runFailure.technicalDetails}</summary>
-            <pre>{message.content}</pre>
-          </details>
-        </div>
-      </div>
-    );
+    return <RunFailureCard code="timeout" message={message.content} />;
   }
   return (
     <div className="message assistant is-notice">
@@ -252,7 +228,9 @@ export function Conversation({
   const pinned = useRef({ height: 0 });
 
   const messages = detail?.messages ?? [];
-  const { following, replacing, trailing } = placeReplays(replays, messages);
+  const failures = coalesceTimeoutNotices(messages, replays, run);
+  const { following, replacing, trailing } = placeReplays(failures.replays, messages);
+  const visibleRun = failures.run;
   /** The files each question was sent with, and the ones still waiting for a
    *  question. Uploads are workspace files rather than message fields, so they
    *  are matched to turns by time — see `placeUploads`. */
@@ -271,7 +249,7 @@ export function Conversation({
     }
     return flags;
   }, [messages, pending]);
-  const reconstructed = run.turns.length > 0 || run.finalContent !== undefined;
+  const reconstructed = hasReplayContent(visibleRun);
   /** A message just sent has no run events yet — the request is still in
    *  flight — but the run exists from the press, and its line is what says so.
    *  Waiting for the first event would leave the user's message alone in the
@@ -280,7 +258,7 @@ export function Conversation({
    *  has said anything. So the placeholder is drawn a beat late, and anything
    *  the stream has actually produced is drawn at once. */
   const placeholder = useAfter(pending !== undefined, RUN_LINE_DELAY_MS);
-  const liveRun = reconstructed || placeholder;
+  const liveRun = (reconstructed || placeholder) && !replays.some(replay => replay.runId === visibleRun.runId);
 
   // `liveRun` pins too: the run line is drawn a beat after the press, and a
   // pin that skipped it would leave the one line saying the run exists below
@@ -327,6 +305,7 @@ export function Conversation({
     <section className="conversation" onScroll={onScroll} ref={scroller}>
       <div className="messages" ref={content}>
         {messages.map((message, index) => {
+          if (failures.hiddenNoticeIds.has(message.id)) return null;
           const replacement = replacing.get(message.id);
           return (
             <Fragment key={message.id}>
@@ -389,7 +368,7 @@ export function Conversation({
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
-            run={run}
+            run={visibleRun}
             sessionId={detail?.id}
           />
         ) : null}

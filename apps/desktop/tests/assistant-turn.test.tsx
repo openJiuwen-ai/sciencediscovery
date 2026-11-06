@@ -309,7 +309,7 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     // The divider is for a run that stopped; an error is a run that broke, and
     // it still owes the reader a mark and the reason.
     const html = render({ error: { message: "gateway died" }, status: "failed", terminal: true });
-    assert.match(html, /is-notice/u);
+    assert.match(html, /run-failure-row/u);
     // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
     assert.match(html, /class="run-failure-details"/u);
@@ -322,7 +322,7 @@ describe("a stopped run ends on a hairline, not a notice", () => {
       status: "failed",
       terminal: true,
     });
-    assert.match(html, /is-notice/u);
+    assert.match(html, /run-failure-row/u);
     // Localized Chinese summary for timeout.
     assert.match(html, /请求超时/u);
     // The original errorCode and error.message live inside the technical details.
