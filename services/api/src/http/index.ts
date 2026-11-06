@@ -423,11 +423,30 @@ function extractReplacementModelId(body: unknown): string | null | undefined {
  */
 export function specialistErrorStatus(error: unknown): 400 | 404 | undefined {
   if (!(error instanceof Error)) return undefined;
-  if (error.message === "Specialist not found") return 404;
-  if (/^(?:Specialist name already exists|Specialist (?:skills|connectors) are unavailable|Built-in specialists are read-only)/
-    .test(error.message)) return 400;
-  return isKnownClientInputError(error) ? 400 : undefined;
+  const match = SPECIALIST_REJECTIONS.find(([wording]) =>
+    typeof wording === "string" ? error.message === wording : wording.test(error.message));
+  return match?.[1];
 }
+
+/**
+ * One entry per rejection `services/api/src/store.ts` raises for these routes,
+ * by its exact wording. A wording the store does not raise is not client input:
+ * `isKnownClientInputError` matches any message containing "must" or "cannot",
+ * which would relabel an internal fault as 400 and hide it from the log.
+ */
+const SPECIALIST_REJECTIONS: ReadonlyArray<readonly [string | RegExp, 400 | 404]> = [
+  ["Specialist not found", 404],
+  ["Specialist name is required", 400],
+  ["Specialist description is required", 400],
+  ["Specialist description must be 1-500 characters", 400],
+  ["Specialist instructions must be 1-20000 characters", 400],
+  ["Specialist name already exists", 400],
+  [/^Specialist (?:skills|connectors) are unavailable: /, 400],
+  ["Built-in specialists are read-only; only their enabled flag can be toggled", 400],
+  ["Built-in specialists cannot be deleted", 400],
+  ["Specialist is referenced by a Session or subagent and cannot be deleted", 400],
+  ["enabled must be a boolean", 400],
+];
 
 /** Answer one Specialist route, keeping the store's message and its status. */
 async function answerSpecialistRoute<T>(
