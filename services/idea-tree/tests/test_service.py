@@ -84,6 +84,22 @@ def test_settings_import_is_once_and_updates_survive_restart(client, tmp_path):
     assert client.get(url, headers=AUTH).json()['maxDepth'] == 4
 
 
+def test_role_thinking_efforts_survive_a_settings_round_trip(client):
+    """The documented per-stage thinking control is part of the persisted contract (PR review F1)."""
+    url = '/api/settings/idea-tree'
+    written = client.put(url, headers=AUTH, json={'roleThinkingEfforts': {'assess': 'high', 'aggregate': 'max'}})
+    assert written.status_code == 200, written.text
+    assert written.json()['roleThinkingEfforts'] == {'assess': 'high', 'aggregate': 'max'}
+    assert client.get(url, headers=AUTH).json()['roleThinkingEfforts'] == {'assess': 'high', 'aggregate': 'max'}
+    # A PUT replaces the field it names, so the next write keeps only its own stages.
+    assert client.put(url, headers=AUTH, json={'roleThinkingEfforts': {'design': 'low'}}).json()['roleThinkingEfforts'] == {'design': 'low'}
+    # An empty object or null clears it, like the prompt overrides.
+    assert 'roleThinkingEfforts' not in client.put(url, headers=AUTH, json={'roleThinkingEfforts': {}}).json()
+    assert client.put(url, headers=AUTH, json={'roleThinkingEfforts': None}).status_code == 200
+    assert client.put(url, headers=AUTH, json={'roleThinkingEfforts': {'unknown': 'high'}}).status_code == 400
+    assert client.put(url, headers=AUTH, json={'roleThinkingEfforts': {'assess': 'extreme'}}).status_code == 400
+
+
 def test_mcp_runs_real_engine_and_streams_terminal_snapshot(client, monkeypatch):
     async def model(self, role, payload):
         await asyncio.sleep(.005)
