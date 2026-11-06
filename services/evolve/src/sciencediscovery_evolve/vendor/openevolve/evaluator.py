@@ -1,4 +1,6 @@
-# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+# Portions Copyright (c) 2026 AgentDescent, licensed under the MIT License.
+# See LICENSE.agentdescent in this directory for the upstream permission notice.
+# Modifications Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
