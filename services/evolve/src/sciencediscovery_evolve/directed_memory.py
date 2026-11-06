@@ -14,11 +14,11 @@
 
 """Remember directed edits so the search does not spend a slot twice.
 
-A seen edit is not a new node. The model is asked again, inside the same
-slot, for a different edit. Coming back with a better score updates the
-existing node. A fault may be tried ``FAULT_LIMIT`` times; retries after the
-first do not take another slot. Waiting is not a fault and does not take a
-slot either.
+A seen edit is not a new node. A reply that is not a JSON object, or that
+leaves the declared fields, is not a run either. The model is asked again,
+inside the same slot. Coming back with a better score updates the existing
+node. A fault may be tried ``FAULT_LIMIT`` times; retries after the first do
+not take another slot. Waiting is not a fault and does not take a slot either.
 
 The vendor search still appends whatever ``add_node`` returns. Skipped results
 are marked and dropped by the event filter, so ``vendor/puct/search.py`` stays
@@ -33,7 +33,7 @@ import threading
 from dataclasses import replace
 from typing import Any, Callable, Mapping, Optional, Tuple
 
-from .direction import field_changes
+from .direction import field_changes, outside_direction
 from .vendor.puct.domain import Domain
 from .vendor.puct.tree import Node
 
@@ -109,6 +109,38 @@ class EditMemory:
             f"{summary}; {key} (score {score:g}). "
             "Already measured: " + "; ".join(seen) + ". "
             "Propose a different JSON. Change an editable field to a value that is not in that list."
+        )
+
+    def hold(self, code: str, direction: Optional[Mapping[str, Any]] = None) -> Tuple[str, str]:
+        """``(log line, prompt)`` when this reply must not run, else ``("", "")``."""
+        repeated = self.repeat_reason(code)
+        if repeated:
+            return (
+                "this edit was already measured, so it does not take a run; asking for a different one",
+                repeated,
+            )
+        if not isinstance(direction, Mapping):
+            return "", ""
+        text = str(code or "").strip()
+        try:
+            parsed = json.loads(text) if text else None
+        except json.JSONDecodeError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            return (
+                "this reply is not a JSON object, so it does not take a run; asking again",
+                "The reply was not a JSON object, so it does not take a run. "
+                "Return one JSON object and nothing else. Change only an editable field.",
+            )
+        if not self.baseline:
+            return "", ""
+        why = outside_direction(self.baseline, text, direction)
+        if not why:
+            return "", ""
+        return (
+            "this edit is outside the declared fields, so it does not take a run; asking again",
+            "This edit is not run: " + why + ". "
+            "Return one JSON object. Change only an editable field and leave every other field as it is.",
         )
 
     def summary_for(self, code: str) -> str:
@@ -299,12 +331,14 @@ def redraw_known(
     memory: EditMemory,
     emit_log: Callable[[str], None],
     limit: int = REDRAW_LIMIT,
+    direction: Optional[Mapping[str, Any]] = None,
 ) -> Callable[..., Any]:
-    """Ask again inside one slot when the model repeats a measured edit.
+    """Ask again inside one slot when the reply must not be run.
 
     The search loop counts one call to ``propose``, and ``propose`` calls
-    ``complete`` once. Repeats stay inside that call, so they do not spend a
-    round and they are not sent to the runner.
+    ``complete`` once. A repeat, a reply that is not a JSON object, and an
+    edit that leaves the declared fields all stay inside that call. They do
+    not spend a round and they are not sent to the runner.
     """
 
     def call(prompt: str, iteration: int) -> Any:
@@ -312,12 +346,10 @@ def redraw_known(
         asked = prompt
         for _ in range(max(0, limit)):
             code = result[0] if isinstance(result, tuple) and result else ""
-            reason = memory.repeat_reason(str(code or ""))
+            log_line, reason = memory.hold(str(code or ""), direction)
             if not reason:
                 return result
-            emit_log(
-                "this edit was already measured, so it does not take a run; asking for a different one"
-            )
+            emit_log(log_line)
             asked = asked.rstrip() + "\n\n" + reason + "\n"
             result = complete(asked, iteration)
         return result

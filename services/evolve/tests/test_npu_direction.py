@@ -328,6 +328,58 @@ def test_a_seen_edit_is_asked_again_inside_the_same_call():
     assert len(prompts) == REDRAW_LIMIT + 1
 
 
+def test_a_reply_that_is_not_json_is_asked_again_inside_the_same_call():
+    from sciencediscovery_evolve.directed_memory import REDRAW_LIMIT, EditMemory, redraw_known
+
+    memory = EditMemory()
+    memory.note_seed('{"model":"fixed","pos_2":"T"}', 0.2)
+    direction = {"editable": ["pos_2"]}
+    prompts = []
+    logs = []
+
+    def complete(prompt, iteration):
+        del iteration
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "def main():\n    return 1\n", "program", None
+        return '{"model":"fixed","pos_2":"A"}', "json", None
+
+    code, summary, promise = redraw_known(
+        complete, memory, logs.append, direction=direction,
+    )("start", 1)
+    assert code == '{"model":"fixed","pos_2":"A"}'
+    assert summary == "json" and promise is None
+    assert len(prompts) == 2
+    assert "not a JSON object" in prompts[1]
+    assert logs == ["this reply is not a JSON object, so it does not take a run; asking again"]
+
+    prompts.clear()
+    logs.clear()
+
+    def fixed_field(prompt, iteration):
+        del iteration
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return '{"model":"changed","pos_2":"A"}', "fixed", None
+        return '{"model":"fixed","pos_2":"A"}', "ok", None
+
+    code, _, _ = redraw_known(
+        fixed_field, memory, logs.append, direction=direction,
+    )("start", 1)
+    assert code == '{"model":"fixed","pos_2":"A"}'
+    assert "outside the declared fields" in logs[-1]
+
+    prompts.clear()
+
+    def stuck(prompt, iteration):
+        del prompt, iteration
+        prompts.append(1)
+        return "still prose", "no", None
+
+    redraw_known(stuck, memory, logs.append, direction=direction)("start", 1)
+    assert len(prompts) == REDRAW_LIMIT + 1
+
+
 def test_a_measured_edit_is_not_sent_to_the_runner_again():
     from sciencediscovery_evolve.directed_memory import EditMemory, guard_evaluate
     from sciencediscovery_evolve.vendor.puct.domain import Domain

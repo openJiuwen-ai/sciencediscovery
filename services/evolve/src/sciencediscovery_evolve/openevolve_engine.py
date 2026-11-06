@@ -259,6 +259,7 @@ class OpenEvolveEngine:
         if isinstance(direction, dict) and direction.get("editable"):
             complete = redraw_known(
                 complete, memory, lambda message: reporter.emit(events.log("info", message)),
+                direction=direction,
             )
         tasks = (_tasks(dataset, spec.search_id) if _stages_rows(mode)
                  else _group_tasks(spec))
