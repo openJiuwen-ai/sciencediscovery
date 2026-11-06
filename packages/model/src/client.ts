@@ -826,7 +826,6 @@ function rejectedThinkingFields(request: { body: string }, detail: string): Set<
 }
 
 function retryWithoutRejectedThinkingFields(
-  endpoint: ModelEndpoint,
   request: { body: string; headers: Record<string, string>; url: string },
   error: unknown,
 ) {
@@ -834,11 +833,8 @@ function retryWithoutRejectedThinkingFields(
     || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(error.responseDetail)) return undefined;
   const fallback = withoutThinkingControls(request);
   const fields = rejectedThinkingFields(request, error.responseDetail);
-  if (fallback && fields.size) {
-    const key = thinkingControlEndpointKey(endpoint);
-    rejectedThinkingControls.set(key, new Set([...(rejectedThinkingControls.get(key) ?? []), ...fields]));
-  }
-  return fallback;
+  if (!fallback || !fields.size) return undefined;
+  return { fallback, fields };
 }
 
 interface OpenAiToolCallFragment {
@@ -914,10 +910,12 @@ async function streamOpenAiTurn(
   try {
     streamed = await requestWithRetry({ ...request, policy, proxy: endpoint.proxy, signal }, recorder);
   } catch (error) {
-    const fallback = retryWithoutRejectedThinkingFields(endpoint, request, error);
-    if (!fallback) throw error;
+    const retry = retryWithoutRejectedThinkingFields(request, error);
+    if (!retry) throw error;
     recorder.retry("provider_http");
-    streamed = await requestWithRetry({ ...fallback, policy, proxy: endpoint.proxy, signal }, recorder);
+    streamed = await requestWithRetry({ ...retry.fallback, policy, proxy: endpoint.proxy, signal }, recorder);
+    const key = thinkingControlEndpointKey(endpoint);
+    rejectedThinkingControls.set(key, new Set([...(rejectedThinkingControls.get(key) ?? []), ...retry.fields]));
   }
   const { body } = streamed;
 
