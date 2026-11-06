@@ -22,7 +22,9 @@ import { createElement } from "react";
 import { act, create } from "./support/dom-renderer.js";
 import {
   autoContinueKey,
+  designAnchorAfterSending,
   lastAnswer,
+  startedDesign,
   useAutoContinue,
   type AutoContinueInput,
 } from "../src/evolve/use-auto-continue.js";
@@ -63,10 +65,10 @@ function Harness(props: AutoContinueInput) {
   return null;
 }
 
-function card(title: string): string {
+function card(title: string, step = 1): string {
   return [
     "```evolve-checkpoint",
-    "step: 1",
+    `step: ${step}`,
     "total: 4",
     "pace: auto",
     `title: ${title}`,
@@ -166,6 +168,58 @@ test("a reworded repeat of the same step is the same step", async () => {
   await mount(renderer!, { design: "design-1", running: false, run: ended(card("度量：压缩比 0.8")), send, sessionId: "s" });
   assert.equal(sent.length, 1);
   renderer!.unmount();
+});
+
+test("a new design's first ending is not refused by the previous design's step", async () => {
+  // The anchor has to be the new design's before the server has persisted its
+  // command: a design's first turn can end while its command is still only the
+  // pending message. Reading the anchor from the transcript would leave it at
+  // the previous design's id, and a first turn that stops on a step the
+  // previous design already carried would be refused — an auto card with
+  // nothing to press, unattended.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  const props = (design: string, running: boolean, run = emptyRunStream()) => ({
+    design, running, run, send, sessionId: "s",
+  });
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, props("design-1", false)));
+  });
+
+  await mount(renderer!, props("design-1", true));
+  await mount(renderer!, props("design-1", false, ended(card("度量", 1))));
+  await mount(renderer!, props("design-1", true));
+  await mount(renderer!, props("design-1", false, ended(card("冻结", 2))));
+  assert.equal(sent.length, 2);
+
+  // Design 2 starts, its command still pending, and stops on step 2 — the step
+  // design 1 last carried.
+  await mount(renderer!, props("design-2", true));
+  await mount(renderer!, props("design-2", false, ended(card("冻结", 2))));
+  assert.equal(sent.length, 3);
+  renderer!.unmount();
+});
+
+test("the anchor a command starts with never repeats the one before it", () => {
+  // `App` bumps this the moment a command leaves the window, so the anchor is
+  // already the new design's during its first turn.
+  assert.equal(startedDesign(undefined), "design-1");
+  assert.equal(startedDesign("design-1"), "design-2");
+  // A reload restores the anchor from the transcript, where it is a message
+  // id; the first design started afterwards cannot collide with it.
+  assert.notEqual(startedDesign("2f1c8a9e-0b7d-4c1a-9f0e-1a2b3c4d5e6f"),
+    "2f1c8a9e-0b7d-4c1a-9f0e-1a2b3c4d5e6f");
+});
+
+test("only a design command starts a design", () => {
+  // What `App` runs as each message leaves the window. The carried messages
+  // are ordinary ones: bumping the anchor for them would make every carried
+  // turn a new design, and the next ending would always be answered.
+  assert.equal(designAnchorAfterSending(undefined, "/evolve-design --algorithm puct --no-confirm 压缩"), "design-1");
+  assert.equal(designAnchorAfterSending("design-1", "/evolve-design --algorithm puct 第二个"), "design-2");
+  assert.equal(designAnchorAfterSending("design-1", "继续步骤 1/4"), "design-1");
+  assert.equal(designAnchorAfterSending(undefined, "普通问题"), undefined);
 });
 
 test("the watermark names the session, the design and the step", () => {
