@@ -57,6 +57,9 @@ export interface FileContent {
 }
 
 export interface SessionRecord {
+  /** What the composer's permission row prints. A Session the fixture writes
+   *  without one reads as asking, which is the service's default. */
+  approvalMode?: string;
   archivedAt?: string;
   createdAt: string;
   id: string;
@@ -234,6 +237,7 @@ export const INBOX_PROJECT: ProjectRecord = {
 
 export function makeSession(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
+    approvalMode: "ask",
     createdAt: CREATED_AT,
     id: "session-1",
     modelId: DEFAULT_MODEL.id,
@@ -242,6 +246,16 @@ export function makeSession(over: Partial<SessionRecord> = {}): SessionRecord {
     updatedAt: UPDATED_AT,
     ...over,
   };
+}
+
+/** The clock every write on a Session moves forward, so a record the fixture
+ *  writes reads as newer than the seeded one — and a spec can seed a replay
+ *  that is older than the write it must not undo. */
+let writeClock = Date.parse(UPDATED_AT);
+
+function newUpdatedAt(): string {
+  writeClock += 1000;
+  return new Date(writeClock).toISOString();
 }
 
 function sse(events: readonly unknown[]): string {
@@ -632,7 +646,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         }
         if (method === "PATCH") {
           const patch = JSON.parse(body ?? "{}") as Partial<SessionRecord>;
-          state.sessions[index] = { ...state.sessions[index]!, ...patch };
+          // Every write on the service stamps `updatedAt`, and the app leans on
+          // that to drop an older copy of the record arriving out of order. A
+          // mock that left the timestamp alone would let a stale replay look
+          // exactly as fresh as the rename it must not undo.
+          state.sessions[index] = { ...state.sessions[index]!, ...patch, updatedAt: newUpdatedAt() };
           return json(route, 200, state.sessions[index]);
         }
         if (method === "DELETE") {
@@ -669,9 +687,15 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           sessionId: session.id,
           status: "running",
         };
+        // What the event carries is the Session record, and the service's has no
+        // transcript in it: the messages live in their own list. The mock keeps
+        // them on the record for its own convenience, so the published copy
+        // leaves them behind — an event that carried them would hand the page a
+        // second copy of a conversation it is already drawing.
+        const published = renamed ? { ...session, messages: undefined } : undefined;
         return route.fulfill({
           body: sse([
-            ...(renamed ? [{ session, type: "session.updated" }] : []),
+            ...(published ? [{ session: published, type: "session.updated" }] : []),
             { run, type: "run.queued" },
             { model: { name: "Qwen Max" }, runId: "run-1", settings: {}, type: "run.started" },
             { responseId: "response-1", turn: 1, type: "assistant.response.started" },
@@ -693,6 +717,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (runEvents && method === "GET") {
         const [sessionId, runId] = [runEvents[1]!, runEvents[2]!];
         const entry = (options.runsBySession?.[sessionId] ?? []).find((candidate) => candidate.run.id === runId);
+        // One route, two readers: rebuilding a finished run reads it as JSON,
+        // and following a run that is still going subscribes to it as a stream.
+        // The subscription replays from cursor 0, which is what puts an older
+        // `session.updated` in front of a page that has just read a newer one.
+        if ((request.headers().accept ?? "").includes("text/event-stream")) {
+          return route.fulfill({
+            body: sse(entry?.events ?? []),
+            contentType: "text/event-stream",
+            status: 200,
+          });
+        }
         return json(route, 200, (entry?.events ?? []).map((event, index) => ({
           createdAt: String(entry?.run.createdAt ?? CREATED_AT),
           event,

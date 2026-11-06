@@ -981,9 +981,25 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // the run would leave the bar under the old name — 未命名会话 for a
         // Session's first message — for as long as the answer streams.
         if (event?.type === "session.updated") {
-          setDetail((current) => (
-            current?.id === event.session.id ? { ...current, ...event.session } : current
-          ));
+          const incoming = event.session;
+          setDetail((current) => {
+            if (current?.id !== incoming.id) return current;
+            // This stream is followed from cursor 0, so opening a Session whose
+            // run is still going replays that run's earlier events — including
+            // a `session.updated` older than the record `openSession` has just
+            // read. Folding it would take the bar back to the name from before
+            // the user's own rename, and the composer back to the approval mode
+            // and expert it had then, until the run ends. Every write stamps
+            // `updatedAt`, so the newer record wins whatever order they arrive
+            // in; a record of the same age is the same state and may land.
+            if (incoming.updatedAt < current.updatedAt) return current;
+            const next = { ...current, ...incoming };
+            // The cache is what paints the Session on the way back to it, so it
+            // has to hear this too: without it, leaving and returning shows the
+            // older record until `getSession` lands.
+            rememberBounded(detailsBySession.current, next.id, next);
+            return next;
+          });
           void refreshSessionLists();
         }
         // 产物 and the workspace tree are read back from the service rather
@@ -1826,10 +1842,15 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
             // The reply is the only news the open Session gets when no run is
             // streaming. The bar prints its title, so without this the row says
             // the new name while the bar keeps the old one until the Session is
-            // reopened.
-            setDetail((current) => (
-              current?.id === updated.id ? { ...current, ...updated } : current
-            ));
+            // reopened. The cache takes it too — it is what paints the Session
+            // on the way back to it — or leaving and returning would show the
+            // name it had before the rename until the read lands.
+            setDetail((current) => {
+              if (current?.id !== updated.id) return current;
+              const next = { ...current, ...updated };
+              rememberBounded(detailsBySession.current, next.id, next);
+              return next;
+            });
           },
         }),
       refreshCatalog,
