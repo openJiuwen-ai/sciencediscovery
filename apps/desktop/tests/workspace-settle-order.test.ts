@@ -95,7 +95,13 @@ function fakeBackend() {
       return new Promise<Response>(() => {});
     },
   };
-  return { client: client as unknown as ApiClient, reads };
+  /** Land the read at `index`; a case only lands reads it knows are in flight. */
+  const land = (index: number, value: unknown) => {
+    const [read] = reads.splice(index, 1);
+    if (read === undefined) throw new Error("no read in flight");
+    read(value);
+  };
+  return { client: client as unknown as ApiClient, land, reads };
 }
 
 const contents = (handle: { state: { detail?: { messages: Array<{ content: string }> } } }) =>
@@ -110,31 +116,38 @@ test("a settle that lands after a newer one does not put its older transcript ba
     return null;
   }
 
+  /** The hook's handle, once the harness has rendered. */
+  const workspace = () => {
+    if (handle === undefined) throw new Error("the harness has not rendered");
+    return handle;
+  };
+
   let renderer: ReturnType<typeof create> | undefined;
   await act(async () => {
     renderer = create(createElement(Harness, { client: backend.client }));
   });
+  if (renderer === undefined) throw new Error("the harness did not mount");
 
   const FIRST = "/evolve-design --algorithm puct 一";
   const SECOND = "/evolve-design --algorithm puct 二";
   const ANSWER = "answer 2";
 
   // A Session with one command already persisted: its own read, held.
-  const opened = handle!.actions.openSession("s");
+  const opened = workspace().actions.openSession("s");
   await act(async () => {
     await tick();
   });
   assert.equal(backend.reads.length, 1);
-  backend.reads.shift()!(detail([{ content: FIRST, role: "user" }]));
+  backend.land(0, detail([{ content: FIRST, role: "user" }]));
   await act(async () => {
     await opened;
   });
-  assert.deepEqual(contents(handle!), [FIRST]);
+  assert.deepEqual(contents(workspace()), [FIRST]);
 
   // A turn is sent and ends, so its `settle` is now reading. `running` is
   // already false — the composer accepts a message here, which is exactly the
   // window the two settles overlap in.
-  void handle!.actions.send(FIRST);
+  void workspace().actions.send(FIRST);
   await act(async () => {
     await tick();
   });
@@ -142,14 +155,15 @@ test("a settle that lands after a newer one does not put its older transcript ba
 
   // The second message goes out while the first settle is still reading, and
   // its own turn ends at once too, so a second settle starts — the newer one.
-  void handle!.actions.send(SECOND);
+  void workspace().actions.send(SECOND);
   await act(async () => {
     await tick();
   });
   assert.equal(backend.reads.length, 2, "the newer settle's session read is in flight");
 
   // The newer settle lands first, with both turns in it.
-  backend.reads.splice(1, 1)[0](
+  backend.land(
+    1,
     detail([
       { content: FIRST, role: "user" },
       { content: SECOND, role: "user" },
@@ -159,16 +173,20 @@ test("a settle that lands after a newer one does not put its older transcript ba
   await act(async () => {
     await tick();
   });
-  assert.deepEqual(contents(handle!), [FIRST, SECOND, ANSWER]);
+  assert.deepEqual(contents(workspace()), [FIRST, SECOND, ANSWER]);
 
   // Then the older one lands, with the transcript as it was before the second
   // message existed. Its reads predate everything the newer settle read, so
   // writing them now would take the answer off the screen until the next turn
   // — and put the design anchor back on the previous design.
-  backend.reads.splice(0, 1)[0](detail([{ content: FIRST, role: "user" }]));
+  backend.land(0, detail([{ content: FIRST, role: "user" }]));
   await act(async () => {
     await tick();
   });
-  assert.deepEqual(contents(handle!), [FIRST, SECOND, ANSWER], "the older settle did not write");
-  renderer!.unmount();
+  assert.deepEqual(
+    contents(workspace()),
+    [FIRST, SECOND, ANSWER],
+    "the older settle did not write",
+  );
+  renderer.unmount();
 });
