@@ -130,12 +130,6 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
   gap: 6px;
   flex: 0 0 auto;
 }
-.settings-subheading {
-  margin: 12px 0 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 650;
-}
 /* A form row stacks instead of sitting on one line. */
 .settings-card.is-form {
   flex-direction: column;

@@ -36,7 +36,7 @@ import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
-import { Group, LoadGate, Row, Select, Tag } from "../rows.js";
+import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
 
 interface Props {
   client: ApiClient;
@@ -360,189 +360,156 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       <p className="settings-note">{TEXT.settings.system.mcp.help}</p>
 
       <LoadGate loaded={loaded}>
-        {(page) => {
-          const hasItems = page.builtins.length > 0 || page.custom.length > 0;
-          return (
-            <Group>
-              {!hasItems ? (
-                <p className="settings-empty">{TEXT.settings.system.mcp.empty}</p>
-              ) : (
-                <div className="settings-list">
-                  <div className="settings-bulk">
-                    <button
-                      className="bulk-button"
-                      disabled={busy}
-                      onClick={() => void setAllSelected(true)}
-                      type="button"
-                    >
-                      {TEXT.settings.system.mcp.selectAll}
-                    </button>
-                    <button
-                      className="bulk-button"
-                      disabled={busy}
-                      onClick={() => void setAllSelected(false)}
-                      type="button"
-                    >
-                      {TEXT.settings.system.mcp.clearSelection}
-                    </button>
-                  </div>
-
-                  {page.custom.length > 0 ? (
-                    <>
-                      <h4 className="settings-subheading">{TEXT.settings.system.mcp.customHeading}</h4>
-                      {page.custom.map((server) => {
-                        const status = server.status;
-                        return (
-                          <div className="settings-card" key={server.id}>
-                            <span className="settings-card-mark">{initialOf(server.name)}</span>
-                            <div className="settings-card-main">
-                              <strong>
-                                {server.name}
-                                <Tag tone={STATUS_TONE[status]}>{statusLabel(status)}</Tag>
-                                <Tag tone="off">{TEXT.settings.system.mcp.toolCount(server.tools.length)}</Tag>
-                              </strong>
-                              {server.description ? <small>{server.description}</small> : null}
-                              <small className={server.description ? "settings-detail-meta" : undefined}>
-                                {server.transport} · {server.transport === "stdio" ? server.command : server.url}
-                                {server.error ? ` · ${server.error}` : ""}
-                              </small>
-                            </div>
-                            <div className="settings-card-actions">
-                              <button
-                                className="link-button"
-                                disabled={busy}
-                                onClick={() => {
-                                  setBusy(true);
-                                  void testMcpServer(client, server.id)
-                                    .then((next) => {
-                                      loaded.reload();
-                                      onToast(next.error ?? TEXT.settings.system.mcp.tested(next.status));
-                                    })
-                                    .catch((reason: unknown) => {
-                                      setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
-                                    })
-                                    .finally(() => setBusy(false));
-                                }}
-                                type="button"
-                              >
-                                {TEXT.settings.system.mcp.test}
-                              </button>
-                              <button
-                                className="link-button"
-                                disabled={busy}
-                                onClick={() => setDraft(draftOf(server))}
-                                type="button"
-                              >
-                                {TEXT.settings.edit}
-                              </button>
-                              <button
-                                className="link-button is-danger"
-                                disabled={busy}
-                                onClick={() => onConfirm({
-                                  accept: TEXT.menu.delete,
-                                  body: TEXT.settings.system.mcp.deleteBody(server.name),
-                                  eyebrow: TEXT.settings.system.mcp.heading,
-                                  onAccept: () => {
-                                    void deleteMcpServer(client, server.id)
-                                      .then(() => loaded.reload())
-                                      .catch((reason: unknown) => {
-                                        setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
-                                      });
-                                  },
-                                  title: TEXT.settings.system.mcp.deleteTitle(server.name),
-                                })}
-                                type="button"
-                              >
-                                {TEXT.menu.delete}
-                              </button>
-                              <label className="settings-check">
-                                <input
-                                  checked={isSelected(server.id)}
-                                  disabled={busy}
-                                  onChange={() => void toggleDefaultUse(server.id)}
-                                  type="checkbox"
-                                />
-                                <span>{TEXT.settings.system.mcp.useByDefault}</span>
-                              </label>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </>
-                  ) : null}
-
-                  {page.builtins.length > 0 ? (
-                    <>
-                      <h4 className="settings-subheading">{TEXT.settings.system.mcp.builtinHeading}</h4>
-                      {page.builtins.map((source) => {
-                        const open = openId === source.manifest.id;
-                        const selected = page.enabledConnectorIds.includes(source.manifest.id as ConnectorId);
-                        const tools = Object.values(source.manifest.tools ?? {});
-                        const meta = [
-                          source.manifest.publisher,
-                          source.manifest.version ? `v${source.manifest.version}` : undefined,
-                        ].filter((part) => part !== undefined && part !== "").join(" · ");
-                        return (
-                          <div
-                            className={`settings-card is-expandable${open ? " is-open" : ""}${selected ? "" : " is-off"}`}
-                            key={source.manifest.id}
-                          >
-                            <span className="settings-card-mark">
-                              {initialOf(source.manifest.displayName || source.manifest.id)}
-                            </span>
-                            <button
-                              className="settings-card-main"
-                              onClick={() => setOpenId(open ? undefined : source.manifest.id)}
-                              type="button"
-                            >
-                              <strong>
-                                {source.manifest.displayName || source.manifest.id}
-                                <Tag tone="off">{TEXT.settings.system.mcp.builtin}</Tag>
-                                <Tag tone={catalogTone(source.status.status)}>
-                                  {statusLabel(source.status.status)}
-                                </Tag>
-                                <Tag tone="off">{TEXT.settings.system.mcp.toolCount(tools.length)}</Tag>
-                              </strong>
-                              <small>{source.manifest.description || source.manifest.id}</small>
-                              {open ? (
-                                <span className="settings-detail">
-                                  {tools.length === 0 ? null : (
-                                    <span className="settings-builtin-tools">
-                                      {tools.map((tool) => (
-                                        <span key={tool.id}>
-                                          <code>{tool.id}</code>
-                                          {tool.description ? <small>{tool.description}</small> : null}
-                                        </span>
-                                      ))}
-                                    </span>
-                                  )}
-                                  {meta === "" ? null : (
-                                    <small className="settings-detail-meta">{meta}</small>
-                                  )}
-                                </span>
-                              ) : null}
-                            </button>
-                            <div className="settings-card-actions">
-                              <label className="settings-check">
-                                <input
-                                  checked={isSelected(source.manifest.id)}
-                                  disabled={busy}
-                                  onChange={() => void toggleDefaultUse(source.manifest.id)}
-                                  type="checkbox"
-                                />
-                                <span>{TEXT.settings.system.mcp.useByDefault}</span>
-                              </label>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </>
-                  ) : null}
+        {(page) => (
+          <Group>
+            {page.custom.length === 0 && page.builtins.length === 0 ? (
+              <p className="settings-empty">{TEXT.settings.system.mcp.empty}</p>
+            ) : (
+              <div className="settings-list">
+                <div className="settings-bulk">
+                  <button className="bulk-button" disabled={busy} onClick={() => void setAllSelected(true)} type="button">
+                    {TEXT.settings.system.mcp.selectAll}
+                  </button>
+                  <button className="bulk-button" disabled={busy} onClick={() => void setAllSelected(false)} type="button">
+                    {TEXT.settings.system.mcp.clearSelection}
+                  </button>
                 </div>
-              )}
-            </Group>
-          );
-        }}
+                {page.custom.map((server) => (
+                  <div className="settings-card" key={server.id}>
+                    <span className="settings-card-mark">{initialOf(server.name)}</span>
+                    <div className="settings-card-main">
+                      <strong>
+                        {server.name}
+                        <Tag tone={STATUS_TONE[server.status]}>{statusLabel(server.status)}</Tag>
+                        <Tag tone="off">{TEXT.settings.system.mcp.toolCount(server.tools.length)}</Tag>
+                      </strong>
+                      {server.description ? <small>{server.description}</small> : null}
+                      <small className={server.description ? "settings-detail-meta" : undefined}>
+                        {server.transport} · {server.transport === "stdio" ? server.command : server.url}
+                        {server.error ? ` · ${server.error}` : ""}
+                      </small>
+                    </div>
+                    <div className="settings-card-actions">
+                      <button
+                        className="link-button"
+                        disabled={busy}
+                        onClick={() => {
+                          setBusy(true);
+                          void testMcpServer(client, server.id)
+                            .then((next) => {
+                              loaded.reload();
+                              onToast(next.error ?? TEXT.settings.system.mcp.tested(next.status));
+                            })
+                            .catch((reason: unknown) => {
+                              setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
+                            })
+                            .finally(() => setBusy(false));
+                        }}
+                        type="button"
+                      >
+                        {TEXT.settings.system.mcp.test}
+                      </button>
+                      <button
+                        className="link-button"
+                        disabled={busy}
+                        onClick={() => setDraft(draftOf(server))}
+                        type="button"
+                      >
+                        {TEXT.settings.edit}
+                      </button>
+                      <button
+                        className="link-button is-danger"
+                        disabled={busy}
+                        onClick={() => onConfirm({
+                          accept: TEXT.menu.delete,
+                          body: TEXT.settings.system.mcp.deleteBody(server.name),
+                          eyebrow: TEXT.settings.system.mcp.heading,
+                          onAccept: () => {
+                            void deleteMcpServer(client, server.id)
+                              .then(() => loaded.reload())
+                              .catch((reason: unknown) => {
+                                setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
+                              });
+                          },
+                          title: TEXT.settings.system.mcp.deleteTitle(server.name),
+                        })}
+                        type="button"
+                      >
+                        {TEXT.menu.delete}
+                      </button>
+                      <Switch
+                        disabled={busy}
+                        label={`${server.name} · ${TEXT.settings.system.mcp.useByDefault}`}
+                        onChange={() => void toggleDefaultUse(server.id)}
+                        value={isSelected(server.id)}
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                {page.builtins.map((source) => {
+                  const open = openId === source.manifest.id;
+                  const on = isSelected(source.manifest.id);
+                  const tools = Object.values(source.manifest.tools ?? {});
+                  const meta = [
+                    source.manifest.publisher,
+                    source.manifest.version ? `v${source.manifest.version}` : undefined,
+                  ].filter((part) => part !== undefined && part !== "").join(" · ");
+                  return (
+                    <div
+                      className={`settings-card is-expandable${open ? " is-open" : ""}${on ? "" : " is-off"}`}
+                      key={source.manifest.id}
+                    >
+                      <span className="settings-card-mark">
+                        {initialOf(source.manifest.displayName || source.manifest.id)}
+                      </span>
+                      <button
+                        className="settings-card-main"
+                        onClick={() => setOpenId(open ? undefined : source.manifest.id)}
+                        type="button"
+                      >
+                        <strong>
+                          {source.manifest.displayName || source.manifest.id}
+                          <Tag tone="off">{TEXT.settings.system.mcp.builtin}</Tag>
+                          <Tag tone={catalogTone(source.status.status)}>
+                            {statusLabel(source.status.status)}
+                          </Tag>
+                          <Tag tone="off">{TEXT.settings.system.mcp.toolCount(tools.length)}</Tag>
+                        </strong>
+                        <small>{source.manifest.description || source.manifest.id}</small>
+                        {open ? (
+                          <span className="settings-detail">
+                            {tools.length === 0 ? null : (
+                              <span className="settings-builtin-tools">
+                                {tools.map((tool) => (
+                                  <span key={tool.id}>
+                                    <code>{tool.id}</code>
+                                    {tool.description ? <small>{tool.description}</small> : null}
+                                  </span>
+                                ))}
+                              </span>
+                            )}
+                            {meta === "" ? null : (
+                              <small className="settings-detail-meta">{meta}</small>
+                            )}
+                          </span>
+                        ) : null}
+                      </button>
+                      <div className="settings-card-actions">
+                        <Switch
+                          disabled={busy}
+                          label={`${source.manifest.displayName || source.manifest.id} · ${TEXT.settings.system.mcp.useByDefault}`}
+                          onChange={() => void toggleDefaultUse(source.manifest.id)}
+                          value={on}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Group>
+        )}
       </LoadGate>
 
       {current ? (
