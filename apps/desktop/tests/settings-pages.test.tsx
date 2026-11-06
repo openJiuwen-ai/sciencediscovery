@@ -675,10 +675,7 @@ describe("each settings page", () => {
     asksForItsData("超时", <TimeoutSettings client={client} />);
   });
 
-  it("技能 says why it cannot read a choice when there is no project yet", () => {
-    // The skill selection lives in the project layer, so a page without a
-    // project has nothing to read — and says so rather than showing a list of
-    // switches that would write nowhere.
+  it("技能 loads global switches without requiring a project", () => {
     const markup = renderToStaticMarkup(
       <SkillsSettings adding={false} client={client} onAddingChange={noConfirm} />,
     );
