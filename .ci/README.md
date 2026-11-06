@@ -442,6 +442,25 @@ consumers, with a single suite-level plan/summary and namespaced per-case scores
 continues to contain complete HTML, linked screenshots and results. Keep large
 diagnostic traces separate if that artifact exceeds the dashboard limit.
 
+For `daily` and `release`, real accounting also publishes a **case execution**
+table in its job summary and in `case-execution-details.md`. Nightly copies the
+same Markdown into its outcome summary. The combined `real-e2e-results` artifact
+contains both that file and `dashboard-summary.json`, whose optional generic
+`table` declares ordered columns and producer-formatted string cells. Its count
+fields partition the selected plan; cases without a verified pass or skip count
+as failed. The existing gate verdict, slice summary, PUCT review and Biomni
+suite report remain separate. `pr` and `merge` do not publish this table.
+
+Rows include every selected identity, ordered by recorded `started_at`, then
+untimed cases by case ID. Score uses only `evaluation.overall_score`,
+`evaluation.total_score`, or `evaluation.score`, in that order. Duration uses
+only `generation_duration_ms / 60000`; it never falls back to end-to-end or
+worker wall time. Generated tokens use recorded completion/output tokens,
+judge tokens and totals retain their recorded scopes, and no split is inferred
+from a total. Peak RSS bytes are divided by `1024 ** 3` for the fixed memory
+column. Missing optional measurements display `n/a` and do not affect gating.
+Only identity cells and numeric measurements enter the table and summary.
+
 ## Coverage reporting
 
 Coverage is recorded by the runs that gate, not by a second one. The `UT` and
