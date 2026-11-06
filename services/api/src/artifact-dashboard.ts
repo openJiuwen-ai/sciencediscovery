@@ -417,7 +417,12 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // and an empty `warnings` — so it is counted and named here instead.
   const widestShown = rows.reduce((widestRow, row) => Math.max(widestRow, row.length), totalColumns);
   const shownSurplus = Math.min(Math.max(0, widestShown - totalColumns), surplusLimit);
-  const paddingOnlyColumns = Math.max(0, surplusShown - shownSurplus);
+  // The padding has to be counted from the grid that was actually built, not
+  // from `totalColumns + surplusShown`: `width` is capped by MAX_PREVIEW_COLUMNS,
+  // so at a wide header the cap can swallow the surplus, and the sentence must
+  // never claim unnamed columns the grid does not hold.
+  const renderedSurplus = Math.max(0, width - totalColumns);
+  const paddingOnlyColumns = Math.max(0, renderedSurplus - shownSurplus);
   const paddingOnlyCells = paddingOnlyColumns * rows.length;
   // Columns past the width leave the preview: the header keeps its first names
   // and the payload says how many columns the file had, so a cut table is never
@@ -445,9 +450,10 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   if (paddingOnlyColumns > 0) {
     const columnWord = paddingOnlyColumns === 1 ? "column" : "columns";
     const cellWord = paddingOnlyCells === 1 ? "cell" : "cells";
+    const rowWord = rows.length === 1 ? "row" : "rows";
     warnings.push(
       `The preview pads ${paddingOnlyColumns} unnamed ${columnWord} (${paddingOnlyCells} blank ${cellWord}) `
-      + `because the file has a wider line past the first ${rows.length} rows, which is not shown.`,
+      + `because the file has a wider line past the first ${rows.length} ${rowWord}, which is not shown.`,
     );
   }
   return {
