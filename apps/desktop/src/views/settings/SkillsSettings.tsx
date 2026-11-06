@@ -15,7 +15,7 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
-import { getJiuwenSwarmSkills, listSkills, setJiuwenSwarmSkillEnabledById } from "../../api/settings.js";
+import { getJiuwenSwarmSkills, getSkill, listSkills, setJiuwenSwarmSkillEnabledById } from "../../api/settings.js";
 import type { SkillDescriptor, SkillDetail } from "../../api/types.js";
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
@@ -94,9 +94,7 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     if (jiuwenSwarm.backend === "native") {
       throw new Error(TEXT.settings.skills.jiuwenSwarmOnly);
     }
-    const enabled = jiuwenSwarm.skills
-      .filter((skill) => skill.enabled && skill.skillId)
-      .map((skill) => skill.skillId!);
+    const enabled = jiuwenSwarm.skills.flatMap((skill) => skill.enabled && skill.skillId ? [skill.skillId] : []);
     return { enabled, skills };
   }, {
     client,
@@ -129,11 +127,15 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     setBusy(true);
     setFailure(undefined);
     try {
+      const failures: string[] = [];
       for (const skill of page.skills) {
-        await setJiuwenSwarmSkillEnabledById(client, skill.id, next);
+        try {
+          await setJiuwenSwarmSkillEnabledById(client, skill.id, next);
+        } catch (reason) {
+          failures.push(`${skill.name}: ${reason instanceof Error ? reason.message : TEXT.settings.saveFailed}`);
+        }
       }
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+      if (failures.length) setFailure(failures.join("\n"));
     } finally {
       setBusy(false);
       loaded.reload();
@@ -154,15 +156,13 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     }
     setOpenId(skill.id);
     setDetail({ id: skill.id });
-    import("../../api/settings.js").then(({ getSkill }) =>
-      getSkill(client, skill.id).then(
-        (found) => setDetail((current) => (
-          current?.id === skill.id ? { id: skill.id, instructions: found.instructions.trim() } : current
-        )),
-        () => setDetail((current) => (
-          current?.id === skill.id ? { failed: true, id: skill.id } : current
-        )),
-      ),
+    getSkill(client, skill.id).then(
+      (found) => setDetail((current) => (
+        current?.id === skill.id ? { id: skill.id, instructions: found.instructions.trim() } : current
+      )),
+      () => setDetail((current) => (
+        current?.id === skill.id ? { failed: true, id: skill.id } : current
+      )),
     );
   };
 
