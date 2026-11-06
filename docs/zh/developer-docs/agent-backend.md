@@ -134,7 +134,7 @@ JiuwenSwarm 不直接绕过这些产品语义：其模型请求经 ScienceDiscov
 
 以错误结束的请求，其 `error.classification` 写在同一行上，空补全也是：gateway 先保留记录到结果确定后再写，因此 502 不会留下一条没有分类的成功行。
 
-任务回合已正常结束、却没有非空白文本也没有工具调用时，按错误处理，而不是成功终答，即使上游报告 `finish_reason=stop`。runtime client 与 gateway 都执行该规则，替代 streamer 也无法静默返回空结果。原本无法区分的两种情形，现在既有各自的 `hasReasoning` 取值，也有各自的分类：推理模型把预算全花在思考上、没有可见答案记为 `reasoning_only`（`hasReasoning: true`），relay 直接返回空 `stop` 记为 `empty_completion`（`hasReasoning: false`）；请求同样失败，只有记录的类别不同。被输出上限截断的回合仍走既有截断恢复。错误消息保留线上摘要（请求 ID、状态、记录数、结束原因、是否有推理），不包含正文。
+任务回合已正常结束、却没有非空白文本也没有工具调用时，按错误处理，而不是成功终答，即使上游报告 `finish_reason=stop`。runtime client 与 gateway 都执行该规则，替代 streamer 也无法静默返回空结果。原本无法区分的两种情形，现在既有各自的 `hasReasoning` 取值，也有各自的分类：推理模型把预算全花在思考上、没有可见答案记为 `reasoning_only`（`hasReasoning: true`），relay 直接返回空 `stop` 记为 `empty_completion`（`hasReasoning: false`）；请求同样失败，只有记录的类别不同。被输出上限截断的回合仍走既有截断恢复，但*终局*截断——被截断的那一轮没有任何工具调用，不会再有任何东西产出答案——按失败处理，而不是报成 `completed`：两个 backend 都拒绝"unrecovered output limit"，native 一侧在消息里带上配置的 `max_tokens`，让可调项一目了然。错误消息保留线上摘要（请求 ID、状态、记录数、结束原因、是否有推理），不包含正文。
 
 需要受控的 relay/direct 对比时，使用 `node scripts/model-endpoint-compare.mjs --model <alias> --a-base-url … --b-base-url … --prompt-file …`：两个 endpoint 收到同一份请求体，请求交错执行，凭证只从 token 环境变量读取，报告只含逐请求延迟、错误与 token 汇总。
 
