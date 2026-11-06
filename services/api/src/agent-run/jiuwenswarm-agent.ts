@@ -679,8 +679,13 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         releaseUserInputWait ??= this.beginExternalWait();
         continue;
       }
-      releaseUserInputWait?.();
-      releaseUserInputWait = undefined;
+      // Accounting/phase frames do not mean the run resumed: the adapter
+      // interleaves them with a paused question, so releasing on them would drop
+      // the wait and let the idle deadline fire while the user is still deciding.
+      if (!("event" in line && (line.event.type === "model.usage" || line.event.type === "agent.phase"))) {
+        releaseUserInputWait?.();
+        releaseUserInputWait = undefined;
+      }
       if ("done" in line) {
         receivedTerminal = true;
         finalText = line.done.finalText;
