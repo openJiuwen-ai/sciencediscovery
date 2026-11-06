@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { replaceVenvTrampolines, copyVenvRuntimeDlls } from "./lib/venv-launchers.mjs";
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
 import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
+import { rewritePthText, SD_BACKEND_PLACEHOLDER } from "./lib/pth-guard.mjs";
 
 const shellRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -50,7 +51,7 @@ const out = arg("out", join(shellRoot, "build", "resources"));
 // so it is staged next to the shared one.
 const VENV_NAMES = ["sd-services", "idea-tree"];
 /** Placeholder bootstrap.ts substitutes with the real <resources>\backend. */
-const BACKEND_PLACEHOLDER = "@@SD_BACKEND_ROOT@@";
+const BACKEND_PLACEHOLDER = SD_BACKEND_PLACEHOLDER;
 
 const say = (line) => console.log(`[assemble] ${line}`);
 const fail = (line) => { console.error(`[assemble] FAIL: ${line}`); process.exit(1); };
@@ -657,35 +658,37 @@ for (const name of VENV_NAMES) {
     filter: pyFilter(),
   });
   // Editable-install .pth files contain an absolute path into the dev repo;
-  // swap the repo prefix for the placeholder the shell resolves at first run.
-  // Two conventions ship: `_editable_impl_*.pth` (workspace members, uv's
-  // editable finders) and a plain `<name>.pth` holding the source directory
-  // (the standalone idea-tree project). Both are matched by content, so a
-  // third convention cannot ship a dev path silently.
+  // swap the repo prefix for the placeholder the shell resolves at first run,
+  // and fail the build on any entry that points at another checkout. The rules
+  // live in lib/pth-guard.mjs, where they are unit tested: matching by content
+  // covers both shipped conventions (`_editable_impl_*.pth` for workspace
+  // members and a plain `<name>.pth` for the standalone idea-tree project), and
+  // import-style shims plus relative entries are left alone.
   const sp = join(out, "envs-template", name, "Lib", "site-packages");
   if (!existsSync(sp)) continue;
   for (const e of await readdir(sp, { withFileTypes: true })) {
     if (!e.isFile() || !e.name.endsWith(".pth")) continue;
     const file = join(sp, e.name);
-    const text = (await readFile(file, "utf8")).trim();
-    // A placeholder swap carries an absolute path into this repo. Anything
-    // outside it is either a stdlib shim (`distutils-precedence.pth` imports
-    // code) or a stale editable — the latter must fail the build. Field
-    // incident (stale editable venv): the envs came from a data dir carried
-    // over after a repo migration; their .pth files still pointed at the old
-    // checkout path. This branch only warned and shipped anyway, and every
-    // Python sidecar died with ModuleNotFoundError on the installed machine
-    // while the build machine looked healthy.
-    // A directory boundary must follow the repo prefix: `repo` is also a
-    // prefix of `repo-something-else`, and that sibling path would silently
-    // slice into a wrong tail (e.g. `-something-else\...`) instead of failing.
-    const insideRepo = text.startsWith(repo) && /^[\\/]/.test(text.slice(repo.length));
-    if (insideRepo) {
-      const tail = text.slice(repo.length).replace(/^[\\/]+/, "").replace(/\//g, "\\");
-      await writeFile(file, `${BACKEND_PLACEHOLDER}\\${tail}\n`, "utf8");
+    const { lines, placeholdered, outside } = rewritePthText({
+      text: await readFile(file, "utf8"),
+      repo,
+      placeholder: BACKEND_PLACEHOLDER,
+    });
+    // A stale editable must fail the build whatever the file is called: a
+    // plain `<name>.pth` holding an old idea-tree path ships exactly the same
+    // broken payload as an `_editable_impl_*.pth` one, and the payload smoke
+    // import cannot catch it because it sets PYTHONPATH to the shipped
+    // sources. Field incident (stale editable venv): the envs came from a data
+    // dir carried over after a repo migration; their .pth files still pointed
+    // at the old checkout path. The guard only warned and shipped anyway, and
+    // every Python sidecar died with ModuleNotFoundError on the installed
+    // machine while the build machine looked healthy.
+    if (outside.length > 0) {
+      fail(`${name}/${e.name} points outside the repo (${outside[0]}) — the venv's editable install is stale; reinstall the editable packages from this repo before assembling`);
+    }
+    if (placeholdered) {
+      await writeFile(file, `${lines.join("\n")}\n`, "utf8");
       say(`placeholdered ${name}/${e.name}`);
-    } else if (/^_editable_impl_.*\.pth$/.test(e.name)) {
-      fail(`${name}/${e.name} points outside the repo (${text}) — the venv's editable install is stale; reinstall the editable packages from this repo before assembling`);
     }
   }
 }
