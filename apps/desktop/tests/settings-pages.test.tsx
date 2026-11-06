@@ -40,7 +40,7 @@ import { RunnerSection } from "../src/views/settings/RemoteHosts.js";
 import { NetworkSettings } from "../src/views/settings/NetworkSettings.js";
 import { RuntimeSettings } from "../src/views/settings/RuntimeSettings.js";
 import { SkillForm } from "../src/views/settings/SkillForm.js";
-import { enabledAfterCreate, skillMeta, SkillsSettings } from "../src/views/settings/SkillsSettings.js";
+import { skillMeta, SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { AbilityPicker } from "../src/views/settings/system/AbilityPicker.js";
 import { McpServers } from "../src/views/settings/system/McpServers.js";
 import { SpecialistForm } from "../src/views/settings/system/SpecialistForm.js";
@@ -606,22 +606,6 @@ describe("the skill card", () => {
       "the resources do not count alongside SKILL.md",
     );
     assert.ok(skillMeta(skill({ source: "built-in" })).includes(TEXT.settings.skills.source.builtIn));
-  });
-});
-
-describe("a skill created from the form", () => {
-  it("joins a project's explicit selection", () => {
-    // `selected` carries an explicit list, so a new package would arrive off.
-    assert.deepEqual(enabledAfterCreate("selected", ["a", "b"], "c"), ["a", "b", "c"]);
-    assert.equal(enabledAfterCreate("selected", ["a", "c"], "c"), undefined, "an already-selected skill is written twice");
-  });
-
-  it("needs no write where the mode already means every installed skill", () => {
-    // `all` is the default and resolves to the whole catalog, so the new
-    // package is on without a write — and writing the list would pin the
-    // project to `selected` and freeze the catalog behind it.
-    assert.equal(enabledAfterCreate("all", ["a"], "c"), undefined);
-    assert.equal(enabledAfterCreate(undefined, [], "c"), undefined);
   });
 });
 

@@ -59,13 +59,14 @@ test("a refused switch is an error, not silence", async () => {
   await assert.rejects(setJiuwenSwarmSkillEnabled({ adapterUrl: "http://a", fetch: refusing }, "xlsx", false), /HTTP 502/);
 });
 
-test("reconcile switches only what disagrees: staged names on, other installed ones off, builtin untouched", async () => {
+test("reconcile switches only what disagrees for ScienceDiscovery skills, builtin and local untouched", async () => {
   const calls: Array<{ url: string; body?: string }> = [];
   const listed = { skills: [
-    { name: "evolve-design", description: "staged, already on", enabled: true, source: "imported" },
-    { name: "old-skill", description: "an earlier run", enabled: true, source: "imported" },
-    { name: "picked-skill", description: "staged, left off", enabled: false, source: "imported" },
+    { name: "evolve-design", description: "staged, already on", enabled: true, source: "sciencediscovery" },
+    { name: "old-skill", description: "an earlier run", enabled: true, source: "sciencediscovery" },
+    { name: "picked-skill", description: "staged, left off", enabled: false, source: "sciencediscovery" },
     { name: "xlsx", description: "JiuwenSwarm's own", enabled: false, source: "builtin" },
+    { name: "local-skill", description: "user's own", enabled: true, source: "local" },
   ] };
   const fake = (async (url: string, init: RequestInit) => {
     calls.push({ url, body: init.body as string });
