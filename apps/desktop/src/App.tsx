@@ -41,6 +41,7 @@ import {
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
+  isEvolveCommand,
   isEvolveSkill,
 } from "./evolve/command.js";
 import { useAutoContinue } from "./evolve/use-auto-continue.js";
@@ -528,10 +529,25 @@ export function App({ initialToken }: Props) {
     reply: (text) => latestSend.current(text),
   }), [state.running]);
 
+  /** The design the auto-continue belongs to: the last `/evolve-design` the
+   *  user sent. Its message id stays the same for the whole design — the
+   *  messages the client sends to carry it are not commands — and the next
+   *  design gets a different one, which is exactly the distinction the
+   *  watermark needs. */
+  const designCommand = useMemo(() => {
+    const messages = state.detail?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "user" && isEvolveCommand(message.content)) return message.id;
+    }
+    return undefined;
+  }, [state.detail?.messages]);
+
   // A no-confirm design that ends its turn on an auto card is carried forward
   // here — the model cannot start the next turn by itself, and the card offers
   // nothing to press. See the hook for what it refuses to act on.
   useAutoContinue({
+    design: designCommand,
     running: state.running,
     run: state.run,
     send: (text) => latestSend.current(text),
