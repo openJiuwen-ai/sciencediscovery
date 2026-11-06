@@ -138,6 +138,15 @@ test("isWindowsReservedDeviceName treats a named stream as its device", () => {
   for (const name of ["CON", "nul.txt", "COM1.log", "CON .csv", "nul.", "conin$", "conout$"]) {
     assert.equal(isWindowsReservedDeviceName(name), true, `${name} is still a device name`);
   }
+  // The naming document counts the superscript digits ¹, ² and ³ as port numbers, so
+  // `COM¹` names the first serial port exactly like `COM1`. Any other digit, and the
+  // ASCII `0` that is not a port, stay ordinary names.
+  for (const name of ["COM¹.txt", "LPT³.log", "com².csv", "com¹:stream"]) {
+    assert.equal(isWindowsReservedDeviceName(name), true, `${name} names a device`);
+  }
+  for (const name of ["com⁴.csv", "com⁰.csv", "lpt¹⁰.log"]) {
+    assert.equal(isWindowsReservedDeviceName(name), false, `${name} is not a port`);
+  }
 });
 
 test("run-scoped extra tools are injected before the established allow/deny policy", async () => {
