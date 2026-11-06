@@ -110,6 +110,35 @@ test("CFG-X03a: MCP metadata uses its own localized labels rather than provider-
   await act(async () => renderer.unmount());
 });
 
+test("CFG-X03a: Chinese MCP availability and deletion cards use their own labels", async () => {
+  const availability = await mount(request({ capabilityId: "mcp.availability", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "enabled", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP · http" }] },
+    { id: "enabled", label: "Available globally", kind: "boolean", required: true, value: true },
+  ] }), actions(), () => undefined, "zh");
+  const availabilityLabels = availability.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(availabilityLabels.some(label => label.includes("全局可用")));
+  assert.ok(availabilityLabels.some(label => label.includes("已有自定义 MCP 服务")));
+  assert.ok(!availabilityLabels.some(label => label.includes("启用全局审阅专家")));
+  assert.ok(availability.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "全局可用"));
+  assert.match(JSON.stringify(availability.toJSON()), /设置 MCP 全局可用性/u);
+  assert.equal(availability.root.findByProps({ name: "enabled" }).props.type, "checkbox");
+  await act(async () => availability.unmount());
+
+  const deletion = await mount(request({ capabilityId: "mcp.delete", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "serverId", before: "Owned MCP", after: "Deleted" }, { field: "confirmDelete", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "confirmDelete", label: "Delete this shared server and its saved references", kind: "boolean", required: true, value: true },
+  ] }), actions(), () => undefined, "zh");
+  const deletionLabels = deletion.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(deletionLabels.some(label => label.includes("删除此共享服务及其已保存引用")));
+  assert.ok(deletionLabels.some(label => label.includes("已有自定义 MCP 服务")));
+  assert.ok(!deletionLabels.some(label => /Existing custom MCP server|Delete this shared server/u.test(label)));
+  const deletionDiff = deletion.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(label => label.children.join(""));
+  assert.ok(deletionDiff.includes("已有自定义 MCP 服务"));
+  assert.ok(deletionDiff.includes("删除此共享服务及其已保存引用"));
+  assert.match(JSON.stringify(deletion.toJSON()), /删除自定义 MCP 服务/u);
+  await act(async () => deletion.unmount());
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
