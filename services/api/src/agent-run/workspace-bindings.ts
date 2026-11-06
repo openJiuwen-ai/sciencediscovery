@@ -185,7 +185,7 @@ export function createWorkspaceExecutionBindings(
       result = { runnerId, checkedAt: capability.checkedAt ?? new Date().toISOString(), connected: true, ready,
         reason: ready ? "ready" : capability.detail || capability.reason || "Runner execution readiness is unknown",
         capability,
-        suggestions: ready ? [] : [capability.shell?.available === false
+        suggestions: ready && capability.shell?.available !== false ? [] : [capability.shell?.available === false
           ? `${capability.shell.unavailableReason ?? "The managed shell environment is unavailable"}. Recreate or update the starter environment on the target Runner to repair managed Bash and its required utilities.`
           : capability.reason === "dependency-unavailable"
           ? "Install or repair the sandbox executable on the target Runner; check its configured path."

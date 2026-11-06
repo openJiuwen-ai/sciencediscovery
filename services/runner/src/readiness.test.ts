@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { RunnerReadiness } from "./readiness.js";
 import { createRunnerServer, loadRunnerConfig } from "./server.js";
 
@@ -45,6 +47,14 @@ test("a missing sandbox executable says how to install it, in at most three line
   for (const detail of [bubblewrap.detail, seatbelt.detail]) assert.ok((detail ?? "").split("\n").length <= 3);
 });
 
+test("none-provider readiness without a managed shell probe stays ready", async () => {
+  const capability = await new RunnerReadiness("none", "unused").get();
+  assert.equal(capability.ready, true);
+  assert.equal(capability.dependencyAvailable, true);
+  assert.equal(capability.reason, "ready");
+  assert.equal(capability.shell, undefined);
+});
+
 test("none-provider readiness reports and rechecks its managed shell contract", async () => {
   let available = false;
   const readiness = new RunnerReadiness("none", "unused", async () => ({
@@ -54,8 +64,10 @@ test("none-provider readiness reports and rechecks its managed shell contract", 
     ...(available ? {} : { unavailableReason: "Managed Bash is missing required utilities: head" }),
   }));
   const missing = await readiness.get();
-  assert.equal(missing.ready, false);
-  assert.equal(missing.reason, "dependency-unavailable");
+  assert.equal(missing.ready, true);
+  assert.equal(missing.dependencyAvailable, true);
+  assert.equal(missing.reason, "ready");
+  assert.equal(missing.detail, "Managed Bash is missing required utilities: head");
   assert.equal(missing.shell?.available, false);
   available = true;
   const repaired = await readiness.get();
@@ -87,3 +99,44 @@ test("management remains reachable and execution fails closed without a sandbox"
     assert.equal(result.body.code, "EXECUTION_UNAVAILABLE");
   }
 });
+
+for (const unavailableReason of [
+  "Managed Bash is unavailable: ENOENT",
+  "Scientific environments are disabled by configuration",
+]) {
+  test(`none-provider shell gap only blocks shell routes: ${unavailableReason}`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "runner-shell-gap-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const authToken = randomUUID();
+    const readiness = new RunnerReadiness("none", "unused", async () => ({
+      available: false, name: "bash", utilities: [], unavailableReason,
+    }));
+    const server = createRunnerServer({ ...loadRunnerConfig(), dataDir: root, authToken,
+      sandboxProvider: "none", scientificEnvsEnabled: false, npuBrokerEnabled: false },
+      undefined, undefined, undefined, undefined, undefined, undefined, readiness);
+    const request = (method: string, url: string) => new Promise<{ status: number; body: Record<string, unknown> }>(resolve => {
+      const input = Object.assign(Readable.from(["{}"]), {
+        method, url, headers: { authorization: `Bearer ${authToken}` },
+      });
+      let status = 0;
+      server.emit("request", input, {
+        writeHead(code: number) { status = code; },
+        end(body: string) { resolve({ status, body: JSON.parse(body) }); },
+      });
+    });
+    const capability = await request("POST", "/execution-capability");
+    assert.equal(capability.status, 200);
+    assert.equal(capability.body.ready, true);
+    for (const path of ["/execute-shell", "/shell-executions"]) {
+      const result = await request("POST", path);
+      assert.equal(result.status, 503);
+      assert.equal(result.body.code, "EXECUTION_UNAVAILABLE");
+      assert.equal(result.body.error, unavailableReason);
+    }
+    // An unsigned Python request reaches authentication rather than being
+    // rejected by shell readiness. No code is dispatched in this handler test.
+    const python = await request("POST", "/execute");
+    assert.equal(python.status, 401);
+    assert.equal(python.body.error, "Invalid or expired execution signature");
+  });
+}
