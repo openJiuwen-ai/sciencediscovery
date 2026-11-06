@@ -188,6 +188,19 @@ function memoryPasswordRequest(overrides: Partial<ConfigurationRequestView> = {}
     activation: { mode: "requires_restart", state: "not_requested" }, ...overrides });
 }
 
+test("CFG-X04d: a Neo4j password change row shows the localized label, not the raw field id", async () => {
+  for (const [locale, label] of [["en", "Neo4j password"], ["zh", "Neo4j 密码"]] as const) {
+    const renderer = await mount(memoryPasswordRequest({
+      changes: [{ field: "neo4jPassword", before: "Configured (write-only)", after: "Replace via secure user input; authentication unverified" }],
+    }), actions(), () => undefined, locale);
+    const diffLabels = renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(node => node.children.join(""));
+    assert.ok(diffLabels.includes(label));
+    assert.equal(diffLabels.includes("neo4jPassword"), false);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /neo4jPassword/);
+    await act(async () => renderer.unmount());
+  }
+});
+
 test("CFG-X04c: Neo4j secure input uses its password label and an operation change clears local plaintext", async () => {
   const renderer = await mount(memoryPasswordRequest(), actions(), () => undefined, "zh");
   assert.match(JSON.stringify(renderer.toJSON()), /Neo4j 密码/); assert.match(JSON.stringify(renderer.toJSON()), /密码操作/);
