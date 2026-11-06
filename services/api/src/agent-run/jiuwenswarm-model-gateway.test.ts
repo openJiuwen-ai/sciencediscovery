@@ -160,9 +160,10 @@ test("gateway rejects the image probe with the code openjiuwen classifies as no 
     // The exact body openjiuwen's image-modality probe sends: one image part
     // next to the text question, plus the reasoning-off switches from
     // `_THINKING_DISABLED_EXTRA_BODY` — including `reasoning` as an *object*,
-    // which the capability-control checks reject. The image vertex has to be
-    // classified before them, or a real probe would come back as a validation
-    // error the classifier does not recognise.
+    // which the capability-control checks reject. The image check keeps its
+    // position above those checks (and below the request-shape ones), so a real
+    // probe is still classified as a capability verdict rather than as the
+    // validation error that object would otherwise raise.
     const response = await post(g, {
       enable_thinking: false,
       max_tokens: 8,
@@ -189,6 +190,34 @@ test("gateway rejects the image probe with the code openjiuwen classifies as no 
     assert.equal(body.error.type, "model_gateway_error");
     assert.match(body.error.message, /images are not supported/);
     assert.equal(calls.length, 0, "a capability rejection must never reach the model");
+  } finally { await g.close(); }
+});
+
+test("a malformed request keeps its own diagnosis instead of the image verdict", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  const [image] = [{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }];
+  const messages = [{ role: "user", content: [image, { type: "text", text: "What color is this image?" }] }];
+  const diagnose = async (body: unknown) => {
+    const response = await post(g, body);
+    assert.equal(response.status, 400);
+    return (await response.json() as { error: { code?: string; message: string } }).error;
+  };
+  try {
+    // A request that is wrong in a way this gateway can name keeps naming it:
+    // answering "images are not supported" here would be cached by the probe as
+    // a capability verdict for a model whose request was merely misshapen.
+    const parameter = await diagnose({ messages, frequency_penalty: 1 });
+    assert.match(parameter.message, /Unsupported gateway parameters: frequency_penalty/);
+    assert.equal(parameter.code, undefined);
+    const completion = await diagnose({ messages, n: 2 });
+    assert.match(completion.message, /one completion only/);
+    assert.equal(completion.code, undefined);
+    // A message entry that is not an object used to reach the image check as-is
+    // and surface a `TypeError`; the shape check now reports it by name.
+    const shape = await diagnose({ messages: [null] });
+    assert.equal(shape.message, "Invalid gateway messages or tools");
+    assert.equal(calls.length, 0);
   } finally { await g.close(); }
 });
 
