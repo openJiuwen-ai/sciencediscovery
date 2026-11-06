@@ -157,6 +157,8 @@ function artifactView(result: JsonObject, sourceId: string, toolId: string, stat
 function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records", state: ProjectionState): JsonObject {
   const records = view[recordsKey] as JsonObject[];
   let omitted = 0;
+  let payloadTruncated = false;
+  const payloadMarker = { truncated: true, reason: "maximum size reached" };
   while (utf8Bytes(view) > MCP_VIEW_BUDGET) {
     state.lossy = true;
     const withAbstract = records
@@ -175,6 +177,20 @@ function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records", sta
       withAuthors.authorsTruncated = true;
       continue;
     }
+    // Reduce business payloads before sacrificing record identity. Per-field
+    // limits alone cannot bound a wide structured document or reference list.
+    const largestPayload = [
+      ...records.flatMap(record => ["structuredData", "crossReferences"].map(key => ({ owner: record, key }))),
+      { owner: view, key: "data" },
+    ].filter(({ owner, key }) => owner[key] !== undefined && owner[key] !== payloadMarker)
+      .map(candidate => ({ ...candidate, bytes: utf8Bytes(candidate.owner[candidate.key]) }))
+      .filter(candidate => candidate.bytes > utf8Bytes(payloadMarker))
+      .toSorted((left, right) => right.bytes - left.bytes)[0];
+    if (largestPayload) {
+      largestPayload.owner[largestPayload.key] = payloadMarker;
+      payloadTruncated = true;
+      continue;
+    }
     if (records.length > 1) {
       records.pop();
       omitted += 1;
@@ -187,12 +203,16 @@ function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records", sta
     view.truncated = true;
   }
   const recordsTruncated = records.some((record) => record.abstractTruncated === true || record.authorsTruncated === true);
-  if (recordsTruncated) view.truncated = true;
+  if (recordsTruncated || payloadTruncated) view.truncated = true;
   if (view.truncated === true) {
     const detail = view.sourceId === "arxiv" ? " Use get_paper with an arXiv identifier when a full abstract is needed." : "";
     view.instruction = view.hasMore === true
       ? `Use nextOffset to request the next result page.${detail}`
       : `Refine the query or lower the result limit.${detail}`;
+    if (payloadTruncated) {
+      view.instruction = "Some evidence was omitted to fit the model-view budget. See _retainedOutput for recovery availability and instructions."
+        + (view.hasMore === true ? " Use nextOffset to request the next result page." : "");
+    }
   }
   if (utf8Bytes(view) <= MCP_VIEW_BUDGET) return view;
   return {
