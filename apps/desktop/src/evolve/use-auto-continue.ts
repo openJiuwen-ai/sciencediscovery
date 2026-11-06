@@ -49,24 +49,38 @@ export function lastAnswer(run: RunStreamState): string | undefined {
 }
 
 /** What one carried-forward ending is remembered by: the session it ended in,
- *  the step it stopped on, and the words it stopped with.
+ *  the design it belongs to, and the step it stopped on.
  *
  *  The step alone is not enough. A second no-confirm design in the same
  *  conversation can end on the same step number — both stop at "checkpoint
  *  1/4" — and a watermark that only knew the step would read that as a card
  *  already answered, leaving the new design stalled on a card with nothing to
- *  press. The answer is what makes the two endings different events; the same
- *  card written twice is still one reply, and is still refused.
+ *  press.
+ *
+ *  The answer is not enough either, which is why it is not in the key. Keying
+ *  on it made the two designs distinguishable, but it also made every
+ *  *reworded* repeat of the same step a new ending: a model that ends its turn
+ *  on the same card with a different number in it is answered again, and again,
+ *  for as long as it keeps rewording — an unattended loop of paid turns that
+ *  never advances. The design is the anchor that does not move: `${design}:1`
+ *  names one step of one design, whatever words it was written with, and a new
+ *  `/evolve-design` names a different one.
  */
 export function autoContinueKey(
   sessionId: string | undefined,
+  design: string | undefined,
   step: number,
-  answer: string,
 ): string {
-  return `${sessionId ?? ""}\u0000${step}\u0000${answer}`;
+  return `${sessionId ?? ""}\u0000${design ?? ""}\u0000${step}`;
 }
 
 export interface AutoContinueInput {
+  /** Which design conversation this is: the id of the last user-authored
+   *  `/evolve-design` command in the transcript. It is what a carried step is
+   *  remembered against, so a reworded repeat of step 1 is refused while a
+   *  second design's step 1 is not. Absent until the command has been
+   *  persisted — the check is still per-session and per-step until then. */
+  design?: string;
   /** Whether a turn is in flight. The transition to `false` is the signal that
    *  one just ended. */
   running: boolean;
@@ -76,12 +90,13 @@ export interface AutoContinueInput {
   sessionId?: string;
 }
 
-export function useAutoContinue({ running, run, send, sessionId }: AutoContinueInput): void {
+export function useAutoContinue({ design, running, run, send, sessionId }: AutoContinueInput): void {
   const wasRunning = useRef(false);
   /** The ending already carried forward, as `autoContinueKey` spells it. A
-   *  model that ends on the same card twice is not answered twice — that
-   *  would be a loop with a paid model call in it — while a new design that
-   *  happens to stop on the same step number still is. */
+   *  model that ends on the same step twice — reworded or not — is not
+   *  answered twice, which would be a loop with a paid model call in it,
+   *  while a new design that happens to stop on the same step number still
+   *  is. */
   const carried = useRef<string | undefined>(undefined);
   // Read at fire time so a new `send` identity does not re-run the check.
   const latestSend = useRef(send);
@@ -102,9 +117,9 @@ export function useAutoContinue({ running, run, send, sessionId }: AutoContinueI
     if (answer === undefined) return;
     const next = trailingAutoStep(answer);
     if (next === undefined) return;
-    const key = autoContinueKey(sessionId, next.step, answer);
+    const key = autoContinueKey(sessionId, design, next.step);
     if (carried.current === key) return;
     carried.current = key;
     latestSend.current(TEXT.evolve.checkpoint.autoContinue(next.step, next.total));
-  }, [run, running, sessionId]);
+  }, [design, run, running, sessionId]);
 }

@@ -95,6 +95,7 @@ test("a second design ending on the same step is carried forward too", async () 
   let renderer: ReturnType<typeof create> | undefined;
   await act(async () => {
     renderer = create(createElement(Harness, {
+      design: "design-1",
       running: false,
       run: emptyRunStream(),
       send,
@@ -102,14 +103,15 @@ test("a second design ending on the same step is carried forward too", async () 
     }));
   });
 
-  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
-  await mount(renderer!, { running: false, run: ended(card("度量")), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: false, run: ended(card("度量")), send, sessionId: "s" });
   assert.equal(sent.length, 1);
 
-  // A new design in the same conversation stops on the same step number. The
-  // step was already carried once, but this ending is a different one.
-  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
-  await mount(renderer!, { running: false, run: ended(card("冻结")), send, sessionId: "s" });
+  // A new design in the same conversation stops on the same step number, even
+  // with the same words. The step was already carried once, but this ending
+  // belongs to a different design.
+  await mount(renderer!, { design: "design-2", running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-2", running: false, run: ended(card("度量")), send, sessionId: "s" });
   assert.equal(sent.length, 2);
   renderer!.unmount();
 });
@@ -120,6 +122,7 @@ test("the same ending is carried forward once", async () => {
   let renderer: ReturnType<typeof create> | undefined;
   await act(async () => {
     renderer = create(createElement(Harness, {
+      design: "design-1",
       running: false,
       run: emptyRunStream(),
       send,
@@ -127,19 +130,50 @@ test("the same ending is carried forward once", async () => {
     }));
   });
 
-  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
-  await mount(renderer!, { running: false, run: ended(card("度量")), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: false, run: ended(card("度量")), send, sessionId: "s" });
   // The same words again would be another paid call answering a card that has
   // already been answered.
-  await mount(renderer!, { running: true, run: emptyRunStream(), send, sessionId: "s" });
-  await mount(renderer!, { running: false, run: ended(card("度量")), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: false, run: ended(card("度量")), send, sessionId: "s" });
   assert.equal(sent.length, 1);
   renderer!.unmount();
 });
 
-test("the watermark names the session, the step and the answer", () => {
-  assert.equal(autoContinueKey("s", 1, "a"), autoContinueKey("s", 1, "a"));
-  assert.notEqual(autoContinueKey("s", 1, "a"), autoContinueKey("s", 1, "b"));
-  assert.notEqual(autoContinueKey("s", 1, "a"), autoContinueKey("s", 2, "a"));
-  assert.notEqual(autoContinueKey("s", 1, "a"), autoContinueKey("t", 1, "a"));
+test("a reworded repeat of the same step is the same step", async () => {
+  // Keying the watermark on the answer made two designs distinguishable, and
+  // also made every rewording of one step a new ending: the model writes the
+  // card again with a different number in it, is answered again, and the
+  // design turns into an unattended loop of paid turns that never advances.
+  const sent: string[] = [];
+  const send = (text: string) => sent.push(text);
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Harness, {
+      design: "design-1",
+      running: false,
+      run: emptyRunStream(),
+      send,
+      sessionId: "s",
+    }));
+  });
+
+  await mount(renderer!, { design: "design-1", running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: false, run: ended(card("度量：压缩比")), send, sessionId: "s" });
+  assert.equal(sent.length, 1);
+
+  await mount(renderer!, { design: "design-1", running: true, run: emptyRunStream(), send, sessionId: "s" });
+  await mount(renderer!, { design: "design-1", running: false, run: ended(card("度量：压缩比 0.8")), send, sessionId: "s" });
+  assert.equal(sent.length, 1);
+  renderer!.unmount();
+});
+
+test("the watermark names the session, the design and the step", () => {
+  assert.equal(autoContinueKey("s", "d", 1), autoContinueKey("s", "d", 1));
+  assert.notEqual(autoContinueKey("s", "d", 1), autoContinueKey("s", "d", 2));
+  assert.notEqual(autoContinueKey("s", "d", 1), autoContinueKey("s", "e", 1));
+  assert.notEqual(autoContinueKey("s", "d", 1), autoContinueKey("t", "d", 1));
+  // An anchor that has not been persisted yet still separates designs from a
+  // session and a step.
+  assert.notEqual(autoContinueKey("s", undefined, 1), autoContinueKey("s", "d", 1));
 });
