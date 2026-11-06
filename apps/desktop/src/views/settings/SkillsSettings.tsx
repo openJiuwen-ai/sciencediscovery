@@ -218,6 +218,9 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                           </Tag>
                         </strong>
                         <small>{skill.description}</small>
+                        <span className={`skill-source-badge ${skill.source === "built-in" ? "is-sd" : "is-managed"}`}>
+                          {SOURCE_LABEL[skill.source]}
+                        </span>
                         {open ? (
                           <span className="settings-detail">
                             <span className="settings-detail-heading">
@@ -255,7 +258,9 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                         </Tag>
                       </strong>
                       <small>{skill.description}</small>
-                      <small>{skill.source === "builtin" ? TEXT.settings.skills.source.jiuwenBuiltIn : TEXT.settings.skills.source.jiuwenLocal}</small>
+                      <span className={`skill-source-badge ${skill.source === "builtin" ? "is-jiuwenswarm" : "is-managed"}`}>
+                        {skill.source === "builtin" ? TEXT.settings.skills.source.jiuwenBuiltIn : TEXT.settings.skills.source.jiuwenLocal}
+                      </span>
                     </div>
                     <div className="settings-card-actions">
                       <Switch
