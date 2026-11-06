@@ -66,8 +66,11 @@ test("Desktop failure cards merge timeout records and remain readable after relo
   });
   const openSession = async () => {
     await page.goto("/");
-    await page.locator(".side-project-toggle").filter({ hasText: fixture!.project.name }).click();
-    await page.locator(".side-session").filter({ hasText: fixture!.session.title }).click();
+    const project = page.locator(".side-project-toggle").filter({ hasText: fixture!.project.name });
+    await expect(project).toBeVisible();
+    if (await project.getAttribute("aria-expanded") === "false") await project.click();
+    const projectGroup = page.locator(".side-project").filter({ has: project }).locator("..");
+    await projectGroup.locator(".side-session").filter({ hasText: fixture!.session.title }).click();
     await expect(page.locator("#composer-textarea")).toBeEnabled();
   };
   const submit = async (text: string) => {
@@ -82,6 +85,7 @@ test("Desktop failure cards merge timeout records and remain readable after relo
       projectName: `Desktop cards ${Date.now()}`, sessionTitle: "Failure card checks",
       model: { baseUrl: `http://127.0.0.1:${(model.address() as AddressInfo).port}/v1`, apiToken: randomUUID(), model: "desktop-card-local", name: `Desktop card ${Date.now()}`, apiVariant: "openai" },
     });
+    await page.setViewportSize({ width: 1440, height: 900 });
     await openSession();
     await journey.step("运行超时只显示一张告警", "1440×900 下，失败摘要清晰，原始诊断默认折叠，同一次超时不再显示两张卡片。", async () => {
       await submit("Please answer the first timeout check");
@@ -107,10 +111,11 @@ test("Desktop failure cards merge timeout records and remain readable after relo
       if (!box) throw new Error("Failure card has no visible bounds");
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(390);
-      await page.keyboard.press("Enter");
-      await expect(cards.locator("pre")).toBeHidden();
     });
     await journey.step("刷新并再次失败", "重新打开会话后仍只有一张卡片；第二次超时产生第二张卡片，两次失败不会误合并。", async () => {
+      await cards.locator("summary").focus();
+      await page.keyboard.press("Enter");
+      await expect(cards.locator("pre")).toBeHidden();
       await page.setViewportSize({ width: 1440, height: 900 });
       await openSession();
       await expect(cards).toHaveCount(1);
