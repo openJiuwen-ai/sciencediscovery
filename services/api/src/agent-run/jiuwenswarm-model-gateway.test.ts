@@ -499,6 +499,74 @@ test("a finished response with unparseable arguments withholds ALL its calls for
   }
 });
 
+test("clean EOF inside tool arguments withholds every call, preserves missing usage and allows a fresh correction", async () => {
+  for (const stream of [false, true]) {
+    let calls = 0;
+    const corrected = { id: "corrected", type: "function" as const,
+      function: { name: "run_shell", arguments: '{"command":"printf corrected"}' } };
+    const g = await gateway(async () => ++calls === 1 ? answer({
+      completionObserved: false, usage: undefined,
+      streamDiagnostics: { protocol: "openai-chat-completions", unparseableSsePayloads: 0, toolCallDeltasWithoutIndex: 0 },
+      assistantMessage: { role: "assistant", content: "", tool_calls: [
+        { id: "valid", type: "function", function: { name: "read_file", arguments: '{"path":"notes.md"}' } },
+        { id: "bad", type: "function", function: { name: "run_shell", arguments: '{"command":"unfinished' } },
+      ] },
+      toolCalls: [{ id: "valid", name: "read_file", args: { path: "notes.md" } },
+        { id: "bad", name: "run_shell", args: {}, argsParseError: "Unterminated string in JSON" }],
+    }) : answer({ completionObserved: true,
+      assistantMessage: { role: "assistant", content: "", tool_calls: [corrected] },
+      toolCalls: [{ id: "corrected", name: "run_shell", args: { command: "printf corrected" } }],
+    }));
+    const payloadsOf = (wire: string) => stream
+      ? wire.split("\n\n").filter(s => s.startsWith("data: {")).map(s => JSON.parse(s.slice(6))) : [JSON.parse(wire)];
+    try {
+      const first = await post(g, { stream, messages: [{ role: "user", content: "go" }] });
+      assert.equal(first.status, 200);
+      const wire = await first.text();
+      const payloads = payloadsOf(wire);
+      assert.match(wire, /invalid_tool_arguments:tool_calls_withheld/);
+      assert.equal(payloads.at(-1).choices[0].finish_reason, "length");
+      for (const payload of payloads) {
+        assert.equal(payload.error, undefined);
+        assert.equal((payload.choices[0].delta ?? payload.choices[0].message).tool_calls, undefined);
+        assert.equal(payload.usage, undefined, "missing provider usage must not become fabricated zero usage");
+      }
+      assert.deepEqual(g.lastFailure()?.tools, ["run_shell"]);
+      assert.equal(calls, 1, "only the existing Swarm boundary may request a correction");
+      const next = await post(g, { stream, messages: [{ role: "user",
+        content: "[Tool argument recovery 1/2; invalid_tool_arguments] Re-issue the call." }] });
+      const correctedPayloads = payloadsOf(await next.text());
+      assert.equal(next.status, 200);
+      assert.equal(correctedPayloads.at(-1).choices[0].finish_reason, "tool_calls");
+      const forwarded = correctedPayloads.flatMap(p => (p.choices[0].delta ?? p.choices[0].message).tool_calls ?? []);
+      assert.equal(forwarded.length, 1);
+      assert.equal(forwarded[0].function.arguments, corrected.function.arguments);
+      assert.equal(g.lastFailure(), undefined);
+    } finally { await g.close(); }
+  }
+});
+
+test("missing completion still rejects valid calls, corrupt SSE and requesters without a recovery boundary", async () => {
+  for (const kind of ["valid-call", "corrupt-sse", "no-boundary", "housekeeping"] as const) {
+    const g = await gatewayWithLifecycle(async () => answer({ completionObserved: false,
+      toolCalls: [{ id: "call", name: "run_shell", args: { command: "printf must-not-run" },
+        ...(kind === "valid-call" ? {} : { argsParseError: "Unterminated string in JSON" }) }],
+      ...(kind === "corrupt-sse" ? { streamDiagnostics: { protocol: "openai-chat-completions" as const, unparseableSsePayloads: 1 } } : {}),
+    }), { progress() {}, recoversWithheldCalls: kind !== "no-boundary" });
+    try {
+      for (const stream of [false, true]) {
+        const response = await fetch(`${g.url}/chat/completions`, { method: "POST", headers: {
+          authorization: `Bearer ${g.token}`, "content-type": "application/json",
+          ...(kind === "housekeeping" ? { "x-sciencediscovery-model-purpose": "housekeeping" } : {}),
+        }, body: JSON.stringify({ stream, messages: [{ role: "user", content: "go" }] }) });
+        const wire = await response.text();
+        assert.match(wire, /Model stream ended without a completion event/, kind);
+        assert.doesNotMatch(wire, /tool_calls_withheld|must-not-run/, kind);
+      }
+    } finally { await g.close(); }
+  }
+});
+
 test("the withheld notice quotes no argument text, even where V8's parser message would", async () => {
   let message = "";
   try { JSON.parse('{"command": cat secret-value}'); } catch (error) { message = (error as Error).message; }

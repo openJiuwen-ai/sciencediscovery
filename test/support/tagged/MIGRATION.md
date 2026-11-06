@@ -26,7 +26,7 @@ against the single target `os=linux, arch=amd64`.
 partition it: `l1`, `ut` (excluding L1), `st` and mocked `e2e` cover it exactly once.
 The new tier dimension defaults to L2, preserving the existing hermetic scope.
 L3 adds seven basic real cases; L4 adds all ten previously eligible nightly
-cases. L5 adds all 50 public BiomniBench-DA tasks and requires complete score
+cases. L5 adds the 45 active public BiomniBench-DA tasks and requires complete score
 and resource metrics to create a baseline candidate; see
 [CI operations](../../../.ci/README.md).
 
