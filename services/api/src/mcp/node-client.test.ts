@@ -15,7 +15,7 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -471,11 +471,136 @@ test("stdio proxy overlay follows the resolved policy", () => {
   }
 });
 
-test("bundled python MCP servers resolve to a configured interpreter", () => {
+test("bundled python MCP servers resolve a configured interpreter", () => {
   assert.equal(resolveMcpPython({ SCIENCE_AGENT_GATEWAY_PYTHON_PATH: "/opt/py/bin/python" }), "/opt/py/bin/python");
-  // With nothing configured and no provisioned environment, the bare command
-  // is the documented last resort rather than a hard failure.
-  assert.equal(resolveMcpPython({}), "python");
+});
+
+/** Create `<dataDir>/envs/<name>/{bin,Scripts}/python` and return its path. */
+function provisionVenv(dataDir: string, name: string): string {
+  const executable = process.platform === "win32" ? "python.exe" : "python";
+  const binDir = join(dataDir, "envs", name, process.platform === "win32" ? "Scripts" : "bin");
+  mkdirSync(binDir, { recursive: true });
+  const python = join(binDir, executable);
+  writeFileSync(python, "", { mode: 0o755 });
+  return python;
+}
+
+/** Run `body` with an empty temporary directory as the process cwd. */
+function inTemporaryCwd<T>(body: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-cwd-"));
+  const previous = process.cwd();
+  try {
+    process.chdir(dir);
+    return body(dir);
+  } finally {
+    process.chdir(previous);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("gateway venv provisioned under the API data dir is resolved without environment hints", () => {
+  // Issue #952: the reporter started the API from the repository root with
+  // only SCIENCE_AGENT_* overrides, so the provisioned `<data dir>/envs/gateway`
+  // venv existed while the resolver looked at `data/` and `services/gateway`
+  // only, fell back to a bare `python`, and every bundled connector died with
+  // `spawn python ENOENT`.
+  const dataDir = mkdtempSync(join(tmpdir(), "mcp-data-dir-"));
+  try {
+    const gateway = provisionVenv(dataDir, "gateway");
+    assert.equal(resolveMcpPython({ PATH: "" }, dataDir), gateway);
+    assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_DATA_DIR: dataDir }), gateway);
+    assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_ENVS_ROOT: join(dataDir, "envs") }), gateway);
+    // An operator value stays authoritative over any provisioned venv.
+    const configured = join(dataDir, "custom-python");
+    assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_GATEWAY_PYTHON_PATH: configured }, dataDir), configured);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+  // scripts/start-stack.mjs and packaged installs provision `envs/sd-services`.
+  const sharedDir = mkdtempSync(join(tmpdir(), "mcp-sd-services-"));
+  try {
+    const shared = provisionVenv(sharedDir, "sd-services");
+    assert.equal(resolveMcpPython({ PATH: "" }, sharedDir), shared);
+  } finally { rmSync(sharedDir, { recursive: true, force: true }); }
+});
+
+test("the default data dir and legacy layouts are still probed from the process cwd", () => {
+  inTemporaryCwd((root) => {
+    const current = provisionVenv(join(root, ".sciencediscovery-data"), "gateway");
+    assert.equal(resolveMcpPython({ PATH: "" }), current);
+  });
+  // Pre-rename checkouts kept the gateway venv at `data/envs/gateway`.
+  inTemporaryCwd((root) => {
+    const legacy = provisionVenv(join(root, "data"), "gateway");
+    assert.equal(resolveMcpPython({ PATH: "" }), legacy);
+  });
+});
+
+test("a python on PATH is resolved to its absolute path, and a missing one fails fast", () => {
+  const pathDir = mkdtempSync(join(tmpdir(), "mcp-path-"));
+  const emptyDataDir = mkdtempSync(join(tmpdir(), "mcp-no-venv-"));
+  try {
+    const executable = process.platform === "win32" ? "python.exe" : "python";
+    const onPath = join(pathDir, executable);
+    writeFileSync(onPath, "", { mode: 0o755 });
+    assert.equal(resolveMcpPython({ PATH: pathDir }, emptyDataDir), onPath);
+    // Nothing configured, nothing provisioned, no `python` on PATH: fail with
+    // the operator's remedy instead of spawning a bare `python` that ENOENTs.
+    inTemporaryCwd(() => {
+      assert.throws(
+        () => resolveMcpPython({ PATH: "" }, emptyDataDir),
+        /SCIENCE_AGENT_GATEWAY_PYTHON_PATH[\s\S]*start-stack\.sh/,
+      );
+    });
+  } finally {
+    rmSync(pathDir, { recursive: true, force: true });
+    rmSync(emptyDataDir, { recursive: true, force: true });
+  }
+});
+
+test("a bundled python server logs the interpreter it resolved, or why it could not", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-python-log-"));
+  const configPath = join(dir, "extensions_config.json");
+  writeFileSync(configPath, JSON.stringify({ mcpServers: {
+    biomed: {
+      args: ["-m", "sciencediscovery_gateway.public_biomed_mcp"],
+      command: "python",
+      enabled: true,
+      type: "stdio",
+    },
+  } }));
+  const request = invokeRequest({ text: "x" });
+  request.serverId = "biomed";
+  request.toolName = "pubmed_search";
+  request.execution.retryPolicy.maxAttempts = 1;
+  try {
+    const missing = join(dir, "absent-python");
+    const resolved = recordingLogger();
+    const resolvedClient = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, resolved.logger,
+      { resolvePython: () => missing });
+    try {
+      assert.equal((await resolvedClient.invoke(request)).isError, true);
+    } finally { await resolvedClient.close(); }
+    const started = resolved.events.find((entry) => entry.event === "mcp_connection_started");
+    assert.equal(started?.fields.python, missing);
+    // The failure record names the interpreter that could not be spawned.
+    assert.match(
+      JSON.stringify(resolved.events.find((entry) => entry.event === "mcp_connection_failed")),
+      /absent-python/,
+    );
+
+    const unresolved = recordingLogger();
+    const unresolvedClient = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, unresolved.logger,
+      { resolvePython: () => { throw new Error("No Python interpreter for the bundled MCP servers"); } });
+    try {
+      assert.equal((await unresolvedClient.invoke(request)).isError, true);
+    } finally { await unresolvedClient.close(); }
+    assert.equal(unresolved.events.find((entry) => entry.event === "mcp_connection_started")?.fields.python, "unresolved");
+    assert.match(
+      JSON.stringify(unresolved.events.find((entry) => entry.event === "mcp_connection_failed")),
+      /No Python interpreter for the bundled MCP servers/,
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 

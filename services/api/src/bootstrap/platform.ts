@@ -219,7 +219,7 @@ export function createPlatformServices(
   const connectorPlugins = createPluginScope(builtinMcpSourcePlugins, dependencies.disabledConnectorPlugins);
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
   const mcpGateway: McpTransportClient = dependencies.mcpTransport
-    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
+    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog, { dataDir: config.dataDir });
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);

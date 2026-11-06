@@ -29,8 +29,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { statSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -123,19 +123,83 @@ export function proxyEnvOverlay(proxy: ResolvedProxy | undefined): Record<string
   return overlay;
 }
 
-/** Resolve the interpreter for the bundled Python MCP servers. */
-export function resolveMcpPython(env: NodeJS.ProcessEnv = process.env): string {
+/** Data dir `bootstrap/config.ts` defaults to when the API sets no override. */
+const DEFAULT_DATA_DIR = ".sciencediscovery-data";
+
+/** The two interpreter names a venv directory may expose. */
+function venvInterpreters(envDir: string): string[] {
+  const exe = process.platform === "win32" ? "python.exe" : "python";
+  return [join(envDir, "bin", exe), join(envDir, "Scripts", exe)];
+}
+
+/** True when `file` is a regular file this process is allowed to execute. */
+function runnableFile(file: string): boolean {
+  try {
+    const stat = statSync(file);
+    if (!stat.isFile()) return false;
+    return process.platform === "win32" || (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Absolute path of the `python` a bare spawn would pick up, if any. */
+function interpreterOnPath(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = (env.PATH ?? env.Path ?? "").trim();
+  if (!raw) return undefined;
+  const names = process.platform === "win32" ? ["python.exe", "python"] : ["python"];
+  for (const dir of raw.split(delimiter)) {
+    if (!dir) continue;
+    for (const name of names) {
+      const candidate = join(dir, name);
+      if (runnableFile(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Interpreter for the bundled Python MCP servers (biomed, UniProt, LLM Wiki).
+ *
+ * An explicit `SCIENCE_AGENT_GATEWAY_PYTHON_PATH` always wins. Otherwise the
+ * venvs this repository provisions are probed under the API's real data dir
+ * (`<data dir>/envs/gateway` from `scripts/start-stack.sh`, `<data dir>/envs/
+ * sd-services` from `scripts/start-stack.mjs` and packaged installs,
+ * `$SCIENCE_AGENT_ENVS_ROOT` for Docker), then the pre-rename `data/` and
+ * `services/gateway/.venv` layouts, and last the `python` already on PATH that
+ * this function used to return unchecked. When nothing is runnable the
+ * resolver fails fast instead of returning a bare `python` that only surfaces
+ * as `spawn python ENOENT` inside the model's tool error.
+ */
+export function resolveMcpPython(env: NodeJS.ProcessEnv = process.env, dataDir?: string): string {
   const configured = env.SCIENCE_AGENT_GATEWAY_PYTHON_PATH?.trim();
   if (configured) return configured;
-  const dataDir = env.SCIENCE_AGENT_DATA_DIR?.trim();
-  for (const candidate of [
-    ...(dataDir ? [resolve(process.cwd(), dataDir, "envs/gateway/bin/python")] : []),
-    resolve(process.cwd(), "data/envs/gateway/bin/python"),
-    resolve(process.cwd(), "services/gateway/.venv/bin/python"),
-  ]) {
-    if (existsSync(candidate)) return candidate;
+  const envsRoots = [
+    ...(dataDir?.trim() ? [resolve(process.cwd(), dataDir.trim(), "envs")] : []),
+    ...(env.SCIENCE_AGENT_DATA_DIR?.trim() ? [resolve(process.cwd(), env.SCIENCE_AGENT_DATA_DIR.trim(), "envs")] : []),
+    resolve(process.cwd(), DEFAULT_DATA_DIR, "envs"),
+    ...(env.SCIENCE_AGENT_ENVS_ROOT?.trim() ? [resolve(process.cwd(), env.SCIENCE_AGENT_ENVS_ROOT.trim())] : []),
+    resolve(process.cwd(), "data", "envs"),
+  ];
+  const candidates = [
+    ...envsRoots.flatMap((root) => [
+      ...venvInterpreters(join(root, "gateway")),
+      ...venvInterpreters(join(root, "sd-services")),
+    ]),
+    ...venvInterpreters(resolve(process.cwd(), "services/gateway/.venv")),
+  ];
+  for (const candidate of candidates) {
+    if (runnableFile(candidate)) return candidate;
   }
-  return "python";
+  const onPath = interpreterOnPath(env);
+  if (onPath) return onPath;
+  throw new Error(
+    "No Python interpreter for the bundled MCP servers: the gateway environment that provides "
+    + "'sciencediscovery_gateway' is missing and no 'python' is on PATH. Set "
+    + "SCIENCE_AGENT_GATEWAY_PYTHON_PATH to that interpreter, or provision the environment with "
+    + "scripts/start-stack.sh (or `uv sync` in services/gateway) and start the API through it. "
+    + `Probed: ${[...new Set(candidates)].join(", ")}.`,
+  );
 }
 
 function classifyError(message: string): { retryAfterMs?: number; status: McpAttemptStatus } {
@@ -219,6 +283,13 @@ interface ServerSession {
   stderrTail?: StderrTail;
 }
 
+export interface McpNodeClientOptions {
+  /** Data dir the API resolved; the provisioned gateway venv lives under `<dataDir>/envs`. */
+  dataDir?: string;
+  /** Interpreter lookup override (tests, or an embedder with its own layout). */
+  resolvePython?: (env: NodeJS.ProcessEnv, dataDir?: string) => string;
+}
+
 export class McpNodeClient {
   private readonly sessions = new Map<string, ServerSession>();
   private readonly connecting = new Map<string, Promise<Client>>();
@@ -228,7 +299,12 @@ export class McpNodeClient {
     private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig,
     private readonly oauth?: McpOAuthManager,
     private readonly logger: OperationalLogger = apiLog,
+    private readonly options: McpNodeClientOptions = {},
   ) {}
+
+  private resolvePython(): string {
+    return (this.options.resolvePython ?? resolveMcpPython)(process.env, this.options.dataDir);
+  }
 
   sourceScope(serverId: string): string {
     const server = this.currentConfig().servers[serverId];
@@ -295,6 +371,21 @@ export class McpNodeClient {
         : "configuration_changed";
     if (existing) await this.closeSession(serverId, reason);
 
+    // A bundled Python server needs the provisioned gateway venv. Resolve the
+    // interpreter before the "started" record so both records name the
+    // interpreter that was actually chosen (issue #952).
+    const bundledPython = server.transport === "stdio" && Boolean(server.command)
+      && (server.command === "python" || server.command === "python3")
+      && server.args.some((arg) => arg.startsWith("sciencediscovery_gateway."));
+    let resolvedPython: string | undefined;
+    let pythonFailure: Error | undefined;
+    if (bundledPython) {
+      try {
+        resolvedPython = this.resolvePython();
+      } catch (error) {
+        pythonFailure = error instanceof Error ? error : new Error(String(error));
+      }
+    }
     const started = Date.now();
     const connectionFields = {
       reason,
@@ -303,7 +394,10 @@ export class McpNodeClient {
       ...proxyFields(this.proxies[serverId]),
       proxyApplied: proxyApplied(server, this.proxies[serverId]),
       ...(server.transport === "stdio"
-        ? { command: server.command ? resolve(server.command).split(/[\\/]/).at(-1) : "" }
+        ? {
+          command: server.command ? resolve(server.command).split(/[\\/]/).at(-1) : "",
+          ...(bundledPython ? { python: resolvedPython ?? "unresolved" } : {}),
+        }
         : endpointFields(server.url)),
     };
     this.logger.info("mcp_connection_started", connectionFields);
@@ -326,11 +420,8 @@ export class McpNodeClient {
       const authorizedFetch = this.oauth?.fetchFor(serverId);
       if (server.transport === "stdio") {
         if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
-        const bundledPython = (server.command === "python" || server.command === "python3")
-          && server.args.some((arg) => arg.startsWith("sciencediscovery_gateway."));
-        const command = bundledPython
-          ? resolveMcpPython()
-          : server.command;
+        if (pythonFailure) throw pythonFailure;
+        const command = bundledPython ? (resolvedPython ?? server.command) : server.command;
         const overlay = proxyEnvOverlay(this.proxies[serverId]);
         const env: Record<string, string> = { ...getDefaultEnvironment() };
         for (const [key, value] of Object.entries(server.env)) {
