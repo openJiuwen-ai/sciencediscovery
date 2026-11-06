@@ -75,48 +75,42 @@ export function autoContinueKey(
   return `${sessionId ?? ""}\u0000${design ?? ""}\u0000${step}`;
 }
 
-/** The anchor a just-sent `/evolve-design` gets, from the anchor before it.
+/** The anchor of the design the open Session is on, from the Session itself.
  *
- *  The anchor has to name the new design *before the server has persisted the
- *  command*: the design's first turn can end on an auto card while its command
- *  is still only the pending message, and an anchor read from the transcript
- *  would still be the previous design's. The two would then share a watermark
- *  — `(design-1, step 2)` — and the second design's first card would be
- *  refused as already answered, which is the pace switch failing silently.
+ *  Counted rather than named: the anchor is only ever compared with the
+ *  previous one, so all it has to be is stable within a design and different
+ *  between designs — a count of the `/evolve-design` commands in the
+ *  transcript is both, and, unlike a counter kept by this window, it cannot
+ *  outlive the Session or disagree with a design another client started.
  *
- *  A counter is enough because the anchor is only ever compared with the
- *  previous one: nothing outside this hook reads it, and it never has to name
- *  the command. An anchor restored from a transcript (a reload) is not
- *  `design-N`, so the first design started after it still gets `design-1`,
- *  which cannot equal it.
+ *  `pending` is the message being sent right now. A design's first turn can
+ *  end on an auto card while its command is still only that pending message —
+ *  the transcript is refreshed when the turn settles — so without it the
+ *  design's first ending would be keyed against the previous design's number,
+ *  and a first turn that stopped on a step the previous design had already
+ *  carried would be refused: the pace switch failing silently.
+ *
+ *  The two cannot double-count: the transcript is not refreshed while a turn
+ *  streams, and `pending` is cleared in the same settle that writes the
+ *  command into it.
  */
-export function startedDesign(previous: string | undefined): string {
-  const count = Number(/^design-(\d+)$/.exec(previous ?? "")?.[1] ?? 0);
-  return `design-${count + 1}`;
-}
-
-/** The anchor after one message leaves the window.
- *
- *  Only a design command starts a design. The messages this hook sends to
- *  carry one forward are ordinary messages, and bumping the anchor for them
- *  would re-arm the loop the anchor exists to stop: every carried turn would
- *  be a "new design" and the next ending would always be answered.
- */
-export function designAnchorAfterSending(
-  previous: string | undefined,
-  content: string,
+export function designAnchor(
+  messages: ReadonlyArray<{ content: string; role: string }>,
+  pending?: string,
 ): string | undefined {
-  return isEvolveCommand(content) ? startedDesign(previous) : previous;
+  const persisted = messages.filter(
+    (message) => message.role === "user" && isEvolveCommand(message.content),
+  ).length;
+  const count = persisted + (pending !== undefined && isEvolveCommand(pending) ? 1 : 0);
+  return count === 0 ? undefined : `design-${count}`;
 }
 
 export interface AutoContinueInput {
-  /** Which design conversation this is. It is what a carried step is
-   *  remembered against, so a reworded repeat of step 1 is refused while a
-   *  second design's step 1 is not. `startedDesign` is what a command sent
-   *  from this window gets, immediately — before the server has persisted it;
-   *  a design restored from a transcript anchors on that command's id. Absent
-   *  only before any design is known, when the check is per-session and
-   *  per-step. */
+  /** Which design conversation this is, as `designAnchor` derives it: the
+   *  count of design commands the Session holds, plus the one being sent. It
+   *  is what a carried step is remembered against, so a reworded repeat of
+   *  step 1 is refused while a second design's step 1 is not. Absent only
+   *  before any design is known, when the check is per-session and per-step. */
   design?: string;
   /** Whether a turn is in flight. The transition to `false` is the signal that
    *  one just ended. */
