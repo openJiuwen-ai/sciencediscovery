@@ -574,6 +574,74 @@ test.describe("技能", () => {
     skill({ description: "画分子图", id: "skill-2", name: "分子绘图", resourceSummary: { bytes: 4, files: 3, kinds: {} } }),
   ];
 
+  test("JiuwenSwarm built-in and local switches work without ScienceDiscovery skills", async ({ page }, testInfo) => {
+    await installMockApi(page, {
+      models: MODELS,
+      jiuwenSwarmSkills: [
+        { name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" },
+        { name: "local-tool", description: "A local skill", enabled: false, source: "local" },
+      ],
+    });
+    let dialog: Locator;
+    await test.step("1. Open skills and identify JiuwenSwarm sources", async () => {
+      dialog = await openSettings(page, "技能");
+      await expect(dialog.locator(".settings-card")).toHaveCount(2);
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("JiuwenSwarm 内置");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("JiuwenSwarm 安装");
+    });
+    await test.step("2. Disable the built-in and enable the local skill", async () => {
+      await dialog.getByRole("switch", { name: "启用或停用「xlsx」" }).click();
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已停用");
+      await dialog.getByRole("switch", { name: "启用或停用「local-tool」" }).click();
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("已启用");
+      await page.screenshot({ path: testInfo.outputPath("jiuwenswarm-skills.png") });
+    });
+    await test.step("3. Reload and verify both saved switches", async () => {
+      await page.reload();
+      dialog = await openSettings(page, "技能");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已停用");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("已启用");
+    });
+  });
+
+  test("same-named skills use separate switches and bulk actions include built-ins", async ({ page }) => {
+    const mock = await installMockApi(page, {
+      models: MODELS,
+      skills: [skill({ id: "xlsx", name: "SD spreadsheets" })],
+      jiuwenSwarmSkills: [
+        { name: "xlsx", description: "Native spreadsheets", enabled: true, source: "builtin" },
+        { name: "sciencediscovery-xlsx", skillId: "xlsx", description: "Imported spreadsheets", enabled: true, source: "sciencediscovery" },
+      ],
+    });
+    const dialog = await openSettings(page, "技能");
+    await expect(dialog.locator(".settings-card")).toHaveCount(2);
+    await dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true }).click();
+    await expect(dialog.locator(".settings-card").filter({ hasText: "Native spreadsheets" })).toContainText("已停用");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "SD spreadsheets" })).toContainText("已启用");
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills\/xlsx$/u)).toEqual({ enabled: false });
+    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/xlsx$/u)).toEqual({ enabled: false });
+    await dialog.getByRole("button", { name: "一键启用", exact: true }).click();
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(2);
+  });
+
+  test("a refused built-in switch keeps its saved state and reports the failure", async ({ page }) => {
+    await installMockApi(page, {
+      models: MODELS, skills, skillToggleFailures: ["xlsx"],
+      jiuwenSwarmSkills: [{ name: "xlsx", description: "Native spreadsheets", enabled: true, source: "builtin" }],
+    });
+    const dialog = await openSettings(page, "技能");
+    await expect(dialog.locator(".settings-card")).toHaveCount(3);
+    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+    await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已启用");
+    await expect(dialog).toContainText("xlsx: Skill switch failed");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已停用");
+    await dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true }).click();
+    await expect(dialog).toContainText("Skill switch failed");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true })).toBeChecked();
+  });
+
   test("a switch updates JiuwenSwarm globally and survives a reload", async ({ page }) => {
     const mock = await installMockApi(page, {
       models: MODELS,
