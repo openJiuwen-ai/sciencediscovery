@@ -716,7 +716,7 @@ class NativeAgent implements NativeAgentHandle {
         // the trajectory still shows the turn that was cut off.
         throw new Error(
           "Native agent ended with an unrecovered output limit: the model was cut off by "
-          + `max_tokens (${this.policy.maxTokens}) before it answered or called a tool. `
+          + `max_tokens (${this.policy.maxTokens}) before it finished answering. `
           + "Raise SCIENCE_AGENT_LLM_MAX_TOKENS and retry, or ask for a smaller step.",
         );
       }
