@@ -261,20 +261,6 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
 
   const closeForm = () => setDraft(undefined);
 
-  const write = async (server: CustomMcpServerDetails, body: CustomMcpServerInput) => {
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      await saveMcpServer(client, body, server.id);
-      loaded.reload();
-      onToast(TEXT.settings.system.mcp.saved);
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   /** Toggle whether a data source is selected by default for new sessions. */
   const toggleDefaultUse = async (id: string) => {
     const page = loaded.value;
@@ -288,7 +274,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
         : [...page.enabledConnectorIds, id];
       await putGlobalSettings(client, {
         ...page.overrides,
-        enabledConnectorIds: next as ConnectorId[],
+        enabledConnectorIds: next,
       });
       loaded.reload();
     } catch (reason) {
@@ -317,7 +303,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       }
       await putGlobalSettings(client, {
         ...page.overrides,
-        enabledConnectorIds: [...ids] as ConnectorId[],
+        enabledConnectorIds: [...ids],
       });
       loaded.reload();
     } catch (reason) {
@@ -352,7 +338,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
 
   const isSelected = (id: string) => {
     const page = loaded.value;
-    return page ? page.enabledConnectorIds.includes(id as ConnectorId) : false;
+    return page ? page.enabledConnectorIds.includes(id) : false;
   };
 
   return (
