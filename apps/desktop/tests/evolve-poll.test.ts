@@ -43,37 +43,58 @@ function run(status: EvolveRun["status"]): EvolveRun {
  *  is longer than a unit test may wait, and what is under test is that a
  *  callback was scheduled at all, not when it lands. */
 function clock(): { armed: () => number; fire: () => Promise<void>; restore: () => void } {
-  const armed: Array<() => void> = [];
-  const real = globalThis.setTimeout;
+  const armed = new Map<number, () => void>();
+  let nextId = 1;
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
   // The hook's only timers are its polls; nothing else in this test schedules.
+  // The handle has to be real enough that the effect's cleanup can cancel it —
+  // a cleared poll is a poll that is not armed.
   globalThis.setTimeout = ((callback: () => void) => {
-    armed.push(callback);
-    return 0 as unknown as ReturnType<typeof setTimeout>;
+    const id = nextId;
+    nextId += 1;
+    armed.set(id, callback);
+    return id as unknown as ReturnType<typeof setTimeout>;
   }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((id: number) => {
+    armed.delete(id);
+  }) as unknown as typeof clearTimeout;
   return {
-    armed: () => armed.length,
+    armed: () => armed.size,
     fire: async () => {
-      const next = armed.shift();
-      assert.ok(next, "a poll was armed");
+      const entry = [...armed.entries()][0];
+      assert.ok(entry, "a poll was armed");
+      armed.delete(entry[0]);
+      const [, callback] = entry;
       await act(async () => {
-        next();
+        callback();
         // The callback starts a request whose `.then`/`.catch` set state; let
         // the microtask queue drain inside the same act().
         for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
       });
     },
     restore: () => {
-      globalThis.setTimeout = real;
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
     },
   };
 }
 
-function mount(client: ApiClient, handle: (value: EvolveHandle) => void): Promise<ReactTestRenderer> {
-  function Harness({ api }: { api: ApiClient }) {
-    handle(useEvolve(api, "s"));
-    return null;
-  }
-  return act(async () => create(createElement(Harness, { api: client })));
+function Harness({ api, onHandle, sessionId }: {
+  api: ApiClient;
+  onHandle: (value: EvolveHandle) => void;
+  sessionId: string;
+}) {
+  onHandle(useEvolve(api, sessionId));
+  return null;
+}
+
+function mount(
+  client: ApiClient,
+  handle: (value: EvolveHandle) => void,
+  sessionId = "s",
+): Promise<ReactTestRenderer> {
+  return act(async () => create(createElement(Harness, { api: client, onHandle: handle, sessionId })));
 }
 
 /** Answers `/api/evolve/status` as ready, then hands the run-list reads to the
@@ -149,6 +170,47 @@ test("a failed read on an idle session does not start polling it", async () => {
     });
     assert.equal(timers.armed(), 0);
     assert.match(latest?.error ?? "", /server restarting/);
+    renderer.unmount();
+  } finally {
+    timers.restore();
+  }
+});
+
+test("a session switch does not inherit the previous session's poll", async () => {
+  // Session A has a live search; the user switches to B, whose first read
+  // fails. The cadence belonged to A's list, so B is not polled — and the
+  // shelf does not keep showing A's running run under B's header.
+  const timers = clock();
+  try {
+    const api = client([
+      async () => [run("running")],
+      async () => {
+        throw new Error("session B unavailable");
+      },
+    ]);
+    let latest: EvolveHandle | undefined;
+    const renderer = await mount(api, (value) => {
+      latest = value;
+    });
+    assert.equal(timers.armed(), 1);
+    assert.equal(latest?.runs[0]?.status, "running");
+
+    await act(async () => {
+      renderer.update(createElement(Harness, {
+        api,
+        onHandle: (value) => {
+          latest = value;
+        },
+        sessionId: "t",
+      }));
+      for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+    });
+    // A's poll was cleared with the effect that armed it, and B's failed read
+    // arms nothing — an endpoint that is failing is not polled for a session
+    // that has no run.
+    assert.equal(timers.armed(), 0);
+    assert.deepEqual(latest?.runs, []);
+    assert.match(latest?.error ?? "", /session B unavailable/);
     renderer.unmount();
   } finally {
     timers.restore();
