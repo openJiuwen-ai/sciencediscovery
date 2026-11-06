@@ -112,17 +112,23 @@ export async function prepareFeedbackImage(
 }
 
 /** Attach as many files as there is room for; stops at the first failure so the
- *  dialog can show the reason instead of silently dropping the rest. */
+ *  dialog can show the reason instead of silently dropping the rest. Picks left
+ *  over once the cap is reached are counted in `skipped`, so the dialog can say
+ *  how many were dropped instead of losing them without a word. */
 export async function prepareFeedbackImages(
   files: File[],
   current: FeedbackImage[],
-): Promise<{ images: FeedbackImage[]; error?: ImagePrepareError }> {
+): Promise<{ images: FeedbackImage[]; error?: ImagePrepareError; skipped: number }> {
   const images = [...current];
+  let skipped = 0;
   for (const file of files) {
-    if (images.length >= FEEDBACK_MAX_IMAGES) break;
+    if (images.length >= FEEDBACK_MAX_IMAGES) {
+      skipped += 1;
+      continue;
+    }
     const result = await prepareFeedbackImage(file);
-    if (!result.ok) return { images, error: result.error };
+    if (!result.ok) return { images, error: result.error, skipped };
     images.push(result.image);
   }
-  return { images };
+  return { images, skipped };
 }
