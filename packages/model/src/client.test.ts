@@ -553,6 +553,83 @@ test("does not retry or suppress a control when the 400 complains about its valu
   assert.deepEqual(requests[1]!.thinking, { type: "enabled" }, "and it does not suppress the control later");
 });
 
+test("recognizes a rejection worded as an unrecognized request argument", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.thinking) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: null, message: "Unrecognized request argument supplied: thinking",
+        param: null, type: "invalid_request_error" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "unrecognized-argument", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "one" }], [], policy, new AbortController().signal);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "two" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 3, "one rejected attempt, the stripped retry, then no 400");
+  assert.equal(requests[1]!.thinking, undefined);
+  assert.equal(requests[1]!.reasoning_effort, "high", "only the named control is stripped");
+  assert.equal(requests[2]!.thinking, undefined, "and the rejection is remembered");
+  assert.equal(requests[2]!.reasoning_effort, "high");
+});
+
+test("a value complaint that points at a control does not suppress it", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: {
+        code: "invalid_value",
+        message: "Invalid value for 'reasoning_effort': 'minimal'. Supported values are: 'low', 'medium', and 'high'.",
+        param: "reasoning_effort",
+      } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "invalid-value", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    assert.equal(failure.statusCode, 400);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 2, "an invalid value is not a parameter rejection");
+  assert.deepEqual(requests[1]!.thinking, { type: "enabled" }, "and it suppresses nothing");
+  assert.equal(requests[1]!.reasoning_effort, "high");
+});
+
+test("a 400 about another parameter in the same sentence does not strip a control", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "temperature is not supported when thinking is enabled" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "state-complaint", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1]!.thinking, { type: "enabled" });
+});
+
 test("does not remember a rejection whose stripped retry fails", async () => {
   const requests: Record<string, unknown>[] = [];
   await withServer(async (request, response) => {

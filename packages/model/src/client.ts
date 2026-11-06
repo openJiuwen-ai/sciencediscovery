@@ -748,10 +748,27 @@ interface ThinkingControlRequest { body: string; headers: Record<string, string>
  * providers use for an unknown/unsupported parameter; deliberately not a bare
  * "invalid", which is what a generic "invalid request" says.
  */
-const rejectedControlWording = /unsupported|not supported|does not support|unknown (?:parameter|field|argument|property|key)|unrecogni[sz]ed (?:parameter|field|argument|property|key)|invalid (?:parameter|field|argument|property|key)|unexpected (?:parameter|field|argument|property|key)|not allowed|not permitted|no such (?:parameter|field|argument)/;
+const rejectedControlWording = /unsupported|not supported|does not support|unknown (?:parameter|field|argument|property|key)|unrecogni[sz]ed (?:[a-z]+ ){0,3}(?:parameter|field|argument|property|key)|invalid (?:parameter|field|argument|property|key)|unexpected (?:parameter|field|argument|property|key)|not allowed|not permitted|no such (?:parameter|field|argument)/;
+/**
+ * A complaint about a control's *value* or the *state* it was sent in is not a
+ * rejection of the parameter. OpenAI answers `param: "reasoning_effort"` with
+ * `code: invalid_value` when only the value is unsupported, and a gateway says
+ * "temperature is not supported when thinking is enabled" about `temperature`.
+ * Stripping the control would silently change the requested mode, so clauses
+ * carrying these words are dropped before any rejection wording is looked for.
+ */
+const valueComplaintWording = /invalid value|unsupported value|not a valid value|supported values are|invalid_value|out of range|must be one of|when [a-z_ ]{0,40}(?:is|are) (?:enabled|on|set)/;
 /** How close the rejection word must be to the field name to describe it. */
 const rejectedControlWordingWindow = 80;
 const rejectedThinkingControls = new Map<string, Set<string>>();
+
+/** `detail` (lower-cased) without the clauses that complain about a value or a state. */
+function withoutValueComplaints(detail: string): string {
+  return detail
+    .split(/[.;]\s*|\r?\n/)
+    .filter((clause) => !valueComplaintWording.test(clause))
+    .join(". ");
+}
 
 function thinkingControlEndpointKey(endpoint: ModelEndpoint): string {
   return [endpointRoot(endpoint.baseUrl), endpoint.model, endpointProtocol(endpoint), endpointVariant(endpoint)].join("\0");
@@ -767,11 +784,13 @@ function withoutThinkingControls(request: ThinkingControlRequest, fields = think
 
 /** Whether `detail` rejects `field`, not merely mentions it: either the
  *  provider's own `param` pointer names it, or a rejection phrase sits within a
- *  short window of the name. */
+ *  short window of the name. A value or state complaint proves neither, even
+ *  when it points at the field. */
 function detailRejectsField(lower: string, field: string): boolean {
-  if (new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower)) return true;
-  for (let at = lower.indexOf(field); at !== -1; at = lower.indexOf(field, at + field.length)) {
-    const window = lower.slice(
+  if (new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower) && !valueComplaintWording.test(lower)) return true;
+  const claims = withoutValueComplaints(lower);
+  for (let at = claims.indexOf(field); at !== -1; at = claims.indexOf(field, at + field.length)) {
+    const window = claims.slice(
       Math.max(0, at - rejectedControlWordingWindow),
       at + field.length + rejectedControlWordingWindow,
     );
