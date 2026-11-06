@@ -31,6 +31,8 @@ import type {
 } from "../src/api/types.js";
 import type { WorkspaceActions, WorkspaceState } from "../src/app/use-workspace.js";
 import { TEXT } from "../src/text.js";
+import { writeSettingsCache } from "../src/app/settings-cache.js";
+import { StubClient } from "./api-stub.js";
 import { GeneralSettings } from "../src/views/settings/GeneralSettings.js";
 import { ModelForm } from "../src/views/ModelForm.js";
 import { ModelPicker, ModelSettings, providerChoices } from "../src/views/settings/ModelSettings.js";
@@ -575,6 +577,23 @@ describe("the skill card", () => {
     version: "revision:1",
     ...fields,
   }) as SkillDescriptor;
+
+  it("identifies all three sources before expanding a card", () => {
+    const sourceClient = new StubClient().asClient();
+    writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
+      enabled: [],
+      skills: [skill({ id: "sd-review", source: "built-in" }), skill({ id: "custom-review" })],
+      jiuwenSwarmSkills: [{ name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" }],
+    });
+    const markup = renderToStaticMarkup(
+      <SkillsSettings adding={false} client={sourceClient} onAddingChange={noConfirm} />,
+    );
+    for (const label of ["SD 内置", "JiuwenSwarm 内置", "自建"]) {
+      assert.ok(markup.includes(label), `The collapsed list does not identify ${label}`);
+    }
+    assert.ok(markup.includes("这里的开关控制 ScienceDiscovery 中技能的全局启用状态，对所有任务生效。"));
+    assert.ok(!markup.includes("settings-detail-heading"), "Sources must be visible before opening instructions");
+  });
 
   it("names the revision a skill was installed at instead of the server's label", () => {
     // The server's own label for an undeclared version is `revision:1`; put
