@@ -1343,9 +1343,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         const tempRoot = join(tmpdir(), randomUUID());
+        const packagesRoot = join(tempRoot, "packages");
         try {
-          await prepareSkillSandbox(tempRoot, tempRoot, [snapshot]);
-          const imported = await importSkillsToJiuwenSwarm(jiuwenSwarm, [{ hash: snapshot.hash, id: snapshot.id }], tempRoot);
+          await prepareSkillSandbox(packagesRoot, join(tempRoot, "workspace"), [snapshot]);
+          const imported = await importSkillsToJiuwenSwarm(jiuwenSwarm, [{ hash: snapshot.hash, id: snapshot.id }], packagesRoot);
           const name = imported.get(snapshot.id);
           if (!name) throw new ApiStatusError(502, "JiuwenSwarm did not import the skill");
           await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, true);

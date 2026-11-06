@@ -126,6 +126,8 @@ export interface MockOptions {
   runners?: unknown[];
   connectors?: JsonRecord[];
   skills?: JsonRecord[];
+  jiuwenSwarmSkills?: JsonRecord[];
+  skillToggleFailures?: string[];
   specialists?: JsonRecord[];
   mcpServers?: JsonRecord[];
   mcpSources?: JsonRecord[];
@@ -190,6 +192,7 @@ export interface MockState {
   sandboxNetwork: { allowedDomains: string[]; mode: string };
   sessions: SessionRecord[];
   skills: JsonRecord[];
+  jiuwenSwarmSkills: JsonRecord[];
   specialists: JsonRecord[];
   timeouts: Record<string, number>;
   /** Names the upload route refuses, per file. See `MockOptions.uploadRejects`. */
@@ -281,6 +284,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     sandboxNetwork: structuredClone(options.sandboxNetwork ?? { allowedDomains: [], mode: "open" }),
     sessions: [...(options.sessions ?? [])],
     skills: [...(options.skills ?? [])],
+    jiuwenSwarmSkills: structuredClone(options.jiuwenSwarmSkills ?? []),
     specialists: [...(options.specialists ?? [])],
     uploadRejects: [...(options.uploadRejects ?? [])],
     timeouts: {
@@ -418,6 +422,20 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/connectors" && method === "GET") {
         return json(route, 200, state.connectors);
+      }
+
+      if (path === "/api/jiuwenswarm/skills" && method === "GET") {
+        return json(route, 200, { backend: "jiuwenswarm", skills: state.jiuwenSwarmSkills });
+      }
+      const skillSwitch = path.match(/^\/api\/jiuwenswarm\/skills-by-id\/([^/]+)$/u);
+      if (skillSwitch && method === "PUT") {
+        const skillId = decodeURIComponent(skillSwitch[1]!);
+        if (options.skillToggleFailures?.includes(skillId)) return json(route, 502, { error: "Skill switch failed" });
+        const input = JSON.parse(body ?? "{}") as JsonRecord;
+        const existing = state.jiuwenSwarmSkills.find((skill) => skill.skillId === skillId);
+        if (existing) existing.enabled = input.enabled;
+        else state.jiuwenSwarmSkills.push({ skillId, name: skillId, enabled: input.enabled, source: "sciencediscovery", description: "" });
+        return json(route, 200, { skillId, name: skillId, enabled: input.enabled });
       }
 
       if (path === "/api/skills" && method === "GET") {
