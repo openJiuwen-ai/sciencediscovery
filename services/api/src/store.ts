@@ -2707,7 +2707,9 @@ export class SessionStore {
         level: values.level ?? reviewer.level,
       });
     } else throw new Error("Unsupported P1 capability");
-    const next = this.normalizeSettings({ ...current, ...patch });
+    const next = scope.kind === "session"
+      ? this.normalizeSessionOverrides({ ...current, ...patch }, current)
+      : this.normalizeSettings({ ...current, ...patch });
     if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
     else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
     session.updatedAt = new Date().toISOString();
@@ -3351,10 +3353,10 @@ export class SessionStore {
           proposal.state = "stale";
         } else {
           // Add to the latest effective set so inherited entries are preserved.
-          session.settingsOverrides = this.normalizeSettings({
+          session.settingsOverrides = this.normalizeSessionOverrides({
             ...session.settingsOverrides,
             enabledConnectorIds: [...effective, proposal.connectorId],
-          });
+          }, session.settingsOverrides);
           this.syncSessionCompatibility(session);
           proposal.state = "applied";
         }
