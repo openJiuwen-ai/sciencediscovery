@@ -349,6 +349,7 @@ function RunStatusLine({ run }: { run: RunStreamState }) {
         ? TEXT.conversation.errorLine(run.error.message)
         : TEXT.conversation.errorWithCode(run.error.code, run.error.message),
     );
+    if (run.error.code === "SESSION_MODEL_UNAVAILABLE") lines.push(TEXT.errors.modelUnavailable);
   } else if (run.status === "cancelled") {
     const reason = run.cancelledReason !== undefined && !GENERIC_CANCEL_REASONS.has(run.cancelledReason)
       ? run.cancelledReason

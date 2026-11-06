@@ -22,7 +22,7 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { SessionStore } from "./store.js";
 import { NotificationDispatcher } from "./notification-dispatch.js";
-import { createNotificationRun } from "./runs/index.js";
+import { createNotificationRun, scheduleSessionRuns } from "./runs/index.js";
 import { SkillLibraryCatalog } from "./skill-library-catalog.js";
 
 function requiredSession(store: SessionStore, id: string) {
@@ -228,4 +228,32 @@ test("session configuration writes retain deleted choices while rejecting new in
   assert.equal(settings.overrides.semanticReviewEnabled, false);
   assert.deepEqual(settings.overrides.enabledSkillLibraries, []);
   assert.ok(settings.effective.enabledConnectorIds.includes("uniprot"));
+});
+
+
+test("a queued run whose frozen model was deleted emits a structured recovery error", async context => {
+  const { state, a, b, project } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Queued", { modelId: a.id });
+  const run = await state.store.createSessionRun({ sessionId: session.id, prompt: "Queued work",
+    settingsSnapshot: state.store.resolveRuntimeSettings(session.id).effective });
+  assert.equal(run.status, "queued");
+  await state.store.deleteModel(a.id, b.id);
+  // Even repairing the session must not silently substitute the frozen model.
+  await state.store.updateSession(session.id, { modelId: b.id });
+  // No external dependency should be touched before rejecting the frozen model.
+  const unused = new Proxy({}, { get: () => assert.fail("Unavailable model reached an execution dependency") }) as never;
+  scheduleSessionRuns(state.store, unused, unused, unused, unused, unused, unused, unused, unused, unused,
+    unused, unused, unused, unused, unused, session.id, unused, null, undefined);
+  let finished = await state.store.getSessionRun(session.id, run.id);
+  for (let attempt = 0; attempt < 100 && finished?.status !== "failed"; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    finished = await state.store.getSessionRun(session.id, run.id);
+  }
+  assert.equal(finished?.status, "failed");
+  assert.equal(finished.error, "The session model is not available");
+  assert.deepEqual(finished.settingsSnapshot, run.settingsSnapshot);
+  const events = await state.store.listSessionRunEvents(session.id, run.id, 0);
+  const failure = events.find(record => record.event.type === "run.failed");
+  assert.ok(failure);
+  assert.deepEqual(failure.event, { type: "run.failed", error: "The session model is not available", errorCode: "SESSION_MODEL_UNAVAILABLE" });
 });

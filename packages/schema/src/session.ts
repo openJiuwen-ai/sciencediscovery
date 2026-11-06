@@ -506,6 +506,7 @@ export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
  * the user still sees what the provider actually said.
  */
 export type RunFailureCode =
+  | "SESSION_MODEL_UNAVAILABLE"
   | "invalid-tool-call"
   | "rate-limited"
   | "semantic-error"
