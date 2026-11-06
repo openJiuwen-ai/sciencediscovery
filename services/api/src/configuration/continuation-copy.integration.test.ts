@@ -9,6 +9,7 @@ import { SessionStore } from "../store.js";
 import { configurationFramework } from "./framework.js";
 import { CONFIGURATION_AGENT_DESCRIPTORS } from "./agent-metadata.js";
 import { verifyNativeConfigurationToolAssembly } from "./native-activation.js";
+import { nativeConfigurationDecisionPrompt } from "../runs/index.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 async function fixture(context: { after(action: () => Promise<void>): void }) {
   const parent = resolve(process.cwd(), ".tmp"), root = resolve(parent, "continuation-copy-" + randomUUID()), store = new SessionStore(root); await store.load();
@@ -19,6 +20,30 @@ async function fixture(context: { after(action: () => Promise<void>): void }) {
   const framework = configurationFramework(store, { nativeExecutor: true, connector: () => undefined, resume: async (sessionId, requestId) => { scheduled.push({ sessionId, requestId }); return run; } });
   return { store, session, run, framework, scheduled };
 }
+
+test("CFG-XE2E-04: proxy.resources continues its bound task using the approved receipt", async context => {
+  const h = await fixture(context);
+  const frozen = structuredClone(h.run.settingsSnapshot);
+  const card = await h.framework.propose(h.session.id, {
+    protocolVersion: 3, runId: h.run.id, capabilityId: "proxy.resources", values: { operation: "create", name: "Owned continuation proxy", kind: "environment" },
+  });
+  const applied = await h.framework.decide(h.session.id, card.id, {
+    revision: card.revision, previewDigest: card.previewDigest!, selectedOptionId: "persist", decision: "apply",
+  });
+  assert.equal(applied.activation.mode, "next_connection");
+  const resumed = { ...h.run, configurationResume: { requestId: card.id, decision: "apply" as const, connectorName: "proxy.resources" } };
+  const prompt = nativeConfigurationDecisionPrompt(h.store, h.session.id, resumed);
+  assert.match(prompt, /Activation mode: next_connection/);
+  assert.match(prompt, /saved route is used by later connections of this task as well/);
+  assert.doesNotMatch(prompt, /applies to future tasks/);
+  assert.match(nativeConfigurationDecisionPrompt(h.store, h.session.id, { ...resumed, configurationResume: { ...resumed.configurationResume, decision: "dismiss" } }), /declined the configuration/);
+  assert.equal(applied.activation.state, "needs_user_action");
+  assert.equal(applied.resumption.state, "queued");
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  assert.doesNotThrow(() => verifyNativeConfigurationToolAssembly({ store: h.store, sessionId: h.session.id, runId: h.run.id, requestId: card.id, enabledConnectorIds: [], tools: [] }));
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+});
+
 test("CFG-X09a: saving a bound Reviewer setting resumes the task without changing its snapshot", async context => {
   const h = await fixture(context);
   await h.store.updateReviewerSpecialistSettings({ enabled: true });
@@ -44,6 +69,7 @@ test("CFG-XBUG-09: future-setting copy permits only its bound original continuat
   assert.match(card.impact.message, /original configuration task already bound/); assert.match(card.impact.message, /frozen task settings/);
   const decision = { revision: card.revision, previewDigest: card.previewDigest!, selectedOptionId: "persist", decision: "apply" as const };
   const applied = await h.framework.decide(h.session.id, card.id, decision); assert.equal(applied.activation.mode, "next_run"); assert.equal(applied.activation.state, "needs_user_action"); assert.equal(applied.resumption.state, "queued");
+  assert.match(nativeConfigurationDecisionPrompt(h.store, h.session.id, { ...h.run, configurationResume: { requestId: card.id, decision: "apply", connectorName: "timeouts.configure" } }), /applies to future tasks/);
   assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]); await h.framework.decide(h.session.id, card.id, decision); assert.equal(h.scheduled.length, 1);
   assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen); assert.equal((await h.store.listSessionRuns(h.session.id)).length, 1);
 });

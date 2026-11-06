@@ -246,12 +246,14 @@ test("CFG-T28 independent active receipt precedes queued resume; failed queue do
   assert.deepEqual(stages, ["active", "queue"]);
 });
 
-test("CFG-T28 next_run and restart are explicit and do not claim target runtime is active", async () => {
-  const { record, receipt } = approved(); record.plan.activationMode = "next_run";
+test("CFG-T28 next_run, next_connection and restart do not claim verified live runtime activation", async () => {
+  for (const mode of ["next_run", "next_connection", "requires_restart"] as const) {
+  const { record, receipt } = approved(); record.plan.activationMode = mode;
   const coordinator = new ConfigurationActivationCoordinator({ isCurrent: async () => true,
-    activate: async () => { assert.fail("no unsupported hot activation"); }, saveActivation: async (_, result) => { assert.equal(result.code, "next_run"); },
+    activate: async () => { assert.fail("no unsupported hot activation"); }, saveActivation: async (_, result) => { assert.equal(result.code, mode); },
     enqueueResume: async () => { assert.fail("no same-run resume"); } });
   assert.equal(await coordinator.activate(record, receipt), "needs_user_action");
+  }
 });
 
 test("CFG-T28 Stop during activation preserves saved fact but suppresses resumption", async () => {

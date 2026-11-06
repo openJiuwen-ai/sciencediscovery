@@ -107,3 +107,16 @@ test("CFG-T06: draft replacement rolls back if encrypted idempotency persistence
   assert.throws(() => bridge.provide(h.binding, "replacement", "key"));
   assert.equal(h.bridge.read(initial.handle, h.binding), "original"); assert.equal(h.rows().length, 1);
 });
+
+test("CFG-X03b: proxy URL drafts retain exact field, target and revision isolation", async () => {
+  const h = harness(); const binding = { ...h.binding, target: "proxy.resources:registered-target", fieldId: "proxyUrl" };
+  const draft = h.bridge.provide(binding, "https://fixture:password@proxy.invalid", "proxy-upload");
+  assert.throws(() => h.bridge.read(draft.handle, { ...binding, fieldId: "apiToken" }), /EXPIRED/);
+  assert.throws(() => h.bridge.provide({ ...binding, fieldId: "arbitrarySecret" }, "secret"));
+  h.bridge.rebind(draft.handle, binding, 2);
+  await h.bridge.withLease(draft.handle, { ...binding, revision: 2 }, async url => assert.match(url, /^https:/));
+  assert.throws(() => h.bridge.read(draft.handle, binding), /EXPIRED/);
+  assert.throws(() => h.bridge.read(draft.handle, { ...binding, revision: 2, target: "another-proxy" }), /EXPIRED/);
+  h.advance(30 * 60_000); assert.throws(() => h.bridge.read(draft.handle, { ...binding, revision: 2 }), /EXPIRED/);
+  assert.doesNotMatch(JSON.stringify(h.rows()), /fixture:password/);
+});

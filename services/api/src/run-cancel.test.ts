@@ -459,14 +459,25 @@ async function waitForGatewayTurn(api: TestApi, expected: number): Promise<void>
   assert.equal(api.gatewayRunCount(), expected, "the agent turn reached the gateway and hung there");
 }
 
-async function waitForRunStatus(api: TestApi, sessionId: string, runId: string, status: SessionRun["status"]): Promise<SessionRun> {
+async function waitForRunStatus(
+  api: TestApi, sessionId: string, runId: string, status: SessionRun["status"], requireReplay = false,
+): Promise<SessionRun> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const run = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
-    if (run?.status === status) return run;
+    if (run?.status === status) {
+      if (!requireReplay) return run;
+      // The scheduler persists the run status before appending the status event.
+      // Tests that tear down the store must wait for that final write as well.
+      const response = await fetch(`${api.origin}/api/sessions/${sessionId}/runs/${runId}/events`, { headers: authorization });
+      assert.equal(response.status, 200);
+      const events = await response.json() as SessionRunEvent[];
+      if (events.some(({ event }) => event.type === "run.status" && event.status === status)) return run;
+    }
     await new Promise((wait) => setTimeout(wait, 25));
   }
   const current = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
   assert.equal(current?.status, status, `expected run ${runId} to become ${status}`);
+  if (requireReplay) assert.fail(`expected run ${runId} to record ${status} in replay`);
   return current!;
 }
 
@@ -491,12 +502,12 @@ test("cancelling a queued run does not start it or append it to Session context"
     assert.deepEqual(detail.messages.map((message) => message.content), ["Keep the gateway busy"]);
 
     assert.equal((await cancelRunById(api, sessionId, active.id)).status, 202);
-    await waitForRunStatus(api, sessionId, active.id, "cancelled");
+    await waitForRunStatus(api, sessionId, active.id, "cancelled", true);
   } finally {
     for (const run of (await listRuns(api, sessionId)).sort((a, b) => Number(b.status === "queued") - Number(a.status === "queued"))) {
       if (["queued", "running", "blocked"].includes(run.status)) {
         await cancelRunById(api, sessionId, run.id);
-        await waitForRunStatus(api, sessionId, run.id, "cancelled");
+        await waitForRunStatus(api, sessionId, run.id, "cancelled", true);
       }
     }
   }

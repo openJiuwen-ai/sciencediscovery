@@ -16,6 +16,34 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03b: a changed opaque proxy credential target clears the local URL before upload", async () => {
+  let latest = request({ capabilityId: "proxy.resources", credentialTargetDigest: "sha256:proxy-a", fields: [
+    { id: "proxyId", kind: "enum", label: "Proxy", choices: [{ id: "a", label: "A" }], value: "a", required: true },
+    { id: "proxyUrl", kind: "credential", label: "Proxy URL", required: true, status: "missing" }] });
+  let renderer: ReactTestRenderer; let uploads = 0;
+  const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1, credentialTargetDigest: "sha256:proxy-b" }),
+    credential: async () => { uploads++; return { handle: "must-not-exist", expiresAt: "2099-01-01T00:00:00Z" }; } });
+  const draw = () => createElement(ConfigurationRequestCard, { request: latest, actions: api,
+    onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } });
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => renderer!.root.findByProps({ name: "proxyUrl" }).props.onChange({ target: { value: "https://private:password@proxy.invalid" } }));
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(uploads, 0); assert.equal(renderer!.root.findByProps({ name: "proxyUrl" }).props.value, "");
+  assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /private:password/);
+  assert.equal(button(renderer!, "Confirm this change").props.disabled, true);
+  await act(async () => renderer!.unmount());
+});
+
+test("CFG-X03b: editing the selected proxy clears a typed URL immediately", async () => {
+  const renderer = await mount(request({ capabilityId: "proxy.resources", credentialTargetDigest: "sha256:a", fields: [
+    { id: "proxyId", kind: "enum", label: "Proxy", choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }], value: "a", required: true },
+    { id: "proxyUrl", kind: "credential", label: "Proxy URL", required: true, status: "missing" }] }));
+  await act(async () => renderer.root.findByProps({ name: "proxyUrl" }).props.onChange({ target: { value: "belongs-to-a" } }));
+  await act(async () => renderer.root.findByProps({ name: "proxyId" }).props.onChange({ target: { value: "b" } }));
+  assert.equal(renderer.root.findByProps({ name: "proxyUrl" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
@@ -814,4 +842,18 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
   await act(async () => renderer.unmount());
+});
+
+test("CFG-X68-734: the proxy card blocks final apply until the current route has independent consent", async () => {
+  const view = request({ capabilityId: "proxy.default", scope: { kind: "global" },
+    fields: [{ id: "defaultPolicy", label: "Default route", kind: "enum", value: "none", choices: [{ id: "none", label: "Direct" }] }],
+    securityConsent: { targetDigest: "sha256:route", statement: "The inherited route can carry credentials.", revision: 2, status: "required" } });
+  const confirmed = { ...view, securityConsent: { ...view.securityConsent!, status: "confirmed" as const } };
+  const api = actions({ securityConsent: async () => confirmed });
+  const renderer = await mount(view, api);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  assert.match(JSON.stringify(renderer.toJSON()), /new default route for inheriting outbound traffic/);
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => { renderer.unmount(); });
 });

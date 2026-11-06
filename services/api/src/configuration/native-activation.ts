@@ -98,7 +98,7 @@ export function verifyNativeConfigurationToolAssembly(input: { store: SessionSto
     }
     return;
   }
-  if (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "requires_restart") {
+  if (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "next_connection" || record.plan.activationMode === "requires_restart") {
     const saved = db.prepare("SELECT record_json FROM configuration_receipts_v2 WHERE request_id=? AND revision=?")
       .get(record.view.id, record.view.revision) as { record_json: string } | undefined;
     const receipt = saved ? JSON.parse(saved.record_json) as ConfigurationApplyReceipt : undefined;

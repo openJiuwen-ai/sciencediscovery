@@ -179,6 +179,7 @@ export function createConfigurationDomainAdapters(options: Options): Configurati
     }
   };
   const connect: ConfigurationAdapter = {
+    fieldPolicy: { credentialFields: ["apiToken"] },
     id: "model.connect", version: 1, schemaVersion: 1, scopes: ["session", "global"], persistence: "local_transaction",
     normalize: normalizeConnection, target: connectionTarget,
     preview: (input, snapshot, scope) => {
@@ -206,6 +207,7 @@ export function createConfigurationDomainAdapters(options: Options): Configurati
     verify: verifyModel, apply: context => apply("model.connect", context),
   };
   const repair: ConfigurationAdapter = {
+    fieldPolicy: { credentialFields: ["apiToken"] },
     id: "model.repair_credential", version: 1, schemaVersion: 1, scopes: ["global"], persistence: "local_transaction",
     normalize: raw => values(raw, ["modelId"]), target: input => text(input, "modelId"),
     preview: (input, snapshot) => {

@@ -1,5 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { ConfigurationSecurityAuthorizer, configurationNeedsSecurityConsent } from "./security-consent.js";
 import type { ConfigurationCredentialInput, ConfigurationDecisionInput, ConfigurationPreviewInput,
   ConfigurationRequestView, SessionRun } from "@sciencediscovery/schema";
 import type { ConfigurationWaitOwner } from "@sciencediscovery/governance";
@@ -12,6 +13,10 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createProxyResourceAdapter } from "./proxy-resource-adapter.js";
+import { createProxyDefaultConfigurationAdapter } from "./proxy-adapter.js";
+import { createProviderProxyAdapter } from "./provider-proxy-adapter.js";
+import { createMcpProxyAdapter } from "./mcp-proxy-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
 import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
 import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
@@ -52,6 +57,7 @@ export class ConversationalConfigurationFramework {
   readonly repository: ConfigurationRepository;
   readonly service: ConfigurationRequestService;
   readonly credentials: ConfigurationCredentialBridge;
+  readonly security: ConfigurationSecurityAuthorizer;
   readonly destinations: ModelDestinationAuthorizer;
   private waitOwner(record: ConfigurationRecord): ConfigurationWaitOwner {
     return { sessionId: record.view.sessionId, requestId: record.view.id,
@@ -114,9 +120,20 @@ export class ConversationalConfigurationFramework {
     this.repository = new ConfigurationRepository(database);
     this.credentials = new ConfigurationCredentialBridge(database, store.configurationSecretCipher());
     this.destinations = new ModelDestinationAuthorizer(database);
+    this.security = new ConfigurationSecurityAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createProxyResourceAdapter(store, this.credentials), createProxyDefaultConfigurationAdapter(store), createProviderProxyAdapter(store), createMcpProxyAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      if (configurationNeedsSecurityConsent(adapter.id)) {
+        const apply = adapter.apply;
+        if (!apply) throw new Error("Security policy adapters require a synchronous domain apply");
+        adapter.apply = context => {
+          const record = this.repository.get(context.requestId, context.sessionId);
+          if (!record) throw new Error("Security proposal is unavailable");
+          this.security.assert(record);
+          return apply(context);
+        };
+      }
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -136,6 +153,7 @@ export class ConversationalConfigurationFramework {
         executionDependencies: record => nativeExecutionDependencies(store, record),
         afterCommit: () => this.flushNotices(),
         projectEndpointAuthorization: record => this.destinations.view(record),
+        projectSecurityConsent: record => this.security.view(record),
         snapshot: (sessionId, capabilityId, target) => store.configurationSnapshot(sessionId, capabilityId, target),
         choiceOptions: input => input.capabilityId === "connector.enable" && input.runId && this.options.nativeExecutor
           ? nativeConnectorChoiceOptions({ store, sessionId: input.sessionId, runId: input.runId,
@@ -158,7 +176,7 @@ export class ConversationalConfigurationFramework {
         },
         resolvePreviewCredential: input => {
           try {
-            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken" });
+            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: this.credentialField(input.sessionId, input.requestId) });
             return input.credentialHandle;
           } catch (error) {
             if (!(error instanceof Error) || error.message !== "CREDENTIAL_DRAFT_EXPIRED") throw error;
@@ -168,17 +186,28 @@ export class ConversationalConfigurationFramework {
           }
         },
         onPreviewRevision: change => {
+          const securityRecord = this.repository.get(change.requestId, change.sessionId);
+          if (securityRecord) this.security.rebind(securityRecord, change.toRevision);
           if (change.oldTarget === change.newTarget) {
             const previous = this.repository.get(change.requestId, change.sessionId);
             if (previous?.plan.endpointAuthorization) this.destinations.rebind(change.requestId, change.sessionId, change.fromRevision, change.toRevision, previous.plan.endpointAuthorization.endpointTarget);
           }
           if (change.credentialHandle) this.credentials.rebind(change.credentialHandle, {
             sessionId: change.sessionId, requestId: change.requestId, revision: change.fromRevision,
-            target: change.oldTarget, fieldId: "apiToken",
+            target: change.oldTarget, fieldId: this.credentialField(change.sessionId, change.requestId),
           }, change.toRevision);
           else if (change.oldTarget !== change.newTarget) this.credentials.clearRequest(change.requestId);
         },
       } });
+  }
+
+  private credentialField(sessionId: string, requestId: string): string {
+    const record = this.repository.get(requestId, sessionId);
+    if (!record) throw new ConfigurationError("CONFIGURATION_REQUEST_NOT_FOUND", "Configuration request not found", 404);
+    const fields = this.service.registry.get(record.view.capabilityId).fieldPolicy?.credentialFields;
+    const field = fields?.[0];
+    if (!field || fields?.length !== 1) throw new ConfigurationError("INVALID_CONFIGURATION_CREDENTIAL", "No single registered credential field is available", 400);
+    return field;
   }
 
   async propose(sessionId: string, input: ConfigurationProposalInput, key?: string): Promise<ConfigurationRequestView> {
@@ -254,6 +283,19 @@ export class ConversationalConfigurationFramework {
     return this.service.propose(sessionId, { ...input, scope }, key);
   }
 
+  async confirmSecurity(sessionId: string, id: string, input: unknown): Promise<ConfigurationRequestView> {
+    await this.reconcileLifecycle(sessionId, id);
+    await this.store.runConfigurationTransaction(sessionId, () => {
+      const record = this.service.getRecord(sessionId, id), version = record.view.stateVersion;
+      if (record.stopGeneration !== this.store.notifications.generation(sessionId)) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped", 409);
+      const current = this.store.configurationSnapshot(sessionId, record.view.capabilityId, record.target);
+      if (canonical(current.resourceVersions) !== canonical(record.resourceVersions)) throw new ConfigurationError("RESOURCE_VERSION_CONFLICT", "Review a new policy preview after configuration changed", 409);
+      this.security.confirm(record, input);
+      record.view.stateVersion++; record.view.updatedAt = new Date().toISOString(); this.repository.save(record, version);
+    });
+    return this.service.get(sessionId, id);
+  }
+
   /** Called only by the authenticated user endpoint; not an Agent tool. */
   async confirmEndpoint(sessionId: string, id: string, input: unknown): Promise<ConfigurationRequestView> {
     await this.reconcileLifecycle(sessionId, id);
@@ -321,6 +363,7 @@ export class ConversationalConfigurationFramework {
     await this.reconcileLifecycle(sessionId, id);
     if (source === "auto") this.assertAutoAuthorized(this.service.getRecord(sessionId, id));
     const deciding = this.service.getRecord(sessionId, id);
+    if (input.decision === "apply") this.security.assert(deciding, source);
     if (!this.options.nativeExecutor && deciding.view.runId && !["applied", "dismissed"].includes(deciding.view.state)
       && !this.liveWaitRunId(sessionId, id))
       throw new ConfigurationError("CONFIGURATION_WAIT_NOT_READY", "The original live task is no longer waiting; do not replay this proposal", 409);
