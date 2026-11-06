@@ -21,9 +21,9 @@ repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 group="${1:-mocked}"
 case "$group" in
   mocked) ;;
-  real|legacy) ;;
+  real) ;;
   *)
-    printf 'Usage: .ci/run-e2e.sh [mocked|real|legacy]\n' >&2
+    printf 'Usage: .ci/run-e2e.sh [mocked|real]\n' >&2
     exit 2
     ;;
 esac
@@ -151,9 +151,6 @@ if [[ "$group" == "real" ]]; then
       exit 2
     fi
   done
-elif [[ "$group" == "legacy" && "${CI_ALLOW_LEGACY:-}" != "1" ]]; then
-  printf 'BLOCKED: set CI_ALLOW_LEGACY=1 to run unaudited legacy E2E.\n' | tee -a "$test_log" >&2
-  exit 2
 fi
 
 cd "$repository_root"

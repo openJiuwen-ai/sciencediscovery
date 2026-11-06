@@ -179,3 +179,86 @@ test("once the queued run started it is the Stop target and its stream is the on
   for (const callback of scheduled.splice(0)) callback();
   assert.equal(started.signal.aborted, true, "the started run's own stream is the fallback abort target");
 });
+
+for (const mode of ["missing-terminal", "late-refresh"] as const) test(`Stop reconciles ${mode} without restoring a stale running snapshot`, async () => {
+  const browser = installBrowserStubs();
+  const previousFetch = globalThis.fetch;
+  let status = "running";
+  let subscriptions = 0;
+  let push = (_event: unknown) => {};
+  let releaseRefresh = () => {};
+  let closeStream = () => {};
+  let holdRefresh = false;
+  let refreshHeld = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input).split("?")[0];
+    if (path === "/api/sessions/session-1/runs") return jsonResponse([{ ...runA, status, queueOrder: 1 }]);
+    if (path === "/api/sessions/session-1/runs/run-a/events") {
+      if (new Headers(init?.headers).get("accept") !== "text/event-stream") return jsonResponse([]);
+      subscriptions++;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          closeStream = () => controller.close();
+          push = event => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true });
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    }
+    if (path === "/api/sessions/session-1/runs/current/cancel") {
+      status = "cancelled";
+      if (mode === "late-refresh") push({ type: "run.status", status, run: { ...runA, status, queueOrder: 1 } });
+      return jsonResponse({ cancelled: true, runId: runA.id, sessionId: session.id });
+    }
+    if (path === "/api/sessions/session-1/usage" && holdRefresh) {
+      holdRefresh = false;
+      refreshHeld = true;
+      await new Promise<void>(resolve => { releaseRefresh = resolve; });
+    }
+    if (path === "/api/projects/project-1/sessions") return jsonResponse([session, { ...session, id: "session-2", title: "Idle Session" }]);
+    if (path === "/api/sessions/session-2") return jsonResponse({ ...session, id: "session-2", title: "Idle Session" });
+    if (path === "/api/sessions/session-2/usage") return jsonResponse({ totals: {}, byRun: [], byModel: [], bySession: [] });
+    if (path === "/api/sessions/session-2/agent-activity") return jsonResponse({ executions: [], timers: [], transfers: [], agents: [] });
+    return jsonResponse(startupBody(String(input)));
+  }) as typeof fetch;
+  let view: ReactTestRenderer | undefined;
+  try {
+    await act(async () => { view = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(App, { initialToken: "test-token" }))); });
+    await settle();
+    const action = () => view!.root.findByType(ComposerRunButton).props;
+    assert.equal(action().action.stopVisible, true);
+    assert.equal(subscriptions, 1, "the running Session has exactly one real subscription");
+    if (mode === "late-refresh") {
+      // Switching away/back reads running while the original stream stays
+      // subscribed. Hold one refresh response until after its terminal event.
+      const row = (title: string) => view!.root.findAllByType("button").find(item => item.props.className?.includes("nav-item") && item.props.title?.includes(title));
+      holdRefresh = true;
+      await act(async () => { row("Idle Session")!.props.onClick(); });
+      await settle();
+      await act(async () => { row(session.title)!.props.onClick(); });
+      await settle();
+      assert.equal(refreshHeld, true, "the running snapshot is held before it can overwrite terminal state");
+    }
+    if (mode === "missing-terminal") {
+      await act(async () => { action().onStop(); });
+      await settle();
+      await act(async () => { browser.fireGrace(); });
+    } else {
+      await act(async () => {
+        status = "cancelled";
+        push({ type: "run.status", status, run: { ...runA, status, queueOrder: 1 } });
+        closeStream();
+      });
+    }
+    await settle();
+    await act(async () => { releaseRefresh(); });
+    await settle();
+    assert.equal(action().action.stopVisible, false, "authoritative cancellation replaces Stop even without a terminal frame");
+    assert.equal(action().action.runLabel, "Run analysis");
+    assert.equal(subscriptions, 1, "a delayed running snapshot must not resurrect the completed subscription");
+  } finally {
+    releaseRefresh();
+    await act(async () => { view?.unmount(); });
+    globalThis.fetch = previousFetch;
+    browser.restore();
+  }
+});

@@ -16,9 +16,7 @@
 // Validates the E2E-META contract for the Playwright specs in this directory:
 // every top-level test() must be immediately preceded by an E2E-META comment
 // block whose fields are complete and whose Type (mocked | real) agrees with
-// the @mocked / @real tag on the test. Files in LEGACY predate the contract,
-// stay quarantined from the safe default project, and produce a migration
-// warning until they carry their first block.
+// the @mocked / @real tag on the test.
 //
 // Run from anywhere: node test/check-e2e-meta.mjs
 
@@ -27,24 +25,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const specDir = dirname(fileURLToPath(import.meta.url));
-
-// Pending migration to the E2E-META contract. Remove entries as they migrate;
-// never add new spec files here.
-const LEGACY = new Set([
-  "agent-run-componentization.spec.ts",
-  "artifact-dashboard.spec.ts",
-  "debug-main-path.spec.ts",
-  "e2e-auth.spec.ts",
-  "gateway-token-recovery.spec.ts",
-  "issue-143-proxy-settings.spec.ts",
-  "issue-37-composer-height.spec.ts",
-  "issue-44-background-timeline.spec.ts",
-  "issue-44-session-stop.spec.ts",
-  "session-run-api-queue-stop.spec.ts",
-  "session-run-queue-stop.spec.ts",
-  "subagent-rename-and-align.spec.ts",
-  "timeouts-runtime-status-user.spec.ts",
-]);
 
 const REQUIRED_FIELDS = [
   "Purpose",
@@ -63,7 +43,6 @@ const REQUIRED_FIELDS = [
 const TAG_WINDOW = 400;
 
 const errors = [];
-const warnings = [];
 
 function lineOf(text, index) {
   return text.slice(0, index).split("\n").length;
@@ -112,14 +91,6 @@ function checkFile(name) {
   const usesE2EFixture = /import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*["']\.\/helpers\/e2e\.ts["']/.test(text);
 
   if (!hasMeta) {
-    if (LEGACY.has(name)) {
-      warnings.push(`${name}: quarantined legacy spec without E2E-META blocks (pending migration)`);
-      // A legacy spec must not partially opt into a group without metadata.
-      if (/@(?:mocked|real)/.test(text)) {
-        errors.push(`${name}: mentions a group tag but has no E2E-META block — migrate it`);
-      }
-      return;
-    }
     errors.push(`${name}: no E2E-META block; every new spec must document each test`);
     return;
   }
@@ -208,9 +179,6 @@ function checkFile(name) {
 const specs = readdirSync(specDir).filter((name) => name.endsWith(".spec.ts")).sort();
 specs.forEach(checkFile);
 
-for (const warning of warnings) console.warn(`WARN  ${warning}`);
 for (const error of errors) console.error(`ERROR ${error}`);
-console.log(
-  `check-e2e-meta: ${specs.length} spec file(s), ${errors.length} error(s), ${warnings.length} legacy warning(s)`,
-);
+console.log(`check-e2e-meta: ${specs.length} spec file(s), ${errors.length} error(s)`);
 process.exit(errors.length ? 1 : 0);

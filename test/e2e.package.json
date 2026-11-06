@@ -15,8 +15,6 @@
     "test:real:list": "npm run check:sync && E2E_REAL=1 playwright test --project=real --list",
     "test:mixed": "npm run check:sync && E2E_REAL=1 playwright test --project=mocked --project=real",
     "test:mixed:list": "npm run check:sync && E2E_REAL=1 playwright test --project=mocked --project=real --list",
-    "test:legacy": "npm run check:sync && E2E_LEGACY=1 playwright test --project=legacy",
-    "test:legacy:list": "npm run check:sync && E2E_LEGACY=1 playwright test --project=legacy --list",
     "test:report": "playwright show-report playwright-report",
     "check:meta": "node ../test/check-e2e-meta.mjs"
   },

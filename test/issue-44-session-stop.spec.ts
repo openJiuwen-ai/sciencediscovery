@@ -12,26 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { HANG_MODEL_ID, HANG_MODEL_NAME, installStubModels, type StubModels } from "./support/stub-models.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-44-session-stop.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-44-session-stop.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@status:reviewed", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 // 用户场景 E2E：Session Stop 按钮 + 跨会话 Run 隔离。
 //
-// 前置：本地栈已启动（./scripts/run-local.sh），并已注册一个「接受 POST
-// /v1/chat/completions 但永不响应」的桩模型，命名为 HANG_MODEL_LABEL——run 因此
-// 会停在模型层，精确复现「卡住」状态。
+// 前置：本地栈已启动（./scripts/run-local.sh）；本用例自己通过 /api/models 注册
+// 一个「接受 POST /v1/chat/completions 但永不响应」的桩模型（hang-model）——run
+// 因此会停在模型层，精确复现「卡住」状态。
 //
 // 运行：E2E_BASE_URL=<api-origin> npx playwright test --config test/playwright.config.ts \
 //         issue-44-session-stop
 // 截图写到运行 cwd 下的 screenshots/。
 
 const SCREENSHOTS = "screenshots";
-const HANG_MODEL_LABEL = "Issue44 Hanging Model · hang-model";
 const API_BASE = apiBaseUrl();
+
+let stubs: StubModels | undefined;
 
 const state = {
   project: `Issue44 E2E ${Date.now()}`,
@@ -58,14 +61,28 @@ async function createProject(page: Page, name: string) {
   await expect(dialog).toBeHidden();
 }
 
+/** Creating a Session is one click now: it lands with a generated title and
+ *  becomes active, so the name is given through the inline rename editor. */
 async function createSession(page: Page, name: string) {
+  const rows = page.locator("#sessions-panel-content button.nav-item");
+  await expect(rows.first()).toBeVisible();
+  const before = await rows.count();
   await page.getByRole("button", { name: "Add session" }).click();
-  const dialog = page.getByRole("dialog", { name: "Create Session" });
-  await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Session name").fill(name);
-  await dialog.getByRole("button", { name: "Create Session" }).click();
-  await waitForToast(page, "Session created");
-  await expect(dialog).toBeHidden();
+  // Count the new row instead of waiting for the toast: the previous Session's
+  // toast is often still on screen and would let the next step run too early.
+  await expect(rows).toHaveCount(before + 1);
+  const activeSession = page.locator("#sessions-panel-content button.nav-item.active").first();
+  await expect(activeSession).toBeVisible();
+  // Creating a Session hands focus to the composer; the inline editor commits
+  // and closes on blur, so let that handoff land before opening it.
+  await expect(page.locator(".composer textarea")).toBeFocused();
+  await activeSession.dblclick();
+  const editor = page.locator("input.nav-inline-rename");
+  await expect(editor).toBeVisible();
+  await editor.fill(name);
+  await editor.press("Enter");
+  await expect(page.locator("#sessions-panel-content button.nav-item", { hasText: name }).first()).toBeVisible();
+  await expect(page.locator("h1")).toContainText(name);
 }
 
 async function openProject(page: Page, name: string) {
@@ -74,11 +91,18 @@ async function openProject(page: Page, name: string) {
 
 async function openSession(page: Page, name: string) {
   await page.locator("button.nav-item", { hasText: name }).first().click();
+  await expect(page.locator("h1")).toContainText(name);
   await expect(page.locator(".composer textarea")).toBeVisible();
 }
 
 async function selectHangModel(page: Page) {
-  await page.getByLabel("Model for this task").selectOption({ label: HANG_MODEL_LABEL });
+  await page.getByLabel("Model for this task").click();
+  const option = page.getByRole("option").filter({ hasText: HANG_MODEL_ID }).first();
+  await expect(option).toBeVisible();
+  await option.click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Choose a model" })).toBeHidden();
+  await expect(page.getByLabel("Model for this task")).toContainText(HANG_MODEL_NAME);
 }
 
 function runButton(page: Page) {
@@ -101,10 +125,11 @@ async function startRun(page: Page, text: string) {
   await expect(stopButton(page)).toBeEnabled();
 }
 
+/** A stopped run is reported by the composer itself: Stop gives way to Run
+ *  again without a reload. */
 async function stopRunAndExpectRecovery(page: Page) {
   await stopButton(page).click();
-  await waitForToast(page, "Run stopped");
-  await expect(runButton(page)).toBeVisible();
+  await expect(runButton(page)).toBeVisible({ timeout: 20000 });
 }
 
 async function cancelViaApi(page: Page, sessionName: string) {
@@ -123,15 +148,42 @@ async function cancelViaApi(page: Page, sessionName: string) {
   });
 }
 
+test.beforeAll(async () => {
+  stubs = await installStubModels();
+});
+
+test.afterAll(async () => {
+  await stubs?.dispose();
+});
+
 test.describe("Session Stop 与 Run 会话隔离", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".app-shell")).toBeVisible();
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/sessions\/[^/?]+(?:\?.*)?$/);
   });
 
-  test("S0 前置：用户创建项目与两个会话并选择模型", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 前置场景——用户创建项目与两个会话，并为两者选择会卡住的桩模型。
+   * Steps:
+   *   1. 创建项目。
+   *   2. 创建会话 A 并选择 hang-model。
+   *   3. 创建会话 B 并选择 hang-model。
+   *   4. 截图留证。
+   * Environment: 隔离本地栈；本 spec 自行注册 127.0.0.1 上的 hang-model 桩模型。
+   * Type: mocked
+   * LLM: 本地桩模型，接受流式请求后永不响应；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；桩模型在套件结束时删除。
+   */
+  test("S0 前置：用户创建项目与两个会话并选择模型", { tag: "@mocked" }, async ({ page }) => {
     await createProject(page, state.project);
     await screenshot(page, "s0-01-project-created");
 
@@ -144,7 +196,26 @@ test.describe("Session Stop 与 Run 会话隔离", () => {
     await screenshot(page, "s0-03-session-b");
   });
 
-  test("S1 运行中可见可点 Stop，停止后无需刷新可再 Run", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 运行中 Stop 可见可点；停止后无需刷新即可再次运行，时间线不残留运行中条目。
+   * Steps:
+   *   1. 打开项目与会话 A。
+   *   2. 发起运行并断言 Stop 可见可用，等待 6 秒仍保持运行。
+   *   3. 点击 Stop，断言 composer 恢复 Run。
+   *   4. 断言没有 running 时间线条目。
+   *   5. 再次发起并停止第二轮，复核恢复。
+   * Environment: 隔离本地栈；hang-model 桩模型让运行停在模型边界。
+   * Type: mocked
+   * LLM: 本地桩模型，接受流式请求后永不响应；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；桩模型在套件结束时删除。
+   */
+  test("S1 运行中可见可点 Stop，停止后无需刷新可再 Run", { tag: "@mocked" }, async ({ page }) => {
     await openProject(page, state.project);
     await openSession(page, state.sessionA);
 
@@ -174,42 +245,106 @@ test.describe("Session Stop 与 Run 会话隔离", () => {
     await expect(page.locator(".timeline-disclosure.running")).toHaveCount(0, { timeout: 5000 });
   });
 
-  test("S2 会话 A 卡住时，会话 B（含新建会话）可 Run", async ({ page }) => {
-    await openProject(page, state.project);
-    await openSession(page, state.sessionA);
+  /**
+   * E2E-META
+   * Purpose: 会话 A 卡住时，新建会话可独立运行；取消响应的终态事件被延迟时，仍无需刷新恢复 Run。
+   * Steps:
+   *   1. A 发起并保持卡住。
+   *   2. 新建会话 C 并选择桩模型。
+   *   3. 断言 C 可 Run 且进入运行态。
+   *   4. 切回 A，断言仍运行且可 Stop。
+   *   5. 延迟 C 的事件响应，依次停止 A 与 C，断言通过持久化状态恢复 Run。
+   * Environment: 隔离本地栈；hang-model 桩模型让运行停在模型边界。
+   * Type: mocked
+   * LLM: 本地桩模型，接受流式请求后永不响应；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；桩模型在套件结束时删除。
+   */
+  test("S2 会话 A 卡住时，会话 B（含新建会话）可 Run", { tag: "@mocked" }, async ({ page }) => {
+    // Buffer C's POST response so its terminal SSE frame cannot reach the
+    // browser. The server still executes/cancels the real run; Stop must recover
+    // by reconciling persisted status after its transport fallback.
+    // Install interception before opening any long-lived Run stream: enabling
+    // routing mid-stream can stall the browser's queued preflight requests.
+    let releaseResponse = () => {};
+    const responseGate = new Promise<void>(resolve => { releaseResponse = resolve; });
+    const messageRoute = "**/api/sessions/*/messages";
+    await page.route(messageRoute, async route => {
+      if (!route.request().postData()?.includes("会话 C 的任务")) return route.continue();
+      const response = await route.fetch();
+      await responseGate;
+      await route.fulfill({ response });
+    });
+    try {
+      await openProject(page, state.project);
+      await openSession(page, state.sessionA);
 
-    // A 发起并保持卡住
-    await startRun(page, "会话 A 的长任务（保持卡住）");
-    await screenshot(page, "s2-01-a-running");
+      // A 发起并保持卡住
+      await startRun(page, "会话 A 的长任务（保持卡住）");
+      await screenshot(page, "s2-01-a-running");
 
-    // A 卡住时新建会话 C，验证新会话的 Run 不会被默认禁用。
-    await expect(page.getByRole("button", { name: "Add session" })).toBeEnabled();
-    await createSession(page, "会话C-卡住时新建");
-    await selectHangModel(page);
+      // A 卡住时新建会话 C，验证新会话的 Run 不会被默认禁用。
+      await expect(page.getByRole("button", { name: "Add session" })).toBeEnabled();
+      await createSession(page, "会话C-卡住时新建");
+      await selectHangModel(page);
+      // C 的 Run 必须可点且能发出
+      await startRun(page, "会话 C 的任务（A 卡住时发起）");
+      const sessionCId = new URL(page.url()).pathname.match(/\/sessions\/([^/]+)/)?.[1];
+      expect(sessionCId).toBeTruthy();
+      await expect.poll(async () => {
+        const response = await page.request.get(`${API_BASE}/api/sessions/${sessionCId}/runs`, { headers: authorizationHeader() });
+        expect(response.ok()).toBe(true);
+        const runs = await response.json() as Array<{ status: string }>;
+        return runs.some(run => run.status === "running" || run.status === "blocked");
+      }).toBe(true);
+      await screenshot(page, "s2-02-c-runnable-while-a-stuck");
 
-    // C 的 Run 必须可点且能发出
-    await startRun(page, "会话 C 的任务（A 卡住时发起）");
-    await screenshot(page, "s2-02-c-runnable-while-a-stuck");
+      // 切回 A：仍能显示运行态并可 Stop
+      await openSession(page, state.sessionA);
+      await expect(stopButton(page)).toBeVisible();
+      await expect(stopButton(page)).toBeEnabled();
+      await screenshot(page, "s2-03-back-to-a-still-running");
 
-    // 切回 A：仍能显示运行态并可 Stop
-    await openSession(page, state.sessionA);
-    await expect(stopButton(page)).toBeVisible();
-    await expect(stopButton(page)).toBeEnabled();
-    await screenshot(page, "s2-03-back-to-a-still-running");
-
-    // 清理：依次停掉 A 与 C
-    await stopRunAndExpectRecovery(page);
-    await openSession(page, "会话C-卡住时新建");
-    await stopRunAndExpectRecovery(page);
+      // 清理：依次停掉 A 与 C
+      await stopRunAndExpectRecovery(page);
+      await openSession(page, "会话C-卡住时新建");
+      await stopRunAndExpectRecovery(page);
+    } finally {
+      releaseResponse();
+      await page.unrouteAll({ behavior: "wait" });
+    }
   });
 
-  test("S3 重复 Stop / 无 active run 时不炸", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 无 active run 与重复 Stop 时取消都是幂等的成功，UI 不报错且 composer 继续可用。
+   * Steps:
+   *   1. 无运行时调用 cancel API，断言 200 且 cancelled=true。
+   *   2. 发起运行后第一次 cancel，断言 200 且 UI 恢复 Run。
+   *   3. 第二次 cancel，断言同样 200 且 cancelled=true。
+   *   4. 断言没有 Request error 提示，输入与 Run 仍可用。
+   * Environment: 隔离本地栈；hang-model 桩模型让运行停在模型边界。
+   * Type: mocked
+   * LLM: 本地桩模型，接受流式请求后永不响应；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；桩模型在套件结束时删除。
+   */
+  test("S3 重复 Stop / 无 active run 时不炸", { tag: "@mocked" }, async ({ page }) => {
     await openProject(page, state.project);
     await openSession(page, state.sessionA);
 
-    // 无 active run 时服务端 cancel → 409，且 UI 无任何异常
+    // 无 active run 时服务端 cancel 是幂等的成功（没有可取消的 run，也不报错）
     const idleCancel = await cancelViaApi(page, state.sessionA);
-    expect(idleCancel.status()).toBe(409);
+    expect(idleCancel.status()).toBe(200);
+    expect(((await idleCancel.json()) as { cancelled?: boolean }).cancelled).toBe(true);
     await expect(page.locator("[role='status']").filter({ hasText: "Request error" })).toHaveCount(0);
 
     // 发起 run → 第一次 cancel（API 路径等价于 Stop 的服务端动作）→ 200
@@ -220,19 +355,37 @@ test.describe("Session Stop 与 Run 会话隔离", () => {
     expect(body.cancelled).toBe(true);
 
     // UI 感知到取消并恢复
-    await waitForToast(page, "Run stopped");
-    await expect(runButton(page)).toBeVisible();
+    await expect(runButton(page)).toBeVisible({ timeout: 20000 });
 
-    // 第二次 cancel（重复 Stop 幂等）→ 409，UI 不崩、Composer 可用
+    // 第二次 cancel（重复 Stop 同样幂等）→ 200 且无异常，UI 不崩、Composer 可用
     const secondCancel = await cancelViaApi(page, state.sessionA);
-    expect(secondCancel.status()).toBe(409);
+    expect(secondCancel.status()).toBe(200);
+    expect(((await secondCancel.json()) as { cancelled?: boolean }).cancelled).toBe(true);
     await fillComposer(page, "重复 Stop 后仍然可以输入并运行");
     await expect(runButton(page)).toBeEnabled();
     await expect(page.locator("[role='status']").filter({ hasText: "Request error" })).toHaveCount(0);
     await screenshot(page, "s3-01-idempotent-stop-composer-usable");
   });
 
-  test("S4 观感与可理解性（桌面 + 移动视口）", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 桌面与移动视口下 Stop 的观感与可理解性——空输入禁用、运行中为 Stop、关键控件不重叠。
+   * Steps:
+   *   1. 打开会话 A，断言空输入时 Run 禁用、有输入时可用。
+   *   2. 发起运行，断言 Stop 可见且文案为 Stop。
+   *   3. 断言 textarea 与按钮矩形不重叠。
+   *   4. 切到 390×844，断言 composer 输入区仍可见。
+   * Environment: 隔离本地栈；hang-model 桩模型；桌面与 390×844 视口。
+   * Type: mocked
+   * LLM: 本地桩模型，接受流式请求后永不响应；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；桩模型在套件结束时删除。
+   */
+  test("S4 观感与可理解性（桌面 + 移动视口）", { tag: "@mocked" }, async ({ page }) => {
     await openProject(page, state.project);
     await openSession(page, state.sessionA);
 

@@ -192,6 +192,20 @@ export async function seedSampleSession(store: SessionStore): Promise<boolean> {
   let created: Project | undefined;
   try {
     const sample = sampleSession();
+    // Streams retain their inline transcript, but a recording must not claim
+    // that this install owns state objects the published sample did not ship.
+    // Trajectory readers can then show their existing unavailable-context
+    // warning and export the recorded events without dereferencing absent CAS.
+    const shipped = new Set([...Object.keys(sample.files), ...Object.keys(sample.encoded)]);
+    for (const [path, text] of Object.entries(sample.files)) {
+      if (!path.startsWith("run-events/") || !path.endsWith(".jsonl")) continue;
+      sample.files[path] = text.split("\n").map((line) => line.trim() ? JSON.stringify(JSON.parse(line, (key, value: unknown) => {
+        if (key.endsWith("Ref") && value && typeof value === "object" && "pool" in value && value.pool === "agent-state" && "digest" in value && typeof value.digest === "string") {
+          if (!shipped.has(`versioning/agent-state/blobs/sha256/${value.digest.replace(/^sha256:/, "")}`)) return undefined;
+        }
+        return value;
+      })) : line).join("\n");
+    }
     const project = await store.createProject(sample.projectName);
     created = project;
     const session = await store.createSession(project.id, sample.sessionTitle, {}, {}, {

@@ -119,7 +119,7 @@ export class PluginApiClient extends AuthApiClient {
     if (filePaths) { params.set("customFiles", "1"); for (const path of filePaths) params.append("filePath", path); }
     if (!includeFullTrajectory) params.set("includeFullTrajectory", "0");
     params.set("includeFullMemoryGraph", includeFullMemoryGraph ? "1" : "0");
-    return this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${params}`);
+    return this.requestResearchPackagePreview(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${params}`);
   }
 
   async getResearchPackagePreviews(projectId: string, sessionId: string, signal?: AbortSignal): Promise<{
@@ -130,8 +130,16 @@ export class PluginApiClient extends AuthApiClient {
     completeWithMemoryGraph: Awaited<ReturnType<PluginApiClient["previewResearchPackage"]>>;
     completeWithTrajectoryAndMemoryGraph: Awaited<ReturnType<PluginApiClient["previewResearchPackage"]>>;
   }> {
+    return this.requestResearchPackagePreview(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${new URLSearchParams({ sessionId, defaults: "1" })}`, signal);
+  }
+
+  private async requestResearchPackagePreview<T>(path: string, signal?: AbortSignal): Promise<T> {
     try {
-      return await this.request(`/api/projects/${encodeURIComponent(projectId)}/research-package/preview?${new URLSearchParams({ sessionId, defaults: "1" })}`, { signal });
+      const result = await this.request<T | { code: "EXPORT_PREVIEW_PENDING" }>(path, { signal, headers: { Prefer: "respond-async" } });
+      if (result && typeof result === "object" && "code" in result && result.code === "EXPORT_PREVIEW_PENDING") {
+        throw new ApiRequestError(translateActive("researchPackage.previewPending"), 202, result.code);
+      }
+      return result as T;
     } catch (error) {
       if (error instanceof ApiRequestError && error.code === "EXPORT_PREVIEW_PENDING") {
         throw new ApiRequestError(translateActive("researchPackage.previewPending"), error.status, error.code, error.details);
