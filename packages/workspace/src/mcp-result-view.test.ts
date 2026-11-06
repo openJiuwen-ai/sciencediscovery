@@ -108,7 +108,7 @@ test("custom large text, malformed records and near-budget Unicode JSON remain r
     assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
     assert.equal(response.isError, false);
     if ("text" in canonical) assert.ok((await store.search(view._retainedOutput.ref, "CUSTOM-END")).matches.length > 0);
-    if ("records" in canonical && canonical.records[0] === null) assert.deepEqual(view.records, canonical.records);
+    if ("records" in canonical && canonical.records?.[0] === null) assert.deepEqual(view.records, canonical.records);
   }
 });
 
