@@ -16,6 +16,129 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X03g: changing the credential header clears plaintext and requires a new endpoint review", async () => {
+  const view = request({ capabilityId: "mcp.header_credential", endpointAuthorization: { endpointTarget: "opaque-owned-recipient", revision: 2, host: "owned.invalid", classification: "public_https", status: "confirmed" }, fields: [
+    { id: "serverId", kind: "enum", label: "MCP", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }] },
+    { id: "headerName", kind: "enum", label: "Header", required: true, value: "authorization", choices: [{ id: "authorization", label: "Authorization" }, { id: "x-key", label: "X-Key" }] },
+    { id: "apiToken", kind: "credential", label: "Replacement header value", required: true, status: "missing" },
+  ] }), renderer = await mount(view, actions());
+  try {
+    await act(async () => renderer.root.findByProps({ type: "password" }).props.onChange({ target: { value: "Bearer synthetic-new" } }));
+    await act(async () => renderer.root.findByProps({ name: "headerName" }).props.onChange({ target: { value: "x-key" } })); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    await act(async () => renderer.root.findByProps({ name: "headerName" }).props.onChange({ target: { value: "authorization" } })); assert.equal(renderer.root.findByProps({ type: "password" }).props.value, "");
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03f: changing the MCP deletion target clears its independent confirmation", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.delete", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "confirmDelete", label: "Delete this shared server and its saved references", kind: "boolean", required: true, value: true },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } }));
+    const check = renderer.root.findByProps({ name: "confirmDelete" }); assert.equal(check.props.checked, false); assert.equal(check.props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} })); assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03e: changing a STDIO target clears its saved environment name without a secret input", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_env", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing STDIO custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "envName", label: "Saved environment override to remove", kind: "enum", required: true, value: "OWNED_TOKEN", choices: [{ id: "OWNED_TOKEN", label: "OWNED_TOKEN" }] },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    assert.match(JSON.stringify(renderer.toJSON()), /Saved environment override to remove/u); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } })); const field = renderer.root.findByProps({ name: "envName" }); assert.equal(field.props.value, ""); assert.equal(field.props.disabled, true); assert.equal(field.props.required, false);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} })); assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03d: changing the server clears and unlocks the dependent header selection", async () => {
+  const previews: unknown[] = [], view = request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, fields: [
+    { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-a", choices: [{ id: "custom-a", label: "A" }, { id: "custom-b", label: "B" }] },
+    { id: "headerName", label: "Saved header name to remove", kind: "enum", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization" }] },
+  ] });
+  const renderer = await mount(view, actions({ preview: async input => { previews.push(input); return view; } }));
+  try {
+    await act(async () => renderer.root.findByProps({ name: "serverId" }).props.onChange({ target: { value: "custom-b" } }));
+    const header = renderer.root.findByProps({ name: "headerName" }); assert.equal(header.props.value, ""); assert.equal(header.props.required, false); assert.equal(header.props.disabled, true);
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    assert.deepEqual(previews, [{ expectedRevision: view.revision, values: { serverId: "custom-b" } }]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+test("CFG-X03d: saved MCP header removal labels names, without a credential value input", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.remove_header", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "headerName", before: "authorization · 2 names; values hidden", after: "Removed" }], fields: [
+    { id: "serverId", label: "Existing HTTP/SSE custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "headerName", label: "Saved header name to remove", kind: "enum", required: true, value: "authorization", choices: [{ id: "authorization", label: "authorization · 2 names" }] },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Saved header name to remove/u); assert.match(text, /values hidden/u); assert.equal(renderer.root.findByProps({ name: "headerName" }).type, "select"); assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+});
+
+test("CFG-X03c: MCP availability uses its own global boolean label and manual impact", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.availability", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "enabled", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP · http" }] },
+    { id: "enabled", label: "Available globally", kind: "boolean", required: true, value: true },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Available globally/u); assert.match(text, /Set shared MCP availability/u); assert.equal(renderer.root.findByProps({ name: "enabled" }).props.type, "checkbox"); assert.equal(renderer.root.findByProps({ name: "enabled" }).props.checked, true);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X03b: MCP timeout labels disclose seconds and subsequent-call timing", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.timeout", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "timeoutSeconds", before: "37", after: "81" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "timeoutSeconds", label: "Call timeout (seconds)", kind: "number", required: true, value: 81 },
+  ] }));
+  const text = JSON.stringify(renderer.toJSON()); assert.match(text, /Call timeout \(seconds\)/u); assert.match(text, /Applies to subsequent MCP calls/u); assert.equal(renderer.root.findByProps({ name: "timeoutSeconds" }).props.type, "number");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X03a: MCP metadata uses its own localized labels rather than provider-name wording", async () => {
+  const renderer = await mount(request({ capabilityId: "mcp.metadata", scope: { kind: "global" }, changes: [{ field: "name", before: "Old", after: "Owned MCP" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "name", label: "MCP server name", kind: "text", required: true, value: "Owned MCP" },
+    { id: "description", label: "MCP server description", kind: "text", required: false, value: "Owned metadata" },
+  ] }), actions(), () => undefined, "zh");
+  const labels = renderer.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(labels.some(label => label.includes("MCP 服务名称"))); assert.ok(labels.some(label => label.includes("MCP 服务描述"))); assert.ok(!labels.some(label => label.includes("服务商名称")));
+  assert.ok(renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "MCP 服务名称"));
+  assert.equal(renderer.root.findByProps({ name: "description" }).type, "textarea");
+  await act(async () => renderer.root.findByProps({ name: "description" }).props.onChange({ target: { value: "Owned metadata\nSecond line" } }));
+  assert.equal(renderer.root.findByProps({ name: "description" }).props.value, "Owned metadata\nSecond line");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X03a: Chinese MCP availability and deletion cards use their own labels", async () => {
+  const availability = await mount(request({ capabilityId: "mcp.availability", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "enabled", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP · http" }] },
+    { id: "enabled", label: "Available globally", kind: "boolean", required: true, value: true },
+  ] }), actions(), () => undefined, "zh");
+  const availabilityLabels = availability.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(availabilityLabels.some(label => label.includes("全局可用")));
+  assert.ok(availabilityLabels.some(label => label.includes("已有自定义 MCP 服务")));
+  assert.ok(!availabilityLabels.some(label => label.includes("启用全局审阅专家")));
+  assert.ok(availability.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").some(label => label.children.join("") === "全局可用"));
+  assert.match(JSON.stringify(availability.toJSON()), /设置 MCP 全局可用性/u);
+  assert.equal(availability.root.findByProps({ name: "enabled" }).props.type, "checkbox");
+  await act(async () => availability.unmount());
+
+  const deletion = await mount(request({ capabilityId: "mcp.delete", scope: { kind: "global" }, activation: { mode: "next_invocation", state: "not_requested" }, changes: [{ field: "serverId", before: "Owned MCP", after: "Deleted" }, { field: "confirmDelete", before: "false", after: "true" }], fields: [
+    { id: "serverId", label: "Existing custom MCP server", kind: "enum", required: true, value: "custom-owned", choices: [{ id: "custom-owned", label: "Owned MCP" }] },
+    { id: "confirmDelete", label: "Delete this shared server and its saved references", kind: "boolean", required: true, value: true },
+  ] }), actions(), () => undefined, "zh");
+  const deletionLabels = deletion.root.findAllByType("label").map(label => label.children.join(""));
+  assert.ok(deletionLabels.some(label => label.includes("删除此共享服务及其已保存引用")));
+  assert.ok(deletionLabels.some(label => label.includes("已有自定义 MCP 服务")));
+  assert.ok(!deletionLabels.some(label => /Existing custom MCP server|Delete this shared server/u.test(label)));
+  const deletionDiff = deletion.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(label => label.children.join(""));
+  assert.ok(deletionDiff.includes("已有自定义 MCP 服务"));
+  assert.ok(deletionDiff.includes("删除此共享服务及其已保存引用"));
+  assert.match(JSON.stringify(deletion.toJSON()), /删除自定义 MCP 服务/u);
+  await act(async () => deletion.unmount());
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
@@ -55,6 +178,60 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
   return renderer!;
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
+
+function memoryPasswordRequest(overrides: Partial<ConfigurationRequestView> = {}) {
+  return request({ capabilityId: "memory.credential", runId: undefined, scope: { kind: "global" },
+    fields: [{ id: "operation", label: "Password operation", kind: "enum", required: true, value: "replace",
+      choices: [{ id: "replace", label: "Replace stored password" }, { id: "clear", label: "Clear stored password" }] },
+      { id: "apiToken", label: "Neo4j password", kind: "credential", required: true, status: "missing" }],
+    endpointAuthorization: { endpointTarget: "neo4j-http|https://owned.invalid|account-one", host: "owned.invalid", classification: "public_https", status: "confirmed", revision: 2 },
+    activation: { mode: "requires_restart", state: "not_requested" }, ...overrides });
+}
+
+test("CFG-X04d: a Neo4j password change row shows the localized label, not the raw field id", async () => {
+  for (const [locale, label] of [["en", "Neo4j password"], ["zh", "Neo4j 密码"]] as const) {
+    const renderer = await mount(memoryPasswordRequest({
+      changes: [{ field: "neo4jPassword", before: "Configured (write-only)", after: "Replace via secure user input; authentication unverified" }],
+    }), actions(), () => undefined, locale);
+    const diffLabels = renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(node => node.children.join(""));
+    assert.ok(diffLabels.includes(label));
+    assert.equal(diffLabels.includes("neo4jPassword"), false);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /neo4jPassword/);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG-X04c: Neo4j secure input uses its password label and an operation change clears local plaintext", async () => {
+  const renderer = await mount(memoryPasswordRequest(), actions(), () => undefined, "zh");
+  assert.match(JSON.stringify(renderer.toJSON()), /Neo4j 密码/); assert.match(JSON.stringify(renderer.toJSON()), /密码操作/);
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-local-password" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "synthetic-local-password");
+  await act(async () => renderer.root.findByProps({ name: "operation" }).props.onChange({ target: { value: "clear" } }));
+  assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => renderer.root.findByProps({ name: "operation" }).props.onChange({ target: { value: "replace" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, ""); await act(async () => renderer.unmount());
+});
+
+test("CFG-X04c: missing or changed Neo4j destination cannot retain or collect a secure draft", async () => {
+  let latest = memoryPasswordRequest(); let renderer: ReactTestRenderer;
+  const render = () => createElement(ConfigurationRequestCard, { request: latest, actions: actions(), onUpdate() {} });
+  await act(async () => { renderer = create(render()); });
+  await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-local-password" } }));
+  await act(async () => { latest = memoryPasswordRequest({ revision: 3, endpointAuthorization: { ...latest.endpointAuthorization!, revision: 3,
+    endpointTarget: "neo4j-http|https://owned.invalid|account-two", status: "required" } }); renderer!.update(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => { latest = { ...latest, endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; renderer!.update(render()); });
+  assert.equal(renderer!.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => { latest = memoryPasswordRequest({ revision: 4, endpointAuthorization: undefined }); renderer!.update(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0); await act(async () => renderer!.unmount());
+});
+
+test("CFG-X04c: a saved password reports restart required without verified runtime activation", async () => {
+  const renderer = await mount(memoryPasswordRequest({ state: "applied", allowedActions: [], activation: { mode: "requires_restart", state: "needs_user_action" } }));
+  assert.match(JSON.stringify(renderer.toJSON()), /Configure Neo4j password · Saved · Restart required/);
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Verified active/); await act(async () => renderer.unmount());
+});
+
 
 test("CFG-X09a: saved global Reviewer switch describes later admission without claiming verified activation", async () => {
   const renderer = await mount(request({ capabilityId: "reviewer.enable", state: "applied", runId: undefined,

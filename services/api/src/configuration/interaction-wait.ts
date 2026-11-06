@@ -10,7 +10,7 @@ export const CONFIGURATION_PENDING_STATES = new Set([
 /** All capabilities share this interaction lifecycle; activation timing is independent. */
 export function configurationDecisionReady(record: ConfigurationRecord): boolean {
   return record.view.state === "dismissed" || record.view.state === "applied"
-    && (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "requires_restart"
+    && (record.plan.activationMode === "next_run" || record.plan.activationMode === "next_request" || record.plan.activationMode === "next_invocation" || record.plan.activationMode === "requires_restart"
       ? record.view.activation.state === "needs_user_action"
       : record.view.activation.state === "active");
 }

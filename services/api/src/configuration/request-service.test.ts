@@ -346,7 +346,11 @@ test("CFG-T24/27: startup classifies an abandoned verification as unknown withou
 
 test("CFG-T24: external writes enqueue approved operations and never claim a local application receipt", async () => {
   const h = harness();
-  const registry = new ConfigurationRegistry().register({ ...h.adapter, persistence: "external_control", apply: undefined });
+  assert.throws(() => new ConfigurationRegistry().register({ ...h.adapter, persistence: "external_control", apply: undefined }));
+  const registry = new ConfigurationRegistry().register({ ...h.adapter, persistence: "external_control", apply: undefined, externalControl: {
+    submit: async operation => ({ ...operation, status: "rejected", code: "TEST_NOT_SAVED" }),
+    resolve: async operation => ({ ...operation, status: "rejected", code: "TEST_NOT_SAVED" }),
+  } });
   const service = new ConfigurationRequestService({ repository: h.repo, registry, host: h.host });
   const view = await service.propose("session", proposal);
   const result = await service.decide("session", view.id, { revision: 1, previewDigest: view.previewDigest!, decision: "apply" });
