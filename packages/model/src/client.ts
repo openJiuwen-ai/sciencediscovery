@@ -771,7 +771,10 @@ function retryWithoutRejectedThinkingFields(
     || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(error.responseDetail)) return undefined;
   const fallback = withoutThinkingControls(request);
   const fields = rejectedThinkingFields(request, error.responseDetail);
-  if (fallback && fields.size) rejectedThinkingControls.set(thinkingControlEndpointKey(endpoint), fields);
+  if (fallback && fields.size) {
+    const key = thinkingControlEndpointKey(endpoint);
+    rejectedThinkingControls.set(key, new Set([...(rejectedThinkingControls.get(key) ?? []), ...fields]));
+  }
   return fallback;
 }
 
