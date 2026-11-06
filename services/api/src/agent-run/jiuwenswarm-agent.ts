@@ -90,7 +90,7 @@ export interface JiuwenSwarmAgentConfig {
    */
   skills?: "jiuwenswarm" | "ours";
   /**
-   * Compatibility marker for desktop launchers (SCIENCE_AGENT_SKILL_SELECTION=desktop).
+   * Desktop catalog packages require explicit first enable (SCIENCE_AGENT_SKILL_SELECTION=desktop).
    * JiuwenSwarm owns the global switches; starting a run never changes them.
    */
   skillSelection?: "desktop";
@@ -479,7 +479,14 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     if (!skills.length) return this.options;
     // A failed read must not silently turn off skills or bypass the global switches.
     const installed = await listJiuwenSwarmSkills(this.config, this.controller.signal);
-    this.enabledSkillIds = new Set(installed.flatMap((skill) => skill.enabled && skill.skillId ? [skill.skillId] : []));
+    const installedById = new Map(installed.flatMap((skill) => skill.skillId ? [[skill.skillId, skill] as const] : []));
+    this.enabledSkillIds = new Set(skills.filter((skill) => {
+      const existing = installedById.get(skill.id);
+      if (existing) return existing.enabled;
+      // Desktop catalog packages enter through explicit enable. Library references
+      // and non-Desktop runs retain first-use import; neither may override a saved disable.
+      return this.config.skillSelection !== "desktop" || skill.importOnRun === true;
+    }).map((skill) => skill.id));
     return { ...this.options, skills: skills.filter((skill) => this.enabledSkillIds.has(skill.id)) };
   }
 
