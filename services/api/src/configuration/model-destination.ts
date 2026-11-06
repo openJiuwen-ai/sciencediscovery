@@ -1,12 +1,15 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { createModelRequest } from "@sciencediscovery/model";
-import { DEFAULT_MODEL_API_VARIANT, type ConfigurationEndpointAuthorization, type ModelProfile } from "@sciencediscovery/schema";
+import { DEFAULT_MODEL_API_VARIANT, isPublicPlaintextEndpoint, type ConfigurationEndpointAuthorization, type ModelProfile } from "@sciencediscovery/schema";
 import type { DatabaseSync } from "node:sqlite";
 import { ConfigurationError, object, integer, string } from "./validation.js";
 import type { ConfigurationRecord, ConfigurationPlan, ConfigurationAdapterContext } from "./types.js";
 
 type Destination = NonNullable<ConfigurationPlan["endpointAuthorization"]>;
+type DestinationRecord = Pick<ConfigurationRecord, "input" | "plan"> & {
+  view: Pick<ConfigurationRecord["view"], "id" | "sessionId" | "revision" | "capabilityId">;
+};
 /** Exact protocol and wire URL, never a provider's user-editable display name. */
 export function modelDestination(profile: Pick<ModelProfile, "baseUrl" | "model" | "apiProtocol" | "apiVariant">): Destination {
   let base: URL;
@@ -40,27 +43,32 @@ export class ModelDestinationAuthorizer {
       session_id TEXT NOT NULL, confirmed_at TEXT NOT NULL,
       PRIMARY KEY(request_id,revision,endpoint_target))`);
   }
-  view(record: ConfigurationRecord): ConfigurationEndpointAuthorization | undefined {
+  view(record: DestinationRecord): ConfigurationEndpointAuthorization | undefined {
     const destination = record.plan.endpointAuthorization;
     if (!destination) return undefined;
     const confirmed = this.database.prepare("SELECT 1 FROM configuration_endpoint_consents WHERE request_id=? AND revision=? AND endpoint_target=? AND session_id=?")
       .get(record.view.id, record.view.revision, destination.endpointTarget, record.view.sessionId);
-    const blocked = destination.classification === "public_http" && record.input.tokenOptional !== true;
+    const blocked = isPublicPlaintextEndpoint(destination.classification) && record.input.tokenOptional !== true;
     return { ...destination, revision: record.view.revision, status: blocked ? "blocked" : destination.classification === "trusted_preset" ? "trusted" : confirmed ? "confirmed" : "required" };
   }
-  assert(record: ConfigurationRecord, credential: boolean): void {
+  assert(record: DestinationRecord, credential: boolean): void {
     const view = this.view(record);
     if (!view) {
-      if (["model.connect", "model.repair_credential"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
+      if (["model.connect", "model.repair_credential", "provider.connection", "provider.credential", "model.api_identity"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
       return;
     }
-    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, "baseUrl");
+    if (isPublicPlaintextEndpoint(view.classification) && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, "baseUrl");
     if (!["confirmed", "trusted"].includes(view.status)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Confirm the exact destination in the dedicated endpoint control before supplying a credential or sending a probe", 409, "baseUrl");
   }
-  assertContext(context: ConfigurationAdapterContext, profile: ModelProfile, credential: boolean): void {
+  assertForContext(context: ConfigurationAdapterContext, capabilityId: DestinationRecord["view"]["capabilityId"], credential: boolean): void {
+    this.assert({ input: context.input, plan: context.plan,
+      view: { id: context.requestId, sessionId: context.sessionId, revision: context.revision, capabilityId } }, credential);
+  }
+
+  assertContext(context: ConfigurationAdapterContext, capabilityId: DestinationRecord["view"]["capabilityId"], profile: ModelProfile, credential: boolean): void {
     if (!context.plan.endpointAuthorization || modelDestination(profile).endpointTarget !== context.plan.endpointAuthorization.endpointTarget)
       throw new ConfigurationError("STALE_ENDPOINT_CONSENT", "The model destination changed; review and confirm a new preview", 409, "baseUrl");
-    this.assert({ input: context.input, plan: context.plan, view: { id: context.requestId, sessionId: context.sessionId, revision: context.revision } } as ConfigurationRecord, credential);
+    this.assertForContext(context, capabilityId, credential);
   }
   confirm(record: ConfigurationRecord, input: unknown): void {
     const body = object(input, ["revision", "endpointTarget"], "endpointConsent");

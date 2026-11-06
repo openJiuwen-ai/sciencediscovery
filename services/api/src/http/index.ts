@@ -635,7 +635,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // Provider model listings are cached briefly so composer and settings reads
   // do not hammer vendor endpoints; provider edits invalidate the entry and
   // `?refresh=1` forces a live fetch.
-  const providerModelListCache = new Map<string, { fetchedAt: string; models: DiscoveredModel[] }>();
+  const providerModelListCache = new Map<string, { revision: string; fetchedAt: string; models: DiscoveredModel[] }>();
   const PROVIDER_MODEL_CACHE_TTL_MS = 5 * 60_000;
   const usageExchangeRateProvider = new UsageExchangeRateProvider({
     config: config.usageExchangeRates,
@@ -2227,12 +2227,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const providerModelsMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models$/);
       if (providerModelsMatch && request.method === "GET") {
         const providerId = providerModelsMatch[1]!;
-        const provider = store.getProvider(providerId);
-        if (!provider) throw new ApiStatusError(404, "Provider not found");
+        const source = store.getProvider(providerId);
+        const revision = store.providerDiscoveryRevision(providerId);
+        if (!source || !revision) throw new ApiStatusError(404, "Provider not found");
+        const provider = structuredClone(source);
         const profileFor = (modelId: string) =>
           store.listModels().find((profile) => profile.providerId === providerId && profile.model === modelId)?.id;
         const refresh = url.searchParams.get("refresh") === "1";
         let cached = providerModelListCache.get(providerId);
+        if (cached?.revision !== revision) cached = undefined;
         if (refresh || !cached || Date.now() - Date.parse(cached.fetchedAt) > PROVIDER_MODEL_CACHE_TTL_MS) {
           try {
             const models = await listProviderModels({
@@ -2241,9 +2244,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               discovery: provider.modelDiscovery,
               proxy: resolveProxyForUrl(store.resolveProxy(provider.proxyPolicy), provider.baseUrl),
             });
-            cached = { fetchedAt: new Date().toISOString(), models };
+            if (store.providerDiscoveryRevision(providerId) !== revision) {
+              throw new ApiStatusError(409, "Provider connection changed while loading models. Refresh the model list.");
+            }
+            cached = { revision, fetchedAt: new Date().toISOString(), models };
             providerModelListCache.set(providerId, cached);
           } catch (error) {
+            if (store.providerDiscoveryRevision(providerId) !== revision) {
+              throw new ApiStatusError(409, "Provider connection changed while loading models. Refresh the model list.");
+            }
             if (error instanceof ModelDiscoveryError) {
               // Surface the upstream failure honestly; the UI keeps manual
               // model entry available as the fallback path.
@@ -2270,7 +2279,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // Seed the profile from the best facts available: explicit request,
         // then the live listing, then the curated catalog. A model typed by
         // hand simply has no listing entry, so it lands on the same path.
-        const remote = providerModelListCache.get(providerId)?.models.find((model) => model.id === modelId);
+        const cached = providerModelListCache.get(providerId);
+        const remote = cached?.revision === store.providerDiscoveryRevision(providerId)
+          ? cached?.models.find((model) => model.id === modelId) : undefined;
         const catalog = modelId ? lookupModelCatalog(modelId, provider.presetId) : undefined;
         const vision = body.vision ?? remote?.vision ?? catalog?.vision;
         const label = body.label ?? remote?.displayName ?? catalog?.label;
