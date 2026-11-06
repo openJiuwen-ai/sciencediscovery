@@ -190,21 +190,11 @@ export const win32Adaptation: OsAdaptation = {
     }
     throw lastError;
   },
-  async renameReplace(source, destination) {
-    // AV scanners and search indexers briefly hold freshly written files;
-    // MoveFileEx-with-replace then reports EPERM/EACCES/EBUSY. Back off and
-    // retry: the window is tens of milliseconds, so ~1.5s of patience is ample.
-    const retryable = new Set(["EPERM", "EACCES", "EBUSY"]);
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      try {
-        return await rename(source, destination);
-      } catch (error) {
-        lastError = error;
-        if (!retryable.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50 + attempt * 25));
-      }
-    }
-    throw lastError;
+  // The retry for a transient sharing violation (an antivirus scanner or an
+  // indexer holding the freshly written file) lives in the facade — index.ts
+  // -> replace.ts — because every caller needs it, not only the Windows ones.
+  // This is the raw replace.
+  renameReplace(source, destination) {
+    return rename(source, destination);
   },
 };

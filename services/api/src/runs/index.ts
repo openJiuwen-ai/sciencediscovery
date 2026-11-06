@@ -3565,7 +3565,21 @@ export function scheduleSessionRuns(
         evolve,
       );
     }
-  })();
+  })().catch((reason: unknown) => {
+    // This scheduler is started with `void`, so nothing above observes its
+    // rejection: it used to reach the process as an unhandled rejection and
+    // killed the API (#816). The throw that escapes is the one from the
+    // `finally` blocks here — the terminal `updateSessionRunStatus` write when
+    // `session-runs/<id>.json` cannot be replaced, or the follow-up
+    // `listSessionRuns`. The run keeps its non-terminal status on disk and
+    // `recoverSessionRuns` marks it `interrupted` at the next start, so
+    // containing the failure here loses no state; swallowing it into a silent
+    // log would, which is why the cause is logged with the run/session ids.
+    runLog.error("run_scheduler_failed", {
+      errorMessage: reason instanceof Error ? reason.message : String(reason),
+      sessionId,
+    });
+  });
 }
 
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
