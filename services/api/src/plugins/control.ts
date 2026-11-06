@@ -95,9 +95,10 @@ export class PluginControl {
           signal.throwIfAborted();
           if (command.expectedRevision !== this.snapshot(scope).revision) throw new BridgeError("conflict", "Settings changed; reload before saving");
         };
-        const settings = this.normalize(command.overrides);
-        if (scope.sessionId) await this.ports.replaceSessionSettings(scope.sessionId, settings, assertCurrent);
-        else await this.ports.replaceProjectSettings(scope.projectId, settings, assertCurrent);
+        // The Store validates session overrides at the shared mutation boundary,
+        // preserving existing unavailable model choices while rejecting new ones.
+        if (scope.sessionId) await this.ports.replaceSessionSettings(scope.sessionId, command.overrides, assertCurrent);
+        else await this.ports.replaceProjectSettings(scope.projectId, this.normalize(command.overrides), assertCurrent);
         return this.describe(scope);
       },
     } });
@@ -133,13 +134,12 @@ export class PluginControl {
           if (command.inherit === true) delete plugins[manifest.id];
           else plugins[manifest.id] = record(command.settings ?? {}) as never;
           next.plugins = plugins;
-          const normalized = this.normalize(next);
           const assertCurrent = () => {
             signal.throwIfAborted();
             if (command.expectedRevision !== this.snapshot(scope).revision) throw new BridgeError("conflict", "Settings changed; reload before saving");
           };
-          if (scope.sessionId) await this.ports.replaceSessionSettings(scope.sessionId, normalized, assertCurrent);
-          else await this.ports.replaceProjectSettings(scope.projectId, normalized, assertCurrent);
+          if (scope.sessionId) await this.ports.replaceSessionSettings(scope.sessionId, next, assertCurrent);
+          else await this.ports.replaceProjectSettings(scope.projectId, this.normalize(next), assertCurrent);
           return this.snapshot(scope);
         },
       },
