@@ -1,0 +1,9 @@
+{
+  "contract_version": "0.1",
+  "repository": "openJiuwen-ai/sciencediscovery",
+  "policy_version": "sd-development-loop-v0.1",
+  "required_labels": [],
+  "required_checks": ["merge-gate"],
+  "trusted_reviewers": [],
+  "evidence_max_age_seconds": 3600
+}
