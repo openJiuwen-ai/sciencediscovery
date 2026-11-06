@@ -50,7 +50,7 @@ import { readCachedDocument } from "../app/document-cache.js";
 import { documentPayload } from "../app/document-payload.js";
 import type { PreviewSlot } from "../app/preview-tabs.js";
 import { TEXT } from "../text.js";
-import { claimsEscape } from "./dialog-escape.js";
+import { useTopmostEscape } from "./use-dialog-escape.js";
 import { DocumentPreview } from "./DocumentPreview.js";
 
 interface Props {
@@ -156,19 +156,12 @@ export function ArtifactDialog({
   /** Re-reads the version's record without touching the selection. */
   const [provenanceAttempt, setProvenanceAttempt] = useState(0);
 
-  useEffect(() => {
-    // A structure's full-screen view sits above the dialog and is the first
-    // thing Escape should leave; the viewer handles it, so the dialog stands
-    // back until the document is back to its box.
-    if (expanded) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!claimsEscape(event)) return;
-      event.preventDefault();
-      onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [expanded, onClose]);
+  // A structure's full-screen view sits above the dialog and is the first
+  // thing Escape should leave; the viewer handles it, so the dialog stands
+  // back until the document is back to its box. The card a citation opens over
+  // this dialog is above it too, and takes the key first for the same reason:
+  // the reader goes back one surface at a time.
+  useTopmostEscape(onClose, !expanded);
 
   // The artifact and every version it has. A citation may pin a version
   // number (the one the report cited); that pin wins over the newest version,
