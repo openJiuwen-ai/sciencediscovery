@@ -1272,6 +1272,15 @@ export const EN: Text = {
       "invalid-tool-call": "Invalid tool call",
     },
     timeout: "The run timed out and was terminated. Retry, or check the relevant timeout in System settings.",
+    timeoutNoticeTitle: "Timeout notice",
+    timeoutNotice: "A timeout was reported. Open the technical details to identify the affected operation and check the relevant timeout setting.",
+    timeoutTitles: {
+      gateway_idle: "Run timed out",
+      gateway_turn: "Run timed out",
+      permission_wait: "Permission wait timed out",
+      runner_exec: "Tool execution timed out",
+      kernel_idle: "Kernel idle timeout",
+    },
     timeouts: {
       gateway_idle: (seconds: number) => `The Agent made no progress for ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry, or increase the Agent idle timeout in System settings.`,
       gateway_turn: (seconds: number) => `The Agent turn exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Split the task and retry, or increase the turn timeout in System settings.`,

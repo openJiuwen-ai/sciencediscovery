@@ -1318,6 +1318,15 @@ export const ZH = {
       "invalid-tool-call": "工具调用无效",
     },
     timeout: "运行已因超时终止。建议重试，或在系统设置中检查对应的超时设置。",
+    timeoutNoticeTitle: "超时提示",
+    timeoutNotice: "检测到超时，请展开技术详情确认受影响的操作，并检查对应的超时设置。",
+    timeoutTitles: {
+      gateway_idle: "运行超时",
+      gateway_turn: "运行超时",
+      permission_wait: "授权等待超时",
+      runner_exec: "工具执行超时",
+      kernel_idle: "内核空闲超时",
+    },
     timeouts: {
       gateway_idle: (seconds: number) => `Agent 在 ${seconds} 秒内没有产生进展，运行已终止。建议重试，或在系统设置中适当增加 Agent 空闲超时时间。`,
       gateway_turn: (seconds: number) => `Agent 单轮运行已超过 ${seconds} 秒，运行已终止。建议拆分任务后重试，或在系统设置中适当增加单轮超时时间。`,

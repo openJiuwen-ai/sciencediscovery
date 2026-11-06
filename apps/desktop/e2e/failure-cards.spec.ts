@@ -156,3 +156,44 @@ test("failure cards merge timeout records and remain readable after reload", asy
     await expect(cards.first().locator(".run-failure-summary")).toContainText("made no progress for 1 second");
   });
 });
+
+
+for (const kind of ["runner_exec", "kernel_idle", undefined] as const) {
+  test(`standalone ${kind ?? "legacy"} timeout does not mark a completed run as timed out`, async ({ page, journey }) => {
+    const raw = "opaque operation timeout diagnostic";
+    await installMockApi(page, { sessions: [makeSession({ messages: [
+      { id: "question", role: "user", content: "Continue after a tool timeout", createdAt: CREATED_AT },
+      { id: "notice", role: "assistant", kind: "timeout_notice", content: raw, createdAt: CREATED_AT,
+        ...(kind ? { timeout: { kind, reason: raw, timeoutMs: 1000 } } : {}) },
+      { id: "answer", role: "assistant", content: "The task completed after recovery", createdAt: CREATED_AT },
+    ] })] });
+    await page.addInitScript(({ key, token }) => {
+      localStorage.setItem(key, token);
+      if (localStorage.getItem("sciencediscovery-desktop:locale") === null) {
+        localStorage.setItem("sciencediscovery-desktop:locale", "zh-CN");
+      }
+    }, { key: TOKEN_STORAGE_KEY, token: randomUUID() });
+    journey.scenario({
+      goal: "工具或内核超时后任务继续完成时，告警准确描述局部超时，不误报整个运行超时。",
+      preconditions: ["Desktop 页面及独立内存 API", "历史超时通知与后续完成回答，无真实后端"],
+    });
+    for (const locale of ["zh-CN", "en"] as const) {
+      await journey.step(`Read the persisted timeout in ${locale}`, "标题标明受影响的操作，完成回答保留，原始诊断可以展开。", async () => {
+        if (locale === "en") await page.evaluate(() => localStorage.setItem("sciencediscovery-desktop:locale", "en"));
+        await page.goto("/");
+        const card = page.locator(".run-failure");
+        const expected = kind === "runner_exec"
+          ? { "zh-CN": "工具执行超时", en: "Tool execution timed out" }
+          : kind === "kernel_idle"
+            ? { "zh-CN": "内核空闲超时", en: "Kernel idle timeout" }
+            : { "zh-CN": "超时提示", en: "Timeout notice" };
+        await expect(card).toHaveCount(1);
+        await expect(card.locator("h3")).toHaveText(expected[locale]);
+        await expect(card).not.toContainText(/运行超时|运行已终止|run was terminated|Run timed out/);
+        await expect(page.getByText("The task completed after recovery", { exact: true })).toBeVisible();
+        await card.locator("summary").click();
+        await expect(card.locator("pre")).toHaveText(raw);
+      });
+    }
+  });
+}

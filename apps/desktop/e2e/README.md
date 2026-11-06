@@ -59,7 +59,11 @@ adds a spec, that the evidence is local — do not describe it as a CI gate.
 
 `failure-cards.spec.ts` uses the same per-page API isolation and shares only the
 step reporter with `test/helpers/journey-report.ts`. It requires no API server,
-model stub or global timeout changes. Its five steps check Desktop rendering of
+model stub or global timeout changes. The main journey’s five steps check Desktop rendering of
 mocked SSE failures and replay; they do not verify real backend timeout
 classification or persistence. Run it with the Desktop config above, appending
 `failure-cards.spec.ts`. It is intentionally outside the Web E2E catalogue.
+
+Three additional cases cover standalone tool, kernel and untyped timeout notices
+beside a later completed answer. Each reloads in Chinese and English, checks the
+operation-specific or neutral title, and opens the unchanged raw diagnostic.
