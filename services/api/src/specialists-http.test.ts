@@ -123,3 +123,44 @@ test("a store fault that is not the store's own rejection is never relabelled 40
       `an unexpected fault must reach the catch-all and read 500, not be claimed as client input: ${fault.message}`);
   }
 });
+
+test("every rejection the Specialist store raises is still a client error", () => {
+  // The exact wording of services/api/src/store.ts, one entry per throw. A store
+  // rejection that loses its mapping silently becomes a 500 the settings pane
+  // cannot explain, so each one is pinned by its own message.
+  const rejections = [
+    "Specialist not found",
+    "Specialist name is required",
+    "Specialist description is required",
+    "Specialist description must be 1-500 characters",
+    "Specialist instructions must be 1-20000 characters",
+    "Specialist name already exists",
+    "Specialist skills are unavailable: nope",
+    "Specialist connectors are unavailable: nope",
+    "Built-in specialists are read-only; only their enabled flag can be toggled",
+    "Built-in specialists cannot be deleted",
+    "Specialist is referenced by a Session or subagent and cannot be deleted",
+    "enabled must be a boolean",
+  ];
+  for (const message of rejections) {
+    const status = specialistErrorStatus(new Error(message));
+    assert.equal(status, message === "Specialist not found" ? 404 : 400,
+      `the store's own rejection must keep its status, not fall through to 500: ${message}`);
+  }
+});
+
+test("a fault that merely reads like input validation is still a 500", () => {
+  // The store's wording is the only thing that may be read as client input. A
+  // fault from anywhere else must not be relabelled because a word matched:
+  // these all match the legacy isKnownClientInputError patterns.
+  const faults = [
+    "Catalog contains an unknown value",
+    "the scheduler must not be unlocked here",
+    "sqlite cannot open the catalog database",
+    "secret storage is unavailable",
+  ];
+  for (const message of faults) {
+    assert.equal(specialistErrorStatus(new Error(message)), undefined,
+      `only the store's own wording is client input; this fault must read 500: ${message}`);
+  }
+});
