@@ -72,12 +72,18 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
   /** Whether a status read has landed. Before it does, the app does not know
    *  whether a list request is even allowed. */
   const statusRead = useRef(false);
-  /** Whether the last list read that succeeded saw an active search. A failed
-   *  read answers nothing about the search itself — a restarted server, a
-   *  proxy hiccup or a dropped request is not a search that ended — so the
-   *  poll keeps the cadence the last *answer* established instead of stopping
-   *  for good with the shelf frozen on a run that is still going. */
-  const lastActive = useRef(false);
+  /** The last list read that succeeded: which session it was for, and whether
+   *  it saw an active search. A failed read answers nothing about the search
+   *  itself — a restarted server, a proxy hiccup or a dropped request is not a
+   *  search that ended — so the poll keeps the cadence the last *answer*
+   *  established instead of stopping for good with the shelf frozen on a run
+   *  that is still going.
+   *
+   *  The session is part of it because the cadence belongs to a list: a read
+   *  that fails for a session the last good read never covered is not a search
+   *  to keep polling, and the shelf must not keep showing one session's runs
+   *  under another's header. */
+  const lastRead = useRef<{ active: boolean; sessionId?: string }>({ active: false });
 
   useEffect(() => {
     let live = true;
@@ -116,9 +122,16 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
   useEffect(() => {
     if (!statusRead.current) return;
     if (sessionId === undefined || !ready) {
-      lastActive.current = false;
+      lastRead.current = { active: false, sessionId };
       setRuns([]);
       return;
+    }
+    // The shelf is this session's list. Rows read for another session are not
+    // this session's to show, and the cadence that read established is not
+    // this session's to keep.
+    if (lastRead.current.sessionId !== sessionId) {
+      lastRead.current = { active: false };
+      setRuns([]);
     }
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -131,8 +144,11 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
           // An active run is the only reason the list changes on its own. A
           // terminal one waits for an explicit refresh, which the panel sends
           // when the user starts or stops something.
-          lastActive.current = next.some((run) => isEvolveRunActive(run.status));
-          if (lastActive.current) {
+          lastRead.current = {
+            active: next.some((run) => isEvolveRunActive(run.status)),
+            sessionId,
+          };
+          if (lastRead.current.active) {
             timer = setTimeout(load, ACTIVE_POLL_MS);
           }
         })
@@ -145,7 +161,9 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
           // said — including "running" for a search that had finished. The
           // cadence is the last good read's to set; the failure only decides
           // whether there was a cadence to keep.
-          if (lastActive.current) timer = setTimeout(load, ACTIVE_POLL_MS);
+          if (lastRead.current.active && lastRead.current.sessionId === sessionId) {
+            timer = setTimeout(load, ACTIVE_POLL_MS);
+          }
         });
     };
     load();
