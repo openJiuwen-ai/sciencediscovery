@@ -323,8 +323,10 @@ describe("a stopped run ends on a hairline, not a notice", () => {
       terminal: true,
     });
     assert.match(html, /run-failure-row/u);
-    // Localized Chinese summary for timeout.
-    assert.match(html, /请求超时/u);
+    assert.match(html, /<h3>运行超时<\/h3>/u);
+    assert.match(html, /Agent 在 1 秒内没有产生进展，运行已终止/u);
+    assert.match(html, /适当增加 Agent 空闲超时时间/u);
+    assert.match(html, /<circle cx="12" cy="12" r="9"><\/circle>/u);
     // The original errorCode and error.message live inside the technical details.
     assert.match(html, /class="run-failure-details"/u);
     assert.match(html, /class="run-failure-code"/u);
@@ -364,7 +366,7 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     });
     assert.doesNotMatch(html, /run-failure-details/u);
     assert.doesNotMatch(html, /任务未能完成/u);
-    assert.doesNotMatch(html, /请求超时/u);
+    assert.doesNotMatch(html, /运行超时/u);
   });
 });
 

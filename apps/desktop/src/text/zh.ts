@@ -1307,22 +1307,32 @@ export const ZH = {
   },
 
   runFailure: {
-    title: "运行未完成",
-    /** Plain-language cause and recovery action per stable failure class. */
-    timeout: "请求超时，请重试，或拆小任务、调大超时预算。",
-    "rate-limited": "模型服务正在限流，请稍候重试。",
-    /** `semantic-error` is the backend's catch-all classification, so keep the
-     *  wording neutral and actionable rather than blaming the model service. */
-    "semantic-error": "运行中遇到了意外问题。请检查输入内容或模型配置后重试；若持续出现，可尝试其他模型。",
-    "server-error": "模型服务出现服务器错误，请稍候重试；若持续失败，请检查服务状态。",
-    "transport-error": "无法连接模型服务，请检查网络或代理设置后重试。",
-    unauthorized: "模型服务拒绝了当前凭据，请检查模型注册表中的 API Key 后重试。",
-    "invalid-tool-call":
-      "模型生成的工具调用参数无法解析，该调用没有执行，运行已停止。请重试任务；若反复出现，可换用其他模型。",
-    /** Fallback when the server returns a code the client does not recognise. */
-    unknown:
-      "任务未能完成，运行已停止。请重试任务；若再次失败，可展开技术详情以排查原因。",
-    /** Label for the expandable block that exposes raw provider diagnostics. */
+    title: "运行失败",
+    titles: {
+      timeout: "运行超时",
+      "rate-limited": "模型请求受限",
+      "semantic-error": "运行异常",
+      "server-error": "模型服务异常",
+      "transport-error": "模型服务连接失败",
+      unauthorized: "模型鉴权失败",
+      "invalid-tool-call": "工具调用无效",
+    },
+    timeout: "运行已因超时终止。建议重试，或在系统设置中检查对应的超时设置。",
+    timeouts: {
+      gateway_idle: (seconds: number) => `Agent 在 ${seconds} 秒内没有产生进展，运行已终止。建议重试，或在系统设置中适当增加 Agent 空闲超时时间。`,
+      gateway_turn: (seconds: number) => `Agent 单轮运行已超过 ${seconds} 秒，运行已终止。建议拆分任务后重试，或在系统设置中适当增加单轮超时时间。`,
+      permission_wait: (seconds: number) => `授权请求在 ${seconds} 秒内未得到处理，运行已终止。建议重试并及时处理授权请求，或在系统设置中适当增加授权等待超时时间。`,
+      runner_exec: (seconds: number) => `工具执行已超过 ${seconds} 秒。建议缩小单次执行范围后重试，或在系统设置中适当增加执行超时时间。`,
+      kernel_idle: (seconds: number) => `内核空闲时间已达到 ${seconds} 秒。建议重试，或在系统设置中适当增加内核空闲超时时间。`,
+    },
+    "rate-limited": "请求次数或用量已达到模型服务限制，运行已停止。建议稍后重试；若持续出现，请检查服务商的限额和可用额度。",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "运行中遇到了意外问题，任务未能完成。建议重试；若持续出现，请展开技术详情排查原因。",
+    "server-error": "模型服务返回服务器错误，运行已停止。建议稍后重试；若持续出现，请检查服务状态或更换模型。",
+    "transport-error": "无法连接模型服务，运行已停止。建议检查网络、代理设置及模型服务地址后重试。",
+    unauthorized: "模型服务拒绝了当前凭据，运行已停止。建议在系统设置的模型注册表中检查 API Key 及访问权限后重试。",
+    "invalid-tool-call": "模型生成的工具调用参数无法解析，该调用未执行，运行已停止。建议重试；若反复出现，可更换模型。",
+    unknown: "任务未能完成，运行已停止。建议重试；若再次失败，请展开技术详情排查原因。",
     technicalDetails: "技术详情",
   },
 

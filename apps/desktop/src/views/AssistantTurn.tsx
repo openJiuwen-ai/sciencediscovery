@@ -354,7 +354,7 @@ function RunStatusLine({ run }: { run: RunStreamState }) {
   }
   return (
     <>
-      {run.error && <RunFailureCard code={run.error.code} message={run.error.message} />}
+      {run.error && <RunFailureCard code={run.error.code} message={run.error.message} timeout={run.error.timeout} />}
       {stop === undefined ? null : <StopDivider reason={stop.reason} word={stop.word} />}
       {lines.length === 0 ? null : (
         <div className="message assistant is-notice">

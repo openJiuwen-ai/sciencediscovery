@@ -366,7 +366,7 @@ test("a timeout notice shows a localized summary and hides raw diagnostics in de
       message("timeout-1", "assistant", "Request stopped because the Agent idle timeout was reached after 1 seconds. Agent run stalled: no gateway progress for 1000 ms", "timeout_notice"),
     ]),
   });
-  assert.match(markup, /请求超时/u);
+  assert.match(markup, /运行超时/u);
   assert.match(markup, /class="run-failure-details"/u);
   assert.match(markup, /Agent idle timeout was reached/u);
 });
@@ -380,7 +380,7 @@ test("a replayed failed run shows the localized summary and keeps diagnostics in
     { messageId: "answer-1", runId: "run-1", state: failed("run-1", "timeout", "no gateway progress for 1000 ms"), userMessageId: "question-1" },
   ];
   const markup = render({ detail: detail(sessionMessages), replays });
-  assert.match(markup, /请求超时/u);
+  assert.match(markup, /运行超时/u);
   assert.match(markup, /class="run-failure-details"/u);
   assert.match(markup, /no gateway progress for 1000 ms/u);
 });
@@ -396,7 +396,7 @@ test("a run timeout merges its transcript notice into one card without losing di
     { messageId: "answer-1", runId: "run-1", state: failed("run-1", "timeout", "no gateway progress for 1000 ms"), userMessageId: "question-1" },
   ];
   const markup = render({ detail: detail(sessionMessages), replays });
-  assert.match(markup, /请求超时/u);
+  assert.match(markup, /运行超时/u);
   assert.equal((markup.match(/class="run-failure-details"/gu) ?? []).length, 1);
   assert.match(markup, /no gateway progress for 1000 ms/u);
   assert.match(markup, /Agent idle timeout was reached/u);
@@ -471,4 +471,32 @@ test("ambiguous failures in one user turn retain the standalone notice", () => {
     replays: ["r1", "r2"].map(runId => ({ runId, userMessageId: "q1", state: failed(runId, "timeout", "no gateway progress for 1000 ms") })),
   });
   assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 3);
+});
+
+test("a standalone timeout uses its persisted duration without parsing opaque diagnostics", () => {
+  const notice: ChatMessage = {
+    ...message("n1", "assistant", "opaque-timeout-diagnostic", "timeout_notice"),
+    timeout: { kind: "gateway_idle", timeoutMs: 4500, reason: "opaque-timeout-diagnostic" },
+  };
+  const markup = render({ detail: detail([notice]) });
+  assert.match(markup, /<h3>运行超时<\/h3>/);
+  assert.match(markup, /Agent 在 4.5 秒内没有产生进展/);
+  assert.match(markup, /适当增加 Agent 空闲超时时间/);
+  assert.match(markup, /<pre>opaque-timeout-diagnostic<\/pre>/);
+});
+
+test("a merged timeout carries its persisted duration into the single failure card", () => {
+  const reason = "idle budget exhausted";
+  const notice: ChatMessage = {
+    ...message("n1", "assistant", `Retained notice: ${reason}`, "timeout_notice"),
+    timeout: { kind: "gateway_idle", timeoutMs: 3500, reason },
+  };
+  const messages = [message("q1", "user", "first"), notice];
+  const run = failed("r1", "timeout", reason);
+  const before = JSON.stringify({ messages, run });
+  const markup = render({ detail: detail(messages), replays: [{ runId: "r1", userMessageId: "q1", state: run }] });
+  assert.equal((markup.match(/class="run-failure"/gu) ?? []).length, 1);
+  assert.match(markup, /Agent 在 3.5 秒内没有产生进展/);
+  assert.match(markup, /Retained notice: idle budget exhausted/);
+  assert.equal(JSON.stringify({ messages, run }), before);
 });

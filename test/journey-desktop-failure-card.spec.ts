@@ -90,8 +90,8 @@ test("Desktop failure cards merge timeout records and remain readable after relo
     await journey.step("运行超时只显示一张告警", "1440×900 下，失败摘要清晰，原始诊断默认折叠，同一次超时不再显示两张卡片。", async () => {
       await submit("Please answer the first timeout check");
       await expect(cards).toHaveCount(1);
-      await expect(cards.locator("h3")).toHaveText("运行未完成");
-      await expect(cards.locator(".run-failure-summary")).toContainText("请求超时");
+      await expect(cards.locator("h3")).toHaveText("运行超时");
+      await expect(cards.locator(".run-failure-summary")).toContainText("Agent 在 1 秒内没有产生进展");
       await expect(cards.locator("pre")).toBeHidden();
       await expect(page.locator("#composer-textarea")).toBeEnabled();
       await expect.poll(() => modelRequests).toBeGreaterThan(0);
@@ -135,8 +135,8 @@ test("Desktop failure cards merge timeout records and remain readable after relo
       await page.setViewportSize({ width: 960, height: 720 });
       await openSession();
       await expect(cards).toHaveCount(2);
-      await expect(cards.first().locator("h3")).toHaveText("Run incomplete");
-      await expect(cards.first().locator(".run-failure-summary")).toContainText("timed out");
+      await expect(cards.first().locator("h3")).toHaveText("Run timed out");
+      await expect(cards.first().locator(".run-failure-summary")).toContainText("made no progress for 1 second");
     });
   } finally {
     await page.request.put(`${origin}/api/timeout-settings`, { headers, data: previousTimeouts });

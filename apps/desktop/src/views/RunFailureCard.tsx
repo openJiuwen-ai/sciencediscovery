@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { formatRunFailure } from "../run-failure.js";
+import type { ChatMessage } from "../api/types.js";
+import { formatRunFailure, formatRunFailureTitle } from "../run-failure.js";
 import { TEXT } from "../text.js";
 
 /** One failure, with recovery guidance first and the complete evidence on demand. */
-export function RunFailureCard({ code, message }: { code?: string; message: string }) {
+export function RunFailureCard({ code, message, timeout }: { code?: string; message: string; timeout?: ChatMessage["timeout"] }) {
   return (
     <div className="message assistant run-failure-row">
       <section className="run-failure" role="status">
         <div className="run-failure-heading">
           <svg aria-hidden="true" className="run-failure-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10.3 4.5 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.5a2 2 0 0 0-3.4 0Z" />
-            <path d="M12 9v4m0 4h.01" />
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7.5v5m0 4h.01" />
           </svg>
-          <h3>{TEXT.runFailure.title}</h3>
+          <h3>{formatRunFailureTitle(code)}</h3>
         </div>
-        <p className="run-failure-summary">{formatRunFailure(code)}</p>
+        <p className="run-failure-summary">{formatRunFailure(code, message, timeout)}</p>
         <details className="run-failure-details">
           <summary>{TEXT.runFailure.technicalDetails}</summary>
           <div className="run-failure-diagnostics">
