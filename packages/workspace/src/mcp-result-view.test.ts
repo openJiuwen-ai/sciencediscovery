@@ -61,6 +61,59 @@ test("large Wiki and custom output stays bounded and recoverable, with honest st
   assert.match(unavailable.instruction, /could not be stored/);
 });
 
+test("oversized record payloads preserve identity and warnings with actionable recovery", async () => {
+  const large = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [
+    `section${index}`, "漢😀".repeat(1_200) + "EVIDENCE-END",
+  ]));
+  for (const payload of [
+    { structuredData: large },
+    { crossReferences: Object.values(large) },
+    { structuredData: large, crossReferences: Object.values(large) },
+  ]) {
+    const record = { identifier: "4HHB", title: "Hemoglobin", year: "1984",
+      url: "https://www.rcsb.org/structure/4HHB", warnings: ["Verify source"], ...payload };
+    const canonical = { records: [record] };
+    const snapshot = structuredClone(canonical);
+    for (const failStorage of [false, true]) {
+      const { response, store } = await dispatch(canonical, failStorage);
+      const view = JSON.parse(response.content);
+      assert.equal(response.isError, false);
+      assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
+      assert.equal(view.records.length, 1);
+      assert.equal(view.records[0].id, record.identifier);
+      assert.equal(view.records[0].title, record.title);
+      assert.equal(view.records[0].year, record.year);
+      assert.equal(view.records[0].url, record.url);
+      assert.deepEqual(view.warnings, record.warnings);
+      assert.equal(view.truncated, true);
+      assert.match(view.instruction, /_retainedOutput/);
+      assert.doesNotMatch(view.instruction, /lower.*limit|refine/i);
+      for (const key of Object.keys(payload)) {
+        assert.deepEqual(view.records[0][key], { truncated: true, reason: "maximum size reached" });
+      }
+      if (failStorage) {
+        assert.equal(view._retainedOutput.ref, undefined);
+        assert.match(view._retainedOutput.instruction, /could not be stored/);
+      } else {
+        assert.ok((await store.search(view._retainedOutput.ref, "EVIDENCE-END")).matches.length > 0);
+      }
+      assert.deepEqual(canonical, snapshot);
+    }
+  }
+});
+
+test("oversized result data preserves all small record identities", async () => {
+  const { response } = await dispatch({ records: [
+    { identifier: "first", title: "First" }, { identifier: "second", title: "Second" },
+  ], data: Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`section${index}`, "x".repeat(4_000)])) });
+  const view = JSON.parse(response.content);
+  assert.deepEqual(view.records.map((record: { id: string }) => record.id), ["first", "second"]);
+  assert.deepEqual(view.data, { truncated: true, reason: "maximum size reached" });
+  assert.equal(view.truncated, true);
+  assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
+  assert.equal(typeof view._retainedOutput.ref, "string");
+});
+
 
 test("depth, object-key and non-arXiv abstract losses retain a usable reference", async () => {
   let nested: unknown = { value: "DEPTH-END" };
