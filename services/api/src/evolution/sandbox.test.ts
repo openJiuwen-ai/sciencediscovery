@@ -75,8 +75,11 @@ test("Windows has no backend unless the installation opted in", () => {
   assert.match(refused?.reason ?? "", /has not enabled direct execution/);
 
   const optedIn = sandboxForPlatform("win32", { unisolated: true });
-  assert.equal(optedIn?.backend, "direct");
-  assert.equal(toSidecarCapability(optedIn!).backend, "direct");
+  // `assert.ok` narrows the optional return; a `!` does the same narrowing by
+  // assertion, which the repo's CodeCheck reads as redundant.
+  assert.ok(optedIn);
+  assert.equal(optedIn.backend, "direct");
+  assert.equal(toSidecarCapability(optedIn).backend, "direct");
   // An explicit `false` is not a truthy accident either.
   assert.equal(sandboxForPlatform("win32", { unisolated: false })?.backend, null);
 });

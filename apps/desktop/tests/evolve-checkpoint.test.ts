@@ -42,12 +42,16 @@ test("a checkpoint block becomes a card, and the prose around it stays prose", (
   const segments = splitEvolveCheckpoints(answer);
   assert.equal(segments.length, 2);
   const [prose, checkpoint] = segments;
-  assert.equal(prose!.kind, "markdown");
-  if (prose!.kind !== "markdown") return;
-  assert.equal(prose!.text, "先说结论。\n");
-  assert.equal(checkpoint!.kind, "checkpoint");
-  if (checkpoint!.kind !== "checkpoint") return;
-  assert.deepEqual(checkpoint!.checkpoint, {
+  // `assert.ok` narrows the possibly-undefined pair; a `!` here is the same
+  // narrowing by assertion, which the repo's CodeCheck reads as redundant.
+  assert.ok(prose);
+  assert.ok(checkpoint);
+  assert.equal(prose.kind, "markdown");
+  if (prose.kind !== "markdown") return;
+  assert.equal(prose.text, "先说结论。\n");
+  assert.equal(checkpoint.kind, "checkpoint");
+  if (checkpoint.kind !== "checkpoint") return;
+  assert.deepEqual(checkpoint.checkpoint, {
     body: "**度量：** 压缩比\n\n**冻结：** 不许用现成库",
     pace: "confirm",
     step: 1,
