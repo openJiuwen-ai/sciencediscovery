@@ -507,12 +507,15 @@ test("gateway venv provisioned under the API data dir is resolved without enviro
   const dataDir = mkdtempSync(join(tmpdir(), "mcp-data-dir-"));
   try {
     const gateway = provisionVenv(dataDir, "gateway");
-    assert.equal(resolveMcpPython({ PATH: "" }, dataDir), gateway);
-    assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_DATA_DIR: dataDir }), gateway);
-    assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_ENVS_ROOT: join(dataDir, "envs") }), gateway);
-    // An operator value stays authoritative over any provisioned venv.
-    const configured = join(dataDir, "custom-python");
-    assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_GATEWAY_PYTHON_PATH: configured }, dataDir), configured);
+    // From a cwd with no provisioned tree, so only the passed data dir can win.
+    inTemporaryCwd(() => {
+      assert.equal(resolveMcpPython({ PATH: "" }, dataDir), gateway);
+      assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_DATA_DIR: dataDir }), gateway);
+      assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_ENVS_ROOT: join(dataDir, "envs") }), gateway);
+      // An operator value stays authoritative over any provisioned venv.
+      const configured = join(dataDir, "custom-python");
+      assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_GATEWAY_PYTHON_PATH: configured }, dataDir), configured);
+    });
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
@@ -520,8 +523,19 @@ test("gateway venv provisioned under the API data dir is resolved without enviro
   const sharedDir = mkdtempSync(join(tmpdir(), "mcp-sd-services-"));
   try {
     const shared = provisionVenv(sharedDir, "sd-services");
-    assert.equal(resolveMcpPython({ PATH: "" }, sharedDir), shared);
+    inTemporaryCwd(() => assert.equal(resolveMcpPython({ PATH: "" }, sharedDir), shared));
   } finally { rmSync(sharedDir, { recursive: true, force: true }); }
+});
+
+test("an explicit envs root outranks the incidental cwd data dir", () => {
+  inTemporaryCwd((root) => {
+    provisionVenv(join(root, ".sciencediscovery-data"), "gateway");
+    const configured = mkdtempSync(join(tmpdir(), "mcp-envs-root-"));
+    try {
+      const gateway = provisionVenv(configured, "gateway");
+      assert.equal(resolveMcpPython({ PATH: "", SCIENCE_AGENT_ENVS_ROOT: join(configured, "envs") }), gateway);
+    } finally { rmSync(configured, { recursive: true, force: true }); }
+  });
 });
 
 test("the default data dir and legacy layouts are still probed from the process cwd", () => {
@@ -543,10 +557,10 @@ test("a python on PATH is resolved to its absolute path, and a missing one fails
     const executable = process.platform === "win32" ? "python.exe" : "python";
     const onPath = join(pathDir, executable);
     writeFileSync(onPath, "", { mode: 0o755 });
-    assert.equal(resolveMcpPython({ PATH: pathDir }, emptyDataDir), onPath);
-    // Nothing configured, nothing provisioned, no `python` on PATH: fail with
-    // the operator's remedy instead of spawning a bare `python` that ENOENTs.
     inTemporaryCwd(() => {
+      assert.equal(resolveMcpPython({ PATH: pathDir }, emptyDataDir), onPath);
+      // Nothing configured, nothing provisioned, no `python` on PATH: fail with
+      // the operator's remedy instead of spawning a bare `python` that ENOENTs.
       assert.throws(
         () => resolveMcpPython({ PATH: "" }, emptyDataDir),
         /SCIENCE_AGENT_GATEWAY_PYTHON_PATH[\s\S]*start-stack\.sh/,
