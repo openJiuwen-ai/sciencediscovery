@@ -1741,6 +1741,79 @@ test("a wide line past the row window does not become the file's column count", 
   assert.deepEqual(narrow.warnings, []);
 });
 
+test("the padding sentence counts the unnamed columns the capped grid really holds", async (context) => {
+  const fixture = await createFixture(context);
+  // The sentence must describe the grid that was actually built, not the width
+  // the header and the hidden line would add up to: `width` is capped by
+  // MAX_PREVIEW_COLUMNS, so a header at the cap has no room for surplus at all.
+  const atCap = Array.from({ length: 1_001 }, (_, index) => `c${index}`);
+  const atCapLines = [atCap.join(",")];
+  for (let index = 0; index < 100; index += 1) atCapLines.push("1,2,3");
+  atCapLines.push(Array.from({ length: 1_016 }, () => "w").join(","));
+  const atCapVid = await seedArtifact(fixture, {
+    content: atCapLines.join("\n"),
+    kind: "dataset",
+    logicalName: "wide-header-outlier-past-window.csv",
+    mediaType: "text/csv",
+  });
+  const atCapPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, atCapVid,
+  );
+  if (atCapPayload.mode !== "dataset-table") assert.fail(`unexpected mode ${atCapPayload.mode}`);
+  assert.equal(atCapPayload.columns.length, 1_001, "the header is previewed whole");
+  assert.equal(atCapPayload.clippedCells, 0, "the hidden line clips no returned cell");
+  assert.deepEqual(atCapPayload.clippedColumns, { shown: 1_001, total: 1_001 });
+  for (const row of atCapPayload.rows) assert.equal(row.length, 1_001, "every row is as wide as the grid");
+  assert.deepEqual(
+    atCapPayload.warnings,
+    [],
+    "the capped grid has no unnamed column, so there is nothing to report as padding",
+  );
+
+  // One column short of the cap the grid really gains one unnamed column, so the
+  // sentence has to count exactly that one — not the sixteen the header and the
+  // hidden line would add up to.
+  const underCap = Array.from({ length: 1_000 }, (_, index) => `c${index}`);
+  const underCapLines = [underCap.join(",")];
+  for (let index = 0; index < 100; index += 1) underCapLines.push(Array.from({ length: 1_000 }, () => "1").join(","));
+  underCapLines.push(Array.from({ length: 1_016 }, () => "w").join(","));
+  const underCapVid = await seedArtifact(fixture, {
+    content: underCapLines.join("\n"),
+    kind: "dataset",
+    logicalName: "near-cap-outlier-past-window.csv",
+    mediaType: "text/csv",
+  });
+  const underCapPayload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, underCapVid,
+  );
+  if (underCapPayload.mode !== "dataset-table") assert.fail(`unexpected mode ${underCapPayload.mode}`);
+  assert.equal(underCapPayload.columns.length, 1_001, "the cap, not the header plus sixteen");
+  assert.deepEqual(underCapPayload.clippedColumns, { shown: 1_000, total: 1_000 });
+  const underCapPadding = underCapPayload.warnings.find((warning) => /pads \d+ unnamed column/.test(warning)) ?? "";
+  assert.match(underCapPadding, /pads 1 unnamed column\b/, `one unnamed column is in the grid: ${underCapPadding}`);
+  assert.match(underCapPadding, /100 blank cells/, `one blank cell per returned row: ${underCapPadding}`);
+});
+
+test("the padding sentence names the row window it is talking about", async (context) => {
+  const fixture = await createFixture(context);
+  const outlier = Array.from({ length: 5_000 }, (_, index) => `c${index}`).join(",");
+  const vid = await seedArtifact(fixture, {
+    content: ["a,b", "1,2", outlier].join("\n"),
+    kind: "dataset",
+    logicalName: "one-row-window.csv",
+    mediaType: "text/csv",
+  });
+  // `maxRows=1` is a documented parameter, so the sentence must read "the first 1
+  // row", not "the first 1 rows".
+  const payload = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, vid, "1",
+  );
+  if (payload.mode !== "dataset-table") assert.fail(`unexpected mode ${payload.mode}`);
+  assert.equal(payload.rows.length, 1);
+  const padding = payload.warnings.find((warning) => /pads \d+ unnamed column/.test(warning)) ?? "";
+  assert.match(padding, /past the first 1 row,/, `the sentence counts rows, singular: ${padding}`);
+});
+
 test("the surplus cap never takes a named column and scales with the header", async (context) => {
   const fixture = await createFixture(context);
   // 40 named columns stay 40 even though every data row has three fields: the
