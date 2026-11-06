@@ -294,10 +294,10 @@ export class ToolOutputGuard {
     const compose = (body: string) => `${prefix}${wrap(body)}${suffix}`;
 
     const envelopeBytes = Buffer.byteLength(compose(""), "utf8");
-    const byteBudget = maxBytes - envelopeBytes;
+    let byteBudget = maxBytes - envelopeBytes;
     let lineBudget = maxLines;
     if (byteBudget > 0) {
-      for (let attempt = 0; attempt <= maxLines; attempt += 1) {
+      for (let attempt = 0; attempt <= maxLines + 1; attempt += 1) {
         const bounded = boundText(input.body, {
           keep: "head",
           maxBytes: byteBudget,
@@ -305,14 +305,28 @@ export class ToolOutputGuard {
         });
         const candidate = compose(bounded.text);
         if (fits(candidate)) return candidate;
-        if (lineBudget <= 1) break;
-        const excessLines = Math.max(1, splitKeepingLineEndings(candidate).length - maxLines);
-        lineBudget = Math.max(1, lineBudget - excessLines);
+        // Neutralizing fence-shaped text can make the wrapped body larger than
+        // its raw prefix. Reduce both dimensions by their measured overflow.
+        const excessBytes = Math.max(1, Buffer.byteLength(candidate, "utf8") - maxBytes);
+        const excessLines = Math.max(0, splitKeepingLineEndings(candidate).length - maxLines);
+        const nextByteBudget = byteBudget - excessBytes;
+        const nextLineBudget = excessLines ? Math.max(1, lineBudget - excessLines) : lineBudget;
+        if (nextByteBudget <= 0 || (nextByteBudget === byteBudget && nextLineBudget === lineBudget)) break;
+        byteBudget = nextByteBudget;
+        lineBudget = nextLineBudget;
       }
     }
     // A budget smaller than the trust envelope itself cannot safely carry any
-    // of the untrusted bytes. Fail closed with framework-only text.
-    return boundText(`${truncationNotice}[bounded tool output] Untrusted content omitted because the configured model-output budget is too small for its trust boundary.`, {
+    // of the untrusted bytes. Preserve a durable ref even when the longer
+    // framework header and suffix cannot fit; never point at deleted guidance.
+    const ref = input.outputRecord?.ref
+      ?? /read_tool_output\(ref="(tool-output-[0-9a-f]{16})"/.exec(originalPrefix)?.[1]
+      ?? /ref "(tool-output-[0-9a-f]{16})"/.exec(originalPrefix)?.[1]
+      ?? /\bref (tool-output-[0-9a-f]{16})\b/.exec(originalPrefix)?.[1];
+    const recovery = ref
+      ? ` Read the full output with read_tool_output(ref="${ref}", offset=1, limit=100).`
+      : " Re-run the tool with a narrower request or explicit pagination.";
+    return boundText(`[bounded tool output] Untrusted content omitted because the configured model-output budget is too small for its trust boundary.${recovery}`, {
       keep: "head", maxBytes, maxLines,
     }).text;
   }

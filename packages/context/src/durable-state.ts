@@ -113,12 +113,23 @@ function historicalResultIsError(content: string): boolean {
   ));
 }
 
-/** Recover the raw payload when canonical history contains a registry fence. */
-const OUTER_FENCE_PATTERN = /^\[BEGIN UNTRUSTED [a-z-]+ #([0-9a-f]+)\]\n([\s\S]*)\n\[END UNTRUSTED #\1\]([\s\S]*)$/;
+/** Recover raw payloads from genuine registry fences, never from look-alikes in tool text. */
+const LEGACY_OUTER_FENCE_PATTERN = /^\[BEGIN UNTRUSTED ([a-z-]+) #([0-9a-f]+)\]\n([\s\S]*)\n\[END UNTRUSTED #\2\][\s\S]*$/;
+const AFFIXED_OUTER_FENCE_PATTERN = /^[\s\S]*?\[BEGIN UNTRUSTED ([a-z-]+) #([0-9a-f]+)\]\n([\s\S]*)\n\[END UNTRUSTED #\2\][\s\S]*$/;
 
-function stripOuterFence(content: string): string {
-  const match = OUTER_FENCE_PATTERN.exec(content);
-  return match ? `${match[2]}${match[3]}` : content;
+function stripOuterFence(
+  content: string,
+  metadata: Record<string, unknown>,
+): { content: string; untrustedCategory?: string } {
+  const authenticated = metadata.untrusted_fenced === true;
+  const match = (authenticated ? AFFIXED_OUTER_FENCE_PATTERN : LEGACY_OUTER_FENCE_PATTERN).exec(content);
+  if (!match) return { content };
+  if (authenticated && (metadata.untrusted_category !== match[1] || metadata.untrusted_nonce !== match[2])) {
+    return { content };
+  }
+  // Output-guard prefixes and failure guidance are framework rendering, not
+  // durable evidence. Only the fenced body is the tool's structured result.
+  return { content: match[3]!, untrustedCategory: match[1] };
 }
 
 function renderRecord(record: DurableToolRecord, fenceUntrusted: DurableUntrustedFence | undefined): Record<string, unknown> {
@@ -186,7 +197,7 @@ export class DurableContextStore {
 
   observe(
     call: RuntimeToolCall,
-    result: Pick<ToolDispatchResult<RuntimeMessage>, "content" | "isError"> & { untrustedCategory?: string },
+    result: Pick<ToolDispatchResult<RuntimeMessage>, "content" | "isError"> & { frameworkGenerated?: boolean; untrustedCategory?: string },
     sequence = ++this.sequence,
   ): void {
     this.sequence = Math.max(this.sequence, sequence);
@@ -197,7 +208,7 @@ export class DurableContextStore {
       sequence,
       status: result.isError ? "failed" : "succeeded",
       toolName: call.name,
-      ...((result.untrustedCategory ?? (call.name === "task" ? "subagent" : undefined))
+      ...(!result.frameworkGenerated && (result.untrustedCategory ?? (call.name === "task" ? "subagent" : undefined))
         ? { untrustedCategory: result.untrustedCategory ?? "subagent" } : {}),
     };
     if (call.name === "read_skill" && !result.isError) {
@@ -251,10 +262,13 @@ export class DurableContextStore {
       const callId = messageString(message, "tool_call_id");
       const call = callId ? pending.get(callId) : undefined;
       if (!call) continue;
-      const content = stripOuterFence(messageString(message, "content") ?? "");
+      const metadata = isRecord(message.additional_kwargs) ? message.additional_kwargs : {};
+      const historical = stripOuterFence(messageString(message, "content") ?? "", metadata);
       this.observe(call, {
-        content,
-        isError: historicalResultIsError(content),
+        content: historical.content,
+        frameworkGenerated: metadata.framework_generated === true,
+        isError: historicalResultIsError(historical.content),
+        ...(historical.untrustedCategory ? { untrustedCategory: historical.untrustedCategory } : {}),
       }, ++sequence);
       pending.delete(call.id);
     }

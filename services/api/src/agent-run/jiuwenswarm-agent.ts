@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { AgentEvent } from "@sciencediscovery/orchestration";
-import { fenceUntrustedContent, neutralizeUntrustedTags, TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool } from "@sciencediscovery/tools";
+import { fenceUntrustedContent, modelToolSpec, neutralizeUntrustedTags, TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool } from "@sciencediscovery/tools";
 
 import { DurableContextStore } from "@sciencediscovery/context";
 
@@ -391,7 +391,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     await trajectory.start({
       executor: "jiuwenswarm",
       model: { model: endpoint.model, apiProtocol: endpoint.apiProtocol, apiVariant: endpoint.apiVariant },
-      tools: [...tools.values()].map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
+      tools: [...tools.values()].map((tool) => modelToolSpec(tool)),
       config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "task" },
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
@@ -653,9 +653,15 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
           tools.has("task") ? subagentCapableParentRunTimeoutMs() : 0,
         ) / 1000) } : {}),
         ...(tools.has("configuration") ? { configurationWaitTimeoutSeconds: 24 * 60 * 60 + 60 } : {}),
-        tools: [...tools.values()].map((tool) => ({
-          name: tool.name, description: this.describe(tool), inputSchema: tool.parameters, approval: approvalFor(tool.name),
-        })),
+        tools: [...tools.values()].map((tool) => {
+          const spec = modelToolSpec(tool);
+          return {
+            name: tool.name,
+            description: this.describe({ ...tool, description: spec.description }),
+            inputSchema: spec.parameters,
+            approval: approvalFor(tool.name),
+          };
+        }),
         bridge: { url: bridgeUrl, token: bridgeToken },
       }),
       signal: this.controller.signal,

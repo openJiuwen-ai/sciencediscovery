@@ -25,6 +25,7 @@
 
 import { createHash } from "node:crypto";
 
+import { resolveUntrustedCategory, shouldNeutralizeUntrustedTags } from "./sanitize.js";
 import type { AgentTool } from "./types.js";
 
 export const TOOL_SEARCH_NAME = "tool_search";
@@ -133,6 +134,8 @@ export interface ToolSearchRunResult {
     promotedToolNames: string[];
     query: string;
   };
+  neutralizeTags?: boolean;
+  untrustedCategory?: string;
 }
 
 /** Run tool_search: promote matches and return the model-facing result text. */
@@ -140,6 +143,14 @@ export function runToolSearchDetailed(state: DeferredToolState, query: string): 
   const matched = state.catalog.search(query);
   const promotedToolNames = matched.map((tool) => tool.name);
   for (const tool of matched) state.promoted.add(tool.name);
+  // Connector-controlled descriptions and schemas are data, even though the
+  // framework serializes the search result. Mixed catalogs use the stronger
+  // remote boundary whenever any match requires authority-tag neutralization.
+  const neutralizeTags = matched.some((tool) =>
+    shouldNeutralizeUntrustedTags(tool, resolveUntrustedCategory(tool)));
+  const untrustedCategory = neutralizeTags
+    ? "remote"
+    : matched.map((tool) => resolveUntrustedCategory(tool)).find((category) => category !== undefined);
   return {
     content: matched.length
       ? JSON.stringify(matched.map(openAiFunctionSchema), null, 2)
@@ -151,6 +162,8 @@ export function runToolSearchDetailed(state: DeferredToolState, query: string): 
       promotedToolNames,
       query,
     },
+    ...(neutralizeTags ? { neutralizeTags } : {}),
+    ...(untrustedCategory ? { untrustedCategory } : {}),
   };
 }
 

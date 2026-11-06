@@ -71,6 +71,8 @@ export function toolOutputStoreRoot(dataDir: string, sessionId: string): string 
 interface StoredMeta extends ToolOutputTrust {
   createdAt: string;
   toolName: string;
+  /** Distinguishes new, explicitly trusted-local records from legacy sidecars. */
+  trustVersion?: 1;
 }
 
 interface StoredOutput extends StoredMeta {
@@ -409,7 +411,7 @@ export class ToolOutputStore implements ToolOutputSink {
     await mkdir(this.root, { recursive: true });
     const textPath = resolve(this.root, `${ref}.txt`);
     const metaPath = resolve(this.root, `${ref}.json`);
-    const meta: StoredMeta = { createdAt: stored.createdAt, toolName: stored.toolName, ...trustMetadata(stored) };
+    const meta: StoredMeta = { createdAt: stored.createdAt, toolName: stored.toolName, trustVersion: 1, ...trustMetadata(stored) };
     await writeFile(`${textPath}.${process.pid}.tmp`, stored.text, { encoding: "utf8", mode: 0o600 });
     await writeFile(`${metaPath}.${process.pid}.tmp`, JSON.stringify(meta), { encoding: "utf8", mode: 0o600 });
     await rename(`${textPath}.${process.pid}.tmp`, textPath);
@@ -422,7 +424,13 @@ export class ToolOutputStore implements ToolOutputSink {
       const meta = JSON.parse(await readFile(resolve(this.root, `${ref}.json`), "utf8")) as StoredMeta;
       const text = await readFile(resolve(this.root, `${ref}.txt`), "utf8");
       if (typeof meta?.toolName !== "string") return undefined;
-      const stored: StoredOutput = { createdAt: meta.createdAt, text, toolName: meta.toolName, ...trustMetadata(meta) };
+      const trust: ToolOutputTrust = meta.trustVersion === 1
+        ? trustMetadata(meta)
+        : {
+          untrustedCategory: meta.untrustedCategory ?? "legacy",
+          neutralizeTags: meta.untrustedCategory ? meta.neutralizeTags === true : true,
+        };
+      const stored: StoredOutput = { createdAt: meta.createdAt, text, toolName: meta.toolName, ...trust };
       this.memory.set(ref, stored);
       return stored;
     } catch {

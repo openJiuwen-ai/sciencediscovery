@@ -39,7 +39,7 @@ export interface ToolSpec {
 
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   batchPolicies?: readonly ToolBatchPolicy[];
-  createResultMessage(call: RuntimeToolCall, content: string, output?: ToolOutputRecord): TMessage;
+  createResultMessage(call: RuntimeToolCall, content: string, output?: ToolOutputRecord, trust?: { frameworkGenerated: boolean; untrustedCategory?: string; untrustedFenceNonce?: string }): TMessage;
   /**
    * One run-segment reminder after the same registered tool fails twice without
    * succeeding. Other tools do not clear its streak. No cause is inferred;
@@ -72,7 +72,7 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
    */
   untrustedFenceNonce?: string;
   /** Required bounded-state reduction. Failure stops the turn; observers remain best-effort. */
-  commitResult?(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number; untrustedCategory?: string }): Promise<void>;
+  commitResult?(input: { call: RuntimeToolCall; content: string; durableContent?: string; details?: unknown; frameworkGenerated: boolean; isError: boolean; sequence: number; untrustedCategory?: string }): Promise<void>;
 }
 
 export interface ToolBatchSupersedeDecision {
@@ -234,6 +234,34 @@ export function sanitizeToolDetails(details: unknown): unknown {
  * sees only ToolDispatcher; discovery, sanitization, and loop protection stay
  * in this capability package.
  */
+function neutralizeSchemaMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(neutralizeSchemaMetadata);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    // Prose fields a connector controls reach the model verbatim. enum/const
+    // stay byte-exact: they are call-data the runtime validates against.
+    if ((key === "description" || key === "title" || key === "$comment" || key === "default") && typeof item === "string") {
+      return [key, neutralizeUntrustedTags(item)];
+    }
+    if (key === "examples" && Array.isArray(item)) {
+      return [key, item.map((entry) => typeof entry === "string" ? neutralizeUntrustedTags(entry) : neutralizeSchemaMetadata(entry))];
+    }
+    return [key, neutralizeSchemaMetadata(item)];
+  }));
+}
+
+/** Model-facing specs neutralize connector prose without changing call-data
+ *  identifiers, enum values, or the execution-time schema. */
+export function modelToolSpec(tool: AgentTool): ToolSpec {
+  const category = resolveUntrustedCategory(tool);
+  const neutralize = shouldNeutralizeUntrustedTags(tool, category);
+  return {
+    name: tool.name,
+    description: neutralize ? neutralizeUntrustedTags(tool.description) : tool.description,
+    parameters: neutralize ? neutralizeSchemaMetadata(tool.parameters) : tool.parameters as unknown,
+  };
+}
+
 export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispatcher<TMessage> {
   private readonly tools: ReadonlyMap<string, AgentTool>;
   private readonly orderedTools: readonly AgentTool[];
@@ -284,7 +312,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     const hidden = hiddenDeferredNames(deferredState);
     const specs = this.availableTools()
       .filter((tool) => !hidden.has(tool.name))
-      .map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters as unknown }));
+      .map((tool) => modelToolSpec(tool));
     if (deferredState) specs.push({ ...TOOL_SEARCH_SPEC });
     return specs;
   }
@@ -357,6 +385,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     let frameworkSuffix = "";
     let resultCategory: string | undefined;
     let outputRecord: ToolOutputRecord | undefined;
+    let durableContent: string | undefined;
     const availableDeferred = this.availableDeferredState();
     if (call.argsParseError) {
       details = { ok: false, error: { attempts: 1, code: "INVALID_TOOL_ARGUMENTS", retryable: true,
@@ -366,10 +395,12 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       frameworkGenerated = true;
     } else if (call.name === TOOL_SEARCH_NAME && availableDeferred) {
       const result = runToolSearchDetailed(availableDeferred, typeof call.args.query === "string" ? call.args.query : "");
-      content = result.content;
+      category = result.untrustedCategory;
+      neutralizeTags = result.neutralizeTags === true;
+      content = neutralizeTags ? neutralizeUntrustedTags(result.content) : result.content;
       details = result.details;
       isError = false;
-      frameworkGenerated = true;
+      frameworkGenerated = !category;
     } else if (!this.tools.has(call.name)) {
       const retired = retiredToolGuidance(call.name);
       if (retired) {
@@ -437,6 +468,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       content = `${modelContent}${frameworkSuffix}`;
       if (!modelContent.startsWith(frameworkPrefix)) throw new Error("Tool framework prefix is not a prefix of its result");
       const body = modelContent.slice(frameworkPrefix.length);
+      durableContent = body;
       const wrap = (untrusted: string) => fenceUntrustedContent(untrusted, category!, this.untrustedFenceNonce);
       modelVisible = this.options.outputGuard?.fitModelContent({
         body,
@@ -450,7 +482,9 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     await this.options.commitResult?.({
       call,
       content,
+      ...(durableContent !== undefined ? { durableContent } : {}),
       ...(boundedDetails !== undefined ? { details: boundedDetails } : {}),
+      frameworkGenerated,
       isError,
       sequence,
       ...(fenceResult && category ? { untrustedCategory: category } : {}),
@@ -460,7 +494,10 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       content: modelVisible,
       ...(boundedDetails !== undefined ? { details: boundedDetails } : {}),
       isError,
-      message: this.options.createResultMessage(call, modelVisible, outputRecord),
+      message: this.options.createResultMessage(call, modelVisible, outputRecord, {
+        frameworkGenerated,
+        ...(fenceResult && category ? { untrustedCategory: category, untrustedFenceNonce: this.untrustedFenceNonce } : {}),
+      }),
     };
   }
 
@@ -469,9 +506,9 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     const details = { ok: true, superseded: true, supersededBy: byCallId };
     const content = JSON.stringify(details);
     if (this.options.recordResult) await this.options.recordResult({ call, content, details, isError: false, sequence });
-    await this.options.commitResult?.({ call, content, details, isError: false, sequence });
+    await this.options.commitResult?.({ call, content, details, frameworkGenerated: true, isError: false, sequence });
     try { this.options.onResult?.({ call, content, details, isError: false, sequence }); } catch { /* observer isolation */ }
-    return { content, details, isError: false, message: this.options.createResultMessage(call, content) };
+    return { content, details, isError: false, message: this.options.createResultMessage(call, content, undefined, { frameworkGenerated: true }) };
   }
 
   private availableTools(): readonly AgentTool[] {

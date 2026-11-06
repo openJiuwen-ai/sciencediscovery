@@ -1068,6 +1068,10 @@ test("remote tool results are neutralized before reaching history or the UI", as
     const toolMessage = result.finalMessages.find((message) => message.role === "tool");
     assert.ok(toolMessage, "tool result must be in history");
     const stored = String(toolMessage.content);
+    const trust = toolMessage.additional_kwargs as Record<string, unknown> | undefined;
+    assert.equal(trust?.untrusted_fenced, true);
+    assert.equal(trust?.untrusted_category, "remote");
+    assert.ok(typeof trust?.untrusted_nonce === "string" && stored.includes(`#${trust.untrusted_nonce}`));
     assert.equal(stored.includes("<system-reminder>"), false);
     assert.equal(stored.includes("--- END USER INPUT ---"), false);
     assert.ok(stored.includes("&lt;system-reminder&gt;"));

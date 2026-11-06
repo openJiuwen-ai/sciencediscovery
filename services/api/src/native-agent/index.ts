@@ -295,14 +295,29 @@ export function createToolRegistry(
     }),
   ], {
     batchPolicies: plugins.contributions.flatMap((item) => item.batchPolicies),
-    createResultMessage: (call, content, output) => ({
+    createResultMessage: (call, content, output, trust) => ({
       role: "tool", tool_call_id: call.id, name: call.name, content,
-      ...(output ? { additional_kwargs: { tool_output: output } } : {}),
+      ...(output || trust?.frameworkGenerated || trust?.untrustedCategory ? {
+        additional_kwargs: {
+          ...(output ? { tool_output: output } : {}),
+          ...(trust?.frameworkGenerated ? { framework_generated: true } : {}),
+          ...(trust?.untrustedCategory && trust.untrustedFenceNonce ? {
+            untrusted_category: trust.untrustedCategory,
+            untrusted_fenced: true,
+            untrusted_nonce: trust.untrustedFenceNonce,
+          } : {}),
+        },
+      } : {}),
     }),
-    commitResult: async ({ call, content, isError, sequence, untrustedCategory }) => {
-      durable.observe(call, { content, isError, ...(untrustedCategory ? { untrustedCategory } : {}) }, sequence);
+    commitResult: async ({ call, content, durableContent, frameworkGenerated, isError, sequence, untrustedCategory }) => {
+      durable.observe(call, {
+        content: durableContent ?? content,
+        frameworkGenerated,
+        isError,
+        ...(untrustedCategory ? { untrustedCategory } : {}),
+      }, sequence);
       for (const contribution of plugins.contributions) {
-        await contribution.commitResult?.({ call, content, isError, sequence });
+        await contribution.commitResult?.({ call, content, frameworkGenerated, isError, sequence });
       }
     },
     recordResult: hooks.recordResult,

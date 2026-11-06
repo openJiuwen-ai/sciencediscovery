@@ -199,7 +199,9 @@ titles, the image-input probe of a new model. They use its *default model*, not 
 install's default is a placeholder (`https://example.com/...`) that answers with an HTML page, so a compression
 attempt failed with `APIStatusError: <!doctype html>` and nothing was compressed. The adapter therefore keeps one
 entry, `sd-default`, first in JiuwenSwarm's list and flagged as the default, whose endpoint is
-`/llm/default/v1` on the adapter (`llm_proxy.default_completions`). That route sends the call, untouched (no system
-prompt, tool list or tool name rewritten), to the model of the run that started last and is still going, and answers
-503 when no run is in progress. It is set at start-up and before each run. Consequence: the JiuwenSwarm instance is
-ScienceDiscovery's own.
+`/llm/default/v1` on the adapter (`llm_proxy.default_completions`). That route identifies the run the history
+belongs to — a platform tool call in the conversation whose arguments carry one active run's `_sd_run` tag — and
+sends the call, untouched (no system prompt, tool list or tool name rewritten), to that run's model. No matching
+run, or two equally matching ones (concurrent runs), answers 503: a housekeeping request never borrows another
+run's model, credentials, or trust fence nonce. It is set at start-up and before each run. Consequence: the
+JiuwenSwarm instance is ScienceDiscovery's own.

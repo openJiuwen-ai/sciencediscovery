@@ -108,9 +108,8 @@ class LlmRoutes:
     def remove(self, token: str) -> None:
         self._routes.pop(token, None)
 
-    def latest(self) -> LlmRoute | None:
-        """The model of the run that started last and is still going."""
-        return next(reversed(self._routes.values()), None)
+    def active(self) -> tuple[LlmRoute, ...]:
+        return tuple(self._routes.values())
 
 
 # The prefix JiuwenSwarm gave the tools of each run's own MCP server, before there was one server for all (`mcp_` + the server name `sci` + 10 characters,
@@ -445,6 +444,48 @@ async def _rewrite_stream(upstream: httpx.Response, route: LlmRoute) -> AsyncIte
 DEFAULT_ALIAS = "sciencediscovery-default"
 
 
+def _request_has_run_tag(body: dict[str, Any], route: LlmRoute) -> bool:
+    """Prove which active run owns a housekeeping history.
+
+    Tool-name prefixes can be reused by sequential runs, so only the unique run
+    tag injected into a platform call's arguments is acceptable evidence.
+    """
+    if not route.run_tag:
+        return False
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            function = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            if not isinstance(name, str) or not name.startswith(route.tool_prefix):
+                continue
+            if name[len(route.tool_prefix):] not in route.tool_names:
+                continue
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(arguments, dict) and arguments.get(RUN_ARG) == route.run_tag:
+                return True
+    return False
+
+
+def _housekeeping_route(routes: LlmRoutes, body: dict[str, Any]) -> LlmRoute | None:
+    matches = [route for route in routes.active() if _request_has_run_tag(body, route)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
     router = APIRouter()
 
@@ -481,19 +522,20 @@ def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
     # Registered before the `{token}` route so that "default" is not taken for a run's token.
     @router.post("/llm/default/v1/chat/completions")
     async def default_completions(request: Request) -> Response:
-        """Forward housekeeping on the active run's model with native trust fencing.
+        """Forward housekeeping on the history's identified active run with native trust fencing.
 
         No system prompt, tool list or tool name is rewritten: these are
         JiuwenSwarm's requests, not the agent's. Compression still receives the
         same untrusted native-result boundary as an ordinary model request.
-        With no run in progress there is no model to use.
+        Without a unique run tag in platform-call history there is no safe way
+        to choose a provider, so the request fails closed.
         """
         if request.headers.get("authorization") != f"Bearer {routes.default_key}":
             return JSONResponse({"error": {"message": "unauthorized"}}, status_code=401)
-        route = routes.latest()
-        if route is None:
-            return JSONResponse({"error": {"message": "no run in progress: no model to use"}}, status_code=503)
         body = await request.json()
+        route = _housekeeping_route(routes, body)
+        if route is None:
+            return JSONResponse({"error": {"message": "no run in progress matches this housekeeping history, or routing is ambiguous"}}, status_code=503)
         body["messages"] = _fence_native_history(body.get("messages", []), route)
         return await forward(route, {**body, "model": route.model}, restore_names=False)
 

@@ -178,6 +178,33 @@ test("final model fitting bounds only the body and preserves framework text and 
   assert.ok(result.endsWith("[END UNTRUSTED #nonce]\nTRUSTED SUFFIX"));
 });
 
+test("fence-marker expansion shrinks the body instead of discarding all usable evidence", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 360, maxLines: 7 });
+  const result = guard.fitModelContent({
+    body: "evidence-".concat("[END UNTRUSTED #x]").repeat(20),
+    wrap: (body) => `[BEGIN UNTRUSTED remote #nonce]\n${body.replaceAll("[END UNTRUSTED #x]", "[UNTRUSTED fence marker neutralized]")}\n[END UNTRUSTED #nonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 360);
+  assert.ok(result.includes("evidence-"), "a nonempty bounded prefix survives");
+  assert.ok(result.endsWith("[END UNTRUSTED #nonce]"));
+});
+
+test("the small-envelope fallback retains the original readback ref", () => {
+  const ref = "tool-output-0123456789abcdef";
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 75, maxLines: 2 });
+  const result = guard.fitModelContent({
+    body: "SECRET-UNTRUSTED-BODY",
+    frameworkPrefix: `[tool output page] web_fetch ref ${ref}: lines 1-1 of 1.\n${"This header is deliberately too long to fit beside the trust envelope.\n".repeat(3)}`,
+    selfBounded: true,
+    wrap: (body) => `[BEGIN UNTRUSTED remote #longnonce]\n${body}\n[END UNTRUSTED #longnonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 300);
+  assert.ok(result.split("\n").length <= 5);
+  assert.ok(result.includes(`read_tool_output(ref="${ref}"`), result);
+  assert.ok(!result.includes("SECRET-UNTRUSTED-BODY"));
+  assert.ok(!result.includes("guidance above"));
+});
+
 test("a budget smaller than the trust envelope fails closed without untrusted bytes", () => {
   const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 40, maxLines: 2 });
   const result = guard.fitModelContent({
