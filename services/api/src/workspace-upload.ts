@@ -64,6 +64,34 @@ export function parseConflictPolicy(value: string | null | undefined): Workspace
   throw new Error("conflict must be one of rename, overwrite, or reject");
 }
 
+/**
+ * Device names Windows resolves in every directory, with or without an extension, so
+ * `CON.csv` and `nul.txt` never reach the filesystem there: `open()` targets the device
+ * instead, and the write fails with EPERM (or silently goes to the console for CON).
+ * COM0/LPT0 are not reserved; CONIN$/CONOUT$ are.
+ * The naming document lists superscript 1, 2 and 3 as port digits, so `COM¹.txt` names the
+ * first serial port exactly like `COM1.txt`; an ASCII-only class lets that spelling through.
+ * https://learn.microsoft.com/windows/win32/fileio/naming-a-file#naming-conventions
+ */
+const WINDOWS_RESERVED_DEVICE_NAME =
+  /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)$/i;
+
+/**
+ * Windows ignores a trailing dot or space on a path segment, so `nul.` and `CON ` name the
+ * device too. The stem is everything before the first dot: for a reserved name the
+ * extension is irrelevant.
+ *
+ * The stream syntax is the same reservation: `NUL:anything` and `CON:$DATA` open the
+ * device, so the part before the colon is what names it. Only that part is tested —
+ * a colon in front of an ordinary stem (`report:2024.csv`) is a legal name on Linux and
+ * macOS, and refusing it would trade this bug for a portability one.
+ */
+function isWindowsReservedDeviceName(name: string): boolean {
+  const beforeStream = name.split(":")[0] ?? "";
+  const stem = beforeStream.split(".")[0]?.replace(/[. ]+$/, "") ?? "";
+  return WINDOWS_RESERVED_DEVICE_NAME.test(stem);
+}
+
 export function sanitizeUploadFilename(filename: string): string {
   const normalized = filename.replaceAll("\\", "/").trim();
   if (!normalized) {
@@ -90,6 +118,12 @@ export function sanitizeUploadFilename(filename: string): string {
   const base = basename(normalized);
   if (!base || base === "." || base === "..") {
     throw Object.assign(new Error("Upload filename is missing or invalid"), { code: "INVALID_UPLOAD_PATH" });
+  }
+  if (isWindowsReservedDeviceName(base)) {
+    throw Object.assign(
+      new Error(`Upload filename "${base}" is a reserved device name on Windows; rename the file before uploading`),
+      { code: "INVALID_UPLOAD_PATH" },
+    );
   }
   return base;
 }

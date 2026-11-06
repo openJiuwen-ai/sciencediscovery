@@ -55,6 +55,54 @@ test("sanitizeUploadFilename rejects absolute and traversal names", () => {
   assert.throws(() => sanitizeUploadFilename(".."), /plain basename|invalid/);
 });
 
+test("sanitizeUploadFilename rejects Windows reserved device names", () => {
+  // On a Windows workspace these names never reach the filesystem: the OS maps them
+  // (with any extension) to devices, so an upload passes this guard and only fails
+  // later, at write time, with an unclassified EPERM/ENOENT.
+  for (const name of ["CON", "con.csv", "nul.txt", "AUX", "PRN.dat", "COM1.log", "lpt9.dat", "conin$.txt", "conout$", "CON .csv", "nul."]) {
+    assert.throws(
+      () => sanitizeUploadFilename(name),
+      /reserved/,
+      `${name} must be rejected as a Windows reserved device name`,
+    );
+  }
+  // The naming document lists superscript 1, 2 and 3 as port digits too: Windows
+  // resolves `COM¹.txt` to the first serial port exactly like `COM1.txt`, so the
+  // ASCII-only class would let the name through and fail later at write time.
+  for (const name of ["COM¹.txt", "com².csv", "LPT³.log"]) {
+    assert.throws(
+      () => sanitizeUploadFilename(name),
+      /reserved/,
+      `${name} must be rejected as a Windows reserved device name`,
+    );
+  }
+  // Stems that merely start with a reserved word, or use a two-digit port, stay valid.
+  assert.equal(sanitizeUploadFilename("conifer.csv"), "conifer.csv");
+  assert.equal(sanitizeUploadFilename("console.log"), "console.log");
+  assert.equal(sanitizeUploadFilename("com10.csv"), "com10.csv");
+  assert.equal(sanitizeUploadFilename("auxiliary.csv"), "auxiliary.csv");
+});
+
+test("sanitizeUploadFilename rejects the stream syntax of a Windows reserved device name", () => {
+  // Windows resolves `NUL:anything` and `CON:$DATA` to the device in every
+  // directory, so the alternate syntax is the same reservation as `nul.txt`,
+  // not a different character rule.
+  const verdict = (name: string): string => {
+    try {
+      sanitizeUploadFilename(name);
+      return "accepted";
+    } catch {
+      return "rejected";
+    }
+  };
+  assert.deepEqual(["nul:stream", "con:$DATA"].map(verdict), ["rejected", "rejected"]);
+  // A colon is not illegal here: Linux and macOS allow it in a file name, so a
+  // name whose stem is ordinary keeps working unchanged — the reservation is
+  // about the device, never about the character.
+  assert.equal(sanitizeUploadFilename("report:2024.csv"), "report:2024.csv");
+});
+
+
 test("parseConflictPolicy defaults to rename", () => {
   assert.equal(parseConflictPolicy(undefined), "rename");
   assert.equal(parseConflictPolicy("overwrite"), "overwrite");
