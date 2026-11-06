@@ -419,16 +419,16 @@
 .run-failure {
   min-width: 0;
   padding: 16px 18px;
-  border: 1px solid var(--warning-border);
+  border: 1px solid var(--border);
   border-radius: var(--radius-m);
-  background: var(--warning-soft);
-  color: var(--text-secondary);
+  background: var(--surface);
+  color: var(--text);
 }
 .run-failure-heading {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--warning-strong);
+  color: var(--danger);
 }
 .run-failure-icon { flex: 0 0 auto; }
 .run-failure-heading h3 {
@@ -447,7 +447,7 @@
 .run-failure-details summary {
   width: fit-content;
   padding: 4px 0;
-  color: var(--warning-strong);
+  color: var(--text);
   font-size: 12px;
   line-height: 1.5;
   cursor: pointer;
@@ -478,7 +478,7 @@
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--text-secondary);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;

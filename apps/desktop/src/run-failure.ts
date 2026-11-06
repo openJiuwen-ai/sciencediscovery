@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RunFailureCode } from "@sciencediscovery/schema";
+import type { RunFailureCode, TimeoutKind } from "@sciencediscovery/schema";
 
 import type { ChatMessage } from "./api/types.js";
 import type { RunStreamState } from "./run-stream/model.js";
@@ -20,27 +20,48 @@ import type { RunReplay } from "./run-stream/replay.js";
 
 import { TEXT } from "./text.js";
 
-const FAILURE_MESSAGE_KEYS: Record<RunFailureCode, keyof typeof TEXT.runFailure> = {
-  "invalid-tool-call": "invalid-tool-call",
-  "rate-limited": "rate-limited",
-  "semantic-error": "semantic-error",
-  "server-error": "server-error",
-  timeout: "timeout",
-  "transport-error": "transport-error",
-  unauthorized: "unauthorized",
-};
+type FailureTimeout = { kind: TimeoutKind; timeoutMs: number };
 
-/** Translate a stable failure code into a user-facing, actionable summary.
- *  The active language is resolved at render time through `TEXT`.
- *  Accepts `string` because the streamed error state stores the code as a plain
- *  string; any value that is not a recognised code falls back to the unknown
- *  message. */
-export function formatRunFailure(code: RunFailureCode | string | undefined): string {
-  const key =
-    code && Object.hasOwn(FAILURE_MESSAGE_KEYS, code)
-      ? FAILURE_MESSAGE_KEYS[code as RunFailureCode]
-      : undefined;
-  return key ? TEXT.runFailure[key] : TEXT.runFailure.unknown;
+function isRunFailureCode(code: string | undefined): code is RunFailureCode {
+  return code !== undefined && Object.hasOwn(TEXT.runFailure.titles, code);
+}
+
+/** The live error frame carries no timeout metadata. Recognize only the
+ * stable producer diagnostics; other timeout messages get generic guidance. */
+function timeoutFromDiagnostic(message: string): FailureTimeout | undefined {
+  const patterns: Array<[TimeoutKind, RegExp]> = [
+    ["gateway_idle", /\bno gateway progress for (\d+) ms\b/i],
+    ["gateway_turn", /\bgateway turn exceeded (\d+) ms\b/i],
+    ["permission_wait", /\bpermission wait timed out after (\d+) ms\b/i],
+    ["runner_exec", /\b(?:execution|evaluation) timed out after (\d+) ms\b/i],
+    ["kernel_idle", /\bkernel idle timeout after (\d+) ms\b/i],
+  ];
+  for (const [kind, pattern] of patterns) {
+    const match = pattern.exec(message);
+    if (match) return { kind, timeoutMs: Number(match[1]) };
+  }
+  return undefined;
+}
+
+export function formatRunFailureTitle(code: string | undefined): string {
+  return isRunFailureCode(code) ? TEXT.runFailure.titles[code] : TEXT.runFailure.title;
+}
+
+/** Read the active language at render time. Prefer persisted timeout metadata
+ * over diagnostics and never invent a duration for unknown/malformed errors. */
+export function formatRunFailure(
+  code: string | undefined,
+  message = "",
+  timeout?: FailureTimeout,
+): string {
+  if (code === "timeout") {
+    const detail = timeout ?? timeoutFromDiagnostic(message);
+    if (detail && Number.isFinite(detail.timeoutMs) && detail.timeoutMs > 0 &&
+      Object.hasOwn(TEXT.runFailure.timeouts, detail.kind)) {
+      return TEXT.runFailure.timeouts[detail.kind](detail.timeoutMs / 1000);
+    }
+  }
+  return isRunFailureCode(code) ? TEXT.runFailure[code] : TEXT.runFailure.unknown;
 }
 
 /** Old timeout messages have no run id. Only merge when both the originating
@@ -58,7 +79,7 @@ export function coalesceTimeoutNotices(
     candidates.push({ anchor: anchor?.id, state: run });
   }
   const hiddenNoticeIds = new Set<string>();
-  const diagnostics = new Map<RunStreamState, string[]>();
+  const diagnostics = new Map<RunStreamState, { messages: string[]; timeout?: ChatMessage["timeout"] }>();
   let anchor: string | undefined;
   for (const message of messages) {
     if (message.role === "user") anchor = message.id;
@@ -73,15 +94,16 @@ export function coalesceTimeoutNotices(
     const state = matching[0]?.state;
     if (!state) continue;
     hiddenNoticeIds.add(message.id);
-    const entries = diagnostics.get(state) ?? [];
-    entries.push(message.content);
+    const entries = diagnostics.get(state) ?? { messages: [], timeout: undefined };
+    entries.messages.push(message.content);
+    entries.timeout ??= message.timeout;
     diagnostics.set(state, entries);
   }
   const merge = (state: RunStreamState): RunStreamState => {
     const entries = diagnostics.get(state);
     if (!entries || !state.error) return state;
-    const messages = [...new Set([state.error.message, ...entries])];
-    return { ...state, error: { ...state.error, message: messages.join("\n\n") } };
+    const messages = [...new Set([state.error.message, ...entries.messages])];
+    return { ...state, error: { ...state.error, message: messages.join("\n\n"), timeout: state.error.timeout ?? entries.timeout } };
   };
   return {
     hiddenNoticeIds,

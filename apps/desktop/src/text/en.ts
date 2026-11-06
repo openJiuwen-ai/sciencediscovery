@@ -1319,22 +1319,32 @@ export const EN: Text = {
   },
 
   runFailure: {
-    title: "Run incomplete",
-    /** Plain-language cause and recovery action per stable failure class. */
-    timeout: "The request timed out. Retry, or split the task / raise the timeout budget.",
-    "rate-limited": "The model service is limiting requests. Wait a moment and try again.",
-    /** `semantic-error` is the backend's catch-all classification, so keep the
-     *  wording neutral and actionable rather than blaming the model service. */
-    "semantic-error": "The run encountered an unexpected issue. Check your input or model configuration and retry; if it keeps happening, try another model.",
-    "server-error": "The model service reported a server error. Wait a moment and retry; if it keeps failing, check the service status.",
-    "transport-error": "The model service could not be reached. Check the network or proxy settings and retry.",
-    unauthorized: "The model service rejected the credentials. Check the API key in the model registry and retry.",
-    "invalid-tool-call":
-      "The model wrote a tool call whose arguments could not be read, so it was not run and the run stopped. Retry the task; if it keeps happening, try another model.",
-    /** Fallback when the server returns a code the client does not recognise. */
-    unknown:
-      "The task stopped before it could finish. Retry the task; if it fails again, open the technical details to help diagnose the problem.",
-    /** Label for the expandable block that exposes raw provider diagnostics. */
+    title: "Run failed",
+    titles: {
+      timeout: "Run timed out",
+      "rate-limited": "Model request limit reached",
+      "semantic-error": "Unexpected run error",
+      "server-error": "Model service error",
+      "transport-error": "Model connection failed",
+      unauthorized: "Model authentication failed",
+      "invalid-tool-call": "Invalid tool call",
+    },
+    timeout: "The run timed out and was terminated. Retry, or check the relevant timeout in System settings.",
+    timeouts: {
+      gateway_idle: (seconds: number) => `The Agent made no progress for ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry, or increase the Agent idle timeout in System settings.`,
+      gateway_turn: (seconds: number) => `The Agent turn exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Split the task and retry, or increase the turn timeout in System settings.`,
+      permission_wait: (seconds: number) => `The permission request was not handled within ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry and respond to permission requests promptly, or increase the permission wait timeout in System settings.`,
+      runner_exec: (seconds: number) => `Tool execution exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}. Reduce the work per execution and retry, or increase the execution timeout in System settings.`,
+      kernel_idle: (seconds: number) => `The kernel was idle for ${seconds} ${seconds === 1 ? "second" : "seconds"}. Retry, or increase the kernel idle timeout in System settings.`,
+    },
+    "rate-limited": "The model service is limiting requests because a request or usage limit was reached. The run has stopped. Retry later; if this persists, check the provider's limits and available quota.",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "An unexpected issue prevented the task from completing. Retry; if this persists, open the technical details to investigate.",
+    "server-error": "The model service returned a server error and the run has stopped. Retry later; if this persists, check the service status or switch models.",
+    "transport-error": "The model service could not be reached and the run has stopped. Check your network, proxy settings and model service URL, then retry.",
+    unauthorized: "The model service rejected the credentials and the run has stopped. Check the API key and access permissions in System settings' model registry, then retry.",
+    "invalid-tool-call": "The model's tool call arguments could not be parsed. That call was not executed and the run has stopped. Retry; if this persists, switch models.",
+    unknown: "The task stopped before it could finish. Retry; if it fails again, open the technical details to investigate.",
     technicalDetails: "Technical details",
   },
 
