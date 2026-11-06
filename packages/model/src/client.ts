@@ -739,13 +739,25 @@ function chatThinkingFields(endpoint: ModelEndpoint): Record<string, unknown> {
 }
 
 const thinkingControlFields = ["thinking", "reasoning_effort", "reasoning_split", "chat_template_kwargs"];
+interface ThinkingControlRequest { body: string; headers: Record<string, string>; url: string }
+/**
+ * A 400 proves a control was *rejected* only when it says so next to the field
+ * name. A bare mention is not proof: "thinking budget exceeds max_tokens"
+ * complains about the value of a control the provider accepts, and a body echo
+ * names every field sent without rejecting any. These phrases are the ones
+ * providers use for an unknown/unsupported parameter; deliberately not a bare
+ * "invalid", which is what a generic "invalid request" says.
+ */
+const rejectedControlWording = /unsupported|not supported|does not support|unknown (?:parameter|field|argument|property|key)|unrecogni[sz]ed (?:parameter|field|argument|property|key)|invalid (?:parameter|field|argument|property|key)|unexpected (?:parameter|field|argument|property|key)|not allowed|not permitted|no such (?:parameter|field|argument)/;
+/** How close the rejection word must be to the field name to describe it. */
+const rejectedControlWordingWindow = 80;
 const rejectedThinkingControls = new Map<string, Set<string>>();
 
 function thinkingControlEndpointKey(endpoint: ModelEndpoint): string {
   return [endpointRoot(endpoint.baseUrl), endpoint.model, endpointProtocol(endpoint), endpointVariant(endpoint)].join("\0");
 }
 
-function withoutThinkingControls(request: { body: string; headers: Record<string, string>; url: string }, fields = thinkingControlFields) {
+function withoutThinkingControls(request: ThinkingControlRequest, fields = thinkingControlFields) {
   let body: Record<string, unknown>;
   try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return undefined; }
   if (!fields.some((field) => field in body)) return undefined;
@@ -753,25 +765,61 @@ function withoutThinkingControls(request: { body: string; headers: Record<string
   return { ...request, body: JSON.stringify(body) };
 }
 
-function rejectedThinkingFields(request: { body: string }, detail: string): Set<string> {
+/** Whether `detail` rejects `field`, not merely mentions it: either the
+ *  provider's own `param` pointer names it, or a rejection phrase sits within a
+ *  short window of the name. */
+function detailRejectsField(lower: string, field: string): boolean {
+  if (new RegExp(`"param"\\s*:\\s*"[^"]*${field}`).test(lower)) return true;
+  for (let at = lower.indexOf(field); at !== -1; at = lower.indexOf(field, at + field.length)) {
+    const window = lower.slice(
+      Math.max(0, at - rejectedControlWordingWindow),
+      at + field.length + rejectedControlWordingWindow,
+    );
+    if (rejectedControlWording.test(window)) return true;
+  }
+  return false;
+}
+
+function rejectedThinkingFields(request: Pick<ThinkingControlRequest, "body">, detail: string): Set<string> {
   let body: Record<string, unknown>;
   try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return new Set(); }
   const lower = detail.toLowerCase();
   return new Set(thinkingControlFields.filter((field) => field in body && (
-    lower.includes(field) || (field === "chat_template_kwargs" && lower.includes("enable_thinking"))
+    detailRejectsField(lower, field) || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))
   )));
 }
 
 function retryWithoutRejectedThinkingFields(
-  request: { body: string; headers: Record<string, string>; url: string },
+  request: ThinkingControlRequest,
   error: unknown,
 ) {
-  if (!(error instanceof ModelRequestError) || error.statusCode !== 400
-    || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(error.responseDetail)) return undefined;
-  const fallback = withoutThinkingControls(request);
-  const fields = rejectedThinkingFields(request, error.responseDetail);
-  if (!fallback || !fields.size) return undefined;
+  if (!(error instanceof ModelRequestError)) return undefined;
+  return thinkingControlFallback(request, error.statusCode, error.responseDetail);
+}
+
+/** The stripped request for a 400 that rejected controls it carried, or
+ *  `undefined` when the 400 does not prove a rejection (a failed status, a value
+ *  complaint, a body echo). */
+function thinkingControlFallback(request: ThinkingControlRequest, status: number | undefined, detail: string) {
+  if (status !== 400 || !/(thinking|reasoning|enable_thinking|chat_template_kwargs)/i.test(detail)) return undefined;
+  // Strip exactly what this 400 named: a control it did not complain about is
+  // still wanted, and dropping all four would silently disable a mode the
+  // provider accepts.
+  const fields = rejectedThinkingFields(request, detail);
+  if (!fields.size) return undefined;
+  const fallback = withoutThinkingControls(request, [...fields]);
+  if (!fallback) return undefined;
   return { fallback, fields };
+}
+
+function withoutKnownRejectedThinkingControls(endpoint: ModelEndpoint, request: ThinkingControlRequest): ThinkingControlRequest {
+  const fields = rejectedThinkingControls.get(thinkingControlEndpointKey(endpoint));
+  return (fields?.size ? withoutThinkingControls(request, [...fields]) : undefined) ?? request;
+}
+
+function rememberRejectedThinkingControls(endpoint: ModelEndpoint, fields: Iterable<string>): void {
+  const key = thinkingControlEndpointKey(endpoint);
+  rejectedThinkingControls.set(key, new Set([...(rejectedThinkingControls.get(key) ?? []), ...fields]));
 }
 
 interface OpenAiToolCallFragment {
@@ -838,22 +886,29 @@ async function streamOpenAiTurn(
   recorder: ModelWireRecorder,
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
-  let request = createModelRequest(endpoint, systemPrompt, history, tools, policy, true);
-  const rejectedFields = rejectedThinkingControls.get(thinkingControlEndpointKey(endpoint));
-  if (rejectedFields) {
-    request = withoutThinkingControls(request, [...rejectedFields]) ?? request;
+  let request = withoutKnownRejectedThinkingControls(endpoint, createModelRequest(endpoint, systemPrompt, history, tools, policy, true));
+  // A provider may report unknown fields one 400 at a time, so each 400 strips
+  // only the fields it names and the request is reissued. The memory is written
+  // once such a request actually succeeds: a fallback that itself fails (429,
+  // 5xx, 401, timeout) has proved nothing and must not downgrade the endpoint.
+  let streamed: Awaited<ReturnType<typeof requestWithRetry>> | undefined;
+  let lastError: unknown;
+  const rejectedHere = new Set<string>();
+  for (let attempt = 0; attempt <= thinkingControlFields.length; attempt += 1) {
+    try {
+      streamed = await requestWithRetry({ ...request, policy, proxy: endpoint.proxy, signal }, recorder);
+      break;
+    } catch (error) {
+      lastError = error;
+      const retry = retryWithoutRejectedThinkingFields(request, error);
+      if (!retry) throw error;
+      for (const field of retry.fields) rejectedHere.add(field);
+      recorder.retry("provider_http");
+      request = retry.fallback;
+    }
   }
-  let streamed: Awaited<ReturnType<typeof requestWithRetry>>;
-  try {
-    streamed = await requestWithRetry({ ...request, policy, proxy: endpoint.proxy, signal }, recorder);
-  } catch (error) {
-    const retry = retryWithoutRejectedThinkingFields(request, error);
-    if (!retry) throw error;
-    recorder.retry("provider_http");
-    streamed = await requestWithRetry({ ...retry.fallback, policy, proxy: endpoint.proxy, signal }, recorder);
-    const key = thinkingControlEndpointKey(endpoint);
-    rejectedThinkingControls.set(key, new Set([...(rejectedThinkingControls.get(key) ?? []), ...retry.fields]));
-  }
+  if (!streamed) throw lastError;
+  if (rejectedHere.size) rememberRejectedThinkingControls(endpoint, rejectedHere);
   const { body } = streamed;
 
   let text = "";
