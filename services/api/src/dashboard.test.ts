@@ -1654,10 +1654,12 @@ test("a delimited preview caps a pathological line and counts what it leaves out
 test("a wide line past the row window does not become the file's column count", async (context) => {
   const fixture = await createFixture(context);
   // The header is the schema: this file has two columns. One outlier line that
-  // falls outside the default row window is a row with many fields, not
-  // evidence that the file has 5,000 columns, and no returned row is padded or
-  // cut because of it. The width may carry the capped unnamed surplus, never the
-  // outlier's field count.
+  // falls outside the default row window is a row with many fields, not evidence
+  // that the file has 5,000 columns. The width still carries the capped unnamed
+  // surplus — the column set must not depend on how many rows a caller asks for —
+  // but the preview then draws blank columns for a line the reader never sees, so
+  // the payload has to say where those columns come from instead of leaving
+  // `clippedCells` at 0 and `warnings` empty.
   const outlier = Array.from({ length: 5_000 }, (_, index) => `c${index}`).join(",");
   const lines = ["a,b"];
   for (let index = 0; index < 100; index += 1) lines.push("1,2");
@@ -1679,6 +1681,18 @@ test("a wide line past the row window does not become the file's column count", 
   }
   assert.equal(payload.clippedCells, 0, "a line outside the window clips no returned cell");
   assert.equal(payload.clippedColumns.total, 2, "the file has as many columns as its header");
+  // The padding is not a silent consequence of a line nobody sees any more: the
+  // two surplus columns and the 200 blank cells they put into the preview are
+  // named by the payload itself.
+  assert.deepEqual(
+    payload.warnings.filter((warning) => /pads \d+ unnamed column/.test(warning)).length,
+    1,
+    `the padding of an out-of-window line needs a warning of its own: ${JSON.stringify(payload.warnings)}`,
+  );
+  const padding = payload.warnings.find((warning) => /pads \d+ unnamed column/.test(warning)) ?? "";
+  assert.match(padding, /pads 2 unnamed columns/, `the warning counts the padded columns: ${padding}`);
+  assert.match(padding, /200 blank cells/, `the warning counts the padded cells: ${padding}`);
+  assert.match(padding, /not shown|not in the preview/, `the warning names the unseen origin: ${padding}`);
   for (const warning of payload.warnings) {
     assert.doesNotMatch(
       warning,
@@ -1686,6 +1700,27 @@ test("a wide line past the row window does not become the file's column count", 
       `a row's field count must not be announced as the file's column count: ${warning}`,
     );
   }
+
+  // The same outlier inside the window is a different case: it is returned, so
+  // its cells past the width are counted as cells and the grid is not padding for
+  // anything unseen. No padding warning may appear here.
+  const inWindowVid = await seedArtifact(fixture, {
+    content: ["a,b", "1,2", "3,4", outlier].join("\n"),
+    kind: "dataset",
+    logicalName: "outlier-in-window.csv",
+    mediaType: "text/csv",
+  });
+  const inWindow = await buildArtifactVersionPreview(
+    fixture.store, fixture.recorder, fixture.session.id, inWindowVid,
+  );
+  if (inWindow.mode !== "dataset-table") assert.fail(`unexpected mode ${inWindow.mode}`);
+  assert.equal(inWindow.columns.length, 4, "a returned outlier still widens the grid to the cap");
+  assert.equal(inWindow.clippedCells, 4_996, "the returned outlier's cells past the width are counted");
+  assert.equal(
+    inWindow.warnings.filter((warning) => /pads \d+ unnamed column/.test(warning)).length,
+    0,
+    `a returned outlier is counted as cells, not as padding: ${JSON.stringify(inWindow.warnings)}`,
+  );
 
   // A two-column file without an outlier stays two columns wide: the cap is for
   // a wider line, not a width every table is padded up to.
