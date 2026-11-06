@@ -604,6 +604,13 @@ export function createRunnerServer(
           sendJson(response, 503, { error: capability.detail ?? capability.reason, code: "EXECUTION_UNAVAILABLE", capability });
           return;
         }
+        if (url.pathname !== "/execute" && capability.shell?.available === false) {
+          sendJson(response, 503, {
+            error: capability.shell.unavailableReason ?? "The managed shell environment is unavailable",
+            code: "EXECUTION_UNAVAILABLE", capability,
+          });
+          return;
+        }
       }
       if (request.method === "GET" && url.pathname === "/resources") {
         sendJson(response, 200, await collectRunnerResources(config.dataDir, {
@@ -1157,7 +1164,8 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const readiness = new RunnerReadiness(
     sandbox,
     sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath,
-    sandbox === "none" ? () => environmentStore.shellCapability() : undefined,
+    // The managed Bash/package contract is provisioned only on Windows.
+    sandbox === "none" && process.platform === "win32" ? () => environmentStore.shellCapability() : undefined,
   );
   const capability = await readiness.get();
   if (!capability.ready) logger.warn("execution_unavailable", { ...capability });

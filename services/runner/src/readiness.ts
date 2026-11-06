@@ -33,15 +33,15 @@ export class RunnerReadiness {
   private async probe(): Promise<RunnerExecutionCapability> {
     if (this.sandbox === "none") {
       // [windows-desktop] direct execution has no sandbox dependency to
-      // probe. ready=true so runs proceed; sandboxUsable stays false so the
+      // probe. A missing managed shell must not block Python execution.
+      // Shell routes check shell.available separately; sandboxUsable stays false so the
       // UI/API can still surface that isolation is absent (F6 tightens
       // permissions to compensate).
       const shell = await this.shellProbe?.();
-      const ready = shell?.available !== false;
       return {
         instanceId: this.instanceId, checkedAt: new Date().toISOString(), sandbox: "none",
-        dependencyAvailable: ready, sandboxUsable: false, ready,
-        reason: ready ? "ready" : "dependency-unavailable",
+        dependencyAvailable: true, sandboxUsable: false, ready: true,
+        reason: "ready",
         detail: shell?.unavailableReason ?? "unsandboxed direct execution",
         platform: process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux",
         ...(shell ? { shell } : {}),
