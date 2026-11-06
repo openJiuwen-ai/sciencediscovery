@@ -1,0 +1,746 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* ============================================================================
+ * 科学记忆
+ *
+ * Three pieces, no surface of its own: the citation chips inside a rendered
+ * report, the status line beside the 启用 switch in 设置 › 科学记忆, and the
+ * card a chip opens. The settings pane is built from the shared settings rows
+ * and only needs the field widths below.
+ * ==========================================================================*/
+
+/* ── citation chips ─────────────────────────────────────────────────────── */
+
+/* The chip is a button inside a sentence, so it inherits the line's type
+   size and only draws the capsule. `vertical-align: baseline` keeps it on
+   the text line instead of lifting the paragraph.
+
+   The shape and palette are the old web UI's, not this window's: a monospace
+   alias in a sunk capsule, uniform across every kind, that turns the accent
+   colour under the pointer. Colour-coding the kinds made the reader learn a
+   legend for a citation that already says its own name. */
+.graph-chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 1px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: .85em;
+  line-height: 1.55;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.graph-chip:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.graph-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-glow);
+}
+.graph-chip:disabled {
+  cursor: default;
+  opacity: .65;
+}
+.graph-chip:disabled:hover {
+  border-color: var(--border);
+  color: var(--text-strong);
+}
+.graph-chip-label {
+  max-width: 22em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── status line ────────────────────────────────────────────────────────── */
+
+/* The switch and the state its value decides, read as one control. The switch
+   keeps the row's right edge, so turning memory on or off never moves it; the
+   state fills in to its left. */
+.memory-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* No capsule: this line lives inside a settings row, where a bordered chip
+   would read as a second switch. A dot and coloured words say the same thing
+   at the weight the rest of the pane uses. */
+.memory-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.memory-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted-light);
+}
+.memory-status.is-healthy { color: var(--success); }
+.memory-status.is-healthy .memory-status-dot { background: var(--success-bright); }
+.memory-status.is-degraded,
+.memory-status.is-needs-password { color: var(--warning); }
+.memory-status.is-degraded .memory-status-dot,
+.memory-status.is-needs-password .memory-status-dot { background: var(--insight); }
+.memory-status.is-checking .memory-status-dot {
+  background: var(--primary);
+  animation: memory-pulse 1.4s ease-in-out infinite;
+}
+@keyframes memory-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .3; }
+}
+
+/* The only way a second reading happens, so it is a word the reader can press
+   rather than an icon they have to learn. */
+.memory-status-recheck {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.memory-status-recheck:hover { text-decoration: underline; }
+.memory-status-recheck:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-glow);
+}
+
+/* ── the card ───────────────────────────────────────────────────────────── */
+
+/* It borrows `.modal-backdrop` for the scrim, and the artifact dialog's panel
+   geometry, so an evidence card and an artifact card read as one surface. */
+.memory-dialog {
+  width: min(960px, calc(100vw - 60px));
+  max-height: min(84vh, 900px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: modalIn .2s cubic-bezier(.2,.8,.2,1);
+  overflow: hidden;
+}
+.memory-dialog-head {
+  position: relative;
+  padding: 20px 28px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.memory-dialog-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 40px;
+}
+.memory-dialog-head h2 {
+  margin-top: 8px;
+  padding-right: 40px;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+
+.memory-kind-chip {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.memory-kind-chip.is-evidence { background: var(--discovery-soft); color: var(--discovery-strong); }
+.memory-kind-chip.is-artifact { background: var(--insight-soft); color: var(--insight-strong); }
+
+.memory-dialog-tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.memory-dialog-open {
+  margin-left: auto;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.memory-tabs {
+  display: flex;
+  gap: 20px;
+}
+.memory-tabs button {
+  position: relative;
+  padding: 11px 1px 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color .15s ease;
+}
+.memory-tabs button:hover { color: var(--text-secondary); }
+.memory-tabs button.is-active { color: var(--text-strong); font-weight: 600; }
+.memory-tabs button.is-active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--primary);
+}
+
+.memory-dialog-body {
+  padding: 16px 24px 32px;
+  overflow-y: auto;
+}
+
+/* ── states ─────────────────────────────────────────────────────────────── */
+
+.memory-state {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 18px 0 6px;
+}
+.memory-state strong {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+.memory-state p {
+  max-width: 52ch;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.memory-state .secondary-button { margin-top: 4px; }
+
+/* ── evidence preview ───────────────────────────────────────────────────── */
+
+/* The old web UI's EvidenceModal header: one line of evidence text, with the
+   full claim on hover. */
+.memory-dialog-head h2.evidence-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-detail { display: grid; gap: 14px; }
+
+.evidence-content { display: grid; gap: 10px; }
+.evidence-content-label {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.evidence-content-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+}
+.evidence-meta-prop {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  gap: 6px;
+  font-size: 11px;
+}
+.evidence-meta-prop dt { color: var(--muted); }
+.evidence-meta-prop dd { margin: 0; color: var(--text-secondary); }
+
+/* ── generic node facts ─────────────────────────────────────────────────── */
+
+.memory-facts { display: grid; gap: 22px; }
+
+.memory-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+}
+.memory-fact { min-width: 0; }
+.memory-fact dt {
+  margin-bottom: 1px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.memory-fact dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.memory-fact dd a { color: var(--primary); text-decoration: none; }
+.memory-fact dd a:hover { text-decoration: underline; }
+
+/* ── provenance ─────────────────────────────────────────────────────────── */
+
+/* An evidence's sources are cards, not numbered steps: each card's own kind
+   label says what it is, so a "来源" heading would only repeat it. This is the
+   old web UI's `evidence-source-paper` card. */
+.evidence-source-papers { display: grid; gap: 10px; }
+.evidence-source-paper {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  overflow: hidden;
+}
+.evidence-source-paper-label {
+  margin: 0;
+  padding: 9px 12px 2px;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.evidence-source-paper-title {
+  margin: 0;
+  padding: 0 12px 4px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.evidence-source-paper-detail {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+.evidence-source-paper-abstract {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.evidence-source-paper-link {
+  color: var(--primary);
+  font-size: 11px;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  overflow-wrap: anywhere;
+}
+.evidence-source-paper-link:hover { text-decoration-style: solid; }
+.evidence-source-frame {
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface-sunk);
+}
+.evidence-source-image {
+  max-width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+}
+
+.memory-trace-empty {
+  color: var(--muted-light);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-node-action {
+  margin-top: 6px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  transition: background .15s ease, border-color .15s ease;
+}
+.memory-node-action:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+.memory-node-action:disabled { color: var(--muted-light); cursor: not-allowed; }
+
+.memory-trace-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.memory-trace-loading .spinner { color: var(--muted); }
+
+/* ── artifact provenance ────────────────────────────────────────────────── */
+
+/* The old web UI's provenance tab, laid out as blocks rather than numbered
+   steps: parents, code, execution log, environment. The dialog is the only
+   place that scrolls, so a long log grows the body instead of the card. */
+.memory-artifact-provenance {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.memory-provenance-block > h4 {
+  margin-bottom: 8px;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* 派生自 labels the files beside it rather than heading a list beneath it: the
+   first parent sits on the same line as the label, and the line wraps when a
+   version has several parents. */
+.memory-provenance-block.is-dependencies {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.memory-provenance-block.is-dependencies > h4 { margin-bottom: 0; }
+
+.memory-dependency-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.memory-dependency {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  transition: background .15s ease, border-color .15s ease;
+}
+button.memory-dependency:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+.memory-dependency.is-file {
+  border-style: dashed;
+  background: var(--surface-sunk);
+  color: var(--muted);
+}
+.memory-dependency-version { color: var(--muted-light); font-variant-numeric: tabular-nums; }
+
+.memory-code,
+.memory-execution,
+.memory-environment {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+.memory-code + .memory-code,
+.memory-execution + .memory-execution,
+.memory-environment + .memory-environment { margin-top: 6px; }
+.memory-code-head,
+.memory-execution-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.memory-code-head strong,
+.memory-execution-head strong {
+  color: var(--text-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.memory-code-head .memory-node-action { margin: 0 0 0 auto; }
+.memory-run-id {
+  margin-left: auto;
+  color: var(--muted-light);
+  font-size: 10.5px;
+}
+.memory-code-body,
+.memory-log-body {
+  max-height: 220px;
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunk);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow: auto;
+  white-space: pre;
+}
+.memory-working-dir {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.memory-working-dir code { color: var(--text-secondary); }
+
+.memory-process-environment {
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+.memory-process-environment > summary {
+  width: fit-content;
+  color: var(--muted);
+  cursor: pointer;
+}
+.memory-process-environment > summary:hover { color: var(--text-secondary); }
+.memory-process-environment[open] > summary { margin-bottom: 6px; }
+.memory-process-environment dl { margin: 0; }
+.memory-process-environment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 14em) minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 0;
+}
+.memory-process-environment-row dt {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.memory-process-environment-row dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.memory-process-environment-row summary { cursor: pointer; }
+.memory-process-environment-row pre { margin-top: 4px; white-space: pre-wrap; }
+
+.memory-environment header {
+  margin-bottom: 2px;
+  color: var(--text-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.memory-environment p,
+.memory-environment small {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ── artifact dialog ────────────────────────────────────────────────────── */
+
+/* A chip opens the artifact itself, in the middle of the window, the way the
+   old web UI did. The dialog only supplies the frame: the document is drawn by
+   the same renderer the right panel uses, so a CSV is a table and a report is
+   Markdown with its own chips. Tall enough for a report, but narrower than the
+   window so the passage that cited it stays visible behind the scrim. */
+.artifact-dialog {
+  width: min(960px, calc(100vw - 60px));
+  max-height: min(84vh, 900px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: modalIn .2s cubic-bezier(.2,.8,.2,1);
+  overflow: hidden;
+}
+
+/* A 派生自 link opens its target in the right panel, so the scrim stops at the
+   panel instead of darkening it, and the dialog centres in what is left. The
+   offset is the panel's width, published inline on the backdrop because the
+   dialog is portaled to `body` and never sees the shell's `--panel-width`;
+   the 6px is the panel's own left margin, which is window, not panel. */
+.artifact-backdrop.is-split { right: calc(var(--artifact-panel-offset, 0px) + 6px); }
+.artifact-dialog.is-split {
+  width: min(960px, calc(100vw - var(--artifact-panel-offset, 0px) - 72px));
+}
+
+/* The two surfaces keep their own chrome: the split geometry is the only
+   thing the link changes, so neither the dialog nor the panel draws a ring
+   around itself when a dependency opens beside it. */
+
+/* Below 1100px the panel is not drawn at all (`shell.css`), so there is no
+   column to leave room for and the dialog takes the window back. */
+@media (max-width: 1100px) {
+  .artifact-backdrop.is-split { right: 0; }
+  .artifact-dialog.is-split { width: min(960px, calc(100vw - 60px)); }
+}
+.artifact-dialog-head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex: 0 0 auto;
+  padding: 20px 28px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.artifact-dialog-title { min-width: 0; }
+.artifact-dialog-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.artifact-dialog-version {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.artifact-dialog-head h2 {
+  margin-top: 8px;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+.artifact-dialog-source {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* The version and the download sit beside the title; the ✕ keeps its corner,
+   so the controls stop short of it. */
+.artifact-dialog-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 2px 40px 0 0;
+}
+.artifact-dialog-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.artifact-dialog-picker select {
+  max-width: 24em;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.artifact-dialog-download {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background .15s ease;
+}
+.artifact-dialog-download:hover:not(:disabled) { background: var(--surface-soft); }
+.artifact-dialog-download:disabled { color: var(--muted-light); cursor: not-allowed; }
+.artifact-dialog-tabs {
+  flex: 0 0 auto;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.artifact-dialog-body { padding-bottom: 32px; }
+/* Opened before its document is: the frame is on screen from the press, and
+   this reserves a document's worth of height so the dialog does not open as a
+   strip and grow once the bytes land. Dropped as soon as the body has
+   something of its own to measure. */
+.artifact-dialog.is-loading .artifact-dialog-body { min-height: min(52vh, 460px); }
+
+/* ── narrow ─────────────────────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .memory-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 40px);
+  }
+  .memory-dialog-head,
+  .memory-dialog-body,
+  .memory-dialog-tabs { padding-left: 18px; padding-right: 18px; }
+  .memory-dialog-head h2 { font-size: 16px; }
+  .artifact-dialog,
+  .artifact-dialog.is-split {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 40px);
+  }
+  .artifact-dialog-head,
+  .artifact-dialog-body,
+  .artifact-dialog-tabs { padding-left: 18px; padding-right: 18px; }
+  .artifact-dialog-head { flex-direction: column; gap: 10px; }
+  .artifact-dialog-controls { flex-wrap: wrap; padding-top: 0; }
+  .artifact-dialog-head h2 { font-size: 16px; }
+  .memory-fact-grid { grid-template-columns: minmax(0, 1fr); }
+  /* Narrow, the state moves under the switch rather than squeezing the row:
+     the words are the point, and dropping them would leave only a dot. */
+  .memory-switch { flex-direction: column; align-items: flex-end; gap: 8px; }
+  .graph-chip-label { max-width: 14em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-chip,
+  .memory-status-dot,
+  .memory-dialog,
+  .artifact-dialog,
+  .memory-tabs button,
+  .memory-node-action {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

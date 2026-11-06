@@ -221,6 +221,10 @@ export function reduceRunStream(
       return {
         ...finished,
         finalContent: event.message.content,
+        // Chips for the answer's `[alias]` tokens. The server back-fills these
+        // onto the message right before emitting this event, which is what lets
+        // the live transcript render chips without waiting for a reload.
+        references: event.message.references ?? finished.references,
         status: "completed",
         turns: sealOpenResponses(finished.turns),
       };

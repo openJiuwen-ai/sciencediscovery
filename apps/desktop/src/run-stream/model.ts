@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage, PermissionRequest, SessionRunStatus, Subagent, ToolTrace } from "../api/types.js";
+import type {
+  ChatMessage,
+  ComposerReference,
+  PermissionRequest,
+  SessionRunStatus,
+  Subagent,
+  ToolTrace,
+} from "../api/types.js";
 
 /** One model invoke attempt's visible text. A turn can hold several: the model
  *  may be re-invoked after a tool call, and each attempt gets its own
@@ -119,6 +126,17 @@ export interface RunStreamState {
   modelName?: string;
   /** Every authorization request this run raised, oldest first. */
   permissions: PermissionEntry[];
+  /**
+   * The aliases this run's answer cites, as the server back-filled them onto
+   * the persisted message (`run.completed.message.references`).
+   *
+   * A finished answer is drawn from the run's own text, not from the stored
+   * `ChatMessage`, so without this the `[artifact1]` tokens in a live or
+   * replayed transcript would stay plain text while the same body in the
+   * report preview shows chips. Absent while the run is going (the aliases are
+   * back-filled at completion) and on records written before the back-fill.
+   */
+  references?: ComposerReference[];
   /**
    * Text that arrived before the frame naming its turn, keyed by `responseId`.
    *

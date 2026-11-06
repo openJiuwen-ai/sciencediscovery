@@ -25,7 +25,13 @@ import { fileFolder, fileName } from "../app/paths.js";
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, PANEL_NUDGE_STEP, PANEL_NUDGE_STRIDE } from "../app/panel-width.js";
 import type { ToolDetail as ToolDetailData } from "../app/tool-io.js";
 import { detectStructureFormat } from "../molecular.js";
-import type { Session, SessionArtifactOutput, Subagent, WorkspaceFile } from "../api/types.js";
+import type {
+  ComposerReference,
+  Session,
+  SessionArtifactOutput,
+  Subagent,
+  WorkspaceFile,
+} from "../api/types.js";
 import { subagentTask } from "../run-stream/subagent.js";
 import { TEXT } from "../text.js";
 import { DocumentPreview } from "./DocumentPreview.js";
@@ -42,6 +48,8 @@ interface Props {
    *  way out of the mode `subagent` and `tool` open. */
   onCloseDetail: () => void;
   onCollapse: () => void;
+  /** Opens the memory card behind a citation chip in a report. */
+  onReferenceClick?: (reference: ComposerReference, sessionId?: string) => void;
   onSelectGroup: (group: PanelGroup) => void;
   outputs: SessionArtifactOutput[];
   resize: PanelResize;
@@ -472,6 +480,7 @@ export function WorkspacePanel({
   files,
   onCloseDetail,
   onCollapse,
+  onReferenceClick,
   onSelectGroup,
   outputs,
   resize,
@@ -700,10 +709,20 @@ export function WorkspacePanel({
             {active === undefined ? (
               <div className="doc-placeholder">{TEXT.workspace.open}</div>
             ) : structure ? (
-              <DocumentPreview expanded={expanded} onExpand={setExpanded} slot={active} />
+              <DocumentPreview
+                expanded={expanded}
+                onExpand={setExpanded}
+                onReferenceClick={onReferenceClick}
+                slot={active}
+              />
             ) : (
               <div className="artifact-canvas">
-                <DocumentPreview expanded={expanded} onExpand={setExpanded} slot={active} />
+                <DocumentPreview
+                  expanded={expanded}
+                  onExpand={setExpanded}
+                  onReferenceClick={onReferenceClick}
+                  slot={active}
+                />
               </div>
             )}
           </div>
