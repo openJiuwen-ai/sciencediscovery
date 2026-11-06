@@ -401,6 +401,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     "real-research/e2e/test-results/benchmark-case/benchmark-metrics.json",
     "real-team/e2e/.hidden-case/team-metrics.json",
     "evolve/e2e/test-results/evolve-case/evolve-metrics.json",
+    "e2e-real/e2e/test-results/basic-case/case-metrics.json",
     "e2e-real/tagged/plan.json",
     "e2e-real/tagged/summary.json",
     "e2e-real/tagged/preflight.json",
@@ -416,6 +417,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     "real-research/prompt.txt", "real-research/model-output.json", "real-research/.env",
     "real-research/not-benchmark-metrics.json", "real-team/team-metrics.json.backup",
     "evolve/.evolve-metrics.json", "real-team/Team-metrics.json", "e2e-real/tagged/catalog.json",
+    "e2e-real/not-case-metrics.json", "e2e-real/case-metrics.json.tmp",
     "e2e-real/tagged/nested/plan.json", "e2e-real/tagged/summary.json.log",
     "other/tagged/plan.json", "summary.json", "preflight.json",
     "misnamed-directory/benchmark-metrics.json/trace.zip",
@@ -436,6 +438,9 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     ["evolve/e2e/test-results/evolve-case/evolve-metrics.json", {...metadata, case: "PUCT-COMPRESS",
       evaluation: {status: "completed", score: 0.61, baseline_gate_score: 0.55, best_gate_score: 0.63},
       llm_evaluation: {status: "error", total_score: null, gating: false}}],
+    // Shared counts of a real case without its own metrics: plan identity and numbers only.
+    ["e2e-real/e2e/test-results/basic-case/case-metrics.json", {schema_version: 1, case: "playwright:test/basic.spec.ts::real/basic.spec.ts/L3-response",
+      key: "case-b@linux/amd64", execution_metrics: {generated_tokens: 70006, total_tokens: 90006, tool_calls: 3}}],
     ["e2e-real/tagged/plan.json", {version: 1, profile: "daily", revision: "a".repeat(40), entries: [{id: "case-a"}]}],
     ["e2e-real/tagged/summary.json", {status: "FAIL", planDigest: "b".repeat(64), planned: 1, executed: 1, passed: 0, failed: 1, skipped: 0,
       results: [{key: "case-a@linux/amd64", outcome: "FAIL", actualTarget: {os: "linux", arch: "amd64"}}]}],
@@ -445,7 +450,11 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     path.endsWith("trace.zip") ? Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]) : Buffer.from(JSON.stringify({fixture: path}))]));
   for (const [path, publicData] of projected) {
     const raw = structuredClone(publicData);
-    if (path.endsWith("metrics.json")) {
+    if (path.endsWith("case-metrics.json")) {
+      // The raw document holds the collector's measurements, never execution_metrics.
+      delete raw.execution_metrics;
+      Object.assign(raw, privateFields, {measurements: {generation_output_tokens: 70006, total_tokens: 90006, tool_calls: 3}});
+    } else if (path.endsWith("metrics.json")) {
       Object.assign(raw, privateFields);
       raw.evaluation.reason = "PRIVATE_FIXTURE judge output";
       raw.evaluation.judge_calls = [{response: "PRIVATE_FIXTURE response"}];
@@ -470,7 +479,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
   await writeFile(join(root, scoreUploadPath, "trace.zip"), "old diagnostic");
   const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], { cwd: root, encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /Staged 7 real E2E score\/plan files/);
+  assert.match(run.stdout, /Staged 8 real E2E score\/plan files/);
   const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "real-e2e.yml"), "utf8");
   const uploads = artifactUploads(workflowJobs(ci)["real-e2e"]);
   const scoreDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-results-")).paths[0]);

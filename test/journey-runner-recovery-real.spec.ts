@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, type Page } from '@playwright/test';
 import { test, requireRealEnv, requireRealStack } from './helpers/e2e.ts';
+import { writeCaseMetrics } from './helpers/case-measurements.ts';
 import { createProjectAndSession, cleanupJourney, openProjectSession, sendUserMessage, waitForRunTerminal } from './helpers/journeys.ts';
 import { apiBaseUrl, authorizationHeader } from './e2e-auth.js';
 import { collectFinalDelivery } from './helpers/real-delivery.ts';
@@ -135,6 +136,7 @@ for (const wait of [true, false]) {
         await info.attach('model-protocol',{body:JSON.stringify({model:real.E2E_LLM_MODEL,backend:process.env.CI_E2E_BACKEND,elapsedMs:Date.now()-started,requests:proxy.requests,runnerRequests:runner?.requests}),contentType:'application/json'});
         if (fixture) {
           if (runId) await api(page,`/api/sessions/${fixture.session.id}/runs/${runId}/cancel`,'POST',{}).catch(()=>undefined);
+          await writeCaseMetrics(page.request,info,fixture.session.id);
           await cleanupJourney(page,fixture);
         }
         if (hostId) await api(page,`/api/remote-hosts/${hostId}`,'DELETE');

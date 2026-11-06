@@ -460,8 +460,9 @@ metric scopes, runtime prerequisites, baseline approval and retained artifacts.
 Each worker always uploads score-only `real-e2e-results-<shard>` and complete
 `real-e2e-evidence-<shard>` separately (seven-day retention). The score staging
 allowlist remains exact `benchmark-metrics.json`, `team-metrics.json`,
-`evolve-metrics.json` plus tagged plan/summary/preflight JSON. Raw prompts,
-model text, traces and credentials never belong in a score artifact.
+`evolve-metrics.json`, `case-metrics.json` plus tagged plan/summary/preflight
+JSON. Raw prompts, model text, traces and credentials never belong in a score
+artifact.
 
 The aggregator retains the existing **real-e2e-results** artifact for dashboard
 consumers, with a single suite-level plan/summary and namespaced per-case scores.
@@ -487,6 +488,21 @@ judge tokens and totals retain their recorded scopes, and no split is inferred
 from a total. Peak RSS bytes are divided by `1024 ** 3` for the fixed memory
 column. Missing optional measurements display `n/a` and do not affect gating.
 Only identity cells and numeric measurements enter the table and summary.
+
+The table reads the staged projection, whose `execution_metrics` keep only
+these numbers, so every measurement is computed before staging. Judge tokens
+fall back to the sum of `evaluation.judge_calls[].usage.total_tokens` only when
+every recorded call reports one. Real cases with a Session collect shared
+`measurements` before cleanup through `test/helpers/case-measurements.ts`:
+generated and total tokens from `GET /api/sessions/:id/usage` when every
+invocation is reported with all three token counts, and tool calls as distinct
+`trace.id`/`toolCallId` values in the Session's run, subagent and evolve event
+streams (0 when every stream was read and none had a tool call; omitted when a
+stream is missing or truncated). Invocation count is never a tool call count.
+These fields join the case's existing benchmark, team or evolve metrics; other
+cases write `case-metrics.json` with their plan `case` id and tagged `key`.
+A case matched by two metrics documents shows no measurements, so each case
+keeps exactly one. Collection never fails a case or spends its time budget.
 
 ## Coverage reporting
 

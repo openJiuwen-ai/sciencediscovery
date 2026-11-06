@@ -3,6 +3,7 @@
 import { writeFile } from "node:fs/promises";
 import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { dirname } from "node:path";
+import { measureSession } from "./helpers/case-measurements.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { deliveryFailureMessage, requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { evaluateTeam } from "./helpers/research-team.ts";
@@ -208,6 +209,8 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
         if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
       }
       metrics.usage = await api(`${prefix}/usage`).catch(() => null);
+      // Shared numeric measurements join this case's only metrics document.
+      metrics.measurements = await measureSession(page.request, info, fixture.session.id);
       children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     }
     // timed_out must stay distinct from delivery failure; only remap leftover running.

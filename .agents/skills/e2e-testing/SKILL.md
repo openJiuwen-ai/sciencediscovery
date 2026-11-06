@@ -536,7 +536,7 @@ an untracked exception.
 
 Keep score collection separate from diagnostics. Use
 `node .ci/prepare-real-e2e-results.mjs` to stage `real-e2e-results`: only exact
-`benchmark-metrics.json`, `team-metrics.json`, `evolve-metrics.json` basenames
+`benchmark-metrics.json`, `team-metrics.json`, `evolve-metrics.json`, `case-metrics.json` basenames
 and `e2e-real/tagged/{plan,summary,preflight}.json` are allowed. Preserve their
 relative paths. The staging script projects metrics to score/status/duration
 fields and removes free-form tagged errors; prompts and raw model output stay
