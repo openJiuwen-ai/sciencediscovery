@@ -7341,7 +7341,7 @@ test("WSP-005 a reserved device name in a session file write answers 400 and nam
   // write route must refuse them before touching the disk: `nul.txt` otherwise fails
   // as a bare EPERM (500) and `CON` silently writes to the console device instead of
   // creating a file. `CON .csv` covers the trailing space Windows ignores.
-  for (const path of ["CON", "nul.txt", "COM1.log", "CON .csv", "nul:stream", "con:$DATA"]) {
+  for (const path of ["CON", "nul.txt", "COM1.log", "CON .csv", "nul:stream", "con:$DATA", "COM¹.txt"]) {
     const refused = await write(path);
     assert.equal(refused.response.status, 400, `${path} must be refused as a bad request`);
     assert.match(refused.body.error, /reserved device name/, `${path} must say why`);
@@ -7355,6 +7355,7 @@ test("WSP-005 a reserved device name in a session file write answers 400 and nam
   // for a clean directory that already worked before the segment rule.
   for (const [path, segment] of [
     ["CON/notes.txt", "CON"],
+    ["CON\\notes.txt", "CON"],
     ["nul.dir/x.csv", "nul.dir"],
     ["notes/CON.txt", "CON.txt"],
   ] as const) {
