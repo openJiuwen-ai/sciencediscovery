@@ -133,6 +133,14 @@ export function getJiuwenSwarmSkills(client: ApiClient): Promise<JiuwenSwarmSkil
   return client.request<JiuwenSwarmSkillsResponse>("/api/jiuwenswarm/skills");
 }
 
+/** Toggle a skill JiuwenSwarm already owns, including its built-in skills. */
+export function setJiuwenSwarmSkillEnabled(client: ApiClient, name: string, enabled: boolean): Promise<void> {
+  return client.request<void>(`/api/jiuwenswarm/skills/${encodeURIComponent(name)}`, {
+    body: JSON.stringify({ enabled }),
+    method: "PUT",
+  });
+}
+
 /** Toggle one ScienceDiscovery skill in JiuwenSwarm by its id, importing it first if needed. */
 export function setJiuwenSwarmSkillEnabledById(client: ApiClient, skillId: string, enabled: boolean): Promise<void> {
   return client.request<void>(`/api/jiuwenswarm/skills-by-id/${encodeURIComponent(skillId)}`, {

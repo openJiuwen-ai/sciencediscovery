@@ -427,6 +427,16 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (path === "/api/jiuwenswarm/skills" && method === "GET") {
         return json(route, 200, { backend: "jiuwenswarm", skills: state.jiuwenSwarmSkills });
       }
+      const namedSkillSwitch = path.match(/^\/api\/jiuwenswarm\/skills\/([^/]+)$/u);
+      if (namedSkillSwitch && method === "PUT") {
+        const name = decodeURIComponent(namedSkillSwitch[1]!);
+        if (options.skillToggleFailures?.includes(name)) return json(route, 502, { error: "Skill switch failed" });
+        const installed = state.jiuwenSwarmSkills.find((skill) => skill.name === name);
+        if (!installed) return json(route, 404, { error: "Skill not found" });
+        const input = JSON.parse(body ?? "{}") as JsonRecord;
+        installed.enabled = input.enabled;
+        return json(route, 200, { name, enabled: input.enabled });
+      }
       const skillSwitch = path.match(/^\/api\/jiuwenswarm\/skills-by-id\/([^/]+)$/u);
       if (skillSwitch && method === "PUT") {
         const skillId = decodeURIComponent(skillSwitch[1]!);

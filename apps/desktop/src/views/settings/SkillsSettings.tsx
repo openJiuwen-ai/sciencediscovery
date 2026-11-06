@@ -15,8 +15,8 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
-import { getJiuwenSwarmSkills, getSkill, listSkills, setJiuwenSwarmSkillEnabledById } from "../../api/settings.js";
-import type { SkillDescriptor, SkillDetail } from "../../api/types.js";
+import { getJiuwenSwarmSkills, getSkill, listSkills, setJiuwenSwarmSkillEnabled, setJiuwenSwarmSkillEnabledById } from "../../api/settings.js";
+import type { JiuwenSwarmSkill, SkillDescriptor, SkillDetail } from "../../api/types.js";
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
@@ -32,7 +32,14 @@ interface Props {
 
 interface SkillPage {
   enabled: string[];
+  jiuwenSwarmSkills: JiuwenSwarmSkill[];
   skills: SkillDescriptor[];
+}
+
+function setSkillEnabled(client: ApiClient, skill: SkillDescriptor | JiuwenSwarmSkill, enabled: boolean): Promise<void> {
+  return "id" in skill
+    ? setJiuwenSwarmSkillEnabledById(client, skill.id, enabled)
+    : setJiuwenSwarmSkillEnabled(client, skill.name, enabled);
 }
 
 /** The expanded card's SKILL.md body: absent while it is being read. */
@@ -95,19 +102,19 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
       throw new Error(TEXT.settings.skills.jiuwenSwarmOnly);
     }
     const enabled = jiuwenSwarm.skills.flatMap((skill) => skill.enabled && skill.skillId ? [skill.skillId] : []);
-    return { enabled, skills };
+    return { enabled, jiuwenSwarmSkills: jiuwenSwarm.skills.filter((skill) => skill.source !== "sciencediscovery"), skills };
   }, {
     client,
     key: "skills:jiuwenswarm",
   });
 
-  const toggle = async (skill: SkillDescriptor, next: boolean) => {
+  const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
     const page = loaded.value;
     if (!page) return;
     setBusy(true);
     setFailure(undefined);
     try {
-      await setJiuwenSwarmSkillEnabledById(client, skill.id, next);
+      await setSkillEnabled(client, skill, next);
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
@@ -128,9 +135,9 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     setFailure(undefined);
     try {
       const failures: string[] = [];
-      for (const skill of page.skills) {
+      for (const skill of [...page.skills, ...page.jiuwenSwarmSkills]) {
         try {
-          await setJiuwenSwarmSkillEnabledById(client, skill.id, next);
+          await setSkillEnabled(client, skill, next);
         } catch (reason) {
           failures.push(`${skill.name}: ${reason instanceof Error ? reason.message : TEXT.settings.saveFailed}`);
         }
@@ -187,7 +194,7 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
         <p className="row-note">{TEXT.settings.skills.scope}</p>
         <LoadGate loaded={loaded}>
           {(page) => {
-            if (page.skills.length === 0) {
+            if (page.skills.length === 0 && page.jiuwenSwarmSkills.length === 0) {
               return <p className="settings-empty">{TEXT.settings.skills.empty}</p>;
             }
             return (
@@ -237,6 +244,29 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                     </div>
                   );
                 })}
+                {page.jiuwenSwarmSkills.map((skill) => (
+                  <div className="settings-card" key={`jiuwenswarm:${skill.name}`}>
+                    <span className="settings-card-mark">{skillMark(skill)}</span>
+                    <div className="settings-card-main">
+                      <strong>
+                        {skill.name}
+                        <Tag tone={skill.enabled ? "on" : "off"}>
+                          {skill.enabled ? TEXT.settings.skills.on : TEXT.settings.skills.off}
+                        </Tag>
+                      </strong>
+                      <small>{skill.description}</small>
+                      <small>{skill.source === "builtin" ? TEXT.settings.skills.source.jiuwenBuiltIn : TEXT.settings.skills.source.jiuwenLocal}</small>
+                    </div>
+                    <div className="settings-card-actions">
+                      <Switch
+                        disabled={busy}
+                        label={TEXT.settings.skills.toggle(skill.name)}
+                        onChange={(next) => void toggle(skill, next)}
+                        value={skill.enabled}
+                      />
+                    </div>
+                  </div>
+                ))}
                 {failure ? <small className="row-note is-error">{failure}</small> : null}
               </div>
             );
