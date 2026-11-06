@@ -15,8 +15,8 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../../api/client.js";
-import { getProjectSettings, getSkill, listSkills, setEnabledSkills } from "../../api/settings.js";
-import type { RuntimeSettingsOverrides, SkillDescriptor, SkillDetail, SkillSource } from "../../api/types.js";
+import { getJiuwenSwarmSkills, listSkills, setJiuwenSwarmSkillEnabledById } from "../../api/settings.js";
+import type { SkillDescriptor, SkillDetail } from "../../api/types.js";
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
@@ -25,8 +25,6 @@ import { SkillForm } from "./SkillForm.js";
 import { BulkToggles, Group, LoadGate, Switch, Tag } from "./rows.js";
 
 interface Props {
-  activeProjectId?: string;
-  /** Owned by the settings surface, where the 新增技能 button lives. */
   adding: boolean;
   client: ApiClient;
   onAddingChange: (next: boolean) => void;
@@ -34,7 +32,6 @@ interface Props {
 
 interface SkillPage {
   enabled: string[];
-  overrides: RuntimeSettingsOverrides;
   skills: SkillDescriptor[];
 }
 
@@ -45,7 +42,7 @@ interface OpenDetail {
   instructions?: string;
 }
 
-const SOURCE_LABEL: Record<SkillSource, string> = {
+const SOURCE_LABEL: Record<SkillDescriptor["source"], string> = {
   "built-in": TEXT.settings.skills.source.builtIn,
   managed: TEXT.settings.skills.source.managed,
 };
@@ -76,64 +73,43 @@ export function skillMeta(skill: SkillDescriptor): string {
 }
 
 /**
- * What the project's enabled list becomes once a new skill is created, or
- * `undefined` when the project needs no write.
- *
- * `all` is the default mode and it resolves to everything installed, so a
- * package created under it is on already. `selected` carries an explicit list,
- * and a package missing from that list would be off the moment it was made —
- * the same write a toggle makes. Enabling it is what 新增技能 promises.
- */
-export function enabledAfterCreate(
-  mode: RuntimeSettingsOverrides["skillSelectionMode"],
-  enabled: string[],
-  skillId: string,
-): string[] | undefined {
-  if (mode !== "selected" || enabled.includes(skillId)) return undefined;
-  return [...enabled, skillId];
-}
-
-/**
  * 设置 › 技能.
  *
- * The enabled set is read back from the project layer after every write rather
- * than tracked locally, because the server normalizes it on the way in: the
- * mode flips to `selected` on the first toggle, and the list is intersected
- * with what is actually installed. Showing the server's answer is the only way
- * the switches and the truth stay in step.
+ * The enabled set is read from JiuwenSwarm's own skill store: it is the global
+ * authority for whether a skill is available, and it applies to every project.
+ * ScienceDiscovery only installs or removes the skill package; the switch lives
+ * in JiuwenSwarm.
  */
-export function SkillsSettings({ activeProjectId, adding, client, onAddingChange }: Props) {
+export function SkillsSettings({ adding, client, onAddingChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [detail, setDetail] = useState<OpenDetail>();
   const [openId, setOpenId] = useState<string>();
 
   const loaded = useLoaded<SkillPage>(async () => {
-    if (!activeProjectId) throw new Error(TEXT.settings.skills.noProject);
-    const [skills, project] = await Promise.all([
+    const [skills, jiuwenSwarm] = await Promise.all([
       listSkills(client),
-      getProjectSettings(client, activeProjectId),
+      getJiuwenSwarmSkills(client),
     ]);
-    const effective = project.effective as { enabledSkillIds?: string[] } | undefined;
-    return { enabled: effective?.enabledSkillIds ?? [], overrides: project.overrides, skills };
+    if (jiuwenSwarm.backend === "native") {
+      throw new Error(TEXT.settings.skills.jiuwenSwarmOnly);
+    }
+    const enabled = jiuwenSwarm.skills
+      .filter((skill) => skill.enabled && skill.skillId)
+      .map((skill) => skill.skillId!);
+    return { enabled, skills };
   }, {
-    // The enabled set belongs to one Project, so the Project is part of the
-    // key: switching Projects must not paint the previous one's switches.
     client,
-    key: `skills:${activeProjectId ?? "none"}`,
+    key: "skills:jiuwenswarm",
   });
 
   const toggle = async (skill: SkillDescriptor, next: boolean) => {
-    if (!activeProjectId) return;
-    const current = loaded.value;
-    if (!current) return;
-    const enabled = next
-      ? [...current.enabled, skill.id]
-      : current.enabled.filter((id) => id !== skill.id);
+    const page = loaded.value;
+    if (!page) return;
     setBusy(true);
     setFailure(undefined);
     try {
-      await setEnabledSkills(client, activeProjectId, enabled);
+      await setJiuwenSwarmSkillEnabledById(client, skill.id, next);
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
@@ -143,19 +119,19 @@ export function SkillsSettings({ activeProjectId, adding, client, onAddingChange
   };
 
   /**
-   * 一键启用 / 一键关闭, as one write: the list the project keeps is the whole
-   * answer, so "all" is every installed id and "none" is the empty list. Under
-   * `all` the project carries no list at all, which is why disabling has to
-   * write one — `setEnabledSkills` flips the mode to `selected` with it.
+   * Enable or disable every installed skill. Each toggle is its own request:
+   * JiuwenSwarm is the authority, and a single failing skill must not stop the
+   * rest from being applied.
    */
   const setAll = async (next: boolean) => {
-    if (!activeProjectId) return;
     const page = loaded.value;
     if (!page) return;
     setBusy(true);
     setFailure(undefined);
     try {
-      await setEnabledSkills(client, activeProjectId, next ? page.skills.map((skill) => skill.id) : []);
+      for (const skill of page.skills) {
+        await setJiuwenSwarmSkillEnabledById(client, skill.id, next);
+      }
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
@@ -178,39 +154,37 @@ export function SkillsSettings({ activeProjectId, adding, client, onAddingChange
     }
     setOpenId(skill.id);
     setDetail({ id: skill.id });
-    getSkill(client, skill.id).then(
-      (found) => setDetail((current) => (
-        current?.id === skill.id ? { id: skill.id, instructions: found.instructions.trim() } : current
-      )),
-      () => setDetail((current) => (
-        current?.id === skill.id ? { failed: true, id: skill.id } : current
-      )),
+    import("../../api/settings.js").then(({ getSkill }) =>
+      getSkill(client, skill.id).then(
+        (found) => setDetail((current) => (
+          current?.id === skill.id ? { id: skill.id, instructions: found.instructions.trim() } : current
+        )),
+        () => setDetail((current) => (
+          current?.id === skill.id ? { failed: true, id: skill.id } : current
+        )),
+      ),
     );
   };
 
-  /** A skill created from the form is on — see `enabledAfterCreate`. */
+  /** A skill created from the form is enabled in JiuwenSwarm right away. */
   const afterCreate = async (skill: SkillDetail) => {
     onAddingChange(false);
-    if (activeProjectId) {
-      try {
-        const project = await getProjectSettings(client, activeProjectId);
-        const effective = project.effective as { enabledSkillIds?: string[] } | undefined;
-        const enabled = enabledAfterCreate(
-          project.overrides.skillSelectionMode,
-          effective?.enabledSkillIds ?? [],
-          skill.id,
-        );
-        if (enabled !== undefined) await setEnabledSkills(client, activeProjectId, enabled);
-      } catch (reason) {
-        setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-      }
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
+    } catch (reason) {
+      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+    } finally {
+      setBusy(false);
+      loaded.reload();
     }
-    loaded.reload();
   };
 
   return (
     <>
       <Group>
+        <p className="row-note">{TEXT.settings.skills.scope}</p>
         <LoadGate loaded={loaded}>
           {(page) => {
             if (page.skills.length === 0) {

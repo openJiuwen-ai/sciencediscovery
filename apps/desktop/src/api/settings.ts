@@ -24,6 +24,7 @@ import type { ApiClient } from "./client.js";
 import type {
   ConnectorManifest,
   CreateSkillPackageRequest,
+  JiuwenSwarmSkillsResponse,
   CreateSpecialistRequest,
   CustomMcpServerDetails,
   CustomMcpServerInput,
@@ -125,6 +126,19 @@ export function updateEnvironmentSource(
 
 export function listSkills(client: ApiClient): Promise<SkillDescriptor[]> {
   return client.request<SkillDescriptor[]>("/api/skills");
+}
+
+/** JiuwenSwarm's global skill on/off state and which backend is active. */
+export function getJiuwenSwarmSkills(client: ApiClient): Promise<JiuwenSwarmSkillsResponse> {
+  return client.request<JiuwenSwarmSkillsResponse>("/api/jiuwenswarm/skills");
+}
+
+/** Toggle one ScienceDiscovery skill in JiuwenSwarm by its id, importing it first if needed. */
+export function setJiuwenSwarmSkillEnabledById(client: ApiClient, skillId: string, enabled: boolean): Promise<void> {
+  return client.request<void>(`/api/jiuwenswarm/skills-by-id/${encodeURIComponent(skillId)}`, {
+    body: JSON.stringify({ enabled }),
+    method: "PUT",
+  });
 }
 
 /** One installed skill with the parts the list does not carry: its SKILL.md
