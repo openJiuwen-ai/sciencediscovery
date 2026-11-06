@@ -2876,7 +2876,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === "visible" && !isRunning) void refreshModelState().catch(reason => setError(reason));
+      if (document.visibilityState === "visible" && !isRunning) void refreshModelState().catch(() => { /* Background reads retry on the next tick. */ });
     };
     const timer = window.setInterval(refresh, 5_000);
     window.addEventListener("focus", refresh);

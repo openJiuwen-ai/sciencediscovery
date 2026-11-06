@@ -584,7 +584,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   /** Restore catalog and selection together after a local or another window's write. */
   const refreshModels = useCallback(
-    async () => {
+    async (background = false) => {
       const target = sessionRef.current;
       const projectId = projectRef.current;
       const epoch = modelSelectionEpoch.current;
@@ -618,7 +618,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           setSelectedModelId(draftModelOverride.current ?? inherited);
         }
       } catch (reason) {
-        report(reason);
+        // Background reads retry on the next tick; rejected credentials still
+        // go through the authentication gate. Explicit actions keep their toast.
+        if (!background || isAuthFailure(reason)) report(reason);
       }
     },
     [client, report],
@@ -1788,7 +1790,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   useEffect(() => {
     if (!usable) return;
     const refresh = () => {
-      if (document.visibilityState === "visible" && !runningRef.current) void refreshModels();
+      if (document.visibilityState === "visible" && !runningRef.current) void refreshModels(true);
     };
     const timer = window.setInterval(refresh, 5_000);
     window.addEventListener("focus", refresh);
