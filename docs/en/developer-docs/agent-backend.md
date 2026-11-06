@@ -130,7 +130,11 @@ values: a reasoning model that spent its whole budget thinking and answered
 nothing is `reasoning_only` (`hasReasoning: true`), and a relay that returned an
 empty `stop` is `empty_completion` (`hasReasoning: false`). Both still fail the
 request; only the recorded class differs. A turn cut at the output limit
-keeps the existing truncation recovery path. The error message preserves the
+keeps the existing truncation recovery path, but a *terminal* one — the cut
+turn calls no tool, so nothing else will ever produce the answer — fails the
+run instead of reporting it `completed`: both backends refuse an
+"unrecovered output limit", the native one with the configured `max_tokens`
+in the message so the knob is obvious. The error message preserves the
 wire summary (request IDs, status, record counts, finish reason, reasoning
 presence) and no payload.
 
