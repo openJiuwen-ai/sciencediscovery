@@ -107,8 +107,10 @@ function textOf(content: unknown): string {
 }
 
 /** True when a message carries anything but text (an image), which the native client cannot send. */
-const hasNonText = (message: Record<string, unknown>) =>
-  Array.isArray(message.content) && message.content.some((part) => (part as { type?: string })?.type !== "text");
+const hasNonText = (message: unknown) =>
+  typeof message === "object" && message !== null
+  && Array.isArray((message as { content?: unknown }).content)
+  && (message as { content: unknown[] }).content.some((part) => (part as { type?: string } | null)?.type !== "text");
 
 /**
  * A rejection the caller is meant to classify, rather than a transport failure.
@@ -297,18 +299,18 @@ export async function startModelGateway(
     let requestPolicy = policy;
     let requestEndpoint = endpoint;
     try {
-      // Before every other check, and staying there: the probe that asks this
-      // question carries an object `reasoning: {"enabled": false}` next to the
-      // image part, and the capability-control checks below reject that shape.
-      // Classifying the image refusal first is what keeps a non-text request a
-      // capability verdict instead of a validation error, whichever switches
-      // the caller happens to send.
-      if (Array.isArray(body.messages) && body.messages.some(hasNonText)) throw new GatewayRejection("images are not supported by this gateway", UNSUPPORTED_IMAGE_INPUT);
       const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "reasoning_split", "enable_thinking", "reasoning", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
       if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
-      if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
+      if (!Array.isArray(body.messages) || body.messages.some((message) => typeof message !== "object" || message === null) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
       if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
       if (body.stream_options && body.stream_options.include_usage !== true) throw new Error("Gateway supports include_usage=true only");
+      // A request-level fault that this gateway can diagnose wins over the capability verdict,
+      // so a malformed request keeps naming its real mismatch instead of being cached by the
+      // probe as "this model has no image input". The probe's own body — an image part, the
+      // text question and the object `reasoning: {"enabled": false}` from
+      // `_THINKING_DISABLED_EXTRA_BODY` — passes every check above and reaches this one, which
+      // in turn sits before the capability-control checks that refuse that object shape.
+      if (body.messages.some(hasNonText)) throw new GatewayRejection("images are not supported by this gateway", UNSUPPORTED_IMAGE_INPUT);
       if ((body.enable_thinking !== undefined && typeof body.enable_thinking !== "boolean")
         || (body.reasoning !== undefined && typeof body.reasoning !== "boolean")) {
         throw new Error("Gateway capability controls must be boolean");
