@@ -1362,6 +1362,7 @@ export const ZH = {
   },
 
   runFailure: {
+    title: "运行未完成",
     /** Plain-language cause and recovery action per stable failure class. */
     timeout: "请求超时，请重试，或拆小任务、调大超时预算。",
     "rate-limited": "模型服务正在限流，请稍候重试。",
