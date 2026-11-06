@@ -400,6 +400,16 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  A create still in flight may only adopt its Session while this matches, so
    *  a slow write cannot pull the view back from one the user has since opened. */
   const viewEpoch = useRef(0);
+  /** Bumped by every send. A run's `settle` issues its reads when the turn
+   *  ends and writes what they return once they land — a whole round trip
+   *  later, and with the composer already usable again (`running` is cleared
+   *  before `settle` is awaited). A message sent in that window is in neither
+   *  the snapshot those reads return nor, once `settle` clears it, the pending
+   *  one: the turn it just started loses the message it is answering, and
+   *  anything derived from pending (the design the auto-continue anchor is
+   *  counted against) loses it too. The epoch is how `settle` can tell whether
+   *  the reads it started with are still the newest truth. */
+  const sendEpoch = useRef(0);
 
   sessionRef.current = sessionId;
   projectRef.current = activeProjectId;
@@ -1003,6 +1013,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    */
   const settle = useCallback(
     async (target: string) => {
+      const epoch = sendEpoch.current;
       try {
         const [fresh, runs] = await Promise.all([getSession(client, target), listRuns(client, target)]);
         const batch = await buildReplays(target, runs);
@@ -1016,12 +1027,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         rememberBounded(detailsBySession.current, target, fresh);
         if (sessionRef.current === target) {
           setDetail(fresh);
-          resetRun();
+          // A send that started while these reads were in flight has already
+          // closed the finished run and opened its own; resetting here would
+          // erase the stream it is writing.
+          if (sendEpoch.current === epoch) resetRun();
         }
       } catch (reason) {
         if (!isAuthFailure(reason) && sessionRef.current === target) report(reason);
       }
-      if (sessionRef.current === target) setPendingMessage(undefined);
+      // Only the pending message this settle was started for may be cleared.
+      // One sent since then is not in `fresh` — that read predates its
+      // persistence — so clearing it would drop a message the user can see is
+      // already on its way.
+      if (sessionRef.current === target && sendEpoch.current === epoch) setPendingMessage(undefined);
       await Promise.all([refreshSessionLists(), refreshPanel(target)]);
     },
     [buildReplays, client, commitReplays, refreshPanel, refreshSessionLists, report, resetRun],
@@ -1071,6 +1089,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     async (content: string) => {
       const text = content.trim();
       if (text === "" || runningRef.current) return;
+      // Any settle still reading belongs to the turn before this message; it
+      // must not write its snapshot — or clear this pending message — over it.
+      sendEpoch.current += 1;
       // Shown from the press, before the Session exists: the composer clears
       // its box on submit, and a message that disappears for the length of a
       // create request reads as a press that was dropped.
