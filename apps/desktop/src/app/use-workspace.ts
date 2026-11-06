@@ -975,8 +975,17 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // row in the sidebar. The service publishes that rename on this stream,
         // ahead of the run's own events, so the row appears with the message
         // rather than at the end of its first answer. A later rename lands in
-        // the same list; the read is shared and rare.
-        if (event?.type === "session.updated") void refreshSessionLists();
+        // the same list; the read is shared and rare. The bar over the
+        // conversation prints the open Session's own record, so it takes the
+        // event's copy of that record: waiting for the read-back that follows
+        // the run would leave the bar under the old name — 未命名会话 for a
+        // Session's first message — for as long as the answer streams.
+        if (event?.type === "session.updated") {
+          setDetail((current) => (
+            current?.id === event.session.id ? { ...current, ...event.session } : current
+          ));
+          void refreshSessionLists();
+        }
         // 产物 and the workspace tree are read back from the service rather
         // than folded in from the event: the artifact list spans Sessions and
         // every version, and a read is what keeps it agreeing with the
@@ -1810,7 +1819,19 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         }
       },
       renameSession: (session, title) =>
-        mutate({ id: session.id, operation: () => updateSession(client, session.id, { title }) }),
+        mutate({
+          id: session.id,
+          operation: async () => {
+            const updated = await updateSession(client, session.id, { title });
+            // The reply is the only news the open Session gets when no run is
+            // streaming. The bar prints its title, so without this the row says
+            // the new name while the bar keeps the old one until the Session is
+            // reopened.
+            setDetail((current) => (
+              current?.id === updated.id ? { ...current, ...updated } : current
+            ));
+          },
+        }),
       refreshCatalog,
       removeAttachment,
       retryAttachment,
