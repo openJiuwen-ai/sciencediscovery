@@ -356,3 +356,36 @@ def test_rollouts_are_never_skipped_as_solved():
 
     source = inspect.getsource(OpenEvolveEngine._search)
     assert '"solved_threshold": 2.0' in source
+    assert '"target_reward": _target_reward(spec)' in source
+    assignments = [
+        line.strip() for line in source.splitlines()
+        if line.strip().startswith('"solved_threshold"')
+    ]
+    assert assignments == ['"solved_threshold": 2.0,']
+    from sciencediscovery_evolve.puct_engine import _target_reward
+    assert 'spec.scorecard.get("solvedThreshold")' in inspect.getsource(_target_reward)
+
+
+def test_target_reward_reaches_the_finish_event_as_a_success():
+    """A run that stops because the goal was met has to say so on the finish
+    event. Without the field the panel only sees ``made < planned`` and calls
+    a successful stop a shortfall."""
+    program = _make_program(iteration=2, score=1.0)
+    archive = _make_archive_with([program])
+    reporter, collector = _make_reporter(archive=archive)
+
+    class _Outcome:
+        stop_reason = "target_reward"
+        error = ""
+        retired_workers = 0
+
+    reporter.note_outcome(_Outcome(), planned=24)
+    reporter.finish("succeeded")
+
+    finished = next(event for event in collector.events if event["type"] == "search_finished")
+    assert finished["status"] == "succeeded"
+    assert finished["stopReason"] == "target_reward"
+    assert finished["expansionsPlanned"] == 24
+    logs = [event["message"] for event in collector.events if event["type"] == "log"]
+    assert any("solved threshold" in message for message in logs)
+    assert not any("stopped because target_reward" in message for message in logs)

@@ -1258,6 +1258,9 @@ export const EN: Text = {
       placeholder: "This run used a placeholder scorecard, not one designed for it.",
       stoppedShort: (made: number, planned: number, reason: string) =>
         `Planned ${planned} expansions, completed ${made} (${reason}).`,
+      targetReached: "The best candidate reached the goal, so the search stopped.",
+      targetReachedEarly: (made: number, planned: number) =>
+        `The best candidate reached the goal after ${made} of ${planned} expansions, so the search stopped.`,
       log: "Engine log",
     },
   },

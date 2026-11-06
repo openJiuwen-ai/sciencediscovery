@@ -36,6 +36,7 @@ import {
   adoptRunStatus,
   bestCandidate,
   emptyRunView,
+  evolveFinishNotice,
   evolveShortTitle,
   formatDelta,
   formatElapsed,
@@ -158,6 +159,7 @@ export function EvolveOverlay({ client, onClose, onError, onRunChanged, run }: E
   }, [run.status]);
 
   const active = isEvolveRunActive(view.status);
+  const finishNotice = evolveFinishNotice(view);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => setClock((tick) => tick + 1), 1_000);
@@ -347,12 +349,19 @@ export function EvolveOverlay({ client, onClose, onError, onRunChanged, run }: E
         {isPlaceholderGoal(run.goal) ? <p className="evolve-notice is-warn">
           {TEXT.evolve.notice.placeholder}
         </p> : null}
-        {!active && view.expansionsPlanned !== undefined && view.expansions < view.expansionsPlanned
+        {finishNotice?.kind === "target"
+          ? <p className="evolve-notice">
+            {finishNotice.planned === null
+              ? TEXT.evolve.notice.targetReached
+              : TEXT.evolve.notice.targetReachedEarly(finishNotice.made, finishNotice.planned)}
+          </p>
+          : null}
+        {finishNotice?.kind === "short"
           ? <p className="evolve-notice">
             {TEXT.evolve.notice.stoppedShort(
-              view.expansions,
-              view.expansionsPlanned,
-              view.stopReason ?? "?",
+              finishNotice.made,
+              finishNotice.planned,
+              finishNotice.reason,
             )}
           </p>
           : null}

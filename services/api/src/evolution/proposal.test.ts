@@ -411,6 +411,28 @@ test("a run that spent its plan says nothing about it", async () => {
   );
 
   assert.equal(summary.stoppedEarly, undefined);
+  assert.equal(summary.targetReached, undefined);
+});
+
+test("reaching the solved threshold is not reported as stopping short", async () => {
+  // The framework stops with `target_reward` once the best candidate hits
+  // the scorecard line, often well before the expansion budget. That is the
+  // run succeeding. Folding it into `stoppedEarly` told the reader that the
+  // search had failed to finish.
+  const summary = summariseRun(
+    { candidates: 9, id: "r", status: "succeeded", tokens: 12_000 },
+    [{
+      event: {
+        bestTestScore: 0.99, candidates: 9, expansionsPlanned: 24,
+        stopReason: "target_reward", type: "search_finished",
+      },
+    }],
+  );
+
+  assert.equal(summary.stoppedEarly, undefined);
+  assert.match(summary.targetReached!, /8/);
+  assert.match(summary.targetReached!, /24/);
+  assert.match(summary.targetReached!, /target_reward/);
 });
 
 test("the summary quotes the split the search never saw", async () => {

@@ -44,7 +44,7 @@ import { SearchCellGrid } from "./SearchCellGrid.js";
 import { SearchGraphCanvas } from "./SearchGraphCanvas.js";
 import { SearchGraphTable } from "./SearchGraphTable.js";
 import { layoutSearchGraph } from "./search-graph-layout.js";
-import { emptyRunView, evolveShortTitle, reduceEvolveRecord, runProgress, type EvolveRunView } from "./model.js";
+import { emptyRunView, evolveFinishNotice, evolveShortTitle, reduceEvolveRecord, runProgress, type EvolveRunView } from "./model.js";
 
 export interface EvolvePanelProps {
   client: ApiClient;
@@ -91,6 +91,7 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
   }, [client, onError, onRunChanged, run.id]);
 
   const progress = runProgress(view, run.goal.budget.expansions);
+  const finishNotice = evolveFinishNotice(view);
   const { hidden } = layoutSearchGraph(view);
   const selected = selectedIndex === undefined
     ? undefined
@@ -215,13 +216,25 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
         {/* A run that made fewer expansions than it planned looks broken, and
             "why did it stop early" is the first question every such run gets.
             The engine records the framework's own stop reason on the finish
-            event; without this line the panel had the answer and never said. */}
-        {!active && view.expansionsPlanned !== undefined && view.expansions < view.expansionsPlanned
+            event; without this line the panel had the answer and never said.
+            Reaching the solved threshold is not that question: the search
+            stopped because the goal was met, and the shortfall wording would
+            send the reader looking for a fault that is not there. */}
+        {finishNotice?.kind === "target"
+          ? <p className="evolve-notice">
+            {finishNotice.planned === null
+              ? t("evolve.panel.targetReached")
+              : t("evolve.panel.targetReachedEarly", {
+                made: finishNotice.made,
+                planned: finishNotice.planned,
+              })}
+          </p> : null}
+        {finishNotice?.kind === "short"
           ? <p className="evolve-notice">
             {t("evolve.panel.stoppedShort", {
-              made: view.expansions,
-              planned: view.expansionsPlanned,
-              reason: view.stopReason ?? "?",
+              made: finishNotice.made,
+              planned: finishNotice.planned,
+              reason: finishNotice.reason,
             })}
           </p> : null}
         {/* What the engine chose to say out loud: a repair that landed, scores

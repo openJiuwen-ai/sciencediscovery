@@ -528,6 +528,7 @@ export function summariseRun(
   let bestChange: string | undefined;
   let note: string | undefined;
   let stoppedEarly: string | undefined;
+  let targetReached: string | undefined;
   // The winner is the node the engine names in `search_finished`, the same one
   // the orchestrator publishes; `null` there means nothing beat the seed. A
   // search still running has no winner yet.
@@ -555,14 +556,22 @@ export function summariseRun(
       // improvement, and nothing in the summary says it stopped a third of the
       // way in — which is the first thing anyone asks on seeing the tree. The
       // engine deliberately keeps quiet in the log about ordinary endings, so
-      // this is where the shortfall becomes sayable.
+      // this is where the shortfall becomes sayable. Reaching the solved
+      // threshold is the exception: fewer expansions than planned is the
+      // success, and calling it a shortfall sends the reader off to restart
+      // a search that already met its goal.
       const planned = typeof event.expansionsPlanned === "number" ? event.expansionsPlanned : null;
       const made = typeof event.candidates === "number" ? event.candidates - 1 : null;
-      if (planned !== null && made !== null && made < planned) {
-        const why = typeof event.stopReason === "string" && event.stopReason
-          ? event.stopReason
-          : "unknown";
-        stoppedEarly = `planned ${planned} expansions, made ${made}; it stopped because ${why}`;
+      const why = typeof event.stopReason === "string" && event.stopReason
+        ? event.stopReason
+        : "";
+      if (why === "target_reward") {
+        const where = planned !== null && made !== null
+          ? ` after ${made} of ${planned} planned expansions`
+          : "";
+        targetReached = `the best candidate reached the solved threshold${where}; the search stopped because target_reward`;
+      } else if (planned !== null && made !== null && made < planned) {
+        stoppedEarly = `planned ${planned} expansions, made ${made}; it stopped because ${why || "unknown"}`;
       }
     }
     // A run can finish `succeeded` having learned nothing — every score
@@ -590,6 +599,7 @@ export function summariseRun(
     note,
     status: run.status,
     stoppedEarly,
+    targetReached,
     tokens: run.tokens ?? 0,
   };
 }

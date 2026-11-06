@@ -31,6 +31,7 @@ import {
   adoptRunStatus,
   bestCandidate,
   emptyRunView,
+  evolveFinishNotice,
   evolveShortTitle,
   formatElapsed,
   formatScore,
@@ -177,6 +178,37 @@ test("a finished search keeps its stop reason, planned count and test score", ()
   assert.equal(view.bestTestScore, 0.28);
   assert.equal(view.expansionsPlanned, 40);
   assert.equal(view.stopReason, "budget");
+});
+
+test("a target-reached stop is not a shortfall", () => {
+  const view = [
+    record(1, { baselineScore: 0.3, nodeIndex: 0, type: "seeded" }),
+    record(2, {
+      depth: 1, nodeIndex: 1, parentIndex: 0, score: 1, type: "expanded", valid: true,
+    }),
+    record(3, {
+      bestNodeIndex: 1,
+      candidates: 2,
+      expansionsPlanned: 24,
+      status: "succeeded",
+      stopReason: "target_reward",
+      type: "search_finished",
+    }),
+  ].reduce(reduceEvolveRecord, emptyRunView());
+  assert.deepEqual(evolveFinishNotice(view), { kind: "target", made: 1, planned: 24 });
+
+  const shortfall = [
+    record(1, { baselineScore: 0.3, nodeIndex: 0, type: "seeded" }),
+    record(2, {
+      bestNodeIndex: 0,
+      candidates: 2,
+      expansionsPlanned: 24,
+      status: "succeeded",
+      stopReason: "max_iters",
+      type: "search_finished",
+    }),
+  ].reduce(reduceEvolveRecord, emptyRunView());
+  assert.equal(evolveFinishNotice(shortfall)?.kind, "short");
 });
 
 test("scores, tokens and spans are written for reading, not as raw numbers", () => {

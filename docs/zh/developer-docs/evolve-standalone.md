@@ -43,7 +43,8 @@ PUCT 和 OpenEvolve 共用同一套骨架（Domain 接缝、事件流、沙箱�
 | 参数 | PUCT | OpenEvolve | 依据 |
 |---|---|---|---|
 | `blast_radius` | 1.0 | 0.6 | 上游 agentdescent OpenEvolve 用 0.6 |
-| `solved_threshold` | 2.0（永不跳过） | 1.0（找到最优跳过） | OpenEvolve 的 shard 是同一目标的多个种子 |
+| `solved_threshold` | 2.0（永不跳过） | 2.0（永不跳过） | 分片是测量，不是待解任务；达到 1.0 就跳过会把后续 rollout 变成空转 |
+| `target_reward` | 评分卡 `solvedThreshold` | 评分卡 `solvedThreshold` | 最优候选的留出分数达到目标后停止，框架 `stop_reason` 为 `target_reward` |
 | `staleness` | full（从 options 读） | full（从 options 读） | 两者都 append-only |
 | `c_puct` / `prior_exponent` | 从 options 读 | 不用 | PUCT 特有 |
 | `islands` / `archive_size` / `feature_bins` / `exploitation_ratio` / `migration_interval` | 不用 | 从 options 读 | OpenEvolve 特有 |

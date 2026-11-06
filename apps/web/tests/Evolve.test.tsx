@@ -34,6 +34,7 @@ import { isPlaceholderGoal } from "../src/evolve/command.js";
 import { EvolveRunCard } from "../src/evolve/EvolveRunCard.js";
 import {
   emptyRunView,
+  evolveFinishNotice,
   reduceEvolveRecords,
   runProgress,
   type EvolveCandidateView,
@@ -42,6 +43,7 @@ import {
 import { SearchGraphTable } from "../src/evolve/SearchGraphTable.js";
 import { diffGraph, layoutSearchGraph, rankScores } from "../src/evolve/search-graph-layout.js";
 import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
+import { translate } from "../src/i18n/locale.js";
 
 function render(node: ReactElement): string {
   return renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" }, node));
@@ -470,6 +472,42 @@ test("a run that stopped early states the reason and the shortfall", () => {
     record(3, { bestNodeIndex: null, candidates: 1, status: "succeeded", type: "search_finished" }),
   ]);
   assert.equal(legacy.stopReason, undefined);
+});
+
+test("a target-reached stop is not labelled as a shortfall", () => {
+  // `made < planned` is how a broken run looks. A search that stopped
+  // because the best candidate hit the solved threshold has the same
+  // numbers and the opposite meaning, so the panel has to tell them apart.
+  const view = reduceEvolveRecords(emptyRunView(), [
+    record(1, START),
+    record(2, SEED),
+    record(3, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 1, type: "expanded", valid: true }),
+    record(4, {
+      bestNodeIndex: 1, candidates: 2, expansionsPlanned: 24,
+      status: "succeeded", stopReason: "target_reward", type: "search_finished",
+    }),
+  ]);
+
+  assert.deepEqual(evolveFinishNotice(view), { kind: "target", made: 1, planned: 24 });
+  const zh = translate("zh-CN", "evolve.panel.targetReachedEarly", { made: 1, planned: 24 });
+  const en = translate("en", "evolve.panel.targetReachedEarly", { made: 1, planned: 24 });
+  assert.match(zh, /1\/24/);
+  assert.match(zh, /达到目标/);
+  assert.doesNotMatch(zh, /停在/);
+  assert.match(en, /1 of 24/);
+  assert.match(en, /reached the goal/);
+  assert.doesNotMatch(en, /stopped on/);
+
+  const shortfall = reduceEvolveRecords(emptyRunView(), [
+    record(1, START),
+    record(2, SEED),
+    record(3, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.4, type: "expanded", valid: true }),
+    record(4, {
+      bestNodeIndex: 1, candidates: 2, expansionsPlanned: 24,
+      status: "succeeded", stopReason: "max_iters", type: "search_finished",
+    }),
+  ]);
+  assert.equal(evolveFinishNotice(shortfall)?.kind, "short");
 });
 
 test("the model's promise rating reaches the candidate view", () => {

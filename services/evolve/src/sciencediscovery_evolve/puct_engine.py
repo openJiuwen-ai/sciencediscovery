@@ -88,6 +88,21 @@ _MAX_SECONDS = 24 * 3600.0
 _SHUTDOWN_GRACE = 120.0
 
 
+def _target_reward(spec: RunSpec) -> float:
+    """The scorecard's solved line, handed to the search as ``target_reward``.
+
+    ``evolve`` and ``async_evolve`` compare it with the best candidate's
+    held-out reward and stop with ``stop_reason="target_reward"``. It is not
+    ``solved_threshold``: that knob skips ``propose`` on one rollout, and a
+    shard here is a measurement, not a task to finish. ``0`` is a real line,
+    so only a missing field falls back to the binary-scorer default.
+    """
+    raw = spec.scorecard.get("solvedThreshold") if spec.scorecard else None
+    if raw is None:
+        return 0.999
+    return float(raw)
+
+
 def _rollout_budget(expansions: int) -> int:
     """`max_iters` in the unit upstream actually counts: worker rollouts.
 
@@ -351,10 +366,11 @@ class PuctEngine:
             # compressed past 50% to a flat 1.0, four of six rollout shards
             # saturated, and two-thirds of the rollout budget burned on skips —
             # a run planned for 20 expansions made 12 and stopped on max_iters
-            # in under two minutes. The scorecard's own solvedThreshold keeps
-            # governing the control plane; it just no longer turns rollouts
-            # into no-ops.
+            # in under two minutes. The scorecard's solvedThreshold is
+            # ``target_reward`` below: it stops the whole search once the best
+            # candidate reaches the goal. It must not be written into this knob.
             "solved_threshold": 2.0,
+            "target_reward": _target_reward(spec),
             "self_verify": False,
             "strategy": PuctStrategy(domain),
             "usage": None,
@@ -696,7 +712,15 @@ class _Reporter:
                 "often enough in a row that the framework stopped retrying them. This search "
                 "will make noticeably fewer expansions than planned.",
             ))
-        if 0 <= done < planned and self.discarded:
+        if reason == "target_reward":
+            # Stopping short of the plan is the success: the goal was met.
+            # The sentences below are for every other reason a run ends early.
+            self.emit(events.log(
+                "info",
+                f"the best candidate reached the solved threshold after {done} of "
+                f"{planned} planned expansions, so the search stopped.",
+            ))
+        elif 0 <= done < planned and self.discarded:
             # Said even when the framework's own stop reason is one of the dull
             # ones. `max_iters` names the budget, and on a run whose selections
             # all landed the budget was not the binding constraint — the

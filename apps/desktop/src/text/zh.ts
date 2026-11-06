@@ -1305,6 +1305,9 @@ export const ZH = {
       placeholder: "这次实验的评分卡是占位符，不是为它设计的真实评分卡。",
       stoppedShort: (made: number, planned: number, reason: string) =>
         `计划 ${planned} 次扩展，实际完成 ${made} 次（${reason}）。`,
+      targetReached: "最优候选已达到目标，搜索因此停止。",
+      targetReachedEarly: (made: number, planned: number) =>
+        `最优候选在 ${made}/${planned} 次扩展时达到目标，搜索因此停止。`,
       log: "引擎日志",
     },
   },
