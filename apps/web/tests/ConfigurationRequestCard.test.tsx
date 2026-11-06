@@ -56,6 +56,108 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
 
+function memoryPasswordRequest(overrides: Partial<ConfigurationRequestView> = {}) {
+  return request({ capabilityId: "memory.credential", runId: undefined, scope: { kind: "global" },
+    fields: [{ id: "operation", label: "Password operation", kind: "enum", required: true, value: "replace",
+      choices: [{ id: "replace", label: "Replace stored password" }, { id: "clear", label: "Clear stored password" }] },
+      { id: "apiToken", label: "Neo4j password", kind: "credential", required: true, status: "missing" }],
+    endpointAuthorization: { endpointTarget: "neo4j-http|https://owned.invalid|account-one", host: "owned.invalid", classification: "public_https", status: "confirmed", revision: 2 },
+    activation: { mode: "requires_restart", state: "not_requested" }, ...overrides });
+}
+
+test("CFG-X04c: Neo4j secure input uses its password label and an operation change clears local plaintext", async () => {
+  const renderer = await mount(memoryPasswordRequest(), actions(), () => undefined, "zh");
+  assert.match(JSON.stringify(renderer.toJSON()), /Neo4j 密码/); assert.match(JSON.stringify(renderer.toJSON()), /密码操作/);
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-local-password" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "synthetic-local-password");
+  await act(async () => renderer.root.findByProps({ name: "operation" }).props.onChange({ target: { value: "clear" } }));
+  assert.equal(renderer.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => renderer.root.findByProps({ name: "operation" }).props.onChange({ target: { value: "replace" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, ""); await act(async () => renderer.unmount());
+});
+
+test("CFG-X04c: missing or changed Neo4j destination cannot retain or collect a secure draft", async () => {
+  let latest = memoryPasswordRequest(); let renderer: ReactTestRenderer;
+  const render = () => createElement(ConfigurationRequestCard, { request: latest, actions: actions(), onUpdate() {} });
+  await act(async () => { renderer = create(render()); });
+  await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-local-password" } }));
+  await act(async () => { latest = memoryPasswordRequest({ revision: 3, endpointAuthorization: { ...latest.endpointAuthorization!, revision: 3,
+    endpointTarget: "neo4j-http|https://owned.invalid|account-two", status: "required" } }); renderer!.update(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0);
+  await act(async () => { latest = { ...latest, endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; renderer!.update(render()); });
+  assert.equal(renderer!.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => { latest = memoryPasswordRequest({ revision: 4, endpointAuthorization: undefined }); renderer!.update(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0); await act(async () => renderer!.unmount());
+});
+
+test("CFG-X04c: a saved password reports restart required without verified runtime activation", async () => {
+  const renderer = await mount(memoryPasswordRequest({ state: "applied", allowedActions: [], activation: { mode: "requires_restart", state: "needs_user_action" } }));
+  assert.match(JSON.stringify(renderer.toJSON()), /Configure Neo4j password · Saved · Restart required/);
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Verified active/); await act(async () => renderer.unmount());
+});
+
+test("CFG-X04a: saved Memory participation remains distinct from verified activation in its terminal summary", async () => {
+  const renderer = await mount(request({ capabilityId: "memory.enable", state: "applied", runId: undefined,
+    activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }));
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /Configure workbench memory graph · Saved · Subsequent memory operations; readiness unverified/);
+  assert.match(content, /User action required/);
+  assert.doesNotMatch(content, /Verified active/);
+});
+
+test("CFG-X04b: a saved Memory backend states restart required without implying verified activation", async () => {
+  const renderer = await mount(request({ capabilityId: "memory.backend", state: "applied", runId: undefined,
+    activation: { mode: "requires_restart", state: "needs_user_action" }, allowedActions: [] }));
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /Choose memory graph backend · Saved · Restart required/);
+  assert.match(content, /User action required/); assert.doesNotMatch(content, /Verified active/);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X04b: Chinese Memory backend field uses the catalog label", async () => {
+  const renderer = await mount(request({ capabilityId: "memory.backend", runId: undefined, scope: { kind: "global" },
+    fields: [{ id: "backend", label: "Workbench memory graph backend", kind: "enum", required: true, value: "local",
+      choices: [{ id: "local", label: "Local graph" }, { id: "neo4j", label: "Configured Neo4j" }] }] }), actions(), () => undefined, "zh");
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /记忆图谱后端/);
+  assert.doesNotMatch(content, /Workbench memory graph backend/);
+  await act(async () => renderer.unmount());
+});
+
+function memoryConnectionRequest(overrides: Partial<ConfigurationRequestView> = {}) {
+  return request({ capabilityId: "memory.connection", runId: undefined, scope: { kind: "global" },
+    fields: [{ id: "neo4jHttp", label: "Neo4j HTTP origin", kind: "url", required: true, value: "https://owned.invalid" },
+      { id: "neo4jUser", label: "Neo4j username", kind: "text", required: true, value: "owned-user" }],
+    endpointAuthorization: { endpointTarget: "neo4j|https://owned.invalid|account-one", host: "owned.invalid", classification: "public_https", status: "required", revision: 2 },
+    activation: { mode: "requires_restart", state: "not_requested" }, ...overrides });
+}
+
+test("CFG-X04d: editing either Neo4j origin or account blocks reuse of the previous recipient approval", async () => {
+  let latest = memoryConnectionRequest(); let renderer: ReactTestRenderer; const consents: unknown[] = [];
+  const api = actions({ consent: async input => { consents.push(input); return { ...latest, endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; } });
+  const render = () => createElement(ConfigurationRequestCard, { request: latest, actions: api, onUpdate(next) { latest = next; renderer.update(render()); } });
+  await act(async () => { renderer = create(render()); });
+  assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0); assert.equal(button(renderer!, "Confirm this change").props.disabled, true);
+  await act(async () => button(renderer!, "Allow this exact endpoint").props.onClick()); assert.equal(consents.length, 1);
+  await act(async () => renderer!.root.findByProps({ name: "neo4jUser" }).props.onChange({ target: { value: "another-owned-user" } }));
+  assert.equal(button(renderer!, "Confirm this change").props.disabled, true); assert.equal(button(renderer!, "Allow this exact endpoint"), undefined);
+  await act(async () => { latest = memoryConnectionRequest({ revision: 3 }); renderer!.update(render()); });
+  await act(async () => button(renderer!, "Allow this exact endpoint").props.onClick());
+  await act(async () => renderer!.root.findByProps({ name: "neo4jHttp" }).props.onChange({ target: { value: "https://another.invalid" } }));
+  assert.equal(button(renderer!, "Confirm this change").props.disabled, true); assert.equal(button(renderer!, "Allow this exact endpoint"), undefined);
+  await act(async () => renderer!.unmount());
+});
+
+test("CFG-X04d: Neo4j connection labels and saved restart state stay distinct from verified activation", async () => {
+  const renderer = await mount(memoryConnectionRequest(), actions(), () => undefined, "zh");
+  assert.match(JSON.stringify(renderer.toJSON()), /Neo4j HTTP 地址/); assert.match(JSON.stringify(renderer.toJSON()), /Neo4j 用户名/);
+  await act(async () => renderer.unmount());
+  const saved = await mount(memoryConnectionRequest({ state: "applied", allowedActions: [], activation: { mode: "requires_restart", state: "needs_user_action" } }));
+  assert.match(JSON.stringify(saved.toJSON()), /Configure Neo4j connection · Saved · Restart required/);
+  assert.doesNotMatch(JSON.stringify(saved.toJSON()), /Verified active/); await act(async () => saved.unmount());
+});
+
+
 test("CFG-X09a: saved global Reviewer switch describes later admission without claiming verified activation", async () => {
   const renderer = await mount(request({ capabilityId: "reviewer.enable", state: "applied", runId: undefined,
     activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }));

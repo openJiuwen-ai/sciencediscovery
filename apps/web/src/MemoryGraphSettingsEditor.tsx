@@ -45,7 +45,7 @@ export function memoryGraphSettingsRequest(draft: MemoryGraphSettingsDraft): Upd
     backend: draft.backend,
     neo4jHttp: draft.neo4jHttp,
     neo4jUser: draft.neo4jUser,
-    ...(draft.removePassword ? { neo4jPassword: null } : draft.password.trim() ? { neo4jPassword: draft.password.trim() } : {}),
+    ...(draft.removePassword ? { neo4jPassword: null } : draft.password.trim() ? { neo4jPassword: draft.password } : {}),
   };
 }
 

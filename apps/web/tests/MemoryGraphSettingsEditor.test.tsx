@@ -44,7 +44,7 @@ test("keeps write-only Memory Graph credentials in a deferred request", () => {
     enabled: true,
     backend: "local",
     neo4jHttp: settings.neo4jHttp,
-    neo4jPassword: "replacement",
+    neo4jPassword: "  replacement  ",
     neo4jUser: settings.neo4jUser,
   });
 

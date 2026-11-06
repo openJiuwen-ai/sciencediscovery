@@ -7,6 +7,16 @@ import { ConfigurationError, object, integer, string } from "./validation.js";
 import type { ConfigurationRecord, ConfigurationPlan, ConfigurationAdapterContext } from "./types.js";
 
 type Destination = NonNullable<ConfigurationPlan["endpointAuthorization"]>;
+export function classifyEndpointAddress(url: URL): Exclude<Destination["classification"], "trusted_preset"> {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const octets = host.split(".").map(Number);
+  const ipv4 = /^\d+\.\d+\.\d+\.\d+$/.test(host) && octets.every(value => value >= 0 && value <= 255);
+  const loopback = host === "localhost" || host.endsWith(".localhost") || host === "::1" || ipv4 && octets[0] === 127 || /^::ffff:7f[0-9a-f]{2}:/i.test(host);
+  const privateNetwork = ipv4 && (octets[0] === 10 || octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31 || octets[0] === 192 && octets[1] === 168 || octets[0] === 169 && octets[1] === 254 || octets[0] === 0)
+    || /^(?:f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(host);
+  return loopback ? "loopback" : privateNetwork ? "private_network" : url.protocol === "https:" ? "public_https" : "public_http";
+}
+
 /** Exact protocol and wire URL, never a provider's user-editable display name. */
 export function modelDestination(profile: Pick<ModelProfile, "baseUrl" | "model" | "apiProtocol" | "apiVariant">): Destination {
   let base: URL;
@@ -17,18 +27,12 @@ export function modelDestination(profile: Pick<ModelProfile, "baseUrl" | "model"
   const variant = profile.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
   const request = createModelRequest({ ...profile, apiProtocol: protocol, apiVariant: variant, thinkingMode: "disabled" }, "Connectivity check", [{ role: "user", content: "Reply OK" }], [], { maxTokens: 16, maxRetries: 0, requestTimeoutMs: 10000 }, false);
   const url = new URL(request.url);
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  const octets = host.split(".").map(Number);
-  const ipv4 = /^\d+\.\d+\.\d+\.\d+$/.test(host) && octets.every(value => value >= 0 && value <= 255);
-  const loopback = host === "localhost" || host.endsWith(".localhost") || host === "::1" || ipv4 && octets[0] === 127 || /^::ffff:7f[0-9a-f]{2}:/i.test(host);
-  const privateNetwork = ipv4 && (octets[0] === 10 || octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31 || octets[0] === 192 && octets[1] === 168 || octets[0] === 169 && octets[1] === 254 || octets[0] === 0)
-    || /^(?:f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(host);
   const trusted = url.protocol === "https:" && (
     protocol === "openai-chat-completions" && variant === "openai" && url.href === "https://api.openai.com/v1/chat/completions"
     || protocol === "openai-responses" && variant === "responses" && url.href === "https://api.openai.com/v1/responses"
     || protocol === "anthropic-messages" && ["anthropic", "anthropic-legacy"].includes(variant) && url.href === "https://api.anthropic.com/v1/messages");
   return { endpointTarget: JSON.stringify([protocol, variant, url.href]), host: url.host,
-    classification: trusted ? "trusted_preset" : loopback ? "loopback" : privateNetwork ? "private_network" : url.protocol === "https:" ? "public_https" : "public_http" };
+    classification: trusted ? "trusted_preset" : classifyEndpointAddress(url) };
 }
 
 /** User-only authorizations are separate from Agent proposal inputs and bind
@@ -51,10 +55,10 @@ export class ModelDestinationAuthorizer {
   assert(record: ConfigurationRecord, credential: boolean): void {
     const view = this.view(record);
     if (!view) {
-      if (["model.connect", "model.repair_credential"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
+      if (["model.connect", "model.repair_credential", "memory.credential", "memory.connection"].includes(record.view.capabilityId)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Prepare a valid destination preview before supplying a credential", 409, "baseUrl");
       return;
     }
-    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive an API key", 400, "baseUrl");
+    if (view.classification === "public_http" && credential) throw new ConfigurationError("ENDPOINT_CREDENTIAL_INSECURE", "Remote plaintext HTTP cannot receive a credential", 400, "baseUrl");
     if (!["confirmed", "trusted"].includes(view.status)) throw new ConfigurationError("ENDPOINT_CONSENT_REQUIRED", "Confirm the exact destination in the dedicated endpoint control before supplying a credential or sending a probe", 409, "baseUrl");
   }
   assertContext(context: ConfigurationAdapterContext, profile: ModelProfile, credential: boolean): void {

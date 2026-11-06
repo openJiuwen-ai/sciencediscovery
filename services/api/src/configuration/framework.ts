@@ -12,10 +12,14 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createMemoryEnableAdapter } from "./memory-enable-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
 import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
 import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
 import { createSystemConfigurationAdapters } from "./system-adapters.js";
+import { createMemoryCredentialAdapter } from "./memory-credential-adapter.js";
+import { createMemoryBackendAdapter } from "./memory-backend-adapter.js";
+import { createMemoryConnectionAdapter } from "./memory-connection-adapter.js";
 import { DEPLOYMENT_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
 import type { ConfigurationApplyReceipt, ConfigurationLiveActivation, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
@@ -116,7 +120,15 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createMemoryEnableAdapter(store), createMemoryBackendAdapter(store), createMemoryCredentialAdapter(store, this.credentials, context => {
+        const record = this.repository.get(context.requestId, context.sessionId);
+        if (!record || record.view.revision !== context.revision) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Review the current password destination", 409);
+        this.destinations.assert(record, true);
+      }), createMemoryConnectionAdapter(store, context => {
+        const record = this.repository.get(context.requestId, context.sessionId);
+        if (!record || record.view.revision !== context.revision) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Review the current Neo4j destination", 409);
+        this.destinations.assert(record, true);
+      }), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply;
         if (!apply) throw new Error("Connector configuration adapters require a synchronous domain apply");
@@ -158,7 +170,8 @@ export class ConversationalConfigurationFramework {
         },
         resolvePreviewCredential: input => {
           try {
-            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken" });
+            this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken",
+              normalization: this.credentialNormalization(input.sessionId, input.requestId) });
             return input.credentialHandle;
           } catch (error) {
             if (!(error instanceof Error) || error.message !== "CREDENTIAL_DRAFT_EXPIRED") throw error;
@@ -174,7 +187,7 @@ export class ConversationalConfigurationFramework {
           }
           if (change.credentialHandle) this.credentials.rebind(change.credentialHandle, {
             sessionId: change.sessionId, requestId: change.requestId, revision: change.fromRevision,
-            target: change.oldTarget, fieldId: "apiToken",
+            target: change.oldTarget, fieldId: "apiToken", normalization: this.credentialNormalization(change.sessionId, change.requestId),
           }, change.toRevision);
           else if (change.oldTarget !== change.newTarget) this.credentials.clearRequest(change.requestId);
         },
@@ -267,6 +280,11 @@ export class ConversationalConfigurationFramework {
     return this.service.get(sessionId, id);
   }
 
+  private credentialNormalization(sessionId: string, id: string): "trim" | "exact" {
+    const record = this.service.getRecord(sessionId, id);
+    return this.service.registry.get(record.view.capabilityId).fieldPolicy?.credentialNormalization ?? "trim";
+  }
+
   async provideCredential(sessionId: string, id: string, input: ConfigurationCredentialInput, key?: string) {
     object(input, ["expectedRevision", "fieldId", "secret"], "credential"); integer(input.expectedRevision, "expectedRevision");
     string(input.fieldId, "fieldId", 100);
@@ -284,7 +302,7 @@ export class ConversationalConfigurationFramework {
       this.destinations.assert(record, true);
       if (record.stopGeneration !== this.store.notifications.generation(sessionId)) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped", 409);
       return this.credentials.provide({ sessionId, requestId: id, revision: input.expectedRevision,
-        fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target) }, input.secret, key);
+        fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target), normalization: this.credentialNormalization(sessionId, id) }, input.secret, key);
     });
   }
 

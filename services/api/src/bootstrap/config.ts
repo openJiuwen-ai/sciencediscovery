@@ -267,7 +267,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     memoryGraph: {
       url: env.SCIENCE_AGENT_MEMORY_GRAPH_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:17674",
       internalToken: env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN?.trim() || "sciencediscovery-memory-graph-local",
-      neo4jPassword: env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD?.trim() || undefined,
+      neo4jPassword: env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD?.trim() ? env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD : undefined,
       available: env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE?.trim() !== "0",
     },
     evolve: {

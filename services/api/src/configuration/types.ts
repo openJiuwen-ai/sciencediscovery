@@ -59,7 +59,7 @@ export interface ConfigurationAdapter {
   readonly scopes: ReadonlyArray<ConfigurationScope["kind"]>;
   readonly persistence: "local_transaction" | "external_control";
   readonly autoApplyEligible?: boolean;
-  readonly fieldPolicy?: { helpHosts?: readonly string[]; credentialFields?: readonly string[] };
+  readonly fieldPolicy?: { helpHosts?: readonly string[]; credentialFields?: readonly string[]; credentialNormalization?: "trim" | "exact" };
   normalize(input: unknown): ConfigurationValues;
   target(input: ConfigurationValues): string;
   preview(input: ConfigurationValues, snapshot: ConfigurationSnapshot, scope: ConfigurationScope): ConfigurationPlan;
