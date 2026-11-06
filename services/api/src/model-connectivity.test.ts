@@ -20,7 +20,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 
 
-import type { ModelConnectivityTestResult, ModelProfile } from "@sciencediscovery/schema";
+import { setModelCatalogSnapshot, type ModelConnectivityTestResult, type ModelProfile } from "@sciencediscovery/schema";
 
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "./model-connectivity.js";
 
@@ -97,6 +97,100 @@ test("connectivity probe uses the saved endpoint, model, and API token", async (
     assert.equal(tested.ok, true);
     assert.equal(tested.category, "ok");
     assert.equal(tested.providerStatus, 200);
+  });
+});
+
+test("an endpoint that rejects the variant's thinking control is still reported as working", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  await withProvider(async (request, response) => {
+    const body = JSON.parse(await readRequest(request)) as Record<string, unknown>;
+    bodies.push(body);
+    if (body.thinking) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Unsupported parameter: thinking", param: "thinking", type: "invalid_request_error" } }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  }, async (origin) => {
+    const tested = await testModelConnectivity({
+      apiToken: "saved-secret",
+      profile: { ...profile(`${origin}/v1/`), apiVariant: "deepseek" },
+      resolveProxy: directProxy,
+    });
+    // The streamed sender already strips a rejected control and retries, so a
+    // model whose streaming chat works must not fail this check.
+    assert.equal(tested.ok, true);
+    assert.equal(tested.category, "ok");
+    assert.match(tested.message, /retrying without the thinking control/);
+    assert.equal(bodies.length, 2, "one rejected attempt plus one retry");
+    assert.deepEqual(bodies[0]?.thinking, { type: "disabled" });
+    assert.equal("thinking" in (bodies[1] ?? {}), false, "the retry must not resend the control the endpoint named");
+    assert.equal(bodies[1]?.max_tokens, 8, "the probe's own budget is not the thing being changed");
+  });
+});
+
+test("the retry strips the named control even when the catalog rewrites the thinking mode", async () => {
+  // `kimi-k3` declares `modes: ["enabled"]`, so a catalog-resolved mode can
+  // rewrite both `disabled` and `auto` to `enabled`: asking for another mode is
+  // not a way to send no control. The retry strips the field from the request
+  // it already built instead.
+  setModelCatalogSnapshot({
+    fetchedAt: "2026-11-06T00:00:00.000Z",
+    origin: "bundled",
+    records: [{
+      key: "kimi-k3",
+      label: "Kimi K3",
+      source: { retrievedAt: "2026-11-06T00:00:00.000Z", url: "https://example.test/catalog" },
+      thinking: { defaultEffort: "max", defaultMode: "enabled", efforts: ["max"], modes: ["enabled"], supported: true },
+    }],
+    sourceUrl: "https://example.test/catalog",
+  });
+  try {
+    const bodies: Array<Record<string, unknown>> = [];
+    await withProvider(async (request, response) => {
+      const body = JSON.parse(await readRequest(request)) as Record<string, unknown>;
+      bodies.push(body);
+      if (body.reasoning_effort) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning_effort", param: "reasoning_effort", type: "invalid_request_error" } }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+    }, async (origin) => {
+      const tested = await testModelConnectivity({
+        apiToken: "saved-secret",
+        profile: { ...profile(`${origin}/v1/`), apiVariant: "kimi-k3", model: "kimi-k3" },
+        resolveProxy: directProxy,
+      });
+      assert.equal(tested.ok, true);
+      assert.match(tested.message, /retrying without the thinking control/);
+      assert.equal(bodies.length, 2, "one rejected attempt plus one retry");
+      assert.equal(bodies[0]?.reasoning_effort, "max", "the catalog turns the requested mode into the declared default");
+      assert.equal("reasoning_effort" in (bodies[1] ?? {}), false, "the retry strips the control the endpoint named");
+      assert.notDeepEqual(bodies[1], bodies[0], "a retry that resends the rejected body proves nothing");
+    });
+  } finally {
+    setModelCatalogSnapshot(undefined);
+  }
+});
+
+test("a 400 naming a control the request did not carry is the provider's error, not a recovery", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  await withProvider(async (request, response) => {
+    bodies.push(JSON.parse(await readRequest(request)) as Record<string, unknown>);
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "Unsupported parameter: reasoning_effort", param: "reasoning_effort", type: "invalid_request_error" } }));
+  }, async (origin) => {
+    // The plain OpenAI-chat default injects no thinking control in `disabled`
+    // mode, so a retry would resend this exact body and claim to have stripped
+    // something the request never carried.
+    const tested = await testModelConnectivity({ apiToken: "saved-secret", profile: profile(`${origin}/v1/`), resolveProxy: directProxy });
+    assert.equal(tested.ok, false);
+    assert.equal(tested.category, "provider_error");
+    assert.equal(tested.providerStatus, 400);
+    assert.equal(bodies.length, 1, "nothing to strip, so nothing to retry");
   });
 });
 
