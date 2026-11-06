@@ -410,6 +410,15 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   // The row count is bounded by its own constant, so the payload stays inside
   // MAX_PREVIEW_ROWS x MAX_PREVIEW_COLUMNS cells. `maxRows` only lowers it.
   const rows = lines.slice(1, Math.min(maxRows, MAX_PREVIEW_ROWS) + 1);
+  // The width can come from a line this call does not return. The column set must
+  // not depend on how many rows a caller asks for, so the width stays file-wide;
+  // but then the grid is padded with unnamed columns, and blank cells, for a row
+  // the reader never sees. That padding used to be invisible — `clippedCells: 0`
+  // and an empty `warnings` — so it is counted and named here instead.
+  const widestShown = rows.reduce((widestRow, row) => Math.max(widestRow, row.length), totalColumns);
+  const shownSurplus = Math.min(Math.max(0, widestShown - totalColumns), surplusLimit);
+  const paddingOnlyColumns = Math.max(0, surplusShown - shownSurplus);
+  const paddingOnlyCells = paddingOnlyColumns * rows.length;
   // Columns past the width leave the preview: the header keeps its first names
   // and the payload says how many columns the file had, so a cut table is never
   // mistaken for a narrow one. A data line wider than the header widens the grid
@@ -432,6 +441,14 @@ function parseDelimitedTable(source: string, subtype: ".csv" | ".tsv", maxRows: 
   }
   if (clippedCells > 0) {
     warnings.push(`${clippedCells} cells past the preview width are not shown.`);
+  }
+  if (paddingOnlyColumns > 0) {
+    const columnWord = paddingOnlyColumns === 1 ? "column" : "columns";
+    const cellWord = paddingOnlyCells === 1 ? "cell" : "cells";
+    warnings.push(
+      `The preview pads ${paddingOnlyColumns} unnamed ${columnWord} (${paddingOnlyCells} blank ${cellWord}) `
+      + `because the file has a wider line past the first ${rows.length} rows, which is not shown.`,
+    );
   }
   return {
     clippedCells,
