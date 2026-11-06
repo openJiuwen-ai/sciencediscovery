@@ -750,6 +750,52 @@ describe("an execution request drives the sandbox's cards", () => {
     assert.equal(cached.devices[0]?.sandboxUsable, true, "the cached verdict is what it contradicts");
   });
 
+  test("an immediate bubblewrap failure is reported instead of leaving the execution pending", { timeout: 5_000 }, async (context) => {
+    // Hold the seccomp fd close while the shim exits. Observing the child must
+    // not wait for that close: awaiting it delivers the exit first, and the
+    // execution then stays pending until execTimeoutMs.
+    const { config, request } = await fixture(context, inventory([
+      { chipName: "910B3", health: "OK", hostIndex: 1_000_000, sandboxUsable: true },
+    ]));
+    const shim = resolve(config.dataDir, "bwrap");
+    await writeFile(shim, "#!/bin/sh\necho \"bwrap: Can't find source path /dev/davinci1000000: No such file or directory\" >&2\nexit 1\n");
+    await chmod(shim, 0o755);
+    config.bwrapPath = shim;
+    config.execTimeoutMs = 1_500;
+    config.closeSeccompFilter = async (handle) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await handle.close();
+    };
+    const started = Date.now();
+    const python = await executePython(config, { ...request, code: "print('unreached')", npuDevices: [1_000_000] });
+    assert.ok(Date.now() - started < 250, `exit was reported only after ${Date.now() - started}ms; the seccomp close must not be awaited`);
+    assert.notEqual(python.exitCode, 0);
+    assert.match(python.stderr, /\/dev\/davinci1000000/u);
+  });
+
+  test("a signalled child whose close was missed keeps the stop reason", { timeout: 5_000 }, async (context) => {
+    // Die by SIGKILL after listeners are attached, and leave a grandchild on
+    // the same pipes so Node records signalCode without emitting close. The
+    // timeout settle path must reject with that reason: exitCode is null.
+    const { config, request } = await fixture(context);
+    const shim = resolve(config.dataDir, "bwrap");
+    await writeFile(shim, [
+      "#!/bin/sh",
+      "if [ \"$1\" = \"--unshare-all\" ]; then exit 0; fi",
+      "sleep 0.15",
+      "sleep 30 &",
+      "kill -9 $$",
+      "",
+    ].join("\n"));
+    await chmod(shim, 0o755);
+    config.bwrapPath = shim;
+    config.execTimeoutMs = 800;
+    await assert.rejects(
+      executePython(config, { ...request, code: "print('unreached')" }),
+      /Python execution timed out after 800 ms/u,
+    );
+  });
+
   test("an execution without cards never reaches the probe", async (context) => {
     // Re-probing the machine for every ordinary run would put seconds of
     // bubblewrap launches in front of code that wants no NPU at all.

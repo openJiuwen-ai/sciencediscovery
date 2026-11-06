@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { Type, type TSchema } from "typebox";
+import { WEB_KEY_PROVIDERS } from "@sciencediscovery/schema";
 import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import { ENVIRONMENT_CONDA_SOURCE_PRESETS, ENVIRONMENT_PIP_SOURCE_PRESETS } from "@sciencediscovery/schema";
 export interface ConfigurationAgentDescriptor {
@@ -19,6 +20,8 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     pipSource: { kind: "string", choices: ENVIRONMENT_PIP_SOURCE_PRESETS.map(preset => preset.id) },
     condaSource: { kind: "string", choices: ENVIRONMENT_CONDA_SOURCE_PRESETS.map(preset => preset.id) },
   }, activation: "next_run", diagnostics: [] },
+  "web.credential": { label: "Manage Web service credentials", whenNeeded: "The user explicitly asks to replace or clear a shared Web provider key. Use only the current backend provider list. Never put a key in values or chat; the secure user card collects it. Changing a key can activate an already-selected paid provider. Saving is not authentication verification and does not retry a Web request.", fields: { webProvider: { kind: "string", choices: WEB_KEY_PROVIDERS }, operation: { kind: "string", choices: ["replace", "clear"] } }, activation: "next_request", diagnostics: [] },
+
   "settings.inherit": { label: "Restore ordinary settings inheritance", whenNeeded: "Only an explicit request to remove selected ordinary overrides at this Session or its Project. selectedFields is a finite list of model/review/semantic/thinking/connector/Skill selection fields. Session is default; no Global, security, approval, auto-review, network, plugin JSON, Runner or credential reset. Manual v3 confirmation. Lower overrides keep precedence and frozen runs do not change.", fields: { selectedFields: ids }, activation: "next_run", diagnostics: [] },
   "reviewer.enable": { label: "Configure global Reviewer Specialist", whenNeeded: "The user explicitly requests the global Reviewer Specialist participation switch, separate from session review preferences and feedback policy. Enabling may admit subsequent paid reviews under the existing feedback policy; disabling blocks pending review admission but does not cancel in-flight work or delete history. This switch does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate. Omit scope; manual confirmation required.", fields: { enabled: boolean }, activation: "next_request", diagnostics: [] },
   "plugin.json_viewer": { label: "Configure JSON artifact previews", whenNeeded: "An explicit request to enable, disable or inherit the installed optional JSON viewer. mode is enabled, disabled or inherit. Session is the default; only its Project or explicit Global scope is allowed. No arbitrary plugin ID/config, installation, file deletion or access grant. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate. Manual v3 confirmation is required.", fields: { mode: { kind: "string", choices: ["enabled", "disabled", "inherit"] } }, activation: "next_run", diagnostics: [] },
@@ -38,6 +41,10 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     uploadMaxFileBytes: { kind: "integer", minimum: 0 }, uploadMaxRequestBytes: { kind: "integer", minimum: 0 },
   }, activation: "next_run", diagnostics: [] },
   "runner.assign": { label: "Select registered Runners", whenNeeded: "The user requests Project or Session Runner allocation. Describe existing IDs first; select only usable registered Runners. Selected + [] disables all Runners, Session inherit removes its override. Registration, SSH host trust and execution permission remain separate. This never starts or migrates a job.", fields: { selectionMode: { kind: "string", choices: ["selected", "inherit"] }, runnerIds: ids }, activation: "next_run", diagnostics: [] },
+  "web.configure": { label: "Configure Web search and fetching", whenNeeded: "The user explicitly requests deployment Web search engines, provider selection, cache TTLs or an existing proxy policy. Describe first: the backend determines supported fields. Keys use separate secure configuration and are never accepted here. Saved choices do not verify connectivity; paid providers can charge when later used.", fields: {
+    deepseekEnabled: boolean, fetchProvider: { kind: "string", choices: ["jina", "tavily", "exa", "deepseek"] }, freeSearchEngines: ids, paidSearchProviders: ids,
+    searchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, fetchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, proxyPolicy: id,
+  }, activation: "next_run", diagnostics: [] },
   "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree registered template, intensity, score direction, or a bounded token, depth, or node limit. Template and intensity determine rounds, candidates, and assessors. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
     templateId: { kind: "string", choices: ["scientific-hypothesis-general/v1", "water-treatment-materials/v1"] },
     explorationIntensity: { kind: "string", choices: ["quick", "standard", "deep"] }, scoreDirection: { kind: "string", choices: ["maximize", "minimize"] },
@@ -46,7 +53,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure", "environment.sources"] as const satisfies readonly ConfigurationCapabilityId[];
-export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "reviewer.enable"] as const;
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "web.configure", "web.credential", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })

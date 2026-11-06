@@ -44,6 +44,12 @@ export async function syncWebSettingsToJiuwenSwarm(
   settings: WebSettings,
   key: (provider: WebKeyProvider) => string | undefined,
 ): Promise<{ ok: boolean; error?: string }> {
+  // The adapter has received provider keys and can echo them in any failure.
+  // Only application-owned diagnostics may cross into logs or public results.
+  const failed = (message: string) => {
+    console.warn(`[jiuwenswarm] could not apply the web settings to JiuwenSwarm: ${message}`);
+    return { ok: false as const, error: message };
+  };
   try {
     const response = await (config.fetch ?? fetch)(`${config.adapterUrl}/agent/jiuwenswarm-config`, {
       method: "POST",
@@ -53,12 +59,13 @@ export async function syncWebSettingsToJiuwenSwarm(
       },
       body: JSON.stringify({ values: jiuwenSwarmWebConfig(settings, key) }),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status} ${(await response.text().catch(() => "")).slice(0, 200)}`);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return failed(`HTTP ${response.status}`);
+    }
     return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[jiuwenswarm] could not apply the web settings to JiuwenSwarm: ${message}`);
-    return { ok: false, error: message };
+  } catch {
+    return failed("Web settings synchronization failed");
   }
 }
 
