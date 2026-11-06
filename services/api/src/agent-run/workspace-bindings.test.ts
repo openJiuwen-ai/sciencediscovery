@@ -26,7 +26,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "../agent-notifications.js";
 import { ShellExecutions } from "../shell-executions.js";
 
-import type { NpuJob } from "@sciencediscovery/schema";
+import type { NpuJob, RunnerExecutionCapability } from "@sciencediscovery/schema";
 import { VersionStore } from "@sciencediscovery/cas";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
@@ -34,6 +34,58 @@ import { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
+
+for (const scenario of [
+  { name: "missing shell utilities", sandbox: "none", ready: false, reason: "dependency-unavailable",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason: "Managed Bash is missing required utilities: head" },
+    expected: /Managed Bash is missing required utilities: head.*Recreate or update the starter environment/ },
+  { name: "missing managed Bash", sandbox: "none", ready: false, reason: "dependency-unavailable",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason: "Managed Bash is unavailable: ENOENT" },
+    expected: /Managed Bash is unavailable: ENOENT.*Recreate or update the starter environment/ },
+  { name: "shell failure without detail", sandbox: "none", ready: false, reason: "dependency-unavailable",
+    shell: { available: false, name: "bash", utilities: [] },
+    expected: /The managed shell environment is unavailable.*Recreate or update the starter environment/ },
+  { name: "missing sandbox executable", sandbox: "bubblewrap", ready: false, reason: "dependency-unavailable",
+    expected: /Install or repair the sandbox executable/ },
+  { name: "unusable sandbox with available shell", sandbox: "bubblewrap", ready: false, reason: "sandbox-unusable",
+    shell: { available: true, name: "bash", utilities: [] },
+    expected: /Inspect the target Runner logs and host\/container sandbox permissions/ },
+  { name: "ready managed shell", sandbox: "none", ready: true, reason: "ready",
+    shell: { available: true, name: "bash", utilities: [] }, expected: undefined },
+] satisfies Array<Pick<RunnerExecutionCapability, "sandbox" | "ready" | "reason" | "shell"> & { name: string; expected: RegExp | undefined }>) {
+  test(`Runner repair advice: ${scenario.name}`, async t => {
+    const queue = new ExecutionBlocks();
+    t.after(() => queue.close());
+    const capability: RunnerExecutionCapability = {
+      instanceId: "runner", checkedAt: new Date().toISOString(),
+      dependencyAvailable: scenario.ready, sandboxUsable: false,
+      sandbox: scenario.sandbox, ready: scenario.ready, reason: scenario.reason,
+      ...("shell" in scenario ? { shell: scenario.shell } : {}),
+    };
+    const bindings = createWorkspaceExecutionBindings({
+      agentId: "main", executionId: "run", sessionId: "s", workspaceRoot: "/workspace", permissionScopeLabel: "test",
+      runnerClient: { executionCapability: async () => capability } as RunnerClient,
+      permission: {} as AgentPermissionRuntime,
+      provenanceRecorder: {} as ProvenanceRecorder,
+      store: { executionBlocks: queue, assertSessionWritable() {}, assertSessionAllowsRunner() {} } as unknown as SessionStore,
+    });
+    assert.ok(bindings.runnerReadiness);
+    const result = await bindings.runnerReadiness.check("local");
+    assert.equal(result.connected, true);
+    assert.equal(result.ready, scenario.ready);
+    assert.deepEqual(result.capability, capability);
+    if (scenario.expected) {
+      assert.match(result.suggestions[0] ?? "", scenario.expected);
+      assert.equal(result.suggestions.length, 2);
+      assert.match(result.suggestions[1] ?? "", /After repair use check_runner/);
+      if (capability.shell?.available === false) {
+        assert.doesNotMatch(result.suggestions.join(" "), /sandbox executable|sandbox permissions/);
+      }
+    } else {
+      assert.deepEqual(result.suggestions, []);
+    }
+  });
+}
 
 for (const action of ["retry", "cancel", "switch"] as const) {
   test(`execution readiness ${action} is pre-dispatch and releases the external wait`, async t => {
