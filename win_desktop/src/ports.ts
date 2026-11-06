@@ -1,21 +1,23 @@
 // Port-epoch resolution. The stack fixes its ports by default
-// (UI 4310 / runner 4311 / API 4410 / evolve 4313 / memory-graph 17674) but
-// start-stack.mjs already honours the SCIENCE_AGENT_*_PORT / _URL variables,
-// so the shell can shift the whole stack by an "epoch" when the defaults are
-// occupied. All decisions here are pure functions; the net probes are thin IO.
+// (UI 4310 / runner 4311 / API 4410 / evolve 4313 / idea-tree 4314 /
+// memory-graph 17674) but start-stack.mjs already honours the
+// SCIENCE_AGENT_*_PORT / _URL variables, so the shell can shift the whole
+// stack by an "epoch" when the defaults are occupied. All decisions here are
+// pure functions; the net probes are thin IO.
 
 export interface StackPorts {
   epoch: number;
   publicPort: number;  // web UI (adapter)
   runnerPort: number;
   legacyPort: number;  // control API (health + Bearer)
-  // memory-graph and evolve used to sit on FIXED ports outside the epoch
-  // system — any stray listener on 17674 doomed the stack even when every
+  // memory-graph, evolve and idea-tree used to sit on FIXED ports outside the
+  // epoch system — any stray listener on 17674 doomed the stack even when every
   // epoch port was free (observed in the field: an old instance's
   // memory-graph held 17674), and runner 4311+epoch would collide with
-  // evolve's fixed 4313 from epoch 2 on. Both now shift with the epoch.
+  // evolve's fixed 4313 from epoch 2 on. All three now shift with the epoch.
   memoryGraphPort: number;
   evolvePort: number;
+  ideaTreePort: number;
 }
 
 export const MAX_PORT_EPOCH = 20;
@@ -28,6 +30,9 @@ export function portsForEpoch(epoch: number): StackPorts {
     legacyPort: 4410 + epoch,
     memoryGraphPort: 17674 + epoch,
     evolvePort: 4313 + epoch,
+    // 4314 is the API's own default (bootstrap/config.ts), so epoch 0 needs no
+    // override; shifting it with the epoch keeps it clear of evolve's 4313+e.
+    ideaTreePort: 4314 + epoch,
   };
 }
 
@@ -55,6 +60,10 @@ export function stackEnvForPorts(p: StackPorts): NodeJS.ProcessEnv {
     // the shifted URL must travel with the shifted port.
     SCIENCE_AGENT_MEMORY_GRAPH_URL: `http://127.0.0.1:${p.memoryGraphPort}`,
     SCIENCE_AGENT_EVOLVE_PORT: String(p.evolvePort),
+    // The Idea Tree client is URL-driven too, so the shifted port must travel
+    // with its URL or the API keeps dialing the fixed 4314.
+    SCIENCE_AGENT_IDEA_TREE_PORT: String(p.ideaTreePort),
+    SCIENCE_AGENT_IDEA_TREE_URL: `http://127.0.0.1:${p.ideaTreePort}`,
   };
 }
 
@@ -103,6 +112,7 @@ export async function firstFreeEpoch(
       isPortFree(p.legacyPort),
       isPortFree(p.memoryGraphPort),
       isPortFree(p.evolvePort),
+      isPortFree(p.ideaTreePort),
     ]);
     if (free.every(Boolean)) return epoch;
   }

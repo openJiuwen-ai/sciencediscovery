@@ -17,6 +17,11 @@ test("maps start-stack say() lines (with the [stack:err] prefix) to stages", () 
   assert.deepEqual(stackLineToStage("[stack:err] Starting the evolve service..."), {
     stage: "evolve", text: STAGE_TEXTS.evolve,
   });
+  // The Idea Tree service is a mandatory sidecar now, so its start line must
+  // move the loading page rather than leaving it on "evolve".
+  assert.deepEqual(stackLineToStage("[stack:err] Starting the idea-tree service..."), {
+    stage: "idea-tree", text: STAGE_TEXTS["idea-tree"],
+  });
   assert.deepEqual(stackLineToStage(
     "[stack:err] JiuwenSwarm is not running; starting it (node scripts/jiuwenswarm.mjs start)...",
   ), { stage: "jiuwenswarm", text: STAGE_TEXTS.jiuwenswarm });
@@ -107,26 +112,26 @@ test("the daily and first-run sequences list every stage exactly once", () => {
   for (const stage of FIRST_RUN_STAGES) assert.ok(STAGE_TEXTS[stage]);
 });
 
-test("stageProgress: daily run — 9 steps, 1-based, shrinking estimate", () => {
+test("stageProgress: daily run — 10 steps, 1-based, shrinking estimate", () => {
   // Re-calibrated against field timing: warm boot ≈ 55s end-to-end.
-  assert.deepEqual(stageProgress("connect", false), { current: 1, total: 9, estimateSec: 51 });
+  assert.deepEqual(stageProgress("connect", false), { current: 1, total: 10, estimateSec: 53 });
   const api = stageProgress("api", false);
-  assert.equal(api.current, 8);
-  assert.equal(api.total, 9);
+  assert.equal(api.current, 9);
+  assert.equal(api.total, 10);
   // "api" is no longer the final stage; "agent" follows it.
   assert.ok(api.estimateSec > 0 && api.estimateSec <= STAGE_ESTIMATE_SEC.api + STAGE_ESTIMATE_SEC.agent);
 });
 
-test("stageProgress: first run — provisioning prepended, 10 steps (precompile moved to build time)", () => {
-  const totalFirstRun = 80 + 51; // unpack + the daily sequence
-  assert.deepEqual(stageProgress("unpack", true), { current: 1, total: 10, estimateSec: totalFirstRun });
-  assert.deepEqual(stageProgress("connect", true), { current: 2, total: 10, estimateSec: totalFirstRun - 80 });
-  assert.equal(stageProgress("api", true).total, 10);
+test("stageProgress: first run — provisioning prepended, 11 steps (precompile moved to build time)", () => {
+  const totalFirstRun = 80 + 53; // unpack + the daily sequence
+  assert.deepEqual(stageProgress("unpack", true), { current: 1, total: 11, estimateSec: totalFirstRun });
+  assert.deepEqual(stageProgress("connect", true), { current: 2, total: 11, estimateSec: totalFirstRun - 80 });
+  assert.equal(stageProgress("api", true).total, 11);
 });
 
 test("stageProgress: unknown stage reports current 0 and no estimate", () => {
-  assert.deepEqual(stageProgress("nope", false), { current: 0, total: 9, estimateSec: 0 });
-  assert.deepEqual(stageProgress("nope", true), { current: 0, total: 10, estimateSec: 0 });
+  assert.deepEqual(stageProgress("nope", false), { current: 0, total: 10, estimateSec: 0 });
+  assert.deepEqual(stageProgress("nope", true), { current: 0, total: 11, estimateSec: 0 });
 });
 
 // --- Provisioning sub-progress lines → live stage text -----------------

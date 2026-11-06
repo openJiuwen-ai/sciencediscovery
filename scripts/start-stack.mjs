@@ -9,7 +9,7 @@
 // unaffected). Every platform fork lives in scripts/lib/stack-platform.mjs.
 //
 // Product contract (mirrors start-stack.sh line by line):
-//   start order runner → memory-graph → evolve → JiuwenSwarm → adapter → api
+//   start order runner → memory-graph → evolve → idea-tree → JiuwenSwarm → adapter → api
 //   an unhealthy runner only warns (the workbench stays usable); any other
 //   sidecar failure stops the stack;
 //   in local mode the API runs in the foreground and Ctrl-C tears down the
@@ -390,6 +390,30 @@ if (!existsSync(memoryGraphPython)) memoryGraphPython = "";
 let evolvePython = venvPython(SHARED_ENV);
 if (!existsSync(evolvePython)) evolvePython = "";
 
+// idea-tree: the independent Idea Tree service is its own uv project with its
+// own venv (the image does the same into envs/idea-tree) because its
+// fastapi/uvicorn floor is not the workspace's. It is NOT optional: the API
+// always dials it (bootstrap/config.ts defaults to 127.0.0.1:4314), the evolve
+// sidecar no longer serves those routes, and Idea Tree tools/settings fail
+// closed without it. So a missing environment is a broken install here, and in
+// a dev checkout without SCIENCE_AGENT_ENVS_DIR we provision it exactly like
+// bash start-stack.sh does.
+const ideaTreeEnv = join(envsDir, "idea-tree");
+let ideaTreePython = process.env.SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH
+  ? absoluteFromRepository(repositoryRoot, process.env.SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH)
+  : venvPython(ideaTreeEnv);
+if (!existsSync(ideaTreePython)) {
+  if (packaged) {
+    fail(`${ideaTreeEnv} is missing; the packaged installation is incomplete — reinstall ScienceDiscovery.`);
+  }
+  say("Provisioning the Idea Tree service environment (uv sync services/idea-tree)...");
+  await uvSyncProject(join(repositoryRoot, "services", "idea-tree"), ideaTreeEnv, { locked: true });
+  ideaTreePython = venvPython(ideaTreeEnv);
+}
+if (!existsSync(ideaTreePython)) {
+  fail(`The Idea Tree service interpreter is missing at ${ideaTreePython}. Run 'uv sync' in services/idea-tree and retry.`);
+}
+
 // adapter: the JiuwenSwarm front door (on by default)
 let adapterPython = "";
 if (process.env.SCIENCE_AGENT_ADAPTER === "1") {
@@ -454,6 +478,7 @@ const publicPort = Number(process.env.SCIENCE_AGENT_PORT ?? 4310);
 const legacyPort = Number(process.env.SCIENCE_AGENT_LEGACY_PORT ?? publicPort + 100);
 const memoryGraphPort = Number(process.env.SCIENCE_AGENT_MEMORY_GRAPH_PORT ?? 17674);
 const evolvePort = Number(process.env.SCIENCE_AGENT_EVOLVE_PORT ?? 4313);
+const ideaTreePort = Number(process.env.SCIENCE_AGENT_IDEA_TREE_PORT ?? 4314);
 
 // The shell's port-epoch system may shift the memory-graph port; the
 // API's client is URL-driven, so the URL must follow the port unless an
@@ -470,6 +495,12 @@ if (evolvePython) {
   process.env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN ??= "sciencediscovery-evolve-local";
 }
 
+// Same contract for the Idea Tree service: the API's client is URL-driven
+// (bootstrap/config.ts), so a shifted port must travel with its URL, and the
+// token the shell hands both sides must be the one the service validates.
+process.env.SCIENCE_AGENT_IDEA_TREE_URL ??= `http://127.0.0.1:${ideaTreePort}`;
+process.env.SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN ??= "sciencediscovery-idea-tree-local";
+
 // Allow JiuwenSwarm to start in the background so the control API can be
 // ready earlier. The adapter still needs JiuwenSwarm, so it starts
 // after JiuwenSwarm is up.
@@ -482,6 +513,7 @@ const portsToCheck = [
   ...(process.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE !== "0" && memoryGraphPython
     ? [{ name: "memory-graph", host: "127.0.0.1", port: memoryGraphPort }] : []),
   ...(evolvePython ? [{ name: "evolve", host: "127.0.0.1", port: evolvePort }] : []),
+  { name: "idea-tree", host: "127.0.0.1", port: ideaTreePort },
 ];
 const portFailures = [];
 for (const { name, host, port } of portsToCheck) {
@@ -593,6 +625,25 @@ try {
       perf("evolve-healthy");
     })());
   }
+
+  // The Idea Tree service: started with the other sidecars (the API's own
+  // /api/health does not need it, but every Idea Tree tool, the settings panel
+  // and research creation do, so it is awaited with them rather than lazily).
+  sidecarPromises.push((async () => {
+    say("Starting the idea-tree service...");
+    perf("idea-tree-spawn");
+    children.push(spawnService(ideaTreePython, ["-m", "sciencediscovery_idea_tree.server"], {
+      env: {
+        SCIENCE_AGENT_DATA_DIR: dataDir,
+        SCIENCE_AGENT_IDEA_TREE_PORT: String(ideaTreePort),
+        SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN: process.env.SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN ?? "sciencediscovery-idea-tree-local",
+      },
+    }));
+    if (!await waitHealthy("idea-tree", `http://127.0.0.1:${ideaTreePort}/health`, { timeoutSeconds: healthTimeoutSeconds })) {
+      throw new Error("idea-tree service failed to start; stopping the stack.");
+    }
+    perf("idea-tree-healthy");
+  })());
 
   // JiuwenSwarm: lazy mode starts in the background and does not block the
   // adapter; the adapter can proxy /api/health while JiuwenSwarm is still

@@ -56,7 +56,7 @@ export function packagedPaths(resourcesPath: string): PackagedPaths {
     // SIZEOPT W2: the five Python sidecars share one venv ("sd-services",
     // staged by assemble-backend from the uv workspace lock) — see
     // sizeopt\agent-knowledge\design\D1 for the 6→2 merge decision.
-    venvNames: ["sd-services"],
+    venvNames: ["sd-services", "idea-tree"],
     // SIZEOPT W6 / design D11: short payload layout backend\jw (was
     // backend\.sciencediscovery-data\jiuwenswarm\src) — the deep path burned
     // all MAX_PATH headroom under the default install root (problems W6).
@@ -100,6 +100,10 @@ export function packagedEnv(paths: PackagedPaths, dataDir: string): NodeJS.Proce
     // never exists on Windows; point it at the shared sidecar venv
     // (SIZEOPT W2: one "sd-services" venv for all five Python sidecars).
     SCIENCE_AGENT_PAPER_PYTHON_PATH: join(envsRoot, "sd-services", "Scripts", "python.exe"),
+    // The Idea Tree service is its own uv project/venv (fastapi/uvicorn floor
+    // differs from the workspace), so its interpreter is named explicitly —
+    // the API always dials the service and there is no evolve fallback left.
+    SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH: join(envsRoot, "idea-tree", "Scripts", "python.exe"),
     // Tell the stack where to find the sidecar venvs (in-place or copied).
     SCIENCE_AGENT_ENVS_DIR: envsRoot,
     // Windows has no bubblewrap or Seatbelt, so program evolution would be
@@ -575,7 +579,11 @@ async function fixEditablePths(venvDir: string, backendRoot: string, log: (line:
     return; // not a Windows-venv layout; nothing to fix
   }
   for (const entry of entries) {
-    if (!entry.isFile() || !/^_editable_impl_.*\.pth$/.test(entry.name)) continue;
+    // Both editable conventions ship: `_editable_impl_*.pth` (workspace
+    // members) and a plain `<name>.pth` holding the source dir (the standalone
+    // idea-tree project). Key on the placeholder, not the name, so a new
+    // convention cannot ship an unresolved path.
+    if (!entry.isFile() || !entry.name.endsWith(".pth")) continue;
     const file = join(sitePackages, entry.name);
     const text = await readFile(file, "utf8");
     if (!text.includes(BACKEND_PLACEHOLDER)) continue;

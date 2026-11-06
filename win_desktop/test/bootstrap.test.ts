@@ -32,8 +32,10 @@ test("packagedPaths maps the installer layout", () => {
   assert.equal(p.python, join("C:\\Program Files\\SD\\resources", "python"));
   assert.equal(p.micromamba, join("C:\\Program Files\\SD\\resources", "micromamba", "micromamba.exe"));
   assert.equal(p.envsTemplate, join("C:\\Program Files\\SD\\resources", "envs-template"));
-  // SIZEOPT W2: one shared venv for all five Python sidecars.
+  // SIZEOPT W2: one shared venv for all five Python sidecars; the independent
+  // Idea Tree service is its own uv project with its own venv.
   assert.ok(p.venvNames.includes("sd-services"));
+  assert.ok(p.venvNames.includes("idea-tree"));
   // SIZEOPT W6 / design D11: short payload layout backend\jw (was
   // backend\.sciencediscovery-data\jiuwenswarm\src) to reclaim MAX_PATH budget.
   assert.equal(p.jwSrc, join("C:\\Program Files\\SD\\resources", "backend", "jw"));
@@ -52,6 +54,9 @@ test("packagedEnv injects the packaged-mode contract", () => {
   assert.equal(env.JIUWENSWARM_ROOT, join("D:\\data", "jiuwenswarm"));
   assert.equal(env.JIUWENSWARM_SRC, join("C:\\res", "backend", "jw"));
   assert.equal(env.SCIENCE_AGENT_PAPER_PYTHON_PATH, join("D:\\data", "envs", "sd-services", "Scripts", "python.exe"));
+  // The API always dials Idea Tree, so the packaged shell must hand the stack
+  // its interpreter explicitly (no evolve fallback exists any more).
+  assert.equal(env.SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH, join("D:\\data", "envs", "idea-tree", "Scripts", "python.exe"));
 });
 
 // --- rewriteEditablePth --------------------------------------------------------

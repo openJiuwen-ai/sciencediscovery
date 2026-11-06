@@ -63,6 +63,25 @@ The public endpoint is `POST /api/sessions/:sessionId/idea-tree/research`, where
 chat-message API returns a 409 that directs the caller to the research entry point; it
 does not start Lead silently.
 
+## Where the process comes from
+
+`services/idea-tree` is a standalone uv project with its own lockfile and its own
+interpreter at `<envs dir>/idea-tree`; it is not a member of the root workspace, so the
+shared `sd-services` venv does not cover it. Every launcher provisions it:
+
+- `scripts/start-stack.sh` (Linux/macOS/Docker) runs `uv sync` into
+  `$SCIENCE_AGENT_ENVS_ROOT/idea-tree` and starts
+  `python -m sciencediscovery_idea_tree.server` on
+  `$SCIENCE_AGENT_IDEA_TREE_PORT` (default `4314`), then waits on `/health`.
+- `scripts/start-stack.mjs` (Windows dev and the desktop backend) does the same, and the
+  desktop shell stages `envs-template/idea-tree` in the payload, hands the stack
+  `SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH`, and shifts the port with the rest of the
+  stack's port epoch (`win_desktop/src/ports.ts`).
+- `SCIENCE_AGENT_IDEA_TREE_URL` and `SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN` must reach
+  **both** the API and the service; the API always dials the service, so a deployment
+  that starts the API without it loses research, the settings panel and the four MCP
+  tools rather than falling back to evolve.
+
 ## Boundaries
 
 Idea Tree currently uses the session's OpenAI-compatible model through the API's model

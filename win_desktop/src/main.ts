@@ -823,13 +823,14 @@ async function startWizardBackend(dataDir: string, proxyEnv: NodeJS.ProcessEnv |
     //    checking the epoch's ports are actually bound (guards against pid reuse).
     if (pidAlive(wizardData.stackPid) && wizardData.epoch !== undefined) {
       const p = portsForEpoch(wizardData.epoch);
-      // The full port set (memory-graph/evolve included) makes the liveness
-      // signal stronger against pid reuse.
+      // The full port set (memory-graph/evolve/idea-tree included) makes the
+      // liveness signal stronger against pid reuse.
       const anyBound = !(await isPortFree(p.publicPort))
         || !(await isPortFree(p.runnerPort))
         || !(await isPortFree(p.legacyPort))
         || !(await isPortFree(p.memoryGraphPort))
-        || !(await isPortFree(p.evolvePort));
+        || !(await isPortFree(p.evolvePort))
+        || !(await isPortFree(p.ideaTreePort));
       if (anyBound) {
         currentEndpoints = epochEndpoints(wizardData.epoch);
         log(`wizard: waiting for recorded spawn (pid ${wizardData.stackPid}, epoch ${wizardData.epoch})`);

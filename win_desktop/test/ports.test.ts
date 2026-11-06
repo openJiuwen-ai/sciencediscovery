@@ -38,6 +38,20 @@ test("epoch N shifts memory-graph and evolve too, URL tracking the port", () => 
   assert.equal(env.SCIENCE_AGENT_EVOLVE_PORT, "4314");
 });
 
+test("the mandatory idea-tree service gets its own epoch port and URL", () => {
+  // Epoch 0 is the API's own 4314 default, so nothing is overridden there.
+  assert.equal(portsForEpoch(0).ideaTreePort, 4314);
+  const p = portsForEpoch(2);
+  // Distinct from evolve (4315 at this epoch) and from the 4310/4311 pairs.
+  const env = stackEnvForPorts(p);
+  assert.equal(p.ideaTreePort, 4316);
+  assert.notEqual(p.ideaTreePort, p.evolvePort);
+  assert.notEqual(p.ideaTreePort, p.publicPort);
+  assert.notEqual(p.ideaTreePort, p.runnerPort);
+  assert.equal(env.SCIENCE_AGENT_IDEA_TREE_PORT, "4316");
+  assert.equal(env.SCIENCE_AGENT_IDEA_TREE_URL, "http://127.0.0.1:4316");
+});
+
 test("epochFromEnv: pinned, garbage and out-of-range", () => {
   assert.equal(epochFromEnv({ SD_SHELL_PORT_EPOCH: "2" }), 2);
   assert.equal(epochFromEnv({ SD_SHELL_PORT_EPOCH: " 5 " }), 5);

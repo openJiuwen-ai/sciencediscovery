@@ -25,6 +25,14 @@ Idea Tree 在独立的 Python 服务内运行，使用一个 ASGI worker。API �
 
 公共入口为 `POST /api/sessions/:sessionId/idea-tree/research`，`operation` 支持 create/get/list/pause/continue/end/defaults。GET 同一路径列出研究。直接向聊天消息 API 发送 Idea Tree 命令会得到引导到研究入口的 409，不会悄悄启动 Lead。
 
+## 进程从哪里启动
+
+`services/idea-tree` 是独立的 uv 工程（自带 lockfile 与解释器 `<envs 目录>/idea-tree`），不属于根 workspace，所以共享的 `sd-services` venv 不覆盖它。各启动器都要显式置备：
+
+- `scripts/start-stack.sh`（Linux/macOS/Docker）：`uv sync` 到 `$SCIENCE_AGENT_ENVS_ROOT/idea-tree`，再以 `python -m sciencediscovery_idea_tree.server` 启动到 `$SCIENCE_AGENT_IDEA_TREE_PORT`（默认 `4314`），并等待 `/health`。
+- `scripts/start-stack.mjs`（Windows 开发与桌面后端）：同样置备并启动；桌面 shell 在 payload 里 staging `envs-template/idea-tree`，向栈传入 `SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH`，并让端口随整套端口 epoch 一起平移（`win_desktop/src/ports.ts`）。
+- `SCIENCE_AGENT_IDEA_TREE_URL` 与 `SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN` 必须同时到达 API 与服务；API 总是直连该服务，缺了它只会失去研究、设置面板和四个 MCP 工具，不存在回落到 evolve 的路径。
+
 ## 边界
 
 当前使用会话的 OpenAI-compatible 模型，实际请求经 API 的既有模型代理。API 或模型不可用时保存为中断，恢复依赖这些服务重新可用。模型输出只允许 JSON，每次格式错误最多纠正一次；网络超时不自动重发。模型请求沿用代理的约 20 分钟上限。

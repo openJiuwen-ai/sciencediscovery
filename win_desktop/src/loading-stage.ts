@@ -22,6 +22,7 @@ export const STAGE_TEXTS: Record<string, string> = {
   runner: "正在启动运行器…",
   "memory-graph": "正在启动记忆图服务…",
   evolve: "正在启动演化服务…",
+  "idea-tree": "正在启动概念树服务…",
   jiuwenswarm: "正在后台启动智能体集群（不阻塞主界面，组件较大可能需要几分钟）…",
   adapter: "正在启动协议适配器…",
   api: "正在启动主服务，即将就绪…",
@@ -29,7 +30,7 @@ export const STAGE_TEXTS: Record<string, string> = {
 };
 
 /** Daily cold-start sequence (no provisioning stages). */
-export const STAGE_SEQUENCE = ["connect", "stack", "runner", "memory-graph", "evolve", "jiuwenswarm", "adapter", "api", "agent"] as const;
+export const STAGE_SEQUENCE = ["connect", "stack", "runner", "memory-graph", "evolve", "idea-tree", "jiuwenswarm", "adapter", "api", "agent"] as const;
 /**
  * First-run-only stages. Bytecode precompiling moved to build time
  * (assemble-backend.mjs ships __pycache__ with content-hash invalidation), so
@@ -53,6 +54,7 @@ export const STAGE_ESTIMATE_SEC: Record<string, number> = {
   runner: 1,
   "memory-graph": 2,
   evolve: 2,
+  "idea-tree": 2,
   // jiuwenswarm + agent together are the long pole of daily warm boot.
   // Calibrated against field timing: warm boot ≈ 55s end-to-end.
   jiuwenswarm: 25,
@@ -75,6 +77,7 @@ const STACK_LINES: Array<[RegExp, string]> = [
   [/Starting the sandbox runner daemon/, "runner"],
   [/Starting the memory-graph service/, "memory-graph"],
   [/Starting the evolve service/, "evolve"],
+  [/Starting the idea-tree service/, "idea-tree"],
   [/JiuwenSwarm is not running; starting it/, "jiuwenswarm"],
   [/Starting the adapter on port/, "adapter"],
   [/Starting the control API/, "api"],

@@ -44,8 +44,11 @@ const data = arg("data", join(repo, ".sciencediscovery-data"));
 const out = arg("out", join(shellRoot, "build", "resources"));
 
 // SIZEOPT W2: the five Python sidecars share one venv (uv workspace,
-// "sd-services"); assemble stages that single venv instead of five.
-const VENV_NAMES = ["sd-services"];
+// "sd-services"); assemble stages that single venv instead of five. The
+// independent Idea Tree service is a separate uv project with its own venv
+// ("idea-tree") because its fastapi/uvicorn floor differs from the workspace's,
+// so it is staged next to the shared one.
+const VENV_NAMES = ["sd-services", "idea-tree"];
 /** Placeholder bootstrap.ts substitutes with the real <resources>\backend. */
 const BACKEND_PLACEHOLDER = "@@SD_BACKEND_ROOT@@";
 
@@ -439,7 +442,7 @@ const copySet = [
   // "unavailable". Ship the repo's authoritative config to backend/config/.
   { src: join(repo, "config", "external-urls.json"), dest: join(backendOut, "config", "external-urls.json") },
 ];
-// The four Python sidecar services: their venvs' editable .pth files point at
+// The Python sidecar services: their venvs' editable .pth files point at
 // <backend>/services/<name>/src, so the source trees must ride along.
 const svcFilter = (src) => {
   const parts = relative(repo, src).split(/[\\/]/).filter(Boolean);
@@ -449,7 +452,7 @@ const svcFilter = (src) => {
   const top = parts[parts.length - 1];
   return !["README.md", ".gitignore", "pyrightconfig.json"].includes(top);
 };
-for (const name of ["gateway", "memory-graph", "evolve", "adapter"]) {
+for (const name of ["gateway", "memory-graph", "evolve", "adapter", "idea-tree"]) {
   await mkdir(join(backendOut, "services", name), { recursive: true });
   await cp(join(repo, "services", name), join(backendOut, "services", name), {
     recursive: true,
@@ -653,29 +656,37 @@ for (const name of VENV_NAMES) {
     force: true,
     filter: pyFilter(),
   });
-  // _editable_impl_*.pth contains an absolute path into the dev repo; swap the
-  // repo prefix for the placeholder the shell resolves at first run.
+  // Editable-install .pth files contain an absolute path into the dev repo;
+  // swap the repo prefix for the placeholder the shell resolves at first run.
+  // Two conventions ship: `_editable_impl_*.pth` (workspace members, uv's
+  // editable finders) and a plain `<name>.pth` holding the source directory
+  // (the standalone idea-tree project). Both are matched by content, so a
+  // third convention cannot ship a dev path silently.
   const sp = join(out, "envs-template", name, "Lib", "site-packages");
   if (!existsSync(sp)) continue;
   for (const e of await readdir(sp, { withFileTypes: true })) {
-    if (!e.isFile() || !/^_editable_impl_.*\.pth$/.test(e.name)) continue;
+    if (!e.isFile() || !e.name.endsWith(".pth")) continue;
     const file = join(sp, e.name);
     const text = (await readFile(file, "utf8")).trim();
-    // Field incident (stale editable venv): the envs came from a data dir
-    // carried over after a repo migration; their .pth files still pointed at
-    // the old checkout path. This branch only warned and shipped anyway, and
-    // every Python sidecar died with ModuleNotFoundError on the installed
-    // machine while the build machine looked healthy. A mispointed editable
-    // is always a broken payload — fail the build instead of shipping it.
+    // A placeholder swap carries an absolute path into this repo. Anything
+    // outside it is either a stdlib shim (`distutils-precedence.pth` imports
+    // code) or a stale editable — the latter must fail the build. Field
+    // incident (stale editable venv): the envs came from a data dir carried
+    // over after a repo migration; their .pth files still pointed at the old
+    // checkout path. This branch only warned and shipped anyway, and every
+    // Python sidecar died with ModuleNotFoundError on the installed machine
+    // while the build machine looked healthy.
     // A directory boundary must follow the repo prefix: `repo` is also a
     // prefix of `repo-something-else`, and that sibling path would silently
     // slice into a wrong tail (e.g. `-something-else\...`) instead of failing.
-    if (!text.startsWith(repo) || !/^[\\/]/.test(text.slice(repo.length))) {
+    const insideRepo = text.startsWith(repo) && /^[\\/]/.test(text.slice(repo.length));
+    if (insideRepo) {
+      const tail = text.slice(repo.length).replace(/^[\\/]+/, "").replace(/\//g, "\\");
+      await writeFile(file, `${BACKEND_PLACEHOLDER}\\${tail}\n`, "utf8");
+      say(`placeholdered ${name}/${e.name}`);
+    } else if (/^_editable_impl_.*\.pth$/.test(e.name)) {
       fail(`${name}/${e.name} points outside the repo (${text}) — the venv's editable install is stale; reinstall the editable packages from this repo before assembling`);
     }
-    const tail = text.slice(repo.length).replace(/^[\\/]+/, "").replace(/\//g, "\\");
-    await writeFile(file, `${BACKEND_PLACEHOLDER}\\${tail}\n`, "utf8");
-    say(`placeholdered ${name}/${e.name}`);
   }
 }
 
@@ -825,6 +836,15 @@ const smokeRuns = [
     code: "import sciencediscovery_gateway, sciencediscovery_memory_graph, sciencediscovery_evolve, sciencediscovery_adapter",
     extraEnv: { PYTHONPATH: sdServiceSrcs.join(";") },
   },
+  {
+    // The Idea Tree service is a STANDALONE uv project with its own venv, so
+    // the shared venv proves nothing about it: prove THAT interpreter imports
+    // the shipped service sources plus the fastapi/uvicorn deps it needs.
+    label: "idea-tree venv",
+    python: join(out, "envs-template", "idea-tree", "Scripts", "python.exe"),
+    code: "import sciencediscovery_idea_tree, sciencediscovery_idea_tree.server, sciencediscovery_idea_tree.mcp, sciencediscovery_idea_tree.settings",
+    extraEnv: { PYTHONPATH: join(out, "backend", "services", "idea-tree", "src") },
+  },
 ];
 for (const { label, python, code, extraEnv } of smokeRuns) {
   try {
@@ -901,6 +921,7 @@ const requiredFiles = [
   join(out, "backend", "services", "api", "dist", "server.js"),
   join(out, "backend", "services", "runner", "dist", "server.js"),
   join(out, "envs-template", "sd-services", "Lib", "site-packages", "_editable_impl_sciencediscovery_gateway.pth"),
+  join(out, "envs-template", "idea-tree", "Scripts", "python.exe"),
   join(out, "micromamba", "micromamba.exe"),
   join(out, "python", "python.exe"),
 ];
