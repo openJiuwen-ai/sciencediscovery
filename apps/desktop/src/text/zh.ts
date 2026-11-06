@@ -503,7 +503,7 @@ export const ZH = {
       noProject: "还没有可用的项目，无法读取技能选择。",
       off: "已停用",
       on: "已启用",
-      scope: "这里的开关控制 JiuwenSwarm 中技能的全局启用状态，对所有任务生效。",
+      scope: "这里的开关控制 ScienceDiscovery 中技能的全局启用状态，对所有任务生效。",
       toggle: (name: string) => `启用或停用「${name}」`,
       add: "新增技能",
       create: "创建",
@@ -526,7 +526,7 @@ export const ZH = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `第 ${revision} 版`,
       source: {
-        builtIn: "内置",
+        builtIn: "SD 内置",
         jiuwenBuiltIn: "JiuwenSwarm 内置",
         jiuwenLocal: "JiuwenSwarm 安装",
         managed: "自建",

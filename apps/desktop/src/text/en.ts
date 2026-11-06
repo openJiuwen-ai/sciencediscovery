@@ -475,7 +475,7 @@ export const EN: Text = {
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
-      scope: "These switches control the global enabled state of skills in JiuwenSwarm. They apply to every task.",
+      scope: "These switches control the global enabled state of skills in ScienceDiscovery. They apply to every task.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       add: "Add skill",
       create: "Create",
@@ -498,7 +498,7 @@ export const EN: Text = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `revision ${revision}`,
       source: {
-        builtIn: "built-in",
+        builtIn: "SD built-in",
         jiuwenBuiltIn: "JiuwenSwarm built-in",
         jiuwenLocal: "Installed in JiuwenSwarm",
         managed: "managed",
