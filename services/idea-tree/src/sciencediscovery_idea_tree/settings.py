@@ -15,6 +15,9 @@ RANGES = dict(maxRounds=(1, 100), candidatesPerRound=(1, 20), maxTokensPerCall=(
               maxDepth=(1, 20), maxNodes=(2, 10000), maxSearchRounds=(1, 10000), maxTokens=(1, 9007199254740991))
 ASSESSORS = ("assessorActivity", "assessorStability", "assessorSustainability")
 PROMPTS = ("designSystemPrompt", "aggregatorSystemPrompt", "propagateInsightSystemPrompt")
+ROLE_STAGES = ("ideate", "design", "assess", "aggregate", "propagate")
+ROLE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+ASSESSOR_DEFAULT_WEIGHTS = {"assessorActivity": 0.35, "assessorStability": 0.35, "assessorSustainability": 0.30}
 _lock = threading.RLock()
 router = APIRouter(dependencies=[Depends(require_internal_token)])
 
@@ -38,6 +41,21 @@ def normalize(update, current):
             result[key] = update[key]
     if update.get("scoreDirection") in ("maximize", "minimize"):
         result["scoreDirection"] = update["scoreDirection"]
+    if "roleThinkingEfforts" in update:
+        value = update["roleThinkingEfforts"]
+        if value is None or value == {}:
+            result.pop("roleThinkingEfforts", None)
+        else:
+            if not isinstance(value, dict):
+                raise ValueError("roleThinkingEfforts must be an object")
+            efforts = {}
+            for role, effort in value.items():
+                if role not in ROLE_STAGES:
+                    raise ValueError(f"roleThinkingEfforts has an unknown stage: {role}")
+                if effort not in ROLE_EFFORTS:
+                    raise ValueError(f"roleThinkingEfforts.{role} must be low, medium, high, xhigh, or max")
+                efforts[role] = effort
+            result["roleThinkingEfforts"] = efforts
     for key in PROMPTS:
         if key in update:
             value = update[key]
@@ -68,8 +86,8 @@ def normalize(update, current):
                 raise ValueError("weight must be between 0 and 1")
             cfg["weight"] = weight
         result[key] = cfg
-    weights = [(update.get(key) or {}).get("weight") for key in ASSESSORS]
-    if all(w is not None for w in weights) and abs(sum(weights) - 1) > .001:
+    weights = [result[key].get("weight", ASSESSOR_DEFAULT_WEIGHTS[key]) for key in ASSESSORS]
+    if any(isinstance(w, bool) or not isinstance(w, (int, float)) or not 0 <= w <= 1 for w in weights) or abs(sum(weights) - 1) > 1e-6:
         raise ValueError("Assessor weights must sum to 1.0")
     return result
 
