@@ -31,10 +31,13 @@ import type { ApiClient } from "../api/client.js";
 import { getHealth } from "../api/models.js";
 import { TEXT } from "../text.js";
 
-export type MemoryStatus = "checking" | "degraded" | "healthy" | "needs-password" | "unknown";
+/** The five readings the line can show. Named apart from the component below:
+ *  a type alias and a function may share a name in TypeScript, but the mirror's
+ *  CodeCheck reads that as a redeclaration (`MemoryStatus` is already defined). */
+export type MemoryState = "checking" | "degraded" | "healthy" | "needs-password" | "unknown";
 
 /** The control plane's words, or this app's when the route did not say. */
-function statusOf(value: string | undefined): MemoryStatus {
+function statusOf(value: string | undefined): MemoryState {
   switch (value) {
     case "healthy": return "healthy";
     case "degraded": return "degraded";
@@ -43,7 +46,7 @@ function statusOf(value: string | undefined): MemoryStatus {
   }
 }
 
-function labelOf(status: MemoryStatus): string {
+function labelOf(status: MemoryState): string {
   const text = TEXT.memory.status;
   switch (status) {
     case "healthy": return text.healthy;
@@ -62,7 +65,7 @@ interface Props {
 }
 
 export function MemoryStatus({ client, enabled }: Props) {
-  const [status, setStatus] = useState<MemoryStatus>("checking");
+  const [status, setStatus] = useState<MemoryState>("checking");
   /** Bumped by 重新检查, which is the only way a second read happens. */
   const [attempt, setAttempt] = useState(0);
 
