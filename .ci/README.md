@@ -32,7 +32,7 @@ No workflow maintains its own list of case titles.
 | L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + all 50 public BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
+| L5 (`release`) | Version tag push or explicit dispatch | Current L4 set + 45 active BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; five retired cases are excluded; the result is an unapproved baseline candidate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; Biomni workers 360 minutes, other research workers 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -388,7 +388,7 @@ instead of only in the log: the case stays unverified and the run says why.
 
 For a full L5 CI run, manually dispatch **CI** (`ci.yml`) on the desired
 branch with `profile=release`. This runs the cumulative CI gates and the
-complete real E2E suite, including the L3/L4 cases and all 50 public
+complete real E2E suite, including the L3/L4 cases and all 45 active public
 BiomniBench-DA tasks.
 The shared real E2E workflow defaults to two concurrent workers across the
 whole matrix. To use four workers, select `max-parallel=4` in the manual
@@ -396,7 +396,7 @@ whole matrix. To use four workers, select `max-parallel=4` in the manual
 invalid reusable-workflow inputs fail planning before any worker starts.
 Merge queue, nightly and release-tag runs keep the default of two workers.
 
-The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50
+The real case counts are L3 **9**, L4 **19**, L5 **64**. L5 includes 45 active
 public BiomniBench-DA tasks, with one task per isolated worker, sharing the
 selected concurrency limit and a six-hour worker ceiling including preparation. The
 other 50 upstream tasks remain private. The seeded literature-review journey
@@ -411,7 +411,7 @@ fixtures rather than sent through the buffered HTTP upload endpoint.
 The checked-in `biomni-gate.json` uses a temporary aggregate baseline from two
 complete A3 diagnostic runs: mean score 67.7, total tokens 195,099,712, tool
 rounds 2,042, research time 1,312.753472 minutes and task-peak RSS P95
-11.201639801 GiB. All 50 valid results are required. A score drop of 3 points
+11.201639801 GiB. All 45 active valid results are required. A score drop of 3 points
 warns and 5 points blocks; resources have independent configured limits.
 Per-task status and metrics appear in JSON, Markdown and the GitHub step summary.
 The resumable serial driver finishes all first-pass tasks before classified

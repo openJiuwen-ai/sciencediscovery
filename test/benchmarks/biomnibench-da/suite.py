@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
-"""Serial public-50 driver: finish all tasks, then allow three classified retries.
+"""Serial BiomniBench-DA L5 driver: finish active tasks, then allow retries.
 
 Requires a prepared checkout and explicit CI_ALLOW_REAL=1. Credentials are read
 from the environment; no SSH hosts, credentials or operator paths are embedded.
@@ -292,7 +292,9 @@ def main():
     import fcntl
     lock = (args.results / 'suite.lock').open('w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    env = dict(os.environ, CI_E2E_PREPARED='1')
+    # L5 uses the low reasoning budget for both the generator and rubric judge.
+    env = dict(os.environ, CI_E2E_PREPARED='1', E2E_LLM_THINKING_EFFORT='low',
+               BIOMNI_JUDGE_THINKING_EFFORT='low')
     if env.get('BIOMNI_JUDGE_MODEL'):
         env.setdefault('E2E_JUDGE_MODEL', env['BIOMNI_JUDGE_MODEL'])
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPOSITORY, text=True).strip()
@@ -300,7 +302,7 @@ def main():
     machine = {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine())
     if not machine:
         parser.error('Unsupported architecture')
-    # Explicit dimensions choose one architecture, never duplicate the 50 cases.
+    # Explicit dimensions choose one architecture, never duplicate the active cases.
     selection = ['--profile', 'release', '--slice', 'e2e-real',
                  '--target-arch', machine, '--backend', args.backend]
     if not (plan_dir / 'plan.json').exists():
@@ -310,6 +312,8 @@ def main():
     if plan['revision'] != revision:
         raise RuntimeError('Resume requires the same immutable candidate revision')
     manifest = json.loads((Path(__file__).parent / 'manifest.json').read_text())
+    excluded = set(json.loads((Path(__file__).parent / 'l5-excluded.json').read_text()))
+    active_tasks = [task for task in manifest['tasks'] if task['id'] not in excluded]
     entries = []
     research = [e for e in plan['entries'] if 'tier:l3' not in e['tags']]
     for e in research:
@@ -318,8 +322,8 @@ def main():
         import re, urllib.parse
         case = re.search(r'BiomniBench-(da-\d+-\d+)\b', urllib.parse.unquote(e['id'])).group(1)
         entries.append({'case': case, 'key': e['key'], 'shard': 'research-' + str(research.index(e) + 1)})
-    if sorted(e['case'] for e in entries) != sorted(t['id'] for t in manifest['tasks']):
-        raise RuntimeError('Exactly the pinned public 50 are required')
+    if sorted(e['case'] for e in entries) != sorted(t['id'] for t in active_tasks):
+        raise RuntimeError('Exactly the active pinned L5 cases are required')
     status = args.results / 'status.jsonl'
     latest = {}
     if status.exists():
@@ -331,7 +335,7 @@ def main():
         with status.open('a') as stream:
             stream.write(json.dumps(row) + '\n')
         write_json(args.results / 'summary.json', {
-            'revision': revision, 'expected': 50,
+            'revision': revision, 'expected': len(active_tasks),
             'completed': sum(bool(r.get('completed', r['exit'] == 0)) for r in latest.values()),
             'first_pass_completed': sum(bool(r.get('completed', r['exit'] == 0)) for r in history if r['phase'] == 'first-pass'),
             'recovered': sum(bool(r.get('completed')) and r.get('retry_count', 0) > 0 for r in latest.values()),
@@ -354,7 +358,7 @@ def main():
     write_json(args.results / 'attempt-costs.json', attempt_costs(history))
     gate = subprocess.run(['node', '.ci/biomni-suite-report.mjs', str(plan_dir / 'plan.json'),
         str(args.results / 'selected-metrics.json'), str(args.results)], cwd=REPOSITORY, env=env)
-    return 0 if len(latest) == 50 and all(r['exit'] == 0 for r in latest.values()) and gate.returncode == 0 else 1
+    return 0 if len(latest) == len(active_tasks) and all(r['exit'] == 0 for r in latest.values()) and gate.returncode == 0 else 1
 
 
 

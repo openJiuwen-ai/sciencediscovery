@@ -4,7 +4,15 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 export const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
-export const cases: Array<{ id: string; title: string; files: Array<{ path: string; bytes: number; oid: string; lfs_pointer_bytes?: number }> }> = manifest.tasks;
+/** Cases intentionally excluded from the L5 execution plan. Keep the pinned
+ * upstream manifest intact so these tasks remain available for provenance and
+ * future policy changes, while preventing them from being collected or run. */
+export const L5_EXCLUDED_CASE_IDS: readonly string[] = Object.freeze(JSON.parse(
+  readFileSync(new URL("./l5-excluded.json", import.meta.url), "utf8"),
+));
+
+export const cases: Array<{ id: string; title: string; files: Array<{ path: string; bytes: number; oid: string; lfs_pointer_bytes?: number }> }> =
+  manifest.tasks.filter((item: { id: string }) => !L5_EXCLUDED_CASE_IDS.includes(item.id));
 
 export const researchTeamReference = {
   id: "science-research-team",

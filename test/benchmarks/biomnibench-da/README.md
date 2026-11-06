@@ -1,8 +1,10 @@
 # BiomniBench-DA L5 gate
 
-L5 (`release`) runs all **50 publicly released tasks** from
+L5 (`release`) runs **45 active tasks** from the 50 publicly released tasks in
 [BiomniBench-DA](https://huggingface.co/datasets/phylobio/BiomniBench-DA), in
-addition to L4. The other 50 upstream tasks are private and are not covered.
+addition to L4. L5 permanently excludes `da-1-3`, `da-1-4`, `da-17-1`,
+`da-17-5` and `da-17-3`; the other 50 upstream tasks are private and are not
+covered.
 The former `da-13-3` and `da-14-1` smoke cases are included in this corpus.
 L1–L4 do not select these paid benchmark tasks.
 
@@ -19,11 +21,11 @@ CI_ALLOW_REAL=1 python test/benchmarks/biomnibench-da/suite.py \
   --data-root /path/to/verified-dataset --python /path/to/benchmark-python
 ```
 
-The driver freezes the release plan, derives exactly the pinned public 50 from
+The driver freezes the release plan, derives exactly the 45 active cases from
 its source identities, and runs one case at a time. AMD64 remains the default
 release target; this driver explicitly selects the actual Linux AMD64 or ARM64
 host using `--target-arch`. Actual measured architecture must match the frozen
-identity. No machine restriction is disabled, and the 50 cases are not doubled.
+identity. No machine restriction is disabled, and the 45 cases are not doubled.
 
 Failures are retained and deferred until every previously unattempted case has
 run. Preparation, process and resource-check failures are recorded per case and
@@ -261,7 +263,7 @@ environment. The quality target is rounded from 67.73 to the agreed 67.7.
 
 | Metric | Temporary baseline | Warning | Block |
 | --- | ---: | ---: | ---: |
-| Mean score over exactly 50 tasks | 67.7 | <=64.7 | <=62.7 |
+| Mean score over exactly 45 active tasks | 67.7 | <=64.7 | <=62.7 |
 | Total tokens | 195,099,712 | >=224,364,669 | >=243,874,640 |
 | Total tool rounds | 2,042 | >=2,655 | >=3,063 |
 | Sum of research minutes | 1,312.753472 | +20% | +30% |
@@ -272,7 +274,7 @@ linear interpolation (Excel PERCENTILE.INC convention). Maximum RSS remains
 visible, but the historical 131.07 GiB outlier is not a normal maximum baseline.
 The implementation compares unrounded values; table count limits round up.
 
-All 50 selected tasks must have valid delivery, evaluation and complete required
+All 45 selected tasks must have valid delivery, evaluation and complete required
 metrics. Missing, duplicate or mismatched results fail, and partial means never
 certify the suite. Only aggregate quality is gated; per-task zero scores remain
 visible without automatically triggering retries. There are no hard per-task
@@ -285,7 +287,7 @@ unknown usage is not replaced by zero. A new evaluation cannot repair unknown
 cost from an earlier request, and required accounting incompleteness still
 blocks the gate. A recovered score and resource completeness are separate facts.
 
-`biomni-gate.json` and `biomni-gate.md` contain all 50 task statuses, delivery and
+`biomni-gate.json` and `biomni-gate.md` contain all 45 active task statuses, delivery and
 evaluation states, available measurements, structured failure codes, aggregate
 values and threshold outcomes. GitHub's real-report step publishes the same
 per-task table in its step summary. Detailed attempt errors stay in diagnostic
