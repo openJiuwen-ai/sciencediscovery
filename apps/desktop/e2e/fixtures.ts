@@ -163,6 +163,11 @@ export interface MockOptions {
   connectError?: string;
   /** Make one write fail, for the "the reason stays on screen" cases. */
   fail?: { method: string; path: string | RegExp; status?: number; message?: string };
+  /** Hold one route's answer until `mock.release()`. For a spec that has to
+   *  look at the screen while a read it is waiting for is still outstanding —
+   *  the write that came before it has already landed, and what the page shows
+   *  in between is the thing under test. */
+  hold?: { method: string; path: string | RegExp };
   /** What `POST /api/mcp/servers/:id/test` answers. The default is a healthy
    *  server; `error` is the provider's own refusal, not an HTTP failure. */
   mcpTest?: "error" | "ok";
@@ -222,6 +227,9 @@ export interface MockState {
 export interface Mock {
   calls: RecordedCall[];
   state: MockState;
+  /** Let the route `hold` is holding answer, so the spec can finish with the
+   *  page's own read-back instead of leaving a request hanging. */
+  release: () => void;
 }
 
 const DEFAULT_MODEL: ModelRecord = {
@@ -322,6 +330,14 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     options.evolveStatus ?? { canInitialize: true, state: "ready" },
   );
 
+  // One gate for the route `hold` names, resolved by the spec through
+  // `release`. Everything else answers immediately.
+  let released = false;
+  let resolveHeld: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    resolveHeld = resolve;
+  });
+
   // Match the API by its path, not by a `**/api/**` glob: that glob also
   // matches Vite's own module URLs (`/src/api/client.ts`), which would make
   // the mock answer the app's source code with a 404.
@@ -334,6 +350,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       const path = decodeURIComponent(url.pathname);
       const body = request.postData() ?? undefined;
       calls.push({ body, method, path });
+
+      if (
+        options.hold !== undefined
+        && !released
+        && options.hold.method === method
+        && (typeof options.hold.path === "string"
+          ? options.hold.path === path
+          : options.hold.path.test(path))
+      ) {
+        await held;
+      }
 
       if (
         options.fail !== undefined
@@ -1018,5 +1045,12 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       return json(route, 404, { error: `not mocked: ${method} ${path}` });
   });
 
-  return { calls, state };
+  return {
+    calls,
+    release: () => {
+      released = true;
+      resolveHeld();
+    },
+    state,
+  };
 }
