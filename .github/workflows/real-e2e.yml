@@ -222,6 +222,9 @@ jobs:
       - name: Stage combined real E2E scores
         if: always()
         run: node .ci/prepare-real-e2e-results.mjs
+      - name: Summarize case execution
+        if: always() && (inputs.profile == 'daily' || inputs.profile == 'release')
+        run: node .ci/case-execution.mjs .ci-real-plan/plan.json .ci-real-results .tmp/real-e2e-results
       - name: Upload combined real E2E results
         if: always()
         uses: actions/upload-artifact@v4
@@ -230,6 +233,16 @@ jobs:
           path: .tmp/real-e2e-results
           include-hidden-files: true
           if-no-files-found: warn
+          retention-days: 7
+      - name: Upload case execution details
+        if: always() && (inputs.profile == 'daily' || inputs.profile == 'release')
+        uses: actions/upload-artifact@v4
+        with:
+          name: case-execution-details.md
+          path: .tmp/real-e2e-results/case-execution-details.md
+          include-hidden-files: true
+          if-no-files-found: warn
+          overwrite: true
           retention-days: 7
       - name: Upload real suite verdict
         if: always()
