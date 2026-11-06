@@ -3,6 +3,7 @@
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { exactSum, sessionUsageTokens } from '../test/helpers/case-measurements.mjs';
 import { realShards } from '../test/support/tagged/execution.mjs';
 import { validatePlan } from '../test/support/tagged/plan.mjs';
 
@@ -22,12 +23,18 @@ const first = (...values) => values.find(value => value !== undefined);
 export function executionMeasurements(doc) {
   const m = doc.measurements, stored = doc.execution_metrics;
   const usage = doc.generation_usage ?? doc.usage;
-  const generator = usage?.totals ?? usage;
+  // A Session usage summary is read call by call: its bucket totals skip
+  // unreported calls, which would publish a partial sum.
+  const session = Array.isArray(usage?.invocations) ? sessionUsageTokens(usage) : undefined;
+  const generator = session ? undefined : usage?.totals ?? usage;
   const judge = doc.judge_usage?.totals ?? doc.judge_usage;
+  // Every recorded judge call must report its total, or there is no total.
+  const calls = doc.evaluation?.judge_calls;
+  const judgeCalls = Array.isArray(calls) ? exactSum(calls.map(call => call?.usage?.total_tokens)) : undefined;
   const values = {
-    generated_tokens: first(count(stored?.generated_tokens), count(m?.generation_output_tokens), count(generator?.outputTokens), count(generator?.completion_tokens)),
-    judge_tokens: first(count(stored?.judge_tokens), count(m?.judge_tokens), count(judge?.totalTokens), count(judge?.total_tokens)),
-    total_tokens: first(count(stored?.total_tokens), count(m?.total_tokens), count(generator?.total_tokens), count(generator?.totalTokens)),
+    generated_tokens: first(count(stored?.generated_tokens), count(m?.generation_output_tokens), session?.generation_output_tokens, count(generator?.outputTokens), count(generator?.completion_tokens)),
+    judge_tokens: first(count(stored?.judge_tokens), count(m?.judge_tokens), count(judge?.totalTokens), count(judge?.total_tokens), judgeCalls),
+    total_tokens: first(count(stored?.total_tokens), count(m?.total_tokens), session?.total_tokens, count(generator?.total_tokens), count(generator?.totalTokens)),
     tool_calls: first(count(stored?.tool_calls), count(m?.tool_calls), count(doc.tool_calls)),
     peak_rss_bytes: first(number(stored?.peak_rss_bytes), number(m?.peak_rss_bytes), number(doc.peak_rss_bytes)),
   };
@@ -59,7 +66,7 @@ function metricDocuments(root) {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
-      else if (entry.isFile() && /^(benchmark|team|evolve)-metrics\.json$/.test(entry.name)) {
+      else if (entry.isFile() && /^(benchmark|team|evolve|case)-metrics\.json$/.test(entry.name)) {
         try {
           const doc = JSON.parse(readFileSync(path, 'utf8'));
           if (doc && typeof doc === 'object' && !Array.isArray(doc)) docs.push(doc);

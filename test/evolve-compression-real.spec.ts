@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { test, requireRealEnv, requireRealStack, allowRealEnvException } from "./helpers/e2e.ts";
+import { measureSession } from "./helpers/case-measurements.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { evolutionScorecard } from "./helpers/evolve-result.mjs";
@@ -198,6 +199,9 @@ test("PUCT-COMPRESS documented text compression search", {
         if (["pending", "running"].includes(search.status)) await page.request.post(`${apiBaseUrl()}/api/evolve/runs/${search.id}/stop`, { headers }).catch(() => {});
       }
       if (runId) await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => {});
+      // Shared numeric measurements join this case's only metrics document.
+      metrics.measurements = await measureSession(page.request, info, fixture.session.id,
+        { evolveRunIds: searches.map(search => search.id) });
     }
     await save("evolve-metrics.json", metrics);
     if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);

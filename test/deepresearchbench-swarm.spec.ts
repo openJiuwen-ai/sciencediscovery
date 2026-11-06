@@ -8,6 +8,7 @@ import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openP
   sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { researchPrompt, drbArticle, drbApi, positiveNumber,
   evaluationConfig, evaluationPreflight, evaluateReport } from "./helpers/deepresearchbench.ts";
+import { measureSession } from "./helpers/case-measurements.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { deliveryFailureMessage, finalReportArtifact } from "./helpers/real-delivery.mjs";
 import { drbSamples } from "./benchmarks/deepresearchbench/samples.ts";
@@ -134,6 +135,8 @@ for (const sample of drbSamples) {
           if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
         }
         metrics.generation_usage = await drbApi(page, `/api/sessions/${fixture.session.id}/usage`).catch(() => null);
+        // Shared numeric measurements join this case's only metrics document.
+        metrics.measurements = await measureSession(page.request, testInfo, fixture.session.id);
         const details = await drbApi<Array<any>>(page, `/api/sessions/${fixture.session.id}/subagents`).catch(() => []);
         await writeFile(testInfo.outputPath("child-trajectories.json"), JSON.stringify(details, null, 2));
         metrics.tool_errors = details.flatMap(c => (c.steps ?? []).filter((s: any) => s.kind === "tool" && s.status === "failed")

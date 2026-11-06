@@ -15,6 +15,7 @@
 import { expect } from "@playwright/test";
 import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 
+import { writeCaseMetrics } from "./helpers/case-measurements.ts";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
 import {
@@ -169,6 +170,7 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
       },
     );
   } finally {
+    await writeCaseMetrics(page.request, testInfo, fixture.session.id);
     await cleanupJourney(page, fixture);
   }
 });
