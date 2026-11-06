@@ -72,6 +72,12 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
   /** Whether a status read has landed. Before it does, the app does not know
    *  whether a list request is even allowed. */
   const statusRead = useRef(false);
+  /** Whether the last list read that succeeded saw an active search. A failed
+   *  read answers nothing about the search itself — a restarted server, a
+   *  proxy hiccup or a dropped request is not a search that ended — so the
+   *  poll keeps the cadence the last *answer* established instead of stopping
+   *  for good with the shelf frozen on a run that is still going. */
+  const lastActive = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -110,6 +116,7 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
   useEffect(() => {
     if (!statusRead.current) return;
     if (sessionId === undefined || !ready) {
+      lastActive.current = false;
       setRuns([]);
       return;
     }
@@ -124,13 +131,21 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
           // An active run is the only reason the list changes on its own. A
           // terminal one waits for an explicit refresh, which the panel sends
           // when the user starts or stops something.
-          if (next.some((run) => isEvolveRunActive(run.status))) {
+          lastActive.current = next.some((run) => isEvolveRunActive(run.status));
+          if (lastActive.current) {
             timer = setTimeout(load, ACTIVE_POLL_MS);
           }
         })
         .catch((reason: unknown) => {
           if (!live) return;
           setError(reason instanceof Error ? reason.message : String(reason));
+          // One failed read used to end the poll: the effect's dependencies do
+          // not change on a rejection, so nothing scheduled another `load` and
+          // a live search's shelf stayed frozen on whatever the last good read
+          // said — including "running" for a search that had finished. The
+          // cadence is the last good read's to set; the failure only decides
+          // whether there was a cadence to keep.
+          if (lastActive.current) timer = setTimeout(load, ACTIVE_POLL_MS);
         });
     };
     load();
