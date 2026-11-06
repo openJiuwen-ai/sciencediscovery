@@ -411,46 +411,77 @@
   letter-spacing: .03em;
 }
 
-/* Expandable technical details for a run failure. Kept inside the notice row
-   so the raw provider diagnostics are available on request without cluttering
-   the transcript. */
-.run-failure-details {
-  padding: 0 14px 10px;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--surface-subtle);
-  color: var(--text-faint);
+/* A single compact card owns both the failure and its supporting evidence. */
+.message.run-failure-row {
+  display: block;
+  margin: 10px 0 20px;
+}
+.run-failure {
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-m);
+  background: var(--warning-soft);
+  color: var(--text-secondary);
+}
+.run-failure-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--warning-strong);
+}
+.run-failure-icon { flex: 0 0 auto; }
+.run-failure-heading h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.run-failure-summary {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.run-failure-details { margin-top: 10px; }
+.run-failure-details summary {
+  width: fit-content;
+  padding: 4px 0;
+  color: var(--warning-strong);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.run-failure-details summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.run-failure-diagnostics {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+.run-failure-code { margin: 0 0 8px; }
+.run-failure-code code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-sunk);
+  font-family: var(--font-mono);
   font-size: 11px;
 }
-
-.run-failure-details summary {
-  padding-top: 8px;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.run-failure-details .run-failure-code {
-  margin: 8px 0 0;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  line-height: 1.5;
-}
-
-.run-failure-details .run-failure-code code {
-  padding: 1px 4px;
-  border-radius: var(--radius-xs);
-  background: var(--surface-sunk);
-}
-
-.run-failure-details pre {
-  margin-top: 8px;
+.run-failure-diagnostics pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
   white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-faint);
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* A short note where a body would go: a truncated answer, or a section with

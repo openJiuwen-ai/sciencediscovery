@@ -17,7 +17,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Markdown } from "../Markdown.js";
 import type { ApiClient } from "../api/client.js";
 import type { ToolDetail } from "../app/tool-io.js";
-import { formatRunFailure } from "../run-failure.js";
+import { RunFailureCard } from "./RunFailureCard.js";
 import { TEXT } from "../text.js";
 import type { AssistantTurn as Turn, PermissionEntry, RunStreamState } from "../run-stream/model.js";
 import { permissionMatchingKey, pendingPermissions } from "../run-stream/permission.js";
@@ -337,44 +337,24 @@ function StopDivider({ reason, word }: { reason?: string; word: string }) {
  *  that stopped without failing gets the divider (cancelled, interrupted), and
  *  anything that went wrong or is worth investigating — an error, dropped
  *  events, a stream that ended without saying — keeps the marked notice row. */
-function RunFailureDetails({ code, message }: { code: string | undefined; message: string }) {
-  return (
-    <div className="run-failure">
-      <div className="status-strip">{formatRunFailure(code)}</div>
-      <details className="run-failure-details">
-        <summary>{TEXT.runFailure.technicalDetails}</summary>
-        {code !== undefined && (
-          <p className="run-failure-code">
-            <code>{code}</code>
-          </p>
-        )}
-        <pre>{message}</pre>
-      </details>
-    </div>
-  );
-}
-
 function RunStatusLine({ run }: { run: RunStreamState }) {
   const lines: ReactNode[] = [];
   if (run.droppedEvents > 0) lines.push(<div className="status-strip" key="dropped">{TEXT.conversation.droppedEvents(run.droppedEvents)}</div>);
   if (run.unknownEvents > 0) lines.push(<div className="status-strip" key="unknown">{TEXT.conversation.unknownEvents(run.unknownEvents)}</div>);
   let stop: { reason?: string; word: string } | undefined;
-  if (run.error) {
-    // Surface a localized, actionable summary to the user and keep the raw
-    // provider diagnostics in an expandable technical-details block.
-    lines.push(<RunFailureDetails key="error" code={run.error.code} message={run.error.message} />);
-  } else if (run.status === "cancelled") {
+  if (!run.error && run.status === "cancelled") {
     const reason = run.cancelledReason !== undefined && !GENERIC_CANCEL_REASONS.has(run.cancelledReason)
       ? run.cancelledReason
       : undefined;
     stop = { reason, word: TEXT.conversation.cancelled };
-  } else if (run.status === "interrupted") {
+  } else if (!run.error && run.status === "interrupted") {
     stop = { word: TEXT.conversation.interrupted };
-  } else if (run.terminal && run.status === undefined) {
+  } else if (!run.error && run.terminal && run.status === undefined) {
     lines.push(<div className="status-strip" key="ended">{TEXT.conversation.streamEnded}</div>);
   }
   return (
     <>
+      {run.error && <RunFailureCard code={run.error.code} message={run.error.message} />}
       {stop === undefined ? null : <StopDivider reason={stop.reason} word={stop.word} />}
       {lines.length === 0 ? null : (
         <div className="message assistant is-notice">

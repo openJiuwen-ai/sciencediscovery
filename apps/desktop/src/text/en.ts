@@ -1261,6 +1261,7 @@ export const EN: Text = {
   },
 
   runFailure: {
+    title: "Run incomplete",
     /** Plain-language cause and recovery action per stable failure class. */
     timeout: "The request timed out. Retry, or split the task / raise the timeout budget.",
     "rate-limited": "The model service is limiting requests. Wait a moment and try again.",
