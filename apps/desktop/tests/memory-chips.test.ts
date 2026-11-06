@@ -48,9 +48,15 @@ describe("the alias index", () => {
 
 describe("the chip URL", () => {
   it("round-trips a kind and an id", () => {
+    const url = graphChipUrl(evidence);
+    assert.equal(url, "graph://evidence/evidence-1");
+    assert.deepEqual(parseGraphChipUrl(url), { id: "evidence-1", kind: "evidence" });
+  });
+
+  it("carries the version a citation pins", () => {
     const url = graphChipUrl(artifact);
-    assert.equal(url, "graph://artifact/artifact-1");
-    assert.deepEqual(parseGraphChipUrl(url), { id: "artifact-1", kind: "artifact" });
+    assert.equal(url, "graph://artifact/artifact-1?v=2");
+    assert.deepEqual(parseGraphChipUrl(url), { id: "artifact-1", kind: "artifact", version: 2 });
   });
 
   it("escapes an id that would otherwise break the URL", () => {
@@ -67,6 +73,22 @@ describe("the chip URL", () => {
     const byUrl = referencesByUrl([evidence, artifact]);
     assert.equal(byUrl.get(graphChipUrl(artifact)), artifact);
     assert.equal(byUrl.get(graphChipUrl(artifact))?.version, 2);
+  });
+
+  it("keeps two versions of one artifact apart", () => {
+    // The same artifact cited twice, at two versions. Both chips name
+    // `artifact-1`; only the URL's version says which document to open.
+    const first: ComposerReference = { id: "artifact-1", kind: "artifact", label: "artifact1", version: 1 };
+    const second: ComposerReference = { id: "artifact-1", kind: "artifact", label: "artifact2", version: 3 };
+    const byUrl = referencesByUrl([first, second]);
+    assert.equal(byUrl.get(graphChipUrl(first)), first);
+    assert.equal(byUrl.get(graphChipUrl(second)), second);
+
+    const nodes = graphChipNodes("First [artifact1], then [artifact2].", buildChipIndex([first, second]));
+    assert.deepEqual(
+      nodes?.filter((node) => node.type === "link").map((node) => node.url),
+      ["graph://artifact/artifact-1?v=1", "graph://artifact/artifact-1?v=3"],
+    );
   });
 });
 
@@ -108,7 +130,7 @@ describe("rewriting a line of prose", () => {
     const nodes = graphChipNodes("[evidence1] then [artifact1]", index);
     assert.deepEqual(
       nodes?.filter((node) => node.type === "link").map((node) => node.url),
-      ["graph://evidence/evidence-1", "graph://artifact/artifact-1"],
+      ["graph://evidence/evidence-1", "graph://artifact/artifact-1?v=2"],
     );
   });
 });

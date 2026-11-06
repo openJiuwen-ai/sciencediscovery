@@ -59,8 +59,13 @@ export function buildChipIndex(references: ComposerReference[] | undefined): Map
   return index;
 }
 
-export function graphChipUrl(reference: Pick<ComposerReference, "id" | "kind">): string {
-  return `graph://${reference.kind}/${encodeURIComponent(reference.id)}`;
+export function graphChipUrl(reference: Pick<ComposerReference, "id" | "kind" | "version">): string {
+  const path = `graph://${reference.kind}/${encodeURIComponent(reference.id)}`;
+  // The pinned version travels with the URL. One report can cite the same
+  // artifact at two versions — `[artifact1]@v1` and `[artifact2]@v3` — and
+  // `referencesByUrl` is keyed by this string, so without the version both
+  // chips would resolve to whichever reference was listed last.
+  return reference.version === undefined ? path : `${path}?v=${reference.version}`;
 }
 
 /** The reverse map the renderer uses: the link node carries only the URL, and
@@ -76,11 +81,15 @@ export function referencesByUrl(
   return byUrl;
 }
 
-export function parseGraphChipUrl(url: string): { id: string; kind: ComposerReferenceKind } | undefined {
-  const match = /^graph:\/\/([^/]+)\/(.+)$/.exec(url);
+export function parseGraphChipUrl(
+  url: string,
+): { id: string; kind: ComposerReferenceKind; version?: number } | undefined {
+  const match = /^graph:\/\/([^/?#]+)\/([^?#]+)(?:\?v=(\d+))?$/.exec(url);
   if (match === null) return undefined;
   try {
-    return { id: decodeURIComponent(match[2]!), kind: match[1] as ComposerReferenceKind };
+    const id = decodeURIComponent(match[2]!);
+    const kind = match[1]! as ComposerReferenceKind;
+    return match[3] === undefined ? { id, kind } : { id, kind, version: Number(match[3]) };
   } catch {
     // A malformed escape is not a chip; the link renderer leaves it alone.
     return undefined;
