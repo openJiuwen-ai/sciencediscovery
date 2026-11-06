@@ -3483,9 +3483,17 @@ export async function createSkillEvolutionRun(
   }, ideaTreeRepository);
 }
 
-export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun> {
+export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun | undefined> {
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
-  const settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  let settingsSnapshot: EffectiveRuntimeSettings;
+  try {
+    settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  } catch (error) {
+    // Keep the inbox unread until the user repairs the model selection. Other
+    // owners must still receive their notices during this tick.
+    if (error instanceof ApiStatusError && error.code === "SESSION_MODEL_UNAVAILABLE") return undefined;
+    throw error;
+  }
   const skillLibraryRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
   return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch),

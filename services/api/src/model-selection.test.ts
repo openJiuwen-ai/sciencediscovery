@@ -21,6 +21,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { SessionStore } from "./store.js";
+import { NotificationDispatcher } from "./notification-dispatch.js";
+import { createNotificationRun } from "./runs/index.js";
+import { SkillLibraryCatalog } from "./skill-library-catalog.js";
 
 function requiredSession(store: SessionStore, id: string) {
   const session = store.getSession(id);
@@ -37,7 +40,7 @@ async function fixture(context: TestContext) {
   const a = await make("A"), b = await make("B"), c = await make("C");
   const project = await state.store.createProject("Model selection");
   const reopen = async () => { state.store.close(); state.store = new SessionStore(root); await state.store.load(); };
-  return { state, a, b, c, project, reopen };
+  return { state, a, b, c, project, reopen, root };
 }
 
 test("deleting a primary model migrates inherited sessions but blocks explicit choices across restart", async context => {
@@ -169,4 +172,60 @@ test("deleting a model keeps historical run snapshots intact", async context => 
   await reopen();
   assert.deepEqual((await state.store.getSessionRun(session.id, run.id))?.settingsSnapshot, run.settingsSnapshot);
   assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+});
+
+
+test("deleted-model notifications do not starve other owners and retry after recovery", async context => {
+  const { state, a, b, project, root } = await fixture(context);
+  const sessions = await Promise.all(["One", "Two"].map(title => state.store.createSession(project.id, title, { modelId: a.id })));
+  for (const session of sessions) state.store.notifications.complete({ sessionId: session.id, agentId: "main" }, "job", "done");
+  const owners = state.store.notifications.pendingOwners();
+  const broken = owners[0]; const healthy = owners[1];
+  assert.ok(broken); assert.ok(healthy);
+  await state.store.updateSession(healthy.sessionId, { modelId: b.id });
+  await state.store.deleteModel(a.id, b.id);
+  const libraries = new SkillLibraryCatalog(root);
+  await libraries.load();
+  const scheduled: string[] = [];
+  const dispatcher = new NotificationDispatcher(state.store,
+    batch => createNotificationRun(state.store, libraries, batch), id => { scheduled.push(id); });
+  await dispatcher.tick();
+  await dispatcher.tick();
+  assert.deepEqual(scheduled, [healthy.sessionId]);
+  assert.equal((await state.store.listSessionRuns(broken.sessionId)).length, 0);
+  assert.equal(state.store.notifications.unread(broken).length, 1);
+  await state.store.updateSession(broken.sessionId, { modelId: b.id });
+  await dispatcher.tick();
+  assert.deepEqual(scheduled, [healthy.sessionId, broken.sessionId]);
+  assert.equal((await state.store.listSessionRuns(broken.sessionId)).length, 1);
+});
+
+
+test("session configuration writes retain deleted choices while rejecting new invalid references", async context => {
+  const { state, a, b, project, reopen } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Configuration", { modelId: a.id, reviewModelId: a.id });
+  await state.store.deleteModel(a.id, b.id);
+  const db = state.store.getConfigurationDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    state.store.applyP1ConfigurationSync(session.id, "skill.select", { enabledSkillLibraryIds: [] }, { kind: "session", id: session.id });
+    state.store.applyP1ConfigurationSync(session.id, "review.configure", { semanticReviewEnabled: false }, { kind: "session", id: session.id });
+    assert.throws(() => state.store.applyP1ConfigurationSync(session.id, "review.configure",
+      { reviewModelId: randomUUID() }, { kind: "session", id: session.id }), /existing model/);
+    assert.throws(() => state.store.applyP1ConfigurationSync(session.id, "thinking.configure",
+      { thinkingMode: "auto" }, { kind: "session", id: session.id }), /MODEL_NOT_SELECTED/);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  const request = state.store.proposeConnectorConfiguration({ sessionId: session.id, runId: "user-request:configuration",
+    connectorId: "uniprot", connectorName: "UniProt", reason: "Needed for this task" });
+  const applied = await state.store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
+  assert.equal(applied.state, "applied");
+  await reopen();
+  const settings = state.store.getSessionSettings(session.id);
+  assert.equal(settings.overrides.modelId, a.id);
+  assert.equal(settings.overrides.reviewModelId, a.id);
+  assert.equal(settings.effective.modelId, undefined);
+  assert.equal(settings.overrides.semanticReviewEnabled, false);
+  assert.deepEqual(settings.overrides.enabledSkillLibraries, []);
+  assert.ok(settings.effective.enabledConnectorIds.includes("uniprot"));
 });
