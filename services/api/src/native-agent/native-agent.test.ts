@@ -877,23 +877,27 @@ test("a terminal turn cut at the output limit fails the run instead of reporting
   // The shape of #953: the model spends the whole per-call budget, the reply is
   // truncated with no tool call, and the run used to end as `completed` with no
   // files and no artifacts. The JiuwenSwarm backend already refuses that.
-  const streamer: ModelTurnStreamer = () => Promise.resolve({
-    assistantMessage: { content: "", role: "assistant" as const },
-    toolCalls: [],
-    truncated: true,
-  });
-  const restore = setModelTurnStreamerForTest(streamer);
-  try {
-    const agent = createNativeAgent(workspace() as NativeAgentOptions);
-    await assert.rejects(agent.execute("write the whole thing in one answer"), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.match(error.message, /unrecovered output limit/);
-      assert.match(error.message, /max_tokens/);
-      assert.match(error.message, /SCIENCE_AGENT_LLM_MAX_TOKENS/);
-      return true;
+  // A turn that got partway through its answer is the same shape: what the run
+  // still needs is the rest of it, and nothing produces that once the loop ends.
+  for (const content of ["", "Here is the first half of the answer"]) {
+    const streamer: ModelTurnStreamer = () => Promise.resolve({
+      assistantMessage: { content, role: "assistant" as const },
+      toolCalls: [],
+      truncated: true,
     });
-  } finally {
-    restore();
+    const restore = setModelTurnStreamerForTest(streamer);
+    try {
+      const agent = createNativeAgent(workspace() as NativeAgentOptions);
+      await assert.rejects(agent.execute("write the whole thing in one answer"), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /unrecovered output limit/);
+        assert.match(error.message, /max_tokens/);
+        assert.match(error.message, /SCIENCE_AGENT_LLM_MAX_TOKENS/);
+        return true;
+      });
+    } finally {
+      restore();
+    }
   }
 });
 
