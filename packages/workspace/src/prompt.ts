@@ -119,6 +119,8 @@ SUBAGENT PROMPTS:
 }
 
 export interface RuntimeSkill {
+  /** Library references can be imported on first use even with Desktop's explicit catalog switches. */
+  importOnRun?: boolean;
   content: string;
   description: string;
   hash: string;

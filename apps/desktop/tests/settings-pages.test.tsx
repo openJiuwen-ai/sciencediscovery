@@ -30,7 +30,7 @@ import type {
   Specialist,
 } from "../src/api/types.js";
 import type { WorkspaceActions, WorkspaceState } from "../src/app/use-workspace.js";
-import { TEXT } from "../src/text.js";
+import { getLanguage, setLanguage, TEXT } from "../src/text.js";
 import { writeSettingsCache } from "../src/app/settings-cache.js";
 import { StubClient } from "./api-stub.js";
 import { GeneralSettings } from "../src/views/settings/GeneralSettings.js";
@@ -582,6 +582,8 @@ describe("the skill card", () => {
     const sourceClient = new StubClient().asClient();
     writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
       enabled: [],
+      native: false,
+      switchesAvailable: true,
       skills: [skill({ id: "sd-review", source: "built-in" }), skill({ id: "custom-review" })],
       jiuwenSwarmSkills: [{ name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" }],
     });
@@ -591,8 +593,25 @@ describe("the skill card", () => {
     for (const label of ["SD 内置", "JiuwenSwarm 内置", "自建"]) {
       assert.ok(markup.includes(label), `The collapsed list does not identify ${label}`);
     }
-    assert.ok(markup.includes("这里的开关控制 ScienceDiscovery 中技能的全局启用状态，对所有任务生效。"));
+    assert.ok(markup.includes(TEXT.settings.skills.scope));
     assert.ok(!markup.includes("settings-detail-heading"), "Sources must be visible before opening instructions");
+  });
+
+  it("reads source badges in the current language after the module was loaded", () => {
+    const previous = getLanguage();
+    const sourceClient = new StubClient().asClient();
+    writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
+      enabled: [], native: false, switchesAvailable: true, jiuwenSwarmSkills: [],
+      skills: [skill({ source: "built-in" }), skill({ id: "custom" })],
+    });
+    try {
+      for (const language of ["en", "zh-CN"] as const) {
+        setLanguage(language);
+        const markup = renderToStaticMarkup(<SkillsSettings adding={false} client={sourceClient} onAddingChange={noConfirm} />);
+        assert.ok(markup.includes(TEXT.settings.skills.source.builtIn));
+        assert.ok(markup.includes(TEXT.settings.skills.source.managed));
+      }
+    } finally { setLanguage(previous); }
   });
 
   it("names the revision a skill was installed at instead of the server's label", () => {
@@ -601,7 +620,7 @@ describe("the skill card", () => {
     const meta = skillMeta(skill());
     assert.ok(meta.includes("第 1 版"), `the revision is not spelled out: ${meta}`);
     assert.ok(!meta.includes("vrevision"), "the server's revision label is being read as a version");
-    assert.ok(meta.includes(TEXT.settings.skills.source.managed), "the card does not say where the skill came from");
+    assert.ok(!meta.includes(TEXT.settings.skills.source.managed), "the source is already in the badge");
   });
 
   it("reads a declared version as a version", () => {
@@ -625,7 +644,7 @@ describe("the skill card", () => {
       skillMeta(withScript).includes(TEXT.workspace.filesCount(4)),
       "the resources do not count alongside SKILL.md",
     );
-    assert.ok(skillMeta(skill({ source: "built-in" })).includes(TEXT.settings.skills.source.builtIn));
+
   });
 });
 

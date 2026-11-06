@@ -636,7 +636,7 @@ export const ZH = {
       noProject: "还没有可用的项目，无法读取技能选择。",
       off: "已停用",
       on: "已启用",
-      scope: "这里的开关控制 ScienceDiscovery 中技能的全局启用状态，对所有任务生效。",
+      scope: "这里的开关控制 JiuwenSwarm 的全局技能状态，适用于使用其技能机制的新任务。ScienceDiscovery 技能包在首次启用时导入。",
       toggle: (name: string) => `启用或停用「${name}」`,
       add: "新增技能",
       create: "创建",

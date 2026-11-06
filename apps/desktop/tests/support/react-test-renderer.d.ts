@@ -23,6 +23,8 @@ declare module "react-test-renderer" {
   export interface ReactTestInstance {
     children: Array<ReactTestInstance | string>;
     findAllByType(type: string): ReactTestInstance[];
+    findAllByProps(props: Record<string, unknown>): ReactTestInstance[];
+    findByType(type: unknown): ReactTestInstance;
     findByProps(props: Record<string, unknown>): ReactTestInstance;
     props: Record<string, unknown>;
     type: string;

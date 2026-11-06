@@ -610,7 +610,7 @@ export const EN: Text = {
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
-      scope: "These switches control the global enabled state of skills in ScienceDiscovery. They apply to every task.",
+      scope: "These switches control JiuwenSwarm’s global skill state for new tasks using its skill mechanism. ScienceDiscovery packages are imported on first enable.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       add: "Add skill",
       create: "Create",
