@@ -264,6 +264,9 @@ export class ToolOutputGuard {
    * Fit the final model message after adding trust boundaries and framework
    * guidance. Only the untrusted body is cut; complete opening/closing markers
    * and framework text survive. The verbatim stored output is never rewritten.
+   * The cut keeps the same end of the output as `applyDetailed` would for
+   * `toolName` (the tail for execution tools, where the exit status and
+   * traceback live), so the two truncation paths never disagree.
    */
   fitModelContent(input: {
     body: string;
@@ -271,11 +274,13 @@ export class ToolOutputGuard {
     frameworkSuffix?: string;
     outputRecord?: ToolOutputRecord;
     selfBounded?: boolean;
+    toolName?: string;
     wrap?(body: string): string;
   }): string {
     const tolerance = input.selfBounded ? SELF_BOUNDED_TOLERANCE : 1;
     const maxBytes = this.maxBytes * tolerance;
     const maxLines = this.maxLines * tolerance;
+    const keep = input.toolName !== undefined && this.keepTailTools.has(input.toolName) ? "tail" : "head";
     const originalPrefix = input.frameworkPrefix ?? "";
     const suffix = input.frameworkSuffix ?? "";
     const wrap = input.wrap ?? ((body: string) => body);
@@ -299,7 +304,7 @@ export class ToolOutputGuard {
     if (byteBudget > 0) {
       for (let attempt = 0; attempt <= maxLines + 1; attempt += 1) {
         const bounded = boundText(input.body, {
-          keep: "head",
+          keep,
           maxBytes: byteBudget,
           maxLines: Math.max(1, lineBudget),
         });

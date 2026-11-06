@@ -202,15 +202,25 @@ def _fence_native_history(messages: list[dict[str, Any]], route: LlmRoute) -> li
         raw_name = message.get("name")
         if message.get("role") == "tool" and not isinstance(raw_name, str):
             mapped = call_names.get(message.get("tool_call_id"))
-            raw_name = mapped if isinstance(mapped, str) else None
+            raw_name = mapped if isinstance(mapped, str) else ""
+        # A tool message whose producer cannot be identified (no name, no
+        # matching assistant call) is unattributable output in model-visible
+        # history. Fence it as remote rather than passing it through unfenced.
+        unidentified_remote = message.get("role") == "tool" and not raw_name
         platform_result = message.get("role") == "tool" and isinstance(raw_name, str) and _is_ours(raw_name, route)
-        if message.get("role") == "tool" and not platform_result and isinstance(raw_name, str):
+        if message.get("role") == "tool" and not platform_result and raw_name:
             content = message.get("content")
             if isinstance(content, str):
                 message["content"] = _fence_native_result(raw_name, content, route.untrusted_fence_nonce)
             elif content is not None:
                 message["content"] = _fence_native_result(
                     raw_name, json.dumps(content, ensure_ascii=False), route.untrusted_fence_nonce)
+        if unidentified_remote:
+            content = message.get("content")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            safe = _FENCE_SHAPED_PATTERN.sub("[UNTRUSTED fence marker neutralized]", _neutralize_untrusted_tags(text))
+            nonce = route.untrusted_fence_nonce
+            message["content"] = f"[BEGIN UNTRUSTED remote #{nonce}]\n{safe}\n[END UNTRUSTED #{nonce}]"
         out.append(message)
     return out
 

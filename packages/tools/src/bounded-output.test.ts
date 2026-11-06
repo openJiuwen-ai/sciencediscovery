@@ -205,6 +205,25 @@ test("the small-envelope fallback retains the original readback ref", () => {
   assert.ok(!result.includes("guidance above"));
 });
 
+test("fitModelContent keeps the tail for tail-preview tools, matching applyDetailed", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 320, maxLines: 12 });
+  const body = `${"import header noise\n".repeat(20)}Traceback: boom`;
+  const result = guard.fitModelContent({
+    body,
+    toolName: "run_python",
+    wrap: (untrusted) => `[BEGIN UNTRUSTED document #tailnonce]\n${untrusted}\n[END UNTRUSTED #tailnonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 320);
+  assert.ok(result.includes("Traceback: boom"), "the failure the model needs survives the second cut");
+  const headKept = guard.fitModelContent({
+    body,
+    toolName: "read_file",
+    wrap: (untrusted) => `[BEGIN UNTRUSTED document #tailnonce]\n${untrusted}\n[END UNTRUSTED #tailnonce]`,
+  });
+  assert.ok(Buffer.byteLength(headKept, "utf8") <= 320);
+  assert.ok(!headKept.includes("Traceback: boom"), "head-preview tools keep the head, as before");
+});
+
 test("a budget smaller than the trust envelope fails closed without untrusted bytes", () => {
   const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 40, maxLines: 2 });
   const result = guard.fitModelContent({

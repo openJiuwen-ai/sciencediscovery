@@ -113,6 +113,20 @@ function historicalResultIsError(content: string): boolean {
   ));
 }
 
+/**
+ * Producers whose fenced results reach stored Swarm history WITHOUT framework
+ * metadata (their fences are written by the event translator / the adapter's
+ * native-history rewrite, not by the registry). Only these may be unwrapped
+ * through the unauthenticated content-anchored path; every platform/registry
+ * tool message carries `untrusted_*` metadata and must authenticate. Keep in
+ * sync with `JIUWENSWARM_NATIVE_*_RESULTS` (jiuwenswarm-agent.ts) and
+ * `_NATIVE_*_RESULTS` (adapter llm_proxy.py).
+ */
+const LEGACY_FENCED_PRODUCERS = new Set([
+  "free_search", "paid_search", "fetch_webpage",
+  "subagent_spawn", "subagent_wait", "task_tool", "subagent_send_input", "subagent_resume",
+]);
+
 /** Recover raw payloads from genuine registry fences, never from look-alikes in tool text. */
 const LEGACY_OUTER_FENCE_PATTERN = /^\[BEGIN UNTRUSTED ([a-z-]+) #([0-9a-f]+)\]\n([\s\S]*)\n\[END UNTRUSTED #\2\][\s\S]*$/;
 const AFFIXED_OUTER_FENCE_PATTERN = /^[\s\S]*?\[BEGIN UNTRUSTED ([a-z-]+) #([0-9a-f]+)\]\n([\s\S]*)\n\[END UNTRUSTED #\2\][\s\S]*$/;
@@ -120,8 +134,10 @@ const AFFIXED_OUTER_FENCE_PATTERN = /^[\s\S]*?\[BEGIN UNTRUSTED ([a-z-]+) #([0-9
 function stripOuterFence(
   content: string,
   metadata: Record<string, unknown>,
+  producerName: string,
 ): { content: string; untrustedCategory?: string } {
   const authenticated = metadata.untrusted_fenced === true;
+  if (!authenticated && !LEGACY_FENCED_PRODUCERS.has(producerName)) return { content };
   const match = (authenticated ? AFFIXED_OUTER_FENCE_PATTERN : LEGACY_OUTER_FENCE_PATTERN).exec(content);
   if (!match) return { content };
   if (authenticated && (metadata.untrusted_category !== match[1] || metadata.untrusted_nonce !== match[2])) {
@@ -263,7 +279,7 @@ export class DurableContextStore {
       const call = callId ? pending.get(callId) : undefined;
       if (!call) continue;
       const metadata = isRecord(message.additional_kwargs) ? message.additional_kwargs : {};
-      const historical = stripOuterFence(messageString(message, "content") ?? "", metadata);
+      const historical = stripOuterFence(messageString(message, "content") ?? "", metadata, call.name);
       this.observe(call, {
         content: historical.content,
         frameworkGenerated: metadata.framework_generated === true,

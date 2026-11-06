@@ -476,6 +476,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         frameworkSuffix,
         ...(outputRecord ? { outputRecord } : {}),
         selfBounded,
+        toolName: call.name,
         wrap,
       }) ?? `${frameworkPrefix}${wrap(body)}${frameworkSuffix}`;
     }
