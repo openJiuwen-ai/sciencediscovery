@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { realModelApiVariant, realModelThinking } from "./helpers/real-model-thinking.ts";
 import { expect, type Page } from "@playwright/test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -102,11 +103,12 @@ async function setupSession(page: Page, options: { alwaysAllow?: boolean } = {})
       model: process.env.E2E_LLM_MODEL,
       name: `E2E inline-cards ${Date.now()}`,
       vision: false,
+      apiVariant: realModelApiVariant(), ...realModelThinking(),
     }),
   });
   const project = await api("/api/projects", { method: "POST", body: JSON.stringify({ name: `E2E inline cards ${Date.now()}` }) });
   const session = await api(`/api/projects/${project.id}/sessions`, { method: "POST", body: JSON.stringify({ title: "Inline cards" }) });
-  await api(`/api/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ modelId: model.id }) });
+  await api(`/api/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ modelId: model.id, ...realModelThinking() }) });
   if (options.alwaysAllow) {
     // Approval mode moves in a dedicated request; it cannot ride the model PATCH.
     await api(`/api/sessions/${session.id}`, { method: "PATCH", body: JSON.stringify({ approvalMode: "always_allow" }) });

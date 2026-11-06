@@ -360,6 +360,7 @@ test("an Idea Tree stage's effort is narrowed to the model's stops, and ignored 
   const models: Record<string, unknown> = {
     // Kimi K3 accepts low, high and max.
     kimi: { ...MODEL, apiProtocol: "openai-chat-completions", apiVariant: "kimi-k3", id: "kimi" },
+    deepseek: { ...MODEL, apiProtocol: "openai-chat-completions", apiVariant: "deepseek", model: "deepseek-flash", id: "deepseek" },
     plain: { ...MODEL, apiProtocol: "openai-chat-completions", apiVariant: "openai", id: "plain" },
   };
   const store = {
@@ -386,6 +387,8 @@ test("an Idea Tree stage's effort is narrowed to the model's stops, and ignored 
   assert.equal(seen.at(-1)?.reasoning_effort, "max");
   assert.equal((await ask("kimi", { reasoning_effort: "medium" })).status, 200);
   assert.equal(seen.at(-1)?.reasoning_effort, "high");
+  assert.equal((await ask("deepseek", { reasoning_effort: "low" })).status, 200);
+  assert.equal(seen.at(-1)?.reasoning_effort, "low");
   // A stage with no effort of its own keeps the profile's thinking: nothing added.
   assert.equal((await ask("kimi", {})).status, 200);
   assert.equal("reasoning_effort" in (seen.at(-1) ?? {}), false);
@@ -434,4 +437,23 @@ test('provider errors preserve original status and bounded redacted causes for p
     else assert.match(body.error, /original|null/);
     assert.equal(recorded.length, 0, 'Failed requests do not manufacture reported usage or zero cost');
   }
+});
+
+test("PUCT enabled mutation preserves the registered DeepSeek low effort and 96K cap", async () => {
+  const tokens = new RunTokenRegistry();
+  const model = { ...MODEL, model: "deepseek-flash", apiVariant: "deepseek", thinkingMode: "enabled", thinkingEffort: "low" };
+  const { store } = fakeStore({ model });
+  const seen: Array<Record<string, unknown>> = [];
+  const { origin } = await mount({ store, tokens, fetchImpl: (async (_url: string, init: RequestInit) => {
+    seen.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "candidate" } }] }));
+  }) as never });
+  const response = await fetch(`${origin}/internal/evolve-llm/run-1/v1/chat/completions`, {
+    method: "POST", headers: { authorization: `Bearer ${tokens.issue("run-1", "s1", "model-1")}`, "content-type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "user", content: "mutate" }], thinking: { type: "enabled" }, max_tokens: 96_000 }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen[0]?.thinking, { type: "enabled" });
+  assert.equal(seen[0]?.reasoning_effort, "low");
+  assert.equal(seen[0]?.max_tokens, 96_000);
 });

@@ -26,14 +26,17 @@ be able to read the token for its own run. Passing credentials per call is the
 whole point, so the request is built here.
 
 What *is* reused rather than rebuilt: `agentdescent.agents.Usage` counts the
-tokens (see `_Usage` in `puct_engine.py`), and `with_retries` wraps this.
+tokens (see `_Usage` in `puct_engine.py`). Transport retries live here so
+they share the call's timeout, cancellation and per-call accounting.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -73,6 +76,7 @@ def completion_for(
     temperature: Optional[float] = None,
     thinking: Optional[str] = None,
     timeout: float = 300.0,
+    max_retries: int = 2,
     on_usage: Optional[Callable[[CompletionUsage], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Callable[[str], str]:
@@ -121,6 +125,8 @@ def completion_for(
     """
     if not endpoint or not token:
         raise CompletionUnavailable("this run was not given model access")
+    if type(max_retries) is not int or not 0 <= max_retries <= 2:
+        raise ValueError("max_retries must be an integer between 0 and 2")
 
     def complete(
         prompt: str,
@@ -176,29 +182,42 @@ def completion_for(
             headers={"authorization": f"Bearer {token}", "content-type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", "replace")[:300]
-            # Returned rather than raised: a failed model call is a failed
-            # expansion, and the node is appended either way. Losing the run
-            # because one call failed would throw away everything before it.
-            #
-            # The reason is *recorded* rather than dropped, though. A call that
-            # never came back and a model that answered with nothing are the
-            # same empty string here and need opposite fixes — one is the
-            # provider, one is the prompt or the token ceiling — and reporting
-            # both as "the model returned an empty reply" sends the user to read
-            # output that was
-            # never produced.
-            log.warning("completion failed: HTTP %s %s", error.code, detail)
-            failures.append(f"HTTP {error.code}：{detail}")
-            return ""
-        except Exception as error:  # noqa: BLE001 - network, timeouts, malformed JSON
-            log.warning("completion failed: %s", error)
-            failures.append(str(error) or error.__class__.__name__)
-            return ""
+        deadline = time.monotonic() + timeout
+        for attempt in range(max_retries + 1):
+            if should_stop is not None and should_stop():
+                return ""
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failures.append("completion transport retry deadline exceeded")
+                return ""
+            try:
+                with urllib.request.urlopen(request, timeout=remaining) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as error:
+                try:
+                    detail = error.read(300).decode("utf-8", "replace")
+                finally:
+                    error.close()
+                reason = f"HTTP {error.code}：{detail}"
+                retryable = error.code == 429 or 500 <= error.code < 600
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
+                reason = str(error) or error.__class__.__name__
+                retryable = True
+            except Exception as error:  # malformed JSON and other permanent failures
+                reason = str(error) or error.__class__.__name__
+                retryable = False
+            if not retryable or attempt == max_retries:
+                log.warning("completion failed after %s attempt(s): %s", attempt + 1, reason)
+                failures.append(reason)
+                return ""
+            log.warning("completion transport retry %s/%s: %s", attempt + 1, max_retries, reason)
+            # Backoff is interruptible, including inside an abandoned daemon call.
+            wake_at = min(deadline, time.monotonic() + 0.5 * 2**attempt)
+            while time.monotonic() < wake_at:
+                if should_stop is not None and should_stop():
+                    return ""
+                time.sleep(min(0.1, max(0, wake_at - time.monotonic())))
         if report is not None:
             usage = body.get("usage") if isinstance(body, dict) else None
             usage = usage if isinstance(usage, dict) else {}

@@ -214,7 +214,7 @@ parallel distribution jobs. Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.
 
-L3, L4 and L5 reuse the existing **nightly-ci-ds** Environment, with **no required
+L3, L4 and L5 reuse the existing **nightly-research** Environment, with **no required
 reviewers and no final approval job**, as agreed in
 [issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):
 
@@ -318,6 +318,25 @@ below. Rebuilding a merge group repeats its model calls.
 Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
 call counts, not timeout ceilings, determine money spent.
+
+The shared real E2E and manual validation workflows default to the configured
+API variant (`deepseek`), thinking `enabled`, and `low` effort for L4 and
+BiomniBench generators and the Biomni judge. GitHub environment variables can
+override the variant and thinking settings. The current gateway can return
+reasoning even when asked to disable it; `low` requests its lowest effort
+without claiming that reasoning is disabled. Both the generator profile and
+session carry this setting so background PUCT mutations inherit the same
+effort. Biomni records the requested and persisted generator settings and the
+judge request settings in its evidence. The run snapshot assertion accounts
+for variants that do not support thinking controls.
+
+Mutation transport failures (429, 5xx including 524, and connection errors)
+retry at most twice within the original call timeout; malformed or empty
+answers do not retry. Interrupted Agent streams can retry within the existing
+shared request retry budget only before any answer text or tool call is
+emitted. These retries repeat one model request, not the research task.
+Reasoning from an interrupted attempt is buffered and discarded; the caller
+only receives reasoning from the attempt that completes or emits an answer.
 
 `prepare-real-research.sh` runs only for research workers. Biomni workers
 prepare one task selected by the frozen plan, at dataset revision

@@ -33,7 +33,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: nightly-ci-ds
+    environment: nightly-research
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       max-parallel: ${{ steps.concurrency.outputs.max-parallel }}
@@ -108,7 +108,7 @@ jobs:
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
-    environment: nightly-ci-ds
+    environment: nightly-research
     env:
       CI_ALLOW_REAL: "1"
       CI_PROFILE: ${{ inputs.profile }}
@@ -127,6 +127,13 @@ jobs:
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
+      # This gateway still reasons when disabled; request its low effort explicitly.
+      # Generator sessions, background mutations and the Biomni judge use the same policy.
+      E2E_LLM_API_VARIANT: ${{ vars.E2E_LLM_API_VARIANT || 'deepseek' }}
+      E2E_LLM_THINKING_MODE: ${{ vars.E2E_LLM_THINKING_MODE || 'enabled' }}
+      E2E_LLM_THINKING_EFFORT: ${{ vars.E2E_LLM_THINKING_EFFORT || 'low' }}
+      BIOMNI_JUDGE_THINKING_MODE: ${{ vars.BIOMNI_JUDGE_THINKING_MODE || 'enabled' }}
+      BIOMNI_JUDGE_THINKING_EFFORT: ${{ vars.BIOMNI_JUDGE_THINKING_EFFORT || 'low' }}
       E2E_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
       E2E_JUDGE_TOKEN: ${{ secrets.E2E_JUDGE_TOKEN }}
@@ -141,7 +148,7 @@ jobs:
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"
       # RACE and FACT share this deadline. Forty minutes lets citation checking finish.
       E2E_DRB_EVAL_TIMEOUT_MS: "2400000"
-      E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
+      E2E_TEAM_RUN_TIMEOUT_MS: "3600000"
       E2E_BIOMNI_RUN_TIMEOUT_MS: ${{ vars.E2E_BIOMNI_RUN_TIMEOUT_MS || '10800000' }}
       LLM_BACKEND: openai
       OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}

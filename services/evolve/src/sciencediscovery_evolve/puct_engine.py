@@ -1141,12 +1141,9 @@ def _default_completion(
 ) -> Callable[..., str]:
     """The mutation call, built once per run.
 
-    Not wrapped in `agentdescent.agents.with_retries`: that helper retries a
-    `prompt -> str` callable, and this one takes a per-call usage sink as a
-    second argument. Retrying here would also fight the stop path — a run being
-    wound down would sit through three attempts of a call whose answer is
-    already being discarded. The engine's own handling is the retry: a failed
-    call is a failed candidate, the node is appended, and the search continues.
+    Transport retries are bounded inside `completion_for`, sharing its deadline
+    and stop callback. Exhausted failures still become failed candidates; empty
+    or invalid code is never retried as though it were a connection failure.
     """
     return completion_for(
         spec.llm_url, spec.llm_token,

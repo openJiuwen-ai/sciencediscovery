@@ -1038,3 +1038,79 @@ test("OpenAI usage aliases with zero placeholders do not erase reported token co
     { inputTokens: 15, outputTokens: 64, reasoningTokens: null, totalTokens: 79, cacheReadTokens: null, cacheWriteTokens: null,
       aliasConflict: { prompt_tokens: 15, completion_tokens: 64, input_tokens: 0, output_tokens: 0 } });
 });
+
+// A real socket reset after SSE data reproduces research-4's failure boundary.
+for (const partial of ["reasoning", "text", "tool"] as const) {
+  test(`mid-stream reset after ${partial} only retries before an answer or tool is emitted`, async () => {
+    let attempts = 0;
+    const bodies: string[] = [];
+    await withServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      bodies.push(body);
+      attempts++;
+      if (attempts > 1) {
+        sse(response, [{ choices: [{ delta: { content: "recovered" }, finish_reason: "stop" }] }]);
+        return;
+      }
+      const delta = partial === "reasoning" ? { reasoning_content: "interrupted thought" }
+        : partial === "text" ? { content: "partial answer" }
+        : { tool_calls: [{ index: 0, id: "call1", function: { name: "write_file", arguments: "{" } }] };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
+      setTimeout(() => response.destroy(), 30);
+    }, async baseUrl => {
+      const seen: ModelWireDiagnostics[] = [];
+      const thinkingDeltas: string[] = [];
+      const run = streamModelTurn({ baseUrl, model: "stub", apiVariant: "deepseek", proxy: { mode: "direct" } },
+        "system", [{ role: "user", content: "keep this context" }], [], policy, new AbortController().signal,
+        { onWireDiagnostics: d => seen.push(d), onThinkingDelta: delta => thinkingDeltas.push(delta) });
+      if (partial === "reasoning") {
+        const turn = await run;
+        assert.equal(turn.assistantMessage.content, "recovered");
+        assert.equal(turn.assistantMessage.reasoning_content, undefined, "discard interrupted reasoning from replay history");
+        assert.equal(attempts, 2);
+        assert.equal(bodies[0], bodies[1], "retry only this model call with the same history");
+        assert.deepEqual(seen[0]?.retryErrors, ["network"]);
+        assert.deepEqual(thinkingDeltas, [], "discard reasoning from the interrupted attempt");
+      } else {
+        await assert.rejects(run);
+        assert.equal(attempts, 1, "never replay partially emitted answers or tool calls");
+      }
+      assert.equal(seen.length, 1);
+    });
+  });
+}
+
+test("HTTP and reasoning-stream retries share one attempt budget", async () => {
+  let attempts = 0;
+  await withServer((_request, response) => {
+    attempts++;
+    if (attempts === 1) { response.writeHead(503, { "retry-after": "0" }).end("retry"); return; }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "thinking" } }] })}\n\n`);
+    setTimeout(() => response.destroy(), 30);
+  }, async baseUrl => {
+    const error = await streamModelTurn({ baseUrl, model: "stub", proxy: { mode: "direct" } }, "s", [], [],
+      { ...policy, maxRetries: 2 }, new AbortController().signal).catch(e => e);
+    assert.ok(error instanceof Error);
+    assert.equal(attempts, 3);
+    assert.deepEqual(modelWireDiagnosticsOf(error)?.retryErrors, ["provider_http", "network"]);
+  });
+});
+
+test("abort during reasoning-stream backoff prevents another request", async () => {
+  let attempts = 0;
+  const controller = new AbortController();
+  await withServer((_request, response) => {
+    attempts++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "thinking" } }] })}\n\n`);
+    setTimeout(() => response.destroy(), 30);
+    setTimeout(() => controller.abort(), 100);
+  }, async baseUrl => {
+    await assert.rejects(streamModelTurn({ baseUrl, model: "stub", proxy: { mode: "direct" } }, "s", [], [],
+      policy, controller.signal));
+    assert.equal(attempts, 1);
+  });
+});
