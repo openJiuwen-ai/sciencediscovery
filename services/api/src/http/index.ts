@@ -18,6 +18,7 @@ import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { createResearchSnapshots } from "../research-snapshots.js";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
+import { prepareSkillSandbox } from "../skill-sandbox.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
@@ -26,13 +27,14 @@ import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin
 import { createResearchPackageAsync, type ImportedResearchPackage } from "@sciencediscovery/research-package";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { sessionTrajectory } from "../trajectory.js";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
-import { listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
+import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
 import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-settings.js";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
 type ResearchPackageInspectionCacheEntry = { projectId: string; bytes: Buffer; imported: ImportedResearchPackage; expiresAt: number };
@@ -1638,6 +1640,57 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
         }
         sendJson(response, 200, { enabled: body.enabled, name });
+        return;
+      }
+      const jiuwenSwarmSkillByIdMatch = url.pathname.match(/^\/api\/jiuwenswarm\/skills-by-id\/([^/]+)$/);
+      if (jiuwenSwarmSkillByIdMatch && request.method === "PUT") {
+        if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
+        const body = await readJson<{ enabled?: unknown }>(request);
+        if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
+        const skillId = decodeURIComponent(jiuwenSwarmSkillByIdMatch[1]!);
+        let snapshot: RuntimeSkillSnapshot;
+        try {
+          snapshot = skillCatalog.resolve([skillId])[0]!;
+        } catch (error) {
+          throw new ApiStatusError(404, error instanceof Error ? error.message : String(error));
+        }
+        let existingName: string | undefined;
+        try {
+          for (const skill of await listJiuwenSwarmSkills(jiuwenSwarm)) {
+            if (skill.skillId === skillId) {
+              existingName = skill.name;
+              break;
+            }
+          }
+        } catch (error) {
+          throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
+        }
+        if (existingName) {
+          try {
+            await setJiuwenSwarmSkillEnabled(jiuwenSwarm, existingName, body.enabled);
+          } catch (error) {
+            throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
+          }
+          sendJson(response, 200, { enabled: body.enabled, name: existingName, skillId });
+          return;
+        }
+        if (!body.enabled) {
+          sendJson(response, 200, { enabled: false, name: null, skillId });
+          return;
+        }
+        const tempRoot = join(tmpdir(), randomUUID());
+        try {
+          await prepareSkillSandbox(tempRoot, tempRoot, [snapshot]);
+          const imported = await importSkillsToJiuwenSwarm(jiuwenSwarm, [{ hash: snapshot.hash, id: snapshot.id }], tempRoot);
+          const name = imported.get(snapshot.id);
+          if (!name) throw new ApiStatusError(502, "JiuwenSwarm did not import the skill");
+          await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, true);
+          sendJson(response, 200, { enabled: true, name, skillId });
+        } catch (error) {
+          throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
+        } finally {
+          await rm(tempRoot, { force: true, recursive: true });
+        }
         return;
       }
       if (url.pathname === "/api/memory/settings" && request.method === "GET") {
