@@ -41,10 +41,9 @@ import {
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
-  isEvolveCommand,
   isEvolveSkill,
 } from "./evolve/command.js";
-import { designAnchorAfterSending, useAutoContinue } from "./evolve/use-auto-continue.js";
+import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
 import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
 import { mergedSubagentSteps } from "./run-stream/subagent.js";
@@ -508,10 +507,6 @@ export function App({ initialToken }: Props) {
       });
       return;
     }
-    // A design starts here, not when the server has stored the command: the
-    // turn it starts can end on an auto card before that, and the anchor the
-    // carry-forward watermark compares must already be this design's.
-    setDesign((previous) => designAnchorAfterSending(previous, content));
     void actions.send(content);
   };
 
@@ -533,31 +528,22 @@ export function App({ initialToken }: Props) {
     reply: (text) => latestSend.current(text),
   }), [state.running]);
 
-  /** The design the auto-continue belongs to, as `startedDesign` names it.
-   *  It is set the moment a `/evolve-design` leaves this window, which is
-   *  before the server has persisted the command — a design's first turn can
-   *  end on an auto card while its command is still pending, and an anchor
-   *  read only from the transcript would still be the previous design's. */
-  const [design, setDesign] = useState<string | undefined>();
-
-  /** The same answer for a design this window did not start: the id of the
-   *  last user-authored `/evolve-design` in the transcript. It stays the same
-   *  for the whole design — the messages the client sends to carry it are not
-   *  commands — and the next design gets a different one. */
-  const designCommand = useMemo(() => {
-    const messages = state.detail?.messages ?? [];
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]!;
-      if (message.role === "user" && isEvolveCommand(message.content)) return message.id;
-    }
-    return undefined;
-  }, [state.detail?.messages]);
+  /** The design the auto-continue belongs to, read from the Session itself:
+   *  its design commands, plus the one being sent (the transcript is written
+   *  when the turn settles, so a design's first ending would otherwise be
+   *  keyed against the previous design's number). Derived rather than
+   *  remembered here, so it cannot outlive the Session or disagree with a
+   *  design another client started in it. */
+  const design = useMemo(
+    () => designAnchor(state.detail?.messages ?? [], state.pendingMessage?.content),
+    [state.detail?.messages, state.pendingMessage?.content],
+  );
 
   // A no-confirm design that ends its turn on an auto card is carried forward
   // here — the model cannot start the next turn by itself, and the card offers
   // nothing to press. See the hook for what it refuses to act on.
   useAutoContinue({
-    design: design ?? designCommand,
+    design,
     running: state.running,
     run: state.run,
     send: (text) => latestSend.current(text),
@@ -863,7 +849,6 @@ export function App({ initialToken }: Props) {
           onInitialize={() => void evolve.initialize()}
           onSend={(command) => {
             closeEvolveCreate();
-            setDesign((previous) => designAnchorAfterSending(previous, command));
             void actions.send(command);
           }}
           running={state.running}

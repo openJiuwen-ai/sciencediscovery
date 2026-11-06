@@ -22,9 +22,8 @@ import { createElement } from "react";
 import { act, create } from "./support/dom-renderer.js";
 import {
   autoContinueKey,
-  designAnchorAfterSending,
+  designAnchor,
   lastAnswer,
-  startedDesign,
   useAutoContinue,
   type AutoContinueInput,
 } from "../src/evolve/use-auto-continue.js";
@@ -201,25 +200,26 @@ test("a new design's first ending is not refused by the previous design's step",
   renderer!.unmount();
 });
 
-test("the anchor a command starts with never repeats the one before it", () => {
-  // `App` bumps this the moment a command leaves the window, so the anchor is
-  // already the new design's during its first turn.
-  assert.equal(startedDesign(undefined), "design-1");
-  assert.equal(startedDesign("design-1"), "design-2");
-  // A reload restores the anchor from the transcript, where it is a message
-  // id; the first design started afterwards cannot collide with it.
-  assert.notEqual(startedDesign("2f1c8a9e-0b7d-4c1a-9f0e-1a2b3c4d5e6f"),
-    "2f1c8a9e-0b7d-4c1a-9f0e-1a2b3c4d5e6f");
-});
-
-test("only a design command starts a design", () => {
-  // What `App` runs as each message leaves the window. The carried messages
-  // are ordinary ones: bumping the anchor for them would make every carried
-  // turn a new design, and the next ending would always be answered.
-  assert.equal(designAnchorAfterSending(undefined, "/evolve-design --algorithm puct --no-confirm 压缩"), "design-1");
-  assert.equal(designAnchorAfterSending("design-1", "/evolve-design --algorithm puct 第二个"), "design-2");
-  assert.equal(designAnchorAfterSending("design-1", "继续步骤 1/4"), "design-1");
-  assert.equal(designAnchorAfterSending(undefined, "普通问题"), undefined);
+test("the anchor follows the Session, not this window", () => {
+  const design = (text: string) => ({ content: text, role: "user" });
+  const reply = (text: string) => ({ content: text, role: "assistant" });
+  // Nothing yet.
+  assert.equal(designAnchor([]), undefined);
+  // A design's first turn: its command is still the pending message, so the
+  // transcript alone would still say "no design".
+  assert.equal(designAnchor([], "/evolve-design --algorithm puct --no-confirm 压缩"), "design-1");
+  // Once the turn settles the command is in the transcript and pending is
+  // gone — the same anchor, so the same design keeps one watermark.
+  assert.equal(designAnchor([design("/evolve-design --algorithm puct --no-confirm 压缩")]), "design-1");
+  // A second design, this window's or another client's, is a different anchor
+  // as soon as its command exists anywhere.
+  assert.equal(designAnchor([design("/evolve-design --algorithm puct 一"), design("/evolve-design --algorithm puct 二")]), "design-2");
+  // A carried message is not a design, and an assistant answer never was.
+  assert.equal(designAnchor([design("/evolve-design --algorithm puct 一"), design("继续步骤 1/4")]), "design-1");
+  assert.equal(designAnchor([reply("/evolve-design --algorithm puct 一")]), undefined);
+  // The pending message only counts when it is a command.
+  assert.equal(designAnchor([design("/evolve-design --algorithm puct 一")], "继续步骤 1/4"), "design-1");
+  assert.equal(designAnchor([design("/evolve-design --algorithm puct 一")], "/evolve-design --algorithm puct 二"), "design-2");
 });
 
 test("the watermark names the session, the design and the step", () => {
