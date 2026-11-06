@@ -3,6 +3,7 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test, describe } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import type { RuntimeSettingsOverrides } from "@sciencediscovery/schema";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -258,3 +259,44 @@ test("HTTP Bridge preserves errors and subscriptions release when transport clos
   const reader=stream.body!.getReader();assert.match(new TextDecoder().decode((await reader.read()).value),/event: changed/);
   abort.abort();await reader.cancel().catch(()=>undefined);
 });
+
+
+for (const pluginId of ["host.settings", "skill", "connector.pubmed"]) {
+  test(`session Bridge ${pluginId} preserves deleted model choices without weakening validation`, async t => {
+    const { store, project, control } = await fixture(t);
+    const model = await store.createModel({ name: "Deleted model", model: "deleted-model",
+      baseUrl: "https://models.example.test/v1", apiToken: randomUUID() });
+    const session = await store.createSession(project.id, "Plugin settings", { modelId: model.id, reviewModelId: model.id });
+    await store.deleteModel(model.id);
+    const scope = { projectId: project.id, sessionId: session.id };
+    const before = control.snapshot(scope);
+    const request = {
+      apiVersion: 1 as const, pluginId, scope, kind: "command" as const,
+      method: pluginId === "host.settings" ? "replace" : "configure",
+      input: { expectedRevision: before.revision,
+        overrides: { ...before.settings.overrides, plugins: { skill: { enabled: false } } },
+        settings: { enabled: false } },
+    };
+    const bridge = control.bridge(scope);
+    await bridge.invoke(request, signal());
+    const settings = store.getSessionSettings(session.id);
+    assert.equal(settings.overrides.modelId, model.id);
+    assert.equal(settings.overrides.reviewModelId, model.id);
+    assert.equal(settings.effective.modelId, undefined);
+    assert.equal(settings.overrides.plugins?.[pluginId === "host.settings" ? "skill" : pluginId]?.enabled, false);
+    await assert.rejects(bridge.invoke(request, signal()), /changed/);
+    const revision = control.snapshot(scope).revision;
+    if (pluginId === "host.settings") {
+      await assert.rejects(bridge.invoke({ ...request, input: { ...request.input, expectedRevision: revision,
+        overrides: { ...settings.overrides, modelId: randomUUID() } } }, signal()), /existing model/);
+      await assert.rejects(bridge.invoke({ ...request, input: { ...request.input, expectedRevision: revision,
+        overrides: { ...settings.overrides, reviewModelId: randomUUID() } } }, signal()), /existing model/);
+    } else {
+      await assert.rejects(bridge.invoke({ ...request, input: { ...request.input, expectedRevision: revision,
+        settings: { enabled: "invalid" } } }, signal()), /Invalid/);
+    }
+    assert.deepEqual(store.getSessionSettings(session.id), settings);
+    store.close(); await store.load();
+    assert.deepEqual(store.getSessionSettings(session.id), settings);
+  });
+}
