@@ -2624,12 +2624,6 @@ async function executeAgentRun(
     return listConfigurationInteractions(store, sessionId).some((request) =>
       request.runId === runId && CONFIGURATION_PENDING_STATES.has(request.state)) ? "interrupted" : "completed";
   } catch (error) {
-    runLog.error("run_execution_failed", {
-      errorMessage: shortErrorMessage(runFailureMessage(error)),
-      ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
-      runId,
-      sessionId,
-    });
     if (cancelledRuns.has(runId)) {
       if (!promptManifest && taskInvocationAttempted) {
         try {
@@ -2666,6 +2660,12 @@ async function executeAgentRun(
       await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
       return "cancelled";
     }
+    runLog.error("run_execution_failed", {
+      errorMessage: shortErrorMessage(runFailureMessage(error)),
+      ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+      runId,
+      sessionId,
+    });
     rememberTimeout(timeoutFailure(error));
     try {
       await persistObservedTimeouts();
