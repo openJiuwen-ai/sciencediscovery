@@ -500,3 +500,28 @@ test("a merged timeout carries its persisted duration into the single failure ca
   assert.match(markup, /Retained notice: idle budget exhausted/);
   assert.equal(JSON.stringify({ messages, run }), before);
 });
+
+
+test("tool and kernel timeout notices do not claim the completed run timed out", () => {
+  for (const [kind, title] of [["runner_exec", "工具执行超时"], ["kernel_idle", "内核空闲超时"]] as const) {
+    const notice: ChatMessage = {
+      ...message("notice", "assistant", "opaque tool diagnostic", "timeout_notice"),
+      timeout: { kind, reason: "opaque tool diagnostic", timeoutMs: 1000 },
+    };
+    const markup = render({
+      detail: detail([message("q", "user", "continue after the tool timeout"), notice, message("a", "assistant", "RECOVERED")]),
+      replays: [{ runId: "r", userMessageId: "q", messageId: "a", state: answered("r", "", "RECOVERED") }],
+    });
+    assert.match(markup, new RegExp(`<h3>${title}</h3>`));
+    assert.match(markup, /RECOVERED/);
+    assert.match(markup, /opaque tool diagnostic/);
+    assert.doesNotMatch(markup, /运行超时|运行已终止|运行已停止/);
+  }
+});
+
+test("an untyped standalone timeout notice does not invent a terminated run", () => {
+  const markup = render({ detail: detail([message("notice", "assistant", "legacy opaque timeout", "timeout_notice")]) });
+  assert.match(markup, /<h3>超时提示<\/h3>/);
+  assert.match(markup, /legacy opaque timeout/);
+  assert.doesNotMatch(markup, /运行超时|运行已终止|运行已停止/);
+});

@@ -80,7 +80,7 @@ const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "revi
 function NoticeRow({ message }: { message: ChatMessage }) {
   const label = message.kind ? (TEXT.conversation.notices[message.kind] ?? message.kind) : "";
   if (message.kind === "timeout_notice") {
-    return <RunFailureCard code="timeout" message={message.content} timeout={message.timeout} />;
+    return <RunFailureCard code="timeout" scope="notice" message={message.content} timeout={message.timeout} />;
   }
   return (
     <div className="message assistant is-notice">

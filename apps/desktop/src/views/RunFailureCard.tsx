@@ -17,7 +17,7 @@ import { formatRunFailure, formatRunFailureTitle } from "../run-failure.js";
 import { TEXT } from "../text.js";
 
 /** One failure, with recovery guidance first and the complete evidence on demand. */
-export function RunFailureCard({ code, message, timeout }: { code?: string; message: string; timeout?: ChatMessage["timeout"] }) {
+export function RunFailureCard({ code, message, timeout, scope = "run" }: { code?: string; message: string; timeout?: ChatMessage["timeout"]; scope?: "run" | "notice" }) {
   return (
     <div className="message assistant run-failure-row">
       <section className="run-failure" role="status">
@@ -26,9 +26,9 @@ export function RunFailureCard({ code, message, timeout }: { code?: string; mess
             <circle cx="12" cy="12" r="9" />
             <path d="M12 7.5v5m0 4h.01" />
           </svg>
-          <h3>{formatRunFailureTitle(code)}</h3>
+          <h3>{formatRunFailureTitle(code, message, timeout, scope)}</h3>
         </div>
-        <p className="run-failure-summary">{formatRunFailure(code, message, timeout)}</p>
+        <p className="run-failure-summary">{formatRunFailure(code, message, timeout, scope)}</p>
         <details className="run-failure-details">
           <summary>{TEXT.runFailure.technicalDetails}</summary>
           <div className="run-failure-diagnostics">
