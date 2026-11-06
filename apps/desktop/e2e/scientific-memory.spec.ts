@@ -183,6 +183,15 @@ const INPUT_OUTPUT = output("artifact-input", 1, {
   versionId: "input-version-1",
 });
 
+/** A second report whose one citation is the report above. Opening that
+ *  citation puts a report with its own citations inside the artifact dialog,
+ *  which is what lets a card open over a dialog. */
+const SUMMARY_OUTPUT = output("artifact-summary", 1, {
+  name: "summary.md",
+  references: [{ id: "artifact-report", kind: "artifact", label: "artifact1", version: 1 }],
+  versionId: "summary-version-1",
+});
+
 /** A second artifact, derived from like any other input: the 溯源 tab lists it
  *  beside the uploaded file, and pressing it is what opens the panel. */
 const TREND_OUTPUT = output("artifact-trend", 1, {
@@ -428,6 +437,54 @@ test("a report's artifact chip opens the artifact itself, in a dialog over the r
   await page.keyboard.press("Escape");
   await expect(page.locator(".artifact-dialog")).toHaveCount(0);
   await expect(panel.locator(".doc-tab.is-active .doc-tab-name")).toHaveText("report.md");
+});
+
+test("Escape closes the card opened over a report's dialog, not the dialog under it", async ({ page }) => {
+  await installMockApi(page, {
+    artifactContents: {
+      "input-version-1": "样品,强度\nA,12.5\n",
+      "summary-version-1": "本轮结论汇总见 [artifact1]。\n",
+      "version-1": REPORT_BODY,
+    },
+    artifactsBySession: { [SESSION]: [SUMMARY_OUTPUT, REPORT_OUTPUT, INPUT_OUTPUT] },
+    artifactVersions: { [`${SESSION}|artifact-report`]: [REPORT_OUTPUT.version] },
+    memory: MEMORY,
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "工作区面板" }).click();
+  const panel = page.locator(".workspace-panel");
+  await panel.getByRole("tab", { name: "产物" }).click();
+  await panel.getByRole("button", { name: "summary.md" }).click();
+  await expect(panel.locator(".doc-body")).toContainText("本轮结论汇总见");
+
+  // summary.md cites report.md, and the dialog report.md opens in draws that
+  // report's own citations.
+  await panel.locator(".graph-chip").click();
+  const dialog = page.locator(".artifact-dialog");
+  await expect(dialog.locator("h2")).toHaveText("report.md");
+  const chips = dialog.locator(".graph-chip");
+  await expect(chips).toHaveText(["evidence1", "artifact1"]);
+
+  // A citation pressed inside the dialog opens its card over it: the reader
+  // went one surface deeper, so both are open at once.
+  await chips.nth(0).click();
+  const card = page.locator(".memory-dialog");
+  await expect(card).toBeVisible();
+  await expect(card.locator("h2")).toHaveText("在 350 °C 下，甲烷转化率提升至 92%。");
+
+  // Escape undoes the last press. The card goes and the document it was
+  // opened in stays, which is the promise the card makes when it closes: the
+  // reader is left where the chip was pressed, not on a blank panel.
+  await page.keyboard.press("Escape");
+  await expect(card).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("h2")).toHaveText("report.md");
+
+  // The dialog's own way out is a second Escape.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".artifact-dialog")).toHaveCount(0);
+  await expect(panel.locator(".doc-tab.is-active .doc-tab-name")).toHaveText("summary.md");
 });
 
 test("a chip press draws the dialog's frame before the version's bytes land", async ({ page }) => {

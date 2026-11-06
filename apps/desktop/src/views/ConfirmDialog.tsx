@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { ConfirmRequest } from "../app/use-workspace.js";
 import { TEXT } from "../text.js";
-import { claimsEscape } from "./dialog-escape.js";
+import { useTopmostEscape } from "./use-dialog-escape.js";
 
 /**
  * The gate in front of everything irreversible.
@@ -33,18 +33,10 @@ export function ConfirmDialog({
   request: ConfirmRequest;
 }) {
   const [replacement, setReplacement] = useState(request.modelReplacement?.models.length === 1 ? request.modelReplacement.models[0]?.id ?? "" : "");
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!claimsEscape(event)) return;
-      // This dialog is the topmost one. Claim the key on its way up so the
-      // settings dialog behind it — listening on `window`, further along the
-      // same path — does not close as well.
-      event.preventDefault();
-      onDismiss();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onDismiss]);
+  // The confirmation is the topmost dialog whenever it is up: it is the one
+  // the reader opened last, and the surface behind it — settings on `window`,
+  // a card on `document` — stays open until the question is answered.
+  useTopmostEscape(onDismiss);
 
   return (
     <div className="modal-backdrop" onPointerDown={onDismiss}>

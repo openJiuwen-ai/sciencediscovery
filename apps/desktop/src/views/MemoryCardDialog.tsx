@@ -55,7 +55,7 @@ import {
 } from "../app/memory.js";
 import { referenceNodeLabel } from "../app/memory-chips.js";
 import { TEXT } from "../text.js";
-import { claimsEscape } from "./dialog-escape.js";
+import { useTopmostEscape } from "./use-dialog-escape.js";
 
 interface Props {
   client: ApiClient;
@@ -151,16 +151,10 @@ export function MemoryCardDialog({
   const targetSession = reference.sessionId ?? sessionId;
 
   // Escape closes the card, but only when nothing above it has claimed the
-  // key first (a nested confirmation, for instance).
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!claimsEscape(event)) return;
-      event.preventDefault();
-      onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  // key first (a nested confirmation, for instance) — and, in the other
+  // direction, the dialog the card was opened in stays open, because the card
+  // is the one that was opened last.
+  useTopmostEscape(onClose);
 
   useEffect(() => {
     let alive = true;
