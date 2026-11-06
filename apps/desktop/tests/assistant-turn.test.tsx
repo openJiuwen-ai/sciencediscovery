@@ -502,3 +502,42 @@ describe("a delegated subagent is one line inside the run", () => {
     assert.match(html, /执行中/);
   });
 });
+
+describe("an answer's citations become chips", () => {
+  const reference = { id: "artifact-6", kind: "artifact" as const, label: "artifact6", version: 1 };
+
+  function renderWithReferences(content: string, references?: typeof reference[]): string {
+    return renderToStaticMarkup(
+      <AssistantTurns
+        client={client}
+        onDecide={() => Promise.resolve()}
+        onReferenceClick={() => undefined}
+        references={references}
+        run={{
+          ...emptyRunStream(),
+          modelName: "m",
+          runId: "r1",
+          terminal: true,
+          turns: [turn({ responses: [{ content, responseId: "a", settled: true, truncated: false }] })],
+        }}
+        sessionId="s1"
+      />,
+    );
+  }
+
+  it("turns [artifact6] into a chip the card can open", () => {
+    const html = renderWithReferences("交付物：out/report/REPORT.md [artifact6]", [reference]);
+    // The alias the answer wrote is the chip's label: no new vocabulary.
+    assert.match(html, /class="graph-chip is-artifact"/u);
+    assert.match(html, />artifact6</u);
+    assert.doesNotMatch(html, /\[artifact6\]/u);
+  });
+
+  it("leaves the token as plain text when the answer carries no references", () => {
+    // An older record, or a run whose aliases were never declared: the alias
+    // is still readable, it just is not a door.
+    const html = renderWithReferences("交付物：out/report/REPORT.md [artifact6]");
+    assert.doesNotMatch(html, /graph-chip/u);
+    assert.match(html, /\[artifact6\]/u);
+  });
+});

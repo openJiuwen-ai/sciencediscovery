@@ -14,9 +14,27 @@
 
 import { memo } from "react";
 
+import type { ComposerReference } from "./api/types.js";
 import { splitEvolveCheckpoints } from "./evolve/checkpoint.js";
 import { MarkdownProse } from "./MarkdownProse.js";
 import { CheckpointCard } from "./views/CheckpointCard.js";
+
+interface Props {
+  children: string;
+  /** Opens the memory card for a chip in a final report. Without one the
+   *  citation still renders as a chip, but it cannot be pressed: a report
+   *  shown somewhere with no card surface would otherwise look interactive
+   *  and do nothing. */
+  onReferenceClick?: (reference: ComposerReference) => void;
+  /**
+   * The aliases a report cites, from the version's own `references`.
+   *
+   * Plain Markdown has no way to know that `[evidence1]` is a citation; the
+   * map is what makes the alias a link at all. Every other Markdown surface
+   * in the app renders without this and is unchanged.
+   */
+  references?: ComposerReference[];
+}
 
 /**
  * The assistant's prose, with evolve's checkpoints drawn as cards.
@@ -32,19 +50,27 @@ import { CheckpointCard } from "./views/CheckpointCard.js";
  * card built from a transient tool call would be gone after a reload. See
  * `evolve/checkpoint.ts` for the fence and its parsing rules.
  */
-export const Markdown = memo(function Markdown({ children }: { children: string }) {
+export const Markdown = memo(function Markdown({ children, onReferenceClick, references }: Props) {
   const segments = splitEvolveCheckpoints(children);
   // The common answer has no fence at all, and then this is exactly the plain
   // renderer — no extra wrapper, no keys the transcript has to carry.
   if (segments.length === 1 && segments[0]!.kind === "markdown") {
-    return <MarkdownProse>{segments[0]!.text}</MarkdownProse>;
+    return (
+      <MarkdownProse onReferenceClick={onReferenceClick} references={references}>
+        {segments[0]!.text}
+      </MarkdownProse>
+    );
   }
   return (
     <>
       {segments.map((segment, index) => (
         segment.kind === "checkpoint"
           ? <CheckpointCard checkpoint={segment.checkpoint} key={`checkpoint-${index}`} />
-          : <MarkdownProse key={`prose-${index}`}>{segment.text}</MarkdownProse>
+          : (
+            <MarkdownProse key={`prose-${index}`} onReferenceClick={onReferenceClick} references={references}>
+              {segment.text}
+            </MarkdownProse>
+          )
       ))}
     </>
   );

@@ -1686,6 +1686,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           artifactId: output.artifact.id,
           label: artifactName(output),
           path: output.version.sourcePath ?? "",
+          // A final report carries the aliases its prose cites; the chip
+          // renderer needs them, and every other version arrives without one.
+          references: output.version.references,
           sessionId: output.version.sessionId || undefined,
           source: "artifact",
           versionId: output.version.id,
@@ -1722,8 +1725,12 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
                 error: undefined,
                 loading: true,
                 // A version may have been written elsewhere than the one before
-                // it, and the preview picks its renderer from this path.
+                // it, and the preview picks its renderer from this path. The
+                // citation map belongs to the version too: an older report's
+                // chips must not open the newer report's nodes.
                 path: output.version.sourcePath ?? "",
+                references: output.version.references,
+                sessionId: output.version.sessionId || undefined,
                 versionId,
               }
             : tab),

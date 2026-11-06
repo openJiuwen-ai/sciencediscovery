@@ -195,6 +195,32 @@ test("the persisted answer outranks the assembled deltas", () => {
   assert.equal(state.turns[0]!.responses[0]!.settled, true);
 });
 
+test("the persisted answer carries the chip references the server back-filled", () => {
+  // The transcript draws a finished answer from the run's own text, so the
+  // alias map has to ride on the completion event too: without it the same
+  // `[artifact1]` is a chip in the report preview and plain text here.
+  const reference = { id: "artifact-1", kind: "artifact" as const, label: "artifact1", version: 2 };
+  const state = fold([
+    responseStarted("r1"),
+    delta("see [artifact1]", "r1"),
+    {
+      files: [],
+      message: { content: "see [artifact1]", references: [reference] },
+      type: "run.completed",
+    } as unknown as RunStreamEvent,
+  ]);
+  assert.deepEqual(state.references, [reference]);
+});
+
+test("a completion without references leaves the earlier list alone", () => {
+  const reference = { id: "artifact-1", kind: "artifact" as const, label: "artifact1" };
+  const before = { ...emptyRunStream(), references: [reference] };
+  const state = fold([
+    { files: [], message: { content: "answer" }, type: "run.completed" } as unknown as RunStreamEvent,
+  ], before);
+  assert.deepEqual(state.references, [reference]);
+});
+
 test("run.started names the model and supplies the run id", () => {
   const state = fold([
     { model: { id: "m", name: "gpt-4o-mini" }, runId: "run-1", type: "run.started" } as RunStreamEvent,

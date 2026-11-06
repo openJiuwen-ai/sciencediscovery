@@ -118,6 +118,32 @@ export interface MockOptions {
   /** The bytes behind `GET .../artifact-versions/:id/content`, keyed by version
    *  id. A version with no entry reads as empty. */
   artifactContents?: Record<string, string>;
+  /** Every version of one Artifact, keyed `<session id>|<artifact id>`. The
+   *  provenance tab turns the cited version number into a version id here. */
+  artifactVersions?: Record<string, JsonRecord[]>;
+  /** The record behind `GET .../artifact-versions/:id/provenance`, keyed by
+   *  version id. A missing entry answers 404, which the tab reports as an
+   *  error rather than as "nothing was recorded". */
+  artifactProvenance?: Record<string, JsonRecord>;
+  /** 科学记忆's read side. The card list answers once for both kinds; each
+   *  provenance hop is keyed `<node id>|<kind>` and a missing key reads empty,
+   *  which is what a node with no recorded relation actually returns. */
+  memory?: {
+    hits?: JsonRecord[];
+    reason?: string;
+    truncated?: boolean;
+    chains?: Record<string, JsonRecord>;
+  };
+  /** 设置 › 科学记忆, and the `memoryGraph` the health probe reports. A write
+   *  replaces only the fields it names, like the real route. */
+  memorySettings?: {
+    backend?: string;
+    enabled?: boolean;
+    hasNeo4jPassword?: boolean;
+    memoryGraphStatus?: string;
+    neo4jHttp?: string;
+    neo4jUser?: string;
+  };
   files?: unknown[];
   /** The runs each Session already took, keyed by Session id. A Session with no
    *  entry has taken none, which is the fresh workspace every other spec opens
@@ -206,6 +232,15 @@ export interface MockState {
   connectors: JsonRecord[];
   files: unknown[];
   mcpServers: JsonRecord[];
+  /** The settings row behind 设置 › 科学记忆 and the state read beside it. */
+  memorySettings: {
+    backend: string;
+    enabled: boolean;
+    hasNeo4jPassword: boolean;
+    memoryGraphStatus: string;
+    neo4jHttp: string;
+    neo4jUser: string;
+  };
   models: ModelRecord[];
   overrides: Record<string, unknown>;
   projectSettings: JsonRecord;
@@ -311,6 +346,15 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     connectors: [...(options.connectors ?? [])],
     files: [...(options.files ?? [])],
     mcpServers: [...(options.mcpServers ?? [])],
+    memorySettings: {
+      backend: "local",
+      enabled: true,
+      hasNeo4jPassword: false,
+      memoryGraphStatus: "healthy",
+      neo4jHttp: "",
+      neo4jUser: "",
+      ...(options.memorySettings ?? {}),
+    },
     models: [...(options.models ?? [DEFAULT_MODEL])],
     overrides: { ...options.overrides },
     projectSettings: {
@@ -393,6 +437,10 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         return json(route, 200, {
           status: "ok",
           workspace: { maxFileBytes: 10 * 1024 * 1024 },
+          // The switch on 设置 › 科学记忆 is what the state line beside it
+          // reports, so the mock derives the answer from the same state the
+          // page writes.
+          memoryGraph: state.memorySettings.enabled ? state.memorySettings.memoryGraphStatus : "disabled",
         });
       }
 
@@ -843,6 +891,66 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         // Sessions' groups has to say which output belongs to which.
         const perSession = options.artifactsBySession?.[outputs[1]!];
         return json(route, 200, perSession ?? state.artifacts);
+      }
+
+      if (path === "/api/memory/settings" && method === "GET") {
+        return json(route, 200, state.memorySettings);
+      }
+
+      if (path === "/api/memory/settings" && method === "PUT") {
+        const input = JSON.parse(body ?? "{}") as {
+          backend?: string;
+          enabled?: boolean;
+          neo4jHttp?: string;
+          neo4jPassword?: string | null;
+          neo4jUser?: string;
+        };
+        // The password is write-only: a string stores one, `null` removes it,
+        // and its absence leaves whatever is stored alone.
+        if (typeof input.neo4jPassword === "string") state.memorySettings.hasNeo4jPassword = true;
+        if (input.neo4jPassword === null) state.memorySettings.hasNeo4jPassword = false;
+        if (input.backend !== undefined) state.memorySettings.backend = input.backend;
+        if (input.enabled !== undefined) state.memorySettings.enabled = input.enabled;
+        if (input.neo4jHttp !== undefined) state.memorySettings.neo4jHttp = input.neo4jHttp;
+        if (input.neo4jUser !== undefined) state.memorySettings.neo4jUser = input.neo4jUser;
+        return json(route, 200, state.memorySettings);
+      }
+
+      if (path === "/api/memory/query/by-node-type" && method === "POST") {
+        const hits = options.memory?.hits ?? [];
+        return json(route, 200, {
+          hits,
+          total: hits.length,
+          truncated: options.memory?.truncated ?? false,
+          ...(options.memory?.reason === undefined ? {} : { reason: options.memory.reason }),
+        });
+      }
+
+      if (path === "/api/memory/query/chain" && method === "POST") {
+        const input = JSON.parse(body ?? "{}") as { kind?: string; node_id?: string };
+        const answer = options.memory?.chains?.[`${input.node_id ?? ""}|${input.kind ?? ""}`] ?? {};
+        // The real chain always includes its source node; a fixture that wants
+        // one says so, and the surface filters it out again by id.
+        return json(route, 200, {
+          edges: [],
+          nodes: [],
+          total: 0,
+          truncated: false,
+          ...answer,
+        });
+      }
+
+      const versions = /^\/api\/sessions\/([^/]+)\/artifacts\/([^/]+)\/versions$/.exec(path);
+      if (versions && method === "GET") {
+        return json(route, 200, options.artifactVersions?.[`${versions[1]}|${versions[2]}`] ?? []);
+      }
+
+      const provenance = /^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/provenance$/.exec(path);
+      if (provenance && method === "GET") {
+        const record = options.artifactProvenance?.[provenance[2]!];
+        return record === undefined
+          ? json(route, 404, { error: "Artifact version not found" })
+          : json(route, 200, record);
       }
 
       const versionContent = /^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/content$/.exec(path);

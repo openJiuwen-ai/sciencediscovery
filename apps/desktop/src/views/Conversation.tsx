@@ -19,6 +19,7 @@ import type { ToolDetail } from "../app/tool-io.js";
 import type { ApiClient } from "../api/client.js";
 import type {
   ChatMessage,
+  ComposerReference,
   PermissionDecision,
   PermissionRequest,
   SessionDetail,
@@ -45,6 +46,9 @@ interface Props {
   /** Open one tool's input or result in the workspace panel. The card shows a
    *  clipped preview of both. */
   onOpenTool?: (detail: ToolDetail) => void;
+  /** Opens the memory card behind a `[alias]` chip in an answer. The report
+   *  preview and the conversation point at the same card. */
+  onReferenceClick?: (reference: ComposerReference, sessionId?: string) => void;
   /** The session's workspace: the files whose provenance says they arrived by
    *  upload are drawn above the question they were sent with. */
   workspaceFiles: readonly WorkspaceFile[];
@@ -126,10 +130,17 @@ function UserRow({ content, files }: { content: string; files?: readonly Uploade
   );
 }
 
-function MessageRow({ answered, message, uploads, onBranch }: {
-  onBranch?: () => void;
+function MessageRow({
+  answered,
+  message,
+  onBranch,
+  onReferenceClick,
+  uploads,
+}: {
   answered?: boolean;
   message: ChatMessage;
+  onBranch?: () => void;
+  onReferenceClick?: (reference: ComposerReference) => void;
   uploads?: readonly UploadedFile[];
 }) {
   // An automatic wake carries no user-authored body — the schema keeps the
@@ -161,7 +172,14 @@ function MessageRow({ answered, message, uploads, onBranch }: {
       <div className="body">
         {/* The same element a replayed run renders its answer with, so a stored
             answer and a reconstructed one cannot drift apart. */}
-        <AnswerBlock actions answered={answered} content={message.content} onBranch={onBranch} />
+        <AnswerBlock
+          actions
+          answered={answered}
+          content={message.content}
+          onBranch={onBranch}
+          onReferenceClick={onReferenceClick}
+          references={message.references}
+        />
       </div>
     </div>
   );
@@ -210,6 +228,7 @@ export function Conversation({
   onDecidePermission,
   onOpenSubagent,
   onOpenTool,
+  onReferenceClick,
   pending,
   replays,
   run,
@@ -231,6 +250,16 @@ export function Conversation({
   const failures = coalesceTimeoutNotices(messages, replays, run);
   const { following, replacing, trailing } = placeReplays(failures.replays, messages);
   const visibleRun = failures.run;
+  /** A chip opens the card for this session; the transcript is the session's
+   *  own, so the id is not a per-row value. Stable so the memoised turns under
+   *  it are not re-rendered — and their Markdown re-parsed — by a press that
+   *  merely opens the dialog. */
+  const referenceClick = useMemo(
+    () => onReferenceClick === undefined
+      ? undefined
+      : (reference: ComposerReference) => onReferenceClick(reference, detail?.id),
+    [onReferenceClick, detail?.id],
+  );
   /** The files each question was sent with, and the ones still waiting for a
    *  question. Uploads are workspace files rather than message fields, so they
    *  are matched to turns by time — see `placeUploads`. */
@@ -314,6 +343,7 @@ export function Conversation({
                   answered={answeredAfter[index]}
                   message={message}
                   onBranch={onBranch && message.role === "assistant" ? () => onBranch(message.id) : undefined}
+                  onReferenceClick={referenceClick}
                   uploads={uploads.byMessage.get(message.id)}
                 />
               ) : (
@@ -323,6 +353,11 @@ export function Conversation({
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
+                  onReferenceClick={referenceClick}
+                  // The answer being replaced is the message whose chips the
+                  // replay is drawing: its references are what make the
+                  // `[alias]` tokens in the reconstructed text links.
+                  references={message.references}
                   run={replacement}
                   onBranch={onBranch ? () => onBranch(message.id) : undefined}
                   sessionId={detail?.id}
@@ -339,6 +374,7 @@ export function Conversation({
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
                   onOpenTool={onOpenTool}
+                  onReferenceClick={referenceClick}
                   run={replay.state}
                   sessionId={detail?.id}
                 />
@@ -354,6 +390,7 @@ export function Conversation({
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
+            onReferenceClick={referenceClick}
             run={replay.state}
             sessionId={detail?.id}
           />
@@ -368,6 +405,7 @@ export function Conversation({
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
+            onReferenceClick={referenceClick}
             run={visibleRun}
             sessionId={detail?.id}
           />
