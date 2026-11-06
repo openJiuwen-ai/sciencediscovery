@@ -336,7 +336,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/settings" && method === "GET") {
         return json(route, 200, {
-          effective: {},
+          effective: { enabledConnectorIds: ["web"], ...state.overrides },
           // The initial default is what the first boot would adopt from the
           // catalog; a spec that needs a different one passes `overrides`.
           overrides: { modelId: state.models[0]?.id, ...state.overrides },
@@ -347,7 +347,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (path === "/api/settings" && method === "PUT") {
         // `PUT` replaces the whole override object, so the mock does too.
         state.overrides = JSON.parse(body ?? "{}") as Record<string, unknown>;
-        return json(route, 200, { effective: {}, overrides: state.overrides, sources: {} });
+        return json(route, 200, {
+          effective: { enabledConnectorIds: ["web"], ...state.overrides },
+          overrides: state.overrides,
+          sources: {},
+        });
       }
 
       if (path === "/api/providers" && method === "GET") {

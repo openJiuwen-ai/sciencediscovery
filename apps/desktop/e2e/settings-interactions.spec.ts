@@ -296,7 +296,7 @@ test.describe("MCP 服务器", () => {
     });
   });
 
-  test("a server can be tested, stopped and started from its card", async ({ page }) => {
+  test("a server can be tested from its card and stopped or started in its edit form", async ({ page }) => {
     const mock = await installMockApi(page, {
       mcpServers: [mcpServer()],
       mcpSources: sources,
@@ -312,13 +312,101 @@ test.describe("MCP 服务器", () => {
       true,
     );
 
-    // A server's switch writes the whole record, so it is a PUT of the card
-    // with `enabled` flipped rather than a separate route of its own.
-    const power = card.getByRole("switch", { name: "检索服务 · 启用" });
-    await expect(power).toHaveAttribute("aria-checked", "true");
-    await power.click();
-    await expect(power).toHaveAttribute("aria-checked", "false");
-    expect(writeCall(mock, "PUT", "/api/mcp/servers/mcp-1")).toMatchObject({ enabled: false });
+    const selection = card.getByRole("switch", { name: "检索服务 · 默认使用" });
+    await expect(selection).toHaveAttribute("aria-checked", "false");
+    for (const enabled of [false, true]) {
+      await card.getByRole("button", { name: "编辑" }).click();
+      const form = page.getByRole("dialog", { name: "编辑服务器" });
+      await form.getByRole("checkbox", { name: "启用服务", exact: true }).setChecked(enabled);
+      await form.getByRole("button", { name: "保存", exact: true }).click();
+      await expect(form).toBeHidden();
+      await expect(card.getByRole("button", { name: "编辑" })).toBeEnabled();
+      expect(lastWriteCall(mock, "PUT", "/api/mcp/servers/mcp-1")).toMatchObject({ enabled });
+      expect(mock.state.mcpServers[0]?.enabled).toBe(enabled);
+      await expect(selection).toHaveAttribute("aria-checked", "false");
+    }
+    expect(mock.calls.filter((call) => call.method === "PUT" && call.path === "/api/settings")).toHaveLength(0);
+  });
+
+  test("default source selection survives reopening without changing permissions or service state", async ({ page }) => {
+    const plugins = { "connector.builtin-search": { enabled: false, config: { mode: "fixture" } } };
+    const mock = await installMockApi(page, {
+      mcpServers: [mcpServer({ enabled: false, status: "disabled" })],
+      mcpSources: sources,
+      overrides: { plugins },
+    });
+    let dialog = await openSettings(page, "MCP 服务器");
+    const builtin = () => dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    const custom = () => dialog.getByRole("switch", { name: "检索服务 · 默认使用" });
+    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await builtin().click();
+    await expect(builtin()).toHaveAttribute("aria-checked", "true");
+    await custom().click();
+    await expect(custom()).toHaveAttribute("aria-checked", "true");
+    expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
+      enabledConnectorIds: ["web", "builtin-search", "mcp-1"], plugins,
+    });
+    expect(mock.state.mcpServers[0]?.enabled).toBe(false);
+    expect(mock.calls.some((call) => call.method === "PUT" && call.path.startsWith("/api/mcp/servers/"))).toBe(false);
+
+    // A fresh page reads the stored selection, including a source whose
+    // permission still prohibits calls. Selection never grants permission.
+    dialog = await openSettings(page, "MCP 服务器");
+    await expect(builtin()).toHaveAttribute("aria-checked", "true");
+    await expect(custom()).toHaveAttribute("aria-checked", "true");
+    await builtin().click();
+    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await custom().click();
+    await expect(custom()).toHaveAttribute("aria-checked", "false");
+    dialog = await openSettings(page, "MCP 服务器");
+    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await expect(custom()).toHaveAttribute("aria-checked", "false");
+    expect(mock.state.overrides.enabledConnectorIds).toEqual(["web"]);
+    expect(mock.state.overrides.plugins).toEqual(plugins);
+  });
+
+  test("select all and clear selection preserve unlisted sources and unrelated overrides", async ({ page }) => {
+    const plugins = { "connector.builtin-search": { enabled: false } };
+    const mock = await installMockApi(page, {
+      mcpServers: [mcpServer()], mcpSources: sources,
+      overrides: { enabledConnectorIds: ["unlisted"], plugins },
+    });
+    const dialog = await openSettings(page, "MCP 服务器");
+    const builtin = dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    const custom = dialog.getByRole("switch", { name: "检索服务 · 默认使用" });
+    await dialog.getByRole("button", { name: "全部选用", exact: true }).click();
+    await expect(builtin).toHaveAttribute("aria-checked", "true");
+    await expect(custom).toHaveAttribute("aria-checked", "true");
+    expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
+      enabledConnectorIds: ["unlisted", "builtin-search", "mcp-1"], plugins,
+    });
+    await dialog.getByRole("button", { name: "取消全选", exact: true }).click();
+    await expect(builtin).toHaveAttribute("aria-checked", "false");
+    await expect(custom).toHaveAttribute("aria-checked", "false");
+    expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
+      enabledConnectorIds: ["unlisted"], plugins,
+    });
+    expect(mock.state.mcpServers[0]?.enabled).toBe(true);
+  });
+
+  test("a rejected default selection keeps the saved value and allows retry", async ({ page }) => {
+    const options = {
+      mcpSources: sources,
+      fail: { message: "selection save refused", method: "PUT", path: "/api/settings" },
+    };
+    const mock = await installMockApi(page, options);
+    const dialog = await openSettings(page, "MCP 服务器");
+    const selection = dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    await selection.click();
+    await expect(dialog.locator(".row-note.is-error")).toHaveText("selection save refused");
+    await expect(selection).toHaveAttribute("aria-checked", "false");
+    await expect(selection).toBeEnabled();
+    expect(mock.state.overrides.enabledConnectorIds).toBeUndefined();
+    options.fail.path = "/not-this-request";
+    await selection.click();
+    await expect(selection).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
+    expect(mock.state.overrides.enabledConnectorIds).toEqual(["web", "builtin-search"]);
   });
 
   test("a failed test shows the provider's own reason", async ({ page }) => {
