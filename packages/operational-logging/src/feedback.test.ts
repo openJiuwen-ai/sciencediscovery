@@ -20,7 +20,10 @@ import {
   RECEIPT_ALPHABET,
   RECEIPT_PATTERN,
   FEEDBACK_MAX_BODY,
+  FEEDBACK_MAX_IMAGE_BYTES,
+  FEEDBACK_MAX_IMAGES,
   FEEDBACK_MAX_TITLE,
+  base64DecodedBytes,
   generateReceipt,
   isValidReceipt,
   redactFeedbackText,
@@ -29,6 +32,7 @@ import {
   deriveFeedbackTitle,
   buildFeedbackPayload,
   validateFeedbackSubmission,
+  type FeedbackImage,
   type FeedbackSubmission,
 } from "./feedback.js";
 
@@ -174,4 +178,62 @@ test("validation rejects wrongly typed JSON fields instead of throwing", () => {
   assert.ok(fields({ diagnostics: 42 }).includes("diagnostics"));
   assert.ok(fields({ meta: { installId: 42 } }).includes("meta.installId"));
   assert.ok(fields({ contact: { type: "email" } }).includes("contact"));
+});
+
+test("base64 size checks reject malformed input and count decoded, not encoded, bytes", () => {
+  assert.equal(base64DecodedBytes("AAAA"), 3);
+  assert.equal(base64DecodedBytes("AAA="), 2);
+  assert.equal(base64DecodedBytes("AA=="), 1);
+  assert.equal(base64DecodedBytes(""), undefined);
+  assert.equal(base64DecodedBytes("AAA"), undefined);
+  assert.equal(base64DecodedBytes("AA=A"), undefined);
+  assert.equal(base64DecodedBytes("data:text/plain;base64,AAAA"), undefined);
+});
+
+test("image validation enforces count, MIME, Base64 shape and the decoded size caps", () => {
+  const base: FeedbackSubmission = {
+    v: 1,
+    kind: "bug",
+    title: "a title",
+    body: "a body long enough",
+    clientTs: "2026-11-03T10:00:00Z",
+  };
+  const image = (patch: Partial<FeedbackImage> = {}): FeedbackImage => ({
+    name: "shot.png",
+    mime: "image/png",
+    data: "A".repeat(4 * 1000),
+    ...patch,
+  });
+  const fields = (images: unknown): string[] =>
+    validateFeedbackSubmission({ ...base, images } as unknown as FeedbackSubmission).map((e) => e.field);
+
+  assert.deepEqual(validateFeedbackSubmission({ ...base, images: [image()] }), []);
+  assert.deepEqual(
+    validateFeedbackSubmission({ ...base, images: Array.from({ length: FEEDBACK_MAX_IMAGES }, () => image()) }),
+    [],
+  );
+  assert.ok(fields({}).includes("images"));
+  assert.ok(fields(Array.from({ length: FEEDBACK_MAX_IMAGES + 1 }, () => image())).includes("images"));
+  assert.ok(fields([image({ mime: "image/gif" as never })]).includes("images[0].mime"));
+  assert.ok(fields([image({ data: "data:image/png;base64,AAAA" })]).includes("images[0].data"));
+  assert.ok(fields([{ data: image().data }]).includes("images[0].name"));
+
+  // 4 chars per 3 decoded bytes: just over the per-image cap must be rejected.
+  const oversized = "A".repeat(Math.ceil((FEEDBACK_MAX_IMAGE_BYTES + 1) / 3) * 4);
+  assert.ok(base64DecodedBytes(oversized)! > FEEDBACK_MAX_IMAGE_BYTES);
+  assert.ok(fields([image({ data: oversized })]).includes("images[0].data"));
+});
+
+test("the payload builder sanitizes image names and keeps the Base64 data verbatim", () => {
+  const payload = buildFeedbackPayload({
+    kind: "bug",
+    title: "title",
+    body: "a long enough body",
+    images: [{ name: "a](b)!<script>.png", mime: "image/webp", data: "AAAA" }],
+    clientTs: "2026-11-03T10:00:00Z",
+  });
+  assert.equal(payload.images?.length, 1);
+  assert.equal(payload.images?.[0]?.data, "AAAA");
+  assert.equal(payload.images?.[0]?.mime, "image/webp");
+  assert.ok(!/[\[\]()<>!]/.test(payload.images![0]!.name));
 });

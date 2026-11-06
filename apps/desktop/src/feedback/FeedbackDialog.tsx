@@ -17,12 +17,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FEEDBACK_KINDS,
   FEEDBACK_MAX_BODY,
+  FEEDBACK_MAX_IMAGES,
   FEEDBACK_MIN_BODY,
   buildFeedbackPayload,
   classifyContact,
   deriveFeedbackTitle,
   detectFeedbackPii,
   redactFeedbackText,
+  type FeedbackImage,
   type FeedbackKind,
   type FeedbackMeta,
 } from "@sciencediscovery/operational-logging/feedback";
@@ -32,6 +34,7 @@ import { useLanguage } from "../app/use-language.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "../views/dialog-escape.js";
 import { subscribeFeedbackOpen, type FeedbackSeed } from "./open.js";
+import { FEEDBACK_IMAGE_ACCEPT, prepareFeedbackImages, type ImagePrepareError } from "./feedback-images.js";
 import {
   clearFeedbackDraft,
   loadFeedbackDraft,
@@ -47,6 +50,8 @@ import { submitFeedback, type FeedbackFailure } from "./submit.js";
 
 const REPRODUCIBILITY_OPTIONS = ["always", "sometimes", "once"];
 const IMPACT_OPTIONS = ["blocker", "major", "minor"];
+
+declare const __SCIENCE_DISCOVERY_BUILD__: string;
 
 type SubmitState =
   | { state: "idle" }
@@ -96,6 +101,10 @@ export function FeedbackDialog() {
   const [submitState, setSubmitState] = useState<SubmitState>({ state: "idle" });
   const [history, setHistory] = useState<FeedbackRecord[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [images, setImages] = useState<FeedbackImage[]>([]);
+  const [imageError, setImageError] = useState<ImagePrepareError | undefined>(undefined);
+  const [preparingImages, setPreparingImages] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const submittingRef = useRef(submitting);
   useEffect(() => { submittingRef.current = submitting; }, [submitting]);
@@ -143,6 +152,9 @@ export function FeedbackDialog() {
     setPiiConfirmed(false);
     setCopyState("idle");
     setSubmitting(false);
+    setImages([]);
+    setImageError(undefined);
+    setPreparingImages(false);
     setKind(incoming?.kind ?? draft.kind);
     setBody(incoming?.body ?? draft.body);
     setContact(draft.contact);
@@ -180,22 +192,30 @@ export function FeedbackDialog() {
   const showBodyTooShort = body.length > 0 && bodyTooShort;
   const contactInvalid = contact.trim().length > 0 && contactType === undefined;
   const piiBlocking = piiHints.length > 0 && !piiConfirmed;
-  // Frequency and impact are required: a report without them cannot be
-  // triaged, so the dialog will not send one.
-  const detailsMissing = reproducibility === "" || impact === "";
-  const canSubmit = !submitting && !bodyTooShort && !contactInvalid && !piiBlocking && !detailsMissing;
+  // Frequency and impact only make sense for a defect report; an idea or an
+  // open-ended note has nothing to reproduce, so those fields stay hidden.
+  const showTriage = kind === "bug";
+  const detailsMissing = showTriage && (reproducibility === "" || impact === "");
+  const canSubmit = !submitting && !preparingImages && !bodyTooShort && !contactInvalid && !piiBlocking && !detailsMissing;
 
   /** The triage lines are appended after the description, so the description
    *  must leave room for them; measuring the suffix lets the counter state the
    *  real budget instead of a cap the send path then trims. */
   const triageSuffix = useMemo(() => {
     const lines: string[] = [];
-    if (reproducibility) lines.push(`${fb.reproducibility.label}: ${optionLabel(REPRODUCIBILITY_LABELS, reproducibility)}`);
-    if (impact) lines.push(`${fb.impact.label}: ${optionLabel(IMPACT_LABELS, impact)}`);
+    if (showTriage && reproducibility) lines.push(`${fb.reproducibility.label}: ${optionLabel(REPRODUCIBILITY_LABELS, reproducibility)}`);
+    if (showTriage && impact) lines.push(`${fb.impact.label}: ${optionLabel(IMPACT_LABELS, impact)}`);
     return lines.length ? `\n\n${lines.join("\n")}` : "";
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reproducibility, impact, locale]);
+  }, [showTriage, reproducibility, impact, locale]);
   const bodyBudget = FEEDBACK_MAX_BODY - triageSuffix.length;
+
+  /** `maxLength` only stops new keystrokes; text written before a budget change
+   *  would stay in the box and get trimmed by the send path without a word.
+   *  Clamping keeps the visible text and the budget identical. */
+  useEffect(() => {
+    setBody((current) => (current.length > bodyBudget ? current.slice(0, bodyBudget) : current));
+  }, [bodyBudget]);
 
   const piiKindLabels = piiHints.map((hint) => (
     hint.kind === "phone" ? fb.pii.phone : hint.kind === "id-card" ? fb.pii.idCard : fb.pii.email
@@ -214,11 +234,13 @@ export function FeedbackDialog() {
   function fullText(): string {
     const lines: string[] = [];
     lines.push(`${fb.kind.label}: ${KIND_LABELS[kind]}`);
-    if (reproducibility) lines.push(`${fb.reproducibility.label}: ${optionLabel(REPRODUCIBILITY_LABELS, reproducibility)}`);
-    if (impact) lines.push(`${fb.impact.label}: ${optionLabel(IMPACT_LABELS, impact)}`);
+    if (showTriage && reproducibility) lines.push(`${fb.reproducibility.label}: ${optionLabel(REPRODUCIBILITY_LABELS, reproducibility)}`);
+    if (showTriage && impact) lines.push(`${fb.impact.label}: ${optionLabel(IMPACT_LABELS, impact)}`);
+    // The GitHub issue URL is capped; keep the diagnostics header and request
+    // id ahead of a long pasted error so they cannot be truncated away.
+    if (includeDiagnostics && diagnostics) lines.push("", `${fb.diagnostics.label}:`, diagnostics);
     lines.push("", body);
     if (contact.trim()) lines.push("", `${fb.contact.label}: ${contact.trim()}`);
-    if (includeDiagnostics && diagnostics) lines.push("", `${fb.diagnostics.label}:`, diagnostics);
     return lines.join("\n");
   }
 
@@ -231,7 +253,7 @@ export function FeedbackDialog() {
     const finalBody = `${redactFeedbackText(trimmedBody).slice(0, Math.max(0, FEEDBACK_MAX_BODY - triageSuffix.length))}${triageSuffix}`;
 
     const meta: FeedbackMeta = {
-      version: "desktop",
+      version: typeof __SCIENCE_DISCOVERY_BUILD__ === "string" ? __SCIENCE_DISCOVERY_BUILD__ : "unknown",
       os: typeof navigator === "undefined" ? "unavailable" : navigator.platform || navigator.userAgent,
       locale,
       installId: readFeedbackInstallId(storage()),
@@ -246,6 +268,7 @@ export function FeedbackDialog() {
         contact: contactType ? { type: contactType, value: contact.trim() } : undefined,
         meta,
         diagnostics: includeDiagnostics ? diagnostics : undefined,
+        images: images.length > 0 ? images : undefined,
       });
       const outcome = await submitFeedback(payload);
       if (outcome.ok) {
@@ -258,6 +281,8 @@ export function FeedbackDialog() {
         });
         clearFeedbackDraft(storage());
         setHistory(loadFeedbackHistory(storage()));
+        setImages([]);
+        setImageError(undefined);
         setSubmitState({ state: "success", receipt: outcome.receipt });
       } else {
         setSubmitState({ state: "failure", failure: outcome.failure });
@@ -269,6 +294,26 @@ export function FeedbackDialog() {
 
   function deleteRecord(receipt: string): void {
     setHistory(removeFeedbackRecord(storage(), receipt));
+  }
+
+  async function addImages(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0 || preparingImages) return;
+    setPreparingImages(true);
+    setImageError(undefined);
+    try {
+      const result = await prepareFeedbackImages(Array.from(files), images);
+      setImages(result.images);
+      setImageError(result.error);
+    } finally {
+      setPreparingImages(false);
+      // Clear the input so picking the same file again still fires `change`.
+      if (imageInputRef.current) imageInputRef.current.value = "";
+    }
+  }
+
+  function removeImage(index: number): void {
+    setImages((current) => current.filter((_, position) => position !== index));
+    setImageError(undefined);
   }
 
   async function copyReceipt(receipt: string): Promise<void> {
@@ -337,6 +382,16 @@ export function FeedbackDialog() {
             {submitState.failure.code === "duplicate" && submitState.failure.receipt ? (
               <div className="feedback-receipt-banner">{submitState.failure.receipt}</div>
             ) : null}
+            {submitState.failure.code === "invalid" && submitState.failure.fields ? (
+              <div className="feedback-field-errors">
+                <p>{fb.failure.fieldsTitle}</p>
+                <ul>
+                  {Object.entries(submitState.failure.fields).map(([field, reason]) => (
+                    <li key={field}><code>{field}</code> {reason}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <p>{fb.failure.kept}</p>
             <div className="feedback-actions">
               <button className="secondary-button" type="button" onClick={() => void copyToClipboard(fullText()).then((ok) => setCopyState(ok ? "copied" : "failed"))}>
@@ -371,33 +426,87 @@ export function FeedbackDialog() {
             </label>
             {showBodyTooShort ? <p className="feedback-inline-error" role="status">{fb.body.tooShort(FEEDBACK_MIN_BODY)}</p> : null}
 
-            <label className="feedback-field">
-              <span>{fb.contact.label}</span>
-              <input
-                className="feedback-contact"
-                onChange={(event) => setContact(event.target.value)}
-                placeholder={fb.contact.placeholder}
-                value={contact}
-              />
-            </label>
-            {contactInvalid ? <p className="feedback-inline-error" role="status">{fb.contact.invalid}</p> : null}
-
-            <div className="feedback-option-grid">
-              <label className="feedback-field">
-                <span>{fb.reproducibility.label}</span>
-                <select value={reproducibility} onChange={(event) => setReproducibility(event.target.value)}>
-                  <option value="">{fb.selectPlaceholder}</option>
-                  {REPRODUCIBILITY_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(REPRODUCIBILITY_LABELS, option)}</option>)}
-                </select>
-              </label>
-              <label className="feedback-field">
-                <span>{fb.impact.label}</span>
-                <select value={impact} onChange={(event) => setImpact(event.target.value)}>
-                  <option value="">{fb.selectPlaceholder}</option>
-                  {IMPACT_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(IMPACT_LABELS, option)}</option>)}
-                </select>
-              </label>
+            {/* Attachments belong to the description, so they sit right under it
+                instead of trailing the submit button across the dialog. */}
+            <div className="feedback-images">
+              <div className="feedback-images-head">
+                <div className="feedback-images-title">
+                  <span>{fb.images.label}</span>
+                  <small>{fb.images.privacy}</small>
+                </div>
+                <input
+                  accept={FEEDBACK_IMAGE_ACCEPT}
+                  className="feedback-image-input"
+                  multiple
+                  onChange={(event) => void addImages(event.target.files)}
+                  ref={imageInputRef}
+                  type="file"
+                />
+                <button
+                  className="secondary-button feedback-image-add"
+                  disabled={submitting || preparingImages || images.length >= FEEDBACK_MAX_IMAGES}
+                  onClick={() => imageInputRef.current?.click()}
+                  type="button"
+                >
+                  {images.length >= FEEDBACK_MAX_IMAGES
+                    ? fb.images.limit(FEEDBACK_MAX_IMAGES)
+                    : fb.images.add}
+                </button>
+              </div>
+              {images.length > 0 ? (
+                <ul className="feedback-image-list">
+                  {images.map((image, index) => (
+                    <li className="feedback-image-item" key={`${image.name}-${index}`}>
+                      <img alt={image.name} src={`data:${image.mime};base64,${image.data}`} />
+                      <button
+                        aria-label={fb.images.remove}
+                        className="feedback-image-remove"
+                        disabled={submitting}
+                        onClick={() => removeImage(index)}
+                        title={fb.images.remove}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {preparingImages ? <p className="feedback-hint" role="status">{fb.images.preparing}</p> : null}
+              {imageError ? <p className="feedback-inline-error" role="status">{fb.images.error[imageError]}</p> : null}
             </div>
+
+            {/* One row while there is room, fewer columns as the window narrows. */}
+            <div className="feedback-meta-grid">
+              <label className="feedback-field">
+                <span>{fb.contact.label}</span>
+                <input
+                  className="feedback-contact"
+                  onChange={(event) => setContact(event.target.value)}
+                  placeholder={fb.contact.placeholder}
+                  value={contact}
+                />
+              </label>
+              {showTriage ? (
+                <>
+                  <label className="feedback-field">
+                    <span>{fb.reproducibility.label}</span>
+                    <select value={reproducibility} onChange={(event) => setReproducibility(event.target.value)}>
+                      <option value="">{fb.selectPlaceholder}</option>
+                      {REPRODUCIBILITY_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(REPRODUCIBILITY_LABELS, option)}</option>)}
+                    </select>
+                  </label>
+                  <label className="feedback-field">
+                    <span>{fb.impact.label}</span>
+                    <select value={impact} onChange={(event) => setImpact(event.target.value)}>
+                      <option value="">{fb.selectPlaceholder}</option>
+                      {IMPACT_OPTIONS.map((option) => <option key={option} value={option}>{optionLabel(IMPACT_LABELS, option)}</option>)}
+                    </select>
+                  </label>
+                </>
+              ) : null}
+            </div>
+            {contactInvalid ? <p className="feedback-inline-error" role="status">{fb.contact.invalid}</p> : null}
             {detailsMissing ? <p className="feedback-hint">{fb.requiredHint}</p> : null}
 
             <div className="feedback-diagnostics">

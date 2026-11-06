@@ -1131,6 +1131,19 @@ export const EN: Text = {
       preview: "Preview what will be sent",
       none: "No diagnostics available for this feedback",
     },
+    images: {
+      label: "Screenshots (optional)",
+      add: "Upload image",
+      limit: (max: number) => `Up to ${max} images`,
+      remove: "Remove screenshot",
+      preparing: "Processing images…",
+      privacy: "Screenshots are visible to anyone with repository access; hide sensitive information first.",
+      error: {
+        type: "Only PNG, JPEG or WebP images are supported.",
+        size: "This image is still too large after compression.",
+        decode: "This image could not be read.",
+      },
+    },
     submit: "Submit",
     submitting: "Submitting…",
     success: {
@@ -1149,6 +1162,7 @@ export const EN: Text = {
       tooLarge: "The message is too long. Shorten it and try again.",
       unavailable: "The service is temporarily unavailable. Please try again later.",
       invalid: "Some fields need attention.",
+      fieldsTitle: "What needs attention",
       kept: "Your draft is kept; you can copy it or open a GitHub issue instead.",
       copyAll: "Copy everything",
       openIssue: "Open GitHub issue instead",

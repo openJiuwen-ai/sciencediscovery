@@ -50,10 +50,17 @@ export function WakeNotice({ agentLabel, notice, onOpenRecord }: {
       : t("chat.wakeNoticeExecutions", { count: notice.executions });
   const records = notice.records ?? [];
   const executions = records.filter((record) => record.kind === "execution");
+  // `cancelled` is its own bucket and not part of "unconfirmed": the record below
+  // already badges it, and an outcome the researcher chose is not unknown. The
+  // unconfirmed bucket keeps only the states with no terminal outcome (queued,
+  // running, unknown), which is what the word means.
+  const unconfirmed = (record: RuntimeNoticeRecord) =>
+    record.state !== "completed" && record.state !== "failed" && record.state !== "cancelled";
   const outcomes = [
     [executions.filter((record) => record.state === "completed").length, "chat.wakeNoticeCompleted"],
     [executions.filter((record) => record.state === "failed").length, "chat.wakeNoticeFailed"],
-    [executions.filter((record) => record.state !== "completed" && record.state !== "failed").length, "chat.wakeNoticeUnconfirmed"],
+    [executions.filter((record) => record.state === "cancelled").length, "chat.wakeNoticeCancelled"],
+    [executions.filter(unconfirmed).length, "chat.wakeNoticeUnconfirmed"],
   ] as const;
   const outcome = outcomes.filter(([count]) => count > 0).map(([count, key]) => t(key, { count })).join(" · ");
   return (

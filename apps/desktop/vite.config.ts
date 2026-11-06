@@ -14,6 +14,14 @@
 
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+/** Release version + build hash, stamped into feedback metadata the same way
+ *  apps/web does it so a report from either front end names its build. */
+const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
+let build = "source";
+try { build = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* Release archives may omit .git. */ }
 
 /** Control plane the dev server proxies to. `settings.port` is 4310; the
  *  JiuwenSwarm launcher keeps the adapter in front of it on that same port, so
@@ -23,6 +31,7 @@ import { defineConfig } from "vite";
 const controlPlane = process.env.SCIENCE_AGENT_API_URL ?? "http://127.0.0.1:4310";
 
 export default defineConfig({
+  define: { __SCIENCE_DISCOVERY_BUILD__: JSON.stringify(`${process.env.SCIENCE_DISCOVERY_VERSION ?? version} (${build})`) },
   // Deliberately no `base`: this app is meant to live at "/" so that swapping
   // it in for apps/web is a change of the static directory alone.
   plugins: [react()],

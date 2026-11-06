@@ -30,7 +30,7 @@ test("error toast and inline alert share both diagnostic controls; success toast
     createElement(ToastViewport, { toasts: [{ id: 1, title: "Failed", tone: "error", detail: "Save failed" }], onDismiss() {} }),
   ]) {
     const html = renderToStaticMarkup(node);
-    assert.match(html, /Copy key diagnostics/); assert.match(html, /Open GitHub issue/);
+    assert.match(html, /Copy key diagnostics/); assert.match(html, /Send feedback/);
     assert.doesNotMatch(html, /href="https:\/\/github/);
   }
   assert.doesNotMatch(renderToStaticMarkup(createElement(ToastViewport, { toasts: [{ id: 1, title: "Saved", tone: "success" }], onDismiss() {} })), /Copy key diagnostics/);
@@ -45,7 +45,7 @@ test("panel render failure and collapsed tool failure remain reportable without 
     isRunning: false, onToggle() {}, workspaceSessionId: "session-1", diagnosticRunId: "run-1",
   }));
   assert.match(html, /Copy key diagnostics/);
-  assert.match(html, /Open GitHub issue/);
+  assert.match(html, /Send feedback/);
 });
 
 test("correlation registry is bounded and contains identifiers only", () => {
