@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { completeChatRequest, normalizeUsage, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
+import { completeChatRequest, normalizeUsage, carriedThinkingControls, rejectedThinkingControlFields, ModelRequestError, streamModelTurn, isAnthropicEndpoint, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
 import { request, type Dispatcher } from "undici";
 import { Readable } from "node:stream";
 import { MODEL_API_VARIANTS, DEFAULT_MODEL_API_VARIANT, type ModelApiProtocol, type ModelCompatibilityOutcome, type ModelConnectivityTestCategory, type ModelConnectivityTestResult, type ModelProfile, type ResolvedProxy } from "@sciencediscovery/schema";
@@ -79,37 +79,84 @@ export async function testModelConnectivity(options: ModelConnectivityTestOption
     const policy = { maxTokens: 64, maxRetries: 0, requestTimeoutMs: options.timeoutMs ?? 10_000, maxResponseBytes: 64 * 1024 };
     let basic = unknown(), streaming = unknown(), tools = unknown();
     let usage: "available" | "unknown" = "unknown";
-    try {
+    // Fields to remove from the next dispatch's body, and the body of the most
+    // recent one. The recovery strips the serialized request instead of asking
+    // for a different thinking mode, because a mode is not a promise that a
+    // control disappears: the catalog resolves it first (`constrainCatalogThinking`
+    // may rewrite `auto` to the model's declared default, and `kimi-k3` declares
+    // `modes: ["enabled"]`), so `thinkingMode: "auto"` can rebuild the very body
+    // the endpoint just refused. The streamed sender strips the named fields for
+    // the same reason (`withoutThinkingControls`).
+    let stripFromBody: string[] = [];
+    let sentBody = "";
+    const dispatch = async (target: ModelEndpoint) => {
       options.beforeDispatch?.(dispatchProfile);
-      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: apiProtocol === "openai-responses" ? 16 : 8 }, signal, async (url, init) => {
+      return completeChatRequest(target, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: apiProtocol === "openai-responses" ? 16 : 8 }, signal, async (url, init) => {
+        let body = typeof init?.body === "string" ? init.body : "";
+        if (body && stripFromBody.length) {
+          try {
+            const parsed = JSON.parse(body) as Record<string, unknown>;
+            for (const field of stripFromBody) delete parsed[field];
+            body = JSON.stringify(parsed);
+          } catch {
+            // Not JSON: nothing to strip, and the provider gets what it was
+            // given so its own error stands.
+          }
+        }
+        sentBody = body;
         const headers = new Headers(init?.headers);
         if (!options.apiToken) { headers.delete("authorization"); headers.delete("x-api-key"); }
-        const incoming = await request(String(url), { method: "POST", headers: Object.fromEntries(headers), body: init?.body as string,
+        const incoming = await request(String(url), { method: "POST", headers: Object.fromEntries(headers), body,
           signal: init?.signal as AbortSignal, headersTimeout: timeout, bodyTimeout: 0, idempotent: false,
           ...((init as RequestInit & { dispatcher?: Dispatcher })?.dispatcher ? { dispatcher: (init as RequestInit & { dispatcher?: Dispatcher }).dispatcher } : {}) });
         return new Response([204, 205, 304].includes(incoming.statusCode) ? null : Readable.toWeb(incoming.body) as ReadableStream<Uint8Array>, { status: incoming.statusCode });
       }, 64 * 1024);
-      if (!response.ok) basic = providerFailure(response.status);
-      else {
-        const payload = await response.json() as { usage?: unknown; choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
-        if (normalizeUsage(payload.usage, "openai-chat-completions")) usage = "available";
-        if (payload.choices?.[0]?.finish_reason === "length") {
-          // The probe asks for a reply of a handful of tokens. A reasoning
-          // model spends that budget thinking and comes back with
-          // `finish_reason: "length"` and no final text, which used to be
-          // reported as inconclusive — so configuring one failed a check that
-          // had already proved the thing it asks about. `completeChatRequest`
-          // has parsed and validated the envelope by the time this runs: the
-          // endpoint accepted the key, answered on the configured protocol,
-          // and stopped at a limit this check wrote. That the cut is ours is
-          // not evidence against the model.
-          basic = { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure; the synthetic reply was cut at the probe's output limit" };
-        } else {
-          const message = payload.choices?.[0]?.message;
-          if (!message || !(message.content || message.reasoning_content || message.tool_calls?.length || message.anthropic_content?.length || message.response_items?.length)) throw new Error("No basic completion evidence");
-          basic = { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure" };
-        }
+    };
+    const readCompletion = async (response: Response): Promise<ModelCompatibilityOutcome> => {
+      const payload = await response.json() as { usage?: unknown; choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
+      if (normalizeUsage(payload.usage, "openai-chat-completions")) usage = "available";
+      if (payload.choices?.[0]?.finish_reason === "length") {
+        // The probe asks for a reply of a handful of tokens. A reasoning
+        // model spends that budget thinking and comes back with
+        // `finish_reason: "length"` and no final text, which used to be
+        // reported as inconclusive — so configuring one failed a check that
+        // had already proved the thing it asks about. `completeChatRequest`
+        // has parsed and validated the envelope by the time this runs: the
+        // endpoint accepted the key, answered on the configured protocol,
+        // and stopped at a limit this check wrote. That the cut is ours is
+        // not evidence against the model.
+        return { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure; the synthetic reply was cut at the probe's output limit" };
       }
+      const message = payload.choices?.[0]?.message;
+      if (!message || !(message.content || message.reasoning_content || message.tool_calls?.length || message.anthropic_content?.length || message.response_items?.length)) throw new Error("No basic completion evidence");
+      return { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure" };
+    };
+    try {
+      let response = await dispatch(endpoint);
+      if (!response.ok && response.status === 400) {
+        // A 400 that names the thinking control this request carried says
+        // nothing about the endpoint: the streamed sender strips exactly the
+        // named control and retries, so an endpoint whose streaming chat works
+        // must not be reported as broken here. The transport keeps no fallback
+        // of its own (see `completeChatRequest`), so this caller owns the retry.
+        //
+        // The intersection is what makes the retry honest. A 400 names what the
+        // endpoint refused, not what this request sent, and a variant that
+        // injects nothing here would otherwise send the identical body again and
+        // report a strip that never happened.
+        const detail = await response.text().catch(() => "");
+        const carried = carriedThinkingControls(sentBody);
+        const named = [...rejectedThinkingControlFields(detail)].filter((field) => carried.has(field));
+        if (named.length) {
+          stripFromBody = named;
+          response = await dispatch(endpoint);
+          stripFromBody = [];
+          basic = response.ok
+            ? { ...(await readCompletion(response)), message: "Valid basic completion structure after retrying without the thinking control this endpoint rejects" }
+            : providerFailure(response.status);
+        } else basic = providerFailure(response.status);
+      } else if (!response.ok) basic = providerFailure(response.status);
+      else basic = await readCompletion(response);
     } catch (error) {
       basic = failure(error, signal);
     }

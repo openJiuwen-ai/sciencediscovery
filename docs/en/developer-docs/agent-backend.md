@@ -103,6 +103,16 @@ Product semantics include provider/protocol variants, thinking controls, proxy p
 
 JiuwenSwarm does not intentionally bypass these product semantics: its model requests are routed through the ScienceDiscovery per-run model gateway/proxy path.
 
+### Rejected thinking controls
+
+One rule for every sender: a provider that answers 400 naming a thinking control the request carried gets exactly the named controls stripped, and the request retried once. Which layer applies it — and whether it applies it yet — differs by sender.
+
+- The OpenAI-chat streamed sender (`streamOpenAiTurn`, `packages/model/src/client.ts`) recovers internally. A rejection is proven only when the provider's own `param` pointer names the field or a rejection phrase sits next to the field name; a complaint about a control's *value* or the state it was sent in proves nothing, and neither does a body echo. The retry strips only the named controls, and the rejection is remembered for that endpoint only after the stripped request succeeds.
+- The other streamed senders do not recover yet: `streamAnthropicTurn` retries nothing, so a rejected `thinking` on an `anthropic-messages` profile still fails, and `openai-responses` sends `reasoning`, which is not one of the four control names and so is never stripped. Giving them the same bounded retry is a separate change.
+- Non-streaming calls go through `completeChatRequest` (`packages/model/src/completion.ts`), which stays a thin transport: it sends what it was given and returns the provider's status and body. A retry in there would consume the 400 that the caller's own recovery needs — `services/api/src/session-naming.ts` retries the same 400 *and* raises `max_tokens` 64 → 16 384, because that retry is also the path for a gateway that ignores the control and truncates the title.
+- A non-stream caller that wants the recovery asks `rejectedThinkingControlFields(detail)` for exactly the controls the 400 proves were rejected, intersects them with `carriedThinkingControls(body)` — a 400 names what the endpoint refused, not what the request sent — and then decides what to do. It has to strip the named fields out of the request it already built instead of asking for another thinking mode: the mode is resolved through the catalog first (`constrainCatalogThinking` rewrites `auto` to a model's declared default when the catalog's `modes` exclude it, and `kimi-k3` declares `modes: ["enabled"]`), so a "different" mode can rebuild the rejected body byte for byte. The Settings connectivity probe (`services/api/src/model-connectivity.ts`) does exactly that: one retry with the named fields removed, and the 400 stays the provider's error when the request carried none of them.
+- `services/api/src/papers.ts` and `services/api/src/evolution/llm-proxy.ts` keep the provider's error: neither has a caller-side recovery, and that is a decision, not an oversight.
+
 ### Model wire diagnostics
 
 Every streamed model request emits one `[model-sse-summary]` JSON line. The

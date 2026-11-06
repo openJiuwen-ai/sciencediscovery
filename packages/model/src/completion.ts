@@ -34,7 +34,30 @@ export class InvalidModelResponseError extends Error {
   override name = "InvalidModelResponseError";
 }
 
-/** Non-streaming compatibility at the existing model boundary. No protocol probing or fallback. */
+/**
+ * Non-streaming compatibility at the existing model boundary.
+ *
+ * The boundary stays dumb on purpose, and that is the rule every caller
+ * follows: a rejected thinking control is recovered by the caller, not here.
+ * This function sends what it was asked to send, returns the provider's status
+ * and body, and lets the caller decide what a 400 means. Two reasons:
+ *
+ * - a retry in here answers the 400 before the caller sees it, which silently
+ *   changes what a caller's own recovery is allowed to do. `session-naming.ts`
+ *   is the standing example: it retries a rejected `thinking` control *and*
+ *   raises `max_tokens` 64 → 16 384 on the same 400, because the retry is also
+ *   the path for gateways that ignore the control and truncate the title. A
+ *   transport-level retry would consume the 400 and never bump the budget.
+ * - the callers that want the recovery need different things from it
+ *   (`model-connectivity.ts` strips the control to answer "is this endpoint
+ *   usable at all", session naming needs the budget bump, the papers and
+ *   evolution proxies keep the provider's error).
+ *
+ * A caller that wants the shared classification logic without the policy uses
+ * {@link rejectedThinkingControlFields} from `client.ts`: it names exactly the
+ * controls a 400 proves were rejected, so the caller can strip them and retry
+ * once. No protocol probing or fallback happens in this function.
+ */
 export async function completeChatRequest(
   endpoint: ModelEndpoint, body: ChatCompletionRequest, signal: AbortSignal,
   fetchImpl?: typeof fetch,

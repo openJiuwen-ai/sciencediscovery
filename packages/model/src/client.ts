@@ -862,13 +862,46 @@ function detailRejectsField(lower: string, field: string): boolean {
   return false;
 }
 
-function rejectedThinkingFields(request: Pick<ThinkingControlRequest, "body">, detail: string): Set<string> {
-  let body: Record<string, unknown>;
-  try { body = JSON.parse(request.body) as Record<string, unknown>; } catch { return new Set(); }
+/**
+ * The thinking controls `detail` rejects, judged by the rule the streamed sender
+ * uses: the provider's own `param` pointer names the field, or a rejection
+ * phrase sits next to it; a complaint about a control's value or the state it
+ * was sent in proves nothing, and a body echo names every field without
+ * rejecting any.
+ *
+ * Exported for callers that own their own retry. The non-stream boundary in
+ * `completion.ts` deliberately carries no fallback (see its doc comment), so a
+ * caller such as the Settings connectivity probe strips exactly the controls a
+ * 400 named and retries once itself — after intersecting with
+ * {@link carriedThinkingControls}, because a 400 can name a control the request
+ * never carried.
+ */
+export function rejectedThinkingControlFields(detail: string): Set<string> {
   const lower = detail.toLowerCase();
-  return new Set(thinkingControlFields.filter((field) => field in body && (
-    detailRejectsField(lower, field) || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))
-  )));
+  return new Set(thinkingControlFields.filter((field) => detailRejectsField(lower, field)
+    || (field === "chat_template_kwargs" && detailRejectsField(lower, "enable_thinking"))));
+}
+
+/**
+ * The thinking controls `body` — a serialized chat request — actually carries.
+ *
+ * Only useful together with {@link rejectedThinkingControlFields}: a 400 names
+ * what the endpoint refused, never what this request sent. Which controls a
+ * variant injects cannot be answered from the endpoint either, because the mode
+ * is resolved through the catalog first (`constrainCatalogThinking` may rewrite
+ * `auto` to a model's declared default), so the serialized body is the only
+ * trustworthy answer. A caller that strips a control it never sent reports a
+ * recovery that did not happen and pays a second request to learn nothing.
+ */
+export function carriedThinkingControls(body: string): Set<string> {
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(body) as Record<string, unknown>; } catch { return new Set(); }
+  return new Set(thinkingControlFields.filter((field) => field in parsed));
+}
+
+function rejectedThinkingFields(request: Pick<ThinkingControlRequest, "body">, detail: string): Set<string> {
+  const carried = carriedThinkingControls(request.body);
+  return new Set([...rejectedThinkingControlFields(detail)].filter((field) => carried.has(field)));
 }
 
 function retryWithoutRejectedThinkingFields(
