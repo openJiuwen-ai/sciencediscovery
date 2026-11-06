@@ -5,9 +5,9 @@ and CI both run. `pnpm test:shared` is that command; `pnpm ci:ut`, `pnpm ci:st`
 `pnpm ci:l1` and `pnpm ci:e2e` are slices of the same selector, so the merge gate cannot run
 a different set from the one on a laptop. [MIGRATION.md](MIGRATION.md) records
 which of the repository's existing cases are in that plan and why each of the
-rest — live model, NPU, legacy quarantine, macOS, live Neo4j — is not.
+rest — live model, NPU, macOS, live Neo4j — is not.
 
-Live-model work enters L3–L5, but not the default PR plan. NPU and legacy work remain outside it: it is tagged,
+Live-model work enters L3–L5, but not the default PR plan. NPU work remains outside it: it is tagged,
 collected and then deselected, and it keeps its own explicitly opt-in entry
 points. Selection cannot reach it by accident, and no environment variable can
 make it appear in or disappear from a shared run.
@@ -61,7 +61,7 @@ pytest phases cannot be collapsed into an apparently clean pass.
 | `npu` | `none`, `required` | `none` | `none` means **not required**, not forbidden. |
 | `model` | `none`, `mock`, `real` | `none` | Model used by the system under test. |
 | `judge` | `none`, `llm` | `none` | Whether the test uses an LLM assertion. |
-| `status` | `reviewed`, `external`, `quarantined`, `legacy`, `unreviewed` | `reviewed` | Only `reviewed` is in the shared PR suite. `external` needs a live third-party service, `quarantined` is a reviewed case temporarily excluded from scheduled gates while a failure is investigated, `legacy` is the unaudited quarantine, and `unreviewed` is not yet fit to run. |
+| `status` | `reviewed`, `external`, `quarantined`, `unreviewed` | `reviewed` | Only `reviewed` is in the shared PR suite. `external` needs a live third-party service, `quarantined` is a reviewed case temporarily excluded from scheduled gates while a failure is investigated, and `unreviewed` is not yet fit to run. |
 | `sandbox` | `none`, `bubblewrap`, `seatbelt` | `none` | The execution sandbox the test itself drives. A plan holding `sandbox:bubblewrap` fails preflight on a host where `bwrap` cannot start. |
 | `swarm` | `none`, `required` | `none` | Whether a Node or Python test needs a real JiuwenSwarm instance behind the adapter, declared on the test that starts a gateway turn. The shared runner starts one instance for the plan's `swarm:required` tests and runs them on it one at a time; no other test gets its variables. A browser journey or command check cannot declare it. |
 

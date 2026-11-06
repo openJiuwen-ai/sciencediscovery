@@ -74,6 +74,7 @@ export interface RunStopOptions {
   cancelRun: (sessionId: string) => Promise<unknown>;
   controllers: Map<string, AbortController>;
   graceMs?: number;
+  onStreamAbort?: (sessionId: string) => void;
   schedule?: (callback: () => void, delayMs: number) => void;
   sessionId: string;
 }
@@ -91,17 +92,26 @@ export async function requestRunStop({
   cancelRun,
   controllers,
   graceMs = STOP_STREAM_GRACE_MS,
+  onStreamAbort,
   schedule = (callback, delayMs) => { setTimeout(callback, delayMs); },
   sessionId,
 }: RunStopOptions): Promise<void> {
   const controller = controllers.get(sessionId);
+  const abortAndReconcile = () => {
+    // A finished stream (or a subsequent run) no longer needs this fallback.
+    controller?.abort();
+    if (controllers.get(sessionId) !== controller) return;
+    // Aborting transport cannot clear the independent server-run indicator.
+    // Re-read it when the terminal event never reached this client.
+    onStreamAbort?.(sessionId);
+  };
   try {
     await cancelRun(sessionId);
-    schedule(() => controller?.abort(), graceMs);
+    schedule(abortAndReconcile, graceMs);
   } catch {
     // 409 means the run already ended server-side; either way the local abort
     // is what releases the composer.
-    controller?.abort();
+    abortAndReconcile();
   }
 }
 

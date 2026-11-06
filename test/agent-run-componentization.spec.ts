@@ -15,12 +15,13 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("agent-run-componentization.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("agent-run-componentization.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@status:reviewed", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * AgentRun / RequestExecution 组件化(commit 63db651)用户场景 E2E。
@@ -102,7 +103,9 @@ async function createProjectAndSession(
   const session = await createSession(project.id, modelId, `${prefix} session ${Date.now()}`, approvalMode);
 
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  // The workbench keeps its Session stream open, so `networkidle` never
+  // arrives; wait for the shell the next step clicks in.
+  await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page).toHaveTitle("ScienceDiscovery");
   await expect(page.locator(".brand strong")).toHaveText("ScienceDiscovery");
 
@@ -201,7 +204,26 @@ function attachLogCollector(page: Page, logs: string[]) {
 }
 
 test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
-  test("S1 主对话正常一轮:发送→进行中反馈→流式完成→可复用", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 主对话一轮的完整用户路径——发送、进行中反馈、流式完成与可复用输入，且无控制台错误。
+   * Steps:
+   *   1. 用 loopback mock LLM 创建模型、项目与会话，并在浏览器打开该会话。
+   *   2. 输入问题并点击 Run，断言消息请求返回 200、Stop 可见可点。
+   *   3. 断言助手回复流式到达、运行身份行可读、按钮恢复 Run、输入框可继续使用。
+   *   4. 切到 390×844 视口，断言完成的消息仍完整可读。
+   *   5. 断言无 console/page 错误，并清理项目与模型。
+   * Environment: 隔离本地栈；模型与流式响应由本 spec 的 loopback SSE 服务提供；桌面与 390×844 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；项目与模型在 finally 中删除。
+   */
+  test("S1 主对话正常一轮:发送→进行中反馈→流式完成→可复用", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(120000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -238,7 +260,8 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       // 完成反馈:助手消息可见、按钮恢复、输入框可继续用
       const assistantMessage = page.locator(".message.assistant").last();
       await expect(assistantMessage).toContainText("Main conversation round completed.", { timeout: 60000 });
-      await expect(assistantMessage.locator(".message-role")).toContainText("ScienceDiscovery");
+      // The answer body carries no role line; the run's identity row does.
+      await expect(page.locator(".run-identity .message-role").last()).toContainText("ScienceDiscovery");
       await expect(page.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 60000 });
       await expect(composer).toBeEnabled();
       await screenshot(page, "s1-03-completed-desktop");
@@ -258,7 +281,25 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     }
   });
 
-  test("S2 权限卡出现在主对话最外层,批准 Once 后运行继续完成", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 受控工具的权限卡浮在主对话时间线最外层，批准 Once 后运行继续并完成。
+   * Steps:
+   *   1. 用会调用 run_shell 的 mock LLM 创建 ask_for_dangerous 会话。
+   *   2. 发起运行，断言主时间线出现 pending 权限卡，且不在 subagent 卡片内。
+   *   3. 点击 Allow once，断言助手完成回复、按钮恢复 Run、pending 卡消失。
+   *   4. 断言无 console/page 错误，并清理项目与模型。
+   * Environment: 隔离本地栈；模型与工具调用流程由本 spec 的 loopback SSE 服务提供。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — run_shell 在本地 Runner 的 sandbox 内执行。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；项目与模型在 finally 中删除。
+   */
+  test("S2 权限卡出现在主对话最外层,批准 Once 后运行继续完成", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(180000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -268,8 +309,8 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
         return textChunks("chatcmpl-permission-final", "agent-run-e2e-model", "Code executed successfully after approval.");
       }
       return toolCallChunks("chatcmpl-permission-code", "agent-run-e2e-model", [{
-        args: { command: "python -c \"print('hello from sandbox')\"" },
-        callId: "call-run-python-1",
+        args: { command: "printf 'hello from sandbox'" },
+        callId: "call-run-shell-1",
         name: "run_shell",
       }]);
     });
@@ -277,32 +318,35 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     let projectId: string | undefined;
 
     try {
-      const { project } = await createProjectAndSession(page, model.id, "AgentRun permission");
+      const { project } = await createProjectAndSession(page, model.id, "AgentRun permission", "ask_for_dangerous");
       projectId = project.id;
 
       const composer = page.locator(".composer textarea");
-      await composer.fill("Run a short Python snippet in the workspace sandbox.");
+      await composer.fill("Run a short shell command in the workspace sandbox.");
       await page.getByRole("button", { name: "Run analysis" }).click();
 
-      // 权限卡出现在主对话层(非嵌套 subagent 卡片内)
-      const permissionSection = page.locator("section[aria-label='Permission cards']");
-      await expect(permissionSection).toBeVisible({ timeout: 30000 });
-      await expect(permissionSection).toContainText("Permission required");
-      await expect(permissionSection).toContainText(/Run python code/i);
+      // 权限卡出现在主对话层(时间线最外层,非嵌套 subagent 卡片内)
+      const timeline = page.getByRole("region", { name: "Agent activity" });
+      const permissionCard = timeline.locator(".timeline-permission.pending").first();
+      await expect(permissionCard).toBeVisible({ timeout: 30000 });
+      await expect(permissionCard).toContainText("Permission required");
+      // The gate names the tool and the exact command the user is approving.
+      await expect(permissionCard).toContainText("run_shell");
+      await expect(permissionCard).toContainText("printf 'hello from sandbox'");
       // 运行仍在等待用户决策
       await expect(page.getByRole("button", { name: "Stop the current run" })).toBeVisible();
       await expect(page.locator(".subagent-card .permission-card")).toHaveCount(0);
-      await permissionSection.scrollIntoViewIfNeeded();
+      await permissionCard.scrollIntoViewIfNeeded();
       await screenshot(page, "s2-01-permission-card-outermost");
 
       // 默认 Once 范围,点击 Allow
-      await permissionSection.getByRole("button", { name: "Allow" }).click();
+      await permissionCard.getByRole("button", { name: "Allow once" }).click();
 
       // 批准后运行继续并最终完成;权限卡消失
       const assistantMessage = page.locator(".message.assistant").last();
       await expect(assistantMessage).toContainText("Code executed successfully after approval.", { timeout: 120000 });
       await expect(page.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 120000 });
-      await expect(permissionSection).toBeHidden();
+      await expect(timeline.locator(".timeline-permission.pending")).toHaveCount(0);
       await screenshot(page, "s2-02-completed-after-approval");
 
       const consoleErrors = logs.filter((line) => line.startsWith("[error]") || line.startsWith("[pageerror]"));
@@ -315,7 +359,25 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     }
   });
 
-  test("S2b subagent 首个受控工具的权限卡也出现在主对话最外层", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: subagent 首个受控工具触发的权限卡同样浮到主对话最外层，批准后 subagent 与父运行都正常收尾。
+   * Steps:
+   *   1. mock LLM 让父 agent 调用 task，subagent 调用 run_shell。
+   *   2. 发起运行，断言 subagent 卡片为 running 且权限卡在主时间线、不嵌套在卡片内。
+   *   3. Allow once 后断言 subagent 完成、父回复到达、pending 清空。
+   *   4. 断言无 console/page 错误，并清理项目与模型。
+   * Environment: 隔离本地栈；模型与 subagent 工具调用流程由本 spec 的 loopback SSE 服务提供。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — run_shell 在本地 Runner 的 sandbox 内执行。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；项目与模型在 finally 中删除。
+   */
+  test("S2b subagent 首个受控工具的权限卡也出现在主对话最外层", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(180000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -326,8 +388,8 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
           return textChunks("chatcmpl-subagent-perm-final", "agent-run-e2e-model", "Subagent ran the approved code.");
         }
         return toolCallChunks("chatcmpl-subagent-perm-code", "agent-run-e2e-model", [{
-          args: { command: "python -c \"print('subagent sandbox')\"" },
-          callId: "call-subagent-run-python",
+          args: { command: "printf 'subagent sandbox'" },
+          callId: "call-subagent-run-shell",
           name: "run_shell",
         }]);
       }
@@ -348,7 +410,7 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     let projectId: string | undefined;
 
     try {
-      const { project } = await createProjectAndSession(page, model.id, "AgentRun subagent permission");
+      const { project } = await createProjectAndSession(page, model.id, "AgentRun subagent permission", "ask_for_dangerous");
       projectId = project.id;
 
       await page.locator(".composer textarea").fill("Delegate a task that needs sandbox code execution.");
@@ -359,21 +421,23 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       await expect(card).toHaveClass(/running/);
 
       // 子 Agent 触发的权限请求同样浮到主对话最外层,且不嵌在 subagent 卡片里
-      const permissionSection = page.locator("section[aria-label='Permission cards']");
-      await expect(permissionSection).toBeVisible({ timeout: 30000 });
-      await expect(permissionSection).toContainText(/Run python code/i);
+      const timeline = page.getByRole("region", { name: "Agent activity" });
+      const permissionCard = timeline.locator(".timeline-permission.pending").first();
+      await expect(permissionCard).toBeVisible({ timeout: 30000 });
+      await expect(permissionCard).toContainText("run_shell");
+      await expect(permissionCard).toContainText("printf 'subagent sandbox'");
       await expect(page.locator(".subagent-card .permission-card")).toHaveCount(0);
-      await permissionSection.scrollIntoViewIfNeeded();
+      await permissionCard.scrollIntoViewIfNeeded();
       await screenshot(page, "s2b-01-subagent-permission-outermost");
 
-      await permissionSection.getByRole("button", { name: "Allow" }).click();
+      await permissionCard.getByRole("button", { name: "Allow once" }).click();
 
       // 批准后 subagent 继续并完成,父运行正常收尾
       await expect(card).toHaveClass(/completed/, { timeout: 120000 });
       const assistantMessage = page.locator(".message.assistant").last();
       await expect(assistantMessage).toContainText("Parent received the subagent result.", { timeout: 120000 });
       await expect(page.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 120000 });
-      await expect(permissionSection).toBeHidden();
+      await expect(timeline.locator(".timeline-permission.pending")).toHaveCount(0);
       await screenshot(page, "s2b-02-subagent-permission-completed");
 
       const consoleErrors = logs.filter((line) => line.startsWith("[error]") || line.startsWith("[pageerror]"));
@@ -386,7 +450,26 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     }
   });
 
-  test("S3 检视缺口①:同轮并发两个 run_shell,同键 once 权限的用户可见行为", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 同一轮两个 run_shell 共用权限键时，Allow once 只授权当前请求，另一个保持 pending；Stop 后 teardown 取消它且不留孤儿。
+   * Steps:
+   *   1. mock LLM 在同一助手消息里发出两个 run_shell 调用。
+   *   2. 发起运行，断言两个 sibling 各有一张 pending 卡；批准其中一张后另一张仍 pending，API 显示 1 allowed / 1 pending。
+   *   3. 点击 Stop，断言按钮恢复 Run，pending 卡与 Allow 按钮消失。
+   *   4. 查询权限 API，断言 1 allowed / 0 pending / 1 cancelled，取消带 decidedAt 且无 authorization。
+   *   5. 断言无权限流程 console/page 错误，并清理项目与模型。
+   * Environment: 隔离本地栈；模型与并发工具调用由本 spec 的 loopback SSE 服务提供。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — run_shell 在本地 Runner 的 sandbox 内执行。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；项目与模型在 finally 中删除。
+   */
+  test("S3 检视缺口①:同轮并发两个 run_shell,同键 once 权限的用户可见行为", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(240000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -396,8 +479,8 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
         return textChunks("chatcmpl-concurrent-final", "agent-run-e2e-model", "Both concurrent code executions finished.");
       }
       return toolCallChunks("chatcmpl-concurrent-code", "agent-run-e2e-model", [
-        { args: { command: "python -c \"print('first')\"" }, callId: "call-run-shell-a", name: "run_shell" },
-        { args: { command: "python -c \"print('second')\"" }, callId: "call-run-shell-b", name: "run_shell" },
+        { args: { command: "printf 'first'" }, callId: "call-run-shell-a", name: "run_shell" },
+        { args: { command: "printf 'second'" }, callId: "call-run-shell-b", name: "run_shell" },
       ]);
     });
     const model = await createTestModel(baseUrl, "AgentRun concurrent-permission model");
@@ -412,20 +495,27 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       );
       projectId = project.id;
 
-      await page.locator(".composer textarea").fill("Run two independent Python snippets concurrently.");
+      await page.locator(".composer textarea").fill("Run two independent shell commands concurrently.");
       await page.getByRole("button", { name: "Run analysis" }).click();
 
       const timeline = page.getByRole("region", { name: "Agent activity" });
+      // Both sibling calls in the assistant message reach their gate and wait.
       const pendingCards = timeline.locator(".timeline-permission.pending");
       await expect(pendingCards).toHaveCount(2, { timeout: 30000 });
       await pendingCards.first().scrollIntoViewIfNeeded();
       await screenshot(page, "s3-01-concurrent-pending-cards");
 
-      // Allow once 只授权点选请求；仍有活跃 waiter 的同键 sibling 保持可独立决策。
-      await pendingCards.first().getByRole("button", { name: "Allow once" }).click();
-      await expect(timeline.locator(".timeline-permission.allowed")).toHaveCount(1);
-      await expect(timeline.locator(".timeline-permission.pending")).toHaveCount(1);
-      await expect(timeline.locator(".timeline-permission.cancelled")).toHaveCount(0);
+      // Allow once authorizes only the request the user pointed at; the sibling
+      // with the same key stays pending for its own decision.
+      const [decisionResponse] = await Promise.all([
+        page.waitForResponse((response) =>
+          response.request().method() === "POST" && response.url().includes("/decision")),
+        pendingCards.first().getByRole("button", { name: "Allow once" }).click(),
+      ]);
+      expect(decisionResponse.ok(), "allow-once decision should be accepted").toBeTruthy();
+      // A decided request leaves the timeline: only pending gates render, so the
+      // sibling's same-key call is the single card left asking.
+      await expect(timeline.locator(".timeline-permission.pending")).toHaveCount(1, { timeout: 30000 });
       await expect(timeline.getByRole("button", { name: "Allow once" })).toHaveCount(1);
       const liveRequestsResponse = await apiRequest(`/api/permission-requests?sessionId=${encodeURIComponent(session.id)}`);
       const liveRequests = (await liveRequestsResponse.json()) as Array<{
@@ -443,9 +533,9 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       // waiter 仍在时 pending 是正常状态；用户终止 run 后，teardown 才取消该 request。
       await page.getByRole("button", { name: "Stop the current run" }).click();
       await expect(page.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 30000 });
+      // The cancelled gate is a decided request too, so the timeline keeps no
+      // card and the user is left with no stale "Allow" affordance.
       await expect(timeline.locator(".timeline-permission.pending")).toHaveCount(0);
-      await expect(timeline.locator(".timeline-permission.allowed")).toHaveCount(1);
-      await expect(timeline.locator(".timeline-permission.cancelled")).toHaveCount(1);
       await expect(timeline.getByRole("button", { name: "Allow once" })).toHaveCount(0);
       const requestsResponse = await apiRequest(`/api/permission-requests?sessionId=${encodeURIComponent(session.id)}`);
       const requests = (await requestsResponse.json()) as typeof liveRequests;
@@ -458,7 +548,7 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       expect(cancelled?.permissionAuthorizationId, "teardown cancellation creates no authorization").toBeUndefined();
       const dismissNotifications = page.getByRole("button", { name: "Dismiss notification" });
       while (await dismissNotifications.count()) await dismissNotifications.first().click();
-      await timeline.locator(".timeline-permission.cancelled").scrollIntoViewIfNeeded();
+      await timeline.scrollIntoViewIfNeeded();
       await screenshot(page, "s3-03-stop-cancels-abandoned-pending-card");
 
       const unexpectedErrors = logs.filter((line) =>
@@ -476,7 +566,26 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     }
   });
 
-  test("S4 检视缺口②:中断主对话连接后 subagent 级联取消,重进会话状态可读", async ({ page, context }) => {
+  /**
+   * E2E-META
+   * Purpose: 关闭页面只断开事件流，后台 subagent 继续运行；重新进入仍可读到运行态，显式 Stop 级联取消并给出可读终态。
+   * Steps:
+   *   1. mock LLM 让 subagent 长时间运行。
+   *   2. 发起运行，断言子卡片 running 后关闭页面。
+   *   3. 新开页面回到同一项目与会话，断言子卡片仍为 running。
+   *   4. 点击 Stop，断言按钮恢复、running 卡片消失、出现 cancelled 记录且摘要可读。
+   *   5. 清理项目与模型。
+   * Environment: 隔离本地栈；模型与长运行 subagent 由本 spec 的 loopback SSE 服务提供。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；项目与模型在 finally 中删除。
+   */
+  test("S4 检视缺口②:关闭页面不取消后台工作,重进状态可读,显式停止级联取消", { tag: "@mocked" }, async ({ page, context }) => {
     test.setTimeout(180000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -516,28 +625,33 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       await expect(card).toHaveClass(/running/);
       await screenshot(page, "s4-01-subagent-running-before-abort");
 
-      // 用户级取消方式:关闭页面,浏览器中断 SSE 连接,服务端应中止运行并级联取消 subagent
+      // 关闭页面只断开事件流:后台工作继续,不能被当成取消。
       await page.close();
       await page.waitForTimeout(3000).catch(() => undefined);
 
-      // 重新打开会话:卡片必须进入可读的终态(cancelled),不能停留在 running
+      // 重新打开会话:用户能读到仍在运行的状态
       const page2 = await context.newPage();
       attachLogCollector(page2, logs);
       await page2.goto("/");
-      await page2.waitForLoadState("networkidle");
+      await expect(page2.locator(".app-shell")).toBeVisible();
       await page2.locator(".nav-item").filter({ hasText: project.name }).click();
       await page2.locator(".nav-item").filter({ hasText: session.title }).click();
       await expect(page2.locator("h1")).toContainText(session.title);
 
       const cardAfter = page2.locator(".subagent-card").first();
       await expect(cardAfter).toBeVisible({ timeout: 20000 });
-      await expect(cardAfter).toHaveClass(/cancelled/, { timeout: 30000 });
-      await expect(cardAfter).not.toHaveClass(/running/);
-      await expect(page2.locator(".subagent-list-heading")).toContainText("0 running");
-      // 展开卡片,错误/状态信息可读
-      await cardAfter.locator("> button").click();
-      await expect(cardAfter.locator(".subagent-details")).toBeVisible();
-      await screenshot(page2, "s4-02-subagent-cancelled-after-reopen");
+      await expect(cardAfter).toHaveClass(/running/);
+      await screenshot(page2, "s4-02-subagent-still-running-after-reopen");
+
+      // 取消是显式动作:停止本次运行会级联取消 subagent,卡片进入可读终态。
+      await page2.getByRole("button", { name: "Stop the current run" }).click();
+      await expect(page2.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 30000 });
+      await expect(page2.locator(".subagent-card.running")).toHaveCount(0, { timeout: 30000 });
+      await expect(page2.locator(".subagent-card.cancelled")).toHaveCount(1, { timeout: 30000 });
+      const record = page2.locator("details.process-record.cancelled").first();
+      await expect(record.locator(":scope > summary")).toContainText(/Long running inspection/i);
+      await expect(record.locator(":scope > summary")).toContainText(/cancelled/i);
+      await screenshot(page2, "s4-03-subagent-cancelled-after-stop");
       await page2.close();
     } finally {
       if (projectId) await deleteProject(projectId).catch(() => undefined);
@@ -547,7 +661,26 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     }
   });
 
-  test("S5 检视缺口④:subagent 超过 maxTurns 被截断,卡片终态与原因可读", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: subagent 超过 maxTurns 被截断时，卡片终态为 timed_out 且原因在折叠摘要中可读，父运行正常收尾。
+   * Steps:
+   *   1. mock LLM 让 subagent 永远调用 list_files，父 agent 指定 max_turns=2。
+   *   2. 发起运行，断言子卡片进入 timed_out 且按钮恢复 Run。
+   *   3. 断言折叠摘要包含任务描述、timed out 与 maxTurns。
+   *   4. 断言父回复说明子 agent 被轮次上限终止。
+   *   5. 断言无 console/page 错误，并清理项目与模型。
+   * Environment: 隔离本地栈；模型与轮次上限流程由本 spec 的 loopback SSE 服务提供。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；项目与模型在 finally 中删除。
+   */
+  test("S5 检视缺口④:subagent 超过 maxTurns 被截断,卡片终态与原因可读", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(180000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -591,10 +724,11 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
       // 截断终态:卡片进入 timed_out 且给出 maxTurns 原因
       await expect(card).toHaveClass(/timed_out/, { timeout: 90000 });
       await expect(page.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 90000 });
-      const toggle = card.locator("> button");
-      if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-      const details = card.locator(".subagent-details");
-      await expect(details).toContainText(/maxTurns/i);
+      // 终态记录折叠卡片本体,但摘要行保留终止原因,用户无需展开即可读。
+      const record = page.locator("details.process-record.timed_out").first();
+      await expect(record.locator(":scope > summary")).toContainText(/Looping inspection/i);
+      await expect(record.locator(":scope > summary")).toContainText(/timed out/i);
+      await expect(record.locator(":scope > summary")).toContainText(/maxTurns/i);
       await screenshot(page, "s5-01-maxturns-truncated-card");
 
       // 父运行收到截断结果后正常收尾

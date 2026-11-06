@@ -95,8 +95,8 @@ skipped case is a failed run. So "the layer passed but ran fewer tests" is not
 a possible outcome any more; `node .ci/tagged-summary.mjs` fails the job unless
 `planned == executed == passed`, including when no plan was produced at all.
 Real E2E runs in L3/L4/L5 with explicit credentials and `CI_ALLOW_REAL=1`.
-The separate `ci:st:real` native compatibility smoke, adapter live tests, NPU
-and legacy-only suites keep their own opt-in entry points; they are not added
+The separate `ci:st:real` native compatibility smoke, adapter live tests and
+NPU suites keep their own opt-in entry points; they are not added
 by selecting the native backend. `test/support/tagged/MIGRATION.md` is the
 ledger of what is in and what is out. Quarantined cases stay outside the plan,
 never counted as passes. There is no suite API/token budget gate or historical

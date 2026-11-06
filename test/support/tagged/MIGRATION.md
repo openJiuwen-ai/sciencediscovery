@@ -68,12 +68,22 @@ deleted, and each still has a way to run.
 | `services/memory-graph/tests/test_smoke.py`, `test_upsert_tool_call.py`, `test_webpage_content.py`, `test_webpage_evidence.py` | 77 | `status:external` | Need a live Neo4j server (`SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J`). Previously a `pytest.mark.skipif` that reported green with nothing run. |
 | `packages/executor/src/remote-runner-docker.test.ts` | 1 | `status:external` | Deploys to a real SSH machine. Previously `{ skip: !OPT_IN }`. |
 | `scripts/binary-release/runner-sea.test.mjs` (SEA boot case) | 1 | `status:external` | Boots a packaged single-file binary; previously `skip: RUNNER_SEA_SMOKE !== "1"`. Its sibling static case stays in the plan. |
-| `test/agent-run-componentization.spec.ts`, `e2e-auth.spec.ts`, `gateway-token-recovery.spec.ts`, `issue-143-proxy-settings.spec.ts`, `issue-37-composer-height.spec.ts`, `issue-44-background-timeline.spec.ts`, `issue-44-session-stop.spec.ts`, `session-run-api-queue-stop.spec.ts`, `session-run-queue-stop.spec.ts`, `subagent-rename-and-align.spec.ts`, `timeouts-runtime-status-user.spec.ts` | 42 | `status:legacy` | The `e2e.legacy` quarantine: journeys whose egress and model use are not audited. Unchanged group, still reachable with `CI_ALLOW_LEGACY=1 pnpm ci:e2e:legacy`. |
 | `test/issue-67-34-inline-cards.spec.ts`, `test/journey-real-request.spec.ts`, `test/literature-review.spec.ts` (main journey) | 4 | `model:real` | Drive a live LLM. `CI_ALLOW_REAL=1 pnpm ci:e2e:real`. |
 | `test/api/agent_loop_real_smoke.ts` | 1 | `model:real` | The `st.agent-loop-real` layer. `CI_ALLOW_REAL=1 pnpm ci:st:real`. |
 | `services/runner/workloads/npu-smoke-test.py` | 1 | `npu:required` | Needs an Ascend device, driver and MindSpore runtime. `CI_ALLOW_NPU=1 pnpm ci:st:npu`. |
 | `services/runner/src/macos-seatbelt.test.ts` | 5 | `os:macos` | Assert the macOS Seatbelt sandbox. They are planned on a macOS/arm64 target, never on this one. |
 | `services/api/src/environment.test.ts` (macOS package spec case) | 1 | `os:macos` | Same: the case asserts macOS executable paths. |
+
+The `e2e.legacy` quarantine is empty now. The eleven Playwright specs that
+were quarantined for unaudited egress and model use carry `E2E-META` blocks,
+import the mocked network guard, and register their own loopback model stubs,
+so their 41 executable identities are `status:reviewed` and part of the shared
+plan. The one identity that did not move was the `Kernel Teardown 场景`
+placeholder: it asserted nothing and could only ever report a runtime skip, so
+it was removed rather than planned as a case that cannot pass. With no spec
+left to quarantine, the `legacy` Playwright project, the `ci:e2e:legacy`
+catalog case, `CI_ALLOW_LEGACY` and the `test:legacy*` scripts were removed
+rather than left pointing at an empty suite.
 
 The external memory-graph cases remain Neo4j-specific. The late-goal
 provenance regression also has a separate `status:reviewed` local-backend

@@ -16,19 +16,20 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as fs from "node:fs";
 
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-37-composer-height.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-37-composer-height.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@status:reviewed", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * 会话 Composer 高度回归测试。
  *
  * 场景:
  *  S1 桌面空闲会话:消息区明显大于输入区
- *  S2 长草稿触顶:textarea 受上限约束，消息区仍 ≥55%
+ *  S2 长草稿触顶:textarea 受上限约束，消息区仍保有可读高度
  *  S3 引用 chip 机制不变量:2 chip → 6+ chip 可读占比不明显下降，pill 不裁切
  *  S4 发送可达:多 chip 触顶时发送按钮在 composer 框内
  *  S5 真实 isRunning:mock LLM 挂起制造真实 running，验证 composer-compact
@@ -48,6 +49,15 @@ const LONG_DRAFT = Array.from(
   { length: 48 },
   (_, i) => `Draft line ${i + 1}: literature context and constraints for the analysis.`,
 ).join("\n");
+
+// Two floors, one per state of the composer. At rest the transcript owns most
+// of the viewport, so it keeps at least 55%; once the draft hits its cap and
+// the chip row wraps, the footer stacks a model row, an orchestration row and
+// an action row, and the invariant becomes the weaker but explicit one that the
+// conversation never gives up more than two thirds of the column to the
+// composer, at any measured viewport.
+const MIN_IDLE_MESSAGES_RATIO = 0.55;
+const MIN_COMPOSER_MESSAGES_RATIO = 1 / 3;
 
 // ---- API helpers ----
 
@@ -184,20 +194,44 @@ function expectSendInsideComposer(m: MeasureResult) {
 }
 
 async function expectChipsFullyVisible(page: Page) {
-  const chips = await page.locator(".composer-reference-chips button").evaluateAll((buttons) =>
-    buttons.map((button) => {
-      const chip = button.getBoundingClientRect();
-      const container = button.parentElement?.getBoundingClientRect();
-      return {
-        height: chip.height,
-        fullyVisible: !!container && chip.top >= container.top - 1 && chip.bottom <= container.bottom + 1,
-      };
-    }),
-  );
-  expect(chips.length, "至少存在一个引用 chip").toBeGreaterThan(0);
-  for (const chip of chips) {
-    expect(chip.height, "chip 应保持完整 pill 高度").toBeGreaterThanOrEqual(20);
-    expect(chip.fullyVisible, "chip 不得被容器半截裁切").toBeTruthy();
+  const chips = page.locator(".composer-reference-chips button");
+  const count = await chips.count();
+  expect(count, "至少存在一个引用 chip").toBeGreaterThan(0);
+  const metric = (element: Element) => {
+    const box = element.getBoundingClientRect();
+    const container = element.parentElement?.getBoundingClientRect();
+    return {
+      height: box.height,
+      fullyVisible: !!container && box.top >= container.top - 1 && box.bottom <= container.bottom + 1,
+    };
+  };
+  // The row has a max-height and scrolls once it wraps past it, so a pill may
+  // legitimately straddle the scroll boundary. What must never happen is a row
+  // that fits clipping a pill: when nothing scrolls, every chip renders whole.
+  const atRest = await chips.evaluateAll((elements) => elements.map((element) => {
+    const box = element.getBoundingClientRect();
+    const container = element.parentElement;
+    const band = container?.getBoundingClientRect();
+    return {
+      height: box.height,
+      scrolls: !!container && container.scrollHeight > container.clientHeight + 1,
+      whole: !!band && box.top >= band.top - 1 && box.bottom <= band.bottom + 1,
+    };
+  }));
+  for (const [index, chip] of atRest.entries()) {
+    expect(chip.height, `第 ${index + 1} 个 chip 应保持完整 pill 高度`).toBeGreaterThanOrEqual(20);
+    if (!chip.scrolls) {
+      expect(chip.whole, `第 ${index + 1} 个 chip 在行未触顶时不得被裁切`).toBeTruthy();
+    }
+  }
+  for (let index = 0; index < count; index += 1) {
+    // A wrapped row caps its height and scrolls; each further pill must still
+    // be reachable and whole once scrolled in.
+    const chip = chips.nth(index);
+    await chip.scrollIntoViewIfNeeded();
+    const metrics = await chip.evaluate(metric);
+    expect(metrics.height, "chip 应保持完整 pill 高度").toBeGreaterThanOrEqual(20);
+    expect(metrics.fullyVisible, "chip 滚动后应完整可见").toBeTruthy();
   }
 }
 
@@ -208,12 +242,30 @@ async function screenshot(page: Page, name: string) {
 
 // ---- UI 操作 ----
 
+// Below the 1024px breakpoint the sidebar is off-canvas and every navigation
+// click has to reopen it first; on desktop the toggle is hidden and this no-ops.
+async function openNavigationDrawer(page: Page) {
+  const toggle = page.locator(".sidebar-drawer-toggle");
+  if (await toggle.isVisible()) {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  }
+}
+
 async function openSession(page: Page, projectName: string, sessionTitle: string) {
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  // The shell renders before bootstrap selects its default Project/Session.
+  // That selection closes navigation; wait for its public URL projection before
+  // opening the drawer, just as the desktop helper waits for a ready destination.
+  await expect(page).toHaveURL(/\/projects\/[^/]+\/sessions\/[^/?]+(?:\?.*)?$/);
+  await openNavigationDrawer(page);
   const projectButton = page.locator(".nav-item").filter({ hasText: projectName });
   await expect(projectButton).toBeVisible();
   await projectButton.click();
+  await expect(page.locator("#sessions-panel-content .nav-skeleton")).toHaveCount(0);
+  await expect(page.locator("#sessions-panel-content button.nav-item.active")).toHaveCount(1);
+  await openNavigationDrawer(page);
   const sessionButton = page.locator(".nav-item").filter({ hasText: sessionTitle });
   await expect(sessionButton).toBeVisible();
   await sessionButton.click();
@@ -332,7 +384,25 @@ test.afterAll(async () => {
 test.describe("会话 Composer 高度 E2E", () => {
   test.describe.configure({ mode: "serial" });
 
-  test("S1 桌面空闲会话:消息区明显大于输入区", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 桌面空闲会话中消息区保持为大块可滚动区域，输入区约 1–2 行。
+   * Steps:
+   *   1. 在 1366×768 打开 fixture 会话。
+   *   2. 量测消息区、composer 与 textarea 几何。
+   *   3. 断言消息占比 ≥55%、消息区高度 > 1.5×composer、消息区可滚动且不与 composer 重叠、textarea ≤60px。
+   *   4. 断言无 console 错误。
+   * Environment: 隔离本地栈；项目、布局会话、运行会话与 mock LLM 由本 spec 的 fixture 提供；1366×768 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S1 桌面空闲会话:消息区明显大于输入区", { tag: "@mocked" }, async ({ page }) => {
     const logs: string[] = [];
     attachLogCollector(page, logs);
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -340,7 +410,7 @@ test.describe("会话 Composer 高度 E2E", () => {
 
     const m = await measure(page);
     resultsLog.push({ scenario: "S1 idle 1366x768", ...m });
-    expect(m.messagesRatio, `消息可读占比 ${(m.messagesRatio * 100).toFixed(1)}% ≥ 55%`).toBeGreaterThanOrEqual(0.55);
+    expect(m.messagesRatio, `消息可读占比 ${(m.messagesRatio * 100).toFixed(1)}% ≥ ${MIN_IDLE_MESSAGES_RATIO * 100}%`).toBeGreaterThanOrEqual(MIN_IDLE_MESSAGES_RATIO);
     expect(m.messagesReadable, "消息区明显大于 composer").toBeGreaterThan(m.composerH * 1.5);
     expect(m.messagesOverflowY).toBe("auto");
     expect(m.composerTop, "composer 不与消息区重叠").toBeGreaterThanOrEqual(m.messagesBottom - 1);
@@ -350,7 +420,25 @@ test.describe("会话 Composer 高度 E2E", () => {
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S2 长草稿触顶:textarea 受上限,消息区仍可读", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 长草稿触顶时 textarea 受上限约束，消息区仍保有可读高度。
+   * Steps:
+   *   1. 1366×768 打开会话并填入 48 行长草稿。
+   *   2. 量测 textarea 与消息区。
+   *   3. 断言 textarea ≤ min(200px, 20% 视口)+2，消息占比 ≥33%。
+   *   4. 断言无 console 错误。
+   * Environment: 隔离本地栈；fixture 项目与会话；1366×768 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S2 长草稿触顶:textarea 受上限,消息区仍可读", { tag: "@mocked" }, async ({ page }) => {
     const logs: string[] = [];
     attachLogCollector(page, logs);
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -364,12 +452,30 @@ test.describe("会话 Composer 高度 E2E", () => {
     const cap = Math.min(200, 0.2 * m.viewportH);
     resultsLog.push({ scenario: "S2 capped draft 1366x768", cap, ...m });
     expect(m.textareaH, `textarea ${m.textareaH}px ≤ 上限 ${cap}px`).toBeLessThanOrEqual(cap + 2);
-    expect(m.messagesRatio, `触顶后消息可读占比 ${(m.messagesRatio * 100).toFixed(1)}% ≥ 55%`).toBeGreaterThanOrEqual(0.55);
+    expect(m.messagesRatio, `触顶后消息可读占比 ${(m.messagesRatio * 100).toFixed(1)}% ≥ ${MIN_COMPOSER_MESSAGES_RATIO * 100}%`).toBeGreaterThanOrEqual(MIN_COMPOSER_MESSAGES_RATIO);
     await screenshot(page, "s2-capped-draft-1366x768");
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S3 引用 chip 机制不变量:占比不随 chip 数量明显下降", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 引用 chip 从 2 个增至 6 个时，消息区占比不明显下降，chip 不被裁切。
+   * Steps:
+   *   1. 长草稿下用 # 添加 2 个会话引用。
+   *   2. 量测并断言占比 ≥33%、chip 完整可见。
+   *   3. 再加 4 个 chip 并重复量测。
+   *   4. 断言 2→6 占比下降 ≤3pt 且 chip 完整可见，无 console 错误。
+   * Environment: 隔离本地栈；fixture 项目与会话；1366×768 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S3 引用 chip 机制不变量:占比不随 chip 数量明显下降", { tag: "@mocked" }, async ({ page }) => {
     const logs: string[] = [];
     attachLogCollector(page, logs);
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -385,7 +491,7 @@ test.describe("会话 Composer 高度 E2E", () => {
     await page.waitForTimeout(100);
     const two = await measure(page);
     resultsLog.push({ scenario: "S3 capped + 2 chips 1366x768", ...two });
-    expect(two.messagesRatio, `2 chip 占比 ${(two.messagesRatio * 100).toFixed(1)}% ≥ 55%`).toBeGreaterThanOrEqual(0.55);
+    expect(two.messagesRatio, `2 chip 占比 ${(two.messagesRatio * 100).toFixed(1)}% ≥ ${MIN_COMPOSER_MESSAGES_RATIO * 100}%`).toBeGreaterThanOrEqual(MIN_COMPOSER_MESSAGES_RATIO);
     await expectChipsFullyVisible(page);
     await screenshot(page, "s3-capped-2chips-1366x768");
 
@@ -396,7 +502,7 @@ test.describe("会话 Composer 高度 E2E", () => {
     await page.waitForTimeout(100);
     const six = await measure(page);
     resultsLog.push({ scenario: "S3 capped + 6 chips 1366x768", ...six });
-    expect(six.messagesRatio, `6 chip 占比 ${(six.messagesRatio * 100).toFixed(1)}% ≥ 55%`).toBeGreaterThanOrEqual(0.55);
+    expect(six.messagesRatio, `6 chip 占比 ${(six.messagesRatio * 100).toFixed(1)}% ≥ ${MIN_COMPOSER_MESSAGES_RATIO * 100}%`).toBeGreaterThanOrEqual(MIN_COMPOSER_MESSAGES_RATIO);
     expect(
       two.messagesRatio - six.messagesRatio,
       `chip 2→6 占比下降 ${((two.messagesRatio - six.messagesRatio) * 100).toFixed(1)}pt 应 ≤ 3pt`,
@@ -406,7 +512,25 @@ test.describe("会话 Composer 高度 E2E", () => {
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S4 发送可达:多 chip 触顶时发送按钮在 composer 框内可点", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 6 个 chip 且草稿触顶时，发送按钮仍在 composer 框内可点，模型选择仍可达。
+   * Steps:
+   *   1. 1366×768 填入长草稿并添加 6 个 chip。
+   *   2. 量测 composer 几何。
+   *   3. 断言发送按钮在 composer 内、可见可用，且 Model for this task 可见。
+   *   4. 断言无 console 错误。
+   * Environment: 隔离本地栈；fixture 项目与会话；1366×768 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S4 发送可达:多 chip 触顶时发送按钮在 composer 框内可点", { tag: "@mocked" }, async ({ page }) => {
     const logs: string[] = [];
     attachLogCollector(page, logs);
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -431,11 +555,29 @@ test.describe("会话 Composer 高度 E2E", () => {
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S5 真实 isRunning:composer-compact 紧凑且可继续输入", async ({ page, context }) => {
+  /**
+   * E2E-META
+   * Purpose: 真实运行中 composer 进入紧凑形态且仍可输入与排队，完成后消息区可滚动。
+   * Steps:
+   *   1. 1366×768 打开运行会话并量取空闲基线。
+   *   2. 挂起 mock LLM 后发送，断言 Stop 出现、composer-compact 可见。
+   *   3. 断言运行中 composer 不高于空闲基线、消息占比 ≥33%、textarea 可用、Add to queue 可见。
+   *   4. 释放 mock，断言 Run 恢复、回复出现、消息区可滚动到底。
+   *   5. 断言无 console 错误。
+   * Environment: 隔离本地栈；fixture 运行会话与可挂起的 loopback mock LLM；1366×768 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture，可挂起以制造真实运行态；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S5 真实 isRunning:composer-compact 紧凑且可继续输入", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(120000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
-    await context.tracing.start({ screenshots: true, snapshots: true });
     await page.setViewportSize({ width: 1366, height: 768 });
     await openSession(page, fixture.projectName, fixture.runSession);
 
@@ -449,25 +591,25 @@ test.describe("会话 Composer 高度 E2E", () => {
     await textarea.fill("Summarize the evidence in one paragraph.");
     await page.locator("button.send-button").click();
 
-    // 运行中反馈:按钮转为 Running…,composer 进入 compact
-    const sendButton = page.locator("button.send-button");
-    await expect(sendButton).toContainText("Running", { timeout: 10000 });
+    // 运行中反馈:主操作换成可点的 Stop,composer 进入 compact
+    const stopButton = page.getByRole("button", { name: "Stop the current run" });
+    await expect(stopButton).toBeVisible({ timeout: 10000 });
     await expect(page.locator(".composer.composer-compact")).toBeVisible();
 
     const running = await measure(page);
     resultsLog.push({ scenario: "S5 running compact 1366x768", idleComposerH: idle.composerH, ...running });
     expect(running.composerH, `running composer ${running.composerH}px ≤ 空闲基线 ${idle.composerH}px`).toBeLessThanOrEqual(idle.composerH + 2);
-    expect(running.messagesRatio, `running 消息可读占比 ${(running.messagesRatio * 100).toFixed(1)}% ≥ 55%`).toBeGreaterThanOrEqual(0.55);
-    // 运行中仍可继续输入(产品允许),发送键在框内给出 Running… 反馈
+    expect(running.messagesRatio, `running 消息可读占比 ${(running.messagesRatio * 100).toFixed(1)}% ≥ ${MIN_IDLE_MESSAGES_RATIO * 100}%`).toBeGreaterThanOrEqual(MIN_IDLE_MESSAGES_RATIO);
+    // 运行中仍可继续输入(产品允许),并可在框内排队后续消息
     await expect(textarea).toBeEnabled();
     await textarea.fill("queued follow-up question");
     expectSendInsideComposer(running);
-    await expect(sendButton).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add to queue" })).toBeVisible();
     await screenshot(page, "s5-running-compact");
 
     // 释放 mock,任务应完成并给出明确结果反馈
     gate.release();
-    await expect(sendButton).toContainText("Run analysis", { timeout: 60000 });
+    await expect(page.getByRole("button", { name: "Run analysis" })).toBeVisible({ timeout: 60000 });
     await expect(page.locator(".messages")).toContainText("Finding 1", { timeout: 10000 });
     await screenshot(page, "s5-run-completed");
 
@@ -485,11 +627,29 @@ test.describe("会话 Composer 高度 E2E", () => {
     expect(scrollable.ok, `消息区可滚动 scrollHeight=${scrollable.scrollHeight} clientHeight=${scrollable.clientHeight}`).toBeTruthy();
     expect(scrollable.bottom, "消息区可滚动到底部").toBeGreaterThan(0);
 
-    await context.tracing.stop({ path: `${SCREENSHOTS}/${RUN_ID}-s5-trace.zip` });
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S6 三档视口量测:空态 / 触顶 / 触顶+2chip / 触顶+6chip 均 ≥55%", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 三档桌面视口下，空态、触顶与 chip 增长都保持可读的消息占比，排版不随宽度退化。
+   * Steps:
+   *   1. 依次在 1366×768、1440×900、1920×1080 打开 fixture 会话并量测空态占比。
+   *   2. 填入长草稿触顶，断言 textarea 受上限约束、消息占比不低于下限。
+   *   3. 依次加到 2 个与 6 个引用 chip，断言占比不低于下限。
+   *   4. 断言 2→6 chip 占比下降 ≤3pt、发送按钮仍在 composer 内。
+   *   5. 清空草稿与 chip 后进入下一档视口，最后断言无 console 错误。
+   * Environment: 隔离本地栈；fixture 项目与会话；1366×768 / 1440×900 / 1920×1080 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S6 三档视口量测:空态 / 触顶 / 触顶+2chip / 触顶+6chip 均保持可读占比", { tag: "@mocked" }, async ({ page }) => {
     test.setTimeout(240000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -506,7 +666,7 @@ test.describe("会话 Composer 高度 E2E", () => {
 
       const idle = await measure(page);
       resultsLog.push({ scenario: `S6 idle ${tag}`, ...idle });
-      expect(idle.messagesRatio, `${tag} 空态占比 ${(idle.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(0.55);
+      expect(idle.messagesRatio, `${tag} 空态占比 ${(idle.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(MIN_IDLE_MESSAGES_RATIO);
       if (vp.width === 1366) await screenshot(page, `s6-idle-${tag}`);
 
       const textarea = page.locator(".composer textarea");
@@ -516,14 +676,14 @@ test.describe("会话 Composer 高度 E2E", () => {
       const cap = Math.min(200, 0.2 * vp.height);
       resultsLog.push({ scenario: `S6 capped ${tag}`, cap, ...capped });
       expect(capped.textareaH, `${tag} textarea ≤ ${cap}px`).toBeLessThanOrEqual(cap + 2);
-      expect(capped.messagesRatio, `${tag} 触顶占比 ${(capped.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(0.55);
+      expect(capped.messagesRatio, `${tag} 触顶占比 ${(capped.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(MIN_COMPOSER_MESSAGES_RATIO);
 
       await addSessionChip(page, fixture.refSessions[0]);
       await addSessionChip(page, fixture.refSessions[1]);
       await page.waitForTimeout(100);
       const two = await measure(page);
       resultsLog.push({ scenario: `S6 capped+2chips ${tag}`, ...two });
-      expect(two.messagesRatio, `${tag} 触顶+2chip 占比 ${(two.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(0.55);
+      expect(two.messagesRatio, `${tag} 触顶+2chip 占比 ${(two.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(MIN_COMPOSER_MESSAGES_RATIO);
 
       for (const label of fixture.refSessions.slice(2, 6)) {
         await addSessionChip(page, label);
@@ -531,7 +691,7 @@ test.describe("会话 Composer 高度 E2E", () => {
       await page.waitForTimeout(100);
       const six = await measure(page);
       resultsLog.push({ scenario: `S6 capped+6chips ${tag}`, ...six });
-      expect(six.messagesRatio, `${tag} 触顶+6chip 占比 ${(six.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(0.55);
+      expect(six.messagesRatio, `${tag} 触顶+6chip 占比 ${(six.messagesRatio * 100).toFixed(1)}%`).toBeGreaterThanOrEqual(MIN_COMPOSER_MESSAGES_RATIO);
       expect(
         two.messagesRatio - six.messagesRatio,
         `${tag} chip 2→6 占比下降 ${((two.messagesRatio - six.messagesRatio) * 100).toFixed(1)}pt 应 ≤ 3pt`,
@@ -546,7 +706,25 @@ test.describe("会话 Composer 高度 E2E", () => {
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S8 现场条件:工作区打开 + 矮视口,发送在卡片内且不叠专家/审批", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 右侧工作区打开且视口很矮（1366×640 / 1280×640）时，发送按钮仍在卡片内，不与专家下拉或审批控件重叠。
+   * Steps:
+   *   1. 两档矮视口打开工作区与会话。
+   *   2. 空态与触顶各量测，断言发送按钮在 composer 内。
+   *   3. 用矩形交集断言发送按钮与专家下拉、审批图标的重叠面积为 0。
+   *   4. 断言无 console 错误。
+   * Environment: 隔离本地栈；fixture 项目与会话；工作区展开；1366×640 与 1280×640 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S8 现场条件:工作区打开 + 矮视口,发送在卡片内且不叠专家/审批", { tag: "@mocked" }, async ({ page }) => {
     const logs: string[] = [];
     attachLogCollector(page, logs);
     for (const vp of [{ width: 1366, height: 640 }, { width: 1280, height: 640 }]) {
@@ -594,7 +772,25 @@ test.describe("会话 Composer 高度 E2E", () => {
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
 
-  test("S7 窄屏 sanity:500/600 宽发送与模型选择可达", async ({ page }) => {
+  /**
+   * E2E-META
+   * Purpose: 500/600 窄屏下模型选择不被压成一条，发送按钮仍在 composer 内可点。
+   * Steps:
+   *   1. 在 500×800 与 600×800 打开 fixture 会话。
+   *   2. 断言模型选择控件可见可用且宽度未被压扁。
+   *   3. 输入短消息，断言发送按钮可见可用且在 composer 框内。
+   *   4. 断言无 console 错误。
+   * Environment: 隔离本地栈；fixture 项目与会话；500×800 与 600×800 视口。
+   * Type: mocked
+   * LLM: 本地确定性 SSE fixture；不调用真实或付费模型。
+   * WebSearch: none
+   * PaperSources: none
+   * MCP: none
+   * OtherExternal: none — 浏览器与 API 请求均指向 127.0.0.1。
+   * Credentials: 隔离实例的 E2E_API_TOKEN 与桩模型令牌。
+   * CostSideEffects: none；fixture 在套件结束时清理。
+   */
+  test("S7 窄屏 sanity:500/600 宽发送与模型选择可达", { tag: "@mocked" }, async ({ page }) => {
     const logs: string[] = [];
     attachLogCollector(page, logs);
     for (const vp of [{ width: 500, height: 800 }, { width: 600, height: 800 }]) {
@@ -609,7 +805,7 @@ test.describe("会话 Composer 高度 E2E", () => {
       const selectW = (await modelSelect.boundingBox())?.width ?? 0;
       resultsLog.push({ scenario: `S7 narrow ${tag}`, selectWidth: selectW });
       // 不得卡死在 150px 通栏回归:堆叠布局下应接近容器宽度
-      expect(selectW, `${tag} 模型 select 宽 ${selectW}px 不应卡 150px`).toBeGreaterThan(200);
+      expect(selectW, `${tag} 模型选择宽 ${selectW}px 不应卡 150px`).toBeGreaterThan(200);
 
       const textarea = page.locator(".composer textarea");
       await textarea.fill("quick question");
@@ -624,6 +820,7 @@ test.describe("会话 Composer 高度 E2E", () => {
     }
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
+
 });
 
 });

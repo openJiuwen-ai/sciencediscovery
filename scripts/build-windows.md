@@ -79,7 +79,6 @@ echo registry=https://registry.npmmirror.com >> .npmrc
 
 | 命令 | 原因 |
 | --- | --- |
-| `pnpm ci:e2e:legacy` | 调用 `.ci/run-e2e.sh` |
 | `pnpm runner:binary` | SEA 单文件打包，Linux-only（`.mjs` 在非 Linux 平台自动跳过该步） |
 | `start-stack.sh --mode docker` | 暂无 Windows 等价物；请用 WSL 运行原 bash 脚本 |
 
