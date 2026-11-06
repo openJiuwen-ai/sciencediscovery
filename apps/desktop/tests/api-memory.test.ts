@@ -39,7 +39,9 @@ describe("the memory card list", () => {
   it("omits the session for the all-sessions scope", async () => {
     const stub = new StubClient().reply({ hits: [], total: 0, truncated: false });
 
-    await listMemoryNodes(stub.asClient(), ["Evidence", "Artifact"], undefined);
+    // The optional argument is left out rather than passed as `undefined`:
+    // same call, and the mirror's CodeCheck does not read it as a value.
+    await listMemoryNodes(stub.asClient(), ["Evidence", "Artifact"]);
 
     assert.deepEqual(json(stub.calls[0]!), { node_types: ["Evidence", "Artifact"] });
   });
