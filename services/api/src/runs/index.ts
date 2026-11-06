@@ -165,6 +165,7 @@ import { resolveExecutorCapability } from "../idea-tree/executor-capability.js";
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "@sciencediscovery/executor";
 import { classifyRunFailure, runFailureMessage } from "../run-failure.js";
+import { runnerNpuBrokerEnabled } from "./runner-health.js";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import {
@@ -1349,7 +1350,7 @@ async function executeAgentRun(
       kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
       maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
       maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-      npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
+      npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
       permission: requestExecution.permission,
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
@@ -1884,7 +1885,7 @@ async function executeAgentRun(
               kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
               maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
               maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-              npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
+              npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
               permission: childExecution.permission,
               permissionScopeLabel: `in subagent ${subagent.id}`,
               artifactPathPrefix: handoff.privateWorkspacePath,
@@ -2623,6 +2624,12 @@ async function executeAgentRun(
     return listConfigurationInteractions(store, sessionId).some((request) =>
       request.runId === runId && CONFIGURATION_PENDING_STATES.has(request.state)) ? "interrupted" : "completed";
   } catch (error) {
+    runLog.error("run_execution_failed", {
+      errorMessage: shortErrorMessage(runFailureMessage(error)),
+      ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+      runId,
+      sessionId,
+    });
     if (cancelledRuns.has(runId)) {
       if (!promptManifest && taskInvocationAttempted) {
         try {
