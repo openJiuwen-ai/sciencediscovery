@@ -457,11 +457,13 @@ export interface WorkspaceToolOptions {
  * Device names Windows resolves in every directory, with or without an extension, so
  * `CON.csv` and `nul.txt` never reach the filesystem there: `open()` targets the device
  * instead, and the write fails with `EPERM` (or silently goes to the console for `CON`).
- * `COM0`/`LPT0` are not reserved; `CONIN$`/`CONOUT$` are.
+ * `COM0`/`LPT0` are not reserved; `CONIN$`/`CONOUT$` are. The naming document counts
+ * the superscript digits ¹, ² and ³ as port numbers too, so `COM¹` is the first serial
+ * port exactly like `COM1`.
  * https://learn.microsoft.com/windows/win32/fileio/naming-a-file#naming-conventions
  */
 const WINDOWS_RESERVED_DEVICE_NAME =
-  /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)$/i;
+  /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)$/i;
 
 /**
  * True when one path segment names a Windows device rather than a file.

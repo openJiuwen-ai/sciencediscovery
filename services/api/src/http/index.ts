@@ -3811,8 +3811,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // of creating a file. The route creates the parent directories too, so every segment
         // is checked, not only the last: `CON/notes.txt` would otherwise run `mkdir("…/CON")`,
         // which fails on Windows and creates an unportable directory on Linux.
+        // Both separators are segment boundaries here: the rule is platform-independent,
+        // and on a POSIX host `CON\notes.txt` is one filename whose Windows reading is a
+        // path through the device, so splitting on the host separator alone let it pass.
         const reserved = relative(workspaceRoot, target)
-          .split(sep)
+          .split(/[\\/]+/)
           .find((segment) => isWindowsReservedDeviceName(segment));
         if (reserved) {
           return sendError(response, 400, `"${reserved}" is a reserved device name on Windows; choose another name`);
