@@ -174,11 +174,14 @@ function interpreterOnPath(env: NodeJS.ProcessEnv): string | undefined {
 export function resolveMcpPython(env: NodeJS.ProcessEnv = process.env, dataDir?: string): string {
   const configured = env.SCIENCE_AGENT_GATEWAY_PYTHON_PATH?.trim();
   if (configured) return configured;
+  // Explicit roots first: the data dir the API resolved, then an env-var data
+  // dir, then an operator-set envs root. The cwd-relative defaults come last so
+  // an incidental checkout layout cannot outrank a configured environment.
   const envsRoots = [
     ...(dataDir?.trim() ? [resolve(process.cwd(), dataDir.trim(), "envs")] : []),
     ...(env.SCIENCE_AGENT_DATA_DIR?.trim() ? [resolve(process.cwd(), env.SCIENCE_AGENT_DATA_DIR.trim(), "envs")] : []),
-    resolve(process.cwd(), DEFAULT_DATA_DIR, "envs"),
     ...(env.SCIENCE_AGENT_ENVS_ROOT?.trim() ? [resolve(process.cwd(), env.SCIENCE_AGENT_ENVS_ROOT.trim())] : []),
+    resolve(process.cwd(), DEFAULT_DATA_DIR, "envs"),
     resolve(process.cwd(), "data", "envs"),
   ];
   const candidates = [
