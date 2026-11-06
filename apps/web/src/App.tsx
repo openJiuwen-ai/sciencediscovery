@@ -4364,7 +4364,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const declaredWorkspacePaths = new Set(sessionArtifacts
     .map((artifact) => artifact.originMeta?.declaredPath)
     .filter((path): path is string => typeof path === "string"));
-  const undeclaredAgentWorkspaceFiles = files.filter((file) => file.provenance?.origin === "agent" && !declaredWorkspacePaths.has(file.path));
+  const undeclaredAgentWorkspaceFiles = files.filter((file) => {
+    const origin = file.provenance?.origin;
+    return (origin === "agent" || origin === "tool" || origin === "subagent") && !declaredWorkspacePaths.has(file.path);
+  });
   const selectedUndeclaredAgentWorkspacePaths = undeclaredAgentWorkspaceFiles
     .filter((file) => selectedWorkspaceFilePaths.has(file.path))
     .map((file) => file.path);

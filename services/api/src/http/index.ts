@@ -3091,8 +3091,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const workspaceRoot = store.workspacePath(sessionId);
         const provenance = await Promise.all(requestedPaths.map((path) => workspaceFileProvenance(store, sessionId, path)));
         const paths = [...new Set(provenance.map((item) => item.file.path))];
-        if (provenance.some((item) => item.currentRevision.origin !== "agent")) {
-          return sendError(response, 422, "Only agent-created workspace files can be registered here");
+        if (provenance.some((item) => item.currentRevision.origin !== "agent"
+          && item.currentRevision.origin !== "tool" && item.currentRevision.origin !== "subagent")) {
+          return sendError(response, 422, "Only agent-generated workspace files can be registered here");
         }
         const alreadyRegistered = provenance.some(({ currentRevision }) => currentRevision.artifactVersionIds.some((versionId) => {
           const version = store.getArtifactVersion(sessionId, versionId);

@@ -806,7 +806,7 @@ test("agent workspace outputs are registered only after an explicit user request
   await store.recordWorkspaceFileRevision(session.id, {
     mode: "write",
     modifiedAt: metadata.mtime.toISOString(),
-    origin: "agent",
+    origin: "tool",
     path,
     size: metadata.size,
   });
@@ -815,7 +815,7 @@ test("agent workspace outputs are registered only after an explicit user request
   const { origin } = await startTestApi(context, root);
 
   const files = await jsonRequest<WorkspaceFile[]>(`${origin}/api/sessions/${session.id}/files`, { headers: authorization });
-  assert.equal(files.body.find((file) => file.path === path)?.provenance?.origin, "agent");
+  assert.equal(files.body.find((file) => file.path === path)?.provenance?.origin, "tool");
   const before = await jsonRequest<ScientificArtifact[]>(`${origin}/api/projects/${project.id}/artifacts`, { headers: authorization });
   assert.equal(before.body.length, 0);
 
