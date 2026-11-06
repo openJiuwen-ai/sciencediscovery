@@ -3094,7 +3094,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (provenance.some((item) => item.currentRevision.origin !== "agent")) {
           return sendError(response, 422, "Only agent-created workspace files can be registered here");
         }
-        if (provenance.some((item) => item.currentRevision.artifactVersionIds.length)) {
+        const alreadyRegistered = provenance.some(({ currentRevision }) => currentRevision.artifactVersionIds.some((versionId) => {
+          const version = store.getArtifactVersion(sessionId, versionId);
+          return Boolean(version && !store.getArtifact(sessionId, version.artifactId)?.deletedAt);
+        }));
+        if (alreadyRegistered) {
           return sendError(response, 409, "One or more workspace files are already registered as artifacts");
         }
         const artifacts = [];

@@ -830,6 +830,17 @@ test("agent workspace outputs are registered only after an explicit user request
   assert.equal((await fetch(`${origin}/api/sessions/${session.id}/workspace/artifacts`, {
     body: JSON.stringify({ paths: [path] }), headers: { ...authorization, "content-type": "application/json" }, method: "POST",
   })).status, 409);
+  assert.equal((await fetch(`${origin}/api/projects/${project.id}/artifacts/${promoted.body.artifacts[0]!.artifact.id}`, {
+    headers: authorization,
+    method: "DELETE",
+  })).status, 200);
+  const republished = await jsonRequest<{ artifacts: Array<{ artifact: ScientificArtifact }> }>(
+    `${origin}/api/sessions/${session.id}/workspace/artifacts`,
+    { body: JSON.stringify({ paths: [path] }), headers: { ...authorization, "content-type": "application/json" }, method: "POST" },
+  );
+  assert.equal(republished.response.status, 201);
+  assert.notEqual(republished.body.artifacts[0]?.artifact.id, promoted.body.artifacts[0]?.artifact.id);
+  assert.equal((await jsonRequest<ScientificArtifact[]>(`${origin}/api/projects/${project.id}/artifacts`, { headers: authorization })).body.length, 1);
 });
 
 test("a first start seeds the sample Session, and a later one does not repeat it", async (context) => {
