@@ -27,6 +27,14 @@ export function isKnownClientInputError(error: unknown): boolean {
     /\bcannot\b/i,
     /\bdoes not match\b/i,
     /\binvalid\b/i,
+    // A caller-supplied string over its length limit: `/api/providers` and
+    // `/api/web/settings` reject it in the store, and it is client input there.
+    // Anchored at the end of the message, with only an optional sentence period
+    // and trailing whitespace allowed after the phrase, so copy that ends with
+    // "is too long.", "is too long\n" or "is too long. \r\n" is still client
+    // input. The executor's "path is too long for tar/socket: <path>" faults put
+    // the phrase mid-sentence and keep their generic 500.
+    /\bis too long\.?\s*$/i,
     /\bunsafe\b.*\b(?:archive|package|path)\b/i,
     /\bplain basename\b/i,
   ].some((pattern) => pattern.test(error.message));
