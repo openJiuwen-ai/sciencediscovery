@@ -64,6 +64,13 @@ def _marker(skill_dir: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _name_for(skill_id: str, installed: dict[str, Path]) -> str:
+    """The name to import a staged skill under: JiuwenSwarm's own skill of that name keeps it."""
+    if skill_id in installed and _marker(installed[skill_id]) is None:
+        return RENAMED_PREFIX + skill_id
+    return skill_id
+
+
 def _renamed(skill_md: str, name: str) -> str:
     """SKILL.md with its frontmatter `name` replaced (JiuwenSwarm installs a package under that name)."""
     if not skill_md.lstrip().startswith("---"):
@@ -87,6 +94,9 @@ class SkillSync:
         # (cached answer, expiry) — the answer is the raw skills list both
         # _installed() and listed() derive from; None means "fetch next read".
         self._list_cache: tuple[list[dict[str, Any]] | None, float] = (None, 0.0)
+        # Bumped by every write, so a fetch that straddles one knows its answer
+        # predates it and must not go back into the cache (see _raw_listed).
+        self._writes = 0
 
     async def _raw_listed(self) -> list[dict[str, Any]]:
         """The skills.list RPC answer, shared by _installed() and listed(), cached for _list_cache_ttl_s.
@@ -96,17 +106,32 @@ class SkillSync:
         success, so the cached answer is always at least as fresh as the last
         write. TTL=0 disables the cache and every read re-fetches (today's
         behaviour, kept as the kill switch).
+
+        An answer fetched while a write was in flight is older than that write, so
+        it is served to the one caller who asked and then dropped: caching it would
+        undo the invalidation the write just made and serve the pre-write state for
+        a whole TTL. `listed()` and `set_enabled()` take no lock (a read must not
+        queue behind a slow import), so this interleaving is reachable whenever two
+        runs prepare at once.
         """
-        if self._list_cache_ttl_s > 0:
-            cached, expires = self._list_cache
-            if cached is not None and expires > time.monotonic():
-                return cached
+        cached = self._cached_list()
+        if cached is not None:
+            return cached
+        writes = self._writes
         listed = (await self._rpc(self._url, "skills.list", {})).get("skills", [])
-        if self._list_cache_ttl_s > 0:
+        if self._list_cache_ttl_s > 0 and self._writes == writes:
             self._list_cache = (listed, time.monotonic() + self._list_cache_ttl_s)
         return listed
 
+    def _cached_list(self) -> list[dict[str, Any]] | None:
+        """The cached answer if it still serves, else None. No await: the answer cannot go stale mid-call."""
+        if self._list_cache_ttl_s <= 0:
+            return None
+        cached, expires = self._list_cache
+        return cached if cached is not None and expires > time.monotonic() else None
+
     def _invalidate_list_cache(self) -> None:
+        self._writes += 1
         self._list_cache = (None, 0.0)
 
     async def _installed(self) -> dict[str, Path]:
@@ -167,18 +192,32 @@ class SkillSync:
             return result
 
     async def _sync(self, skills: list[dict[str, str]]) -> tuple[dict[str, dict[str, str]], dict[str, Path], bool]:
+        # Whether the listing below can be a TTL old. Taken before it, since a fetch
+        # is what would answer it; after, only this adapter's own writes can change it.
+        cached = self._cached_list() is not None
         installed = await self._installed()
         result: dict[str, dict[str, str]] = {}
         imported_any = False
+        fresh: dict[str, Path] | None = None  # a listing taken now, for naming a new package
         for skill in skills:
             skill_id, source, digest = skill["id"], Path(skill["path"]), skill["hash"]
-            name = skill_id
-            if name in installed and _marker(installed[name]) is None:
-                name = RENAMED_PREFIX + skill_id  # JiuwenSwarm's own skill of that name stays
+            name = _name_for(skill_id, installed)
             current = _marker(installed[name]) if name in installed else None
             if current and current.get("id") == skill_id and current.get("hash") == digest:
                 result[skill_id] = {"name": name}
                 continue
+            if cached and name not in installed:
+                # Importing under the plain id, with `force` — the one step here that
+                # destroys something the user made, since a JiuwenSwarm skill created
+                # after a cached listing was taken is invisible to it and would be
+                # replaced instead of renamed. The adapter cannot invalidate a write
+                # it did not make, so name the package from a listing taken now. Once
+                # per sync: a new skill is rare, and a sync that imports nothing never
+                # gets here, so the steady state keeps the single listing.
+                if fresh is None:
+                    self._invalidate_list_cache()
+                    fresh = await self._installed()
+                name = _name_for(skill_id, fresh)
             try:
                 await self._import(source, skill_id, name, digest)
                 imported_any = True
