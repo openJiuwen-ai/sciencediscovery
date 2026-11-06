@@ -43,6 +43,7 @@ import { SkillForm } from "../src/views/settings/SkillForm.js";
 import { enabledAfterCreate, skillMeta, SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { AbilityPicker } from "../src/views/settings/system/AbilityPicker.js";
 import { McpServers } from "../src/views/settings/system/McpServers.js";
+import { MemorySettings } from "../src/views/settings/system/MemorySettings.js";
 import { SpecialistForm } from "../src/views/settings/system/SpecialistForm.js";
 import { SpecialistsSettings } from "../src/views/settings/system/Specialists.js";
 import { TimeoutSettings } from "../src/views/settings/system/Timeouts.js";
@@ -75,11 +76,11 @@ const noConfirm = () => {};
 const loading = "正在读取…";
 
 describe("the settings tree", () => {
-  it("keeps the original desktop groups, plus MCP, 专家 and 超时", () => {
+  it("keeps the original desktop groups, plus 科学记忆, MCP, 专家 and 超时", () => {
     assert.deepEqual(Object.values(TEXT.settings.system.categories), ["系统", "智能", "连接", "工作区"]);
     assert.deepEqual(
       Object.values(TEXT.settings.system.groups).map((group) => group.label),
-      ["通用", "模型", "技能", "MCP 服务器", "专家", "网络", "远程", "超时"],
+      ["通用", "科学记忆", "模型", "技能", "MCP 服务器", "专家", "网络", "远程", "超时"],
     );
   });
 });
@@ -657,6 +658,10 @@ describe("each settings page", () => {
     assert.ok(markup.includes("settings-section"), `${name} rendered no section`);
     assert.ok(markup.includes(loading), `${name} did not start a read`);
   };
+
+  it("科学记忆 renders and asks for its data", () => {
+    asksForItsData("科学记忆", <MemorySettings client={client} />);
+  });
 
   it("技能 renders and asks for its data", () => {
     asksForItsData(

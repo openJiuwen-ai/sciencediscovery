@@ -47,11 +47,14 @@ function SettingsGlyph() {
 /**
  * The 64px rail: the logo, the task surface and 设置.
  *
- * It is the one element every surface shares. The way back to a collapsed left
- * column sits at the left edge of the page itself, not in this rail: the
- * expand control is part of the surface that lost its column.
+ * It is the one element every surface shares. Scientific memory is not a
+ * surface of its own: it is a capsule in the task header and a card behind a
+ * report's citation, so there is no rail entry to return to. The way back to a
+ * collapsed left column sits at the left edge of the page itself, not in this
+ * rail: the expand control is part of the surface that lost its column.
  */
 export function Rail({ onOpenSettings, onSelectTask, settingsOpen }: Props) {
+  const onTask = !settingsOpen;
   return (
     <nav aria-label={TEXT.appName} className="rail">
       {/* The mark is the stylesheet's `app-mark.png`; the box carries no glyph
@@ -59,8 +62,8 @@ export function Rail({ onOpenSettings, onSelectTask, settingsOpen }: Props) {
       <div aria-hidden="true" className="rail-logo" />
       <div className="rail-nav">
         <button
-          aria-current={settingsOpen ? undefined : "page"}
-          className={`rail-item${settingsOpen ? "" : " is-active"}`}
+          aria-current={onTask ? "page" : undefined}
+          className={`rail-item${onTask ? " is-active" : ""}`}
           onClick={onSelectTask}
           title={TEXT.rail.task}
           type="button"

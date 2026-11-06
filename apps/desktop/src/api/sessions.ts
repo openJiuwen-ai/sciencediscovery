@@ -14,9 +14,11 @@
 
 import type { ApiClient } from "./client.js";
 import type {
+  ArtifactVersionProvenance,
   CreateSessionRequest,
   Project,
   ScientificArtifact,
+  ScientificArtifactVersion,
   Session,
   SessionArtifactOutput,
   SessionDetail,
@@ -183,6 +185,31 @@ export function listArtifactOutputs(
 ): Promise<SessionArtifactOutput[]> {
   return client.request<SessionArtifactOutput[]>(
     `/api/sessions/${encodeURIComponent(sessionId)}/artifact-outputs`,
+  );
+}
+
+/** Every version of one Artifact, oldest first. The artifact dialog's picker
+ *  lists them newest first; a citation pins a version *number*, which this
+ *  list turns into the version id the provenance and content routes read. */
+export function listArtifactVersions(
+  client: ApiClient,
+  sessionId: string,
+  artifactId: string,
+): Promise<ScientificArtifactVersion[]> {
+  return client.request<ScientificArtifactVersion[]>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifactId)}/versions`,
+  );
+}
+
+/** The version's own record of how it was made: the files it was derived
+ *  from, the code that ran, the execution log, and the managed environment. */
+export function readArtifactProvenance(
+  client: ApiClient,
+  sessionId: string,
+  versionId: string,
+): Promise<ArtifactVersionProvenance> {
+  return client.request<ArtifactVersionProvenance>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifact-versions/${encodeURIComponent(versionId)}/provenance`,
   );
 }
 
