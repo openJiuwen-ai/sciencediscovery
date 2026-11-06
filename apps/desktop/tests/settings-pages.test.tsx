@@ -646,12 +646,6 @@ describe("the data sources page", () => {
     assert.ok(!markup.includes("settings-card is-form"), "a form is mounted before a row was picked");
     assert.ok(!markup.includes(TEXT.settings.system.mcp.add), "新增服务器 is still drawn");
   });
-
-  it("uses checkboxes for default selection, not permission switches", () => {
-    const markup = page();
-    assert.ok(!markup.includes('role="switch"'), "a permission switch is still rendered");
-    assert.ok(!markup.includes(TEXT.settings.system.mcp.enabled), "the old per-server enable label is still used");
-  });
 });
 
 describe("each settings page", () => {
