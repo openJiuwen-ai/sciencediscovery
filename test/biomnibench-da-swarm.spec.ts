@@ -48,7 +48,9 @@ async function waitForResearch(page: any, sessionId: string, rootRunId: string, 
       } else { previous = ""; stableAt = Date.now(); }
     } else {
       previous = ""; stableAt = Date.now();
-      if (settled(snapshot) && last && ["failed", "cancelled"].includes(last.status)) throw new Error(`Final research run ${last.status}`);
+      if (settled(snapshot) && last && ["failed", "cancelled"].includes(last.status)) {
+        throw new Error(`Final research run ${last.status}${last.error ? `: ${last.error}` : ""}`);
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -218,7 +220,9 @@ for (const sample of cases) {
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
       await testInfo.attach("benchmark-metrics", { path: testInfo.outputPath("benchmark-metrics.json"), contentType: "application/json" });
       if (fixture) await cleanupJourney(page, fixture);
-      if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
+      // Retain shutdown evidence without replacing the research failure that
+      // is already propagating from catch. A cleanup-only failure still fails.
+      if (metrics.cleanup_error && metrics.error === undefined) throw new Error(metrics.cleanup_error);
     }
   });
 }

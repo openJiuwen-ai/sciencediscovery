@@ -4,7 +4,15 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 export const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
-export const cases: Array<{ id: string; title: string; files: Array<{ path: string; bytes: number; oid: string; lfs_pointer_bytes?: number }> }> = manifest.tasks;
+/** Cases intentionally excluded from the L5 execution plan. Keep the pinned
+ * upstream manifest intact so these tasks remain available for provenance and
+ * future policy changes, while preventing them from being collected or run. */
+export const L5_EXCLUDED_CASE_IDS: readonly string[] = Object.freeze(JSON.parse(
+  readFileSync(new URL("./l5-excluded.json", import.meta.url), "utf8"),
+));
+
+export const cases: Array<{ id: string; title: string; files: Array<{ path: string; bytes: number; oid: string; lfs_pointer_bytes?: number }> }> =
+  manifest.tasks.filter((item: { id: string }) => !L5_EXCLUDED_CASE_IDS.includes(item.id));
 
 export const researchTeamReference = {
   id: "science-research-team",
@@ -28,9 +36,12 @@ export function selectedCases(value = process.env.E2E_BIOMNI_CASE_IDS) {
   return cases.filter(c => ids.includes(c.id));
 }
 
-export function analysisPrompt(_id: string, instruction: string, input = "data/") {
+export function analysisPrompt(id: string, instruction: string, input = "data/") {
+  const incrementalDelivery = id === "da-11-1"
+    ? "\nWrite trace.md and answer.txt incrementally as the analysis progresses. Append one small section per write command, aiming for less than 2000 characters of document text per call. Preserve the full scientific analysis and required outputs across sections. If a write call is withheld or interrupted, inspect the existing file before appending only the missing content; do not replay successful writes."
+    : "";
   return [instruction, researchTeamParameters,
-    `<platform_delivery>\nThe original task above defines the scientific scope and required outputs. The provided data directory is in this session workspace: ${input}. Preserve its nested paths. Resolve paths using the actual workspace; /app/data in the original instruction maps to workspace data/ and /app outputs map to workspace-relative outputs. Save and declare the required trace.md and answer.txt artifacts with those exact logical names.\n</platform_delivery>`,
+    `<platform_delivery>\nThe original task above defines the scientific scope and required outputs. The provided data directory is in this session workspace: ${input}. Preserve its nested paths. Resolve paths using the actual workspace; /app/data in the original instruction maps to workspace data/ and /app outputs map to workspace-relative outputs. Save and declare the required trace.md and answer.txt artifacts with those exact logical names.${incrementalDelivery}\n</platform_delivery>`,
   ].join("\n\n");
 }
 

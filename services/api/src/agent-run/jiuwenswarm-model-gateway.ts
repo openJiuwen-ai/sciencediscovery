@@ -383,22 +383,29 @@ export async function startModelGateway(
       try { console.info(`[model-sse-summary] ${JSON.stringify(record)}`); } catch { /* logging must not change the request */ }
     };
     // A call whose arguments do not parse is never executed. Truncated turns have their own recovery;
-    // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
+    // a task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
     // requests may come from instances without that boundary, still fail the request.
     const missingArgumentsOf = (call: ModelTurn["toolCalls"][number]): string[] => {
       const required = lifecycle?.requiredArguments?.[call.name];
       return required?.length ? missingRequiredArguments(call.args, required) : [];
     };
     const invalidCalls = (turn: ModelTurn): WithheldCall[] => {
+      const unparseable: WithheldCall[] = turn.toolCalls.filter(call => call.argsParseError)
+        .map((call) => ({ call, reason: parserMessage(call.argsParseError) }));
       if (turn.streamDiagnostics?.unparseableSsePayloads && !turn.toolCalls.some(call => call.argsParseError)) throw new Error("Model stream contained malformed event payloads");
-      if (turn.completionObserved === false) throw new Error("Model stream ended without a completion event");
+      // A clean EOF can cut a tool argument before the finish event. Withhold
+      // the entire turn and ask for a fresh call through the same bounded
+      // recovery as invalid JSON. Never accept an unfinished answer or valid
+      // call as complete, or recover a corrupt SSE stream through this path.
+      if (turn.completionObserved === false && (!unparseable.length || turn.truncated || auxiliary
+          || lifecycle?.recoversWithheldCalls === false || turn.streamDiagnostics?.unparseableSsePayloads)) {
+        throw new Error("Model stream ended without a completion event");
+      }
       if (turn.truncated) return [];
       // An alternate streamer reaches this gateway without the runtime client's
       // completion rule. A task turn that answers nothing and calls nothing
       // cannot advance the run, whatever finish reason the provider claimed.
       if (!auxiliary && isEmptyTerminalTurn(turn)) throw new EmptyModelTurnError(turn.wireDiagnostics);
-      const unparseable: WithheldCall[] = turn.toolCalls.filter(call => call.argsParseError)
-        .map((call) => ({ call, reason: parserMessage(call.argsParseError) }));
       // A call that left out an argument the tool cannot run without can never
       // succeed as it stands. It is withheld like an unparseable one, so the
       // model re-issues it complete instead of the run showing a failed tool

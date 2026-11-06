@@ -10,6 +10,9 @@ import { MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.m
 const manifestBytes = readFileSync(new URL('../test/benchmarks/biomnibench-da/manifest.json', import.meta.url));
 export const dataset = JSON.parse(manifestBytes);
 export const manifestHash = createHash('sha256').update(manifestBytes).digest('hex');
+const excludedL5CaseIds = new Set(JSON.parse(readFileSync(new URL('../test/benchmarks/biomnibench-da/l5-excluded.json', import.meta.url))));
+const l5CaseIds = new Set(dataset.tasks.filter(task => !excludedL5CaseIds.has(task.id)).map(task => task.id));
+export const l5Tasks = dataset.tasks.filter(task => l5CaseIds.has(task.id));
 const resourceKeys = ['tool_calls', 'tool_rounds', 'peak_rss_bytes', 'e2e_ms', 'generation_tokens', 'judge_tokens', 'total_tokens'];
 const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 const pick = (doc, keys) => Object.fromEntries(keys.filter(k => doc?.[k] !== undefined).map(k => [k, doc[k]]));
@@ -34,9 +37,19 @@ export function aggregateMetrics(results) {
 
 export function temporaryVerdict(summary, policy) {
   const warnings = [], problems = [], metrics = [];
+  const { reference_case_count: reference, active_case_count: active } = policy.temporary_population ?? {};
+  if (!Number.isSafeInteger(reference) || !Number.isSafeInteger(active)
+      || reference < active || active !== l5Tasks.length) {
+    return { warnings, problems: ['INVALID_TEMPORARY_POPULATION_POLICY'], metrics, population: null };
+  }
+  const population = { reference_case_count: reference, active_case_count: active,
+    sum_budget_scale: active / reference, mean_and_p95_reference: 'historical-population-not-remeasured' };
   for (const key of ['mean_score', 'total_tokens', 'tool_rounds', 'sum_e2e_ms', 'p95_peak_rss_gib']) {
-    const base = policy.temporary_baseline?.[key], rule = policy.thresholds?.[key === 'mean_score' ? 'score_drop' : key];
-    if (!positive(base) || !rule || ![rule.warning, rule.block].every(positive) || rule.block <= rule.warning
+    const historical = policy.temporary_baseline?.[key];
+    // Preserve historical observations; normalize only additive resource budgets.
+    const scale = ['total_tokens', 'tool_rounds', 'sum_e2e_ms'].includes(key) ? population.sum_budget_scale : 1;
+    const base = historical * scale, rule = policy.thresholds?.[key === 'mean_score' ? 'score_drop' : key];
+    if (!positive(historical) || !positive(base) || !rule || ![rule.warning, rule.block].every(positive) || rule.block <= rule.warning
         || (key === 'p95_peak_rss_gib' && ![rule.warning_min_gib, rule.block_min_gib].every(positive))) {
       problems.push('INVALID_TEMPORARY_BASELINE_POLICY'); continue;
     }
@@ -46,11 +59,11 @@ export function temporaryVerdict(summary, policy) {
     const warning = limit('warning'), block = limit('block'), actual = summary?.[key];
     const crossed = value => key === 'mean_score' ? actual <= value + 1e-9 : actual >= value - 1e-9;
     const status = actual === undefined ? 'incomplete' : crossed(block) ? 'blocked' : crossed(warning) ? 'warning' : 'passed';
-    metrics.push({ metric: key, baseline: base, warning, block, actual: actual ?? null, status });
+    metrics.push({ metric: key, historical_baseline: historical, budget_scale: scale, baseline: base, warning, block, actual: actual ?? null, status });
     if (status === 'blocked') problems.push(`${key.toUpperCase()}_REGRESSION`);
     else if (status === 'warning') warnings.push(`${key.toUpperCase()}_WARNING`);
   }
-  return { warnings, problems, metrics };
+  return { warnings, problems, metrics, population };
 }
 
 // This is the only Biomni projection published as the score artifact. Never
@@ -106,7 +119,7 @@ export function evaluateSuite(plan, documents, policy, baseline) {
   const expected = plan.entries.filter(e => biomniCase(e));
   if (!expected.length && !['release', 'l5'].includes(plan.profile)) return undefined;
   const problems = [], results = [], caseStatuses = [], ids = expected.map(biomniCase);
-  if (canonical([...ids].sort()) !== canonical(dataset.tasks.map(t => t.id).sort())) problems.push('BIOMNI_PUBLIC_50_PLAN_REQUIRED');
+  if (canonical([...ids].sort()) !== canonical(l5Tasks.map(t => t.id).sort())) problems.push('BIOMNI_L5_CASE_SET_REQUIRED');
   if (!['candidate', 'compare', 'temporary'].includes(policy?.mode)) problems.push('INVALID_BASELINE_POLICY');
   if (policy?.mode === 'candidate' && (policy.baseline !== null || baseline)) problems.push('CANDIDATE_MUST_NOT_USE_BASELINE');
   for (const entry of expected) {
@@ -135,27 +148,30 @@ export function evaluateSuite(plan, documents, policy, baseline) {
     }
   }
   const summary = aggregateMetrics(results);
-  const thresholds = policy?.mode === 'temporary' ? temporaryVerdict(results.length === dataset.tasks.length ? summary : null, policy) : { warnings: [], problems: [], metrics: [] };
+  const thresholds = policy?.mode === 'temporary' ? temporaryVerdict(results.length === l5Tasks.length ? summary : null, policy) : { warnings: [], problems: [], metrics: [] };
   problems.push(...thresholds.problems);
   const complete = problems.length === 0;
-  return { schema_version: 1, benchmark: 'biomnibench-da', scope: dataset.scope, revision: plan.revision,
+  return { schema_version: 1, benchmark: 'biomnibench-da', scope: `public-${l5Tasks.length}-active`, dataset_scope: dataset.scope,
+    excluded_case_ids: [...excludedL5CaseIds], revision: plan.revision,
     status: complete ? policy.mode === 'candidate' ? 'baseline_candidate' : policy.mode === 'temporary' ? thresholds.warnings.length ? 'temporary_baseline_warning' : 'temporary_baseline_passed' : 'non_regression_passed' : 'failed',
-    non_regression_certified: complete && policy.mode === 'compare', expected: dataset.tasks.length, measured: results.length,
+    non_regression_certified: complete && policy.mode === 'compare', expected: l5Tasks.length, measured: results.length,
     problems, warnings: thresholds.warnings, thresholds: thresholds.metrics, case_statuses: caseStatuses,
-    baseline_kind: policy?.mode, cases: results, summary,
-    summary_complete: results.length === dataset.tasks.length };
+    baseline_kind: policy?.mode, baseline_population: thresholds.population, cases: results, summary,
+    summary_complete: results.length === l5Tasks.length };
 }
 
 export function renderSuite(report) {
   const format = value => Number.isFinite(value) ? String(Math.round(value * 1000) / 1000) : '—';
-  const limits = report.thresholds.map(m => `| ${m.metric} | ${format(m.actual)} | ${format(m.baseline)} | ${format(m.warning)} | ${format(m.block)} | ${m.status} |`).join('\n');
+  const limits = report.thresholds.map(m => `| ${m.metric} | ${format(m.actual)} | ${format(m.historical_baseline)} | ${format(m.budget_scale)} | ${format(m.baseline)} | ${format(m.warning)} | ${format(m.block)} | ${m.status} |`).join('\n');
+  const population = report.baseline_population;
+  const provenance = population ? ` Historical reference: ${population.reference_case_count} cases; active population: ${population.active_case_count}. Additive resource budgets scale by ${population.sum_budget_scale}. Mean score and P95 retain the historical reference and have not been remeasured on the active population.` : '';
   const rows = report.case_statuses.map(c => {
     const m = c.measurements, value = (key, scale = 1) => Number.isFinite(m[key]) ? (m[key] / scale).toFixed(2) : '—';
     const local = c.local_evaluation;
     const localScore = local?.status === 'scored' && Number.isFinite(local.score) ? format(local.score) : '—';
     return `| ${c.case_id} | ${c.status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${localScore} | ${value('total_tokens')} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
   });
-  return `### Biomni public-50: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}. Gates and release figures use official scores only. Local-variant scores are informational; — means unavailable.\n\n| Metric (time in ms) | Actual | Baseline | Warning | Block | Status |\n|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Official score | Local-variant score (non-gating) | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
+  return `### Biomni L5 active cases: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}.${provenance} Gates and release figures use official scores only. Local-variant scores are informational; — means unavailable.\n\n| Metric (time in ms) | Actual | Historical reference | Budget scale | Effective reference | Warning | Block | Status |\n|---|---|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Official score | Local-variant score (non-gating) | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
 }
 
 export function collectSuite(plan, root, policy, baseline) {

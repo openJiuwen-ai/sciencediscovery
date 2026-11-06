@@ -10,6 +10,8 @@ export type ResearchStep = {
   /** Hold a response until the test releases this gate; no timing-based child ordering. */
   gate?: string;
   disconnect?: boolean;
+  /** Clean EOF after deltas, without a completion event or [DONE]. */
+  omitCompletion?: boolean;
   /** Expected pre-stream provider failure, without a fixture assertion failure. */
   httpStatus?: 429 | 500 | 503;
 };
@@ -95,6 +97,7 @@ export async function researchModel(scripts: Record<string, ResearchScriptStep[]
       })) }));
       if (step.text) response.write(chunk({ content: step.text }));
       if (step.disconnect) { response.destroy(); call.aborted = true; return; }
+      if (step.omitCompletion) { response.end(); call.endedAt = Date.now(); return; }
       response.write(chunk({}, step.tools ? "tool_calls" : "stop"));
       response.end("data: [DONE]\n\n");
       call.endedAt = Date.now();
