@@ -2432,6 +2432,19 @@ export class SessionStore {
       const json = this.configurationJsonViewerSettings(sessionId);
       systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
     }
+    const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
+    const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+      this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
+    if (capabilityId === "web.credential") systemVersions = {
+      webSettings: version(this.catalog.webSettings),
+      webCredentials: webCredentialVersion(),
+      webProxy: webProxyVersion(),
+    };
+    if (capabilityId === "web.configure") systemVersions = {
+      web: version(this.catalog.webSettings),
+      webCredentials: webCredentialVersion(),
+      webProxy: webProxyVersion(),
+    };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
@@ -2460,6 +2473,9 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "web.credential" ? { webProviders: this.getWebSettings().providers } : {}),
+        ...(capabilityId === "web.configure" ? { webSettings: this.getWebSettings(), webProxyPolicies: this.configurationWebProxyPolicies() } : {}),
+
         ...(capabilityId === "reviewer.enable" ? { globalReviewer: this.getReviewerSpecialistSettings() } : {}),
         ...(capabilityId === "plugin.json_viewer" ? { jsonViewerSettings: this.configurationJsonViewerSettings(sessionId) } : {}),
       },
@@ -2737,7 +2753,24 @@ export class SessionStore {
     return row ? this.decryptModelApiToken(`web:${provider}`, row.encrypted_token) : undefined;
   }
 
-  async updateWebSettings(input: UpdateWebSettingsRequest): Promise<WebSettingsDetails> {
+  /** Uses the formal Web settings/key writer in the shared audit transaction. */
+  applyWebCredentialConfigurationSync(provider: WebKeyProvider, value: string | null): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Web credential configuration requires the shared transaction");
+    if (!WEB_KEY_PROVIDERS.includes(provider)) throw new Error("Unknown Web provider");
+    this.applyWebSettingsSync({ providerApiKeys: { [provider]: value } });
+  }
+
+  configurationWebProxyPolicies(): string[] {
+    return ["inherit", "none", ...this.catalog.proxyServers.map(server => `proxy:${server.id}`)];
+  }
+
+  /** Non-credential Web edits use the same formal normalizer and shared audit transaction. */
+  applyWebConfigurationSync(input: Omit<UpdateWebSettingsRequest, "providerApiKeys">): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    this.applyWebSettingsSync(input);
+  }
+
+  private applyWebSettingsSync(input: UpdateWebSettingsRequest): void {
     const { providerApiKeys, ...settingsInput } = input;
     const nextSettings = normalizeWebSettings({ ...this.catalog.webSettings, ...settingsInput });
     this.assertProxyPolicyKnown(nextSettings.proxyPolicy, "proxyPolicy");
@@ -2761,6 +2794,10 @@ export class SessionStore {
         ).run(provider, encrypted);
       }
     }
+  }
+
+  async updateWebSettings(input: UpdateWebSettingsRequest): Promise<WebSettingsDetails> {
+    this.applyWebSettingsSync(input);
     await this.saveCatalog();
     return this.getWebSettings();
   }
