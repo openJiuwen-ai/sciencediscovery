@@ -21,6 +21,7 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
+import { isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
@@ -36,6 +37,14 @@ import { useLanguage } from "./app/use-language.js";
 import { usePanelWidth } from "./app/use-panel-width.js";
 import { useWorkspace } from "./app/use-workspace.js";
 import { formatByteLimit } from "./app/upload.js";
+import {
+  evolveCommandAlgorithm,
+  evolveCommandCheckpointMode,
+  evolveCommandGoal,
+  isEvolveSkill,
+} from "./evolve/command.js";
+import { designAnchor, useAutoContinue } from "./evolve/use-auto-continue.js";
+import { useEvolve } from "./evolve/use-evolve.js";
 import { allSubagents } from "./run-stream/model.js";
 import { mergedSubagentSteps } from "./run-stream/subagent.js";
 import {
@@ -48,9 +57,13 @@ import {
 import { applyDocumentLanguage, TEXT } from "./text.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
+import { CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
 import { Composer } from "./views/Composer.js";
 import { ConfirmDialog } from "./views/ConfirmDialog.js";
 import { Conversation } from "./views/Conversation.js";
+import { EvolveCreateDialog } from "./views/evolve/EvolveCreateDialog.js";
+import { EvolveOverlay } from "./views/evolve/EvolveOverlay.js";
+import { EvolveShelf } from "./views/evolve/EvolveShelf.js";
 import { Guide } from "./views/Guide.js";
 import { Landing } from "./views/Landing.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
@@ -121,6 +134,38 @@ export function App({ initialToken }: Props) {
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
   const resize = usePanelWidth();
+
+  /** The runtime and the open Session's searches. The shelf reads `runs`
+   *  directly, which is why the hook exists at this level rather than inside
+   *  the panel: the searches must stay reachable while the panel is closed. */
+  const evolve = useEvolve(client, state.sessionId);
+  const refreshEvolve = evolve.refresh;
+  /** Which search the panel is showing, by id. Storing the id rather than the
+   *  record keeps the panel reading the same list the shelf does, so a status
+   *  that moves while the panel is open changes both at once. */
+  const [evolveRunId, setEvolveRunId] = useState<string>();
+  /** The create dialog, open with a typed goal when the command was diverted
+   *  here because the runtime is not ready. */
+  const [evolveCreate, setEvolveCreate] = useState<{
+    algorithm?: EvolveAlgorithm;
+    checkpointMode?: "auto" | "confirm";
+    goal?: string;
+  } | undefined>();
+
+  // An open panel belongs to one session's searches, like a selected
+  // subagent. The create dialog is deliberately left alone: it starts a run
+  // in whichever session is open when it sends, and the session the app is
+  // opening as it boots is not a reason to close a dialog the user just opened.
+  useEffect(() => {
+    setEvolveRunId(undefined);
+  }, [state.sessionId]);
+
+  // A search is created by the server while the agent's turn is running, and
+  // the list is not polled until one is active. The created event is therefore
+  // the one moment the app knows to look now rather than at the next poll.
+  useEffect(() => {
+    if (state.run.evolveRunsCreated > 0) void refreshEvolve();
+  }, [refreshEvolve, state.run.evolveRunsCreated]);
 
   // The shell (when present) pushes JiuwenSwarm cluster readiness.
   // "shell present, no verdict yet" is NOT ready — the composer stays gated
@@ -437,6 +482,74 @@ export function App({ initialToken }: Props) {
     actions.retryBoot();
   };
 
+  /** The command is a way into the surface, not only a message. While the
+   *  runtime is not ready the goal typed after it is carried into the setup
+   *  dialog instead of being sent to a server that cannot run it; a bare
+   *  command opens the dialog that asks for one. On a host with no sandbox
+   *  every command detours there, including one that already carries
+   *  `--allow-direct`: a pasted flag is a word the user typed without the
+   *  warning on screen, and the dialog is where that warning is read and
+   *  answered. So the dialog is the only writer of the flag — a command that
+   *  reaches the server with it is one the user confirmed here.
+   *
+   *  Defined above the boot screens' early returns because the checkpoint
+   *  provider below reads it in an effect: a `const` declared after an early
+   *  `return` is still in its temporal dead zone when that effect commits. */
+  const sendMessage = (content: string) => {
+    const goal = evolveCommandGoal(content);
+    if (goal !== undefined
+        && (goal === "" || evolve.status.state !== "ready"
+            || evolve.status.sandbox === "direct")) {
+      setEvolveCreate({
+        algorithm: evolveCommandAlgorithm(content),
+        checkpointMode: evolveCommandCheckpointMode(content),
+        goal: goal === "" ? undefined : goal,
+      });
+      return;
+    }
+    void actions.send(content);
+  };
+
+  /** The current `sendMessage`, read at press time. Holding it in a ref is
+   *  what lets the provider's value stay stable while a run streams: a value
+   *  rebuilt on every event would re-render every checkpoint card in the
+   *  transcript on every delta. It starts as a no-op and the effect replaces
+   *  it before any card can be pressed.
+   *
+   *  These hooks sit above the boot screens' early returns on purpose: a hook
+   *  declared after them runs on the main screen and not on the loading one,
+   *  and React counts that as a different number of hooks between renders. */
+  const latestSend = useRef<(content: string) => void>(() => {});
+  useEffect(() => {
+    latestSend.current = sendMessage;
+  });
+  const checkpointReply = useMemo<CheckpointReply>(() => ({
+    busy: state.running,
+    reply: (text) => latestSend.current(text),
+  }), [state.running]);
+
+  /** The design the auto-continue belongs to, read from the Session itself:
+   *  its design commands, plus the one being sent (the transcript is written
+   *  when the turn settles, so a design's first ending would otherwise be
+   *  keyed against the previous design's number). Derived rather than
+   *  remembered here, so it cannot outlive the Session or disagree with a
+   *  design another client started in it. */
+  const design = useMemo(
+    () => designAnchor(state.detail?.messages ?? [], state.pendingMessage?.content),
+    [state.detail?.messages, state.pendingMessage?.content],
+  );
+
+  // A no-confirm design that ends its turn on an auto card is carried forward
+  // here — the model cannot start the next turn by itself, and the card offers
+  // nothing to press. See the hook for what it refuses to act on.
+  useAutoContinue({
+    design,
+    running: state.running,
+    run: state.run,
+    send: (text) => latestSend.current(text),
+    sessionId: state.sessionId,
+  });
+
   // No token is its own screen, ahead of the boot states: without one nothing
   // the app can say about the server is knowable, including whether it is up.
   if (token === "") {
@@ -531,6 +644,19 @@ export function App({ initialToken }: Props) {
     setSettingsOpen(true);
   };
 
+  const evolveRun = evolve.runs.find((run) => run.id === evolveRunId);
+  const evolveLive = evolve.runs.some((run) => isEvolveRunActive(run.status));
+
+  /** The header button goes to the search that wants attention — a running
+   *  one, else the newest — and starts one only when the session has none. */
+  const openEvolve = () => {
+    const target = evolve.runs.find((run) => isEvolveRunActive(run.status)) ?? evolve.runs[0];
+    if (target === undefined) setEvolveCreate({});
+    else setEvolveRunId(target.id);
+  };
+
+  const closeEvolveCreate = () => setEvolveCreate(undefined);
+
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
   const composerProps: Omit<ComponentProps<typeof Composer>, "landing" | "seed" | "tag"> = {
@@ -546,12 +672,19 @@ export function App({ initialToken }: Props) {
     onClearAttachments: actions.clearAttachments,
     onCreateProject: (name) => void actions.createProject(name),
     onOpenSettings: () => openSettings("models"),
+    // A skill that has a setup surface opens it instead of dropping its
+    // command into the draft — the same dialog the header capsule opens.
+    onPickSkill: (skill) => {
+      if (!isEvolveSkill(skill)) return false;
+      setEvolveCreate({});
+      return true;
+    },
     onRemoveAttachment: actions.removeAttachment,
     onRetryAttachment: actions.retryAttachment,
     onSelectModel: (modelId) => void actions.selectModel(modelId),
     onSelectProject: (projectId) => actions.selectProject(projectId),
     onSelectSpecialist: (specialistId) => void actions.selectSpecialist(specialistId),
-    onSend: (content) => void actions.send(content),
+    onSend: sendMessage,
     onStop: () => void actions.stop(),
     onUpload: (files) => void upload(files),
     // No name when the next conversation goes into no Project: the strip then
@@ -587,7 +720,7 @@ export function App({ initialToken }: Props) {
   ].filter(Boolean).join(" ");
 
   return (
-    <>
+    <CheckpointReplyProvider value={checkpointReply}>
       <div className={shellClass} style={shellStyle}>
         <Rail
           onOpenSettings={() => openSettings(settingsGroup)}
@@ -612,6 +745,9 @@ export function App({ initialToken }: Props) {
           <SessionBar
             actions={actions}
             detail={state.detail}
+            evolveLive={evolveLive}
+            evolveState={evolve.status.state}
+            onEvolve={openEvolve}
             onExpandSidebar={expandSidebar}
             onToggleWorkspace={() => setWorkspaceOpen(true)}
             // A Session outside every Project is not "in 最近会话": that is
@@ -620,6 +756,14 @@ export function App({ initialToken }: Props) {
             projectName={state.activeProject?.kind === "inbox" ? undefined : state.activeProjectName}
             sidebarCollapsed={showExpand}
             workspaceOpen={workspaceOpen}
+          />
+          {/* A search keeps running after the turn that started it, so its
+              handle belongs to the session rather than to the transcript. The
+              shelf draws nothing at all for a session that has none. */}
+          <EvolveShelf
+            onNew={() => setEvolveCreate({})}
+            onOpen={setEvolveRunId}
+            runs={evolve.runs}
           />
           {landing ? (
             /* The page's category and its open topic row belong to one
@@ -683,6 +827,35 @@ export function App({ initialToken }: Props) {
 
       {guideOpen ? <Guide onClose={closeGuide} onStep={guideStep} /> : null}
 
+      {evolveRun === undefined ? null : (
+        <EvolveOverlay
+          client={client}
+          onClose={() => setEvolveRunId(undefined)}
+          onError={(message) => actions.toast(message, "error")}
+          onRunChanged={() => void refreshEvolve()}
+          run={evolveRun}
+        />
+      )}
+
+      {evolveCreate === undefined ? null : (
+        <EvolveCreateDialog
+          archived={state.detail?.archivedAt !== undefined}
+          error={evolve.error}
+          initialAlgorithm={evolveCreate.algorithm}
+          initialCheckpointMode={evolveCreate.checkpointMode}
+          initialGoal={evolveCreate.goal}
+          initializing={evolve.initializing}
+          onClose={closeEvolveCreate}
+          onInitialize={() => void evolve.initialize()}
+          onSend={(command) => {
+            closeEvolveCreate();
+            void actions.send(command);
+          }}
+          running={state.running}
+          status={evolve.status}
+        />
+      )}
+
       {/* The whole window is the drop target, so the whole window is what has
           to say so. It is drawn only while a file is actually over the app,
           and it repeats the reason when there is no session — a drop that does
@@ -722,6 +895,6 @@ export function App({ initialToken }: Props) {
       ) : null}
 
       <FeedbackDialog />
-    </>
+    </CheckpointReplyProvider>
   );
 }

@@ -58,6 +58,7 @@ function proposal(over: Partial<EvolveRunProposal> = {}): EvolveRunProposal {
 function deps(over: Partial<ProposalDeps> = {}) {
   const stored: Array<{ content?: string; path?: string }> = [];
   const base: ProposalDeps = {
+    approvedUnisolated: true,
     casHas: async () => true,
     model: () => ({ hasApiToken: true, id: "m1", name: "M" }),
     modelId: "m1",
@@ -84,6 +85,60 @@ test("a coherent proposal becomes a run, and the probe's numbers come back with 
   assert.equal(result.run?.id, "run-1");
   assert.equal(result.probe?.baseline, 0.4);
   assert.equal(result.refusedBecause, undefined);
+});
+
+test("a goal records direct execution only when the host has none and the user allowed it", async () => {
+  // The proposal carries the user's answer; the host decides whether it means
+  // anything. Both have to agree before a goal can claim its candidates ran
+  // unconfined — one is a checkbox on a machine that has a sandbox, the other
+  // is the only place the flag could honestly come from.
+  const startWith = async (
+    backend: "bwrap" | "direct",
+    allowed: boolean | undefined,
+    approvedUnisolated = true,
+  ) => {
+    let started: EvolveGoal | undefined;
+    const { deps: d } = deps({
+      approvedUnisolated,
+      orchestrator: {
+        probe: async () => ({
+          baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1,
+        }),
+        sandboxCapability: async () => ({
+          backend, bwrapPath: "bwrap", disableUserns: false, procMode: "proc",
+        }),
+        start: async (input: { goal: EvolveGoal }) => {
+          started = input.goal;
+          return { id: "run-1", status: "running" };
+        },
+      } as never,
+    });
+    const result = await startProposedRun(
+      proposal(allowed === undefined ? {} : { allowUnisolated: allowed }), d,
+    );
+    return { result, started };
+  };
+
+  const allowed = await startWith("direct", true);
+  assert.equal(allowed.result.refusedBecause, undefined);
+  assert.equal(allowed.started?.allowUnisolated, true);
+
+  // No confirmation: refused before a run exists, and nothing was started.
+  const refused = await startWith("direct", undefined);
+  assert.match(refused.result.refusedBecause ?? "", /without isolation/);
+  assert.equal(refused.started, undefined);
+
+  // The model asked, but the user's own command never approved it — the tool
+  // argument is not consent, so the goal gets nothing to run unconfined with.
+  const unapproved = await startWith("direct", true, false);
+  assert.match(unapproved.result.refusedBecause ?? "", /without isolation/);
+  assert.equal(unapproved.started, undefined);
+
+  // A host with a real sandbox: the flag is dropped, not merely ignored, so a
+  // run card cannot carry a warning badge for a run that was confined.
+  const isolated = await startWith("bwrap", true);
+  assert.equal(isolated.result.refusedBecause, undefined);
+  assert.equal("allowUnisolated" in (isolated.started ?? {}), false);
 });
 
 test("a model with no thinking control is budgeted as a thinking model", async () => {
@@ -159,6 +214,28 @@ test("the budget the checkpoint shows is the budget the run starts with", async 
         `${where}: saying "thinking off" was overridden obliges the run to actually be a thinking run`);
     }
   }
+});
+
+test("the pace the user chose is recorded on the run, and silence means confirm", async () => {
+  let seen: EvolveGoal | undefined;
+  const world = () => deps({
+    orchestrator: {
+      probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async ({ goal }: { goal: EvolveGoal }) => {
+        seen = goal;
+        return { id: "run-1", status: "running" };
+      },
+    } as never,
+  });
+
+  await startProposedRun(proposal(), world().deps);
+  // An agent that has not heard the flag — or an older client that cannot send
+  // one — gets the pace every run had before the switch existed.
+  assert.equal(seen?.checkpointMode, "confirm");
+
+  await startProposedRun(proposal({ checkpointMode: "auto" }), world().deps);
+  assert.equal(seen?.checkpointMode, "auto");
 });
 
 test("the probe's own verdict reaches the agent unwrapped", async () => {

@@ -104,6 +104,16 @@ export interface RunStreamState {
    * fields.
    */
   finishedAt?: number;
+  /**
+   * How many searches this stream has announced (`evolve_run.created`).
+   *
+   * The search is designed in the conversation and then starts on the server,
+   * so the run list changes without any client request — and the list is only
+   * polled while something is running, which cannot be true yet. This counter
+   * is the event the app watches to re-read the list once, immediately, rather
+   * than waiting for the next poll or a manual refresh.
+   */
+  evolveRunsCreated: number;
   /** Largest replay cursor seen, for `?after=` on a reconnect. */
   lastSequence?: number;
   modelName?: string;
@@ -133,6 +143,7 @@ export interface RunStreamState {
 export function emptyRunStream(): RunStreamState {
   return {
     droppedEvents: 0,
+    evolveRunsCreated: 0,
     pendingResponses: {},
     permissions: [],
     terminal: false,

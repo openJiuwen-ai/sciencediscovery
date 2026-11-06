@@ -47,9 +47,11 @@ import { EvolveOrchestrator } from "../evolution/orchestrator.js";
 import { EvolveAvailability } from "../evolution/availability.js";
 import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
+import { probeEvolveSandbox } from "../evolution/sandbox.js";
 import { describeEvolveBudget } from "../evolution/call-budget.js";
 import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
+import { latestEvolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import { seedSampleSession } from "../sample-session/index.js";
@@ -298,7 +300,13 @@ export function createPlatformServices(
     evolutionStore,
     new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url, connection: () => evolveAvailability.connection() }),
     memoryGraphSink,
-    undefined,
+    // Stated here rather than left to the orchestrator's default: whether an
+    // installation may run candidates unconfined is a configuration decision,
+    // and the default must stay "no".
+    () => probeEvolveSandbox(
+      process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+      { unisolated: config.evolve.unisolated },
+    ),
     evolveRunTokens,
     // The sidecar reaches the model proxy at this origin. `0.0.0.0` is a bind
     // address, not somewhere to connect to, so it is dialled back to loopback —
@@ -386,6 +394,18 @@ export function createPlatformServices(
     },
   );
 
+  /** Whether the user's own command approved unconfined candidates. On a
+   *  Windows install the server runs candidates directly, so this flag is the
+   *  only thing between a search and unconfined model-written code; the
+   *  model's tool argument alone is not the user's answer.
+   *
+   *  The latest command wins: a second design started with a plain
+   *  `/evolve-design` inherits nothing from an earlier approval. A checkpoint
+   *  answer does not move the anchor — it is not a command — so the design
+   *  this run belongs to is still the latest one there. */
+  const userApprovedUnisolated = async (sessionId: string) =>
+    latestEvolveCommandApprovesUnisolated(await store.readMessages(sessionId));
+
   const casHasEvolve = async (hash: string) => {
     try {
       await evolveCas.read(hash);
@@ -422,6 +442,16 @@ export function createPlatformServices(
     createEvolveRun: async (input: EvolveRunProposal) => {
       await evolveAvailability.connection();
       store.assertSessionWritable(turn.sessionId);
+      // The tool's `allowUnisolated` records the user's answer, but it is the
+      // model that writes it: a goal, a dataset row or a plain mistake can set
+      // it. Accept it only when the session's own `/evolve-design` command
+      // carried `--allow-direct`; otherwise drop it and let pre-flight's
+      // `unisolated_run_unconfirmed` refusal say what is missing.
+      const requested = input.allowUnisolated === true;
+      const approvedUnisolated = requested && await userApprovedUnisolated(turn.sessionId);
+      if (requested && !approvedUnisolated) {
+        apiLog.warn("evolve_unisolated_not_confirmed", { sessionId: turn.sessionId });
+      }
       // The probe runs real evaluations in the sandbox — two or three, each
       // with the candidate timeout as its ceiling. That is minutes, and the
       // agent's idle clock is four: without pausing it the turn dies with "no
@@ -431,6 +461,7 @@ export function createPlatformServices(
       const releaseWait = turn.beginExternalWait?.();
       try {
         const result = await startProposedRun(input, {
+          approvedUnisolated,
           casHas: casHasEvolve,
           model: (id: string) => store.getModel(id),
           modelId: turn.modelId,

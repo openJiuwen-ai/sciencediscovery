@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PendingMessage } from "../app/use-workspace.js";
 import type { ToolDetail } from "../app/tool-io.js";
@@ -117,7 +117,11 @@ function UserRow({ content, files }: { content: string; files?: readonly Uploade
   );
 }
 
-function MessageRow({ message, uploads }: { message: ChatMessage; uploads?: readonly UploadedFile[] }) {
+function MessageRow({ answered, message, uploads }: {
+  answered?: boolean;
+  message: ChatMessage;
+  uploads?: readonly UploadedFile[];
+}) {
   // An automatic wake carries no user-authored body — the schema keeps the
   // model-facing prompt out of `content` precisely so a wake is never shown as
   // something the user typed — so a card for it was a blank strip with an
@@ -147,7 +151,7 @@ function MessageRow({ message, uploads }: { message: ChatMessage; uploads?: read
       <div className="body">
         {/* The same element a replayed run renders its answer with, so a stored
             answer and a reconstructed one cannot drift apart. */}
-        <AnswerBlock actions content={message.content} />
+        <AnswerBlock actions answered={answered} content={message.content} />
       </div>
     </div>
   );
@@ -215,6 +219,20 @@ export function Conversation({
    *  question. Uploads are workspace files rather than message fields, so they
    *  are matched to turns by time — see `placeUploads`. */
   const uploads = placeUploads(workspaceFiles, messages);
+  /** Whether a user turn comes after each message — the one fact a checkpoint
+   *  card cannot read for itself. A later answer means the card's question has
+   *  been met, so the card folds to its header. A just-sent message counts as
+   *  one already (`pending`), so pressing 确认 folds the card in the same frame
+   *  rather than when the server persists the reply. */
+  const answeredAfter = useMemo(() => {
+    const flags = messages.map(() => false);
+    let later = pending !== undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      flags[index] = later;
+      if (messages[index]!.role === "user") later = true;
+    }
+    return flags;
+  }, [messages, pending]);
   const reconstructed = run.turns.length > 0 || run.finalContent !== undefined;
   /** A message just sent has no run events yet — the request is still in
    *  flight — but the run exists from the press, and its line is what says so.
@@ -250,14 +268,19 @@ export function Conversation({
   return (
     <section className="conversation" onScroll={onScroll} ref={scroller}>
       <div className="messages">
-        {messages.map((message) => {
+        {messages.map((message, index) => {
           const replacement = replacing.get(message.id);
           return (
             <Fragment key={message.id}>
               {replacement === undefined ? (
-                <MessageRow message={message} uploads={uploads.byMessage.get(message.id)} />
+                <MessageRow
+                  answered={answeredAfter[index]}
+                  message={message}
+                  uploads={uploads.byMessage.get(message.id)}
+                />
               ) : (
                 <AssistantTurns
+                  answered={answeredAfter[index]}
                   client={client}
                   onDecide={onDecidePermission}
                   onOpenSubagent={onOpenSubagent}
@@ -271,6 +294,7 @@ export function Conversation({
                   conversation it did not come last in. */}
               {(following.get(message.id) ?? []).map((replay) => (
                 <AssistantTurns
+                  answered={answeredAfter[index]}
                   client={client}
                   key={replay.runId}
                   onDecide={onDecidePermission}
@@ -285,6 +309,7 @@ export function Conversation({
         })}
         {trailing.map((replay) => (
           <AssistantTurns
+            answered={pending !== undefined}
             client={client}
             key={replay.runId}
             onDecide={onDecidePermission}

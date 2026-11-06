@@ -1114,6 +1114,201 @@ export const ZH = {
     close: "退出全屏",
   },
 
+  /** 程序演进：一次在评分卡上自我改进的搜索。
+   *
+   *  The shelf under the session header and the full panel share this block;
+   *  the words are written for the panel first and shortened for the shelf,
+   *  so a search is called the same thing in both places. */
+  evolve: {
+    title: "程序演进",
+    open: "程序演进",
+    newRun: "新建实验",
+    runningCount: (count: number) => `${count} 个实验运行中`,
+    moreRuns: (count: number) => `还有 ${count} 个`,
+    fewerRuns: "收起",
+    shelfHint: "让程序在评分卡上反复改进，保留得分更高的版本",
+    autoPace: "自动",
+    autoPaceTitle: "启动时未在每个检查点暂停",
+    /* 这次 run 的候选代码没有在沙箱里跑。徽标和标题都必须说出来，否则一次
+       无隔离搜索的结果会被当成受隔离保护的结果来看。 */
+    unisolated: "无隔离",
+    unisolatedTitle: "候选代码没有在沙箱中执行",
+
+    /* 表头胶囊的后半句：现在能不能开始一次搜索。比“能不能打开面板”更有用，
+       因为不能运行时点进去也是同一个安装界面。 */
+    runtime: {
+      ready: "可用",
+      running: "运行中",
+      installing: "准备中",
+      not_initialized: "未就绪",
+      error: "不可用",
+    },
+
+    /* 检查点卡片。标题和正文是模型写在卡片里的内容，这里只有卡片自己的
+       外壳：序号、等谁回答、两个按钮。 */
+    checkpoint: {
+      eyebrow: (step: number, total?: number) => (total === undefined ? `检查点 ${step}` : `检查点 ${step}/${total}`),
+      /* 不等待审批的卡片不是检查点：没有人需要在这里做决定，它只是记录一步
+         已经做完的事。所以它不叫「检查点」，也不带「自动」之类的角标。 */
+      stepEyebrow: (step: number, total?: number) => (total === undefined ? `步骤 ${step}` : `步骤 ${step}/${total}`),
+      waiting: "等待确认",
+      answered: "已回答",
+      confirm: "确认，继续",
+      adjust: "需要调整",
+      send: "发送",
+      cancel: "取消",
+      /* 每张卡的确认都是同一句话时，模型只看到「继续」，分不清回答的是哪一步：
+         一次跑动里它因此把检查点 3 重新问了一遍。把步号带出去，回复本身
+         就说明了它答的是哪张卡。 */
+      confirmReply: (step: number, total?: number) =>
+        total === undefined ? `确认检查点 ${step}，继续。` : `确认检查点 ${step}/${total}，继续。`,
+      /* 不需要审批时，卡片画完、模型却结束回合，整段设计就停在这一步。客户端
+         替用户把流程推下去，发出的这句话只说明"第 N 步已记录，继续"，不是
+         一次确认。 */
+      autoContinue: (step: number, total?: number) =>
+        total === undefined ? `继续步骤 ${step}。` : `继续步骤 ${step}/${total}。`,
+      adjustDraft: "我想调整这一步：",
+      busy: "这条回复还没结束，等它完成后再操作。",
+    },
+
+    create: {
+      title: "新建程序演进实验",
+      intro: "描述你想改进的东西，以及“更好”应该怎么衡量。助手会先在对话里设计评分卡，确认后再开始搜索。",
+      goalLabel: "优化目标",
+      goalPlaceholder: "例如：让 compress / decompress 在完全无损的前提下压缩比尽可能高，不许使用 zlib / lzma / bz2 之类的现成库。",
+      algorithmLabel: "搜索算法",
+      puct: "PUCT",
+      puctHint: "沿树逐个扩展，适合有清晰父子改进关系的任务。",
+      openEvolve: "OpenEvolve",
+      openEvolveHint: "按岛屿和网格并行探索，适合差异较大的方案。",
+      confirmLabel: "检查点需要人工确认",
+      confirmHint: "每个检查点会停下来，等你确认后再继续。",
+      autoHint: "关闭后，助手会连续完成设计与启动；检查点仍会在对话中说明，但不再等待确认。",
+      /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
+         横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
+         命令发出（`--allow-direct`），不成为会被忘记的设置。 */
+      unisolatedBannerTitle: "此实验会在没有沙箱的情况下运行候选代码",
+      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有 CPU / 内存限制。点击“开始设计”时会再确认一次。",
+      unisolatedConfirmTitle: "允许无隔离运行候选代码？",
+      unisolatedConfirmBody: "接下来会直接执行候选程序：没有沙箱、没有 CPU / 内存限制，可以读写你的文件并访问网络。只在你了解这些风险并愿意承担时继续。",
+      unisolatedConfirmCancel: "返回",
+      unisolatedConfirmContinue: "仍然继续",
+      sessionNote: "实验会记录在当前会话中；开始后可以随时在会话顶部查看进度。",
+      send: "开始设计",
+      cancel: "取消",
+      blockedRunning: "当前会话正在运行，等它结束后再开始新的实验。",
+      blockedArchived: "归档会话不能开始新的实验。",
+    },
+
+    setup: {
+      title: "需要准备演化运行时",
+      body: "第一次运行需要安装演化引擎。安装由本地服务完成，通常需要几分钟。",
+      missing: "演化运行时还没有准备",
+      installing: "正在准备演化运行时…",
+      install: "准备运行时",
+      operator: "当前部署没有开放自动安装，请联系管理员在服务端启用程序演进。",
+      error: "演化运行时不可用",
+    },
+
+    panel: {
+      eyebrow: "程序演进",
+      close: "关闭",
+      stop: "停止",
+      stopping: "正在停止…",
+      stopHint: "停止后，已经产生的候选仍然可以查看。",
+      fullscreen: "全屏",
+      exitFullscreen: "退出全屏",
+      fullTask: "查看完整目标",
+    },
+
+    status: {
+      pending: "等待中",
+      running: "运行中",
+      succeeded: "已完成",
+      stopped: "已停止",
+      budget_exhausted: "预算用尽",
+      failed: "失败",
+    },
+
+    metric: {
+      best: "最优得分",
+      baseline: "起点",
+      test: "留出集测试",
+      candidates: "候选",
+      depth: "最大深度",
+    },
+
+    chart: {
+      title: "最优得分随扩展次数变化",
+      aria: (baseline: string, best: string, candidates: number) =>
+        `得分曲线：起点 ${baseline}，当前最优 ${best}，共 ${candidates} 个候选。`,
+      xAxis: "扩展次数",
+      best: "当前最优",
+      gate: "留出集得分",
+      rollout: "搜索内得分",
+      test: "测试",
+      failed: "未跑起来",
+      baseline: "起点",
+      empty: "还没有可以画出的得分。",
+    },
+
+    table: {
+      title: "候选",
+      filterAll: "全部",
+      filterAccepted: "已接受",
+      filterRejected: "次优",
+      filterFailed: "失败",
+      search: "搜索改动或编号",
+      empty: "还没有候选。",
+      noMatch: "没有匹配的候选。",
+      node: "编号",
+      parent: "来源",
+      change: "改动",
+      score: "得分",
+      verdict: "判定",
+      root: "起点",
+      accepted: "已接受",
+      rejected: "次优",
+      violated: "违反约束",
+      failed: "未跑起来",
+      truncated: (shown: number, total: number) => `仅显示前 ${shown} / ${total} 个候选`,
+    },
+
+    inspector: {
+      title: "候选",
+      emptyTitle: "选择一个候选",
+      emptyBody: "点表格中的一行，查看它相对父代的改动、得分和判定原因。",
+      parent: "父代",
+      depth: "深度",
+      gate: "留出门",
+      rollout: "搜索内",
+      prior: "模型先验",
+      visits: "访问",
+      diff: "改动",
+      loading: "正在读取源码…",
+      unavailable: "源码不可用（可能已被清理）。",
+      unchanged: "与父代相同。",
+      noParent: "这是起点，没有父代。",
+      error: "失败原因",
+      hidden: (count: number) => `已折叠 ${count} 行未改动内容`,
+      close: "关闭候选详情",
+    },
+
+    budget: {
+      expansions: "扩展次数",
+      tokens: "Token",
+      elapsed: "用时",
+      cost: "成本",
+    },
+
+    notice: {
+      placeholder: "这次实验的评分卡是占位符，不是为它设计的真实评分卡。",
+      stoppedShort: (made: number, planned: number, reason: string) =>
+        `计划 ${planned} 次扩展，实际完成 ${made} 次（${reason}）。`,
+      log: "引擎日志",
+    },
+  },
+
   errors: {
     generic: "操作失败",
     sessionCreate: "创建会话失败",
