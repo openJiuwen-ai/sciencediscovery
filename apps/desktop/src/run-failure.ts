@@ -43,7 +43,21 @@ function timeoutFromDiagnostic(message: string): FailureTimeout | undefined {
   return undefined;
 }
 
-export function formatRunFailureTitle(code: string | undefined): string {
+type FailureScope = "run" | "notice";
+
+export function formatRunFailureTitle(
+  code: string | undefined,
+  message = "",
+  timeout?: FailureTimeout,
+  scope: FailureScope = "run",
+): string {
+  if (code === "timeout") {
+    const detail = timeout ?? timeoutFromDiagnostic(message);
+    if (detail && Object.hasOwn(TEXT.runFailure.timeoutTitles, detail.kind)) {
+      return TEXT.runFailure.timeoutTitles[detail.kind];
+    }
+    if (scope === "notice") return TEXT.runFailure.timeoutNoticeTitle;
+  }
   return isRunFailureCode(code) ? TEXT.runFailure.titles[code] : TEXT.runFailure.title;
 }
 
@@ -53,6 +67,7 @@ export function formatRunFailure(
   code: string | undefined,
   message = "",
   timeout?: FailureTimeout,
+  scope: FailureScope = "run",
 ): string {
   if (code === "timeout") {
     const detail = timeout ?? timeoutFromDiagnostic(message);
@@ -60,6 +75,7 @@ export function formatRunFailure(
       Object.hasOwn(TEXT.runFailure.timeouts, detail.kind)) {
       return TEXT.runFailure.timeouts[detail.kind](detail.timeoutMs / 1000);
     }
+    if (scope === "notice") return TEXT.runFailure.timeoutNotice;
   }
   return isRunFailureCode(code) ? TEXT.runFailure[code] : TEXT.runFailure.unknown;
 }

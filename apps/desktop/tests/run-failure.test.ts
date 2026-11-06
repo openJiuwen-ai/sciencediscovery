@@ -145,3 +145,35 @@ describe("failure titles and timeout guidance", () => {
     assert.match(formatRunFailure("timeout", "no gateway progress for 2500 ms"), /no progress for 2.5 seconds/);
   });
 });
+
+
+describe("timeout scope", () => {
+  it("uses tool and kernel titles from metadata in both languages", () => {
+    for (const [locale, toolTitle, kernelTitle] of [["zh-CN", "工具执行超时", "内核空闲超时"], ["en", "Tool execution timed out", "Kernel idle timeout"]] as const) {
+      setLanguage(locale);
+      assert.equal(formatRunFailureTitle("timeout", "opaque", { kind: "runner_exec", timeoutMs: 1000 }), toolTitle);
+      assert.equal(formatRunFailureTitle("timeout", "opaque", { kind: "kernel_idle", timeoutMs: 1000 }), kernelTitle);
+      // Persisted metadata wins over incidental text in the diagnostic.
+      assert.equal(formatRunFailureTitle("timeout", "no gateway progress for 2000 ms", { kind: "runner_exec", timeoutMs: 1000 }), toolTitle);
+    }
+  });
+
+  it("recognizes historical tool diagnostics without timeout metadata", () => {
+    setLanguage("en");
+    for (const raw of ["execution timed out after 4000 ms", "evaluation timed out after 5000 ms"]) {
+      assert.equal(formatRunFailureTitle("timeout", raw, undefined, "notice"), "Tool execution timed out");
+      assert.doesNotMatch(formatRunFailure("timeout", raw, undefined, "notice"), /run.*terminated/i);
+    }
+    assert.equal(formatRunFailureTitle("timeout", "kernel idle timeout after 6000 ms"), "Kernel idle timeout");
+  });
+
+  it("keeps unknown or malformed notices neutral while actual run failures stay explicit", () => {
+    for (const locale of ["en", "zh-CN"] as const) {
+      setLanguage(locale);
+      assert.equal(formatRunFailureTitle("timeout", "opaque", undefined, "notice"), locale === "en" ? "Timeout notice" : "超时提示");
+      const malformed = { kind: "runner_exec", timeoutMs: 0 } as const;
+      assert.doesNotMatch(formatRunFailure("timeout", "opaque", malformed, "notice"), /run.*terminated|运行已.*终止/i);
+      assert.match(formatRunFailure("timeout"), /run.*terminated|运行已.*终止/i);
+    }
+  });
+});
