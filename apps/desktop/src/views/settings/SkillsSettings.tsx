@@ -31,6 +31,9 @@ interface Props {
 }
 
 interface SkillPage {
+  switchesAvailable: boolean;
+  switchError?: string;
+  native: boolean;
   enabled: string[];
   jiuwenSwarmSkills: JiuwenSwarmSkill[];
   skills: SkillDescriptor[];
@@ -49,14 +52,12 @@ interface OpenDetail {
   instructions?: string;
 }
 
-const SOURCE_LABEL: Record<SkillDescriptor["source"], string> = {
-  "built-in": TEXT.settings.skills.source.builtIn,
-  managed: TEXT.settings.skills.source.managed,
-};
+function sourceLabel(source: SkillDescriptor["source"]): string {
+  return source === "built-in" ? TEXT.settings.skills.source.builtIn : TEXT.settings.skills.source.managed;
+}
 
 /**
- * The line under a card's description: where the skill came from, which
- * version it is, and how many files it ships.
+ * The expanded card's version and file count; its source is already in the badge.
  *
  * Two of those used to be the server's own labels rather than a reader's.
  * `version` is `revision:N` for a package that declared none, and printing it
@@ -73,7 +74,6 @@ export function skillMeta(skill: SkillDescriptor): string {
     ? TEXT.settings.skills.revision(skill.currentRevision)
     : `v${skill.declaredVersion}`;
   return [
-    SOURCE_LABEL[skill.source],
     version,
     TEXT.workspace.filesCount(skill.resourceSummary.files + 1),
   ].join(" · ");
@@ -94,15 +94,22 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
   const [openId, setOpenId] = useState<string>();
 
   const loaded = useLoaded<SkillPage>(async () => {
-    const [skills, jiuwenSwarm] = await Promise.all([
+    const [catalog, state] = await Promise.allSettled([
       listSkills(client),
       getJiuwenSwarmSkills(client),
     ]);
-    if (jiuwenSwarm.backend === "native") {
-      throw new Error(TEXT.settings.skills.jiuwenSwarmOnly);
-    }
-    const enabled = jiuwenSwarm.skills.flatMap((skill) => skill.enabled && skill.skillId ? [skill.skillId] : []);
-    return { enabled, jiuwenSwarmSkills: jiuwenSwarm.skills.filter((skill) => skill.source !== "sciencediscovery"), skills };
+    if (catalog.status === "rejected") throw catalog.reason;
+    const jiuwenSwarm = state.status === "fulfilled" ? state.value : undefined;
+    return {
+      enabled: jiuwenSwarm?.skills.flatMap((skill) => skill.enabled && skill.skillId ? [skill.skillId] : []) ?? [],
+      jiuwenSwarmSkills: jiuwenSwarm?.skills.filter((skill) => skill.source !== "sciencediscovery") ?? [],
+      native: jiuwenSwarm?.backend === "native",
+      skills: catalog.value,
+      switchesAvailable: jiuwenSwarm?.backend === "jiuwenswarm",
+      ...(state.status === "rejected" ? {
+        switchError: state.reason instanceof Error ? state.reason.message : TEXT.settings.saveFailed,
+      } : {}),
+    };
   }, {
     client,
     key: "skills:jiuwenswarm",
@@ -110,7 +117,7 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
 
   const toggle = async (skill: SkillDescriptor | JiuwenSwarmSkill, next: boolean) => {
     const page = loaded.value;
-    if (!page) return;
+    if (!page?.switchesAvailable) return;
     setBusy(true);
     setFailure(undefined);
     try {
@@ -130,7 +137,7 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
    */
   const setAll = async (next: boolean) => {
     const page = loaded.value;
-    if (!page) return;
+    if (!page?.switchesAvailable) return;
     setBusy(true);
     setFailure(undefined);
     try {
@@ -173,13 +180,17 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     );
   };
 
-  /** A skill created from the form is enabled in JiuwenSwarm right away. */
+  /** Enable a new skill when JiuwenSwarm is available; native creation needs no import. */
   const afterCreate = async (skill: SkillDetail) => {
     onAddingChange(false);
     setBusy(true);
     setFailure(undefined);
     try {
-      await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
+      if (loaded.value?.switchesAvailable) {
+        await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
+      } else if (!loaded.value?.native) {
+        setFailure(loaded.value?.switchError ?? TEXT.settings.saveFailed);
+      }
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
     } finally {
@@ -192,14 +203,21 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
     <>
       <Group>
         <p className="row-note">{TEXT.settings.skills.scope}</p>
+        {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
         <LoadGate loaded={loaded}>
           {(page) => {
-            if (page.skills.length === 0 && page.jiuwenSwarmSkills.length === 0) {
-              return <p className="settings-empty">{TEXT.settings.skills.empty}</p>;
-            }
             return (
               <div className="settings-list">
-                <BulkToggles busy={busy} onAll={(next) => void setAll(next)} />
+                {page.native ? <p className="row-note">{TEXT.settings.skills.jiuwenSwarmOnly}</p> : null}
+                {page.switchError ? <div className="row-note is-error" role="alert">
+                  {page.switchError}
+                  <button className="bulk-button" disabled={loaded.loading} onClick={() => { setFailure(undefined); loaded.reload(); }} type="button">
+                    {TEXT.settings.retry}
+                  </button>
+                </div> : null}
+                {page.skills.length === 0 && page.jiuwenSwarmSkills.length === 0
+                  ? <p className="settings-empty">{TEXT.settings.skills.empty}</p>
+                  : page.switchesAvailable ? <BulkToggles busy={busy} onAll={(next) => void setAll(next)} /> : null}
                 {page.skills.map((skill) => {
                   const on = page.enabled.includes(skill.id);
                   const open = openId === skill.id;
@@ -213,13 +231,13 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                       >
                         <strong>
                           {skill.name}
-                          <Tag tone={on ? "on" : "off"}>
+                          {page.switchesAvailable ? <Tag tone={on ? "on" : "off"}>
                             {on ? TEXT.settings.skills.on : TEXT.settings.skills.off}
-                          </Tag>
+                          </Tag> : null}
                         </strong>
                         <small>{skill.description}</small>
                         <span className={`skill-source-badge ${skill.source === "built-in" ? "is-sd" : "is-managed"}`}>
-                          {SOURCE_LABEL[skill.source]}
+                          {sourceLabel(skill.source)}
                         </span>
                         {open ? (
                           <span className="settings-detail">
@@ -238,7 +256,7 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                       </button>
                       <div className="settings-card-actions">
                         <Switch
-                          disabled={busy}
+                          disabled={busy || !page.switchesAvailable}
                           label={TEXT.settings.skills.toggle(skill.name)}
                           onChange={(next) => void toggle(skill, next)}
                           value={on}
@@ -264,7 +282,7 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                     </div>
                     <div className="settings-card-actions">
                       <Switch
-                        disabled={busy}
+                        disabled={busy || !page.switchesAvailable}
                         label={TEXT.settings.skills.toggle(skill.name)}
                         onChange={(next) => void toggle(skill, next)}
                         value={skill.enabled}
@@ -272,7 +290,6 @@ export function SkillsSettings({ adding, client, onAddingChange }: Props) {
                     </div>
                   </div>
                 ))}
-                {failure ? <small className="row-note is-error">{failure}</small> : null}
               </div>
             );
           }}
