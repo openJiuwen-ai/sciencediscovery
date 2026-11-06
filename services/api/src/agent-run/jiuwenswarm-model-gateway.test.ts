@@ -153,6 +153,45 @@ test("gateway accepts Swarm's tool-less modality probe controls without changing
   } finally { await g.close(); }
 });
 
+test("gateway rejects the image probe with the code openjiuwen classifies as no image input", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  try {
+    // The exact body openjiuwen's image-modality probe sends: one image part
+    // next to the text question, plus the reasoning-off switches from
+    // `_THINKING_DISABLED_EXTRA_BODY` — including `reasoning` as an *object*,
+    // which the capability-control checks reject. The image vertex has to be
+    // classified before them, or a real probe would come back as a validation
+    // error the classifier does not recognise.
+    const response = await post(g, {
+      enable_thinking: false,
+      max_tokens: 8,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+          { type: "text", text: "What color is this image? Reply with one word." },
+        ],
+      }],
+      reasoning: { enabled: false },
+      stream: false,
+      temperature: 0,
+      thinking: { type: "disabled" },
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { error: { code?: string; message: string; type: string } };
+    // `is_image_modality_rejection` (openjiuwen/harness/image_modality_probe.py)
+    // accepts any of its allowlisted codes, so the classification no longer
+    // rests on our wording matching one of its text fragments — today
+    // "images are not supported" does match, and the message stays as the
+    // second signal.
+    assert.equal(body.error.code, "unsupported_image_input");
+    assert.equal(body.error.type, "model_gateway_error");
+    assert.match(body.error.message, /images are not supported/);
+    assert.equal(calls.length, 0, "a capability rejection must never reach the model");
+  } finally { await g.close(); }
+});
+
 test("gateway diagnostics report an active model request without logging its payload", async () => {
   let release!: () => void;
   let started!: () => void;
