@@ -794,27 +794,16 @@ test("agent workspace outputs are registered only after an explicit user request
   const root = resolve(process.cwd(), ".tmp", `workspace-artifact-promotion-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
   context.after(() => removeTestRoot(root));
-  const modelServer = await startTextModel(context);
-  const { origin } = await startTestApi(context, root);
-  const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
-  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
-    body: JSON.stringify({ name: "Artifact promotion" }),
-    headers: { ...authorization, "content-type": "application/json" },
-    method: "POST",
-  });
-  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ modelId: model.id, title: "Outputs" }),
-    headers: { ...authorization, "content-type": "application/json" },
-    method: "POST",
-  });
   const store = new SessionStore(root);
   await store.load();
+  const project = await store.createProject("Artifact promotion");
+  const session = await store.createSession(project.id, "Outputs", {}, {}, { allowUnconfiguredModel: true });
   const path = "results/analysis.json";
-  const target = resolve(store.workspacePath(session.body.id), path);
+  const target = resolve(store.workspacePath(session.id), path);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, '{"answer": 42}\n');
   const metadata = await stat(target);
-  await store.recordWorkspaceFileRevision(session.body.id, {
+  await store.recordWorkspaceFileRevision(session.id, {
     mode: "write",
     modifiedAt: metadata.mtime.toISOString(),
     origin: "agent",
@@ -823,20 +812,22 @@ test("agent workspace outputs are registered only after an explicit user request
   });
   store.close();
 
-  const files = await jsonRequest<WorkspaceFile[]>(`${origin}/api/sessions/${session.body.id}/files`, { headers: authorization });
+  const { origin } = await startTestApi(context, root);
+
+  const files = await jsonRequest<WorkspaceFile[]>(`${origin}/api/sessions/${session.id}/files`, { headers: authorization });
   assert.equal(files.body.find((file) => file.path === path)?.provenance?.origin, "agent");
-  const before = await jsonRequest<ScientificArtifact[]>(`${origin}/api/projects/${project.body.id}/artifacts`, { headers: authorization });
+  const before = await jsonRequest<ScientificArtifact[]>(`${origin}/api/projects/${project.id}/artifacts`, { headers: authorization });
   assert.equal(before.body.length, 0);
 
   const promoted = await jsonRequest<{ artifacts: Array<{ artifact: ScientificArtifact }> }>(
-    `${origin}/api/sessions/${session.body.id}/workspace/artifacts`,
+    `${origin}/api/sessions/${session.id}/workspace/artifacts`,
     { body: JSON.stringify({ paths: [path] }), headers: { ...authorization, "content-type": "application/json" }, method: "POST" },
   );
   assert.equal(promoted.response.status, 201);
   assert.equal(promoted.body.artifacts[0]?.artifact.originMeta?.declaredPath, path);
-  const after = await jsonRequest<ScientificArtifact[]>(`${origin}/api/projects/${project.body.id}/artifacts`, { headers: authorization });
+  const after = await jsonRequest<ScientificArtifact[]>(`${origin}/api/projects/${project.id}/artifacts`, { headers: authorization });
   assert.equal(after.body.length, 1);
-  assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/workspace/artifacts`, {
+  assert.equal((await fetch(`${origin}/api/sessions/${session.id}/workspace/artifacts`, {
     body: JSON.stringify({ paths: [path] }), headers: { ...authorization, "content-type": "application/json" }, method: "POST",
   })).status, 409);
 });
