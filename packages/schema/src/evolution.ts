@@ -465,8 +465,13 @@ export interface EvolveRunSummary {
   resultArtifact?: string;
   status: EvolveRunStatus;
   /** Set only when the search made fewer expansions than it planned, which a
-   *  `succeeded` status and a real improvement otherwise hide completely. */
+   *  `succeeded` status and a real improvement otherwise hide completely.
+   *  Absent when the reason is `target_reward`: stopping at the solved
+   *  threshold is the success, and that sentence lives on `targetReached`. */
   stoppedEarly?: string;
+  /** Set when the best candidate reached the scorecard's solved threshold
+   *  and the framework stopped with `target_reward`. */
+  targetReached?: string;
   tokens: number;
 }
 

@@ -33,9 +33,12 @@ parent selection, mutation prompt, options, and emitted events.
 | Prompt | `domain.prompt(parent.program)` | parent prompt plus archive context: global-best metrics and diverse inspiration code |
 | Engine-specific options | `c_puct`, `prior_exponent` | islands, archive size, feature bins, exploitation ratio, migration interval, and model retry options |
 
-PUCT uses `blast_radius: 1.0` and a `solved_threshold` of `2.0` (never skip); OpenEvolve uses
-`0.6` and `1.0` (skip once optimal) because its shards are seeds for one objective. Both read
-staleness policy from options. OpenEvolve defaults model retries/backoff to `2 / 1.0`.
+PUCT and OpenEvolve both keep a per-rollout `solved_threshold` of `2.0`, so a rollout is never
+skipped as solved: a shard is a measurement of one program, not a task to finish. PUCT uses
+`blast_radius: 1.0`; OpenEvolve uses `0.6`. Both pass the scorecard's `solvedThreshold` as
+`target_reward`, and the search stops once the best held-out score reaches that line
+(`stop_reason` `target_reward`). Both read staleness policy from options. OpenEvolve defaults
+model retries/backoff to `2 / 1.0`.
 
 PUCT emits `expanded` with depth, parent index, and score. OpenEvolve adds island, program ID, and
 inspiration indexes, and emits `inserted` (complexity bin, diversity bin, island, insertion or

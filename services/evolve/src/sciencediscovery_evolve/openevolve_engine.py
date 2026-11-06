@@ -148,7 +148,7 @@ class OpenEvolveEngine:
         from .puct_engine import (
             _mode_of, _default_completion, _judge_spec, _scale_of,
             _tasks, _group_tasks, _stages_rows, _held_out_frac,
-            _group_held_out_frac, _entrypoint_of,
+            _group_held_out_frac, _entrypoint_of, _target_reward,
         )
 
         baseline: Dict[str, float] = {}
@@ -265,7 +265,9 @@ class OpenEvolveEngine:
             # Never skip a rollout as solved, as in the PUCT engine: a shard is a measurement of one
             # program, not a task to finish. Measured: the first candidate scored 1.0, every later
             # rollout counted as solved and proposed nothing, and a run planned for 4 expansions made 1.
+            # solvedThreshold is ``target_reward`` below, which stops the search; it is not this knob.
             "solved_threshold": 2.0,
+            "target_reward": _target_reward(spec),
             "self_verify": False,
             "strategy": strategy,
             "usage": None,
@@ -393,6 +395,11 @@ class _Reporter:
         self.store = store
         self.usage = usage
         self.emit = emit
+        # Empty until the framework returns. `finish` still runs when it
+        # never does, and an absent reason has to stay distinct from one
+        # the framework declined to give.
+        self._stop_reason = ""
+        self._planned = spec.expansions
         self.attempted = 0
         self.scored = 0
         self._distinct_scores: set = set()
@@ -538,6 +545,8 @@ class _Reporter:
         error = str(getattr(outcome, "error", "") or "")
         retired = int(getattr(outcome, "retired_workers", 0) or 0)
         done = (len(self.archive.history) - 1) if self.archive is not None else 0
+        self._stop_reason = reason
+        self._planned = planned
 
         if error:
             self.emit(events.log("warn", f"the search was ended by an error: {error[:300]}"))
@@ -547,7 +556,14 @@ class _Reporter:
                 f"{retired} workers retired — model calls failed repeatedly "
                 "enough that the framework stopped trying.",
             ))
-        if 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
+        if reason == "target_reward":
+            # Stopping short of the plan is the success: the goal was met.
+            self.emit(events.log(
+                "info",
+                f"the best candidate reached the solved threshold after {done} of "
+                f"{planned} planned expansions, so the search stopped.",
+            ))
+        elif 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
             self.emit(events.log(
                 "info",
                 f"planned {planned} expansions, ran {done}, stopped because {reason}.",
@@ -593,6 +609,8 @@ class _Reporter:
         nodes = len(self.archive.history) if self.archive is not None else 0
         self.emit(events.search_finished(
             status, best_index, nodes, best_test_score=best_test_score,
+            stop_reason=self._stop_reason,
+            expansions_planned=self._planned,
         ))
 
         log.info(

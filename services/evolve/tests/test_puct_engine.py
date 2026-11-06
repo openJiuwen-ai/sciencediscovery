@@ -1253,14 +1253,71 @@ def test_rollouts_are_never_skipped_as_solved() -> None:
     Measured live: an evaluator clamped any shard compressed past 50% to a
     flat 1.0, four of six rollout shards saturated, and a run planned for 20
     expansions made 12 — two-thirds of the rollout budget burned on skips.
+
+    The scorecard's solvedThreshold is a different knob: it is the search-level
+    stop (``target_reward``), not the per-rollout skip. Reading it inside the
+    search is required; writing it into ``solved_threshold`` is the bug.
     """
     import inspect
 
-    from sciencediscovery_evolve.puct_engine import PuctEngine
+    from sciencediscovery_evolve.puct_engine import PuctEngine, _target_reward
 
     source = inspect.getsource(PuctEngine._search)
     assert '"solved_threshold": 2.0' in source
-    assert 'spec.scorecard.get("solvedThreshold")' not in source
+    assert '"target_reward": _target_reward(spec)' in source
+    assignments = [
+        line.strip() for line in source.splitlines()
+        if line.strip().startswith('"solved_threshold"')
+    ]
+    assert assignments == ['"solved_threshold": 2.0,']
+    assert 'spec.scorecard.get("solvedThreshold")' in inspect.getsource(_target_reward)
+
+
+def test_a_zero_solved_threshold_is_kept() -> None:
+    """``0`` is a real line (stop as soon as any reward is observed). Only a
+    missing field falls back to the binary-scorer default."""
+    from sciencediscovery_evolve.puct_engine import _target_reward
+
+    assert _target_reward(spec(scorecard={**SCORECARD, "solvedThreshold": 0})) == 0.0
+    assert _target_reward(spec(scorecard={**SCORECARD, "solvedThreshold": 0.85})) == 0.85
+    without = {key: value for key, value in SCORECARD.items() if key != "solvedThreshold"}
+    assert _target_reward(spec(scorecard=without)) == 0.999
+
+
+@pytest.mark.parametrize("mode", ["serial", "async"])
+def test_reaching_the_solved_threshold_stops_the_search(mode: str) -> None:
+    """A candidate at the scorecard line used to keep buying expansions until
+    the budget ran out. The framework already stops on ``target_reward``; the
+    engine has to hand it the scorecard's threshold, and the run has to come
+    back succeeded with that reason rather than as a shortfall.
+    """
+    card = {**SCORECARD, "solvedThreshold": 0.5}
+    harness = Harness(scores=[0.8])
+    harness.run(spec(
+        expansions=6, scorecard=card, workers=1, options={"mode": mode},
+    ))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["status"] == "succeeded"
+    assert finished["stopReason"] == "target_reward"
+    made = finished["candidates"] - 1  # the seed is not an expansion
+    assert 1 <= made < 6
+    assert any(
+        "solved threshold" in event.get("message", "")
+        for event in harness.of("log")
+    )
+
+
+def test_a_search_below_the_solved_threshold_spends_its_plan() -> None:
+    """The new stop is the threshold, not any improvement. A run whose best
+    score stays under the line still owes the expansions it was asked for."""
+    card = {**SCORECARD, "solvedThreshold": 0.99}
+    harness = Harness(scores=[0.4, 0.55, 0.7])
+    harness.run(spec(expansions=2, scorecard=card, workers=1, options={"mode": "serial"}))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["stopReason"] != "target_reward"
+    assert finished["candidates"] - 1 == 2
 
 
 def test_an_unclosed_fence_still_yields_importable_code() -> None:

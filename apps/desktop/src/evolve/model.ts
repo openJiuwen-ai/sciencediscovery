@@ -26,11 +26,12 @@
  * stream.
  */
 
-import type {
-  EvolveEvent,
-  EvolveEventRecord,
-  EvolveRejectionCategory,
-  EvolveRunStatus,
+import {
+  isEvolveRunActive,
+  type EvolveEvent,
+  type EvolveEventRecord,
+  type EvolveRejectionCategory,
+  type EvolveRunStatus,
 } from "@sciencediscovery/schema";
 
 export interface EvolveCandidateView {
@@ -90,6 +91,36 @@ export interface EvolveRunView {
   stopReason?: string;
   expansionsPlanned?: number;
   tokens: number;
+}
+
+export type EvolveFinishNotice =
+  | { kind: "target"; made: number; planned: number | null }
+  | { kind: "short"; made: number; planned: number; reason: string };
+
+/**
+ * What to say when a finished run made fewer expansions than it planned.
+ *
+ * `target_reward` means the goal was met, so it does not share the shortfall
+ * sentence. Every other early stop still does.
+ */
+export function evolveFinishNotice(view: EvolveRunView): EvolveFinishNotice | null {
+  if (isEvolveRunActive(view.status)) return null;
+  if (view.stopReason === "target_reward") {
+    return {
+      kind: "target",
+      made: view.expansions,
+      planned: view.expansionsPlanned ?? null,
+    };
+  }
+  if (view.expansionsPlanned !== undefined && view.expansions < view.expansionsPlanned) {
+    return {
+      kind: "short",
+      made: view.expansions,
+      planned: view.expansionsPlanned,
+      reason: view.stopReason ?? "?",
+    };
+  }
+  return null;
 }
 
 export function emptyRunView(): EvolveRunView {
