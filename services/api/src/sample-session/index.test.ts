@@ -61,6 +61,13 @@ test("an install with no conversation of its own opens on the sample Session", a
   const mainStream = await readFile(resolve(root, "run-events", session.id, run.id, "main.jsonl"), "utf8");
   assert.doesNotMatch(mainStream, /样例/);
   assert.ok(mainStream.includes(session.title));
+  let stateRefs = 0;
+  for (const line of mainStream.trim().split("\n")) JSON.parse(line, (key, value: unknown) => {
+    if (key.endsWith("Ref") && value && typeof value === "object" && "pool" in value && value.pool === "agent-state") stateRefs++;
+    return value;
+  });
+  assert.equal(stateRefs, 0, "the sample must not promise agent-state CAS objects it does not ship");
+  assert.match(mainStream, /assistant\.delta/, "inline recorded output is retained");
   const workspace = resolve(root, "projects", project.id, "sessions", session.id, "workspace");
   assert.ok((await stat(workspace)).isDirectory());
   // The analysis's own deliverables and the scripts behind them landed.

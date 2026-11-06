@@ -21,7 +21,7 @@ import type { ServerConfig } from "./bootstrap/config.js";
 import type { ArtifactVersionProvenance, WorkspaceFileProvenance, SessionRun, AgentShellExecution, SessionRunEvent, ArtifactReviewRun, Claim, EvidenceItem, EvidenceLink } from "@sciencediscovery/schema";
 import type { SessionDetail, ResearchContinuationOperation } from "@sciencediscovery/schema";
 
-async function fixture(context: TestContext, graphAvailable = false) {
+async function fixture(context: TestContext, graphAvailable = false, sampleSession = false) {
   const root = await mkdtemp(resolve(tmpdir(), "research-package-http-"));
   const snapshots: ReturnType<typeof researchHistoryFixture>["records"]["memoryGraph"][] = [];
   let graphExports = 0;
@@ -46,7 +46,7 @@ async function fixture(context: TestContext, graphAvailable = false) {
   });
   await new Promise<void>((done) => graph.listen(0, "127.0.0.1", done));
   const config: ServerConfig = {
-    authToken: "test-token", dataDir: root, host: "127.0.0.1", port: 0,
+    sampleSession, authToken: "test-token", dataDir: root, host: "127.0.0.1", port: 0,
     gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 0, kernelIdleTimeoutMs: 0,
     modelCatalogPath: resolve(root, "absent.json"), paperPythonPath: resolve(root, "no-python"), paperWorkerPath: resolve(root, "no-worker"),
     permissionWaitTimeoutMs: 0, runnerExecTimeoutMs: 0, runnerMaxOutputBytes: 1_000_000, runnerMaxWorkspaceBytes: 10_737_418_240,
@@ -95,6 +95,48 @@ test("pending export previews return HTTP 409 for single and default profiles", 
     assert.equal(response.status, 409);
     assert.equal((await response.json() as { code: string }).code, "EXPORT_PREVIEW_PENDING");
   }
+});
+
+test("async preview clients receive accepted pending state and recover for single and default profiles", async (context) => {
+  const { rawRequest, project } = await fixture(context);
+  const target = await project();
+  let pending = true;
+  let unavailable = false;
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => {
+    if (unavailable) throw new ApiStatusError(503, "Export storage unavailable", "EXPORT_STORAGE_UNAVAILABLE");
+    if (pending) throw new ApiStatusError(409, "Export preview is pending", "EXPORT_PREVIEW_PENDING");
+    return { revision: "settled", estimatedBytes: 42, files: [], omissions: [] };
+  });
+  const endpoint = `/api/projects/${target.id}/research-package/preview?sessionId=${target.firstSession.id}`;
+  for (const query of ["&level=complete", "&defaults=1"]) {
+    pending = true;
+    const response = await rawRequest(`${endpoint}${query}`, { headers: { Prefer: "respond-async" } });
+    assert.equal(response.status, 202);
+    assert.equal(response.headers.get("preference-applied"), "respond-async");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.json() as { code: string }).code, "EXPORT_PREVIEW_PENDING");
+    pending = false;
+    const ready = await rawRequest(`${endpoint}${query}`, { headers: { Prefer: "respond-async" } });
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json() as { revision: string }).revision, "settled");
+  }
+  unavailable = true;
+  const failed = await rawRequest(`${endpoint}&level=complete`, { headers: { Prefer: "respond-async" } });
+  assert.equal(failed.status, 503);
+  assert.equal((await failed.json() as { code: string }).code, "EXPORT_STORAGE_UNAVAILABLE");
+});
+
+test("the first-install sample supports all five preview profiles without unshipped state objects", async (context) => {
+  const f = await fixture(context, false, true);
+  const projects = await (await f.request("/api/projects")).json() as { id: string }[];
+  const projectId = projects[0]!.id;
+  const sessions = await (await f.request(`/api/projects/${projectId}/sessions`)).json() as { id: string }[];
+  const response = await f.rawRequest(`/api/projects/${projectId}/research-package/preview?sessionId=${sessions[0]!.id}&defaults=1`, { headers: { Prefer: "respond-async" } });
+  assert.equal(response.status, 200);
+  const previews = await response.json() as { revision: string; complete: { estimatedBytes: number }; completeWithTrajectory: { estimatedBytes: number } };
+  assert.ok(previews.revision);
+  assert.ok(previews.complete.estimatedBytes > 0);
+  assert.ok(previews.completeWithTrajectory.estimatedBytes > previews.complete.estimatedBytes, "the recorded trajectory remains in the complete preview");
 });
 
 test("viewing a conversation prewarms default sizes and workspace changes invalidate the cached evidence revision", async (context) => {
