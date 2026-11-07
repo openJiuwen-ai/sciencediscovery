@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { uploadFileName } from "../api/sessions.js";
+import { scaledSize } from "./size-units.js";
 
 /**
  * The files waiting in the composer, and the decisions about them that do not
@@ -162,15 +163,11 @@ export function attachmentType(name: string): string {
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0KB";
   const units = ["B", "KB", "MB", "GB", "TB"] as const;
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  if (unit === 0) return `${Math.round(value)}B`;
-  const rounded = value < 100 ? Number(value.toFixed(1)) : Math.round(value);
-  return `${rounded}${units[unit]}`;
+  // The same rounding the card prints decides the unit, so a size one byte under
+  // 1 MiB reads 1MB rather than a KB value that reaches 1024.
+  const round = (value: number): number => value < 100 ? Number(value.toFixed(1)) : Math.round(value);
+  const { unit, value } = scaledSize(bytes, round, units.length);
+  return unit === 0 ? `${Math.round(value)}B` : `${round(value)}${units[unit]}`;
 }
 
 /**
