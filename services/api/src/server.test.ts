@@ -558,6 +558,56 @@ async function startTestApi(
   return { origin };
 }
 
+test("desktop skill switches import a new package and preserve global state on repeat writes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `skill-switch-${randomUUID()}`);
+  const token = randomUUID();
+  const installed: Array<{ name: string; skillId: string; enabled: boolean; source: string }> = [];
+  const importedPaths: string[] = [];
+  const adapter = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/agent/skills" && request.method === "GET") {
+      response.end(JSON.stringify({ skills: installed }));
+    } else if (request.url === "/agent/skills" && request.method === "POST") {
+      const skill = body.skills[0];
+      importedPaths.push(skill.path);
+      assert.match(await readFile(resolve(skill.path, "SKILL.md"), "utf8"), /literature-searcher/);
+      installed.push({ name: skill.id, skillId: skill.id, enabled: true, source: "sciencediscovery" });
+      response.end(JSON.stringify({ skills: { [skill.id]: { name: skill.id } } }));
+    } else if (request.url?.endsWith("/enabled")) {
+      installed[0]!.enabled = body.enabled;
+      response.end("{}");
+    } else response.end("{}");
+  });
+  await new Promise<void>((done) => adapter.listen(0, "127.0.0.1", done));
+  const previous = { executor: process.env.SCIENCE_AGENT_EXECUTOR, adapter: process.env.SCIENCE_AGENT_ADAPTER_URL };
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`;
+  const server = createApiServer({ ...testConfig(root), authToken: token });
+  context.after(async () => {
+    await closeApiServer(server);
+    await new Promise<void>((done) => { adapter.close(() => done()); adapter.closeAllConnections(); });
+    if (previous.executor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR;
+    else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
+    if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
+    else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
+    await rm(root, { recursive: true, force: true });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  for (const enabled of [true, false, true]) {
+    const result = await fetch(`${origin}/api/jiuwenswarm/skills-by-id/literature-searcher`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    assert.equal(result.status, 200, await result.text());
+    assert.equal(installed[0]?.enabled, enabled);
+  }
+  assert.equal(importedPaths.length, 1, "subsequent toggles reuse JiuwenSwarm's installed package");
+});
+
 test("closing the API server drains active connections before closing the MCP transport", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });

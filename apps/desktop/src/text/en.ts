@@ -476,11 +476,13 @@ export const EN: Text = {
     },
     skills: {
       detail: "Details",
-      empty: "No built-in skills found.",
+      empty: "No skills found.",
       heading: "Skills",
+      jiuwenSwarmOnly: "The current agent backend is not JiuwenSwarm, so skill switches are unavailable.",
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
+      scope: "These switches control JiuwenSwarm’s global skill state for new tasks using its skill mechanism. ScienceDiscovery packages are imported on first enable.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       add: "Add skill",
       create: "Create",
@@ -503,7 +505,9 @@ export const EN: Text = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `revision ${revision}`,
       source: {
-        builtIn: "built-in",
+        builtIn: "SD built-in",
+        jiuwenBuiltIn: "JiuwenSwarm built-in",
+        jiuwenLocal: "Installed in JiuwenSwarm",
         managed: "managed",
       },
       instructionsHeading: "Instructions",
