@@ -192,11 +192,20 @@ test("queued run rows expose a run-specific cancel control", () => {
 });
 
 test("queued cancel feedback reflects the returned run status", () => {
-  assert.deepEqual(queuedCancelToast("cancelled"), { title: "Queued run cancelled", tone: "info" });
-  assert.deepEqual(queuedCancelToast("running"), {
-    detail: "The queued run has already started; use Stop to cancel the active run.",
-    title: "Run already started",
+  // Compare catalog keys, never English literals: the wording lives in the message
+  // catalog so the next localization sweep cannot pin a sentence back into the source.
+  const keys = (key: string, variables?: Record<string, string | number>) =>
+    variables ? `${key}(${Object.values(variables).join(",")})` : key;
+  assert.deepEqual(queuedCancelToast("cancelled", keys), { title: "app.queuedCancelOutcome.cancelled", tone: "info" });
+  assert.deepEqual(queuedCancelToast("running", keys), {
+    detail: "app.queuedCancelOutcome.startedDetail",
+    title: "app.queuedCancelOutcome.started",
     tone: "info",
   });
-  assert.deepEqual(queuedCancelToast("completed"), { title: "Run already finished", tone: "info" });
+  assert.deepEqual(queuedCancelToast("completed", keys), { title: "app.queuedCancelOutcome.finished", tone: "info" });
+  assert.deepEqual(queuedCancelToast("queued", keys), {
+    detail: "app.queuedCancelOutcome.statusDetail(queued)",
+    title: "app.queuedCancelOutcome.updated",
+    tone: "info",
+  });
 });
