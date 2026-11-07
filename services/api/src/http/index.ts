@@ -2649,6 +2649,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const projectArtifactVersionsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
       if (projectArtifactVersionsMatch && request.method === "GET") {
+        // Same 500-on-a-stale-id as the Session-scoped sibling: name the missing project or
+        // artifact instead of letting listProjectArtifactVersions throw a bare Error.
+        if (!store.getProject(projectArtifactVersionsMatch[1]!)) {
+          return sendError(response, 404, `Project not found: ${projectArtifactVersionsMatch[1]!}`);
+        }
+        if (!store.getProjectArtifact(projectArtifactVersionsMatch[1]!, projectArtifactVersionsMatch[2]!)) {
+          return sendError(response, 404, "Artifact not found");
+        }
         sendJson(response, 200, store.listProjectArtifactVersions(
           projectArtifactVersionsMatch[1]!,
           projectArtifactVersionsMatch[2]!,
@@ -3686,6 +3694,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const artifactVersionsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
       if (artifactVersionsMatch && request.method === "GET") {
+        // The store helper throws a bare "Artifact not found", which the top-level mapper does
+        // not recognise: a stale artifact id must read as missing, not as a server fault.
+        const versionsSession = store.getSession(artifactVersionsMatch[1]!);
+        if (!versionsSession) return sendError(response, 404, `Session not found: ${artifactVersionsMatch[1]!}`);
+        if (!store.getProjectArtifact(versionsSession.projectId, artifactVersionsMatch[2]!)) {
+          return sendError(response, 404, "Artifact not found");
+        }
         sendJson(response, 200, store.listArtifactVersions(artifactVersionsMatch[1]!, artifactVersionsMatch[2]!));
         return;
       }
@@ -3698,6 +3713,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const artifactVersionProvenanceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/provenance$/);
       if (artifactVersionProvenanceMatch && request.method === "GET") {
+        // Answer a stale version id the way the sibling content route does: the helper's bare
+        // throw would fall through to the 500 branch and be logged as unclassified.
+        if (!store.getArtifactVersion(artifactVersionProvenanceMatch[1]!, artifactVersionProvenanceMatch[2]!)) {
+          return sendError(response, 404, "Artifact version not found");
+        }
         sendJson(response, 200, await artifactVersionProvenance(
           store,
           provenanceRecorder,
@@ -3709,13 +3729,20 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const artifactVersionDiffMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/diff$/);
       if (artifactVersionDiffMatch && request.method === "GET") {
-        sendJson(response, 200, await artifactVersionDiff(
-          store,
-          provenanceRecorder,
-          artifactVersionDiffMatch[1]!,
-          artifactVersionDiffMatch[2]!,
-          url.searchParams.get("against") ?? undefined,
-        ));
+        const diffSessionId = artifactVersionDiffMatch[1]!;
+        const to = store.getArtifactVersion(diffSessionId, artifactVersionDiffMatch[2]!);
+        if (!to) return sendError(response, 404, "Artifact version not found");
+        const against = url.searchParams.get("against") ?? undefined;
+        // An explicitly requested comparison base that does not exist is a missing resource;
+        // an absent default base means the caller asked for a diff this artifact cannot have yet.
+        if (against) {
+          if (!store.listArtifactVersions(diffSessionId, to.artifactId).some((version) => version.id === against)) {
+            return sendError(response, 404, "Artifact version not found");
+          }
+        } else if (!store.listArtifactVersions(diffSessionId, to.artifactId).some((version) => version.version === to.version - 1)) {
+          return sendError(response, 400, "A previous artifact version is unavailable for comparison");
+        }
+        sendJson(response, 200, await artifactVersionDiff(store, provenanceRecorder, diffSessionId, artifactVersionDiffMatch[2]!, against));
         return;
       }
       const artifactDashboardMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-dashboard$/);
