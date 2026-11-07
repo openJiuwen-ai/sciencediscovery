@@ -395,8 +395,8 @@ test("a truncated tool-call-free turn is retried with output-limit feedback befo
   assert.equal(calls, 2);
   assert.deepEqual(feedbacks, ["recover 1"]);
   assert.deepEqual(result.history.map((message) => message.role), ["user", "user", "assistant", "tool"]);
-  assert.equal(result.history[1].content, "recover 1");
-  assert.equal(result.history[2].content, "done");
+  assert.equal(result.history[1]?.content, "recover 1");
+  assert.equal(result.history[2]?.content, "done");
 });
 
 test("output-limit recovery exhausts and still reports the truncated turn for fail-closed handling", async () => {
