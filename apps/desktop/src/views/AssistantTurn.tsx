@@ -27,6 +27,7 @@ import { collapseHint } from "./collapse-hint.js";
 import { PermissionCard } from "./PermissionCard.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolCard } from "./ToolCard.js";
+import { RowMenu, type MenuState } from "./RowMenu.js";
 
 /** The model's initial. Kept because the persisted transcript still has a
  *  model name to fall back on where no avatar is drawn. */
@@ -42,10 +43,10 @@ export function AssistantAvatar() {
   return <div aria-hidden="true" className="avatar-mini is-brand" />;
 }
 
-/** Copy the answer, and say the press landed. It is the only tool under an
- *  answer: the thumbs had nowhere to write a rating to. */
-function AnswerTools({ content }: { content: string }) {
+/** Actions belong to the completed reply they act on. */
+function AnswerTools({ content, onBranch }: { content: string; onBranch?: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [menu, setMenu] = useState<MenuState>();
 
   useEffect(() => {
     if (!copied) return;
@@ -71,6 +72,8 @@ function AnswerTools({ content }: { content: string }) {
           </svg>
         )}
       </button>
+      {onBranch ? <button className="answer-tool" aria-label={TEXT.researchPackage.messageMenu} aria-haspopup="menu" type="button" onClick={event => setMenu({ x: event.clientX, y: event.clientY, items: [{ label: TEXT.researchPackage.branch, onSelect: onBranch }] })}>⋯</button> : null}
+      <RowMenu menu={menu} onClose={() => setMenu(undefined)} />
     </div>
   );
 }
@@ -84,12 +87,14 @@ function AnswerTools({ content }: { content: string }) {
  * keeps them from drifting apart.
  */
 export function AnswerBlock({
+  onBranch,
   actions,
   answered,
   content,
   live,
   truncated,
 }: {
+  onBranch?: () => void;
   /** The copy/feedback row belongs under a finished answer, not under the
    *  prose a folded run wrote on its way to one. */
   actions?: boolean;
@@ -109,7 +114,7 @@ export function AnswerBlock({
         <div className="workspace-empty">{TEXT.conversation.truncatedBody}</div>
       ) : null}
       {live ? <span className="spinner" /> : null}
-      {actions === true && !live ? <AnswerTools content={content} /> : null}
+      {actions === true && !live ? <AnswerTools content={content} onBranch={onBranch} /> : null}
     </div>
   );
 }
@@ -487,6 +492,7 @@ function foldLabel(run: RunStreamState): { icon: string; title: string; working:
  * survive a re-render of the run.
  */
 export function AssistantTurns({
+  onBranch,
   answered,
   client,
   onDecide,
@@ -495,6 +501,7 @@ export function AssistantTurns({
   run,
   sessionId,
 }: {
+  onBranch?: () => void;
   /** A later turn exists in the transcript, so this run's checkpoint cards
    *  fold. The conversation is the only place that knows this. */
   answered?: boolean;
@@ -613,11 +620,12 @@ export function AssistantTurns({
               actions={!live}
               answered={answered}
               content={shown.content}
+              onBranch={onBranch}
               live={live && !shown.settled}
               truncated={shown.truncated}
             />
           )}
-          {showFinal ? <AnswerBlock actions answered={answered} content={finalBody} /> : null}
+          {showFinal ? <AnswerBlock actions answered={answered} content={finalBody} onBranch={onBranch} /> : null}
         </div>
       </div>
       <RunStatusLine run={run} />
