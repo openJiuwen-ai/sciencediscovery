@@ -71,7 +71,7 @@ test("Swarm child tool failure recovers and parent delivers report", { tag: ["@m
     }
     const activity = await readRunActivity(page);
     expect(activity.tools.some((tool) => /read_artifact/.test(tool.summary)
-      && /Recovery succeeded/.test(tool.details))).toBe(true);
+      && /fixture-sources\.md/.test(tool.details) && /"version"\s*:\s*1/.test(tool.details))).toBe(true);
     expect(activity.tools.some((tool) => /task/.test(tool.summary)
       && /artifact_id/.test(tool.details) && /fixture-sources.md/.test(tool.details))).toBe(true);
     for (const call of stub.calls.filter((call) => call.tool)) expect(call.offeredTools).toContain(call.tool);
