@@ -141,7 +141,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
     return (
       <details
         aria-label={label}
-        className={`evolve-checkpoint is-${shade} ${answered ? "is-answered" : "is-record"}`}
+        className={`evolve-checkpoint is-${shade} is-folded${answered ? " is-answered" : " is-record"}`}
         data-pace={checkpoint.pace}
         data-step={checkpoint.step}
       >
