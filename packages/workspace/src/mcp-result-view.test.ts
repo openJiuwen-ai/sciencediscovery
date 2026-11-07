@@ -7,10 +7,10 @@ import { randomUUID } from "node:crypto";
 import { ToolRegistry, ToolOutputGuard, ToolOutputStore } from "@sciencediscovery/tools";
 import { createMcpTools } from "./workspace.js";
 
-async function dispatch(result: unknown, failStorage = false) {
+async function dispatch(result: unknown, failStorage = false, sourceId = "fixture", toolId = "lookup") {
   const store = new ToolOutputStore();
   const registry = new ToolRegistry(createMcpTools({ mcpTools: [{
-    name: "fixture", displayName: "Fixture", description: "Fixture", sourceId: "fixture", toolId: "lookup",
+    name: "fixture", displayName: "Fixture", description: "Fixture", sourceId, toolId,
     routing: { mode: "off", priority: 0, keywords: [] }, inputSchema: { type: "object" }, execute: async () => result,
   }] }), {
     createResultMessage: (_call, content, output) => ({ role: "tool", content, output }),
@@ -100,6 +100,63 @@ test("oversized record payloads preserve identity and warnings with actionable r
       assert.deepEqual(canonical, snapshot);
     }
   }
+});
+
+test("literature searches shed duplicated provider payload before abstract text", async () => {
+  const abstract = "A".repeat(3_000);
+  const providerPayload = (index: number) => Object.fromEntries(Array.from({ length: 6 }, (_, key) => [
+    `field${key}`, `${index}:${"P".repeat(996)}`,
+  ]));
+  const canonical = { records: Array.from({ length: 8 }, (_, index) => ({
+    abstract,
+    contentScope: "abstract",
+    identifier: `PMC${100 + index}`,
+    peerReviewStatus: "peer-reviewed",
+    primaryCitation: { identifier: `PMC${100 + index}`, source: "europe-pmc",
+      markdown: `[Europe PMC:PMC${100 + index}](https://europepmc.org/article/PMC/${100 + index})` },
+    structuredData: providerPayload(index),
+    title: `Literature result ${index}`,
+  })) };
+  const snapshot = structuredClone(canonical);
+  const { response, store } = await dispatch(canonical, false, "europe-pmc", "search");
+  const view = JSON.parse(response.content);
+  assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
+  assert.equal(view.records.length, 8);
+  for (const record of view.records) {
+    assert.equal(record.abstract, abstract);
+    assert.equal(record.abstractTruncated, undefined);
+    assert.match(record.title, /^Literature result /);
+    assert.match(record.citation, /Europe PMC:PMC/);
+  }
+  assert.ok(view.records.some((record: { structuredData?: { truncated?: boolean } }) => record.structuredData?.truncated === true));
+  assert.equal(view.truncated, true);
+  assert.match(view.instruction, /_retainedOutput/);
+  assert.deepEqual(canonical, snapshot);
+  assert.ok((await store.search(view._retainedOutput.ref, "PPPP")).matches.length > 0);
+});
+
+test("structured sources keep provider payload while reducing abstract text", async () => {
+  const abstract = "A".repeat(3_000);
+  const structuredData = Object.fromEntries(Array.from({ length: 5 }, (_, key) => [`field${key}`, `${key}:${"S".repeat(996)}`]));
+  const canonical = { records: Array.from({ length: 8 }, (_, index) => ({
+    abstract,
+    identifier: `4HHB${index}`,
+    structuredData,
+    title: `Structure ${index}`,
+    url: `https://www.rcsb.org/structure/4HHB${index}`,
+  })) };
+  const { response } = await dispatch(canonical, false, "pdb", "lookup_structure");
+  const view = JSON.parse(response.content);
+  assert.ok(Buffer.byteLength(response.content) <= 48 * 1024);
+  assert.equal(view.records.length, 8);
+  for (const [index, record] of view.records.entries()) {
+    assert.equal(record.id, `4HHB${index}`);
+    assert.equal(record.title, `Structure ${index}`);
+    assert.deepEqual(record.structuredData, structuredData);
+    assert.equal(record.abstractTruncated, true);
+    assert.ok(Buffer.byteLength(record.abstract) < Buffer.byteLength(abstract));
+  }
+  assert.equal(view.truncated, true);
 });
 
 test("oversized result data preserves all small record identities", async () => {
