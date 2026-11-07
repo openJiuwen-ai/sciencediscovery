@@ -2,7 +2,7 @@
 
 Status: initial desktop UI implementation; do not merge. Depends on #498 (observed head 4390b236299be0ae3c1a692eb69fae2da2515d12). Related requirements: #803. Export/import, copy and branch controls are now wired to the proposed backend routes. Full backend journeys remain unverified.
 
-Local interaction preview: run the desktop Vite server and open `/e2e/research-preview.html`. This development-only fixture renders the production ResearchPackage component with explicitly simulated responses. It does not validate archive restoration or model continuation. Browser reload recovery for background operations, per-reply source anchoring, and full shipping-backend journeys remain open.
+Preview the actual desktop application against the #498 backend. The standalone component preview has been removed. Browser reload recovery for background operations and full shipping-backend journeys remain open.
 
 ## Goal and delivery boundary
 
@@ -10,10 +10,10 @@ Deliver necessary/complete evidence export, import, correct evidence inspection,
 
 ## User interface
 
-- Session menu: export research package. Show necessary/complete profile, file selection, included/omitted counts, size preparation, independent full trajectory and scientific memory options. Reflect the actual revision and never present stale size as final.
-- Project/empty-conversation entry: import a .sdresearch file, inspect scope and omissions, confirm destination, follow restoration and open the read-only record. File selection/drop is distinct from attaching a file to a normal chat.
-- Imported conversation: show a persistent read-only notice and Create a new session to continue research. Use an independent writable copy; inherited files and context must be available to follow-up turns under local model/permission settings.
-- Completed reply menu: Branch to a new chat in an eligible writable conversation. Preserve only the prefix and attributable evidence through that reply. Imported snapshots first require a writable copy. Keep source navigation after reload and support branching a branch.
+- Session row menu: place Export conversation between Rename and Delete. Export the whole Session's research through #498, not rendered chat text. Show necessary/complete cards, each with a description, estimated uncompressed size and content summary. Keep detailed omissions collapsed.
+- New conversation and project `+`: retain the existing create action and add an adjacent dropdown offering Import conversation. Standalone import targets the inbox; project import targets that project.
+- Imported conversation: preserve the evidence snapshot, prepare an independent writable continuation and open it automatically. A restored snapshot also offers Continue chatting if preparation needs to be retried. Inherited files and context must be available under local model/permission settings.
+- Completed reply menu: Create branch chat uses that reply as the boundary. Preserve only the prefix through the selected reply and attributable evidence; exclude later turns. Keep the original unchanged and show the chosen reply in confirmation.
 - Background operation indicator: export/import/continuation progress, cancellation where supported, failure/retry and completed download/open actions. Navigation must not hide running operations or steal focus on completion.
 - Reuse existing file/artifact/provenance and trajectory surfaces. Explain omitted or unavailable historical material instead of substituting current files or presenting unexplained errors. Scientific-memory UI follows the desktop surface; no new graph canvas is required.
 

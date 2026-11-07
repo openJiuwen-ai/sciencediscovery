@@ -15,26 +15,38 @@ export function evidenceReadOnly(detail?: SessionDetail): boolean {
   const snapshot = (detail as EvidenceSession | undefined)?.researchSnapshot;
   return Boolean(snapshot && (snapshot.role === "imported_snapshot" || snapshot.state !== "ready"));
 }
+export interface PackageRequest {
+  kind: "export" | "import" | "branch"; projectId?: string; sessionId?: string; messageId?: string;
+}
 interface Props {
-  client: ApiClient; projectId?: string; detail?: SessionDetail; running: boolean;
+  client: ApiClient; request?: PackageRequest; detail?: SessionDetail;
   onOpen: (session: string) => void; onRefresh: () => Promise<void>;
 }
-export function ResearchPackage({ client, projectId, detail, running, onOpen, onRefresh }: Props) {
+export function ResearchPackage({ client, request, detail: activeDetail, onOpen, onRefresh }: Props) {
   const t = TEXT.researchPackage;
   const [dialog, setDialog] = useState<"export" | "import" | "branch">();
+  const [detail, setDetail] = useState<SessionDetail>();
+  const projectId = request?.projectId;
   const [level, setLevel] = useState("necessary");
   const [trajectory, setTrajectory] = useState(false), [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
+  const [profiles, setProfiles] = useState<Record<string, PackagePreview>>({});
   const [files, setFiles] = useState<string[]>();
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const [copy, setCopy] = useState<CopyOperation>();
   const [exportTask, setExportTask] = useState<{ project: string; task: ExportOperation }>();
   const [messageId, setMessageId] = useState("");
-  const readOnly = evidenceReadOnly(detail);
-  const branch = (detail as EvidenceSession | undefined)?.conversationBranch;
+  const readOnly = evidenceReadOnly(activeDetail);
+  const branch = (activeDetail as EvidenceSession | undefined)?.conversationBranch;
   const requestId = useRef(crypto.randomUUID());
-  const messages = detail?.messages.filter(message => message.role === "assistant" && message.content.trim()) ?? [];
+  useEffect(() => {
+    if (!request) return;
+    let active = true;
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setTrajectory(false); setGraph(false); setMessageId(request.messageId ?? "");
+    if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
+    return () => { active = false; };
+  }, [client, request]);
 
   useEffect(() => {
     if (!dialog) return;
@@ -53,7 +65,15 @@ export function ResearchPackage({ client, projectId, detail, running, onOpen, on
     return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
   }, [dialog, busy]);
 
-  useEffect(() => { setDialog(undefined); setPreview(undefined); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); }, [detail?.id, projectId]);
+  useEffect(() => {
+    if (dialog !== "export" || !detail || !projectId) return;
+    let active = true;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const value of ["necessary", "complete"]) {
+      const load = () => { void packagePreview(client, projectId, detail.id, value, false, false).then(result => { if (active) setProfiles(current => ({ ...current, [value]: result })); }).catch(reason => { if (active && reason?.code === "EXPORT_PREVIEW_PENDING") timers.push(setTimeout(load, 1500)); }); }; load();
+    }
+    return () => { active = false; timers.forEach(clearTimeout); };
+  }, [client, dialog, detail?.id, projectId]);
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
     let active = true; let timer: ReturnType<typeof setTimeout>;
@@ -68,7 +88,7 @@ export function ResearchPackage({ client, projectId, detail, running, onOpen, on
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>;
-    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(next => { if (!active) return; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else void onRefresh(); }).catch(reason => { if (active) { setError(String(reason.message ?? reason)); timer = setTimeout(poll, 3000); } }); };
+    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => { if (active) { setError(String(reason.message ?? reason)); timer = setTimeout(poll, 3000); } }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, copy?.id, copy?.state]);
   useEffect(() => {
@@ -81,22 +101,18 @@ export function ResearchPackage({ client, projectId, detail, running, onOpen, on
     setBusy(true); setError(""); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); }
   }
   async function copyResearch(id?: string) {
-    if (!detail) return;
+    const source = id ? detail : activeDetail;
+    if (!source) return;
     await perform(async () => {
-      const operation = await startCopy(client, detail.id, requestId.current, id); setCopy(operation);
+      const operation = await startCopy(client, source.id, requestId.current, id); setCopy(operation);
+      if (operation.state === "ready" && operation.entrySessionId) { await onRefresh(); onOpen(operation.entrySessionId); }
       if (operation.state !== "failed") { requestId.current = crypto.randomUUID(); setDialog(undefined); }
       else throw new Error(operation.error ?? t.failed);
     });
   }
-  return <section className="research-package-bar" aria-label={t.title}>
-    <div className="research-package-actions">
-      <span className="research-package-label">{t.title}</span>
-      <button className="secondary-button" disabled={!projectId || busy} onClick={() => { setError(""); setDialog("import"); }} type="button">{t.import}</button>
-      <button className="secondary-button" disabled={!detail || running || busy} onClick={() => { setError(""); setDialog("export"); }} type="button">{t.export}</button>
-      {readOnly ? <button className="primary-button" disabled={busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button> : <button className="secondary-button" disabled={!messages.length || running || busy} onClick={() => { setMessageId(messages[0]?.id ?? ""); setDialog("branch"); }} type="button">{t.branch}</button>}
-      {branch ? <button className="secondary-button" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
-    </div>
-    {readOnly ? <p className="research-package-notice">{t.readOnly}</p> : null}
+  return <>
+    {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{t.readOnly}</p><button className="primary-button" disabled={busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
+    {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
     {copy ? <div className="research-package-status" role="status">{copy.state === "copying" ? t.copying : copy.state === "failed" ? copy.error ?? t.failed : t.ready}{copy.state === "ready" && copy.entrySessionId ? <button onClick={() => onOpen(copy.entrySessionId!)} type="button">{t.open}</button> : null}</div> : null}
     {exportTask ? <div className="research-package-status" role="status">{exportTask.task.status === "completed" ? exportTask.task.filename : exportTask.task.status === "failed" ? exportTask.task.error ?? t.failed : t.preparing}{exportTask.task.status === "completed" ? <button onClick={() => void perform(() => downloadExport(client, exportTask.project, exportTask.task))} type="button">{t.download}</button> : null}</div> : null}
     {error ? <p role="alert" className="research-package-error">{error}</p> : null}
@@ -104,23 +120,24 @@ export function ResearchPackage({ client, projectId, detail, running, onOpen, on
       <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></header>
       <div className="modal-body">
         {dialog === "export" ? <>
-          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); }} type="button"><strong>{value === "necessary" ? t.necessary : t.complete}</strong><span>{value === "necessary" ? t.necessaryHint : t.completeHint}</span></button>)}</div>
+          <p className="research-package-notice">{t.sessionScope}</p>
+          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); }} type="button"><strong>{value === "necessary" ? t.necessary : t.complete}</strong><span>{value === "necessary" ? t.necessaryHint : t.completeHint}</span><span className="research-package-size">{profiles[value] ? `${t.estimate} ${(profiles[value]!.estimatedBytes / 1024).toFixed(1)} KiB` : t.calculating}</span><span>{t.packageContents}</span></button>)}</div>
           {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.trajectory}</label><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
           <p>{preview ? `${t.estimate} ${(preview.estimatedBytes / 1024).toFixed(1)} KiB` : t.calculating}</p>
           {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
-          {preview?.omissions.length ? <details open><summary>{t.omissions}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
+          {preview?.omissions.length ? <details><summary>{t.omissions} · {preview.omissions.length}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
         </> : dialog === "import" ? <>
           <label className="research-package-upload">{t.choose}<input type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); if (selected && projectId) void perform(async () => setInspection(await inspectPackage(client, projectId, selected))); }} /></label>
           {inspection ? <><h3>{inspection.manifest.source.title}</h3><p>{file?.name} · {inspection.objectCount} {t.objects}</p><p>{t.importHint}</p><ul>{inspection.manifest.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></> : <p>{t.importHint}</p>}
-        </> : <><p>{t.branchHint}</p><label>{t.reply}<select value={messageId} onChange={event => setMessageId(event.target.value)}>{messages.map((message, index) => <option key={message.id} value={message.id}>{index + 1}. {message.content.slice(0, 90)}</option>)}</select></label></>}
+        </> : <><p>{t.branchHint}</p><blockquote>{detail?.messages.find(message => message.id === messageId)?.content.slice(0, 240)}</blockquote></>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
       <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision : dialog === "import" ? !inspection : !messageId)} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => { const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: level === "complete" && trajectory, includeFullMemoryGraph: level === "complete" && graph, filePaths: files }); setExportTask({ project: projectId, task }); setDialog(undefined); });
-        else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file); await onRefresh(); setDialog(undefined); if (result.importedSessionIds[0]) onOpen(result.importedSessionIds[0]); });
+        else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) { onOpen(source); const operation = await startCopy(client, source, crypto.randomUUID()); setCopy(operation); if (operation.state === "ready" && operation.entrySessionId) { await onRefresh(); onOpen(operation.entrySessionId); } } });
       }}>{busy ? t.working : dialog === "export" ? t.startExport : dialog === "import" ? t.confirmImport : t.branch}</button></footer>
     </section></div> : null}
-  </section>;
+  </>;
 }

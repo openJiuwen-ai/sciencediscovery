@@ -1,19 +1,23 @@
-.research-package-bar { padding: 8px 28px; border-bottom: 1px solid #e6e4df; background: #faf9f6; }
-.research-package-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.research-package-actions button { font-size:12px; padding:5px 10px; }
-.research-package-label { font-size:12px; color:#777; margin-right:auto; }
+.side-new-split { display:flex; align-items:center; }
+.side-new-split .side-new { flex:1; min-width:0; }
+.side-new-split > .side-mini-button { margin-right:20px; }
+.research-package-resume { padding:16px 28px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.research-package-source { align-self:flex-start; margin:8px 28px; border:0; background:none; color:#777; font-size:12px; cursor:pointer; }
 .research-package-notice { color:#777; font-size:12px; line-height:1.6; margin:8px 0; }
-.research-package-dialog { width:min(620px,calc(100vw - 32px)); max-height:85vh; overflow:auto; }
+.research-package-dialog { width:min(680px,calc(100vw - 32px)); max-height:85vh; overflow:hidden; display:flex; flex-direction:column; }
+.research-package-dialog .modal-body { min-height:0; overflow:auto; overflow-wrap:anywhere; }
+.research-package-dialog .modal-header,.research-package-dialog .modal-footer { flex-shrink:0; }
 .research-package-profiles { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .research-package-profiles button { text-align:left; background:white; border:1px solid #ddd; border-radius:12px; padding:16px; cursor:pointer; }
 .research-package-profiles .is-selected { border-color:#51745a; background:#f0f5ef; }
 .research-package-profiles strong,.research-package-profiles span { display:block; }
 .research-package-profiles span { color:#777; font-size:12px; line-height:1.6; margin-top:8px; }
+.research-package-profiles .research-package-size { color:#333; font-weight:600; margin-top:14px; }
 .research-package-options,.research-package-files { display:flex; flex-direction:column; gap:10px; margin:16px 0; }
 .research-package-files { max-height:180px; overflow:auto; font-size:12px; }
 .research-package-upload { display:block; border:1px dashed #aaa; padding:24px; border-radius:12px; }
 .research-package-upload input { display:block; margin-top:12px; }
-.research-package-status { font-size:12px; padding:8px 0; display:flex; gap:12px; align-items:center; }
+.research-package-status { font-size:12px; padding:8px 28px; display:flex; gap:12px; align-items:center; overflow-wrap:anywhere; }
 .research-package-error { color:#a33131; font-size:13px; overflow-wrap:anywhere; }
 .research-package-dialog select { display:block; width:100%; margin-top:12px; padding:10px; }
-@media(max-width:600px) { .research-package-profiles { grid-template-columns:1fr; } .research-package-bar { padding:8px 12px; } }
+@media(max-width:600px) { .research-package-profiles { grid-template-columns:1fr; } }
