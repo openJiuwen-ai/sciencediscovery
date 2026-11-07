@@ -43,6 +43,13 @@ export function isAuthFailure(reason: unknown): boolean {
   return reason instanceof ApiRequestError && reason.status === 401;
 }
 
+/** The adapter's 502 means a legacy read could not reach the API at all. */
+export function isLegacyUnavailableError(reason: unknown): boolean {
+  return reason instanceof ApiRequestError
+    && reason.status === 502
+    && reason.message === "legacy_unavailable";
+}
+
 export class AuthApiClient {
   /** @param onAuthFailure notified whenever the server rejects this token, so
    *  the UI can offer the token dialog instead of showing a bare error. */

@@ -51,16 +51,16 @@ function highlightLines(source: string, language: string): Token[][] {
   return lines;
 }
 
-export function SourcePreview({ source, name, mediaType, language, truncated = false }: {
-  source: string; name?: string; mediaType?: string; language?: string; truncated?: boolean;
+export function SourcePreview({ source, name, mediaType, language, truncated = false, clip = true }: {
+  source: string; name?: string; mediaType?: string; language?: string; truncated?: boolean; clip?: boolean;
 }) {
   const { t } = useLocale();
   const selectedLanguage = language?.toLowerCase() ?? sourceLanguage(name, mediaType);
-  const clipped = source.slice(0, SOURCE_PREVIEW_LIMIT).replace(/[\uD800-\uDBFF]$/, "");
+  const clipped = (clip ? source.slice(0, SOURCE_PREVIEW_LIMIT) : source).replace(/[\uD800-\uDBFF]$/, "");
   const visible = clipped.replace(/\r\n?/g, "\n");
   const lines = useMemo(() => highlightLines(visible, selectedLanguage), [visible, selectedLanguage]);
   return <div className="source-preview">
-    {truncated || source.length > SOURCE_PREVIEW_LIMIT ? <p className="dataset-table-meta">{t("artifact.sourceTruncated")}</p> : null}
+    {truncated || (clip && source.length > SOURCE_PREVIEW_LIMIT) ? <p className="dataset-table-meta">{t("artifact.sourceTruncated")}</p> : null}
     {source.length === 0 ? <p className="artifact-empty compact">{t("artifact.textEmpty")}</p> : null}
     <pre aria-label={t("artifact.sourceAria")} className="artifact-source-preview numbered-source" data-language={selectedLanguage} tabIndex={0}>
       <code>{lines.map((tokens, index) => <span className="source-line" key={index}>

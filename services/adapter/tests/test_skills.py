@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from sciencediscovery_adapter.skills import MARKER, SkillSync, sandbox_skill_paths
@@ -140,6 +142,152 @@ async def test_sync_records_where_jiuwenswarm_keeps_each_imported_skill(tmp_path
     sync = SkillSync(jw.rpc, URL)
     await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
     assert sync.directories == {str(jw.root / "sciencediscovery-evolve-design"): "evolve-design"}
+
+
+def counting_rpc(jw: FakeJiuwenSwarm) -> tuple[Callable, dict[str, int]]:
+    calls: dict[str, int] = {}
+
+    async def rpc(url, method, params=None, **kwargs):
+        calls[method] = calls.get(method, 0) + 1
+        return await jw.rpc(url, method, params, **kwargs)
+
+    return rpc, calls
+
+
+async def test_a_sync_that_imports_nothing_lists_the_skills_only_once(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    skill = {"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}
+    await SkillSync(jw.rpc, URL).sync([skill])  # first adapter life: imports
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)  # fresh adapter, empty directories map
+    assert await sync.sync([skill]) == {"evolve-design": {"name": "evolve-design"}}
+    assert calls.get("skills.list") == 1
+    # the single listing still populated the directories map for path rewriting
+    assert sync.directories == {str(jw.root / "evolve-design"): "evolve-design"}
+
+
+async def test_a_sync_that_imports_relists_to_refresh_the_directories_map(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
+    assert calls.get("skills.list") == 2  # unchanged: pre-import listing + post-import refresh
+    assert sync.directories == {str(jw.root / "evolve-design"): "evolve-design"}
+
+
+async def test_two_listed_calls_within_the_ttl_share_one_rpc(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.listed()
+    await sync.listed()
+    assert calls.get("skills.list") == 1
+
+
+async def test_a_no_import_sync_and_the_next_listed_share_one_rpc(tmp_path):
+    # The steady state this cache is for: back-to-back runs stage the same
+    # skills, so _sync's listing already answers the reconcile's listed().
+    jw = jiuwenswarm(tmp_path)
+    skill = {"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}
+    await SkillSync(jw.rpc, URL).sync([skill])  # first adapter life: imports
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.sync([skill])  # no import -> one listing
+    await sync.listed()  # same answer within the TTL -> no second RPC
+    assert calls.get("skills.list") == 1
+
+
+async def test_an_import_invalidates_the_list_cache(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
+    assert calls.get("skills.list") == 2  # pre-import + post-import refresh
+    await sync.listed()  # cache was invalidated by the import, then repopulated by the refresh
+    assert calls.get("skills.list") == 2
+
+
+async def test_a_toggle_invalidates_the_list_cache(tmp_path):
+    jw = jiuwenswarm(tmp_path, "xlsx")
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.listed()
+    await sync.set_enabled("xlsx", False)
+    await sync.listed()
+    assert calls.get("skills.list") == 2  # one per side of the write
+
+
+async def test_a_zero_ttl_disables_the_list_cache(tmp_path):
+    jw = jiuwenswarm(tmp_path)
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL, list_cache_ttl_s=0)
+    await sync.listed()
+    await sync.listed()
+    assert calls.get("skills.list") == 2  # today's behaviour: every read re-fetches
+
+
+async def test_a_fetch_that_straddles_a_write_does_not_cache_the_pre_write_answer(tmp_path):
+    # F2: listed()/set_enabled() take no lock, so a fetch can be in flight across a
+    # write from another run. The stale answer must serve its one caller and then be
+    # dropped, not go back into the cache to undo the write's invalidation.
+    jw = jiuwenswarm(tmp_path, "xlsx")
+    calls = {"skills.list": 0}
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def gated_rpc(url, method, params=None, **kwargs):
+        if method != "skills.list":
+            return await jw.rpc(url, method, params, **kwargs)
+        calls["skills.list"] += 1
+        answer = await jw.rpc(url, method, params, **kwargs)  # snapshot before the write
+        if calls["skills.list"] == 1:
+            started.set()
+            await release.wait()  # hold it open across run B's toggle
+        return answer
+
+    sync = SkillSync(gated_rpc, URL)
+    fetch = asyncio.create_task(sync.listed())  # run A: fetch in flight
+    await started.wait()
+    await sync.set_enabled("xlsx", False)  # run B: toggle + invalidate
+    release.set()
+    first = await fetch  # A's pre-toggle answer
+    assert next(s for s in first if s["name"] == "xlsx")["enabled"] is True
+    # ...but it was not cached, so the next read re-fetches and sees the write.
+    calls["skills.list"] = 0
+    again = await sync.listed()
+    assert calls["skills.list"] == 1
+    assert next(s for s in again if s["name"] == "xlsx")["enabled"] is False
+
+
+async def test_a_skill_created_after_the_cached_listing_is_renamed_not_overwritten(tmp_path):
+    # F1: naming a new package is decided from a listing that can be a TTL old, and a
+    # JiuwenSwarm skill the user created in that window is invisible to it. Since the
+    # import is force=True and JiuwenSwarm silently replaces a non-builtin skill of the
+    # same name, the name must be re-decided on a listing taken now.
+    jw = jiuwenswarm(tmp_path)  # no own skills yet
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.listed()  # fill the cache with an empty listing
+    # The user now creates their own JiuwenSwarm skill, unseen by the cache.
+    own = jw.root / "skill-creator"
+    own.mkdir()
+    (own / "SKILL.md").write_text("---\nname: skill-creator\ndescription: theirs\n---\n")
+    result = await sync.sync([{"id": "skill-creator", "path": str(package(tmp_path, "skill-creator")), "hash": "h1"}])
+    assert result == {"skill-creator": {"name": "sciencediscovery-skill-creator"}}
+    assert (own / "SKILL.md").read_text().count("theirs") == 1  # the user's skill survives
+    assert (jw.root / "sciencediscovery-skill-creator" / "SKILL.md").read_text().startswith("---\nname: sciencediscovery-skill-creator\n")
+
+
+async def test_a_sync_that_imports_nothing_never_relists_even_from_a_stale_cache(tmp_path):
+    # The steady state must not pay for F1's guard: no import, no new name, no re-fetch.
+    jw = jiuwenswarm(tmp_path)
+    skill = {"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}
+    await SkillSync(jw.rpc, URL).sync([skill])  # first adapter life: imports
+    rpc, calls = counting_rpc(jw)
+    sync = SkillSync(rpc, URL)
+    await sync.listed()  # cache the listing
+    calls["skills.list"] = 0
+    await sync.sync([skill])  # unchanged -> no import -> no new name -> no re-list
+    assert calls.get("skills.list") == 0
 
 
 def test_a_command_reading_jiuwenswarms_copy_of_a_skill_reads_the_sandbox_package():

@@ -126,6 +126,7 @@ class RunRequest(BaseModel):
     candidate_timeout_seconds: float = Field(default=60.0, gt=0, le=86_400)
     max_tokens_per_call: int = Field(default=16_000, ge=1)
     thinking: str = ""
+    thinking_effort: str = Field(default="", pattern=r"^(|low|medium|high|xhigh|max)$")
     #: Packages the candidates need that this runtime may not have.
     packages: list[str] = Field(default_factory=list)
     rubric: str = ""
@@ -267,6 +268,7 @@ def _spec_of(request: "RunRequest") -> RunSpec:
         candidate_timeout_seconds=request.candidate_timeout_seconds,
         max_tokens_per_call=request.max_tokens_per_call,
         thinking=request.thinking,
+        thinking_effort=request.thinking_effort,
         packages=tuple(request.packages),
         rubric=request.rubric,
         script=request.script,

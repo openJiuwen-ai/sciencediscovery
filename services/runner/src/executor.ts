@@ -16,7 +16,8 @@ import { randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { constants } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import type { Readable } from "node:stream";
+import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname, delimiter, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -63,6 +64,7 @@ import { buildSeatbeltProfile, canonicalPath, seatbeltPwdShim, seatbeltWorkspace
 // win32: taskkill /T /F). See #482.
 import { condaActivationPaths, environmentShellPath, terminateTree } from "./platform/index.js";
 import { RunnerSkillPackages } from "./skill-packages.js";
+import { shellFailureDiagnostic } from "./shell-diagnostics.js";
 
 import { RUNNER_VERSION } from "./version.js";
 export { RUNNER_VERSION } from "./version.js";
@@ -134,6 +136,13 @@ export interface ExecutorConfig extends SandboxRuntimeConfig {
    * whitelist; configured via SCIENCE_RUNNER_EXTRA_WORKSPACE_ROOTS.
    */
   extraWorkspaceRoots?: string[];
+  /**
+   * Closes the parent's seccomp fd after spawn has duplicated it into the
+   * child. Tests hold this open so a fast bubblewrap failure lands while the
+   * close is still in flight. Production closes the handle immediately and
+   * does not wait for that close before observing the child.
+   */
+  closeSeccompFilter?: (handle: FileHandle) => Promise<void>;
 }
 
 export function executorSandboxKind(config: SandboxRuntimeConfig): SandboxKind {
@@ -597,7 +606,7 @@ async function runSandboxed(
   maxOutputBytes: number,
   seccompVariant: SeccompVariant = "baseline",
   onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
-  spawnProcess = () => spawnSandboxProcess(config, launch, commandArguments, seccompVariant),
+  spawnProcess = () => spawnSandboxProcess(config, launch, commandArguments, seccompVariant, config.closeSeccompFilter),
 ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
   try {
     return await new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolveRun, reject) => {
@@ -631,6 +640,17 @@ async function runSandboxed(
       const timeout = timeoutMs > 0
         ? setTimeout(() => {
             stop(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
+            if (!child) {
+              // Spawn never handed back a process. The deadline is the outcome.
+              finish(stopError, 1);
+            } else if (child.exitCode !== null || child.signalCode !== null) {
+              // The process already finished and its close event was missed.
+              // A normal exit is the outcome, including exit 0. A signal leaves
+              // exitCode null, so the abort, quota, or timeout reason still wins.
+              stdout += drainPaused(child.stdout);
+              stderr += drainPaused(child.stderr);
+              finish(child.exitCode !== null ? undefined : stopError, child.exitCode ?? 1);
+            }
           }, timeoutMs)
         : undefined;
       const quotaTimer = maxWorkspaceBytes > 0
@@ -658,6 +678,15 @@ async function runSandboxed(
         if (!child.stdin || !child.stdout || !child.stderr) {
           killSandboxProcess(child);
           finish(new Error("Runner failed to create isolated process streams"));
+          return;
+        }
+        if (child.exitCode !== null || child.signalCode !== null) {
+          // bubblewrap can fail before this listener exists: a missing device
+          // node makes it exit while the seccomp fd is still being closed.
+          // Leave the streams paused so the buffered bytes are still readable.
+          stdout += drainPaused(child.stdout);
+          stderr += drainPaused(child.stderr);
+          finish(stopError, child.exitCode ?? 1);
           return;
         }
         child.stdout.on("data", (chunk: Buffer) => {
@@ -1106,6 +1135,11 @@ export async function assertSandboxWorkspaceLinks(
   done`;
   const child = await spawnSandboxProcess(config, { ...launch, commandPrefix: [] },
     [sandboxCommandPath(launch, "/usr/bin/bash", "/bin/bash"), "--noprofile", "--norc", "-c", script], "baseline");
+  if (child.exitCode !== null || child.signalCode !== null) {
+    const early = drainPaused(child.stderr).trim();
+    if ((child.exitCode ?? 1) !== 0) throw new Error(early || "Sandbox workspace symlink validation did not complete");
+    return;
+  }
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => { stderr = truncateToBudget(stderr + chunk.toString(), 8192); });
   child.stdout.resume();
@@ -1137,6 +1171,18 @@ export function sandboxCommandPath(launch: SandboxLaunch, linuxPath: string, hos
 
 const sandboxProcessGroups = new WeakSet<ChildProcessWithoutNullStreams>();
 
+/** Bytes still sitting in a paused stream after the process has already exited. */
+function drainPaused(stream: Readable): string {
+  if (stream.readableFlowing) return "";
+  const chunks: Buffer[] = [];
+  let chunk = stream.read() as Buffer | null;
+  while (chunk) {
+    chunks.push(chunk);
+    chunk = stream.read() as Buffer | null;
+  }
+  return Buffer.concat(chunks).toString();
+}
+
 /** Kill the namespace init as well as the monitor, including during bwrap setup. */
 export function killSandboxProcess(child: ChildProcessWithoutNullStreams): boolean {
   // [windows-desktop] The non-sandbox path also goes through the platform facade:
@@ -1157,6 +1203,7 @@ export async function spawnSandboxProcess(
   launch: SandboxLaunch,
   commandArguments: string[],
   seccompVariant: SeccompVariant,
+  closeFilter: (handle: FileHandle) => Promise<void> = (handle) => handle.close(),
 ): Promise<ChildProcessWithoutNullStreams> {
   const kind = launch.sandbox ?? executorSandboxKind(config);
   if (kind === "none") {
@@ -1197,7 +1244,12 @@ export async function spawnSandboxProcess(
       sandboxProcessGroups.add(child);
       child.once("close", () => sandboxProcessGroups.delete(child));
     }
-    await filter?.close();
+    // Do not await this close. A missing device node makes bwrap exit in the
+    // same turn, and that close event is delivered while the fd close is in
+    // flight. Waiting here returns the child only after the caller can no
+    // longer hear it, so the execution promise stays pending until the
+    // timeout timer is the last handle and the event loop drains.
+    if (filter) void closeFilter(filter).catch(() => undefined);
     return child;
   } catch (error) {
     await filter?.close().catch(() => undefined);
@@ -1585,9 +1637,10 @@ export async function executeDirectShell(
       child.once("close", () => sandboxProcessGroups.delete(child));
       return child;
     });
+  const diagnostic = shellFailureDiagnostic(result.exitCode, result.stderr);
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
   const after = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
-  return { ...result, cgroupMode: "none", createdFiles: [...after.keys()].filter(path => !before.has(path)).sort(),
+  return { ...result, ...(diagnostic ? { diagnostic } : {}), cgroupMode: "none", createdFiles: [...after.keys()].filter(path => !before.has(path)).sort(),
     modifiedFiles: [...after.keys()].filter(path => before.has(path) && before.get(path) !== after.get(path)).sort(),
     environmentRevisionId: "system-shell-direct-v1", environmentVariables: env, executionId: request.executionId,
     finishedAt: new Date().toISOString(), kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral",
@@ -1678,6 +1731,7 @@ async function executeEnvironmentShell(
     "baseline",
     onOutput,
   );
+  const diagnostic = shellFailureDiagnostic(processResult.exitCode, processResult.stderr);
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
   const after = await workspaceSnapshot(workspaceRoot);
@@ -1688,6 +1742,7 @@ async function executeEnvironmentShell(
     .toSorted();
   return {
     ...processResult,
+    ...(diagnostic ? { diagnostic } : {}),
     cgroupMode: RESOURCE_LIMIT_MODE,
     createdFiles,
     environmentRevisionId: resolved.revision.id,

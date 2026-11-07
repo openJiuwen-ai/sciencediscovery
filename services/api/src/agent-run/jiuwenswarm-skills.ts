@@ -77,7 +77,7 @@ export function skillLoadedBy(call: { args: unknown; name: string }, ids: Readon
   return undefined;
 }
 
-async function adapterCall<T>(config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">, path: string, body?: unknown): Promise<T> {
+async function adapterCall<T>(config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await (config.fetch ?? fetch)(`${config.adapterUrl}${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: {
@@ -85,14 +85,18 @@ async function adapterCall<T>(config: Pick<JiuwenSwarmAgentConfig, "adapterToken
       ...(config.adapterToken ? { authorization: `Bearer ${config.adapterToken}` } : {}),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) throw new Error(`JiuwenSwarm (through the adapter) answered HTTP ${response.status}: ${(await response.text().catch(() => "")).slice(0, 200)}`);
   return await response.json() as T;
 }
 
 /** Every skill JiuwenSwarm has installed and whether it is on. */
-export async function listJiuwenSwarmSkills(config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">): Promise<JiuwenSwarmSkill[]> {
-  return (await adapterCall<{ skills?: JiuwenSwarmSkill[] }>(config, "/agent/skills")).skills ?? [];
+export async function listJiuwenSwarmSkills(
+  config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">,
+  signal?: AbortSignal,
+): Promise<JiuwenSwarmSkill[]> {
+  return (await adapterCall<{ skills?: JiuwenSwarmSkill[] }>(config, "/agent/skills", undefined, signal)).skills ?? [];
 }
 
 /** Switch one of JiuwenSwarm's skills on or off. It is one setting for every session; sessions started afterwards see it. */
@@ -100,26 +104,6 @@ export async function setJiuwenSwarmSkillEnabled(
   config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">, name: string, enabled: boolean,
 ): Promise<void> {
   await adapterCall(config, `/agent/skills/${encodeURIComponent(name)}/enabled`, { enabled });
-}
-
-/**
- * Align JiuwenSwarm's own on/off switches with the desktop UI's selection: the names this run staged are on,
- * skills installed earlier but not staged now are off. JiuwenSwarm's builtin skills are its own and never
- * touched. It is one setting for every session there, and sessions started afterwards see it — this runs
- * before the run's own session is created, so the selection applies to it. Never throws.
- */
-export async function reconcileJiuwenSwarmSkills(
-  config: Pick<JiuwenSwarmAgentConfig, "adapterToken" | "adapterUrl" | "fetch">,
-  enabledNames: ReadonlySet<string>,
-): Promise<void> {
-  try {
-    for (const { enabled, name, source } of await listJiuwenSwarmSkills(config)) {
-      if (source === "builtin" || enabled === enabledNames.has(name)) continue;
-      await setJiuwenSwarmSkillEnabled(config, name, enabledNames.has(name));
-    }
-  } catch (error) {
-    console.warn(`[jiuwenswarm] could not align its skill switches with the selection: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 /**

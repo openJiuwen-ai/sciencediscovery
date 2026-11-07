@@ -132,7 +132,6 @@ export function SystemSettingsDialog({
       case "skills":
         return (
           <SkillsSettings
-            activeProjectId={state.activeProjectId}
             adding={addingSkill}
             client={client}
             onAddingChange={setAddingSkill}

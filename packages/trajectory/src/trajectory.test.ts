@@ -44,6 +44,40 @@ test("classification and structured credential redaction", () => {
   assert.equal(eventKind({ type: "mcp.invocation" }), "mcp");
   assert.deepEqual(redact({ authorization: "secret", nested: [{ api_key: "secret", answer: "hello" }] }), { authorization: "[REDACTED]", nested: [{ api_key: "[REDACTED]", answer: "hello" }] });
 });
+
+test("imported CAS identities retain exact inputs and all reasoning packets without reading the source Agent's history", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "trajectory-import-"));
+  const store = new VersionStore(directory), refs = await RefStore.open(store);
+  const original = "main:source", imported = "main:imported", signal = new AbortController().signal;
+  try {
+    const revision = await store.putRecord("AgentRevision", { agentId: original, requestExecutionId: "original-request" });
+    const stateRef = await store.putRecord("AgentStateSnapshot", { agentId: original, agentRevision: revision });
+    const input = { systemPrompt: "exact original system", history: [{ role: "user", content: "exact original request" }], tools: [] };
+    const modelContext = await store.putRecord("ModelContextSnapshot", { input });
+    const contextRef = await store.putRecord("ContextAssemblyRecord", { state: stateRef, modelContext, turn: 0 });
+    const privateContext = await store.putRecord("ContextAssemblyRecord", { state: stateRef, modelContext, turn: 99 });
+    const start = await store.putRecord("TrajectoryStart", { state: stateRef });
+    await refs.commit(store, `agents/${encodeURIComponent(original)}/trajectories/private-run`, null, start);
+    await refs.commit(store, "attempts/private-run/99", null, privateContext);
+    const evidence = { agentId: imported, agentRunId: "original-agent-run", requestExecutionId: "request", contextRef, stateRef, recordedAt: "2026-10-24T00:00:00Z" };
+    const chunks = ["reasoning ".repeat(3000), "END_OF_REASONING"];
+    const events: RecordedEvent[] = [
+      { id: "input", agentId: imported, runId: "request", createdAt: evidence.recordedAt, event: { type: "agent.record", name: "context.captured", evidence } },
+      ...chunks.map((delta, i) => ({ id: `thinking-${i}`, agentId: imported, runId: "request", streamId: "main", sequence: i + 2, createdAt: evidence.recordedAt, event: { type: "assistant.thinking.delta", delta, responseId: "response", evidence } })),
+    ];
+    const view = await openSessionTrajectory(directory, { sessionId: "imported", agents: [{ id: imported, label: "Main" }], events, agentAliases: { [original]: imported } }, signal);
+    assert.deepEqual(view.index.warnings, []);
+    assert.equal(view.index.entries.length, 2);
+    assert.ok(!JSON.stringify(view.index).includes(privateContext.digest));
+    const detail = (await view.detail("event:input"))!;
+    assert.deepEqual(detail.context?.input, input);
+    const thinking = (await view.detail("event:thinking-0"))!.value as { packets: RecordedEvent[] };
+    assert.equal(thinking.packets.map((packet) => (packet.event as { delta: string }).delta).join(""), chunks.join(""));
+    const unrelated = await openSessionTrajectory(directory, { sessionId: "imported", agents: [{ id: imported, label: "Main" }], events }, signal);
+    assert.ok(unrelated.index.warnings.some((warning) => warning.includes("missing or invalid")), "ownership checks remain required without the server-owned import alias");
+    assert.deepEqual((await store.readRecord(stateRef)).value, { agentId: original, agentRevision: revision });
+  } finally { refs.close(); await rm(directory, { recursive: true, force: true }); }
+});
 test("failed attempts remain inspectable, scoped, immutable and self-contained in NDJSON", async () => {
   const directory = await mkdtemp(join(tmpdir(), "trajectory-"));
   const store = new VersionStore(directory), refs = await RefStore.open(store);

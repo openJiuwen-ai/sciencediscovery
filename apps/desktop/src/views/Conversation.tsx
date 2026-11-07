@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { PendingMessage } from "../app/use-workspace.js";
 import type { ToolDetail } from "../app/tool-io.js";
@@ -53,6 +53,9 @@ interface Props {
   replays: readonly RunReplay[];
   /** The run streaming right now, which has no persisted answer to take. */
   run: RunStreamState;
+  /** What the conversation produced that outlives it: the session's searches,
+   *  drawn after the last turn. */
+  evolve?: ReactNode;
 }
 
 /**
@@ -207,9 +210,12 @@ export function Conversation({
   pending,
   replays,
   run,
+  evolve,
   workspaceFiles,
 }: Props) {
   const scroller = useRef<HTMLElement>(null);
+  /** The transcript itself, watched for growth after the pin. */
+  const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   /** How tall the transcript was at the last pin. Growth after it is the
    *  transcript getting longer, not the reader leaving the bottom — the scroll
@@ -261,6 +267,26 @@ export function Conversation({
     pinned.current = { height: node.scrollHeight };
   }, [liveRun, messages, pending, replays, run]);
 
+  // Content that arrives after the pin makes the transcript taller below the
+  // reader instead of moving it, and nothing above re-pins for it: the search
+  // cards are fetched a beat after the messages they sit under, so a session
+  // opened with runs left its card half hidden under the composer. A reader at
+  // the bottom wants the newest thing in view however it arrived, so follow
+  // growth the same way an appended answer is followed — and leave someone
+  // reading further up alone.
+  useEffect(() => {
+    const node = scroller.current;
+    const inner = content.current;
+    if (node === null || inner === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stick.current) return;
+      node.scrollTop = node.scrollHeight;
+      pinned.current = { height: node.scrollHeight };
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+
   const onScroll = () => {
     const node = scroller.current;
     if (!node) return;
@@ -274,7 +300,7 @@ export function Conversation({
 
   return (
     <section className="conversation" onScroll={onScroll} ref={scroller}>
-      <div className="messages">
+      <div className="messages" ref={content}>
         {messages.map((message, index) => {
           if (failures.hiddenNoticeIds.has(message.id)) return null;
           const replacement = replacing.get(message.id);
@@ -341,6 +367,7 @@ export function Conversation({
             sessionId={detail?.id}
           />
         ) : null}
+        {evolve}
         {loading ? <div className="status-strip">{TEXT.boot.checking}</div> : null}
       </div>
     </section>

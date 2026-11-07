@@ -57,6 +57,9 @@ export interface FileContent {
 }
 
 export interface SessionRecord {
+  /** What the composer's permission row prints. A Session the fixture writes
+   *  without one reads as asking, which is the service's default. */
+  approvalMode?: string;
   archivedAt?: string;
   createdAt: string;
   id: string;
@@ -129,7 +132,7 @@ export interface MockOptions {
    *  Session with no entry has never evolved anything. */
   evolveRunsBySession?: Record<string, EvolveFixture[]>;
   /** What `GET /api/evolve/status` answers. The runtime is ready by default:
-   *  the shelf and the panel are about watching a search, and only the setup
+   *  the cards and the panel are about watching a search, and only the setup
    *  spec is about installing one. */
   evolveStatus?: JsonRecord;
   /** What `POST /api/evolve/init` answers, and what the status route answers
@@ -145,6 +148,8 @@ export interface MockOptions {
   runners?: unknown[];
   connectors?: JsonRecord[];
   skills?: JsonRecord[];
+  jiuwenSwarmSkills?: JsonRecord[];
+  skillToggleFailures?: string[];
   specialists?: JsonRecord[];
   mcpServers?: JsonRecord[];
   mcpSources?: JsonRecord[];
@@ -163,6 +168,11 @@ export interface MockOptions {
   connectError?: string;
   /** Make one write fail, for the "the reason stays on screen" cases. */
   fail?: { method: string; path: string | RegExp; status?: number; message?: string };
+  /** Hold one route's answer until `mock.release()`. For a spec that has to
+   *  look at the screen while a read it is waiting for is still outstanding —
+   *  the write that came before it has already landed, and what the page shows
+   *  in between is the thing under test. */
+  hold?: { method: string; path: string | RegExp };
   /** What `POST /api/mcp/servers/:id/test` answers. The default is a healthy
    *  server; `error` is the provider's own refusal, not an HTTP failure. */
   mcpTest?: "error" | "ok";
@@ -213,6 +223,7 @@ export interface MockState {
   sandboxNetwork: { allowedDomains: string[]; mode: string };
   sessions: SessionRecord[];
   skills: JsonRecord[];
+  jiuwenSwarmSkills: JsonRecord[];
   specialists: JsonRecord[];
   timeouts: Record<string, number>;
   /** Names the upload route refuses, per file. See `MockOptions.uploadRejects`. */
@@ -222,6 +233,9 @@ export interface MockState {
 export interface Mock {
   calls: RecordedCall[];
   state: MockState;
+  /** Let the route `hold` is holding answer, so the spec can finish with the
+   *  page's own read-back instead of leaving a request hanging. */
+  release: () => void;
 }
 
 const DEFAULT_MODEL: ModelRecord = {
@@ -249,6 +263,7 @@ export const INBOX_PROJECT: ProjectRecord = {
 
 export function makeSession(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
+    approvalMode: "ask",
     createdAt: CREATED_AT,
     id: "session-1",
     modelId: DEFAULT_MODEL.id,
@@ -257,6 +272,16 @@ export function makeSession(over: Partial<SessionRecord> = {}): SessionRecord {
     updatedAt: UPDATED_AT,
     ...over,
   };
+}
+
+/** The clock every write on a Session moves forward, so a record the fixture
+ *  writes reads as newer than the seeded one — and a spec can seed a replay
+ *  that is older than the write it must not undo. */
+let writeClock = Date.parse(UPDATED_AT);
+
+function newUpdatedAt(): string {
+  writeClock += 1000;
+  return new Date(writeClock).toISOString();
 }
 
 function sse(events: readonly unknown[]): string {
@@ -304,6 +329,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     sandboxNetwork: structuredClone(options.sandboxNetwork ?? { allowedDomains: [], mode: "open" }),
     sessions: [...(options.sessions ?? [])],
     skills: [...(options.skills ?? [])],
+    jiuwenSwarmSkills: structuredClone(options.jiuwenSwarmSkills ?? []),
     specialists: [...(options.specialists ?? [])],
     uploadRejects: [...(options.uploadRejects ?? [])],
     timeouts: {
@@ -322,6 +348,14 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     options.evolveStatus ?? { canInitialize: true, state: "ready" },
   );
 
+  // One gate for the route `hold` names, resolved by the spec through
+  // `release`. Everything else answers immediately.
+  let released = false;
+  let resolveHeld: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    resolveHeld = resolve;
+  });
+
   // Match the API by its path, not by a `**/api/**` glob: that glob also
   // matches Vite's own module URLs (`/src/api/client.ts`), which would make
   // the mock answer the app's source code with a 404.
@@ -334,6 +368,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       const path = decodeURIComponent(url.pathname);
       const body = request.postData() ?? undefined;
       calls.push({ body, method, path });
+
+      if (
+        options.hold !== undefined
+        && !released
+        && options.hold.method === method
+        && (typeof options.hold.path === "string"
+          ? options.hold.path === path
+          : options.hold.path.test(path))
+      ) {
+        await held;
+      }
 
       if (
         options.fail !== undefined
@@ -364,7 +409,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/settings" && method === "GET") {
         return json(route, 200, {
-          effective: {},
+          effective: { enabledConnectorIds: ["web"], ...state.overrides },
           // The initial default is what the first boot would adopt from the
           // catalog; a spec that needs a different one passes `overrides`.
           overrides: { modelId: state.models[0]?.id, ...state.overrides },
@@ -375,7 +420,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (path === "/api/settings" && method === "PUT") {
         // `PUT` replaces the whole override object, so the mock does too.
         state.overrides = JSON.parse(body ?? "{}") as Record<string, unknown>;
-        return json(route, 200, { effective: {}, overrides: state.overrides, sources: {} });
+        return json(route, 200, {
+          effective: { enabledConnectorIds: ["web"], ...state.overrides },
+          overrides: state.overrides,
+          sources: {},
+        });
       }
 
       if (path === "/api/providers" && method === "GET") {
@@ -446,6 +495,30 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/connectors" && method === "GET") {
         return json(route, 200, state.connectors);
+      }
+
+      if (path === "/api/jiuwenswarm/skills" && method === "GET") {
+        return json(route, 200, { backend: "jiuwenswarm", skills: state.jiuwenSwarmSkills });
+      }
+      const namedSkillSwitch = path.match(/^\/api\/jiuwenswarm\/skills\/([^/]+)$/u);
+      if (namedSkillSwitch && method === "PUT") {
+        const name = decodeURIComponent(namedSkillSwitch[1]!);
+        if (options.skillToggleFailures?.includes(name)) return json(route, 502, { error: "Skill switch failed" });
+        const installed = state.jiuwenSwarmSkills.find((skill) => skill.name === name);
+        if (!installed) return json(route, 404, { error: "Skill not found" });
+        const input = JSON.parse(body ?? "{}") as JsonRecord;
+        installed.enabled = input.enabled;
+        return json(route, 200, { name, enabled: input.enabled });
+      }
+      const skillSwitch = path.match(/^\/api\/jiuwenswarm\/skills-by-id\/([^/]+)$/u);
+      if (skillSwitch && method === "PUT") {
+        const skillId = decodeURIComponent(skillSwitch[1]!);
+        if (options.skillToggleFailures?.includes(skillId)) return json(route, 502, { error: "Skill switch failed" });
+        const input = JSON.parse(body ?? "{}") as JsonRecord;
+        const existing = state.jiuwenSwarmSkills.find((skill) => skill.skillId === skillId);
+        if (existing) existing.enabled = input.enabled;
+        else state.jiuwenSwarmSkills.push({ skillId, name: skillId, enabled: input.enabled, source: "sciencediscovery", description: "" });
+        return json(route, 200, { skillId, name: skillId, enabled: input.enabled });
       }
 
       if (path === "/api/skills" && method === "GET") {
@@ -633,7 +706,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         }
         if (method === "PATCH") {
           const patch = JSON.parse(body ?? "{}") as Partial<SessionRecord>;
-          state.sessions[index] = { ...state.sessions[index]!, ...patch };
+          // Every write on the service stamps `updatedAt`, and the app leans on
+          // that to drop an older copy of the record arriving out of order. A
+          // mock that left the timestamp alone would let a stale replay look
+          // exactly as fresh as the rename it must not undo.
+          state.sessions[index] = { ...state.sessions[index]!, ...patch, updatedAt: newUpdatedAt() };
           return json(route, 200, state.sessions[index]);
         }
         if (method === "DELETE") {
@@ -670,9 +747,15 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           sessionId: session.id,
           status: "running",
         };
+        // What the event carries is the Session record, and the service's has no
+        // transcript in it: the messages live in their own list. The mock keeps
+        // them on the record for its own convenience, so the published copy
+        // leaves them behind — an event that carried them would hand the page a
+        // second copy of a conversation it is already drawing.
+        const published = renamed ? { ...session, messages: undefined } : undefined;
         return route.fulfill({
           body: sse([
-            ...(renamed ? [{ session, type: "session.updated" }] : []),
+            ...(published ? [{ session: published, type: "session.updated" }] : []),
             { run, type: "run.queued" },
             { model: { name: "Qwen Max" }, runId: "run-1", settings: {}, type: "run.started" },
             { responseId: "response-1", turn: 1, type: "assistant.response.started" },
@@ -694,6 +777,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (runEvents && method === "GET") {
         const [sessionId, runId] = [runEvents[1]!, runEvents[2]!];
         const entry = (options.runsBySession?.[sessionId] ?? []).find((candidate) => candidate.run.id === runId);
+        // One route, two readers: rebuilding a finished run reads it as JSON,
+        // and following a run that is still going subscribes to it as a stream.
+        // The subscription replays from cursor 0, which is what puts an older
+        // `session.updated` in front of a page that has just read a newer one.
+        if ((request.headers().accept ?? "").includes("text/event-stream")) {
+          return route.fulfill({
+            body: sse(entry?.events ?? []),
+            contentType: "text/event-stream",
+            status: 200,
+          });
+        }
         return json(route, 200, (entry?.events ?? []).map((event, index) => ({
           createdAt: String(entry?.run.createdAt ?? CREATED_AT),
           event,
@@ -1018,5 +1112,12 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       return json(route, 404, { error: `not mocked: ${method} ${path}` });
   });
 
-  return { calls, state };
+  return {
+    calls,
+    release: () => {
+      released = true;
+      resolveHeld();
+    },
+    state,
+  };
 }

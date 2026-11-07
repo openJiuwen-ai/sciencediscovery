@@ -102,10 +102,30 @@ export function evolveCommand(
   const flags = `${EVOLVE_COMMAND} --algorithm ${algorithm}`
     + (checkpointMode === "auto" ? " --no-confirm" : "")
     + (allowUnisolated ? " --allow-direct" : "");
+  return composeEvolveMessage(flags, goal);
+}
+
+/** The flags and the sentence as one message.
+ *
+ *  The composer shows the flags as a token of their own and lets the user
+ *  finish the sentence after it, so the two halves are joined here — with the
+ *  same rule `evolveCommand` uses: a goal that begins with a flag would
+ *  otherwise be read back as one — both by this module, when the setup detour
+ *  re-opens the dialog, and by the agent, which reads the command's leading
+ *  run. A line break ends that run, so the goal keeps its own text. */
+export function composeEvolveMessage(flags: string, goal: string): string {
   const text = goal.trim();
-  // A goal that begins with a flag would otherwise be read back as one — both
-  // by this module, when the setup detour re-opens the dialog, and by the
-  // agent, which reads the command's leading run. A line break ends that run,
-  // so the goal keeps its own text.
-  return text.startsWith("--") ? `${flags}\n${text}` : `${flags} ${text}`.trimEnd();
+  if (text === "") return flags;
+  return text.startsWith("--") ? `${flags}\n${text}` : `${flags} ${text}`;
+}
+
+/** A whole message split back into the token and the sentence, so the dialog's
+ *  command can be placed in the composer as flags the user completes rather
+ *  than as a message already sent. */
+export function splitEvolveCommand(text: string): { command: string; goal: string } {
+  if (!isEvolveCommand(text)) return { command: text.trim(), goal: "" };
+  return {
+    command: `${EVOLVE_COMMAND}${leadingFlags(text)}`.trimEnd(),
+    goal: evolveCommandGoal(text) ?? "",
+  };
 }

@@ -72,6 +72,19 @@ describe("runtime settings layers", () => {
 });
 
 describe("skills", () => {
+  it("switches JiuwenSwarm built-ins by name and ScienceDiscovery packages by id", async () => {
+    const stub = new StubClient().reply({}).reply({});
+    const client = stub.asClient();
+    await settings.setJiuwenSwarmSkillEnabled(client, "builtin/one", false);
+    await settings.setJiuwenSwarmSkillEnabledById(client, "builtin/one", true);
+    assert.equal(stub.calls[0]!.path, "/api/jiuwenswarm/skills/builtin%2Fone");
+    assert.equal(stub.calls[1]!.path, "/api/jiuwenswarm/skills-by-id/builtin%2Fone");
+    assert.equal(stub.calls[0]!.init.method, "PUT");
+    assert.equal(stub.calls[1]!.init.method, "PUT");
+    assert.deepEqual(json(stub.calls[0]!), { enabled: false });
+    assert.deepEqual(json(stub.calls[1]!), { enabled: true });
+  });
+
   it("reads connectors and the installed skill catalog", async () => {
     const stub = new StubClient().reply([]).reply([]);
     const client = stub.asClient();

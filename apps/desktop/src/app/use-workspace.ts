@@ -410,6 +410,14 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    *  counted against) loses it too. The epoch is how `settle` can tell whether
    *  the reads it started with are still the newest truth. */
   const sendEpoch = useRef(0);
+  /** Bumped by every settle and by every session change. A settle issues its
+   *  reads when a turn ends and writes what they return once they land — a whole
+   *  round trip later, with the composer already usable again (`running` is
+   *  cleared before it is awaited), so two settles can overlap. Only the newest
+   *  one may write: an older one's reads predate everything the newer one read,
+   *  and writing them last would put the older turn back on screen and replace
+   *  the session's replay list with an older, shorter one. */
+  const settleEpoch = useRef(0);
 
   sessionRef.current = sessionId;
   projectRef.current = activeProjectId;
@@ -985,8 +993,33 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         // row in the sidebar. The service publishes that rename on this stream,
         // ahead of the run's own events, so the row appears with the message
         // rather than at the end of its first answer. A later rename lands in
-        // the same list; the read is shared and rare.
-        if (event?.type === "session.updated") void refreshSessionLists();
+        // the same list; the read is shared and rare. The bar over the
+        // conversation prints the open Session's own record, so it takes the
+        // event's copy of that record: waiting for the read-back that follows
+        // the run would leave the bar under the old name — 未命名会话 for a
+        // Session's first message — for as long as the answer streams.
+        if (event?.type === "session.updated") {
+          const incoming = event.session;
+          setDetail((current) => {
+            if (current?.id !== incoming.id) return current;
+            // This stream is followed from cursor 0, so opening a Session whose
+            // run is still going replays that run's earlier events — including
+            // a `session.updated` older than the record `openSession` has just
+            // read. Folding it would take the bar back to the name from before
+            // the user's own rename, and the composer back to the approval mode
+            // and expert it had then, until the run ends. Every write stamps
+            // `updatedAt`, so the newer record wins whatever order they arrive
+            // in; a record of the same age is the same state and may land.
+            if (incoming.updatedAt < current.updatedAt) return current;
+            const next = { ...current, ...incoming };
+            // The cache is what paints the Session on the way back to it, so it
+            // has to hear this too: without it, leaving and returning shows the
+            // older record until `getSession` lands.
+            rememberBounded(detailsBySession.current, next.id, next);
+            return next;
+          });
+          void refreshSessionLists();
+        }
         // 产物 and the workspace tree are read back from the service rather
         // than folded in from the event: the artifact list spans Sessions and
         // every version, and a read is what keeps it agreeing with the
@@ -1013,24 +1046,36 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    */
   const settle = useCallback(
     async (target: string) => {
+      const settleId = ++settleEpoch.current;
+      // Asked at each write rather than captured once: a newer settle may start
+      // while this one is still reading, and whether this one is still the last
+      // word has to be decided at the moment of writing.
+      const newest = () => settleEpoch.current === settleId;
       const epoch = sendEpoch.current;
       try {
         const [fresh, runs] = await Promise.all([getSession(client, target), listRuns(client, target)]);
         const batch = await buildReplays(target, runs);
-        // `commitReplays` drops a batch read for a Session that is no longer
-        // open; the transcript and the live run need the same gate. The reads
-        // belong to the Session the run was in — the run keeps going on the
-        // server, and coming back resumes it — so writing here would put that
-        // Session over the one now on screen. The list below is shared and
-        // stays worth refreshing either way.
-        commitReplays(target, batch);
-        rememberBounded(detailsBySession.current, target, fresh);
-        if (sessionRef.current === target) {
-          setDetail(fresh);
-          // A send that started while these reads were in flight has already
-          // closed the finished run and opened its own; resetting here would
-          // erase the stream it is writing.
-          if (sendEpoch.current === epoch) resetRun();
+        // A settle started after this one has read — or is reading — the turn
+        // that came after this snapshot. Both the transcript and the rebuilt
+        // replay list belong to the older turn: landing them now would hide the
+        // newer message and answer, drop the newer run from the replay cache, and
+        // leave the design anchor counting against the previous design.
+        if (newest()) {
+          // `commitReplays` drops a batch read for a Session that is no longer
+          // open; the transcript and the live run need the same gate. The reads
+          // belong to the Session the run was in — the run keeps going on the
+          // server, and coming back resumes it — so writing here would put that
+          // Session over the one now on screen. The list below is shared and
+          // stays worth refreshing either way.
+          commitReplays(target, batch);
+          rememberBounded(detailsBySession.current, target, fresh);
+          if (sessionRef.current === target) {
+            setDetail(fresh);
+            // A send that started while these reads were in flight has already
+            // closed the finished run and opened its own; resetting here would
+            // erase the stream it is writing.
+            if (sendEpoch.current === epoch) resetRun();
+          }
         }
       } catch (reason) {
         if (!isAuthFailure(reason) && sessionRef.current === target) report(reason);
@@ -1038,8 +1083,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       // Only the pending message this settle was started for may be cleared.
       // One sent since then is not in `fresh` — that read predates its
       // persistence — so clearing it would drop a message the user can see is
-      // already on its way.
-      if (sessionRef.current === target && sendEpoch.current === epoch) setPendingMessage(undefined);
+      // already on its way. A newer settle clears its own.
+      if (newest() && sessionRef.current === target && sendEpoch.current === epoch) setPendingMessage(undefined);
+      // The list and the panel are shared by every Session; a stale settle's
+      // refresh is still a refresh, so it stays unconditional.
       await Promise.all([refreshSessionLists(), refreshPanel(target)]);
     },
     [buildReplays, client, commitReplays, refreshPanel, refreshSessionLists, report, resetRun],
@@ -1203,6 +1250,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     // Any batch still being read belongs to the session being left behind. What
     // it rebuilt stays in `replaysBySession`, so coming back needs no re-read.
     replayEpoch.current += 1;
+    // A settle still reading belongs to the Session being left. Bumping the
+    // epoch here also covers the case nothing else does: leaving and reopening
+    // the *same* Session before that settle lands would otherwise make it look
+    // current again.
+    settleEpoch.current += 1;
     setReplays([]);
     // Open documents belong to the session's workspace, so leaving the session
     // takes them with it rather than showing another session's file contents.
@@ -1831,7 +1883,24 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         }
       },
       renameSession: (session, title) =>
-        mutate({ id: session.id, operation: () => updateSession(client, session.id, { title }) }),
+        mutate({
+          id: session.id,
+          operation: async () => {
+            const updated = await updateSession(client, session.id, { title });
+            // The reply is the only news the open Session gets when no run is
+            // streaming. The bar prints its title, so without this the row says
+            // the new name while the bar keeps the old one until the Session is
+            // reopened. The cache takes it too — it is what paints the Session
+            // on the way back to it — or leaving and returning would show the
+            // name it had before the rename until the read lands.
+            setDetail((current) => {
+              if (current?.id !== updated.id) return current;
+              const next = { ...current, ...updated };
+              rememberBounded(detailsBySession.current, next.id, next);
+              return next;
+            });
+          },
+        }),
       refreshCatalog,
       removeAttachment,
       retryAttachment,

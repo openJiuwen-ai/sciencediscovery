@@ -325,9 +325,14 @@ class RunEventMapper:
     def _on_chat_ask_user_question(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         request_id = str(payload.get("request_id") or "")
         question = (payload.get("questions") or [{}])[0]
-        if payload.get("source") != "permission_interrupt" or not request_id:
+        if not request_id:
             self.unmapped.append(f"chat.ask_user_question:{payload.get('source')}")
             return []
+        if payload.get("source") != "permission_interrupt":
+            return [*self._settle_response(), {"type": "user_input.required", "request": {
+                "id": request_id, "question": str(question.get("question") or ""),
+                "source": str(payload.get("source") or "ask_user"),
+            }}]
         self._permissions[request_id] = [str(o.get("label")) for o in question.get("options") or []]
         tool = str(question.get("header") or "").split(":")[-1].strip() or "tool"
         request = {

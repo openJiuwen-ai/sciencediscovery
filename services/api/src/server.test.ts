@@ -124,11 +124,43 @@ import type { NativeAgentOptions } from "./native-agent/index.js";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
 import { SessionStore } from "./store.js";
+import { EvolutionStore } from "./evolution/store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
+
+test("closing an API during startup waits for evolution initialization", async () => {
+  const root = resolve(process.cwd(), ".tmp", `startup-close-${randomUUID()}`);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const initializeStarted = new Promise<void>((resolveStarted) => { started = resolveStarted; });
+  const originalInitialize = EvolutionStore.prototype.initialize;
+  let server: ReturnType<typeof createProductionApiServer> | undefined;
+  let closing: Promise<void> | undefined;
+  EvolutionStore.prototype.initialize = async function (): Promise<void> {
+    started();
+    await gate;
+    await originalInitialize.call(this);
+  };
+  try {
+    server = createProductionApiServer(testConfig(root));
+    await initializeStarted;
+    let closed = false;
+    closing = closeApiServer(server).then(() => { closed = true; });
+    await new Promise((done) => setTimeout(done, 20));
+    assert.equal(closed, false);
+    release();
+    await closing;
+  } finally {
+    release();
+    EvolutionStore.prototype.initialize = originalInitialize;
+    if (server) await (closing ?? closeApiServer(server));
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 /**
  * Agent turns run on JiuwenSwarm (behind a real adapter) in the tests that declare `swarm:required`: the shared
@@ -525,6 +557,56 @@ async function startTestApi(
   }) });
   return { origin };
 }
+
+test("desktop skill switches import a new package and preserve global state on repeat writes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `skill-switch-${randomUUID()}`);
+  const token = randomUUID();
+  const installed: Array<{ name: string; skillId: string; enabled: boolean; source: string }> = [];
+  const importedPaths: string[] = [];
+  const adapter = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/agent/skills" && request.method === "GET") {
+      response.end(JSON.stringify({ skills: installed }));
+    } else if (request.url === "/agent/skills" && request.method === "POST") {
+      const skill = body.skills[0];
+      importedPaths.push(skill.path);
+      assert.match(await readFile(resolve(skill.path, "SKILL.md"), "utf8"), /literature-searcher/);
+      installed.push({ name: skill.id, skillId: skill.id, enabled: true, source: "sciencediscovery" });
+      response.end(JSON.stringify({ skills: { [skill.id]: { name: skill.id } } }));
+    } else if (request.url?.endsWith("/enabled")) {
+      installed[0]!.enabled = body.enabled;
+      response.end("{}");
+    } else response.end("{}");
+  });
+  await new Promise<void>((done) => adapter.listen(0, "127.0.0.1", done));
+  const previous = { executor: process.env.SCIENCE_AGENT_EXECUTOR, adapter: process.env.SCIENCE_AGENT_ADAPTER_URL };
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`;
+  const server = createApiServer({ ...testConfig(root), authToken: token });
+  context.after(async () => {
+    await closeApiServer(server);
+    await new Promise<void>((done) => { adapter.close(() => done()); adapter.closeAllConnections(); });
+    if (previous.executor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR;
+    else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
+    if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
+    else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
+    await rm(root, { recursive: true, force: true });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  for (const enabled of [true, false, true]) {
+    const result = await fetch(`${origin}/api/jiuwenswarm/skills-by-id/literature-searcher`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    assert.equal(result.status, 200, await result.text());
+    assert.equal(installed[0]?.enabled, enabled);
+  }
+  assert.equal(importedPaths.length, 1, "subsequent toggles reuse JiuwenSwarm's installed package");
+});
 
 test("closing the API server drains active connections before closing the MCP transport", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
@@ -982,10 +1064,8 @@ test("updating SSH credentials immediately probes with the newly stored username
   const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(async () => {
-    await new Promise<void>((resolveClose) => {
-      server.close(() => resolveClose());
-      server.closeAllConnections();
-    });
+    // Drain asynchronous API cleanup before removing the stores it still owns.
+    await closeApiServer(server);
     await rm(tempRoot, { force: true, recursive: true });
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -8011,13 +8091,7 @@ test("closing the server closes the MCP transport it connected at startup", asyn
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 
   assert.equal(closed, 0, "the transport must stay open while the server is serving");
-  await new Promise<void>((resolveClose) => {
-    server.close(() => resolveClose());
-    server.closeAllConnections();
-  });
-  // The listener's close callback and the teardown both run on `close`; give
-  // the asynchronous one a turn before reading the count.
-  await new Promise((settled) => setImmediate(settled));
+  await closeApiServer(server);
 
   assert.equal(closed, 1);
 });

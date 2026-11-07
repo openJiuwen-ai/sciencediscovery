@@ -103,3 +103,117 @@ def test_accounting_failure_does_not_discard_valid_text(model_server):
     def fail(_usage):
         raise RuntimeError("accounting unavailable")
     assert completion_for(model_server, "synthetic", on_usage=fail)("synthetic") == "ok"
+
+
+def test_forwards_frozen_low_effort(model_server):
+    completion_for(model_server, "token", thinking="enabled", thinking_effort="low")("hello")
+    assert _RecordingModel.bodies[0]["thinking"] == {"type": "enabled"}
+    assert _RecordingModel.bodies[0]["reasoning_effort"] == "low"
+
+
+def test_auto_omits_thinking_wire_controls_even_with_snapshot_effort(model_server):
+    completion_for(model_server, "token", thinking="auto", thinking_effort="high")("hello")
+    assert "thinking" not in _RecordingModel.bodies[0]
+    assert "reasoning_effort" not in _RecordingModel.bodies[0]
+
+
+@pytest.mark.parametrize("status", [502, 503, 504, 524])
+def test_transient_http_failure_retries_then_succeeds(status, monkeypatch):
+    import io
+    import urllib.error
+    calls = []
+
+    def respond(*args, **kwargs):
+        calls.append(kwargs["timeout"])
+        if len(calls) == 1:
+            raise urllib.error.HTTPError("http://synthetic.test", status, "transient", {}, io.BytesIO(b"retry"))
+        return io.BytesIO(b'{"choices":[{"message":{"content":"recovered"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    assert completion_for("http://synthetic.test", "token", retry_backoff=0)("hello") == "recovered"
+    assert len(calls) == 2
+    assert 0 < calls[1] < calls[0], "retries share the original deadline"
+
+
+@pytest.mark.parametrize("status,expected", [(524, 3), (400, 1), (401, 1), (422, 1), (429, 1)])
+def test_http_retry_limit_and_nonretryable_errors(status, expected, monkeypatch):
+    import io
+    import urllib.error
+    calls, failures = [], []
+
+    def respond(*args, **kwargs):
+        calls.append(1)
+        raise urllib.error.HTTPError("http://synthetic.test", status, "failure", {}, io.BytesIO(b"failed"))
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    assert completion_for("http://synthetic.test", "token", max_retries=99, retry_backoff=0)("hello", on_failure=failures.append) == ""
+    assert len(calls) == expected
+    assert len(failures) == 1 and f"HTTP {status}" in failures[0]
+
+
+def test_capped_empty_completion_is_charged_once_without_retry(monkeypatch):
+    import io
+    calls, usage = [], []
+
+    def respond(*args, **kwargs):
+        calls.append(1)
+        return io.BytesIO(b'{"choices":[{"message":{"content":null},"finish_reason":"length"}],"usage":{"completion_tokens":16000,"total_tokens":16010}}')
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    assert completion_for("http://synthetic.test", "token", on_usage=usage.append)("hello") == ""
+    assert len(calls) == 1
+    assert len(usage) == 1 and usage[0].capped and usage[0].total == 16010
+
+
+def test_stop_after_failure_prevents_retry(monkeypatch):
+    import io
+    import urllib.error
+    stopped = threading.Event()
+    calls = []
+
+    def respond(*args, **kwargs):
+        calls.append(1)
+        stopped.set()
+        raise urllib.error.HTTPError("http://synthetic.test", 524, "timeout", {}, io.BytesIO())
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    assert completion_for("http://synthetic.test", "token", should_stop=stopped.is_set)("hello") == ""
+    assert calls == [1]
+
+
+def test_deadline_expires_during_retry_backoff(monkeypatch):
+    import io
+    import time
+    import urllib.error
+    calls, failures = [], []
+
+    def respond(*args, **kwargs):
+        calls.append(1)
+        raise urllib.error.HTTPError("http://synthetic.test", 524, "timeout", {}, io.BytesIO())
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    began = time.monotonic()
+    assert completion_for("http://synthetic.test", "token", timeout=0.1, retry_backoff=10)("hello", on_failure=failures.append) == ""
+    assert time.monotonic() - began < 1
+    assert calls == [1] and len(failures) == 1
+    assert "deadline" in failures[0]
+
+
+def test_socket_that_keeps_reading_cannot_extend_wall_deadline(monkeypatch):
+    import io
+    import time
+    finished = threading.Event()
+
+    def respond(*args, **kwargs):
+        finished.wait(2)
+        return io.BytesIO(b'{"choices":[{"message":{"content":"too late"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    failures = []
+    try:
+        began = time.monotonic()
+        assert completion_for("http://synthetic.test", "token", timeout=0.1)("hello", on_failure=failures.append) == ""
+        assert time.monotonic() - began < 1
+        assert failures == ["completion call deadline exceeded"]
+    finally:
+        finished.set()
