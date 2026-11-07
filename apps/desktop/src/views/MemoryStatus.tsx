@@ -31,17 +31,23 @@ import type { ApiClient } from "../api/client.js";
 import { getHealth } from "../api/models.js";
 import { TEXT } from "../text.js";
 
-/** The five readings the line can show. Named apart from the component below:
+/** The four readings the line can show. Named apart from the component below:
  *  a type alias and a function may share a name in TypeScript, but the mirror's
- *  CodeCheck reads that as a redeclaration (`MemoryStatus` is already defined). */
-export type MemoryState = "checking" | "degraded" | "healthy" | "needs-password" | "unknown";
+ *  CodeCheck reads that as a redeclaration (`MemoryStatus` is already defined).
+ *
+ *  `needs-password` is deliberately not one of them. A Neo4j deployment that
+ *  has not been given its credential is the memory service's own configuration
+ *  — where the graph is stored is not asked for, or answered, in this window —
+ *  so naming it would point the reader at a step they cannot take from here.
+ *  It reads as any other service that is not working: `degraded`. */
+export type MemoryState = "checking" | "degraded" | "healthy" | "unknown";
 
 /** The control plane's words, or this app's when the route did not say. */
 function statusOf(value: string | undefined): MemoryState {
   switch (value) {
     case "healthy": return "healthy";
-    case "degraded": return "degraded";
-    case "needs-password": return "needs-password";
+    case "degraded":
+    case "needs-password": return "degraded";
     default: return "unknown";
   }
 }
@@ -51,7 +57,6 @@ function labelOf(status: MemoryState): string {
   switch (status) {
     case "healthy": return text.healthy;
     case "degraded": return text.degraded;
-    case "needs-password": return text.needsPassword;
     case "checking": return text.checking;
     default: return text.unknown;
   }

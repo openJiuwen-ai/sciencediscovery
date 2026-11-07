@@ -102,10 +102,8 @@
 }
 .memory-status.is-healthy { color: var(--success); }
 .memory-status.is-healthy .memory-status-dot { background: var(--success-bright); }
-.memory-status.is-degraded,
-.memory-status.is-needs-password { color: var(--warning); }
-.memory-status.is-degraded .memory-status-dot,
-.memory-status.is-needs-password .memory-status-dot { background: var(--insight); }
+.memory-status.is-degraded { color: var(--warning); }
+.memory-status.is-degraded .memory-status-dot { background: var(--insight); }
 .memory-status.is-checking .memory-status-dot {
   background: var(--primary);
   animation: memory-pulse 1.4s ease-in-out infinite;
