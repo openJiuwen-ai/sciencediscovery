@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { PendingMessage } from "../app/use-workspace.js";
 import type { ToolDetail } from "../app/tool-io.js";
@@ -51,6 +51,9 @@ interface Props {
   replays: readonly RunReplay[];
   /** The run streaming right now, which has no persisted answer to take. */
   run: RunStreamState;
+  /** What the conversation produced that outlives it: the session's searches,
+   *  drawn after the last turn. */
+  evolve?: ReactNode;
 }
 
 /**
@@ -202,6 +205,7 @@ export function Conversation({
   pending,
   replays,
   run,
+  evolve,
   workspaceFiles,
 }: Props) {
   const scroller = useRef<HTMLElement>(null);
@@ -333,6 +337,7 @@ export function Conversation({
             sessionId={detail?.id}
           />
         ) : null}
+        {evolve}
         {loading ? <div className="status-strip">{TEXT.boot.checking}</div> : null}
       </div>
     </section>

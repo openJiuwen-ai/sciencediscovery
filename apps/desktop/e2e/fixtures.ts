@@ -132,7 +132,7 @@ export interface MockOptions {
    *  Session with no entry has never evolved anything. */
   evolveRunsBySession?: Record<string, EvolveFixture[]>;
   /** What `GET /api/evolve/status` answers. The runtime is ready by default:
-   *  the shelf and the panel are about watching a search, and only the setup
+   *  the cards and the panel are about watching a search, and only the setup
    *  spec is about installing one. */
   evolveStatus?: JsonRecord;
   /** What `POST /api/evolve/init` answers, and what the status route answers
