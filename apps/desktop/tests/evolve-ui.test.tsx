@@ -95,6 +95,23 @@ function nodeText(node: unknown): string {
   return children.map(nodeText).join(" ");
 }
 
+/** The card a hovered point draws. Matched on the base class only: the card's
+ *  own children are named `evolve-chart-tooltip-…` and would match a prefix. */
+function tooltipOf(chart: ReturnType<typeof create>) {
+  return chart.root.findAll((node) =>
+    typeof node.props.className === "string"
+    && node.props.className.startsWith("evolve-chart-tooltip")
+    && !node.props.className.startsWith("evolve-chart-tooltip-"))[0];
+}
+
+/** The invisible circle a plotted point answers the pointer and the keyboard
+ *  through, found by the label it announces. */
+function hitOf(chart: ReturnType<typeof create>, label: string) {
+  return chart.root.findAll((node) =>
+    node.props.className === "evolve-chart-hit"
+    && String(node.props["aria-label"]).startsWith(label))[0];
+}
+
 function switchTag(html: string): string {
   return html.match(/<input[^>]*role="switch"[^>]*>/)?.[0] ?? "";
 }
@@ -218,7 +235,7 @@ test("the task panel leads with the totals, the chart, the tree and the budget",
     />,
   );
 
-  for (const label of ["最优解", "有效节点数/总数", "代际数", "算法", "Token"]) {
+  for (const label of ["最优解", "有效节点数/总数", "层数", "算法", "Token"]) {
     assert.match(html, new RegExp(label), `${label}: the overview has a cell`);
   }
   assert.equal((html.match(/evolve-overview-cell/g) ?? []).length, 5);
@@ -235,7 +252,7 @@ test("the task panel leads with the totals, the chart, the tree and the budget",
   // Budget rows read value over limit, with the clock taken from the record.
   assert.match(html, /0 \/ 1,000,000/);
   assert.match(html, /38m20s \/ 1h00m/);
-  assert.match(html, /0\.00 \/ 5\.00/);
+  assert.match(html, /0 \/ 40/);
   assert.equal((html.match(/role="progressbar"/g) ?? []).length, 3);
 });
 
@@ -269,21 +286,23 @@ test("the overview's delta is the last step of the best staircase", () => {
   assert.ok(Math.abs((gained ?? 0) - 25) < 1e-9);
 });
 
-test("a budget without a price table says so instead of drawing a cost bar", () => {
+test("the budget reads the node count, the tokens and the clock, and no cost", () => {
   const html = renderToStaticMarkup(
     <EvolveDetail
       client={client}
       onError={() => {}}
       onRunChanged={() => {}}
-      run={run({
-        finishedAt: "2026-10-01T09:20:00.000Z",
-        goal: { ...run().goal, budget: { ...budget, maxCostCents: 0 } },
-        status: "succeeded",
-      })}
+      run={run()}
     />,
   );
-  assert.match(html, /未配置价格表/);
-  assert.match(html, /evolve-budget-track is-muted/);
+  // Three rows, in the order they are read: what the search spent, against
+  // the budget it was given. Cost is not one of them: no price table exists,
+  // and a row that can never move is not a budget.
+  assert.match(html, /Token/);
+  assert.match(html, /耗时/);
+  assert.match(html, /节点/);
+  assert.match(html, /0 \/ 40/);
+  assert.doesNotMatch(html, /费用|未配置价格表/);
 });
 
 test("a run past its clock budget marks the row rather than clipping the bar", () => {
@@ -354,42 +373,36 @@ test("pointing at a node names it, its generation and its score", async () => {
   try {
     // Nothing follows the pointer until one is over a point.
     assert.equal(
-      chart!.root.findAll((node) => node.props.className === "evolve-chart-tooltip").length,
+      chart.root.findAll((node) => node.props.className === "evolve-chart-tooltip").length,
       0,
     );
 
-    const hit = chart!.root.findAll((node) =>
-      node.props.className === "evolve-chart-hit"
-      && String(node.props["aria-label"]).startsWith("#1"))[0];
+    const hit = hitOf(chart, "#1");
     assert.ok(hit, "the best node has a hit area larger than its dot");
     await act(async () => { (hit.props.onMouseEnter as () => void)(); });
 
     // The dashed rule marks the expansion the point belongs to.
-    assert.equal(chart!.root.findAll((node) => node.props.className === "evolve-chart-guide").length, 1);
-    const tooltip = chart!.root.findAll((node) =>
-      typeof node.props.className === "string"
-      && node.props.className.startsWith("evolve-chart-tooltip")
-      && !node.props.className.startsWith("evolve-chart-tooltip-"))[0];
-    const text = nodeText(tooltip);
+    assert.equal(chart.root.findAll((node) => node.props.className === "evolve-chart-guide").length, 1);
+    const text = nodeText(tooltipOf(chart));
     assert.match(text, /Node #1/);
-    assert.match(text, /代际 01/);
+    assert.match(text, /层数 01/);
     // The handoff tags the best node rather than leaving the reader to compare
     // the score with the rule above.
     assert.match(text, /最佳/);
     assert.match(
-      String(chart!.root.findByProps({ className: "evolve-chart-tooltip-score" }).children),
+      String(chart.root.findByProps({ className: "evolve-chart-tooltip-score" }).children),
       /0\.6200/,
     );
 
     // Leaving the point takes the reading with it.
     await act(async () => { (hit.props.onMouseLeave as () => void)(); });
     assert.equal(
-      chart!.root.findAll((node) => node.props.className === "evolve-chart-tooltip").length,
+      chart.root.findAll((node) => node.props.className === "evolve-chart-tooltip").length,
       0,
     );
-    assert.equal(chart!.root.findAll((node) => node.props.className === "evolve-chart-guide").length, 0);
+    assert.equal(chart.root.findAll((node) => node.props.className === "evolve-chart-guide").length, 0);
   } finally {
-    await act(async () => { chart!.unmount(); });
+    await act(async () => { chart.unmount(); });
   }
 });
 
@@ -400,9 +413,7 @@ test("pressing a plotted node opens its detail, as a row of the list does", asyn
     chart = create(<ScoreChart onSelect={(index) => picked.push(index)} view={view()} />);
   });
   try {
-    const hit = (label: string) => chart!.root.findAll((node) =>
-      node.props.className === "evolve-chart-hit"
-      && String(node.props["aria-label"]).startsWith(label))[0];
+    const hit = (label: string) => hitOf(chart, label);
     await act(async () => { (hit("#1").props.onClick as () => void)(); });
     // A failed node is still a node: its detail says why it never ran.
     await act(async () => { (hit("#3").props.onClick as () => void)(); });
@@ -415,7 +426,7 @@ test("pressing a plotted node opens its detail, as a row of the list does", asyn
     });
     assert.deepEqual(picked, [1, 3, 1]);
   } finally {
-    await act(async () => { chart!.unmount(); });
+    await act(async () => { chart.unmount(); });
   }
 });
 
@@ -423,23 +434,17 @@ test("a failed node answers the pointer with its verdict, not a score", async ()
   let chart;
   await act(async () => { chart = create(<ScoreChart view={view()} />); });
   try {
-    const hit = chart!.root.findAll((node) =>
-      node.props.className === "evolve-chart-hit"
-      && String(node.props["aria-label"]).startsWith("#3"))[0];
+    const hit = hitOf(chart, "#3");
     assert.ok(hit, "the failed node is hoverable too");
     await act(async () => { (hit.props.onMouseEnter as () => void)(); });
 
-    const tooltip = chart!.root.findAll((node) =>
-      typeof node.props.className === "string"
-      && node.props.className.startsWith("evolve-chart-tooltip")
-      && !node.props.className.startsWith("evolve-chart-tooltip-"))[0];
-    const text = nodeText(tooltip);
+    const text = nodeText(tooltipOf(chart));
     assert.match(text, /Node #3/);
     assert.match(text, /失败/);
     // It never ran, so there is no score to print.
-    assert.equal(chart!.root.findAll((node) => node.props.className === "evolve-chart-tooltip-score").length, 0);
+    assert.equal(chart.root.findAll((node) => node.props.className === "evolve-chart-tooltip-score").length, 0);
   } finally {
-    await act(async () => { chart!.unmount(); });
+    await act(async () => { chart.unmount(); });
   }
 });
 
@@ -461,7 +466,7 @@ test("the node list reads the tree as rows and marks the winner", () => {
   assert.match(html, /节点列表/);
   assert.equal((html.match(/class="evolve-node-row /g) ?? []).length, 4);
   assert.match(html, /Node #1/);
-  assert.match(html, /代际 01/);
+  assert.match(html, /层数 01/);
   // The best row is badged; the time-sort column from the handoff is absent.
   assert.equal((html.match(/最佳/g) ?? []).length, 1);
   assert.match(html, /evolve-node-row is-best/);
@@ -596,7 +601,7 @@ test("the node drawer shows the score, the parent and one way to expand the diff
   assert.match(html, /Node #1/);
   assert.match(html, /最佳/);
   assert.match(html, /父代 #0/);
-  assert.match(html, /代际 02/);
+  assert.match(html, /层数 02/);
   assert.match(html, /优化分数/);
   assert.match(html, /0\.5000/);
   assert.match(html, /子节点数/);
