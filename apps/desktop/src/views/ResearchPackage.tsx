@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.js";
-import type { SessionDetail } from "../api/types.js";
+import type { Project, SessionDetail } from "../api/types.js";
 import { downloadExport, importPackage, inspectPackage, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
 import { TEXT } from "../text.js";
 import "../styles/research-package.css";
@@ -20,13 +20,15 @@ export interface PackageRequest {
 }
 interface Props {
   client: ApiClient; request?: PackageRequest; detail?: SessionDetail;
+  projects: Project[];
   onOpen: (session: string) => void; onRefresh: () => Promise<void>;
 }
-export function ResearchPackage({ client, request, detail: activeDetail, onOpen, onRefresh }: Props) {
+export function ResearchPackage({ client, request, projects, detail: activeDetail, onOpen, onRefresh }: Props) {
   const t = TEXT.researchPackage;
   const [dialog, setDialog] = useState<"export" | "import" | "branch">();
   const [detail, setDetail] = useState<SessionDetail>();
-  const projectId = request?.projectId;
+  const [importProjectId, setImportProjectId] = useState("");
+  const projectId = request?.kind === "import" ? importProjectId || request.projectId : request?.projectId;
   const [level, setLevel] = useState("necessary");
   const [trajectory, setTrajectory] = useState(false), [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
@@ -43,6 +45,7 @@ export function ResearchPackage({ client, request, detail: activeDetail, onOpen,
   useEffect(() => {
     if (!request) return;
     let active = true;
+    setImportProjectId("");
     setDialog(request.kind); setDetail(undefined); setPreview(undefined); setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setTrajectory(false); setGraph(false); setMessageId(request.messageId ?? "");
     if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
     return () => { active = false; };
@@ -121,13 +124,19 @@ export function ResearchPackage({ client, request, detail: activeDetail, onOpen,
       <div className="modal-body">
         {dialog === "export" ? <>
           <p className="research-package-notice">{t.sessionScope}</p>
-          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); }} type="button"><strong>{value === "necessary" ? t.necessary : t.complete}</strong><span>{value === "necessary" ? t.necessaryHint : t.completeHint}</span><span className="research-package-size">{profiles[value] ? `${t.estimate} ${(profiles[value]!.estimatedBytes / 1024).toFixed(1)} KiB` : t.calculating}</span><span>{t.packageContents}</span></button>)}</div>
+          <div className="research-package-profiles">{["necessary", "complete"].map(value => <button key={value} aria-pressed={level === value} className={level === value ? "is-selected" : ""} onClick={() => { setLevel(value); setFiles(undefined); }} type="button">
+            <span className="research-profile-heading"><span className="research-profile-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">{value === "necessary" ? <><path d="M7 3h7l4 4v14H7zM14 3v5h4M10 12h5M10 16h5" /></> : <><rect x="4" y="6" width="16" height="15" rx="2" /><path d="M8 6V3h8v3M4 11h16M10 15h4" /></>}</svg></span><span className="research-profile-check" aria-hidden="true">{level === value ? "✓" : ""}</span></span>
+            <strong>{value === "necessary" ? t.necessary : t.complete}</strong><span className="research-profile-description">{value === "necessary" ? t.necessaryHint : t.completeHint}</span>
+            <span className="research-profile-contents">{value === "necessary" ? t.necessaryContents : t.completeContents}</span>
+            <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? `${(profiles[value]!.estimatedBytes / 1024).toFixed(1)} KiB` : "—"}</b></span>
+          </button>)}</div>
           {level === "complete" ? <div className="research-package-options"><label><input type="checkbox" checked={trajectory} onChange={event => setTrajectory(event.target.checked)} />{t.trajectory}</label><label><input type="checkbox" checked={graph} onChange={event => setGraph(event.target.checked)} />{t.graph}</label></div> : null}
           <p>{preview ? `${t.estimate} ${(preview.estimatedBytes / 1024).toFixed(1)} KiB` : t.calculating}</p>
           {preview ? <details><summary>{t.files} · {preview.files.length}</summary><div className="research-package-files">{preview.files.map(item => <label key={item.path}><input type="checkbox" checked={files ? files.includes(item.path) : item.selected !== false} onChange={event => { const selected = files ?? preview.files.filter(row => row.selected !== false).map(row => row.path); setFiles(event.target.checked ? [...selected, item.path] : selected.filter(path => path !== item.path)); }} />{item.path}</label>)}</div></details> : null}
           {preview?.omissions.length ? <details><summary>{t.omissions} · {preview.omissions.length}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
           <p className="research-package-notice">{t.evidenceOnly}</p>
         </> : dialog === "import" ? <>
+          <label className="research-import-project">{t.projectDestination}<select value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><span>{t.projectDestinationHint}</span></label>
           <label className="research-package-upload">{t.choose}<input type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); if (selected && projectId) void perform(async () => setInspection(await inspectPackage(client, projectId, selected))); }} /></label>
           {inspection ? <><h3>{inspection.manifest.source.title}</h3><p>{file?.name} · {inspection.objectCount} {t.objects}</p><p>{t.importHint}</p><ul>{inspection.manifest.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></> : <p>{t.importHint}</p>}
         </> : <><p>{t.branchHint}</p><blockquote>{detail?.messages.find(message => message.id === messageId)?.content.slice(0, 240)}</blockquote></>}

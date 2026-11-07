@@ -41,7 +41,7 @@ test("session menu exports research with two scope cards", async ({ page }, info
     await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
     await expect(page.locator(".research-package-bar")).toHaveCount(0);
     await page.getByRole("button", { name: "会话菜单", exact: true }).click();
-    await expect(page.getByRole("menuitem")).toHaveText(["✎重命名", "↓导出会话", "🗑删除"]);
+    await expect(page.getByRole("menuitem")).toHaveText(["✎重命名", "导出会话", "🗑删除"]);
     await page.getByRole("menuitem", { name: "导出会话" }).click();
   });
   await test.step("2. Inspect both real UI cards and download the selected scope", async () => {
@@ -60,7 +60,7 @@ test("session menu exports research with two scope cards", async ({ page }, info
   await info.attach("journey-report", { body: "1. Session-menu placement verified.\n2. Both size cards, full research scope and package download verified.\n", contentType: "text/plain" });
 });
 
-test("both import menus restore a writable conversation in the chosen location", async ({ page }, info) => {
+test("hover import defaults to no project and allows an existing project", async ({ page }, info) => {
   const mock = await installMockApi(page, { sessions: [makeSession({ messages })] });
   const targets: string[] = [];
   await page.route("**/research-package/**", async route => {
@@ -81,11 +81,24 @@ test("both import menus restore a writable conversation in the chosen location",
   await page.goto("/");
   await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
   await expect(page.locator(".conversation")).toContainText("下文结论");
-  for (const [label, project] of [["新建会话选项", "inbox-1"], ["在「默认项目」中导入会话", "project-1"]]) {
-    await test.step(`Import through ${label} and continue in ${project}`, async () => {
-      await page.getByRole("button", { name: label, exact: true }).click();
+  await test.step("The import option only appears over the arrow; original create actions remain unchanged", async () => {
+    await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeHidden();
+    await page.getByRole("button", { name: "新建会话选项", exact: true }).hover();
+    await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeVisible();
+    await page.locator(".task-head-title").hover();
+    await expect(page.getByRole("menuitem", { name: "导入会话" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "在「默认项目」中导入会话" })).toHaveCount(0);
+    await page.getByRole("button", { name: "新建会话", exact: true }).click();
+    await expect(page.locator(".landing")).toBeVisible();
+    expect(targets).toEqual([]);
+  });
+  for (const project of ["inbox-1", "project-1"]) {
+    await test.step(`Import and continue in ${project}`, async () => {
+      await page.getByRole("button", { name: "新建会话选项", exact: true }).hover();
       await page.getByRole("menuitem", { name: "导入会话" }).click();
       const dialog = page.getByRole("dialog", { name: "导入会话" });
+      await expect(dialog.getByLabel("项目归属")).toHaveValue("");
+      if (project === "project-1") await dialog.getByLabel("项目归属").selectOption(project);
       await dialog.locator("input[type=file]").setInputFiles({ name: "study.sdresearch", mimeType: "application/octet-stream", buffer: Buffer.from("fixture") });
       await expect(dialog).toContainText("恢复的研究");
       await dialog.getByRole("button", { name: "确认导入" }).click();
@@ -95,7 +108,7 @@ test("both import menus restore a writable conversation in the chosen location",
     });
   }
   expect(targets).toEqual(["inbox-1", "project-1"]);
-  await info.attach("journey-report", { body: "Both import locations restore history and open a writable conversation; source records remain intact.", contentType: "text/plain" });
+  await info.attach("journey-report", { body: "Hover-only import, unchanged create actions, no-project default and optional project assignment verified; history restored into a writable conversation.", contentType: "text/plain" });
 });
 
 test("reply menu branches at the selected reply without its later conversation", async ({ page }, info) => {

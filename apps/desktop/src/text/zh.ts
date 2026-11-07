@@ -21,6 +21,7 @@
  */
 export const ZH = {
   researchPackage: {
+    projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入最近会话，也可以选择一个已有项目。", necessaryContents: "会话记录 · 当前文件与产物 · 依赖证据", completeContents: "会话记录 · 文件与产物版本 · 已有研究历史",
     newOptions: "新建会话选项", projectImport: (name: string) => `在「${name}」中导入会话`, messageMenu: "回复菜单", sessionScope: "导出整个会话及其研究材料，不只是页面上的聊天文字。", packageContents: "包含会话、工作区文件、产物及相关研究证据。",
     title: "科研证据包", import: "导入会话", export: "导出会话", continue: "继续聊天", branch: "创建新分支聊天", source: "返回来源会话",
     readOnly: "导入证据快照 · 只读。创建独立副本后，可使用已有材料继续研究。", copying: "正在复制研究记录，可切换会话…", ready: "研究副本已准备好", failed: "操作失败", open: "打开会话", download: "下载", preparing: "正在后台准备证据包…", close: "关闭",

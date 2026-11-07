@@ -11,7 +11,7 @@ Deliver necessary/complete evidence export, import, correct evidence inspection,
 ## User interface
 
 - Session row menu: place Export conversation between Rename and Delete. Export the whole Session's research through #498, not rendered chat text. Show necessary/complete cards, each with a description, estimated uncompressed size and content summary. Keep detailed omissions collapsed.
-- New conversation and project `+`: retain the existing create action and add an adjacent dropdown offering Import conversation. Standalone import targets the inbox; project import targets that project.
+- New conversation: retain the existing create action and add a fine-line chevron that reveals Import conversation on hover or keyboard focus. Project `+` remains unchanged. Import defaults to no project (the inbox), with an optional existing-project selector in the import dialog.
 - Imported conversation: preserve the evidence snapshot, prepare an independent writable continuation and open it automatically. A restored snapshot also offers Continue chatting if preparation needs to be retried. Inherited files and context must be available under local model/permission settings.
 - Completed reply menu: Create branch chat uses that reply as the boundary. Preserve only the prefix through the selected reply and attributable evidence; exclude later turns. Keep the original unchanged and show the chosen reply in confirmation.
 - Background operation indicator: export/import/continuation progress, cancellation where supported, failure/retry and completed download/open actions. Navigation must not hide running operations or steal focus on completion.
