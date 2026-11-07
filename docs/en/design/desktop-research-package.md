@@ -1,6 +1,8 @@
 # Desktop research package delivery design
 
-Status: design-only draft; do not merge. Depends on #498 (observed head 4390b236299be0ae3c1a692eb69fae2da2515d12). Related requirements: #803. This commit adds no runtime UI implementation.
+Status: initial desktop UI implementation; do not merge. Depends on #498 (observed head 4390b236299be0ae3c1a692eb69fae2da2515d12). Related requirements: #803. Export/import, copy and branch controls are now wired to the proposed backend routes. Full backend journeys remain unverified.
+
+Local interaction preview: run the desktop Vite server and open `/e2e/research-preview.html`. This development-only fixture renders the production ResearchPackage component with explicitly simulated responses. It does not validate archive restoration or model continuation. Browser reload recovery for background operations, per-reply source anchoring, and full shipping-backend journeys remain open.
 
 ## Goal and delivery boundary
 
@@ -44,4 +46,4 @@ Run desktop typecheck/unit/E2E and required repository UT/ST/E2E gates on the ex
 
 ## Merge gate
 
-Do not merge this design-only draft. Before readiness: #498 merged; runtime code implemented; settled API compatibility checked; UI reviewed; necessary/complete handoff, inherited follow-up, intermediate branch and restart journeys passed with evidence. This PR must not automatically close #803 while required delivery remains incomplete.
+Do not merge this draft. Before readiness: #498 merged; remaining lifecycle and navigation details implemented; settled API compatibility checked; UI reviewed; necessary/complete handoff, inherited follow-up, intermediate branch and restart journeys passed with evidence. This PR must not automatically close #803 while required delivery remains incomplete.

@@ -20,6 +20,11 @@
  * saying so. Wording is reviewable here without reading any JSX.
  */
 export const ZH = {
+  researchPackage: {
+    title: "科研证据包", import: "导入研究", export: "导出证据包", continue: "创建新会话继续研究", branch: "从中途开启新对话", source: "返回来源会话",
+    readOnly: "导入证据快照 · 只读。创建独立副本后，可使用已有材料继续研究。", copying: "正在复制研究记录，可切换会话…", ready: "研究副本已准备好", failed: "操作失败", open: "打开会话", download: "下载", preparing: "正在后台准备证据包…", close: "关闭",
+    necessary: "必要导出", complete: "完整导出", necessaryHint: "保留当前结果、输入依赖与相关证据，精简可选历史。", completeHint: "保留所选范围内的已有历史和版本。", trajectory: "包含完整轨迹详情", graph: "包含完整科学记忆图谱", estimate: "未压缩估算", calculating: "正在计算范围与大小…", files: "工作区文件", omissions: "范围与省略说明", evidenceOnly: "证据包用于检查和继续研究；导入不会执行代码或恢复历史授权。", choose: "选择 .sdresearch 研究包", objects: "个内容对象", importHint: "导入到当前项目。确认后恢复只读研究记录，后续可创建独立副本。", branchHint: "选择已完成回复，继承截至该回复的对话与可恢复证据，不包含之后的研究。", reply: "分支起点", working: "正在处理…", startExport: "开始后台导出", confirmImport: "确认导入",
+  },
   appName: "ScienceDiscovery",
   /** The BCP 47 tag the language calls itself, for `Intl` and `<html lang>`. */
   languageTag: "zh-CN",
