@@ -209,6 +209,8 @@ export function Conversation({
   workspaceFiles,
 }: Props) {
   const scroller = useRef<HTMLElement>(null);
+  /** The transcript itself, watched for growth after the pin. */
+  const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   /** How tall the transcript was at the last pin. Growth after it is the
    *  transcript getting longer, not the reader leaving the bottom — the scroll
@@ -258,6 +260,26 @@ export function Conversation({
     pinned.current = { height: node.scrollHeight };
   }, [liveRun, messages, pending, replays, run]);
 
+  // Content that arrives after the pin makes the transcript taller below the
+  // reader instead of moving it, and nothing above re-pins for it: the search
+  // cards are fetched a beat after the messages they sit under, so a session
+  // opened with runs left its card half hidden under the composer. A reader at
+  // the bottom wants the newest thing in view however it arrived, so follow
+  // growth the same way an appended answer is followed — and leave someone
+  // reading further up alone.
+  useEffect(() => {
+    const node = scroller.current;
+    const inner = content.current;
+    if (node === null || inner === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stick.current) return;
+      node.scrollTop = node.scrollHeight;
+      pinned.current = { height: node.scrollHeight };
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+
   const onScroll = () => {
     const node = scroller.current;
     if (!node) return;
@@ -271,7 +293,7 @@ export function Conversation({
 
   return (
     <section className="conversation" onScroll={onScroll} ref={scroller}>
-      <div className="messages">
+      <div className="messages" ref={content}>
         {messages.map((message, index) => {
           const replacement = replacing.get(message.id);
           return (
