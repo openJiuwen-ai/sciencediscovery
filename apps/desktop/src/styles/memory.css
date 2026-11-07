@@ -439,7 +439,7 @@
   font-weight: 600;
 }
 
-/* 派生自 labels the files beside it rather than heading a list beneath it: the
+/* 上游文件 labels the files beside it rather than heading a list beneath it: the
    first parent sits on the same line as the label, and the line wraps when a
    version has several parents. */
 .memory-provenance-block.is-dependencies {
@@ -597,7 +597,7 @@ button.memory-dependency:hover {
   overflow: hidden;
 }
 
-/* A 派生自 link opens its target in the right panel, so the scrim stops at the
+/* A 上游文件 link opens its target in the right panel, so the scrim stops at the
    panel instead of darkening it, and the dialog centres in what is left. The
    offset is the panel's width, published inline on the backdrop because the
    dialog is portaled to `body` and never sees the shell's `--panel-width`;

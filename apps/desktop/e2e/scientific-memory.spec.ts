@@ -572,7 +572,7 @@ test("a provenance tab opens at its first line, not where the preview was left",
   await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
 });
 
-test("a 派生自 link opens the dependency beside the dialog, not in place of it", async ({ page }) => {
+test("a 上游文件 link opens the dependency beside the dialog, not in place of it", async ({ page }) => {
   const mock = await installMockApi(page, {
     artifactContents: {
       "input-version-1": "样品,强度\nA,12.5\n",

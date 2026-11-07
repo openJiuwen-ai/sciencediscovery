@@ -414,7 +414,7 @@ export const EN: Text = {
     /** An Artifact's provenance is the old web UI's provenance tab: parents,
      *  code, execution log, and the managed environment of the run. */
     artifactProvenance: {
-      dependencies: "derived from",
+      dependencies: "upstream file",
       code: "Code",
       downloadScript: "Download script",
       execution: "Execution log",
