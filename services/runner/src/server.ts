@@ -604,7 +604,12 @@ export function createRunnerServer(
           sendJson(response, 503, { error: capability.detail ?? capability.reason, code: "EXECUTION_UNAVAILABLE", capability });
           return;
         }
-        if (url.pathname !== "/execute" && capability.shell?.available === false) {
+        // The synchronous route has no execution record to settle, so it fails
+        // closed. The managed route accepts the request and records a
+        // deterministic pre-admission failure instead: a 503 there is
+        // indistinguishable from a lost submission to the API, which would
+        // record an unverified outcome and block the workspace.
+        if (url.pathname === "/execute-shell" && capability.shell?.available === false) {
           sendJson(response, 503, {
             error: capability.shell.unavailableReason ?? "The managed shell environment is unavailable",
             code: "EXECUTION_UNAVAILABLE", capability,
@@ -1015,7 +1020,16 @@ export function createRunnerServer(
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
               return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log, environmentStore, expectedEnvironmentRevisionId);
             }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log, environmentStore, expectedEnvironmentRevisionId));
+          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log, environmentStore, expectedEnvironmentRevisionId),
+        direct ? undefined : async () => {
+          // Admission-time check: the managed Shell may be repaired while this
+          // request waits behind earlier work in the same Workspace queue. A
+          // rejection here never launches a process.
+          const capability = await readiness.get();
+          if (capability.shell?.available === false) {
+            throw new Error(capability.shell.unavailableReason ?? "The managed shell environment is unavailable");
+          }
+        });
         sendJson(response, accepted.accepted ? 202 : 200, accepted.execution);
         return;
       }

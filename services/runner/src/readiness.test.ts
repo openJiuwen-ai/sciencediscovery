@@ -127,12 +127,16 @@ for (const unavailableReason of [
     const capability = await request("POST", "/execution-capability");
     assert.equal(capability.status, 200);
     assert.equal(capability.body.ready, true);
-    for (const path of ["/execute-shell", "/shell-executions"]) {
-      const result = await request("POST", path);
-      assert.equal(result.status, 503);
-      assert.equal(result.body.code, "EXECUTION_UNAVAILABLE");
-      assert.equal(result.body.error, unavailableReason);
-    }
+    // The synchronous route has no execution record to settle, so it fails closed.
+    const synchronous = await request("POST", "/execute-shell");
+    assert.equal(synchronous.status, 503);
+    assert.equal(synchronous.body.code, "EXECUTION_UNAVAILABLE");
+    assert.equal(synchronous.body.error, unavailableReason);
+    // The managed route must accept the request and record a deterministic
+    // failure later; a 503 here would be an unverified outcome for the API.
+    const managed = await request("POST", "/shell-executions");
+    assert.equal(managed.status, 401);
+    assert.equal(managed.body.error, "Invalid or expired execution signature");
     // An unsigned Python request reaches authentication rather than being
     // rejected by shell readiness. No code is dispatched in this handler test.
     const python = await request("POST", "/execute");
