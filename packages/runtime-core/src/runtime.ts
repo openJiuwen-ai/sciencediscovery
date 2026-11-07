@@ -43,11 +43,17 @@ export interface ContextAssembly<TMessage extends RuntimeMessage, TModelInput> {
   modelInput: TModelInput;
 }
 
+export interface ContextRecovery {
+  /** 1-based rebuild count within the turn. */
+  attempt: number;
+  reason: "model-input-overflow" | "output-limit";
+}
+
 export interface ContextAssembler<TMessage extends RuntimeMessage, TModelInput> {
   assemble(input: {
     history: readonly TMessage[];
-    /** Present only for the single forced rebuild after provider overflow. */
-    recovery?: { attempt: 1; reason: "model-input-overflow" };
+    /** Present only for a forced rebuild after provider overflow or output limit. */
+    recovery?: ContextRecovery;
     signal: AbortSignal;
     turn: number;
     onProgress: () => void;
@@ -167,7 +173,7 @@ export type RunEvent<TUsage> =
   | { call: RuntimeToolCall; type: "tool_execution_start" }
   | { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; type: "tool_execution_end" }
   | { type: "model_usage"; usage: TUsage }
-  | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
+  | { attempt: number; reason: ContextRecovery["reason"]; turn: number; type: "context_recovery" }
   | { type: "completed"; truncated?: boolean; usage?: TUsage };
 
 export type RunEventSink<TUsage> = (event: RunEvent<TUsage>) => void;
@@ -235,6 +241,15 @@ export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, 
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController?: ExternalWaitController;
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  /** Bounded in-turn recovery for a turn cut at the output token limit. */
+  outputRecovery?: {
+    /** Build the user message that asks the model to continue after a truncation. */
+    feedback(truncatedTurn: ModelTurn<TMessage, TUsage>, attempt: number): TMessage;
+    /** Which turns are eligible; default is a truncated turn with no tool call. */
+    eligible?(turn: ModelTurn<TMessage, TUsage>): boolean;
+    /** Extra attempts after the first truncated turn; defaults to 2. */
+    maxRecoveries?: number;
+  };
   /** Called only after the tool batch and its durable Step have committed. */
   suspendAfterTurn?: (input: { turn: number; history: TMessage[] }) => boolean | Promise<boolean>;
 }
@@ -322,6 +337,41 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         }
         this.raiseForAbort(signal);
         onProgress();
+        if (this.options.outputRecovery) {
+          const outputRecovery = this.options.outputRecovery;
+          const maxRecoveries = outputRecovery.maxRecoveries ?? 2;
+          const eligible = outputRecovery.eligible
+            ?? ((turnResult) => turnResult.truncated === true && turnResult.toolCalls.length === 0);
+          let recoveries = 0;
+          while (eligible(modelTurn) && recoveries < maxRecoveries) {
+            recoveries += 1;
+            this.raiseForAbort(signal);
+            // Never replay the truncated turn as a completed answer: append a
+            // user message that asks for one small continuation instead.
+            this.state.history.push(outputRecovery.feedback(modelTurn, recoveries));
+            this.transition("assembling_context", turn);
+            this.emit({ type: "context_recovery", attempt: recoveries, reason: "output-limit", turn });
+            assembly = await this.options.contextAssembler.assemble({
+              history: this.state.history,
+              recovery: { attempt: recoveries, reason: "output-limit" },
+              signal,
+              turn,
+              onProgress,
+            });
+            this.raiseForAbort(signal);
+            this.state.history = [...assembly.history];
+            if (this.options.turnLifecycle) await this.options.turnLifecycle.afterAssembly({ turn, assembly: structuredClone(assembly) });
+            this.raiseForAbort(signal);
+            this.transition("calling_model", turn);
+            modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
+            if (modelTurn.usage !== undefined) {
+              usage = modelTurn.usage;
+              this.emit({ type: "model_usage", usage });
+            }
+            this.raiseForAbort(signal);
+            onProgress();
+          }
+        }
         this.state.history.push(modelTurn.assistantMessage);
         if (modelTurn.toolCalls.length === 0) {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results: [] });
@@ -435,6 +485,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private toolDispatcher?: ToolDispatcher<TMessage>;
   private waitController?: ExternalWaitController;
   private turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  private outputRecovery?: AgentLoopOptions<TMessage, TModelInput, TUsage>["outputRecovery"];
   private suspendAfterTurn?: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"];
 
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
@@ -445,6 +496,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withToolDispatcher(value: ToolDispatcher<TMessage>): this { this.toolDispatcher = value; return this; }
   withWaitController(value: ExternalWaitController): this { this.waitController = value; return this; }
   withTurnLifecycle(value: TurnLifecycle<TMessage, TModelInput, TUsage> | undefined): this { this.turnLifecycle = value; return this; }
+  withOutputRecovery(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["outputRecovery"]): this { this.outputRecovery = value; return this; }
   withSuspendAfterTurn(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["suspendAfterTurn"]): this { this.suspendAfterTurn = value; return this; }
 
   build(): AgentLoop<TMessage, TModelInput, TUsage> {
@@ -464,6 +516,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
       ...(this.eventSink ? { eventSink: this.eventSink } : {}),
       ...(this.waitController ? { waitController: this.waitController } : {}),
       ...(this.turnLifecycle ? { turnLifecycle: this.turnLifecycle } : {}),
+      ...(this.outputRecovery ? { outputRecovery: this.outputRecovery } : {}),
       ...(this.suspendAfterTurn ? { suspendAfterTurn: this.suspendAfterTurn } : {}),
     });
   }

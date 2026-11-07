@@ -23,6 +23,7 @@ export {
   type AgentLoopPhase,
   type ContextAssembler,
   type ContextAssembly,
+  type ContextRecovery,
   type ExternalWaitHandle,
   type ModelClient,
   type ModelClientObserver,
