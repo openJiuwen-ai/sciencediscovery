@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
+import { configurationNeedsSecurityConsent, DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
 import type { ConfigurationAction, ConfigurationCredentialDraftView, ConfigurationCredentialInput, ConfigurationDecisionInput,
   ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../api/auth.js";
@@ -11,6 +11,7 @@ import { ProcessRecord } from "../ProcessRecord.js";
 import { configurationMessages } from "./messages.js";
 
 export interface ConfigurationRequestActions {
+  securityConsent?(input: { revision: number; targetDigest: string; acknowledged: true }, key: string): Promise<ConfigurationRequestView>;
   consent?(input: { revision: number; endpointTarget: string }, key: string): Promise<ConfigurationRequestView>;
   preview(input: ConfigurationPreviewInput, key: string): Promise<ConfigurationRequestView>;
   credential(input: ConfigurationCredentialInput, key: string): Promise<ConfigurationCredentialDraftView>;
@@ -25,6 +26,13 @@ function fieldValues(request: ConfigurationRequestView): ConfigurationValues {
     ? [[field.id, field.value]] : []));
 }
 
+/** Known capabilities keep their typed wording. A server-first id still needs a readable acknowledgement.
+ * The fallback names no consequence of its own; it assumes the request's security statement stays visible above the checkbox. */
+function securityAcknowledgementText(capabilityId: string, copy: object, fallback: string): string {
+  if (!Object.hasOwn(copy, capabilityId)) return fallback;
+  const text = (copy as Record<string, unknown>)[capabilityId];
+  return typeof text === "string" && text.length > 0 ? text : fallback;
+}
 /** Message tables are plain objects. An inherited prototype key is not a translation. */
 function ownMessage(table: Record<string, string>, key: string, fallback: string): string {
   return Object.hasOwn(table, key) ? table[key] ?? fallback : fallback;
@@ -53,6 +61,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const [selectedOptionId, setSelectedOptionId] = useState(request.selectedOptionId);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
+  const [securityAcknowledged, setSecurityAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [refreshRequired, setRefreshRequired] = useState(false);
@@ -95,6 +104,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [request.autoApplyAt, request.state]);
+  useEffect(() => { setSecurityAcknowledged(false); }, [request.id, request.revision, request.securityConsent?.targetDigest]);
   const hasAction = (action: ConfigurationAction) => request.allowedActions.includes(action);
   const choices = request.protocolVersion === 3 ? request.options ?? [] : [];
   const visibleChoices = choices.filter(option => option.kind !== "dismiss");
@@ -108,10 +118,16 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
+  const securityConsent = request.securityConsent;
+  // A listed capability and any consent payload the server actually sent both block Apply.
+  // The local list alone would hide a newer gated id and leave confirmation unreachable.
+  const securityReady = !(configurationNeedsSecurityConsent(request.capabilityId) || securityConsent)
+    || (securityConsent?.status === "confirmed" && securityConsent.revision === request.revision);
+  const securityAcknowledgement = securityAcknowledgementText(request.capabilityId, m.securityAcknowledgement, m.securityAcknowledgementFallback);
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
-    && endpointReady && Boolean(request.previewDigest) && !dirty && !refreshRequired && !runActive && !readOnly && !mutationsBlocked
+    && endpointReady && securityReady && Boolean(request.previewDigest) && !dirty && !refreshRequired && !runActive && !readOnly && !mutationsBlocked
     && (!submittedPreview.current || (submittedPreview.current.revision === request.revision && submittedPreview.current.digest === request.previewDigest))
     && (request.protocolVersion !== 3 || (selectedOption && selectedOption.kind !== "dismiss" && selectedOption.id === request.selectedOptionId));
   const scheduledAt = !readOnly && !mutationsBlocked && request.state === "awaiting_confirmation" && request.autoApplyAt && Number.isFinite(Date.parse(request.autoApplyAt))
@@ -141,6 +157,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     return targetChanged;
   }
   function edit(field: ConfigurationFieldView, value: ConfigurationScalar | string[]) {
+    setSecurityAcknowledged(false);
     setDirty(true);
     setError(undefined);
     setErrorField(undefined);
@@ -282,16 +299,22 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
   const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
-  const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
+  const savedForNextRun = request.state === "applied" && ["next_run", "next_request"].includes(request.activation.mode) && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "web.credential"
-    ? m.mode.domainNextRequest : m.mode[request.activation.mode];
+  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "security.automatic_configuration"
+    ? m.mode.domainNextRequest
+    : request.activation.mode === "next_request" && request.capabilityId === "web.credential"
+      ? m.mode.webCredentialNextRequest
+      : m.mode[request.activation.mode];
   const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
-  const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
-    ? m.waitingNextRun : m.activation[request.activation.state];
+  const activationLabel = request.capabilityId === "security.approval_mode" && request.activation.state === "active" ? m.sessionApprovalActive
+    : request.capabilityId === "security.network" && request.activation.state === "active" ? m.securityActive
+    : ["security.network", "security.approval_mode"].includes(request.capabilityId) && request.state === "applied" && request.activation.state === "failed" ? m.securityCleanupFailed
+    : request.capabilityId === "security.automatic_configuration" && request.activation.mode === "next_request" && request.activation.state === "needs_user_action" ? m.waitingNextRequest
+    : savedForNextRun && request.activation.mode === "next_run" && request.activation.state === "needs_user_action" ? m.waitingNextRun : m.activation[request.activation.state];
   const details = <>
     <p>{reasonText}</p>
     <dl className="configuration-impact">
@@ -316,6 +339,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       <dt>{m.activationLabel}</dt><dd>{activationLabel}</dd>
       <dt>{m.resumptionLabel}</dt><dd>{resumptionLabel}</dd>
       {request.decisionSource ? <><dt>{m.decisionSourceLabel}</dt><dd>{m.decisionSource[request.decisionSource]}</dd></> : null}
+      {terminal && securityConsent ? <><dt>{m.securityTitle}</dt><dd>{securityReady ? m.securityConfirmed : m.securityRequired}</dd></> : null}
       <dt>{m.updatedAt}</dt><dd><time dateTime={request.updatedAt}>{formattedTime(request.updatedAt)}</time></dd>
     </dl>
     {request.error ? <p className="conversation-configuration-error" role="alert">{request.error.message} <span>({request.error.code})</span></p> : null}
@@ -356,6 +380,20 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
         title={m.closeAndReturn} disabled={busy || runActive || readOnly || mutationsBlocked} onClick={dismiss}>×</button> : null}
     </div>
     {details}
+    {securityConsent ? <section className="configuration-endpoint" aria-label={m.securityTitle}>
+      <strong>{m.securityTitle}</strong><p>{securityConsent.statement}</p>
+      <p role="status">{securityReady && !dirty ? m.securityConfirmed : m.securityRequired}</p>
+      {(!securityReady || securityConsent.status !== "confirmed") && actions.securityConsent ? <>
+        <label className="configuration-security-ack" htmlFor={`${id}-security-ack`}>
+          <input id={`${id}-security-ack`} type="checkbox" checked={securityAcknowledged}
+            disabled={!editable || dirty || runActive || request.state !== "awaiting_confirmation"}
+            onChange={event => setSecurityAcknowledged(event.target.checked)} />
+          <span>{securityAcknowledgement}</span>
+        </label>
+        <button type="button" className="secondary-button" disabled={!editable || !securityAcknowledged || dirty || runActive || request.state !== "awaiting_confirmation"}
+          onClick={() => void perform(() => actions.securityConsent!({ revision: request.revision, targetDigest: securityConsent.targetDigest, acknowledged: true }, operationKey(`security:${request.revision}:${securityConsent.targetDigest}`)))}>{m.securityConfirm}</button>
+      </> : null}
+    </section> : null}
     {scheduledAt && remainingSeconds !== undefined ? <div className="configuration-auto-apply" role="status">
       <p>{remainingSeconds > 0 ? m.autoCountdown(remainingSeconds) : m.autoDue}</p>
       <p>{m.scheduledAt}: <time dateTime={scheduledAt}>{formattedTime(scheduledAt)}</time></p>
@@ -392,7 +430,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{(request.capabilityId === "security.network" && field.id === "mode"
+            ? (locale.startsWith("zh") ? m.field.networkMode : field.label)
+            : ownMessage(m.field, field.id, field.label))}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
@@ -407,7 +447,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
               ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "web.credential" && field.id === "operation"
-                ? ownMessage(m.credentialOperation, choice.id, choice.label) : choice.label}</option>)}
+                ? ownMessage(m.credentialOperation, choice.id, choice.label)
+                : request.capabilityId === "security.approval_mode" && field.id === "approvalMode" && locale.startsWith("zh")
+                  ? choice.id === "always_allow" ? "始终允许当前会话后续合格动作" : "危险动作前询问" : choice.label}</option>)}
           </select> : field.kind === "boolean" ? <input {...common} required={false} type="checkbox" checked={values[field.id] === true} onChange={(event) => edit(field, event.target.checked)} />
             : <input {...common} type={field.kind === "number" ? "number" : field.kind === "url" ? "url" : "text"}
               value={values[field.id] === undefined ? "" : String(values[field.id])} placeholder={field.placeholder}

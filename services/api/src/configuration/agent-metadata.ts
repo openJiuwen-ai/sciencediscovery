@@ -8,7 +8,7 @@ export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
   fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
-  activation: "next_run" | "next_request" | "same_run_if_bound";
+  activation: "next_run" | "next_request" | "next_execution" | "same_run_if_bound";
   diagnostics: readonly string[];
 }
 const id = { kind: "string", maxLength: 200 } as const;
@@ -41,6 +41,10 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
     uploadMaxFileBytes: { kind: "integer", minimum: 0 }, uploadMaxRequestBytes: { kind: "integer", minimum: 0 },
   }, activation: "next_run", diagnostics: [] },
   "runner.assign": { label: "Select registered Runners", whenNeeded: "The user requests Project or Session Runner allocation. Describe existing IDs first; select only usable registered Runners. Selected + [] disables all Runners, Session inherit removes its override. Registration, SSH host trust and execution permission remain separate. This never starts or migrates a job.", fields: { selectionMode: { kind: "string", choices: ["selected", "inherit"] }, runnerIds: ids }, activation: "next_run", diagnostics: [] },
+  "security.approval_mode": { label: "Change current session approval mode", whenNeeded: "Only an explicit user request to change this session's approval mode. Describe first. Existing pending permission cards must be resolved separately; this entry never bulk-approves them. Independent user security acknowledgement and manual confirmation are both mandatory. Always allow affects later eligible actions, not direct-code authorization. Epoch rotation can lose persistent kernel/shell memory. A bound original configuration wait may continue after confirmation and cleanup; this is not authorization to bypass any other control.", fields: { approvalMode: { kind: "string", choices: ["ask_for_dangerous", "always_allow"] } }, activation: "next_execution", diagnostics: [] },
+  "security.default_approval": { label: "Set new-session approval defaults", whenNeeded: "Only an explicit user request to set global or current-Project defaults for NEW sessions. Existing sessions and pending tools stay unchanged. Independent human security acknowledgement and manual confirmation are mandatory. Omit scope for global; project selects the current Project. inherit removes that layer override.", fields: { defaultApprovalMode: { kind: "string", choices: ["ask_for_dangerous", "always_allow", "inherit"] } }, activation: "next_run", diagnostics: [] },
+  "security.automatic_configuration": { label: "Authorize low-risk configuration automation", whenNeeded: "Only an explicit user request to change this Session low-risk configuration automation. Independent human security acknowledgement and manual confirmation are required. This is not tool Always allow; only existing eligible ready-connector compatibility proposals may use their cancellation window. v3 choices and security/credential changes remain manual.", fields: { autoApplyLowRiskConfiguration: boolean }, activation: "next_request", diagnostics: [] },
+  "security.network": { label: "Configure sandbox network policy", whenNeeded: "Only an explicit user request to change deployment sandbox network access. This is a security decision: a separate user-only acknowledgement and manual confirmation are mandatory. Ordinary tool Always allow never authorizes it. All writable sessions can rotate Permission Epochs and lose persistent kernel/shell state. Describe first; never automatically widen access after a failed tool call.", fields: { mode: { kind: "string", choices: ["none", "domain-allowlist", "open"] }, allowedDomainsText: { kind: "string", maxLength: 4096 }, allowPrivateNetwork: boolean, egressProxyPolicy: id }, activation: "next_execution", diagnostics: [] },
   "web.configure": { label: "Configure Web search and fetching", whenNeeded: "The user explicitly requests deployment Web search engines, provider selection, cache TTLs or an existing proxy policy. Describe first: the backend determines supported fields. Keys use separate secure configuration and are never accepted here. Saved choices do not verify connectivity; paid providers can charge when later used.", fields: {
     deepseekEnabled: boolean, fetchProvider: { kind: "string", choices: ["jina", "tavily", "exa", "deepseek"] }, freeSearchEngines: ids, paidSearchProviders: ids,
     searchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, fetchCacheTtlSeconds: { kind: "integer", minimum: 0, maximum: 2592000 }, proxyPolicy: id,
@@ -53,7 +57,7 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   }, activation: "next_run", diagnostics: [] },
 };
 export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure", "environment.sources"] as const satisfies readonly ConfigurationCapabilityId[];
-export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "web.configure", "web.credential", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
+export const DEPLOYMENT_CONFIGURATION_CAPABILITIES = [...SYSTEM_CONFIGURATION_CAPABILITIES, "security.network", "web.configure", "web.credential", "reviewer.enable"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })

@@ -336,6 +336,7 @@ import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import { modelDestination } from "../configuration/model-destination.js";
 import { configurationConnectorReadinessReason } from "../configuration/connector-directory.js";
+import { retireSecurityNetworkKernels } from "../configuration/security-network-cleanup.js";
 import { configurationFramework } from "../configuration/framework.js";
 import { handleConfigurationHttp } from "../configuration/http.js";
 import { prepareNativeConnectorActivation } from "../configuration/native-activation.js";
@@ -466,6 +467,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     });
     });
     return configurationFramework(store, {
+    securityNetworkCleanup: ids => retireSecurityNetworkKernels(runnerClient, ids),
+    sessionApprovalCleanup: ids => retireSecurityNetworkKernels(runnerClient, ids, "Session approval mode changed; old Permission Epoch retired"),
     nativeExecutor: !jiuwenSwarmConfigFromEnv(),
     jiuwenLiveWait: Boolean(jiuwenSwarmConfigFromEnv()),
     connectors: () => mcpRegistry.listManifests().map(manifest => {

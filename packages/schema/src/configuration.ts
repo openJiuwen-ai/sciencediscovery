@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
+export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "security.network" | "security.approval_mode" | "security.default_approval" | "security.automatic_configuration" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -69,7 +69,14 @@ export type ConfigurationFieldView = {
   | { kind: "multiselect"; value?: string[]; choices: Array<{ id: string; label: string }> }
   | { kind: "text" | "url" | "number" | "boolean" | "enum"; value?: ConfigurationScalar; choices?: Array<{ id: string; label: string }> }
 );
+export interface ConfigurationSecurityConsent {
+  revision: number;
+  targetDigest: string;
+  statement: string;
+  status: "required" | "confirmed";
+}
 export interface ConfigurationRequestView {
+  securityConsent?: ConfigurationSecurityConsent;
   endpointAuthorization?: ConfigurationEndpointAuthorization;
   /** Missing means the historical v2 apply/dismiss protocol. */
   protocolVersion?: 3;
@@ -99,7 +106,7 @@ export interface ConfigurationRequestView {
   verificationPlan: { targets: string[]; actions: string[]; maxRequests: number; mayCharge: boolean };
   previewDigest?: string;
   activation: {
-    mode: "before_first_run" | "same_run" | "next_run" | "next_request" | "requires_restart";
+    mode: "before_first_run" | "same_run" | "next_run" | "next_request" | "next_execution" | "requires_restart";
     state: "not_requested" | "pending" | "active" | "failed" | "suppressed" | "needs_user_action";
     effectiveRevision?: string;
   };
