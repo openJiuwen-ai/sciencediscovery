@@ -30,8 +30,10 @@ import { TEXT } from "../text.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
+import { RowMenu, type MenuState } from "./RowMenu.js";
 
 interface Props {
+  onBranch?: (messageId: string) => void;
   client: ApiClient;
   detail?: SessionDetail;
   loading: boolean;
@@ -196,6 +198,7 @@ function useAfter(flag: boolean, delayMs: number): boolean {
  * per turn, and the run still streaming has none yet, so it goes at the end.
  */
 export function Conversation({
+  onBranch,
   client,
   detail,
   loading,
@@ -208,6 +211,7 @@ export function Conversation({
   evolve,
   workspaceFiles,
 }: Props) {
+  const [messageMenu, setMessageMenu] = useState<MenuState>();
   const scroller = useRef<HTMLElement>(null);
   /** The transcript itself, watched for growth after the pin. */
   const content = useRef<HTMLDivElement>(null);
@@ -315,6 +319,9 @@ export function Conversation({
                   sessionId={detail?.id}
                 />
               )}
+              {message.role === "assistant" && (!message.kind || message.kind === "message") && message.content.trim() && onBranch ? (
+                <div className="answer-tools"><button className="answer-tool" aria-label={TEXT.researchPackage.messageMenu} aria-haspopup="menu" type="button" onClick={event => setMessageMenu({ x: event.clientX, y: event.clientY, items: [{ label: TEXT.researchPackage.branch, onSelect: () => onBranch(message.id) }] })}>⋯</button></div>
+              ) : null}
               {/* A run that never wrote an answer still belongs here, after
                   the message that started it, rather than at the end of a
                   conversation it did not come last in. */}
@@ -362,6 +369,7 @@ export function Conversation({
         {evolve}
         {loading ? <div className="status-strip">{TEXT.boot.checking}</div> : null}
       </div>
+      <RowMenu menu={messageMenu} onClose={() => setMessageMenu(undefined)} />
     </section>
   );
 }

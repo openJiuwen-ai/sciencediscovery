@@ -36,6 +36,8 @@ type Renaming =
 
 interface Props {
   actions: WorkspaceActions;
+  onExportSession?: (session: Session) => void;
+  onImportSession?: (projectId?: string) => void;
   /** The Project of the open Session, for the fold's highlight. */
   activeProjectId?: string;
   activeSessionId?: string;
@@ -89,6 +91,8 @@ const PAGE_SIZE = 6;
  */
 export function Sidebar({
   actions,
+  onExportSession,
+  onImportSession,
   activeProjectId,
   activeSessionId,
   onToggleSidebar,
@@ -203,6 +207,7 @@ export function Sidebar({
                     label: TEXT.menu.rename,
                     onSelect: () => setRenaming({ kind: "session", session, value: sessionTitle(session.title) }),
                   },
+                  ...(onExportSession ? [{ icon: "↓", label: TEXT.researchPackage.export, onSelect: () => onExportSession(session) }] : []),
                   {
                     icon: "🗑",
                     label: TEXT.menu.delete,
@@ -245,12 +250,12 @@ export function Sidebar({
         {onToggleSidebar ? <SidebarToggle onClick={onToggleSidebar} open /> : null}
       </div>
 
-      <button className="side-new" onClick={() => actions.newSession()} type="button">
+      <div className="side-new-split"><button className="side-new" onClick={() => actions.newSession()} type="button">
         <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" viewBox="0 0 24 24" width="16">
           <path d="M12 5v14M5 12h14" />
         </svg>
         <span>{TEXT.sidebar.newTask}</span>
-      </button>
+      </button><button className="side-mini-button" aria-label={TEXT.researchPackage.newOptions} aria-haspopup="menu" onClick={event => setMenu({ ...anchor(event), items: [{ label: TEXT.researchPackage.import, onSelect: () => onImportSession?.() }] })} type="button">⌄</button></div>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
@@ -308,6 +313,7 @@ export function Sidebar({
                   >
                     +
                   </button>
+                  <button aria-label={TEXT.researchPackage.projectImport(project.name)} aria-haspopup="menu" className="side-mini-button" onClick={event => setMenu({ ...anchor(event), items: [{ label: TEXT.researchPackage.import, onSelect: () => onImportSession?.(project.id) }] })} type="button">⌄</button>
                   <button
                     aria-label={TEXT.sidebar.projectMenu}
                     className="side-mini-button"
