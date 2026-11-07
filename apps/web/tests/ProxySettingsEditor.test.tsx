@@ -48,7 +48,7 @@ const settings: ProxySettingsDetails = {
         variables: [
           {
             effectiveName: "HTTPS_PROXY",
-            effectiveValue: "http://env-user:env-secret@proxy.example.test:8080/?token=private",
+            effectiveValue: "http://***:***@proxy.example.test:8080/",
             names: ["https_proxy", "HTTPS_PROXY"],
             status: "configured",
           },
@@ -78,10 +78,10 @@ test("renders complete settings URLs and independent MCP policies without persis
     webProxyPolicy: "inherit",
   }));
 
-  assert.match(html, /Network proxies/);
+  assert.match(html, /Network and proxy/);
   assert.match(html, /Primary corporate proxy/);
   assert.match(html, /research%40team:p%40ss%3Aword@proxy\.example\.test:8080/);
-  assert.match(html, /env-user:env-secret@proxy\.example\.test:8080/);
+  assert.doesNotMatch(html, /env-secret/);
   assert.match(html, /HTTPS_PROXY/);
   assert.match(html, /Configured/);
   assert.match(html, /WebSearch proxy/);

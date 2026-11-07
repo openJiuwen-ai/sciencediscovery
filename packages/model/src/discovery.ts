@@ -151,8 +151,8 @@ export async function listProviderModels(
   endpoint: ModelDiscoveryEndpoint,
   options: { timeoutMs?: number } = {},
 ): Promise<DiscoveredModel[]> {
-  const dispatcher = proxyDispatcher(endpoint.proxy);
   const url = modelsUrl(endpoint);
+  const dispatcher = proxyDispatcher(endpoint.proxy, url);
   let statusCode: number;
   let bodyText: string;
   try {
