@@ -235,7 +235,7 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
 
       <section className="evolve-section">
         <h3 className="evolve-section-title">{TEXT.evolve.detail.chartTitle}</h3>
-        <ScoreChart view={view} />
+        <ScoreChart onSelect={setSelectedIndex} view={view} />
       </section>
 
       <section className="evolve-section">

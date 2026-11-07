@@ -56,7 +56,11 @@ const WIDTH = 820;
 const HEIGHT = 280;
 const PAD = { bottom: 46, left: 56, right: 20, top: 22 };
 
-export function ScoreChart({ view }: { view: EvolveRunView }) {
+export function ScoreChart({ onSelect, view }: {
+  /** Opens the node's detail, the same way a row of the node list does. */
+  onSelect?: (index: number) => void;
+  view: EvolveRunView;
+}) {
   const [hovered, setHovered] = useState<number | null>(null);
   const series = collectSeries(view);
   if (!series.significant.length && view.baselineScore === null) {
@@ -260,11 +264,17 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
           cy={y(point.value)}
           key={`hit-${point.index}`}
           onBlur={() => setHovered((current) => current === point.index ? null : current)}
+          onClick={() => onSelect?.(point.index)}
           onFocus={() => setHovered(point.index)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            onSelect?.(point.index);
+          }}
           onMouseEnter={() => setHovered(point.index)}
           onMouseLeave={() => setHovered((current) => current === point.index ? null : current)}
           r={13}
-          role="img"
+          role="button"
           tabIndex={0}
         />)}
         {series.failed.map((index) => <circle
@@ -274,11 +284,17 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
           cy={floor}
           key={`hit-failed-${index}`}
           onBlur={() => setHovered((current) => current === index ? null : current)}
+          onClick={() => onSelect?.(index)}
           onFocus={() => setHovered(index)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            onSelect?.(index);
+          }}
           onMouseEnter={() => setHovered(index)}
           onMouseLeave={() => setHovered((current) => current === index ? null : current)}
           r={12}
-          role="img"
+          role="button"
           tabIndex={0}
         />)}
 

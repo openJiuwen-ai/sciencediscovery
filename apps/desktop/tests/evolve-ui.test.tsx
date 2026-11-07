@@ -393,6 +393,32 @@ test("pointing at a node names it, its generation and its score", async () => {
   }
 });
 
+test("pressing a plotted node opens its detail, as a row of the list does", async () => {
+  const picked: number[] = [];
+  let chart;
+  await act(async () => {
+    chart = create(<ScoreChart onSelect={(index) => picked.push(index)} view={view()} />);
+  });
+  try {
+    const hit = (label: string) => chart!.root.findAll((node) =>
+      node.props.className === "evolve-chart-hit"
+      && String(node.props["aria-label"]).startsWith(label))[0];
+    await act(async () => { (hit("#1").props.onClick as () => void)(); });
+    // A failed node is still a node: its detail says why it never ran.
+    await act(async () => { (hit("#3").props.onClick as () => void)(); });
+    // Enter does what a click does, for the keyboard.
+    await act(async () => {
+      (hit("#1").props.onKeyDown as (event: { key: string; preventDefault: () => void }) => void)({
+        key: "Enter",
+        preventDefault: () => {},
+      });
+    });
+    assert.deepEqual(picked, [1, 3, 1]);
+  } finally {
+    await act(async () => { chart!.unmount(); });
+  }
+});
+
 test("a failed node answers the pointer with its verdict, not a score", async () => {
   let chart;
   await act(async () => { chart = create(<ScoreChart view={view()} />); });

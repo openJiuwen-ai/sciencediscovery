@@ -150,6 +150,16 @@ test("a search stays reachable after its turn and opens in the task tab", async 
   await page.locator(".evolve-drawer-close").first().click();
   await expect(page.locator(".evolve-drawer")).toHaveCount(0);
 
+  // A node opens the same detail wherever it is drawn: the tree and the chart
+  // name the same candidate as the list does, and pressing one is not a pan.
+  await page.locator(".evolve-tree-node").filter({ hasText: "#1" }).click();
+  await expect(page.locator(".evolve-drawer")).toContainText("缓存 fit 的结果");
+  await page.locator(".evolve-drawer-close").first().click();
+
+  await page.locator(".evolve-chart-hit[aria-label^='#1']").click();
+  await expect(page.locator(".evolve-drawer")).toContainText("缓存 fit 的结果");
+  await page.locator(".evolve-drawer-close").first().click();
+
   await page.locator(".evolve-task-stop").click();
   expect(
     mock.calls.some(
