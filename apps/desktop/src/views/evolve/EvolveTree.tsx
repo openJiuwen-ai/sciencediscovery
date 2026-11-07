@@ -278,7 +278,9 @@ export function EvolveTree({ bestIndex, candidates, onSelect, selectedIndex }: E
     if (event.button !== 0 || candidates.length === 0) return;
     drag.current = { panX: pan.x, panY: pan.y, pointerId: event.pointerId, x: event.clientX, y: event.clientY };
     moved.current = false;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // Capture is taken on the first move, not here: capturing on the press
+    // retargets the click to the viewport, so the node under the pointer never
+    // receives it and a plain click would not open its detail.
     setDragging(true);
   };
 
@@ -289,6 +291,11 @@ export function EvolveTree({ bestIndex, candidates, onSelect, selectedIndex }: E
     const dx = event.clientX - current.x;
     const dy = event.clientY - current.y;
     if (!moved.current && Math.hypot(dx, dy) < 4) return;
+    if (!moved.current) {
+      // The first real move is where the pan begins, and where the pointer has
+      // to be followed past the viewport's edge.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
     moved.current = true;
     const bounds = panBounds(
       { height: element.clientHeight, width: element.clientWidth },

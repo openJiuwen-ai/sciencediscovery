@@ -985,8 +985,10 @@
 
 .evolve-chart-guide { stroke: #b9b9b9; stroke-dasharray: 4 4; stroke-width: 1; }
 
-.evolve-chart-hit { cursor: pointer; fill: none; pointer-events: all; }
-.evolve-chart-hit:focus-visible { outline: 2px solid #1968f0; outline-offset: 2px; }
+/* No outline box: the node is a point on a drawing, and a rectangle around it
+   on click reads as a selection frame the chart does not have. A focused node
+   answers the way a hovered one does — the dot grows and its card opens. */
+.evolve-chart-hit { cursor: pointer; fill: none; pointer-events: all; outline: none; }
 
 /* Pixels rather than viewBox units: the drawing scales with the panel, the
    card's text does not, and an 8-unit label would be a caption at one width
