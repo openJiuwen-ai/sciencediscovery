@@ -57,7 +57,7 @@ interface Props {
   client: ApiClient;
   onClose: () => void;
   /**
-   * A 派生自 row opens its artifact in the right panel instead of switching
+   * A 上游文件 row opens its artifact in the right panel instead of switching
    * this dialog: the provenance stays in front of the reader while the file
    * itself opens beside it. Without a panel to open (the demo page), the row
    * falls back to switching the dialog.

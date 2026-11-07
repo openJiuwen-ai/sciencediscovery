@@ -119,7 +119,7 @@ export function App({ initialToken }: Props) {
     reference: ComposerReference;
     sessionId?: string;
   } | undefined>();
-  /** The artifact a 派生自 link in the open dialog put in the panel. While the
+  /** The artifact a 上游文件 link in the open dialog put in the panel. While the
    *  panel is still showing it, the dialog moves out of the panel's way instead
    *  of covering it. It clears when the dialog closes: the link is a reading aid
    *  for the document on screen, not a lasting mode of the panel. */
@@ -779,7 +779,7 @@ export function App({ initialToken }: Props) {
     setWorkspaceOpen(false);
     setOpenSubagentId(undefined);
     setOpenTool(undefined);
-    // A 派生自 link is a relationship between two visible surfaces; one of
+    // A 上游文件 link is a relationship between two visible surfaces; one of
     // them going away ends it.
     setLinkedArtifactId(undefined);
     // The group belongs to the panel being open in the same way: a panel the
@@ -825,7 +825,7 @@ export function App({ initialToken }: Props) {
   const closeEvolveCreate = () => setEvolveCreate(undefined);
 
   /**
-   * A 派生自 link inside the open artifact dialog.
+   * A 上游文件 link inside the open artifact dialog.
    *
    * The dialog stays on the artifact the reader was reading: pressing a
    * dependency is a question about *this* document, and swapping the document
