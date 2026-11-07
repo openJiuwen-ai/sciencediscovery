@@ -1,20 +1,14 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { useEffect, useRef, useState } from "react";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import type { ApiClient } from "../api/client.js";
 import type { Project, SessionDetail } from "../api/types.js";
 import { downloadExport, importPackage, inspectPackage, packagePreview, readCopy, readExport, startCopy, startExport, type CopyOperation, type ExportOperation, type PackageInspection, type PackagePreview } from "../api/research-package.js";
 import { TEXT } from "../text.js";
+import { claimsEscape } from "./dialog-escape.js";
 import "../styles/research-package.css";
 
-type EvidenceSession = SessionDetail & {
-  researchSnapshot?: { role: string; state: string };
-  conversationBranch?: { sourceSessionId: string; sourceMessageId: string };
-};
-export function evidenceReadOnly(detail?: SessionDetail): boolean {
-  const snapshot = (detail as EvidenceSession | undefined)?.researchSnapshot;
-  return Boolean(snapshot && (snapshot.role === "imported_snapshot" || snapshot.state !== "ready"));
-}
 export interface PackageRequest {
   kind: "export" | "import" | "branch"; projectId?: string; sessionId?: string; messageId?: string;
 }
@@ -35,19 +29,23 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [profiles, setProfiles] = useState<Record<string, PackagePreview>>({});
   const [files, setFiles] = useState<string[]>();
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
+  const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const [copy, setCopy] = useState<CopyOperation>();
   const [exportTask, setExportTask] = useState<{ project: string; task: ExportOperation }>();
   const [messageId, setMessageId] = useState("");
-  const readOnly = evidenceReadOnly(activeDetail);
-  const branch = (activeDetail as EvidenceSession | undefined)?.conversationBranch;
+  const readOnly = isEvidenceSessionReadOnly(activeDetail);
+  const canContinue = activeDetail?.researchSnapshot?.role === "imported_snapshot" && activeDetail.researchSnapshot.state === "ready" && activeDetail.researchSnapshot.continuationAvailable === true;
+  const branch = activeDetail?.conversationBranch;
   const requestId = useRef(crypto.randomUUID());
+  const copying = useRef(false);
+  const busyRef = useRef(false);
   useEffect(() => {
     if (!request) return;
     let active = true;
-    setImportProjectId("");
+    setImportProjectId(""); setInspectedProject(undefined);
     setDialog(request.kind); setDetail(undefined); setPreview(undefined); setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setTrajectory(false); setGraph(false); setMessageId(request.messageId ?? "");
-    if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
+    if (request.sessionId) void client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(request.sessionId)}`).then(value => { if (active) setDetail(value); }).catch(reason => { if (active) setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); });
     return () => { active = false; };
   }, [client, request]);
 
@@ -57,7 +55,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     const panel = document.querySelector<HTMLElement>(".research-package-dialog");
     panel?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled), select")?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) { event.preventDefault(); setDialog(undefined); }
+      if ([...document.querySelectorAll('[role="dialog"]')].at(-1) !== panel) return;
+      if (claimsEscape(event)) { event.preventDefault(); if (!busyRef.current) setDialog(undefined); }
       if (event.key !== "Tab" || !panel) return;
       const items = [...panel.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary")];
       const first = items[0], last = items.at(-1);
@@ -66,7 +65,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
-  }, [dialog, busy]);
+  }, [dialog]);
 
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
@@ -84,14 +83,14 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     const load = () => { void packagePreview(client, projectId, detail.id, level, trajectory, graph, files).then(value => { if (active) setPreview(value); }).catch(reason => {
       if (!active) return;
       if (reason?.code === "EXPORT_PREVIEW_PENDING") timer = setTimeout(load, 1500);
-      else setError(String(reason.message ?? reason));
+      else setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason));
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
   }, [client, dialog, detail?.id, projectId, level, trajectory, graph, files]);
   useEffect(() => {
     if (copy?.state !== "copying") return;
     let active = true; let timer: ReturnType<typeof setTimeout>;
-    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => { if (active) { setError(String(reason.message ?? reason)); timer = setTimeout(poll, 3000); } }); };
+    const poll = () => { void readCopy(client, copy.sourceSessionId, copy.id).then(async next => { if (!active) return; setCopy(next); if (next.state === "copying") timer = setTimeout(poll, 1000); else { requestId.current = crypto.randomUUID(); await onRefresh(); if (next.state === "ready" && next.entrySessionId) onOpen(next.entrySessionId); } }).catch(reason => { if (active) { setError(String(reason.message ?? reason)); timer = setTimeout(poll, 3000); } }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, copy?.id, copy?.state]);
   useEffect(() => {
@@ -101,23 +100,25 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, exportTask?.task.id, exportTask?.task.status]);
   async function perform(action: () => Promise<void>) {
-    setBusy(true); setError(""); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); }
+    busyRef.current = true; setBusy(true); setError(""); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { busyRef.current = false; setBusy(false); }
   }
   async function copyResearch(id?: string) {
     const source = id ? detail : activeDetail;
-    if (!source) return;
-    await perform(async () => {
+    if (!source || copying.current || copy?.state === "copying" || (id ? isEvidenceSessionReadOnly(source) : !canContinue)) return;
+    copying.current = true;
+    try { await perform(async () => {
       const operation = await startCopy(client, source.id, requestId.current, id); setCopy(operation);
+      if (operation.state !== "copying") requestId.current = crypto.randomUUID();
       if (operation.state === "ready" && operation.entrySessionId) { await onRefresh(); onOpen(operation.entrySessionId); }
-      if (operation.state !== "failed") { requestId.current = crypto.randomUUID(); setDialog(undefined); }
+      if (operation.state !== "failed") setDialog(undefined);
       else throw new Error(operation.error ?? t.failed);
-    });
+    }); } finally { copying.current = false; }
   }
   return <>
-    {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{t.readOnly}</p><button className="primary-button" disabled={busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
+    {readOnly ? <div className="research-package-resume"><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <button className="research-package-source" onClick={() => onOpen(branch.sourceSessionId)} type="button">{t.source}</button> : null}
     {copy ? <div className="research-package-status" role="status">{copy.state === "copying" ? t.copying : copy.state === "failed" ? copy.error ?? t.failed : t.ready}{copy.state === "ready" && copy.entrySessionId ? <button onClick={() => onOpen(copy.entrySessionId!)} type="button">{t.open}</button> : null}</div> : null}
-    {exportTask ? <div className="research-package-status" role="status">{exportTask.task.status === "completed" ? exportTask.task.filename : exportTask.task.status === "failed" ? exportTask.task.error ?? t.failed : t.preparing}{exportTask.task.status === "completed" ? <button onClick={() => void perform(() => downloadExport(client, exportTask.project, exportTask.task))} type="button">{t.download}</button> : null}</div> : null}
+    {exportTask ? <div className={`research-package-status${exportTask.task.status === "failed" ? " is-failed" : ""}`} role="status">{["queued", "running"].includes(exportTask.task.status) ? <span aria-hidden="true" className="spinner" /> : null}{exportTask.task.status === "completed" ? exportTask.task.filename : exportTask.task.status === "failed" ? exportTask.task.error ?? t.failed : t.preparing}{exportTask.task.status === "completed" ? <button onClick={() => void perform(() => downloadExport(client, exportTask.project, exportTask.task))} type="button">{t.download}</button> : null}</div> : null}
     {error ? <p role="alert" className="research-package-error">{error}</p> : null}
     {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className="modal-panel research-package-dialog" role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
       <header className="modal-header"><span className="modal-eyebrow">ScienceDiscovery</span><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></header>
@@ -137,15 +138,15 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           <p className="research-package-notice">{t.evidenceOnly}</p>
         </> : dialog === "import" ? <>
           <label className="research-import-project">{t.projectDestination}<select value={importProjectId} disabled={busy} onChange={event => setImportProjectId(event.target.value)}><option value="">{t.noProject}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><span>{t.projectDestinationHint}</span></label>
-          <label className="research-package-upload">{t.choose}<input type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); if (selected && projectId) void perform(async () => setInspection(await inspectPackage(client, projectId, selected))); }} /></label>
+          <label className="research-package-upload">{t.choose}<input type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           {inspection ? <><h3>{inspection.manifest.source.title}</h3><p>{file?.name} · {inspection.objectCount} {t.objects}</p><p>{t.importHint}</p><ul>{inspection.manifest.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></> : <p>{t.importHint}</p>}
         </> : <><p>{t.branchHint}</p><blockquote>{detail?.messages.find(message => message.id === messageId)?.content.slice(0, 240)}</blockquote></>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision : dialog === "import" ? !inspection : !messageId)} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{t.close}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => { const task = await startExport(client, projectId, { sessionId: detail.id, revision: preview.revision!, level, includeFullTrajectory: level === "complete" && trajectory, includeFullMemoryGraph: level === "complete" && graph, filePaths: files }); setExportTask({ project: projectId, task }); setDialog(undefined); });
-        else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) { onOpen(source); const operation = await startCopy(client, source, crypto.randomUUID()); setCopy(operation); if (operation.state === "ready" && operation.entrySessionId) { await onRefresh(); onOpen(operation.entrySessionId); } } });
+        else if (file && projectId) void perform(async () => { const result = await importPackage(client, projectId, file, inspectedProject === projectId ? inspection?.packageChecksum : undefined); await onRefresh(); setDialog(undefined); const source = result.importedSessionIds[0]; if (source) { onOpen(source); const restored = await client.request<SessionDetail>(`/api/sessions/${encodeURIComponent(source)}`); if (restored.researchSnapshot?.continuationAvailable !== true || restored.researchSnapshot.state !== "ready") return; const operation = await startCopy(client, source, crypto.randomUUID()); setCopy(operation); if (operation.state === "ready" && operation.entrySessionId) { await onRefresh(); onOpen(operation.entrySessionId); } } });
       }}>{busy ? t.working : dialog === "export" ? t.startExport : dialog === "import" ? t.confirmImport : t.branch}</button></footer>
     </section></div> : null}
   </>;

@@ -18,6 +18,35 @@ test("package preview preserves scope, options, selected files and authenticatio
   };
   try { await packagePreview(new ApiClient("local-token"), "p/1", "session/1", "complete", true, false, ["a b.csv"]); } finally { globalThis.fetch = previous; }
 });
+
+test("an inspected package imports without uploading its bytes again", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    assert.equal(new URL(String(input), "http://localhost").searchParams.get("inspectionChecksum"), "checked/hash");
+    assert.equal(init?.body, undefined);
+    return Response.json({ importedSessionIds: ["restored"] });
+  };
+  try { assert.deepEqual(await importPackage(new ApiClient("token"), "p", new Blob(["archive"]), "checked/hash"), { importedSessionIds: ["restored"] }); }
+  finally { globalThis.fetch = previous; }
+});
+
+test("an expired inspection cache falls back to the original bytes, without retrying other conflicts", async () => {
+  const previous = globalThis.fetch;
+  const bytes = new Blob(["archive"]);
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    if (++calls === 1) return Response.json({ error: "Inspected package expired; upload it again" }, { status: 409 });
+    assert.equal(init?.body, bytes);
+    return Response.json({ importedSessionIds: ["restored"] });
+  };
+  try {
+    await importPackage(new ApiClient("token"), "p", bytes, "old"); assert.equal(calls, 2);
+    calls = 0;
+    globalThis.fetch = async () => { calls++; return Response.json({ error: "Research package import is already in progress" }, { status: 409 }); };
+    await assert.rejects(importPackage(new ApiClient("token"), "p", bytes, "checked"), /already in progress/);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = previous; }
+});
 test("import sends original bytes; branch requests retain boundary and idempotency key", async () => {
   const previous = globalThis.fetch; let calls = 0;
   const bytes = new Blob([new Uint8Array([0, 127, 255])]);

@@ -218,6 +218,8 @@ export interface WorkspaceActions {
   renameSession: (session: Session, title: string) => Promise<void>;
   /** Re-read the model catalog after the wizard or settings changed it. */
   refreshCatalog: () => Promise<void>;
+  /** Re-read session rows after research import, continuation or branching. */
+  refreshSessions: () => Promise<void>;
   /** Take one card out of the composer. The file stays in the workspace: the
    *  upload has already happened, and this is the tray, not the workspace. */
   removeAttachment: (id: string) => void;
@@ -1902,6 +1904,7 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           },
         }),
       refreshCatalog,
+      refreshSessions: async () => { await refreshSessionLists(); },
       removeAttachment,
       retryAttachment,
       retryBoot,

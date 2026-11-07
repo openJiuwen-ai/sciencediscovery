@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { expect, test } from "@playwright/test";
 import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 /**
  * E2E-META
@@ -16,6 +18,136 @@ import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } fro
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [TOKEN_STORAGE_KEY, TOKEN]);
 });
+
+for (const kind of ["continuation", "branch"] as const) {
+  test(`${kind} recovers from a durable failure with a fresh request and a visible sidebar row`, async ({ page }, info) => {
+    const source = Object.assign(makeSession({ messages }), kind === "continuation" ? { researchSnapshot: { role: "imported_snapshot", state: "ready", continuationAvailable: true } } : {});
+    const mock = await installMockApi(page, { sessions: [source] });
+    const keys: string[] = [];
+    const stored = new Map<string, any>();
+    await page.route(kind === "branch" ? "**/conversation-branches" : "**/research-continuations", async route => {
+      const key = route.request().postDataJSON().requestId;
+      keys.push(key);
+      if (!stored.has(key)) {
+        const first = stored.size === 0;
+        const operation = { id: key, sourceSessionId: "session-1", state: first ? kind === "continuation" ? "copying" : "failed" : "ready", error: first ? "Temporary restore failure" : undefined, entrySessionId: first ? undefined : "retry-result" };
+        stored.set(key, operation);
+        if (!first) mock.state.sessions.push(makeSession({ id: "retry-result", title: "重试成功", messages: kind === "branch" ? messages.slice(0, 2) : messages }));
+      }
+      await route.fulfill({ json: stored.get(key) });
+    });
+    await page.route("**/research-continuations/*", async route => {
+      const key = new URL(route.request().url()).pathname.split("/").at(-1)!;
+      stored.get(key).state = "failed";
+      await route.fulfill({ json: stored.get(key) });
+    });
+    await test.step("1. Acknowledge and display a durable operation failure", async () => {
+      await page.goto("/");
+      await expect(page.locator(".conversation")).toContainText("下文结论");
+      if (kind === "continuation") await page.getByRole("button", { name: "继续聊天", exact: true }).click();
+      else {
+        await page.getByRole("button", { name: "回复菜单" }).first().click();
+        await page.getByRole("menuitem", { name: "创建新分支聊天" }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "创建新分支聊天", exact: true }).click();
+      }
+      await expect(page.locator(".research-package-status").first()).toContainText("Temporary restore failure");
+    });
+    await test.step("2. Retry without reload, then navigate to the new session and back", async () => {
+      if (kind === "continuation") await page.getByRole("button", { name: "继续聊天", exact: true }).click();
+      else await page.getByRole("dialog").getByRole("button", { name: "创建新分支聊天", exact: true }).click();
+      await expect(page.locator(".task-head-title")).toHaveText("重试成功");
+      await expect(page.locator(".side-sub.is-active .side-session-name")).toHaveText("重试成功");
+      expect(keys).toHaveLength(2); expect(keys[0]).not.toBe(keys[1]);
+      await page.locator(".side-session-name", { hasText: "晶体结构分析" }).click();
+      await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
+      await page.locator(".side-session-name", { hasText: "重试成功" }).click();
+      await expect(page.locator("#composer-textarea")).toBeVisible();
+    });
+    await info.attach("journey-report", { body: `${kind}: durable failure, fresh-key retry, refreshed sidebar and round-trip navigation passed.`, contentType: "text/plain" });
+  });
+}
+
+for (const snapshot of [
+  { role: "imported_snapshot", state: "ready", continuationAvailable: false },
+  { role: "imported_snapshot", state: "ready" },
+  { role: "imported_snapshot", state: "importing", continuationAvailable: true },
+  { role: "research_copy", state: "failed", continuationAvailable: true },
+]) {
+  test(`unavailable snapshot ${JSON.stringify(snapshot)} offers no rejected actions`, async ({ page }, info) => {
+    await installMockApi(page, { sessions: [Object.assign(makeSession({ messages }), { researchSnapshot: snapshot })] });
+    await test.step("Inspect the unavailable snapshot", async () => {
+      await page.goto("/");
+      await expect(page.locator(".conversation")).toContainText("下文结论");
+      await expect(page.getByRole("button", { name: "继续聊天", exact: true })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "回复菜单", exact: true })).toHaveCount(0);
+      await expect(page.locator("#composer-textarea")).toHaveCount(0);
+      await expect(page.locator(".research-package-resume")).toContainText("尚未完整恢复");
+    });
+    await info.attach("journey-report", { body: "Unavailable snapshot hides branch/send/upload and disables continuation with an explanation.", contentType: "text/plain" });
+  });
+}
+
+test("a missing project reports a recoverable export error and stacked Escape only closes the top dialog", async ({ page }, info) => {
+  await installMockApi(page, { sessions: [makeSession({ messages })] });
+  await page.route("**/research-package/preview?*", route => route.fulfill({ status: 404, json: { error: "Project not found" } }));
+  await test.step("1. Export after the project disappeared", async () => {
+    await page.goto("/");
+    await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
+    await page.getByRole("button", { name: "会话菜单", exact: true }).click();
+    await page.getByRole("menuitem", { name: "导出会话" }).click();
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText("会话或所属项目已不存在");
+    await expect(page.getByRole("button", { name: "开始后台导出" })).toBeDisabled();
+  });
+  await test.step("2. Close a stacked dialog without dismissing export", async () => {
+    await page.evaluate(() => {
+      const top = document.createElement("section"); top.setAttribute("role", "dialog"); top.setAttribute("aria-label", "Top dialog"); document.body.append(top);
+      document.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); top.remove(); } }, { once: true });
+    });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "导出会话" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+  await info.attach("journey-report", { body: "Missing-project error and topmost-only Escape behavior verified.", contentType: "text/plain" });
+});
+
+for (const locale of ["zh-CN", "en"]) {
+  test(`review states: read-only import and export preparing/failure (${locale})`, async ({ page }, info) => {
+    const en = locale === "en";
+    await page.addInitScript(locale => localStorage.setItem("sciencediscovery-desktop:locale", locale), locale);
+    await installMockApi(page, { sessions: [Object.assign(makeSession({ messages }), { researchSnapshot: { role: "imported_snapshot", state: "ready", continuationAvailable: true } })] });
+    let fail = false;
+    await page.route("**/research-package/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/preview")) return route.fulfill({ json: { revision: "r", estimatedBytes: 2048, files: [], omissions: [] } });
+      await route.fulfill({ json: { id: "status-export", status: fail ? "failed" : "running", filename: "research.sdresearch", error: en ? "Export failed: storage unavailable (simulated failure)." : "导出失败：存储暂不可用（模拟失败）。" } });
+    });
+    const capture = async (name: string) => {
+      const dir = process.env.REVIEW_SCREENSHOTS_DIR;
+      if (dir) { await mkdir(dir, { recursive: true }); await page.screenshot({ path: join(dir, `${name}-${en ? "en" : "zh"}.png`), animations: "disabled" }); }
+    };
+    await test.step("1. Inspect the read-only imported conversation", async () => {
+      await page.goto("/");
+      await expect(page.locator(".conversation")).toContainText("下文结论");
+      await expect(page.locator("#composer-textarea")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: en ? "Continue chatting" : "继续聊天", exact: true })).toBeEnabled();
+      await expect(page.getByRole("button", { name: en ? "Reply menu" : "回复菜单", exact: true })).toHaveCount(0);
+      await capture("10-imported-read-only");
+    });
+    await test.step("2. Inspect export preparation and failure without losing the conversation", async () => {
+      await page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }).click();
+      await page.getByRole("menuitem", { name: en ? "Export conversation" : "导出会话" }).click();
+      await page.getByRole("button", { name: en ? "Start background export" : "开始后台导出" }).click();
+      await expect(page.locator(".research-package-status")).toContainText(en ? "Preparing the package" : "正在后台准备");
+      await capture("11-export-preparing");
+      fail = true;
+      await expect(page.locator(".research-package-status")).toContainText(en ? "Export failed" : "导出失败");
+      await expect(page.getByRole("button", { name: en ? "Download" : "下载", exact: true })).toHaveCount(0);
+      await capture("12-export-failed");
+    });
+    await info.attach("journey-report", { body: "Read-only UI, export preparing and explicit simulated failure verified. Screenshot data uses the desktop fixture control plane, not a real export failure.", contentType: "text/plain" });
+  });
+}
 
 const messages = [
   { id: "u1", role: "user", content: "上文问题", createdAt: CREATED_AT },
@@ -65,17 +197,19 @@ test("hover import defaults to no project and allows an existing project", async
   const targets: string[] = [];
   await page.route("**/research-package/**", async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/inspect")) return route.fulfill({ json: { manifest: { source: { title: "恢复的研究" }, omissions: [] }, objectCount: 2, recordsBytes: 100 } });
+    if (path.endsWith("/inspect")) return route.fulfill({ json: { manifest: { source: { title: "恢复的研究" }, omissions: [] }, objectCount: 2, recordsBytes: 100, packageChecksum: "inspected-package" } });
+    expect(new URL(route.request().url()).searchParams.get("inspectionChecksum")).toBe("inspected-package");
+    expect(route.request().postData()).toBeNull();
     const projectId = path.split("/")[3]!;
     targets.push(projectId);
-    mock.state.sessions.push(makeSession({ id: `import-${projectId}`, projectId, title: "恢复的研究", messages }));
+    mock.state.sessions.push(Object.assign(makeSession({ id: `import-${projectId}`, projectId, title: "恢复的研究", messages }), { researchSnapshot: { role: "imported_snapshot", state: "ready", continuationAvailable: true } }));
     await route.fulfill({ json: { importedSessionIds: [`import-${projectId}`] } });
   });
   await page.route("**/research-continuations", async route => {
     const source = new URL(route.request().url()).pathname.split("/")[3]!;
     const record = mock.state.sessions.find(session => session.id === source)!;
     const id = `continued-${source}`;
-    mock.state.sessions.push({ ...record, id, title: "可继续的研究" });
+    mock.state.sessions.push(Object.assign({ ...record, id, title: "可继续的研究" }, { researchSnapshot: { role: "research_copy", state: "ready" } }));
     await route.fulfill({ json: { id: `op-${source}`, sourceSessionId: source, state: "ready", entrySessionId: id } });
   });
   await page.goto("/");
@@ -103,6 +237,7 @@ test("hover import defaults to no project and allows an existing project", async
       await expect(dialog).toContainText("恢复的研究");
       await dialog.getByRole("button", { name: "确认导入" }).click();
       await expect(page.locator(".task-head-title")).toHaveText("可继续的研究");
+      await expect(page.locator(".side-sub.is-active .side-session-name")).toHaveText("可继续的研究");
       await expect(page.locator("#composer-textarea")).toBeVisible();
       await expect(page.locator(".conversation")).toContainText("下文结论");
     });
@@ -129,6 +264,7 @@ test("reply menu branches at the selected reply without its later conversation",
   });
   await test.step("2. Verify the prefix, writable composer and unchanged source", async () => {
     await expect(page.locator(".task-head-title")).toHaveText("分支会话");
+    await expect(page.locator(".side-sub.is-active .side-session-name")).toHaveText("分支会话");
     await expect(page.locator(".conversation")).toContainText("上文问题");
     await expect(page.locator(".conversation")).toContainText("中间回复");
     await expect(page.locator(".conversation")).not.toContainText("下文问题");

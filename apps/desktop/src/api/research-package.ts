@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ApiClient } from "./client.js";
+import { ApiRequestError, type ApiClient } from "./client.js";
+import type { ResearchContinuationOperation } from "@sciencediscovery/schema";
 
 export interface PackagePreview {
   revision?: string; estimatedBytes: number;
@@ -11,10 +12,7 @@ export interface PackageInspection {
   manifest: { source: { title: string }; omissions: string[] };
   objectCount: number; recordsBytes: number; packageChecksum?: string;
 }
-export interface CopyOperation {
-  id: string; sourceSessionId: string; state: "copying" | "ready" | "failed";
-  entrySessionId?: string; error?: string;
-}
+export type CopyOperation = ResearchContinuationOperation;
 export interface ExportOperation {
   id: string; status: "queued" | "running" | "completed" | "failed";
   filename: string; error?: string;
@@ -29,8 +27,13 @@ export function packagePreview(client: ApiClient, project: string, session: stri
 export function inspectPackage(client: ApiClient, project: string, file: Blob) {
   return client.request<PackageInspection>(`${projectPath(project)}/inspect`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } });
 }
-export function importPackage(client: ApiClient, project: string, file: Blob) {
-  return client.request<{ importedSessionIds: string[]; omissions?: string[] }>(`${projectPath(project)}/import`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } });
+export async function importPackage(client: ApiClient, project: string, file: Blob, inspectionChecksum?: string): Promise<{ importedSessionIds: string[]; omissions?: string[] }> {
+  const query = inspectionChecksum ? `?inspectionChecksum=${encodeURIComponent(inspectionChecksum)}` : "";
+  try { return await client.request(`${projectPath(project)}/import${query}`, { method: "POST", body: inspectionChecksum ? undefined : file, headers: { "content-type": "application/octet-stream" } }); }
+  catch (error) {
+    if (inspectionChecksum && error instanceof ApiRequestError && error.status === 409 && /inspected package expired/i.test(error.message)) return importPackage(client, project, file);
+    throw error;
+  }
 }
 export function startCopy(client: ApiClient, session: string, requestId: string, messageId?: string) {
   return client.request<CopyOperation>(`${sessionPath(session)}/${messageId ? "conversation-branches" : "research-continuations"}`, { method: "POST", body: JSON.stringify({ requestId, ...(messageId ? { messageId } : {}) }) });
