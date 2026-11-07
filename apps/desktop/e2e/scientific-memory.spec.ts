@@ -100,7 +100,7 @@ const PAPER: JsonRecord = {
       + "<h4>Results</h4><p>Methane conversion over a nickel catalyst rises with temperature up to 350 °C.</p>",
     identifier: "10.1000/example",
     link: "https://europepmc.org/article/MED/12345678",
-    title: "A paper on methane",
+    title: "A paper on &lt;i&gt;methane&lt;/i&gt;",
   },
 };
 
@@ -358,6 +358,7 @@ test("a report's evidence chip opens its details and provenance", async ({ page 
   await dialog.getByRole("button", { name: "溯源" }).click();
   await expect(dialog.locator(".evidence-source-paper")).toHaveCount(1);
   await expect(dialog.locator(".evidence-source-paper-label")).toHaveText("文献");
+  // The record stores its title with escaped markup; the card shows the words.
   await expect(dialog.locator(".evidence-source-paper-title")).toHaveText("A paper on methane");
   // The abstract reads as its sentences, one paragraph per block: no tag and
   // none of the source's section labels reach the reader.

@@ -58,6 +58,29 @@ export function decodeEntities(value: string): string {
   });
 }
 
+/** A tag, not a comparison: `5 < 10` and `a > b` stay as the author wrote them. */
+const TAG = /<\/?[a-zA-Z][^>]*>/gu;
+
+/** A section heading with its label, which is navigation rather than prose. */
+const SECTION_HEADING = /<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]\s*>/giu;
+
+/**
+ * One run of text with no markup in it.
+ *
+ * The decode pass is followed by a second strip because some records come back
+ * double-escaped — a title stored as `&lt;i&gt;BRCA1&lt;/i&gt;` means an italic
+ * run, not four characters to show the reader.
+ */
+function cleanText(fragment: string): string {
+  const decoded = decodeEntities(fragment.replace(TAG, ""));
+  return decoded.replace(TAG, "").replace(/\s+/gu, " ").trim();
+}
+
+/** A paper's title, or any other single-line field of its record, as text. */
+export function paperPlainText(raw: string): string {
+  return cleanText(raw);
+}
+
 /**
  * Split an abstract into the paragraphs it reads as.
  *
@@ -69,14 +92,11 @@ export function decodeEntities(value: string): string {
 export function paperAbstractParagraphs(raw: string): string[] {
   if (raw.trim() === "") return [];
 
-  const withoutHeadings = raw.replace(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]\s*>/giu, PARAGRAPH_BREAK);
-  const blocks = withoutHeadings
+  return raw
+    .replace(SECTION_HEADING, PARAGRAPH_BREAK)
     .replace(/<br\s*\/?>/giu, PARAGRAPH_BREAK)
     .replace(/<\/(?:p|div|li)\s*>/giu, PARAGRAPH_BREAK)
-    .replace(/<[^>]*>/gu, "");
-
-  return decodeEntities(blocks)
     .split(/\n+/u)
-    .map((block) => block.replace(/\s+/gu, " ").trim())
+    .map(cleanText)
     .filter((block) => block !== "");
 }

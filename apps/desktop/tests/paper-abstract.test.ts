@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-import { decodeEntities, paperAbstractParagraphs } from "../src/app/paper-abstract.js";
+import { decodeEntities, paperAbstractParagraphs, paperPlainText } from "../src/app/paper-abstract.js";
 
 const { describe, it } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
@@ -66,6 +66,23 @@ describe("paperAbstractParagraphs", () => {
     const raw = "<h4>Methods</h4><p>We used <i>in situ</i> XRD<br/>and GC-MS.</p>";
 
     assert.deepEqual(paperAbstractParagraphs(raw), ["We used in situ XRD", "and GC-MS."]);
+  });
+});
+
+describe("paperPlainText", () => {
+  it("turns an escaped italic run back into the words it wrapped", () => {
+    assert.equal(
+      paperPlainText("Therapeutic Potential &#8230; for &lt;i&gt;BRCA1&lt;/i&gt;-Associated Cancer."),
+      "Therapeutic Potential … for BRCA1-Associated Cancer.",
+    );
+  });
+
+  it("drops real inline markup too", () => {
+    assert.equal(paperPlainText("A <b>bold</b> claim."), "A bold claim.");
+  });
+
+  it("keeps a comparison that only looks like a tag", () => {
+    assert.equal(paperPlainText("Yield fell below 5 < 10 mmol."), "Yield fell below 5 < 10 mmol.");
   });
 });
 

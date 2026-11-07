@@ -54,7 +54,7 @@ import {
   memoryNodeTitle,
 } from "../app/memory.js";
 import { referenceNodeLabel } from "../app/memory-chips.js";
-import { paperAbstractParagraphs } from "../app/paper-abstract.js";
+import { paperAbstractParagraphs, paperPlainText } from "../app/paper-abstract.js";
 import { TEXT } from "../text.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 
@@ -508,7 +508,9 @@ function EvidenceSources({ client, nodes, sessionId }: {
         return (
           <article className="evidence-source-paper" key={paper.id}>
             <h4 className="evidence-source-paper-label">{TEXT.memory.nodeLabels.Paper}</h4>
-            <h5 className="evidence-source-paper-title">{memoryNodeTitle(paper)}</h5>
+            {/* Records carry escaped markup in the title too — `&lt;i&gt;BRCA1
+                &lt;/i&gt;` is an italic run, not eight characters. */}
+            <h5 className="evidence-source-paper-title">{paperPlainText(memoryNodeTitle(paper))}</h5>
             <div className="evidence-source-paper-detail">
               {abstract.length === 0
                 ? <p className="memory-trace-empty">{TEXT.memory.provenance.noAbstract}</p>
