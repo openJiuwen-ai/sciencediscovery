@@ -279,6 +279,7 @@ import {
   ensureConfigurationContinuation,
   getActiveSessionRun,
   publishApprovalModeChange,
+  publishResolvedPermissions,
   scheduleSessionRuns,
   sessionHasActiveRun,
   sessionHasActiveRunExceptConfigurationWait,
@@ -2694,6 +2695,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             requestedApprovalMode,
             teardown?.count ? teardown.reason : undefined,
           );
+          // The switch settles every pending request the new policy covers;
+          // each one needs its resolution on the timeline a reload reads back.
+          await publishResolvedPermissions(store, sessionId, modeChange.resolvedPendingRequests);
           await advanceResolvedPermissionRequests(
             modeChange.resolvedPendingRequests,
             store,
@@ -2900,6 +2904,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         });
         if (outcome.kind === "not_found") return sendError(response, 404, "Permission request not found");
         if (outcome.kind === "already_resolved") {
+          // A retry of a decision whose resolution never reached the run
+          // stream (an artifact download answered before this endpoint wrote
+          // one). The catalog is terminal, so this is the only chance to fill
+          // the replay's missing half.
+          await publishResolvedPermissions(store, existingRequest.sessionId, [outcome.request]);
           sendJson(response, 409, {
             code: "PERMISSION_ALREADY_RESOLVED",
             details: { request: outcome.request },
@@ -2907,6 +2916,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           });
           return;
         }
+        // Recorded in the catalog; the stream has to say so too. A request a
+        // run is polling for resolves itself and this is a no-op duplicate
+        // (publishRunEvent drops it); artifact downloads and remote jobs have
+        // no poller, and a reload would otherwise replay them as pending.
+        await publishResolvedPermissions(store, existingRequest.sessionId, outcome.decision.resolvedRequests);
         const advanced = await advanceResolvedPermissionRequests(
           outcome.decision.resolvedRequests,
           store,

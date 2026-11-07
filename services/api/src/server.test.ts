@@ -5337,6 +5337,13 @@ test("switching an active run to always-allow resolves its pending subagent acti
   }
   stream += decoder.decode();
   assert.match(stream, /"type":"run.completed"/);
+  // The switch and the run's own poll both resolve this request; the stream
+  // carries the resolution once.
+  assert.equal(
+    stream.match(/"type":"permission\.resolved"/g)?.length,
+    1,
+    "the decision is published once even though two paths record it",
+  );
   const requests = await jsonRequest<PermissionRequest[]>(
     `${origin}/api/permission-requests?sessionId=${encodeURIComponent(session.body.id)}`,
     { headers: authorization },
@@ -5352,6 +5359,72 @@ test("switching an active run to always-allow resolves its pending subagent acti
   );
   assert.equal(authorizations.body.length, 1);
   assert.equal(authorizations.body[0]?.source, "always_allow");
+});
+
+test("a decision recorded outside a run's wait reaches the replay it is reloaded from", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-permission-replay-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const modelServer = await startTextModel(context);
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Permission replay" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Permission replay" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const answer = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "Summarize the paper" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(answer.status, 200);
+  await answer.text();
+  const runs = await jsonRequest<SessionRun[]>(`${origin}/api/sessions/${session.body.id}/runs`, {
+    headers: authorization,
+  });
+  const runId = runs.body.at(-1)!.id;
+
+  // The shape of an artifact download: raised inside the run, decided later
+  // from the Session's authorization card, with no poll inside the run that
+  // would notice the answer and publish it.
+  const created = await jsonRequest<{ allowed: boolean; request?: PermissionRequest }>(
+    `${origin}/api/sessions/${session.body.id}/permission-requests`,
+    {
+      body: JSON.stringify({
+        action: "artifact_download",
+        executionId: runId,
+        resource: "artifact:biorxiv:10.1101/2025.04.16.649149:v2:pdf",
+        summary: "Download biorxiv-2025.04.16.649149-v2.pdf",
+      }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    },
+  );
+  assert.equal(created.response.status, 201);
+  const requestId = created.body.request?.id;
+  assert.ok(requestId);
+  const before = await listRunEvents(origin, session.body.id, runId);
+  assert.ok(!before.some((record) => record.event.type === "permission.resolved"
+    && record.event.request.id === requestId), "the fixture starts with no resolution on the stream");
+
+  const decision = await jsonRequest(`${origin}/api/permission-requests/${requestId}/decision`, {
+    body: JSON.stringify({ decision: "allow_once" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(decision.response.status, 200);
+
+  const replay = await listRunEvents(origin, session.body.id, runId);
+  const resolutions = replay.filter((record) => record.event.type === "permission.resolved"
+    && record.event.request.id === requestId);
+  assert.equal(resolutions.length, 1, "the resolution reaches the replay exactly once");
+  assert.equal(resolutions[0]!.event.type === "permission.resolved" && resolutions[0]!.event.request.state, "allowed");
 });
 
 test("concurrent permission decisions serialize and return an authoritative conflict", async (context) => {

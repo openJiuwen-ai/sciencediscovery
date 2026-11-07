@@ -62,7 +62,7 @@ import {
   updateSession,
   uploadWorkspaceFiles,
 } from "../api/sessions.js";
-import { decidePermissionRequest } from "../api/permissions.js";
+import { decidePermissionRequest, listPermissionRequests } from "../api/permissions.js";
 import { listRunEvents, streamMessage, subscribeRunEvents, type RunEventHandler } from "../api/stream.js";
 import type {
   ApprovalMode,
@@ -80,6 +80,7 @@ import type {
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
 import { emptyRunStream, isTerminalRunStatus, type RunStreamState } from "../run-stream/model.js";
+import { pendingPermissions, reconcilePermissions } from "../run-stream/permission.js";
 import { foldRunRecords, replayRun, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
 
@@ -494,7 +495,29 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
         );
         for (const replay of rebuilt) if (replay) held.set(replay.runId, replay);
       }
-      return { epoch, replays: runs.flatMap((entry) => held.get(entry.id) ?? []) };
+      const replays = runs.flatMap((entry) => held.get(entry.id) ?? []);
+      // A request the catalog has already answered but whose
+      // `permission.resolved` never reached the run stream replays as a card
+      // nobody can press. The catalog is the only place that still knows the
+      // answer, so one read settles every such card at once. Asked only when a
+      // replay actually holds a pending one, which a healthy Session never
+      // does.
+      if (!replays.some((replay) => pendingPermissions(replay.state.permissions).length > 0)) {
+        return { epoch, replays };
+      }
+      // Display-only correction: a failed read leaves the replay as it was.
+      const authoritative = await listPermissionRequests(client, target).catch(() => undefined);
+      if (!authoritative) return { epoch, replays };
+      const reconciled = replays.map((replay) => {
+        const permissions = reconcilePermissions(replay.state.permissions, authoritative);
+        return permissions === replay.state.permissions
+          ? replay
+          : { ...replay, state: { ...replay.state, permissions } };
+      });
+      // The corrected replay replaces the cached copy, so the next settle does
+      // not have to ask again.
+      for (const replay of reconciled) held.set(replay.runId, replay);
+      return { epoch, replays: reconciled };
     },
     [client],
   );
