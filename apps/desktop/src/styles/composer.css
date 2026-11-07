@@ -30,10 +30,15 @@
 }
 
 .composer-input {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 8px;
   padding: 14px 16px 8px;
+  /* The token is out of flow and travels with the field's own scrolling; the
+     clip is what sends it out of sight with the first line instead of letting
+     it float up over the card. */
+  overflow: hidden;
 }
 .composer textarea {
   flex: 1;
@@ -41,6 +46,10 @@
   min-height: 48px;
   max-height: 200px;
   display: block;
+  /* The command token is out of flow (see `.composer-command`), so the first
+     line steps over it by hand; every later line starts at the left margin,
+     under the token, instead of being pushed right for the whole paragraph. */
+  text-indent: var(--composer-command-indent, 0px);
   padding: 2px 0 0;
   border: 0;
   outline: 0;
@@ -52,6 +61,69 @@
   resize: none;
 }
 .composer textarea::placeholder { color: var(--muted-light); }
+
+/* The design command the setup dialog placed here: blue, because the app put
+   it there and it is not prose; a token, because editing the flags by hand is
+   how a design stops matching its search. It sits on the input's first line,
+   in front of the sentence the user finishes by typing. */
+.composer-command {
+  /* Absolute, at the start of the first line: as a flex sibling it would
+     indent the whole paragraph by its own width, leaving a blank gutter under
+     the token on every wrapped line. Its left edge and the matching indent are
+     measured by the composer (`--composer-command-left` / `-indent`), because
+     the token's width follows the interface language and the loaded font. */
+  position: absolute;
+  top: 15px;
+  left: var(--composer-command-left, 16px);
+  /* Past the field's max-height the text scrolls under a fixed token; moving
+     it by the scroll offset keeps it attached to the line it belongs to. */
+  transform: translateY(var(--composer-command-shift, 0px));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 48%;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--primary-border-soft);
+  border-radius: var(--radius-xs);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 500;
+  /* The token is one line inside a fixed-height pill: the line box has to be
+     tall enough for descenders, or `overflow: hidden` on the text span cuts
+     the tails off `p` and `g`. */
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.composer-command svg { flex: 0 0 auto; }
+
+.composer-command-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The ✕ on the token. The flags came from a dialog, so declining them has to
+   be as easy as accepting them — otherwise the only way out is to send a
+   search the reader no longer wants. */
+.composer-command-clear {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-right: -2px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: inherit;
+  opacity: .65;
+  transition: background .12s ease, opacity .12s ease;
+}
+
+.composer-command-clear:hover { background: rgba(20, 118, 255, .13); opacity: 1; }
+.composer-command-clear:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; opacity: 1; }
 
 .composer-footer {
   display: flex;
