@@ -21,7 +21,7 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
-import { isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
+import { isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm } from "@sciencediscovery/schema";
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
@@ -71,7 +71,7 @@ import { Landing } from "./views/Landing.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
-import { ResearchPackage, evidenceReadOnly, type PackageRequest } from "./views/ResearchPackage.js";
+import { ResearchPackage, type PackageRequest } from "./views/ResearchPackage.js";
 import { SetupWizard } from "./views/SetupWizard.js";
 import {
   SystemSettingsDialog,
@@ -513,7 +513,7 @@ export function App({ initialToken }: Props) {
   // to write into. The listeners are installed regardless of that: a file
   // dropped on a page that ignores it would otherwise navigate away from the
   // app entirely.
-  const canUpload = boot === "ready" && state.detail?.archivedAt === undefined && !evidenceReadOnly(state.detail);
+  const canUpload = boot === "ready" && state.detail?.archivedAt === undefined && !isEvidenceSessionReadOnly(state.detail);
   const dragging = useFileDrop((files) => void upload(files), canUpload);
 
   /** A session with nothing to read yet shows the welcome page instead of an
@@ -562,7 +562,7 @@ export function App({ initialToken }: Props) {
    *  provider below reads it in an effect: a `const` declared after an early
    *  `return` is still in its temporal dead zone when that effect commits. */
   const sendMessage = (content: string, command?: string) => {
-    if (evidenceReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return; }
+    if (isEvidenceSessionReadOnly(state.detail)) { actions.toast(TEXT.researchPackage.readOnly, "error"); return; }
     // The token came from the design dialog, which collected the goal, the
     // search and the no-sandbox consent before placing it. Sending it is a
     // question about the sentence only, so the detour below — which is for
@@ -828,7 +828,10 @@ export function App({ initialToken }: Props) {
         {taskSidebar ? (
           <Sidebar
             actions={actions}
-            onExportSession={session => setPackageRequest({ kind: "export", sessionId: session.id, projectId: session.projectId })}
+            onExportSession={session => {
+              if (session.projectId !== state.inboxProject?.id && !state.projects.some(project => project.id === session.projectId)) { actions.toast(TEXT.researchPackage.sourceUnavailable, "error"); return; }
+              setPackageRequest({ kind: "export", sessionId: session.id, projectId: session.projectId });
+            }}
             onImportSession={() => setPackageRequest({ kind: "import", projectId: state.inboxProject?.id })}
             activeProjectId={state.activeProjectId}
             activeSessionId={state.sessionId}
@@ -870,16 +873,16 @@ export function App({ initialToken }: Props) {
                 onDecidePermission={(request, decision) => actions.decidePermission(request.id, decision)}
                 onOpenSubagent={openSubagentDetails}
                 onOpenTool={openToolDetails}
-                onBranch={messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
+                onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
                 pending={state.pendingMessage}
                 replays={state.replays}
                 run={state.run}
                 workspaceFiles={state.panelFiles}
               />
-              {evidenceReadOnly(state.detail) ? null : <Composer {...composerProps} />}
+              {isEvidenceSessionReadOnly(state.detail) ? null : <Composer {...composerProps} />}
             </>
           )}
-          <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshCatalog} />
+          <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshSessions} />
         </main>
 
         <WorkspacePanel
