@@ -138,7 +138,7 @@ test.afterAll(async () => {
  *      design calls create_evolve_run.
  *   4. Watch the background search reach three expansions and read each
  *      candidate by the hash its event recorded.
- *   5. Open the running search from the shelf, then stop it; the scores are
+ *   5. Open the running search from the runs list, then stop it; the scores are
  *      recorded, never used as a gate. The search does not have to finish.
  * Environment: Linux Swarm stack selected by E2E_BASE_URL, with bubblewrap,
  *              scientific Python and the evolve sidecar, plus the desktop Vite
@@ -448,13 +448,14 @@ test("desktop /evolve-design reaches three PUCT expansions on an LLM-SRBench pro
         },
       });
 
-      // The new entry is what this case exists for: the shelf is the handle
-      // that keeps a running search reachable, and opening it must read the
-      // same run the API just returned.
-      await expect(page.locator(".evolve-shelf")).toBeVisible({ timeout: 120_000 });
-      await page.locator(".evolve-chip").first().click();
-      await expect(page.getByRole("dialog")).toBeVisible();
-      await expect(page.locator("#evolve-panel-title")).toBeVisible();
+      // The new entry is what this case exists for: the runs list is the
+      // handle that keeps a running search reachable, and opening its card
+      // must read the same run the API just returned. The list lives in the
+      // task panel, so opening it is a card press, not a dialog.
+      const runs = page.locator(".evolve-runs");
+      await expect(runs).toBeVisible({ timeout: 120_000 });
+      await runs.locator(".evolve-run-card").first().click();
+      await expect(page.locator("#evolve-panel-title")).toBeVisible({ timeout: 60_000 });
       await page.screenshot({ path: info.outputPath("running.png"), fullPage: true });
 
       // Nothing is left running: the smoke case owns this search.
