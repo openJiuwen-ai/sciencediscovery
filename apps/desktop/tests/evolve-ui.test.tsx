@@ -323,7 +323,10 @@ test("the chart draws a rising line and says what its axes mean", () => {
   assert.match(html, /扩展次数/);
   assert.match(html, /evolve-chart-x/);
   // Every reading has a key in the legend.
-  for (const label of ["最优产物", "显著节点", "测试", "失败", "低于基线"]) {
+  // Every plotted point was scored by the gate, so the key names the reading
+  // rather than a class of node: "显著" would describe a distinction the chart
+  // no longer draws.
+  for (const label of ["最优产物", "得分节点", "测试", "失败", "低于基线"]) {
     assert.match(html, new RegExp(label), `${label}: the legend names it`);
   }
 });
