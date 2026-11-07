@@ -382,43 +382,6 @@ if [[ "$healthy" -ne 1 ]]; then
   exit 2
 fi
 
-# API health means the process can answer requests, not that the optional
-# managed scientific environment has finished provisioning. J3 immediately
-# creates an environment and otherwise races a bootstrap that can take minutes
-# on a cold cache. Keep that race out of the browser suite and surface the
-# runner's terminal setup failure directly in the layer log.
-if [[ "$SCIENTIFIC_ENVS" =~ ^(1|true|yes)$ ]]; then
-  environment_timeout="${CI_E2E_ENVIRONMENT_TIMEOUT_SECONDS:-600}"
-  environment_ready=0
-  environment_state=unknown
-  environment_message=
-  for _ in $(seq 1 "$environment_timeout"); do
-    environment_response=$(curl --silent --fail \
-      --header "Authorization: Bearer $auth_token" \
-      "$E2E_BASE_URL/api/environment-setup" 2>/dev/null || true)
-    if [[ -n "$environment_response" ]]; then
-      environment_status=$(node -e '
-        const value = JSON.parse(process.argv[1]);
-        process.stdout.write(`${value.state ?? "unknown"}\n${value.message ?? ""}`);
-      ' "$environment_response" 2>/dev/null || true)
-      environment_state=${environment_status%%$'\n'*}
-      environment_message=${environment_status#*$'\n'}
-      if [[ "$environment_state" == ready ]]; then
-        environment_ready=1
-        break
-      fi
-      if [[ "$environment_state" == failed || "$environment_state" == disabled ]]; then break; fi
-    fi
-    if ! kill -0 "$stack_pid" 2>/dev/null; then break; fi
-    sleep 1
-  done
-  if [[ "$environment_ready" -ne 1 ]]; then
-    printf 'BLOCKED: managed scientific environment did not become ready (state=%s, message=%s); inspect stack.log.\n' \
-      "$environment_state" "${environment_message:-not reported}" | tee -a "$test_log" >&2
-    exit 2
-  fi
-fi
-
 if [[ "$group" == real ]]; then
   node .ci/configure-real-e2e.mjs >> "$test_log" 2>&1 || exit 2
 fi

@@ -68,7 +68,7 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
       real = requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
       await requireRealStack(testInfo);
       test.setTimeout(600_000);
-      const setup = await waitForEnvironmentSetup(() => environmentSetup(page));
+      const setup = await waitForEnvironmentSetup(timeoutMs => environmentSetup(page, timeoutMs));
       testInfo.skip(
         setup.state !== "ready",
         `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
