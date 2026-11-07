@@ -701,6 +701,11 @@ class NativeAgent implements NativeAgentHandle {
           if (event.type === "completed" && event.truncated) truncatedTerminalTurn = true;
         },
         turnLifecycle: this.versionRecorder,
+        outputRecovery: {
+          maxRecoveries: MAX_OUTPUT_RECOVERIES,
+          eligible: (turn) => turn.truncated === true && turn.toolCalls.length === 0,
+          feedback: (turn, attempt) => outputLimitFeedback(turn, attempt),
+        },
         suspendAfterTurn: this.options.suspendAfterTurn,
         waitController: this.waitController,
       });
@@ -860,6 +865,35 @@ class NativeAgent implements NativeAgentHandle {
         break;
     }
   }
+}
+
+const MAX_OUTPUT_RECOVERIES = 2;
+
+/** Best-effort visible text of a wire message content (string or content blocks). */
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((item) => {
+    if (!item || typeof item !== "object") return "";
+    const record = item as Record<string, unknown>;
+    if (typeof record.text === "string") return record.text;
+    if (typeof record.content === "string") return record.content;
+    return "";
+  }).join("");
+}
+
+/** The user message that asks a cut-off turn to continue with one small action. */
+function outputLimitFeedback(turn: { assistantMessage: WireMessage }, attempt: number): WireMessage {
+  const excerpt = messageText(turn.assistantMessage.content).slice(0, 2000);
+  let content =
+    `[Output limit recovery ${attempt}/${MAX_OUTPUT_RECOVERIES}] The previous response hit its output token limit; `
+    + "it was not a completed answer. NO tools from that response were executed. Earlier successful operations and "
+    + "artifacts remain valid: do not replay them. Stop expanding the plan and perform ONE small useful action now. "
+    + "For long files, save a short draft or append one small section per call (aim below 2000 characters). Prefer "
+    + "existing artifact/file transfer tools over retyping full documents. If the task is already done, return a brief "
+    + "handoff with artifact references.";
+  if (excerpt) content += `\n\nPrevious unfinished text excerpt (not a completed result):\n${excerpt}`;
+  return { role: "user", content };
 }
 
 /** Build the same workspace tools as before, so handlers + governance are unchanged.

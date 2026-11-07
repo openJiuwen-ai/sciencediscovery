@@ -33,10 +33,12 @@ export function createContextTraceWriter(
       await mkdir(contextDirectory, { recursive: true });
       const recovery = record.recovery;
       const recoveryAttempt = typeof recovery === "object" && recovery !== null && !Array.isArray(recovery)
-        && (recovery as Record<string, unknown>).reason === "model-input-overflow"
-        && (recovery as Record<string, unknown>).attempt === 1
-        ? 1 : undefined;
-      const filename = `turn-${String(turn).padStart(4, "0")}${recoveryAttempt ? `-recovery-${recoveryAttempt}` : ""}.json`;
+        && ((recovery as Record<string, unknown>).reason === "model-input-overflow"
+          || (recovery as Record<string, unknown>).reason === "output-limit")
+        && typeof (recovery as Record<string, unknown>).attempt === "number"
+        ? (recovery as Record<string, unknown>).attempt as number
+        : undefined;
+      const filename = `turn-${String(turn).padStart(4, "0")}${recoveryAttempt !== undefined ? `-recovery-${recoveryAttempt}` : ""}.json`;
       const destination = resolve(contextDirectory, filename);
       const temporary = `${destination}.${process.pid}.tmp`;
       const payload = JSON.stringify({
