@@ -30,6 +30,8 @@
  * would be honest to add for it.
  */
 
+import { useState } from "react";
+
 import { TEXT } from "../../text.js";
 import { CrownGlyph } from "./glyphs.js";
 import {
@@ -55,6 +57,7 @@ const HEIGHT = 280;
 const PAD = { bottom: 46, left: 56, right: 20, top: 22 };
 
 export function ScoreChart({ view }: { view: EvolveRunView }) {
+  const [hovered, setHovered] = useState<number | null>(null);
   const series = collectSeries(view);
   if (!series.significant.length && view.baselineScore === null) {
     return <p className="evolve-chart-empty">{TEXT.evolve.chart.empty}</p>;
@@ -92,156 +95,247 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
   const ticks = Array.from({ length: 5 }, (_unused, at) =>
     Math.round((bounds.maxIndex * at) / 4));
 
-  return <figure className="evolve-chart">
-    <svg
-      aria-label={TEXT.evolve.chart.aria(
-        formatScore(view.baselineScore),
-        formatScore(bestScore),
-        view.candidates.length,
-      )}
-      className="evolve-chart-svg"
-      preserveAspectRatio="xMidYMid meet"
-      role="img"
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-    >
-      <defs>
-        <pattern
-          height="10"
-          id="evolve-hatch"
-          patternTransform="rotate(45 0 0)"
-          patternUnits="userSpaceOnUse"
-          width="8"
-        >
-          <line className="evolve-chart-hatch-line" x1="0" x2="0" y1="0" y2="10" />
-        </pattern>
-      </defs>
+  // The node the pointer is on. Its depth is not in the series (that is only
+  // what the gate measured), so it is read from the run, and a candidate the
+  // list no longer holds simply gets no generation line.
+  const hoverPoint = hovered === null ? undefined : pointAt(hovered, series);
+  const hoverDepth = hoverPoint === undefined
+    ? undefined
+    : view.candidates.find((candidate) => candidate.nodeIndex === hoverPoint.index)?.depth;
+  const hoverX = hoverPoint === undefined ? 0 : x(hoverPoint.index);
+  const hoverY = hoverPoint === undefined
+    ? 0
+    : hoverPoint.failed ? floor : y(hoverPoint.value ?? 0);
+  // The card is placed below-right of the point, except near an edge, where it
+  // would leave the drawing; there it flips to the other side.
+  const flipX = hoverX > WIDTH * 0.62;
+  const flipY = hoverY > HEIGHT * 0.68;
 
-      {ticks.map((index, at) => <g key={at}>
-        <line
-          className="evolve-chart-grid"
-          x1={x(index)}
-          x2={x(index)}
+  return <figure className="evolve-chart">
+    <div className="evolve-chart-canvas">
+      <svg
+        aria-label={TEXT.evolve.chart.aria(
+          formatScore(view.baselineScore),
+          formatScore(bestScore),
+          view.candidates.length,
+        )}
+        className="evolve-chart-svg"
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+      >
+        <defs>
+          <pattern
+            height="10"
+            id="evolve-hatch"
+            patternTransform="rotate(45 0 0)"
+            patternUnits="userSpaceOnUse"
+            width="8"
+          >
+            <line className="evolve-chart-hatch-line" x1="0" x2="0" y1="0" y2="10" />
+          </pattern>
+        </defs>
+
+        {ticks.map((index, at) => <g key={at}>
+          <line
+            className="evolve-chart-grid"
+            x1={x(index)}
+            x2={x(index)}
+            y1={PAD.top}
+            y2={floor}
+          />
+          <text
+            className="evolve-chart-x"
+            textAnchor={at === 0 ? "start" : at === ticks.length - 1 ? "end" : "middle"}
+            x={x(index)}
+            y={HEIGHT - 24}
+          >
+            {index}
+          </text>
+        </g>)}
+
+        {view.baselineScore === null ? null : <rect
+          className="evolve-chart-below"
+          fill="url(#evolve-hatch)"
+          height={Math.max(0, floor - y(view.baselineScore))}
+          width={plotWidth}
+          x={PAD.left}
+          y={y(view.baselineScore)}
+        />}
+
+        {view.baselineScore === null ? null : <g>
+          <line
+            className="evolve-chart-baseline"
+            x1={PAD.left}
+            x2={WIDTH - PAD.right}
+            y1={y(view.baselineScore)}
+            y2={y(view.baselineScore)}
+          />
+          <text
+            className="evolve-chart-tick"
+            textAnchor="end"
+            x={PAD.left - 8}
+            y={y(view.baselineScore) + 3.5}
+          >
+            {ruleLabel(view.baselineScore)}
+          </text>
+          <text
+            className="evolve-chart-baseline-label"
+            textAnchor="start"
+            x={PAD.left}
+            y={y(view.baselineScore) + 16}
+          >
+            {TEXT.evolve.chart.baseline}
+          </text>
+        </g>}
+
+        {bestScore === null ? null : <g>
+          <line
+            className="evolve-chart-best-line"
+            x1={PAD.left}
+            x2={WIDTH - PAD.right}
+            y1={y(bestScore)}
+            y2={y(bestScore)}
+          />
+          <text
+            className="evolve-chart-tick is-best"
+            textAnchor="end"
+            x={PAD.left - 8}
+            y={y(bestScore) + 3.5}
+          >
+            {ruleLabel(bestScore)}
+          </text>
+        </g>}
+
+        {/* The rule under the pointer: the handoff draws it top to bottom, so
+            the reader can see which expansion a point belongs to even when the
+            card is off to the side. */}
+        {hoverPoint === undefined ? null : <line
+          className="evolve-chart-guide"
+          x1={hoverX}
+          x2={hoverX}
           y1={PAD.top}
+          y2={HEIGHT}
+        />}
+
+        {line ? <path className="evolve-chart-line" d={line} /> : null}
+
+        {series.failed.map((index) => <circle
+          className="evolve-chart-failed"
+          cx={x(index)}
+          cy={floor}
+          key={`failed-${index}`}
+          r={hovered === index ? 4.4 : 3.4}
+        />)}
+
+        {series.significant.map((point) => <circle
+          className={`evolve-chart-dot is-significant${bestNode?.nodeIndex === point.index ? " is-best" : ""}`}
+          cx={x(point.index)}
+          cy={y(point.value)}
+          key={`significant-${point.index}`}
+          r={hovered === point.index ? 5 : 3.8}
+        />)}
+
+        {view.bestTestScore === undefined ? null : <g className="evolve-chart-test">
+          <circle cx={x(bounds.maxIndex)} cy={y(view.bestTestScore)} r={4.6} />
+          <title>{`${TEXT.evolve.chart.test} ${formatScore(view.bestTestScore)}`}</title>
+        </g>}
+
+        {bestNode === undefined || bestScore === null ? null : <g className="evolve-chart-best">
+          <circle cx={x(bestNode.nodeIndex)} cy={y(bestScore)} r={7.2} />
+          <g transform={`translate(${x(bestNode.nodeIndex) - 5} ${y(bestScore) - 5})`}>
+            <CrownGlyph size={10} />
+          </g>
+          <title>{`#${bestNode.nodeIndex} · ${TEXT.evolve.chart.best}`}</title>
+        </g>}
+
+        {/* The points are small by design; the hit areas are not. This layer is
+            last so it sits above the best marker and the step line, and it
+            carries the accessible name the visible dot used to give as a
+            native `<title>` — the card below replaces that tooltip. */}
+        {series.significant.map((point) => <circle
+          aria-label={`#${point.index} · ${TEXT.evolve.chart.significant} ${formatScore(point.value)}`}
+          className="evolve-chart-hit"
+          cx={x(point.index)}
+          cy={y(point.value)}
+          key={`hit-${point.index}`}
+          onBlur={() => setHovered((current) => current === point.index ? null : current)}
+          onFocus={() => setHovered(point.index)}
+          onMouseEnter={() => setHovered(point.index)}
+          onMouseLeave={() => setHovered((current) => current === point.index ? null : current)}
+          r={13}
+          role="img"
+          tabIndex={0}
+        />)}
+        {series.failed.map((index) => <circle
+          aria-label={`#${index} · ${TEXT.evolve.chart.failed}`}
+          className="evolve-chart-hit"
+          cx={x(index)}
+          cy={floor}
+          key={`hit-failed-${index}`}
+          onBlur={() => setHovered((current) => current === index ? null : current)}
+          onFocus={() => setHovered(index)}
+          onMouseEnter={() => setHovered(index)}
+          onMouseLeave={() => setHovered((current) => current === index ? null : current)}
+          r={12}
+          role="img"
+          tabIndex={0}
+        />)}
+
+        <line
+          className="evolve-chart-axis"
+          x1={PAD.left}
+          x2={WIDTH - PAD.right}
+          y1={floor}
           y2={floor}
         />
-        <text
-          className="evolve-chart-x"
-          textAnchor={at === 0 ? "start" : at === ticks.length - 1 ? "end" : "middle"}
-          x={x(index)}
-          y={HEIGHT - 24}
-        >
-          {index}
-        </text>
-      </g>)}
-
-      {view.baselineScore === null ? null : <rect
-        className="evolve-chart-below"
-        fill="url(#evolve-hatch)"
-        height={Math.max(0, floor - y(view.baselineScore))}
-        width={plotWidth}
-        x={PAD.left}
-        y={y(view.baselineScore)}
-      />}
-
-      {view.baselineScore === null ? null : <g>
-        <line
-          className="evolve-chart-baseline"
-          x1={PAD.left}
-          x2={WIDTH - PAD.right}
-          y1={y(view.baselineScore)}
-          y2={y(view.baselineScore)}
-        />
-        <text
-          className="evolve-chart-tick"
-          textAnchor="end"
-          x={PAD.left - 8}
-          y={y(view.baselineScore) + 3.5}
-        >
-          {ruleLabel(view.baselineScore)}
+        <text className="evolve-chart-tick" textAnchor="end" x={PAD.left - 8} y={floor + 3.5}>0</text>
+        <text className="evolve-chart-tick is-top" textAnchor="end" x={PAD.left - 8} y={PAD.top + 3.5}>
+          {axisLabel(bounds.max, bounds.max - bounds.min)}
         </text>
         <text
-          className="evolve-chart-baseline-label"
-          textAnchor="start"
-          x={PAD.left}
-          y={y(view.baselineScore) + 16}
+          className="evolve-chart-x-label"
+          textAnchor="middle"
+          x={PAD.left + plotWidth / 2}
+          y={HEIGHT - 4}
         >
-          {TEXT.evolve.chart.baseline}
+          {TEXT.evolve.chart.xAxis}
         </text>
-      </g>}
+      </svg>
 
-      {bestScore === null ? null : <g>
-        <line
-          className="evolve-chart-best-line"
-          x1={PAD.left}
-          x2={WIDTH - PAD.right}
-          y1={y(bestScore)}
-          y2={y(bestScore)}
-        />
-        <text
-          className="evolve-chart-tick is-best"
-          textAnchor="end"
-          x={PAD.left - 8}
-          y={y(bestScore) + 3.5}
+      {hoverPoint === undefined ? null : (
+        <div
+          className={`evolve-chart-tooltip${flipX ? " is-left" : ""}${flipY ? " is-above" : ""}`}
+          style={{
+            left: `${(hoverX / WIDTH) * 100}%`,
+            top: `${(hoverY / HEIGHT) * 100}%`,
+          }}
         >
-          {ruleLabel(bestScore)}
-        </text>
-      </g>}
-
-      {line ? <path className="evolve-chart-line" d={line} /> : null}
-
-      {series.failed.map((index) => <circle
-        className="evolve-chart-failed"
-        cx={x(index)}
-        cy={floor}
-        key={`failed-${index}`}
-        r={3.4}
-      >
-        <title>{`#${index} · ${TEXT.evolve.chart.failed}`}</title>
-      </circle>)}
-
-      {series.significant.map((point) => <circle
-        className={`evolve-chart-dot is-significant${bestNode?.nodeIndex === point.index ? " is-best" : ""}`}
-        cx={x(point.index)}
-        cy={y(point.value)}
-        key={`significant-${point.index}`}
-        r={3.8}
-      >
-        <title>{`#${point.index} · ${TEXT.evolve.chart.significant} ${formatScore(point.value)}`}</title>
-      </circle>)}
-
-      {view.bestTestScore === undefined ? null : <g className="evolve-chart-test">
-        <circle cx={x(bounds.maxIndex)} cy={y(view.bestTestScore)} r={4.6} />
-        <title>{`${TEXT.evolve.chart.test} ${formatScore(view.bestTestScore)}`}</title>
-      </g>}
-
-      {bestNode === undefined || bestScore === null ? null : <g className="evolve-chart-best">
-        <circle cx={x(bestNode.nodeIndex)} cy={y(bestScore)} r={7.2} />
-        <g transform={`translate(${x(bestNode.nodeIndex) - 5} ${y(bestScore) - 5})`}>
-          <CrownGlyph size={10} />
-        </g>
-        <title>{`#${bestNode.nodeIndex} · ${TEXT.evolve.chart.best}`}</title>
-      </g>}
-
-      <line
-        className="evolve-chart-axis"
-        x1={PAD.left}
-        x2={WIDTH - PAD.right}
-        y1={floor}
-        y2={floor}
-      />
-      <text className="evolve-chart-tick" textAnchor="end" x={PAD.left - 8} y={floor + 3.5}>0</text>
-      <text className="evolve-chart-tick is-top" textAnchor="end" x={PAD.left - 8} y={PAD.top + 3.5}>
-        {axisLabel(bounds.max, bounds.max - bounds.min)}
-      </text>
-      <text
-        className="evolve-chart-x-label"
-        textAnchor="middle"
-        x={PAD.left + plotWidth / 2}
-        y={HEIGHT - 4}
-      >
-        {TEXT.evolve.chart.xAxis}
-      </text>
-    </svg>
+          <div className="evolve-chart-tooltip-head">
+            <span className={`evolve-chart-tooltip-bullet${hoverPoint.failed ? " is-failed" : ""}`} />
+            <span className="evolve-chart-tooltip-node">
+              {TEXT.evolve.detail.nodeTitle(hoverPoint.index)}
+            </span>
+            {hoverDepth === undefined ? null : (
+              <span className="evolve-chart-tooltip-gen">
+                {TEXT.evolve.detail.generation(hoverDepth)}
+              </span>
+            )}
+            {hoverPoint.failed ? (
+              <span className="evolve-chart-tooltip-failed">{TEXT.evolve.chart.failed}</span>
+            ) : bestNode?.nodeIndex === hoverPoint.index ? (
+              <span className="evolve-chart-tooltip-best">
+                <CrownGlyph size={13} />
+                {TEXT.evolve.detail.bestTag}
+              </span>
+            ) : null}
+          </div>
+          {hoverPoint.value === null ? null : (
+            <div className="evolve-chart-tooltip-score">{formatScore(hoverPoint.value)}</div>
+          )}
+        </div>
+      )}
+    </div>
 
     <figcaption className="evolve-chart-legend">
       <span className="evolve-key is-best">
@@ -254,6 +348,20 @@ export function ScoreChart({ view }: { view: EvolveRunView }) {
       <span className="evolve-key is-below">{TEXT.evolve.chart.belowBaseline}</span>
     </figcaption>
   </figure>;
+}
+
+interface HoverPoint {
+  failed: boolean;
+  index: number;
+  value: number | null;
+}
+
+/** The plotted point at a node index, or nothing when the list has moved on
+ *  since the pointer entered the dot. */
+function pointAt(index: number, series: ChartSeries): HoverPoint | undefined {
+  const measured = series.significant.find((point) => point.index === index);
+  if (measured !== undefined) return { failed: false, index, value: measured.value };
+  return series.failed.includes(index) ? { failed: true, index, value: null } : undefined;
 }
 
 /** Pure, and exported so the reading of the events is testable without a DOM. */

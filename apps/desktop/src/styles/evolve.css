@@ -978,6 +978,79 @@
 .evolve-chart-best circle { fill: #fff; stroke: #1968f0; stroke-width: 2.2; }
 .evolve-chart-best svg { color: #1968f0; }
 
+/* The pointer's reading: a dashed rule down the plot, and a small card below
+   the point. The hit areas are larger than the dots, because a 3.8-unit dot is
+   a target nobody can find with a mouse. */
+.evolve-chart-canvas { position: relative; }
+
+.evolve-chart-guide { stroke: #b9b9b9; stroke-dasharray: 4 4; stroke-width: 1; }
+
+.evolve-chart-hit { cursor: pointer; fill: none; pointer-events: all; }
+.evolve-chart-hit:focus-visible { outline: 2px solid #1968f0; outline-offset: 2px; }
+
+/* Pixels rather than viewBox units: the drawing scales with the panel, the
+   card's text does not, and an 8-unit label would be a caption at one width
+   and a billboard at another. Only the anchor point follows the drawing. */
+.evolve-chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  min-width: 128px;
+  padding: 8px 12px 9px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(22, 32, 55, 0.14), 0 2px 6px rgba(22, 32, 55, 0.06);
+  transform: translate(10px, 16px);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* The handoff places the card below-right; near an edge it flips rather than
+   being clipped. */
+.evolve-chart-tooltip.is-left { transform: translate(calc(-100% - 10px), 16px); }
+.evolve-chart-tooltip.is-above { transform: translate(10px, calc(-100% - 16px)); }
+.evolve-chart-tooltip.is-left.is-above {
+  transform: translate(calc(-100% - 10px), calc(-100% - 16px));
+}
+
+.evolve-chart-tooltip-head { display: flex; align-items: center; gap: 5px; }
+
+.evolve-chart-tooltip-bullet {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1968f0;
+}
+.evolve-chart-tooltip-bullet.is-failed { background: #fff; border: 1.5px solid #f0393e; }
+
+.evolve-chart-tooltip-node {
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.evolve-chart-tooltip-gen { color: #9b9b9b; font-size: 12px; }
+
+.evolve-chart-tooltip-best,
+.evolve-chart-tooltip-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.evolve-chart-tooltip-best { color: #1968f0; }
+.evolve-chart-tooltip-failed { color: #f0393e; }
+
+.evolve-chart-tooltip-score {
+  margin-top: 3px;
+  color: #191919;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
 .evolve-chart-legend {
   display: flex;
   flex-wrap: wrap;
