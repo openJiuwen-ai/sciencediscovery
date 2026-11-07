@@ -1280,7 +1280,7 @@ export const EN: Text = {
         `Score chart: baseline ${baseline}, current best ${best}, ${candidates} candidates.`,
       xAxis: "Expansions",
       best: "Best so far",
-      significant: "Significant",
+      significant: "Scored",
       test: "Test",
       failed: "Failed",
       belowBaseline: "Below baseline",

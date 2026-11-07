@@ -1324,7 +1324,7 @@ export const ZH = {
         `得分曲线：基线 ${baseline}，当前最优 ${best}，共 ${candidates} 个候选。`,
       xAxis: "扩展次数",
       best: "最优产物",
-      significant: "显著节点",
+      significant: "得分节点",
       test: "测试",
       failed: "失败",
       belowBaseline: "低于基线",
