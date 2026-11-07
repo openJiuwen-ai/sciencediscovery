@@ -343,7 +343,6 @@ export const EN: Text = {
     status: {
       healthy: "Running",
       degraded: "Cannot connect",
-      needsPassword: "Password needed",
       checking: "Checking",
       unknown: "Status unknown",
       recheck: "Check again",

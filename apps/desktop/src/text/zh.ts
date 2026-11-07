@@ -369,7 +369,6 @@ export const ZH = {
     status: {
       healthy: "运行正常",
       degraded: "连接失败",
-      needsPassword: "需要密码",
       checking: "检查中",
       unknown: "状态未知",
       recheck: "重新检查",

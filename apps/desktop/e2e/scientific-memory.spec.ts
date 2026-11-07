@@ -699,6 +699,16 @@ test("the memory state reads beside the switch, and only while the switch is on"
   await expect(status).toHaveClass(/is-degraded/u);
   await expect(status).toContainText("连接失败");
 
+  // A store that has not been given its credential is the memory service's own
+  // configuration; this window has no field to enter one, so it reads as any
+  // service that is not working rather than naming a step the reader cannot
+  // take from here.
+  mock.state.memorySettings.memoryGraphStatus = "needs-password";
+  await status.getByRole("button", { name: "重新检查" }).click();
+  await expect(status).toHaveClass(/is-degraded/u);
+  await expect(status).toContainText("连接失败");
+  await expect(dialog.getByText("需要密码")).toHaveCount(0);
+
   // Turning it off takes the line, and the question, away again.
   await enabled.click();
   await expect.poll(() => mock.state.memorySettings.enabled).toBe(false);
