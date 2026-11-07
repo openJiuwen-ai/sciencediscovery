@@ -18,7 +18,7 @@
 
 科学记忆不需要任何外部服务。默认（“系统配置 → 记忆 → 存储后端”选“本地文件”）图谱由 memory-graph 侧车自己维护，并以纯文本落盘到：
 
-- 由 `scripts/start-stack.mjs`（桌面宿主进程）或单文件启动器（`ScienceDiscovery serve`）拉起时，是 `<数据目录>/memory-graph/`，其中 `<数据目录>` 即 `SCIENCE_AGENT_DATA_DIR`（默认为 `.sciencediscovery-data/`）；
+- 由 `scripts/start-stack.mjs`（桌面宿主进程）或单文件启动器（`ScienceDiscovery serve`）拉起时，是 `<数据目录>/memory-graph/`，其中 `<数据目录>` 即 `SCIENCE_DISCOVERY_DATA_DIR`（默认为 `.sciencediscovery-data/`；原 `SCIENCE_AGENT_DATA_DIR` 仍作为带日志的兼容回退读取）；
 - 由 `scripts/start-stack.sh`（源码与 Docker 入口）拉起，或直接启动服务时，是 `~/.science-agent/memory-graph/`——那是服务自身的默认值。
 
 `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` 会原样覆盖两种默认值；图谱不会自动迁移：仍留在 `~/.science-agent/memory-graph/` 的安装，一旦改由传入 `<数据目录>/memory-graph` 的入口启动，读到的就是空库。要保留旧图谱，在首次启动前把 `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` 指向旧目录（或直接移动该目录）。
