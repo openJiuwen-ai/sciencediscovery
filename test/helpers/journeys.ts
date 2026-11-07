@@ -869,8 +869,8 @@ export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Arr
 }
 
 /** Query the setup state without triggering installation or other environment changes. */
-export function environmentSetup(page: Page): Promise<{ message: string; state: string }> {
-  return apiJson(page, "/api/environment-setup");
+export function environmentSetup(page: Page, timeoutMs = 10_000): Promise<{ message: string; state: string }> {
+  return apiJson(page, "/api/environment-setup", { timeoutMs });
 }
 
 /** Records a first-run journey cannot tolerate, counted before anything is deleted. */

@@ -15,6 +15,7 @@
 import { expect } from "@playwright/test";
 
 import { test } from "./helpers/e2e.ts";
+import { waitForEnvironmentSetup } from "./helpers/environment-setup.ts";
 import {
   cleanupJourney,
   createProjectAndSession,
@@ -73,7 +74,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     "确认托管 Python 已就绪，并打开本机 Runner 的科学环境页",
     "系统设置的 Runner 目录里选本机，科学环境页签显示托管 Python 已经 Ready；base 没就绪时这条旅程应当被判为前置未满足。",
     async () => {
-      const setup = await environmentSetup(page);
+      const setup = await waitForEnvironmentSetup(timeoutMs => environmentSetup(page, timeoutMs));
       expect(setup.state,
         `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
       ).toBe("ready");

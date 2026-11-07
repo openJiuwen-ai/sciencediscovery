@@ -8,8 +8,12 @@ interface EnvironmentSetup {
 
 /** Observe the runner's existing installation; the reader must not start another one. */
 export async function waitForEnvironmentSetup(
-  read: () => Promise<EnvironmentSetup>,
+  read: (timeoutMs: number) => Promise<EnvironmentSetup>,
 ): Promise<EnvironmentSetup> {
+  const timeoutMs = 180_000;
+  const requestTimeoutMs = 10_000;
+  const started = Date.now();
+  let requestTimer: ReturnType<typeof setTimeout> | undefined;
   let latest: EnvironmentSetup = {
     state: "unknown",
     message: "No environment setup status received before the readiness deadline",
@@ -21,16 +25,29 @@ export async function waitForEnvironmentSetup(
     deadlineTimer = setTimeout(() => {
       expired = true;
       resolve(undefined);
-    }, 180_000);
+    }, timeoutMs);
   });
 
   try {
     while (!expired) {
-      // The deadline also bounds a slow GET; a late ready response cannot open the gate.
-      const setup = await Promise.race([read(), deadline]);
-      if (expired || !setup) break;
+      // Bound both the HTTP request and the wait, including a reader that
+      // ignores its transport timeout. A late response cannot open the gate.
+      const remaining = Math.max(1, timeoutMs - (Date.now() - started));
+      const requestBudget = Math.min(requestTimeoutMs, remaining);
+      let setup: EnvironmentSetup | undefined;
+      try {
+        setup = await Promise.race([
+          read(requestBudget),
+          new Promise<undefined>(resolve => { requestTimer = setTimeout(resolve, requestBudget); }),
+          deadline,
+        ]);
+      } finally {
+        clearTimeout(requestTimer);
+      }
+      if (expired) break;
+      if (!setup) throw new Error(`Environment setup request did not complete within ${requestBudget} ms`);
       latest = setup;
-      if (setup.state === "ready" || setup.state === "failed") return setup;
+      if (["ready", "failed", "disabled"].includes(setup.state)) return setup;
       await Promise.race([
         new Promise<void>((resolve) => { pollTimer = setTimeout(resolve, 5_000); }),
         deadline,
@@ -38,6 +55,7 @@ export async function waitForEnvironmentSetup(
     }
     return latest;
   } finally {
+    clearTimeout(requestTimer);
     clearTimeout(deadlineTimer);
     clearTimeout(pollTimer);
   }

@@ -154,6 +154,14 @@ fresh-library cases execute first in a dedicated pristine stack, followed by
 the global configuration cases and the single supplemental pass in a second
 stack. Without `--shard`, the local entry point retains the full serial suite
 and the same isolation boundary.
+
+Managed scientific-environment readiness is a prerequisite of the journeys
+that use it, rather than a gate before every browser batch. J3 and the real
+request journey poll the existing setup status for at most 180 seconds, with
+each request limited to 10 seconds and the remaining total budget. A failed,
+disabled or expired setup cannot satisfy the journey's ready precondition;
+unrelated journeys can still run and report their own results.
+
 Concurrent local invocations must use prepared dependencies and distinct
 `CI_RESULTS_DIR`, `CI_RUNTIME_DIR`, API/legacy/Runner/evolve/memory-graph ports.
 On one host, let each JiuwenSwarm instance finish binding its automatically
