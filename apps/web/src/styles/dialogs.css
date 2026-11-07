@@ -288,6 +288,10 @@
 .codex-config-card p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
 .codex-config-card .primary-button { justify-self: start; }
 
+.model-deletion-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; color: var(--text); background: var(--surface); overflow: auto; }
+.model-deletion-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.model-deletion-dialog h2 { overflow-wrap: anywhere; }
+.model-deletion-dialog select { width: 100%; min-width: 0; }
 .workspace-file-preview-modal .artifact-modal-header { flex: 0 0 auto; flex-wrap: wrap; min-width: 0; }
 .workspace-file-preview-modal .artifact-modal-header > div:first-child { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .workspace-file-preview-modal .artifact-modal-controls { min-width: 0; max-width: 100%; }

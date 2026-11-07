@@ -148,3 +148,20 @@ test("a storage failure still yields a bounded result", async () => {
   assert.match(result, /could not be stored for re-reading/);
   assert.ok(Buffer.byteLength(result, "utf8") < DEFAULT_TOOL_OUTPUT_MAX_BYTES * 1.1);
 });
+
+
+test("explicit retained content bypasses the threshold and preserves JSON recovery metadata", async () => {
+  let saved = "";
+  const guard = new ToolOutputGuard({ sink: { async save(_tool, text) { saved = text; return record(); } } });
+  const result = await guard.applyDetailed("custom", '{"answer":"preview"}', true, "complete safe result");
+  assert.equal(saved, "complete safe result");
+  assert.match(JSON.parse(result.content)._retainedOutput.instruction, /read_tool_output/);
+  assert.equal(JSON.parse(result.content).answer, "preview");
+});
+
+test("the retention notice still crosses the output bound", async () => {
+  const guard = new ToolOutputGuard({ maxBytes: 64, sink: { async save() { return record(); } } });
+  const result = await guard.applyDetailed("custom", '{"answer":"preview"}', false, "complete safe result");
+  assert.equal(result.truncated, true);
+  assert.ok(result.record);
+});

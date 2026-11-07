@@ -44,6 +44,16 @@ export async function readJson<T>(request: IncomingMessage): Promise<T> {
   }
 }
 
+export async function readOptionalJson<T>(request: IncomingMessage): Promise<T | undefined> {
+  const bytes = await readBytes(request, MAX_BODY_BYTES, "Request body");
+  if (bytes.length === 0) return undefined;
+  try {
+    return JSON.parse(bytes.toString("utf8")) as T;
+  } catch {
+    throw new Error("Request body must be valid JSON");
+  }
+}
+
 export async function readMultipartSkill(request: IncomingMessage): Promise<{ bytes: Buffer; filename: string }> {
   const contentType = request.headers["content-type"] ?? "";
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);

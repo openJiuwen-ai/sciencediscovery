@@ -681,6 +681,11 @@ async function executeAgentRun(
   }
   const project = store.getProject(session.projectId);
   if (!project) throw new ApiStatusError(404, "Project not found");
+  // Validate the queued run's frozen selection before touching execution services.
+  const selectedModel = store.getModel(settingsSnapshot.modelId);
+  if (!selectedModel) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   // Remote machines are an addition, not a replacement: this run always has the
   // local runner, and each allowed machine is one more place the model may ask
   // to run. A machine that is not connected only fails the calls that name it.
@@ -799,11 +804,7 @@ async function executeAgentRun(
   const enabledBuiltinSpecialists = store
     .listSpecialists()
     .filter((specialist) => specialist.builtIn && specialist.enabled !== false);
-  const selectedModel = store.getModel(settingsSnapshot.modelId);
   const initialPermissionEpoch = store.getSessionPermissionEpoch(sessionId);
-  if (!selectedModel) {
-    throw new ApiStatusError(400, "The session model is not available");
-  }
   if (!initialPermissionEpoch) {
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
@@ -825,6 +826,7 @@ async function executeAgentRun(
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
   let activeSkills: RuntimeSkillSnapshot[];
+  const librarySkillIds = new Set<string>();
   try {
     // `/` attachments must stay inside the Session's effective skill set: in
     // `selected` mode a skill outside the whitelist is not usable at all.
@@ -850,6 +852,9 @@ async function executeAgentRun(
         )
       : [];
     const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
+    for (const skill of librarySkills) {
+      if (!manualSkillIds.has(skill.id)) librarySkillIds.add(skill.id);
+    }
     activeSkills = [
       ...manualSkills,
       ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
@@ -864,6 +869,7 @@ async function executeAgentRun(
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
   const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
+    ...(librarySkillIds.has(id) ? { importOnRun: true } : {}),
     content,
     description,
     hash,
@@ -3095,7 +3101,9 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   if (!pluginEnabled(snapshot.plugins, "skill")) { snapshot.enabledSkillIds = []; snapshot.enabledSkillLibraries = []; }
   snapshot.enabledConnectorIds = filterEnabledMcpSources(snapshot.enabledConnectorIds, snapshot.plugins);
   const model = store.getModel(snapshot.modelId);
-  if (!model) return snapshot;
+  if (!model) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
     ? "anthropic-messages"
     : "openai-chat-completions");
@@ -3347,9 +3355,17 @@ export async function createSkillEvolutionRun(
   }, ideaTreeRepository);
 }
 
-export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun> {
+export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun | undefined> {
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
-  const settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  let settingsSnapshot: EffectiveRuntimeSettings;
+  try {
+    settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  } catch (error) {
+    // Keep the inbox unread until the user repairs the model selection. Other
+    // owners must still receive their notices during this tick.
+    if (error instanceof ApiStatusError && error.code === "SESSION_MODEL_UNAVAILABLE") return undefined;
+    throw error;
+  }
   const skillLibraryRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
   return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch),

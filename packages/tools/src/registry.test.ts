@@ -4,12 +4,13 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import { Type } from "typebox";
 
 import { ToolOutputGuard } from "./bounded-output.js";
 import { ToolLoopGuard } from "./loop-guard.js";
-import { sanitizeToolDetails, ToolRegistry } from "./registry.js";
+import { redactToolDetails, sanitizeToolDetails, ToolRegistry } from "./registry.js";
 import { ToolOutputStore } from "./tool-output-store.js";
 
 const resultMessage = (call: { id: string; name: string }, content: string, output?: { ref: string }) => ({
@@ -184,12 +185,93 @@ test("returned tool failures keep their result, metadata, and error flag through
   assert.equal(result.content, content);
   assert.deepEqual(result.details, sanitizedDetails);
   assert.equal(result.message.content, content);
-  for (const results of [recorded, observed]) {
-    assert.equal(results.length, 1);
-    assert.equal(results[0]?.isError, true);
-    assert.equal(results[0]?.content, content);
-    assert.deepEqual(results[0]?.details, sanitizedDetails);
-  }
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.isError, true);
+  assert.equal(recorded[0]?.content, content);
+  assert.deepEqual(recorded[0]?.details, { apiToken: "[redacted]", exitCode: 1, stderr: "[omitted]", stdout: "[omitted]" });
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0]?.isError, true);
+  assert.equal(observed[0]?.content, content);
+  assert.deepEqual(observed[0]?.details, sanitizedDetails);
+});
+
+test("durable details redact nested credentials and payloads without truncating safe metadata", async () => {
+  const recorded: Array<{ details?: unknown }> = [];
+  const testCredential = randomUUID();
+  const shared = { password: testCredential, label: "shared" };
+  const details = {
+    token: "root-token",
+    records: Array.from({ length: 105 }, () => ({ metadata: "x".repeat(5_000), nested: [shared] })),
+    tail: { authorization: "header-secret", body: "private-payload" },
+    left: shared, right: shared,
+  };
+  const cyclic: Record<string, unknown> = { details };
+  cyclic.self = cyclic;
+  const registry = new ToolRegistry([{
+    name: "audit", label: "Audit", description: "Audit", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text", text: "done" }], details: cyclic }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(result); },
+  });
+  const result = await registry.execute({ id: "audit", name: "audit", args: {} }, new AbortController().signal);
+  const audit = recorded[0]?.details as { self: string; details: typeof details };
+  assert.equal(audit.self, "[circular]");
+  assert.equal(audit.details.records.length, 105);
+  assert.equal(audit.details.records[104]?.metadata.length, 5_000);
+  assert.equal(audit.details.records[104]?.nested[0]?.password, "[redacted]");
+  assert.deepEqual(audit.details.tail, { authorization: "[redacted]", body: "[omitted]" });
+  assert.equal(audit.details.left.password, "[redacted]");
+  assert.equal(audit.details.left.label, "shared");
+  assert.equal(Object.keys(audit.details.left).length, 2);
+  assert.deepEqual(audit.details.right, audit.details.left);
+  assert.doesNotMatch(JSON.stringify(audit), /root-token|header-secret|private-payload/);
+  assert.equal(JSON.stringify(audit).includes(testCredential), false);
+  assert.equal(details.token, "root-token");
+  assert.equal(shared.password, testCredential);
+  assert.equal(cyclic.self, cyclic);
+  assert.equal((result.details as { __detailsBoundary: { truncated: boolean } }).__detailsBoundary.truncated, true);
+});
+
+test("pathologically deep tool details remain recordable without failing the turn", async () => {
+  const recorded: string[] = [];
+  let nested: unknown = { token: "deep-secret" };
+  for (let index = 0; index < 5_000; index += 1) nested = index % 2 ? { next: nested } : [nested];
+  const registry = new ToolRegistry([{
+    name: "deep", label: "Deep", description: "Deep", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text", text: "done" }], details: { nested, token: "root-secret", safe: "retained" } }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(JSON.stringify(result.details)); },
+  });
+  const result = await registry.execute({ id: "deep", name: "deep", args: {} }, new AbortController().signal);
+  assert.equal(result.isError, false);
+  assert.equal(result.content, "done");
+  assert.equal(recorded.length, 1);
+  assert.match(recorded[0]!, /\[max-depth\]/);
+  assert.match(recorded[0]!, /"safe":"retained"/);
+  assert.match(recorded[0]!, /"token":"\[redacted\]"/);
+  assert.doesNotMatch(recorded[0]!, /deep-secret|root-secret/);
+});
+
+test("audit redaction preserves deep and wide metadata and normalizes non-JSON values", () => {
+  let nested: Record<string, unknown> = { token: "deep-secret", safe: "leaf" };
+  for (let index = 0; index < 12; index += 1) nested = { next: nested };
+  const wide = Object.fromEntries(Array.from({ length: 105 }, (_, index) => [`key${index}`, index]));
+  const ref = { pool: "data", digest: `sha256:${"a".repeat(64)}`, size: 1, mediaType: "text/plain" };
+  const result = redactToolDetails({ nested, wide, ref, date: new Date("2026-01-01Z"), invalid: new Date(NaN),
+    count: 42n, bytes: new Uint8Array(3), error: new Error("safe failure"), absent: undefined }) as Record<string, unknown>;
+  let leaf = result.nested as Record<string, unknown>;
+  for (let index = 0; index < 12; index += 1) leaf = leaf.next as Record<string, unknown>;
+  assert.deepEqual(leaf, { token: "[redacted]", safe: "leaf" });
+  assert.deepEqual(result.wide, wide);
+  assert.deepEqual(result.ref, ref);
+  assert.equal(result.date, "2026-01-01T00:00:00.000Z");
+  assert.equal(result.invalid, null);
+  assert.equal(result.count, "42");
+  assert.equal(result.bytes, "[binary:3]");
+  assert.deepEqual(result.error, { name: "Error", message: "safe failure" });
+  assert.equal(Object.hasOwn(result, "absent"), false);
 });
 
 test("error-looking output is successful unless the tool marks it as a failure", async () => {

@@ -1,0 +1,259 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { TestContext } from "node:test";
+import { SessionStore } from "./store.js";
+import { NotificationDispatcher } from "./notification-dispatch.js";
+import { createNotificationRun, scheduleSessionRuns } from "./runs/index.js";
+import { SkillLibraryCatalog } from "./skill-library-catalog.js";
+
+function requiredSession(store: SessionStore, id: string) {
+  const session = store.getSession(id);
+  assert.ok(session, "session must remain accessible");
+  return session;
+}
+
+async function fixture(context: TestContext) {
+  const root = await mkdtemp(join(tmpdir(), "sd-model-selection-"));
+  const state = { store: new SessionStore(root) };
+  await state.store.load();
+  context.after(async () => { state.store.close(); await rm(root, { recursive: true, force: true }); });
+  const make = (name: string) => state.store.createModel({ name, model: name, baseUrl: "https://models.example.test/v1", apiToken: randomUUID() });
+  const a = await make("A"), b = await make("B"), c = await make("C");
+  const project = await state.store.createProject("Model selection");
+  const reopen = async () => { state.store.close(); state.store = new SessionStore(root); await state.store.load(); };
+  return { state, a, b, c, project, reopen, root };
+}
+
+test("deleting a primary model migrates inherited sessions but blocks explicit choices across restart", async context => {
+  const { state, a, b, project, reopen } = await fixture(context);
+  const inherited = await state.store.createSession(project.id, "Inherited");
+  const explicit = await state.store.createSession(project.id, "Explicit", { modelId: a.id });
+  await state.store.deleteModel(a.id, b.id);
+  const check = () => {
+    assert.equal(state.store.getGlobalSettings().overrides.modelId, b.id);
+    assert.equal(requiredSession(state.store, inherited.id).modelId, b.id);
+    assert.equal(requiredSession(state.store, explicit.id).modelId, undefined);
+    assert.equal(requiredSession(state.store, explicit.id).settingsOverrides.modelId, a.id);
+    assert.equal(state.store.resolveRuntimeSettings(explicit.id).effective.modelId, undefined);
+    assert.equal(state.store.resolveRuntimeSettings(explicit.id).sources.modelId, "session");
+  };
+  check(); await reopen(); check();
+  await state.store.updateSession(explicit.id, { modelId: b.id });
+  assert.equal(requiredSession(state.store, explicit.id).modelId, b.id);
+});
+
+test("a deleted explicit model blocks an already configured project and global model", async context => {
+  const { state, a, b, c, project, reopen } = await fixture(context);
+  await state.store.replaceGlobalSettings({ modelId: c.id });
+  await state.store.replaceProjectSettings(project.id, { modelId: b.id });
+  const session = await state.store.createSession(project.id, "Explicit A", { modelId: a.id });
+  await state.store.deleteModel(a.id);
+  assert.equal(state.store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+  await reopen();
+  assert.equal(state.store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+  await state.store.replaceSessionSettings(session.id, {});
+  assert.equal(requiredSession(state.store, session.id).modelId, b.id);
+});
+
+test("clearing all model overrides never resurrects a compatibility mirror", async context => {
+  const { state, a, project, reopen } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Clear", { modelId: a.id });
+  await state.store.replaceSessionSettings(session.id, {});
+  await state.store.replaceGlobalSettings({});
+  assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+  assert.equal(state.store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+  await reopen();
+  assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+  assert.equal(state.store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+});
+
+test("invalid replacement and failed deletion preserve catalog and credentials atomically", async context => {
+  const { state, a, b, project, reopen } = await fixture(context);
+  const before = state.store.getModelApiToken(a.id);
+  const session = await state.store.createSession(project.id, "Inherited");
+  for (const replacement of [a.id, randomUUID()]) {
+    await assert.rejects(state.store.deleteModel(a.id, replacement), /Replacement/);
+    assert.equal(state.store.getGlobalSettings().overrides.modelId, a.id);
+    assert.equal(state.store.getModelApiToken(a.id), before);
+  }
+  const database = state.store.getConfigurationDatabase();
+  database.exec("CREATE TEMP TRIGGER fail_model_delete BEFORE UPDATE ON catalog_state BEGIN SELECT RAISE(ABORT, 'injected deletion failure'); END");
+  await assert.rejects(state.store.deleteModel(a.id, b.id), /injected deletion failure/);
+  database.exec("DROP TRIGGER fail_model_delete");
+  assert.equal(state.store.getModelApiToken(a.id), before);
+  assert.equal(requiredSession(state.store, session.id).modelId, a.id);
+  await reopen();
+  assert.equal(state.store.getGlobalSettings().overrides.modelId, a.id);
+  assert.equal(state.store.getModelApiToken(a.id), before);
+});
+
+test("a stale deletion confirmation cannot change another window's primary model", async context => {
+  const { state, a, b, c } = await fixture(context);
+  await state.store.replaceGlobalSettings({ modelId: c.id });
+  await state.store.deleteModel(a.id, b.id);
+  assert.equal(state.store.getGlobalSettings().overrides.modelId, c.id);
+});
+
+test("unavailable choices allow unrelated edits but reject new unknown references", async context => {
+  const { state, a, b, project } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Editable", { modelId: a.id, reviewModelId: a.id });
+  await state.store.deleteModel(a.id, b.id);
+  await state.store.updateSession(session.id, { title: "Renamed", thinkingMode: "auto" });
+  assert.equal(requiredSession(state.store, session.id).settingsOverrides.modelId, a.id);
+  await assert.rejects(state.store.updateSession(session.id, { modelId: randomUUID() }), /existing model/);
+  await state.store.replaceSessionSettings(session.id, { ...requiredSession(state.store, session.id).settingsOverrides, semanticReviewEnabled: false });
+  assert.equal(state.store.resolveRuntimeSettings(session.id).effective.modelId, undefined);
+});
+
+test("provider deletion replaces only its default and keeps explicit choices unavailable", async context => {
+  const { state, b, project, reopen } = await fixture(context);
+  const provider = await state.store.createProvider({ name: "Provider", baseUrl: "https://models.example.test/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", modelDiscovery: "openai-models", apiToken: randomUUID() });
+  const model = await state.store.materializeProviderModel(provider.id, "gpt-4o-mini");
+  await state.store.replaceGlobalSettings({ modelId: model.id, reviewModelId: model.id });
+  const session = await state.store.createSession(project.id, "Provider choice", { modelId: model.id });
+  await state.store.deleteProvider(provider.id, b.id);
+  assert.equal(state.store.getGlobalSettings().overrides.modelId, b.id);
+  assert.equal(state.store.getGlobalSettings().overrides.reviewModelId, undefined);
+  assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+  await reopen();
+  assert.equal(requiredSession(state.store, session.id).settingsOverrides.modelId, model.id);
+  assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+});
+
+test("leaving the primary unset survives restart and profile edits", async context => {
+  const { state, a, b, project, reopen } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Inherited");
+  await state.store.deleteModel(a.id, null);
+  await state.store.updateModel(b.id, { name: "Renamed B", model: b.model, baseUrl: b.baseUrl });
+  await reopen();
+  assert.equal(state.store.getGlobalSettings().overrides.modelId, undefined);
+  assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+});
+
+
+test("connecting the first model updates existing inherited unconfigured sessions", async context => {
+  const root = await mkdtemp(join(tmpdir(), "sd-first-model-"));
+  const store = new SessionStore(root);
+  context.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await store.load();
+  const project = await store.createProject("First model");
+  const session = await store.createSession(project.id, "Waiting for setup", {}, {}, { allowUnconfiguredModel: true });
+  const model = await store.createModel({ name: "First", model: "first", baseUrl: "https://models.example.test/v1", apiToken: randomUUID() });
+  assert.equal(requiredSession(store, session.id).modelId, model.id);
+  assert.equal(requiredSession(store, session.id).settingsOverrides.modelId, undefined);
+});
+
+
+test("deleting a model keeps historical run snapshots intact", async context => {
+  const { state, a, b, project, reopen } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Historical", { modelId: a.id });
+  const run = await state.store.createSessionRun({ sessionId: session.id, prompt: "Historical work", settingsSnapshot: state.store.resolveRuntimeSettings(session.id).effective });
+  await state.store.updateSessionRun(session.id, run.id, { status: "completed" });
+  await state.store.deleteModel(a.id, b.id);
+  await reopen();
+  assert.deepEqual((await state.store.getSessionRun(session.id, run.id))?.settingsSnapshot, run.settingsSnapshot);
+  assert.equal(requiredSession(state.store, session.id).modelId, undefined);
+});
+
+
+test("deleted-model notifications do not starve other owners and retry after recovery", async context => {
+  const { state, a, b, project, root } = await fixture(context);
+  const sessions = await Promise.all(["One", "Two"].map(title => state.store.createSession(project.id, title, { modelId: a.id })));
+  for (const session of sessions) state.store.notifications.complete({ sessionId: session.id, agentId: "main" }, "job", "done");
+  const owners = state.store.notifications.pendingOwners();
+  const broken = owners[0]; const healthy = owners[1];
+  assert.ok(broken); assert.ok(healthy);
+  await state.store.updateSession(healthy.sessionId, { modelId: b.id });
+  await state.store.deleteModel(a.id, b.id);
+  const libraries = new SkillLibraryCatalog(root);
+  await libraries.load();
+  const scheduled: string[] = [];
+  const dispatcher = new NotificationDispatcher(state.store,
+    batch => createNotificationRun(state.store, libraries, batch), id => { scheduled.push(id); });
+  await dispatcher.tick();
+  await dispatcher.tick();
+  assert.deepEqual(scheduled, [healthy.sessionId]);
+  assert.equal((await state.store.listSessionRuns(broken.sessionId)).length, 0);
+  assert.equal(state.store.notifications.unread(broken).length, 1);
+  await state.store.updateSession(broken.sessionId, { modelId: b.id });
+  await dispatcher.tick();
+  assert.deepEqual(scheduled, [healthy.sessionId, broken.sessionId]);
+  assert.equal((await state.store.listSessionRuns(broken.sessionId)).length, 1);
+});
+
+
+test("session configuration writes retain deleted choices while rejecting new invalid references", async context => {
+  const { state, a, b, project, reopen } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Configuration", { modelId: a.id, reviewModelId: a.id });
+  await state.store.deleteModel(a.id, b.id);
+  const db = state.store.getConfigurationDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    state.store.applyP1ConfigurationSync(session.id, "skill.select", { enabledSkillLibraryIds: [] }, { kind: "session", id: session.id });
+    state.store.applyP1ConfigurationSync(session.id, "review.configure", { semanticReviewEnabled: false }, { kind: "session", id: session.id });
+    assert.throws(() => state.store.applyP1ConfigurationSync(session.id, "review.configure",
+      { reviewModelId: randomUUID() }, { kind: "session", id: session.id }), /existing model/);
+    assert.throws(() => state.store.applyP1ConfigurationSync(session.id, "thinking.configure",
+      { thinkingMode: "auto" }, { kind: "session", id: session.id }), /MODEL_NOT_SELECTED/);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  const request = state.store.proposeConnectorConfiguration({ sessionId: session.id, runId: "user-request:configuration",
+    connectorId: "uniprot", connectorName: "UniProt", reason: "Needed for this task" });
+  const applied = await state.store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
+  assert.equal(applied.state, "applied");
+  await reopen();
+  const settings = state.store.getSessionSettings(session.id);
+  assert.equal(settings.overrides.modelId, a.id);
+  assert.equal(settings.overrides.reviewModelId, a.id);
+  assert.equal(settings.effective.modelId, undefined);
+  assert.equal(settings.overrides.semanticReviewEnabled, false);
+  assert.deepEqual(settings.overrides.enabledSkillLibraries, []);
+  assert.ok(settings.effective.enabledConnectorIds.includes("uniprot"));
+});
+
+
+test("a queued run whose frozen model was deleted emits a structured recovery error", async context => {
+  const { state, a, b, project } = await fixture(context);
+  const session = await state.store.createSession(project.id, "Queued", { modelId: a.id });
+  const run = await state.store.createSessionRun({ sessionId: session.id, prompt: "Queued work",
+    settingsSnapshot: state.store.resolveRuntimeSettings(session.id).effective });
+  assert.equal(run.status, "queued");
+  await state.store.deleteModel(a.id, b.id);
+  // Even repairing the session must not silently substitute the frozen model.
+  await state.store.updateSession(session.id, { modelId: b.id });
+  // No external dependency should be touched before rejecting the frozen model.
+  const unused = new Proxy({}, { get: () => assert.fail("Unavailable model reached an execution dependency") }) as never;
+  scheduleSessionRuns(state.store, unused, unused, unused, unused, unused, unused, unused, unused, unused,
+    unused, unused, unused, unused, unused, session.id, unused, null, undefined);
+  let finished = await state.store.getSessionRun(session.id, run.id);
+  for (let attempt = 0; attempt < 100 && finished?.status !== "failed"; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    finished = await state.store.getSessionRun(session.id, run.id);
+  }
+  assert.equal(finished?.status, "failed");
+  assert.equal(finished.error, "The session model is not available");
+  assert.deepEqual(finished.settingsSnapshot, run.settingsSnapshot);
+  const events = await state.store.listSessionRunEvents(session.id, run.id, 0);
+  const failure = events.find(record => record.event.type === "run.failed");
+  assert.ok(failure);
+  assert.deepEqual(failure.event, { type: "run.failed", error: "The session model is not available", errorCode: "SESSION_MODEL_UNAVAILABLE" });
+});

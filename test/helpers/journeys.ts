@@ -286,7 +286,9 @@ export function scriptedModel(
           // Read only the execution's scalar fields, without evaluating that
           // wrapper or treating a foreground wait deadline as completion.
           const result = String([...messages].reverse().find(message => message.role === "tool")?.content ?? "");
-          const executionId = result.match(/"id"\s*:\s*"([^"]+)"/)?.[1];
+          // Projected execution results expose `executionId`; retain `id` as
+          // a fallback for older execution_status fixtures during upgrades.
+          const executionId = result.match(/"(?:executionId|id)"\s*:\s*"([^"]+)"/)?.[1];
           const state = result.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
           if (!executionId || !state) throw new Error("Scripted shell returned no execution id/state");
           if (state === "queued" || state === "running") {
@@ -298,6 +300,14 @@ export function scriptedModel(
               throw new Error(`Scripted shell did not succeed: state=${state}, exitCode=${exitCode ?? "missing"}`);
             }
             waitingForShell[route] = false;
+            // execution_status intentionally projects only lifecycle facts.
+            // Fetch retained output before the fixture advances so dependent
+            // scripted steps observe the command's actual stdout/stderr. A
+            // foreground run_shell result already carries those sections.
+            if (!result.includes("stdout:")) {
+              step = { tool: "execution_logs", arguments: { execution_id: executionId } };
+              pollingShell = true;
+            }
           }
         }
 

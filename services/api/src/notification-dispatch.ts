@@ -32,7 +32,7 @@ export class NotificationDispatcher {
   private polling = false;
   private closed = false;
   constructor(private readonly store: SessionStore,
-    private readonly enqueue: (batch: NotificationBatch) => Promise<SessionRun>,
+    private readonly enqueue: (batch: NotificationBatch) => Promise<SessionRun | undefined>,
     private readonly schedule: (sessionId: string) => void) {}
 
   close(): void { this.closed = true; }
@@ -54,7 +54,8 @@ export class NotificationDispatcher {
         if (runs.some((run) => ["queued", "running", "blocked"].includes(run.status))) continue;
         const batch = this.store.notifications.prepareDelivery(owner);
         if (!batch) continue;
-        await this.enqueue(batch);
+        const run = await this.enqueue(batch);
+        if (!run) continue;
         // Admission rechecks the gate. Stop during persistence leaves notices unread.
         if (!this.closed) this.schedule(owner.sessionId);
       }

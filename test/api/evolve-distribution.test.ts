@@ -37,6 +37,10 @@ const run = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const BASELINE = '"""Predict the training mean."""\nimport pandas as pd\ndef train_and_predict(train_path, test_path):\n    train = pd.read_csv(train_path)\n    test = pd.read_csv(test_path)\n    return [float(train["y"].mean())] * len(test)\n';
 const CANDIDATE = '```python\n"""Learn the linear relation."""\nimport pandas as pd\nfrom sklearn.linear_model import LinearRegression\ndef train_and_predict(train_path, test_path):\n    train = pd.read_csv(train_path)\n    test = pd.read_csv(test_path)\n    model = LinearRegression()\n    model.fit(train[["x"]], train["y"])\n    return list(model.predict(test[["x"]]))\n```';
+const proxyEnvironment = Object.fromEntries(
+  ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]
+    .flatMap(name => process.env[name] ? [[name, process.env[name]]] : []),
+);
 
 test("a user initializes the pinned release into an empty installation and completes a real Evolve task", { timeout: 15 * 60_000 }, async () => {
   const workspace = await mkdtemp(join(tmpdir(), "evolve-distribution-"));
@@ -111,7 +115,7 @@ test("a user initializes the pinned release into an empty installation and compl
       },
     };
     const context = { dataDir: join(workspace, "data"), payloadRoot: workspace, manifest, io,
-      env: { PATH: process.env.PATH, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || "https://pypi.org/simple" }, log };
+      env: { PATH: process.env.PATH, ...proxyEnvironment, SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR: join(workspace, "operator-candidates"), SCIENCE_AGENT_PYPI_INDEX: process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || "https://pypi.org/simple" }, log };
     control = await startEvolveControl(context);
     assert.equal(control.runtime.status().state, "not_initialized");
     assert(control.runtime.connection() === undefined, "unavailable service must not expose a connection");

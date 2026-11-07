@@ -156,7 +156,7 @@ test("researcher can allow a manual MCP download from its card", { tag: ["@mocke
   const stub = await scriptedModel([
     { arguments: { identifier: "2401.00001" }, tool: "mcp__arxiv__prepare_paper_download" },
     { text: "The candidate is ready; downloading it still needs your approval." },
-  ]);
+  ], undefined, { captureContext: true });
   // The connector call itself runs under "always allow" so the journey reaches
   // an unprepared candidate; consent is switched on afterwards, so the click
   // under test is the one that has to ask.
@@ -201,6 +201,15 @@ test("researcher can allow a manual MCP download from its card", { tag: ["@mocke
       expect(stub.calls[0]?.offeredTools ?? [], "the arXiv download tool must be offered to the run").toContain("mcp__arxiv__prepare_paper_download");
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 120_000);
       expect(terminal.status, terminal.error).toBe("completed");
+      const modelResults = stub.calls.flatMap((call) => call.toolResults ?? []);
+      const candidateResult = modelResults.find((result) => result.includes('"candidateId"'));
+      expect(candidateResult, "the model sees terms and estimated size before download consent").toBeDefined();
+      // JiuwenSwarm wraps the JSON result in its own tool-result envelope.
+      // Assert what reaches the model without assuming the envelope is JSON.
+      expect(candidateResult).toMatch(/"license"\s*:\s*"CC0"/);
+      expect(candidateResult).toMatch(/"attribution"\s*:\s*"Offline fixture"/);
+      expect(candidateResult).toMatch(/"expectedBytes"\s*:\s*[1-9]\d*[,}]/);
+      expect(candidateResult).not.toContain("sourceUrl");
       // An actionable card opens itself; the candidate's Prepare button is the
       // entry point the user is here for.
       await expect(prepare).toBeVisible();

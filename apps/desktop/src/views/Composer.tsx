@@ -131,6 +131,7 @@ interface Props {
    *  the composer cannot clear it alone: the other mount would keep drawing it. */
   onClearCommand?: () => void;
   selectedModelId?: string;
+  unavailableModel?: boolean;
   /** The expert the open session is bound to, if any. */
   selectedSpecialistId?: string;
   /** The category the welcome page attached to this turn. */
@@ -706,6 +707,7 @@ export function Composer({
   seed,
   seededCommand,
   selectedModelId,
+  unavailableModel = false,
   selectedSpecialistId,
   tag,
   uploading,
@@ -801,11 +803,11 @@ export function Composer({
     node.setSelectionRange(end, end);
   };
 
-  const selected = models.find((model) => model.id === selectedModelId) ?? models[0];
+  const selected = models.find((model) => model.id === selectedModelId);
   /** The stored name is the server's; the pill shows it in the interface's
    *  language. */
   const selectedName = selected ? providerName(selected.name) : undefined;
-  const canSend = text.trim() !== "" && !running && jwBlocked === undefined;
+  const canSend = text.trim() !== "" && !running && jwBlocked === undefined && selected !== undefined;
 
   // Grow with the content up to the CSS max-height, then scroll. Done by hand
   // because a textarea cannot size to its content.
@@ -1113,7 +1115,7 @@ export function Composer({
             type="button"
           >
             <span className="model-name">
-              {selectedName ?? TEXT.errors.modelRequired}
+              {selectedName ?? (unavailableModel ? TEXT.errors.modelUnavailable : TEXT.errors.modelRequired)}
             </span>
             <Chevron down={menu !== "model"} />
           </button>

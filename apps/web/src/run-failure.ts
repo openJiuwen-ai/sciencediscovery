@@ -19,6 +19,7 @@ import { translateActive } from "./i18n/index.js";
 
 /** Plain-language cause and recovery action per stable failure class. */
 const FAILURE_MESSAGE_KEYS: Record<RunFailureCode, MessageKey> = {
+  SESSION_MODEL_UNAVAILABLE: "composer.modelUnavailable",
   "invalid-tool-call": "runFailure.invalid-tool-call",
   "rate-limited": "runFailure.rate-limited",
   "semantic-error": "runFailure.semantic-error",

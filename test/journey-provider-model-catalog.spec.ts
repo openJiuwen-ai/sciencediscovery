@@ -208,7 +208,7 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  *   8. 用 DeepSeek 预设目录核对 USD 每百万 token 标准单价、缓存输入与规范去重来源（上游不再发布分时价）。
  *   9. 刷新模型列表遭遇 403 时显示明确错误、保留上次结果，并可手动添加精确模型 ID。
  *   10. 让 Provider A 迟到、B 先回，确认界面只保留 B 且添加请求发往 B。
- *   11. 删除被全局默认模型引用的 B，确认中文错误提供可恢复操作且不会误报保存/刷新失败。
+ *   11. 删除主模型所属服务商时显示替代模型选择；取消保留服务商与默认值。
  *   12. 在 600px 窄屏确认 Provider 表单、目录卡片无横向溢出且仍可操作。
  *   13. 新建会话，经小弹窗切换模型；不支持思考的模型无分档控件并提示，DeepSeek 思考分档按钮选 max 并跨刷新保存。
  *   14. 工作区展开时分别在 1440×900、600×900 对中文 Composer 做两两无重叠、紧凑高度、命中、边界与标签几何断言。
@@ -844,30 +844,26 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     );
 
     await journey.step(
-      "被全局默认模型引用的 Provider 给出本地化恢复提示",
-      "把 Provider B 的模型设为全局默认后尝试删除 B。中文错误明确说明该服务商正被运行时设置引用，并指导先更换全局默认任务模型或评审模型；Provider 保持可用，恢复默认设置后用户可以继续操作。",
+      "删除主模型所属服务商可以选择替代模型或取消",
+      "把 Provider B 的模型设为全局默认后尝试删除 B。确认框提供替代模型或暂不设置；取消后服务商与默认模型均保留，恢复默认设置后可以继续操作。",
       async () => {
         const before = await apiJson<{ overrides: Record<string, unknown> }>(page, "/api/settings");
-        await apiJson(page, "/api/settings", {
-          data: { ...before.overrides, modelId: raceModelId },
-          method: "PUT",
-        });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByLabel("全局默认任务模型").selectOption(raceModelId);
+        await expect(dialog.getByLabel("全局默认任务模型")).toHaveValue(raceModelId);
         const providerRow = dialog.locator(".provider-row").filter({ hasText: "J7 Race Provider B" });
         if (!await providerRow.locator(".provider-row-detail").count()) {
           await providerRow.locator(".provider-row-summary").click();
         }
         // The editor never opens on its own; deleting is an explicit 编辑 first.
         await providerRow.getByRole("button", { name: "编辑", exact: true }).click();
-        page.once("dialog", (confirmation) => {
-          void confirmation.accept();
-        });
         await dialog.getByRole("region", { name: "服务商编辑器" })
           .getByRole("button", { name: "删除" })
           .click();
-        await expect(dialog.getByRole("alert")).toContainText(
-          "此服务商正被运行时设置引用。请先更换全局默认任务模型或评审模型，再删除服务商。",
-        );
+        const confirmation = page.getByRole("dialog", { name: /删除服务商/ });
+        await expect(confirmation.getByLabel("新的全局默认任务模型")).toBeVisible();
+        await confirmation.getByRole("button", { name: "取消", exact: true }).click();
+        expect((await apiJson<{ overrides: { modelId?: string } }>(page, "/api/settings")).overrides.modelId).toBe(raceModelId);
         await expect(dialog.getByRole("region", { name: "已配置服务商" })
           .locator(".provider-row").filter({ hasText: "J7 Race Provider B" }).locator(".provider-row-summary")).toBeVisible();
         await apiJson(page, "/api/settings", { data: before.overrides, method: "PUT" });

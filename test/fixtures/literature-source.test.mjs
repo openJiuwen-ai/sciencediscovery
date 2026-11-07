@@ -45,3 +45,15 @@ test('download fixture distinguishes a real PDF, login HTML, corrupt PDF and acc
   assert.equal(await (await fixture.connectorFetch('https://arxiv.org/pdf/2401.00003')).text(), '%PDF-1.4\nbroken');
   assert.equal((await fixture.connectorFetch('https://arxiv.org/pdf/2401.00004')).status, 403);
 });
+
+
+test('LR-14 fixture puts recovery evidence beyond the model string budget', async () => {
+  const fixture = literatureSource();
+  const source = createPublicBiomedSources(['arxiv'])[0];
+  const tool = source.manifest.tools.search;
+  const raw = await fixture.mcpTransport.invoke({ serverId: source.manifest.transport.mcpServerId,
+    toolName: tool.mcpToolName, arguments: { query: 'LR_CONFLICT_LONG' } });
+  const normalized = await source.normalizeResult({ source: source.manifest, tool, retrievedAt: new Date().toISOString() }, raw);
+  const notes = normalized.records[0].structuredData.notes;
+  assert.ok(notes.indexOf('LR_RETAINED_TAIL') > 4096);
+});

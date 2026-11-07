@@ -12,7 +12,7 @@ import type {
   ToolExecutionMode,
 } from "@sciencediscovery/runtime-core";
 
-import type { ToolOutputGuard, ToolOutputRecord } from "./bounded-output.js";
+import { retainedOutputNotice, type ToolOutputGuard, type ToolOutputRecord } from "./bounded-output.js";
 import {
   autoPromoteFromRouting,
   blockedDeferredToolResult,
@@ -82,6 +82,9 @@ export interface ToolBatchPolicy {
 }
 
 const MAX_DETAIL_DEPTH = 8;
+// Audit metadata can be deeper than the interactive view, but must remain
+// safe to traverse and serialize even when a provider returns pathological nesting.
+const MAX_AUDIT_DETAIL_DEPTH = 128;
 const MAX_DETAIL_KEYS = 100;
 const MAX_DETAIL_ARRAY_ITEMS = 100;
 const MAX_DETAIL_STRING_CHARS = 4_096;
@@ -90,6 +93,7 @@ const REDACTED_DETAIL_KEY = /^(?:authorization|api[_-]?key|apikey|apiToken|authT
 const OMITTED_PAYLOAD_DETAIL_KEY = /^(?:stdout|stderr|raw[_-]?request|raw[_-]?response|raw[_-]?result|prompt|content|text|body|input|output|evaluatorSource)$/iu;
 
 interface DetailSanitizeState {
+  bounded: boolean;
   omitted: boolean;
   remainingChars: number;
   truncated: boolean;
@@ -110,6 +114,7 @@ function detailBoundary(state: DetailSanitizeState): Record<string, unknown> | u
 }
 
 function sanitizeStringDetail(value: string, state: DetailSanitizeState): string {
+  if (!state.bounded) return value;
   if (state.remainingChars <= 0) {
     state.truncated = true;
     return "[truncated]";
@@ -137,7 +142,7 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   if (typeof value === "string") return sanitizeStringDetail(value, state);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "symbol" || typeof value === "function" || value === undefined) return undefined;
-  if (depth >= MAX_DETAIL_DEPTH) {
+  if (depth >= (state.bounded ? MAX_DETAIL_DEPTH : MAX_AUDIT_DETAIL_DEPTH)) {
     state.truncated = true;
     return "[max-depth]";
   }
@@ -153,7 +158,7 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
       && typeof ref.mediaType === "string" && ref.mediaType.length > 0
       && Object.keys(ref).length === 4) {
       const chars = ref.pool.length + ref.digest.length + ref.mediaType.length;
-      if (chars > state.remainingChars || ref.mediaType.length > MAX_DETAIL_STRING_CHARS) {
+      if (state.bounded && (chars > state.remainingChars || ref.mediaType.length > MAX_DETAIL_STRING_CHARS)) {
         state.truncated = true;
         return "[reference omitted: detail budget]";
       }
@@ -184,10 +189,10 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
     return `[binary:${value.byteLength}]`;
   }
   if (Array.isArray(value)) {
-    const values = value.slice(0, MAX_DETAIL_ARRAY_ITEMS)
+    const values = value.slice(0, state.bounded ? MAX_DETAIL_ARRAY_ITEMS : undefined)
       .map((item) => sanitizeDetailValue(item, state, depth + 1))
       .filter((item) => item !== undefined);
-    if (value.length > MAX_DETAIL_ARRAY_ITEMS) {
+    if (state.bounded && value.length > MAX_DETAIL_ARRAY_ITEMS) {
       state.truncated = true;
       values.push(`[${value.length - MAX_DETAIL_ARRAY_ITEMS} items omitted]`);
     }
@@ -196,11 +201,11 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   }
   const result: Record<string, unknown> = {};
   const entries = Object.entries(value as Record<string, unknown>);
-  for (const [entryKey, entryValue] of entries.slice(0, MAX_DETAIL_KEYS)) {
+  for (const [entryKey, entryValue] of entries.slice(0, state.bounded ? MAX_DETAIL_KEYS : undefined)) {
     const sanitized = sanitizeDetailValue(entryValue, state, depth + 1, entryKey);
     if (sanitized !== undefined) result[entryKey] = sanitized;
   }
-  if (entries.length > MAX_DETAIL_KEYS) {
+  if (state.bounded && entries.length > MAX_DETAIL_KEYS) {
     state.truncated = true;
     result.__omittedKeys = entries.length - MAX_DETAIL_KEYS;
   }
@@ -208,8 +213,18 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
   return result;
 }
 
+/** Persist safe metadata without the interactive size limits, retaining a
+ * defensive depth limit. Raw payload fields remain omitted; full results
+ * belong in their governed source stores. */
+export function redactToolDetails(details: unknown): unknown {
+  return sanitizeDetailValue(details, {
+    bounded: false, omitted: false, remainingChars: Infinity, seen: new WeakSet<object>(), truncated: false,
+  }, 0);
+}
+
 export function sanitizeToolDetails(details: unknown): unknown {
   const state: DetailSanitizeState = {
+    bounded: true,
     omitted: false,
     remainingChars: MAX_DETAIL_TOTAL_CHARS,
     seen: new WeakSet<object>(),
@@ -340,6 +355,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     let details: unknown | undefined;
     let isError: boolean;
     let selfBounded = false;
+    let retainedContent: string | undefined;
     let outputRecord: ToolOutputRecord | undefined;
     const availableDeferred = this.availableDeferredState();
     if (call.argsParseError) {
@@ -371,7 +387,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       details = { ok: false, error: { code: "DEFERRED_TOOL_NOT_PROMOTED", message: content, retryable: true } };
       isError = true;
     } else {
-      ({ content, details, isError, selfBounded } = await this.executeRegistered(call, signal));
+      ({ content, details, isError, selfBounded, retainedContent } = await this.executeRegistered(call, signal));
     }
     if (this.options.errorGuidance && !this.errorGuidanceShown && !signal.aborted
       && call.name !== "configuration" && this.tools.has(call.name)) {
@@ -389,12 +405,19 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
         }
       }
     }
+    // Audit records retain complete safe metadata, but must not persist raw
+    // credentials or payload fields. Interactive results also apply size limits.
+    if (this.options.recordResult) {
+      const auditDetails = details === undefined ? undefined : redactToolDetails(details);
+      await this.options.recordResult({ call, content, ...(auditDetails !== undefined ? { details: auditDetails } : {}), isError, sequence });
+    }
     const boundedDetails = details === undefined ? undefined : sanitizeToolDetails(details);
-    if (this.options.recordResult) await this.options.recordResult({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });
     if (this.options.outputGuard) {
-      const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded);
+      const guarded = await this.options.outputGuard.applyDetailed(call.name, content, selfBounded, retainedContent);
       content = guarded.content;
       outputRecord = guarded.record;
+    } else if (retainedContent !== undefined) {
+      content = retainedOutputNotice(content);
     }
     await this.options.commitResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });
     try { this.options.onResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence }); } catch { /* observer isolation */ }
@@ -440,7 +463,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   private async executeRegistered(
     call: RuntimeToolCall,
     signal: AbortSignal,
-  ): Promise<{ content: string; details?: unknown; isError: boolean; selfBounded: boolean }> {
+  ): Promise<{ content: string; details?: unknown; isError: boolean; selfBounded: boolean; retainedContent?: string }> {
     const decision = this.loopGuard.inspect(call.name, call.args);
     if (decision.action !== "allow") {
       return {
@@ -459,10 +482,11 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       });
       const text = result.content.map((item) => item.text).join("\n");
       return {
-        content: isRemoteContentTool(call.name) ? neutralizeUntrustedTags(text) : text,
+        content: (tool.mcp || isRemoteContentTool(call.name)) ? neutralizeUntrustedTags(text) : text,
         ...(result.details !== undefined ? { details: result.details } : {}),
         isError: result.isError === true,
         selfBounded: result.bounded === true,
+        ...(result.retainedContent !== undefined ? { retainedContent: neutralizeUntrustedTags(result.retainedContent) } : {}),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

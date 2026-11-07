@@ -558,6 +558,56 @@ async function startTestApi(
   return { origin };
 }
 
+test("desktop skill switches import a new package and preserve global state on repeat writes", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `skill-switch-${randomUUID()}`);
+  const token = randomUUID();
+  const installed: Array<{ name: string; skillId: string; enabled: boolean; source: string }> = [];
+  const importedPaths: string[] = [];
+  const adapter = createHttpServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/agent/skills" && request.method === "GET") {
+      response.end(JSON.stringify({ skills: installed }));
+    } else if (request.url === "/agent/skills" && request.method === "POST") {
+      const skill = body.skills[0];
+      importedPaths.push(skill.path);
+      assert.match(await readFile(resolve(skill.path, "SKILL.md"), "utf8"), /literature-searcher/);
+      installed.push({ name: skill.id, skillId: skill.id, enabled: true, source: "sciencediscovery" });
+      response.end(JSON.stringify({ skills: { [skill.id]: { name: skill.id } } }));
+    } else if (request.url?.endsWith("/enabled")) {
+      installed[0]!.enabled = body.enabled;
+      response.end("{}");
+    } else response.end("{}");
+  });
+  await new Promise<void>((done) => adapter.listen(0, "127.0.0.1", done));
+  const previous = { executor: process.env.SCIENCE_AGENT_EXECUTOR, adapter: process.env.SCIENCE_AGENT_ADAPTER_URL };
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = `http://127.0.0.1:${(adapter.address() as AddressInfo).port}`;
+  const server = createApiServer({ ...testConfig(root), authToken: token });
+  context.after(async () => {
+    await closeApiServer(server);
+    await new Promise<void>((done) => { adapter.close(() => done()); adapter.closeAllConnections(); });
+    if (previous.executor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR;
+    else process.env.SCIENCE_AGENT_EXECUTOR = previous.executor;
+    if (previous.adapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL;
+    else process.env.SCIENCE_AGENT_ADAPTER_URL = previous.adapter;
+    await rm(root, { recursive: true, force: true });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  for (const enabled of [true, false, true]) {
+    const result = await fetch(`${origin}/api/jiuwenswarm/skills-by-id/literature-searcher`, {
+      method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    assert.equal(result.status, 200, await result.text());
+    assert.equal(installed[0]?.enabled, enabled);
+  }
+  assert.equal(importedPaths.length, 1, "subsequent toggles reuse JiuwenSwarm's installed package");
+});
+
 test("closing the API server drains active connections before closing the MCP transport", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -639,6 +689,12 @@ test("request errors after headers terminate the response without rejecting the 
     headers: authorization, method: "POST", body: JSON.stringify({ name: "Streaming failure" }),
   });
   assert.equal(project.response.status, 201);
+  const model = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    headers: authorization, method: "POST", body: JSON.stringify({
+      apiToken: randomUUID(), baseUrl: "http://127.0.0.1:1/v1", model: "stream-fixture", name: "Stream fixture",
+    }),
+  });
+  assert.equal(model.response.status, 201);
   testApiOrigins.set(root, { origin, close: () => closeApiServer(server) });
   for (const code of [undefined, "ENOENT"]) {
     let writes = 0;
@@ -4323,6 +4379,23 @@ test("API runs one observable subagent through task and keeps nested task denied
       enabled: true,
       id: "biomed",
       tools: [{
+        description: "get paper",
+        inputSchema: {
+          additionalProperties: false,
+          properties: {
+            identifier: {
+              maxLength: 80,
+              minLength: 1,
+              pattern: "^(?:\\d{4}\\.\\d{4,5}|[A-Za-z.-]+/\\d{7})(?:v\\d+)?$",
+              type: "string",
+            },
+          },
+          required: ["identifier"],
+          type: "object",
+        },
+        name: "arxiv_get_paper",
+        schemaHash: "get_paper",
+      }, {
         description: "prepare",
         inputSchema: {
           additionalProperties: false,
@@ -4345,6 +4418,7 @@ test("API runs one observable subagent through task and keeps nested task denied
           additionalProperties: false,
           properties: {
             limit: { default: 5, maximum: 25, minimum: 1, type: "integer" },
+            offset: { default: 0, maximum: 10000, minimum: 0, type: "integer" },
             query: { maxLength: 500, minLength: 1, type: "string" },
           },
           required: ["query"],
@@ -4395,7 +4469,7 @@ test("API runs one observable subagent through task and keeps nested task denied
     { headers: authorization },
   );
   assert.equal(arxivStatus.body.status, "ready");
-  assert.deepEqual(arxivStatus.body.availableTools.toSorted(), ["prepare_paper_download", "search"]);
+  assert.deepEqual(arxivStatus.body.availableTools.toSorted(), ["get_paper", "prepare_paper_download", "search"]);
 
   const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
     body: JSON.stringify({ content: "Delegate workspace inspection." }),
@@ -6095,9 +6169,9 @@ test("failed subagent tool steps retain raw input and the full error result", { 
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
   assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
-  const execution = JSON.parse(toolStep?.content ?? "{}");
-  assert.equal(execution.state, "failed");
-  assert.equal(execution.result?.exitCode, 1);
+  const execution = toolStep?.details as { state?: string; exitCode?: number } | undefined;
+  assert.equal(execution?.state, "failed");
+  assert.equal(execution?.exitCode, 1);
   assert.equal(toolStep?.status, "failed", "Failed Shell result must remain failed in the subagent timeline");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /RuntimeError/);
@@ -7127,7 +7201,12 @@ test("model registry persists multiple profiles and assigns them per session", a
     headers: authorization,
     method: "DELETE",
   });
-  assert.equal(assignedDelete.status, 400);
+  assert.equal(assignedDelete.status, 200);
+  const reopenedAnalysis = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${analysis.body.id}`, { headers: authorization });
+  assert.equal(reopenedAnalysis.body.modelId, fast.body.id);
+  const reopenedReview = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${review.body.id}`, { headers: authorization });
+  assert.equal(reopenedReview.body.modelId, undefined);
+  assert.equal(reopenedReview.body.settingsOverrides.modelId, reviewer.body.id);
   const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
   const catalog = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
   database.close();
@@ -8629,4 +8708,42 @@ test("the recent-sessions Project is reachable by name, absent from the project 
     headers: authorization,
     method: "DELETE",
   })).status, 409);
+});
+
+test("model deletion HTTP validates replacement options and preserves explicit unavailable choices", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-deletion-http-${randomUUID()}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const headers = { ...authorization, "content-type": "application/json" };
+  const create = async (name: string) => (await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    method: "POST", headers,
+    body: JSON.stringify({ name, model: name, baseUrl: "https://models.example.test/v1", apiToken: randomUUID() }),
+  })).body;
+  const a = await create("A"), b = await create("B");
+  const project = await jsonRequest<{ project: Project; firstSession: Session }>(`${origin}/api/projects`, {
+    method: "POST", headers, body: JSON.stringify({ name: "Deletion HTTP" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.project.id}/sessions`, {
+    method: "POST", headers, body: JSON.stringify({ modelId: a.id }),
+  });
+  for (const body of [null, [], "bad", { replacementModelId: false }, { replacementModelId: a.id }, { replacementModelId: randomUUID() }]) {
+    const response = await fetch(`${origin}/api/models/${a.id}`, { method: "DELETE", headers, body: JSON.stringify(body) });
+    assert.equal(response.status, 400);
+    const settings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers });
+    assert.equal(settings.body.overrides.modelId, a.id);
+    assert.equal((await jsonRequest<ModelProfile[]>(`${origin}/api/models`, { headers })).body.length, 2);
+  }
+  const deletion = await fetch(`${origin}/api/models/${a.id}`, { method: "DELETE", headers, body: JSON.stringify({ replacementModelId: b.id }) });
+  assert.equal(deletion.status, 200);
+  assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, b.id);
+  const fresh = (await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers })).body;
+  assert.equal(fresh.modelId, undefined);
+  assert.equal(fresh.settingsOverrides.modelId, a.id);
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "Do not silently switch models" }) });
+  assert.equal(run.status, 400);
+  assert.equal(((await run.json()) as { code: string }).code, "SESSION_MODEL_UNAVAILABLE");
+  // Legacy DELETE callers can omit a body and leave the removed default unset.
+  assert.equal((await fetch(`${origin}/api/models/${b.id}`, { method: "DELETE", headers })).status, 200);
+  assert.equal((await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, { headers })).body.overrides.modelId, undefined);
 });

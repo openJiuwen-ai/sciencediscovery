@@ -112,6 +112,12 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
     rateLimit: { maxConcurrentRequests: 1, minIntervalMs: 3_000, retryInitialDelayMs: 3_000 },
     termsUrl: externalUrl("terms.arxiv"),
     tools: {
+      get_paper: {
+        description: "Get complete arXiv metadata and abstract for one versioned identifier.",
+        inputSchema: objectSchema({ identifier: accession("^(?:\\d{4}\\.\\d{4,5}|[A-Za-z.-]+/\\d{7})(?:v\\d+)?$") }, ["identifier"]),
+        keywords: ["arXiv abstract", "arXiv metadata", "arXiv identifier"],
+        priority: 95,
+      },
       prepare_paper_download: {
         description: "Prepare an arXiv PDF as a governed download candidate.",
         inputSchema: objectSchema({ identifier: accession("^(?:\\d{4}\\.\\d{4,5}|[A-Za-z.-]+/\\d{7})(?:v\\d+)?$") }, ["identifier"]),
@@ -122,7 +128,11 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
       },
       search: {
         description: "Search arXiv metadata and abstracts.",
-        inputSchema: objectSchema({ limit, query: text() }, ["query"]),
+        inputSchema: objectSchema({
+          limit,
+          offset: { default: 0, maximum: 10_000, minimum: 0, type: "integer" },
+          query: text(),
+        }, ["query"]),
         keywords: ["arXiv", "preprint", "e-print"],
         priority: 90,
       },

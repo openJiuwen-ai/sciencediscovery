@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { PermissionRequest, SessionRunStatus, Subagent, ToolTrace } from "../api/types.js";
+import type { ChatMessage, PermissionRequest, SessionRunStatus, Subagent, ToolTrace } from "../api/types.js";
 
 /** One model invoke attempt's visible text. A turn can hold several: the model
  *  may be re-invoked after a tool call, and each attempt gets its own
@@ -92,7 +92,7 @@ export interface RunStreamState {
   /** Number of earlier events the server could not replay. Non-zero means the
    *  transcript below is genuinely incomplete and must say so. */
   droppedEvents: number;
-  error?: { code?: string; message: string };
+  error?: { code?: string; message: string; timeout?: ChatMessage["timeout"] };
   /** `run.completed.message.content` — the persisted answer, which outranks
    *  anything assembled from deltas. */
   finalContent?: string;
