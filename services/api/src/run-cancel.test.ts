@@ -26,7 +26,7 @@ import type { TestContext } from "node:test";
 import type { CancelRunResult, ModelProfile, Project, RunnerHealth, Session, SessionDetail, SessionRun, SessionRunEvent, SessionUsageSummary } from "@sciencediscovery/schema";
 
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
-import { createApiServer, type ServerConfig } from "./server.js";
+import { closeApiServer, createApiServer, type ServerConfig } from "./server.js";
 
 const authorization = { authorization: "Bearer test-token" };
 const jsonHeaders = { ...authorization, "content-type": "application/json" };
@@ -303,14 +303,15 @@ async function startApi(
 ): Promise<TestApi> {
   const dataDir = resolve(process.cwd(), ".tmp", `${name}-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
-  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  let server: ReturnType<typeof createApiServer> | undefined;
+  context.after(async () => {
+    // Stop background exports before deleting the directory they write to.
+    if (server) await closeApiServer(server);
+    await rm(dataDir, { force: true, recursive: true });
+  });
   const [runnerUrl, gateway] = await Promise.all([startStubRunner(context), startGateway(context)]);
-  const server = createApiServer(testConfig(dataDir, runnerUrl), { mcpTransport: offlineMcpTransport });
+  server = createApiServer(testConfig(dataDir, runnerUrl), { mcpTransport: offlineMcpTransport });
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
-  context.after(() => new Promise<void>((done) => {
-    server.close(() => done());
-    server.closeAllConnections();
-  }));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   const modelResponse = await fetch(`${origin}/api/models`, {
@@ -459,14 +460,25 @@ async function waitForGatewayTurn(api: TestApi, expected: number): Promise<void>
   assert.equal(api.gatewayRunCount(), expected, "the agent turn reached the gateway and hung there");
 }
 
-async function waitForRunStatus(api: TestApi, sessionId: string, runId: string, status: SessionRun["status"]): Promise<SessionRun> {
+async function waitForRunStatus(
+  api: TestApi, sessionId: string, runId: string, status: SessionRun["status"], requireReplay = false,
+): Promise<SessionRun> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const run = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
-    if (run?.status === status) return run;
+    if (run?.status === status) {
+      if (!requireReplay) return run;
+      // The scheduler persists the run status before appending the status event.
+      // Tests that tear down the store must wait for that final write as well.
+      const response = await fetch(`${api.origin}/api/sessions/${sessionId}/runs/${runId}/events`, { headers: authorization });
+      assert.equal(response.status, 200);
+      const events = await response.json() as SessionRunEvent[];
+      if (events.some(({ event }) => event.type === "run.status" && event.status === status)) return run;
+    }
     await new Promise((wait) => setTimeout(wait, 25));
   }
   const current = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
   assert.equal(current?.status, status, `expected run ${runId} to become ${status}`);
+  if (requireReplay) assert.fail(`expected run ${runId} to record ${status} in replay`);
   return current!;
 }
 
@@ -491,12 +503,12 @@ test("cancelling a queued run does not start it or append it to Session context"
     assert.deepEqual(detail.messages.map((message) => message.content), ["Keep the gateway busy"]);
 
     assert.equal((await cancelRunById(api, sessionId, active.id)).status, 202);
-    await waitForRunStatus(api, sessionId, active.id, "cancelled");
+    await waitForRunStatus(api, sessionId, active.id, "cancelled", true);
   } finally {
     for (const run of (await listRuns(api, sessionId)).sort((a, b) => Number(b.status === "queued") - Number(a.status === "queued"))) {
       if (["queued", "running", "blocked"].includes(run.status)) {
         await cancelRunById(api, sessionId, run.id);
-        await waitForRunStatus(api, sessionId, run.id, "cancelled");
+        await waitForRunStatus(api, sessionId, run.id, "cancelled", true);
       }
     }
   }
@@ -558,7 +570,7 @@ test("cancelling a blocked run preserves reported model usage", { tags: ["swarm:
     await waitForRunStatus(api, sessionId, blocked.id, "blocked");
 
     assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
-    await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+    await waitForRunStatus(api, sessionId, blocked.id, "cancelled", true);
 
     const usage = await getUsage(api, sessionId);
     assert.equal(usage.totals.invocationCount, 1);
@@ -572,7 +584,7 @@ test("cancelling a blocked run preserves reported model usage", { tags: ["swarm:
     const current = (await listRuns(api, sessionId)).find((run) => run.id === blocked.id);
     if (current && (current.status === "queued" || current.status === "running" || current.status === "blocked")) {
       await cancelRunById(api, sessionId, blocked.id);
-      await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+      await waitForRunStatus(api, sessionId, blocked.id, "cancelled", true);
     }
   }
 });
@@ -721,5 +733,5 @@ test("run child stream endpoint serves empty streams and rejects invalid ids", {
   assert.equal(invalid.status, 400);
 
   assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
-  await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+  await waitForRunStatus(api, sessionId, blocked.id, "cancelled", true);
 });

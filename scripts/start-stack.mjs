@@ -460,6 +460,16 @@ const evolvePort = Number(process.env.SCIENCE_AGENT_EVOLVE_PORT ?? 4313);
 // operator pinned it explicitly (prevents a PORT/URL desync foot-gun).
 process.env.SCIENCE_AGENT_MEMORY_GRAPH_URL ??= `http://127.0.0.1:${memoryGraphPort}`;
 
+// Same contract for evolve, which has no launcher control plane in this
+// script: the API reaches the sidecar only through these two variables, and
+// `spawnService` hands its own process.env to both sides. Without them the
+// sidecar started and stayed healthy while the API reported it uninitialized —
+// the desktop then offered an install that could not change anything.
+if (evolvePython) {
+  process.env.SCIENCE_AGENT_EVOLVE_URL ??= `http://127.0.0.1:${evolvePort}`;
+  process.env.SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN ??= "sciencediscovery-evolve-local";
+}
+
 // Allow JiuwenSwarm to start in the background so the control API can be
 // ready earlier. The adapter still needs JiuwenSwarm, so it starts
 // after JiuwenSwarm is up.

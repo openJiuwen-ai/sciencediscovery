@@ -77,6 +77,12 @@ interface ChatRequest {
   temperature?: number;
   top_p?: number;
   thinking?: { type: string };
+  // JiuwenSwarm sends these legacy OpenAI-compatible controls with its
+  // tool-less image-modality probe. The ScienceDiscovery model configuration
+  // remains authoritative, so the loopback gateway accepts but does not
+  // forward them.
+  enable_thinking?: boolean;
+  reasoning?: boolean;
   tool_choice?: unknown;
   parallel_tool_calls?: boolean;
   stream_options?: { include_usage?: boolean };
@@ -101,8 +107,30 @@ function textOf(content: unknown): string {
 }
 
 /** True when a message carries anything but text (an image), which the native client cannot send. */
-const hasNonText = (message: Record<string, unknown>) =>
-  Array.isArray(message.content) && message.content.some((part) => (part as { type?: string })?.type !== "text");
+const hasNonText = (message: unknown) =>
+  typeof message === "object" && message !== null
+  && Array.isArray((message as { content?: unknown }).content)
+  && (message as { content: unknown[] }).content.some((part) => (part as { type?: string } | null)?.type !== "text");
+
+/**
+ * A rejection the caller is meant to classify, rather than a transport failure.
+ *
+ * `openjiuwen`'s image-modality probe decides "this model has no image input"
+ * by matching the exception against an allowlist of error codes and message
+ * fragments (`openjiuwen/harness/image_modality_probe.py`). Matching text alone
+ * makes the verdict depend on our wording, so the image rejection also carries
+ * one of the codes that allowlist names: the probe then caches
+ * `image_input=unsupported` even if the message is reworded later.
+ */
+class GatewayRejection extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+    this.name = "GatewayRejection";
+  }
+}
+
+/** The code `is_image_modality_rejection` recognizes for a non-text request. */
+const UNSUPPORTED_IMAGE_INPUT = "unsupported_image_input";
 
 /** What identifies an assistant turn: the tool calls it made, or else its text. */
 const turnKey = (message: Record<string, unknown>) => {
@@ -252,9 +280,9 @@ export async function startModelGateway(
     return (own ?? message) as typeof message;
   };
   const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
-    const fail = (status: number, message: string) => {
+    const fail = (status: number, message: string, code?: string) => {
       if (!response.headersSent) response.writeHead(status, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message, type: "model_gateway_error" } }));
+      response.end(JSON.stringify({ error: { message, type: "model_gateway_error", ...(code ? { code } : {}) } }));
     };
     if (request.method !== "POST" || !request.url?.endsWith("/chat/completions") || request.headers.authorization !== `Bearer ${token}`) {
       fail(request.headers.authorization === `Bearer ${token}` ? 404 : 401, "unauthorized");
@@ -271,12 +299,25 @@ export async function startModelGateway(
     let requestPolicy = policy;
     let requestEndpoint = endpoint;
     try {
-      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "reasoning_split", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
+      const unsupported = Object.keys(body).filter(k => !["model", "messages", "stream", "tools", "max_tokens", "max_completion_tokens", "temperature", "top_p", "thinking", "reasoning_split", "enable_thinking", "reasoning", "tool_choice", "parallel_tool_calls", "stream_options", "n"].includes(k));
       if (unsupported.length) throw new Error(`Unsupported gateway parameters: ${unsupported.join(", ")}`);
-      if (!Array.isArray(body.messages) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
+      if (!Array.isArray(body.messages) || body.messages.some((message) => typeof message !== "object" || message === null) || !Array.isArray(body.tools ?? [])) throw new Error("Invalid gateway messages or tools");
       if ((body.tool_choice !== undefined && body.tool_choice !== "auto") || body.parallel_tool_calls === false || (body.n !== undefined && body.n !== 1)) throw new Error("Gateway supports automatic parallel function calls and one completion only");
       if (body.stream_options && body.stream_options.include_usage !== true) throw new Error("Gateway supports include_usage=true only");
-      if (body.messages.some(hasNonText)) throw new Error("images are not supported by this gateway");
+      // A request-level fault that this gateway can diagnose wins over the capability verdict,
+      // so a malformed request keeps naming its real mismatch instead of being cached by the
+      // probe as "this model has no image input". The probe's own body — an image part, the
+      // text question and the object `reasoning: {"enabled": false}` from
+      // `_THINKING_DISABLED_EXTRA_BODY` — passes every check above and reaches this one, which
+      // in turn sits before the capability-control checks that refuse that object shape.
+      if (body.messages.some(hasNonText)) throw new GatewayRejection("images are not supported by this gateway", UNSUPPORTED_IMAGE_INPUT);
+      if ((body.enable_thinking !== undefined && typeof body.enable_thinking !== "boolean")
+        || (body.reasoning !== undefined && typeof body.reasoning !== "boolean")) {
+        throw new Error("Gateway capability controls must be boolean");
+      }
+      if ((body.enable_thinking !== undefined || body.reasoning !== undefined) && (body.tools?.length ?? 0) > 0) {
+        throw new Error("Gateway capability controls are only supported for tool-less probes");
+      }
       const budget = body.max_completion_tokens ?? body.max_tokens ?? policy.maxTokens;
       if (!Number.isInteger(budget) || budget <= 0 || budget > policy.maxTokens || (body.max_completion_tokens !== undefined && body.max_tokens !== undefined && body.max_tokens !== body.max_completion_tokens)) throw new Error("Requested token limit must be positive and within the configured gateway ceiling");
       if (body.temperature !== undefined && !Number.isFinite(body.temperature)) throw new Error("Invalid gateway temperature");
@@ -297,7 +338,8 @@ export async function startModelGateway(
       requestEndpoint = { ...endpoint, ...(thinkingMode ? { thinkingMode } : {}) };
       translated = toModelRequest(body, restore);
     } catch (error) {
-      fail(400, error instanceof Error ? error.message : "Invalid gateway request");
+      fail(400, error instanceof Error ? error.message : "Invalid gateway request",
+        error instanceof GatewayRejection ? error.code : undefined);
       return;
     }
     const { history, systemPrompt, tools } = translated;
@@ -341,22 +383,29 @@ export async function startModelGateway(
       try { console.info(`[model-sse-summary] ${JSON.stringify(record)}`); } catch { /* logging must not change the request */ }
     };
     // A call whose arguments do not parse is never executed. Truncated turns have their own recovery;
-    // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
+    // a task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
     // requests may come from instances without that boundary, still fail the request.
     const missingArgumentsOf = (call: ModelTurn["toolCalls"][number]): string[] => {
       const required = lifecycle?.requiredArguments?.[call.name];
       return required?.length ? missingRequiredArguments(call.args, required) : [];
     };
     const invalidCalls = (turn: ModelTurn): WithheldCall[] => {
+      const unparseable: WithheldCall[] = turn.toolCalls.filter(call => call.argsParseError)
+        .map((call) => ({ call, reason: parserMessage(call.argsParseError) }));
       if (turn.streamDiagnostics?.unparseableSsePayloads && !turn.toolCalls.some(call => call.argsParseError)) throw new Error("Model stream contained malformed event payloads");
-      if (turn.completionObserved === false) throw new Error("Model stream ended without a completion event");
+      // A clean EOF can cut a tool argument before the finish event. Withhold
+      // the entire turn and ask for a fresh call through the same bounded
+      // recovery as invalid JSON. Never accept an unfinished answer or valid
+      // call as complete, or recover a corrupt SSE stream through this path.
+      if (turn.completionObserved === false && (!unparseable.length || turn.truncated || auxiliary
+          || lifecycle?.recoversWithheldCalls === false || turn.streamDiagnostics?.unparseableSsePayloads)) {
+        throw new Error("Model stream ended without a completion event");
+      }
       if (turn.truncated) return [];
       // An alternate streamer reaches this gateway without the runtime client's
       // completion rule. A task turn that answers nothing and calls nothing
       // cannot advance the run, whatever finish reason the provider claimed.
       if (!auxiliary && isEmptyTerminalTurn(turn)) throw new EmptyModelTurnError(turn.wireDiagnostics);
-      const unparseable: WithheldCall[] = turn.toolCalls.filter(call => call.argsParseError)
-        .map((call) => ({ call, reason: parserMessage(call.argsParseError) }));
       // A call that left out an argument the tool cannot run without can never
       // succeed as it stands. It is withheld like an unparseable one, so the
       // model re-issues it complete instead of the run showing a failed tool

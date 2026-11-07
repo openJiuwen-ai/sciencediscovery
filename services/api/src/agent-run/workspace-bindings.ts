@@ -168,9 +168,16 @@ export function createWorkspaceExecutionBindings(
    */
   // These records describe FAILED calls, not scheduled executions. They only
   // let this agent explicitly ask the user about an operation it attempted.
-  const blockedOperations = new Map<string, { runner: RunnerCheckResult; toolCallId?: string; summary: string }>();
+  const blockedOperations = new Map<string, { runner: RunnerCheckResult; toolCallId?: string; summary: string;
+    requiresShell?: boolean }>();
   const waitingOperations = new Set<string>();
-  const checkRunner = async (machine?: string, signal?: AbortSignal, refresh = true): Promise<RunnerCheckResult> => {
+  /**
+   * `requiresShell` narrows readiness to the managed Shell as well, so a
+   * `wait_for_runner` recheck and its alternative machines answer the same
+   * question the blocked Shell call asked. Python-only checks leave it false.
+   */
+  const checkRunner = async (machine?: string, signal?: AbortSignal, refresh = true,
+    requiresShell = false): Promise<RunnerCheckResult> => {
     signal?.throwIfAborted();
     options.store.assertSessionWritable(options.sessionId);
     const runnerId = machine?.trim() || "local";
@@ -181,11 +188,19 @@ export function createWorkspaceExecutionBindings(
     let result: RunnerCheckResult;
     try {
       const capability = await resolveExecutionTarget(runnerId).runnerClient.executionCapability(refresh, signal);
-      const ready = capability.ready === true;
+      // An absent `shell` field is an older Runner that cannot report it, so
+      // only an explicit `available: false` narrows readiness.
+      const shellUnavailableReason = requiresShell && capability.shell?.available === false
+        ? capability.shell.unavailableReason ?? "The managed Shell environment is unavailable"
+        : undefined;
+      const ready = capability.ready === true && shellUnavailableReason === undefined;
       result = { runnerId, checkedAt: capability.checkedAt ?? new Date().toISOString(), connected: true, ready,
-        reason: ready ? "ready" : capability.detail || capability.reason || "Runner execution readiness is unknown",
+        reason: shellUnavailableReason
+          || (ready ? "ready" : capability.detail || capability.reason || "Runner execution readiness is unknown"),
         capability,
-        suggestions: ready ? [] : [capability.reason === "dependency-unavailable"
+        suggestions: ready && capability.shell?.available !== false ? [] : [capability.shell?.available === false
+          ? `${capability.shell.unavailableReason ?? "The managed shell environment is unavailable"}. Recreate or update the starter environment on the target Runner to repair managed Bash and its required utilities.`
+          : capability.reason === "dependency-unavailable"
           ? "Install or repair the sandbox executable on the target Runner; check its configured path."
           : "Inspect the target Runner logs and host/container sandbox permissions. Do not disable isolation automatically.",
           "After repair use check_runner, or explicitly request user help with wait_for_runner."] };
@@ -199,18 +214,29 @@ export function createWorkspaceExecutionBindings(
     options.store.assertSessionAllowsRunner(options.sessionId, runnerId);
     return result;
   };
-  const prepareExecutionTarget = async (machine: string | undefined, signal?: AbortSignal, toolCallId?: string, summary = "Scientific execution") => {
-    const runner = await checkRunner(machine, signal, false);
+  /**
+   * `requiresShell` blocks a Shell call when the Runner explicitly reports its
+   * managed Shell as unavailable. An absent `shell` field means an older
+   * Runner that cannot report it, so the call proceeds, and Python execution
+   * is never blocked by a Shell gap.
+   */
+  const prepareExecutionTarget = async (machine: string | undefined, signal?: AbortSignal, toolCallId?: string,
+    summary = "Scientific execution", requiresShell = false) => {
+    const runner = await checkRunner(machine, signal, false, requiresShell);
     if (!runner.ready) {
+      const shellUnavailable = requiresShell && runner.capability?.shell?.available === false;
       const operationId = randomUUID();
       if (blockedOperations.size >= 128) {
         const removable = [...blockedOperations.keys()].find(id => !waitingOperations.has(id));
         if (removable) blockedOperations.delete(removable);
         else throw new Error("Too many pending Runner decisions; resolve existing requests first");
       }
-      blockedOperations.set(operationId, { runner, toolCallId, summary: summary.slice(0, 500) });
+      blockedOperations.set(operationId, { runner, toolCallId, summary: summary.slice(0, 500), requiresShell });
       throw new RunnerUnavailableError({ code: "RUNNER_UNAVAILABLE", dispatched: false, operationId, runner,
-        instruction: "This call has finished without dispatching code. Decide whether to continue other work, explain the blocker and finish, or wait for user help. If you decide to wait, including when the user requested a pause for their decision, call wait_for_runner(operation_id); text saying 'paused' or 'waiting' does not create a pending operation or interactive card. Showing the card does not repair, install, switch machines or execute code and needs no extra confirmation merely to display the requested choices. Preserve the user's constraints after receiving their decision. check_runner is diagnostic only. Do not repeatedly retry unchanged failures. Nothing will execute automatically." });
+        instruction: (shellUnavailable
+          ? "This call has finished without dispatching code: the target Runner reports its managed Shell as unavailable, so no Shell execution record was created and Python execution is unaffected. Report the Shell blocker with its repair steps. "
+          : "This call has finished without dispatching code. ")
+          + "Decide whether to continue other work, explain the blocker and finish, or wait for user help. If you decide to wait, including when the user requested a pause for their decision, call wait_for_runner(operation_id); text saying 'paused' or 'waiting' does not create a pending operation or interactive card. Showing the card does not repair, install, switch machines or execute code and needs no extra confirmation merely to display the requested choices. Preserve the user's constraints after receiving their decision. check_runner is diagnostic only. Do not repeatedly retry unchanged failures. Nothing will execute automatically." });
     }
     let target = resolveExecutionTarget(machine);
     if (target.runnerId !== "local" && options.skillPackagesRoot) {
@@ -249,7 +275,7 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
-      target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code);
+      target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code, true);
       const permissionEpoch = await networkConsent.consume(environment?.networkAuthorizationId, target.runnerId, signal);
       return {
         agentId: options.agentId,
@@ -402,7 +428,7 @@ export function createWorkspaceExecutionBindings(
           for (const runnerId of options.store.effectiveRunnerIds(options.sessionId)) {
             if (runnerId === operation.runner.runnerId) continue;
             try {
-              if ((await checkRunner(runnerId, signal, false)).ready) alternatives.push({ runnerId, label: runnerId });
+              if ((await checkRunner(runnerId, signal, false, operation.requiresShell)).ready) alternatives.push({ runnerId, label: runnerId });
             } catch { signal?.throwIfAborted(); }
           }
           const blocked = { sessionId: options.sessionId, executionId: options.executionId,
@@ -417,7 +443,8 @@ export function createWorkspaceExecutionBindings(
           executionLogger().info("execution_decision", { ...blocked, decision });
           if (decision.action === "cancel") return { action: "cancel", operationId, dispatched: false,
             instruction: "This operation was cancelled or the wait expired. Do not resubmit it without a new user request. You may continue unrelated work." };
-          const runner = await checkRunner(decision.action === "switch" ? decision.runnerId : operation.runner.runnerId, signal);
+          const runner = await checkRunner(decision.action === "switch" ? decision.runnerId : operation.runner.runnerId,
+            signal, true, operation.requiresShell);
           operation.runner = runner;
           if (!runner.ready) blockedOperations.set(operationId, operation);
           // Never execute here: a completed failed call cannot come back to life.

@@ -56,6 +56,10 @@
 .resource-menu-popover button:disabled { cursor: not-allowed; opacity: .5; }
 .resource-menu-popover button.danger { color: var(--danger); }
 .resource-menu-popover button.danger:hover { background: var(--danger-soft); color: var(--danger); }
+.resource-menu-submenu { position: relative; }
+.resource-menu-submenu > button { grid-template-columns: 22px minmax(0, 1fr) auto; }
+.resource-menu-submenu-popover { display: none; gap: 3px; margin: 3px 0 4px 14px; padding-left: 4px; border-left: 1px solid var(--border); }
+.resource-menu-submenu.expanded .resource-menu-submenu-popover { display: grid; }
 .session-filter { position: relative; flex: 0 0 auto; }
 .session-filter-trigger { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .session-filter-trigger:hover, .session-filter-trigger[aria-expanded="true"] { border-color: var(--accent-border-soft); background: var(--accent-soft); color: var(--accent-ink); }

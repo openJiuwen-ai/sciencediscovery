@@ -6,20 +6,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTest } from "../../support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
-import { analysisPrompt, loadAnalysisPrompt, researchTeamParameters, researchTeamReference, selectedCases, cases, manifest } from "./cases.ts";
+import { analysisPrompt, loadAnalysisPrompt, researchTeamParameters, researchTeamReference, selectedCases, cases, manifest, L5_EXCLUDED_CASE_IDS } from "./cases.ts";
 
 test("BiomniBench selection rejects typos and duplicates", () => {
   assert.equal(selectedCases("da-13-3,da-14-1").length, 2);
   assert.equal(selectedCases("da-14-1")[0].id, "da-14-1");
+  for (const excluded of L5_EXCLUDED_CASE_IDS) assert.throws(() => selectedCases(excluded), /unique public/);
   for (const bad of ["", "da-999-1", "da-13-3,da-13-3"]) assert.throws(() => selectedCases(bad));
 });
 
-test("the pinned corpus contains all 50 public tasks and all nested data assets", () => {
-  assert.equal(cases.length, 50);
-  assert.equal(new Set(cases.map(c => c.id)).size, 50);
+test("the pinned corpus retains all public tasks while L5 excludes its five retired cases", () => {
+  assert.equal(manifest.tasks.length, 50);
+  assert.equal(cases.length, 45);
+  assert.equal(new Set(cases.map(c => c.id)).size, 45);
+  assert.deepEqual(manifest.tasks.filter((item: { id: string }) => L5_EXCLUDED_CASE_IDS.includes(item.id)).map((item: { id: string }) => item.id).sort(), [...L5_EXCLUDED_CASE_IDS].sort());
   assert.match(manifest.revision, /^[a-f0-9]{40}$/);
-  assert.equal(cases.flatMap(c => c.files).filter(f => f.path.startsWith("environment/data/")).length, 463);
-  for (const item of cases) {
+  assert.equal(manifest.tasks.flatMap((c: { files: Array<{ path: string }> }) => c.files).filter(f => f.path.startsWith("environment/data/")).length, 463);
+  for (const item of manifest.tasks) {
     for (const path of ["instruction.md", "tests/rubric.txt", "task.toml", "environment/Dockerfile"]) assert.ok(item.files.some(f => f.path === path), `${item.id}/${path}`);
     assert.ok(item.files.every(f => /^[a-f0-9]{40}$/.test(f.oid) && f.bytes >= 0));
   }
@@ -68,5 +71,19 @@ test("every public task loads its own instruction verbatim and appends Skill par
     await assert.rejects(loadAnalysisPrompt(root, cases[0]!.id), /Empty BiomniBench-DA instruction/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("only da-11-1 requests incremental delivery without shortening the scientific output", () => {
+  for (const item of cases) {
+    const prompt = analysisPrompt(item.id, "Original scientific instruction");
+    if (item.id === "da-11-1") {
+      assert.match(prompt, /Append one small section per write command/);
+      assert.match(prompt, /less than 2000 characters/);
+      assert.match(prompt, /Preserve the full scientific analysis and required outputs/);
+      assert.match(prompt, /inspect the existing file before appending only the missing content/);
+    } else {
+      assert.doesNotMatch(prompt, /incrementally|2000 characters|replay successful writes/);
+    }
   }
 });

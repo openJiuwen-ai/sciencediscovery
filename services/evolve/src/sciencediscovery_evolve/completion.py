@@ -26,7 +26,8 @@ be able to read the token for its own run. Passing credentials per call is the
 whole point, so the request is built here.
 
 What *is* reused rather than rebuilt: `agentdescent.agents.Usage` counts the
-tokens (see `_Usage` in `puct_engine.py`), and `with_retries` wraps this.
+tokens (see `_Usage` in `puct_engine.py`). Transient HTTP retries live here,
+shared by both engines and bounded by the same stop gate and call deadline.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from __future__ import annotations
 import json
 import math
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -72,7 +74,10 @@ def completion_for(
     max_tokens: int = 16_000,
     temperature: Optional[float] = None,
     thinking: Optional[str] = None,
+    thinking_effort: Optional[str] = None,
     timeout: float = 300.0,
+    max_retries: int = 2,
+    retry_backoff: float = 0.5,
     on_usage: Optional[Callable[[CompletionUsage], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Callable[[str], str]:
@@ -96,8 +101,10 @@ def completion_for(
     dropped — the call is already paid for either way, and the difference is
     whether the user is made to wait for it.
 
-    ``thinking`` is sent as ``{"type": ...}`` when set, and comes from the goal
-    rather than being decided here — it is a trade the user makes, measured on
+    ``thinking`` is sent as ``{"type": ...}`` for explicit ``enabled`` or
+    ``disabled`` modes. ``auto`` is omitted so the provider's own default
+    remains in force. The value comes from the goal rather than being decided
+    here — it is a trade the user makes, measured on
     GLM5.2 rewriting a small program: on, ~46k output tokens per call and a
     held-out test score of 0.519; off, ~1.2k and 0.366. Forty times the tokens
     and five times the wall clock for better candidates.
@@ -137,21 +144,24 @@ def completion_for(
         # call runs on a daemon thread so it can be abandoned when the run
         # stops, and a thread-local set over there is invisible here.
         failures: list[str] = []
-        if should_stop is None:
-            text = _call(prompt, report, failures)
-        else:
-            box: list[str] = []
-            worker = threading.Thread(
-                target=lambda: box.append(_call(prompt, report, failures)),
-                daemon=True, name="evolve-completion",
-            )
-            worker.start()
-            while worker.is_alive():
-                worker.join(0.5)
-                if should_stop():
-                    log.info("completion abandoned: the run was stopped")
-                    return ""
-            text = box[0] if box else ""
+        deadline = time.monotonic() + timeout
+        box: list[str] = []
+        worker = threading.Thread(
+            target=lambda: box.append(_call(prompt, report, failures, deadline)),
+            daemon=True, name="evolve-completion",
+        )
+        worker.start()
+        while worker.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if on_failure is not None:
+                    on_failure("completion call deadline exceeded")
+                return ""
+            worker.join(min(0.05, remaining))
+            if should_stop is not None and should_stop():
+                log.info("completion abandoned: the run was stopped")
+                return ""
+        text = box[0] if box else ""
         if failures and on_failure is not None:
             on_failure(failures[-1])
         return text
@@ -160,6 +170,7 @@ def completion_for(
         prompt: str,
         report: Optional[Callable[[CompletionUsage], None]],
         failures: list[str],
+        deadline: float,
     ) -> str:
         body: dict[str, Any] = {
             "max_tokens": max_tokens,
@@ -167,8 +178,10 @@ def completion_for(
         }
         if temperature is not None:
             body["temperature"] = temperature
-        if thinking:
+        if thinking in {"enabled", "disabled"}:
             body["thinking"] = {"type": thinking}
+        if thinking == "enabled" and thinking_effort:
+            body["reasoning_effort"] = thinking_effort
         payload = json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
             endpoint,
@@ -177,8 +190,32 @@ def completion_for(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
+            for attempt in range(max(0, min(max_retries, 2)) + 1):
+                if should_stop is not None and should_stop():
+                    return ""
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("completion retry deadline exceeded")
+                try:
+                    with urllib.request.urlopen(request, timeout=remaining) as response:
+                        body = json.loads(response.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as error:
+                    # Retry only pre-completion transient server failures. A
+                    # valid empty/capped response and a broken stream (422) are
+                    # never sent again with the same token ceiling.
+                    if error.code not in {502, 503, 504, 524} or attempt >= min(max_retries, 2):
+                        raise
+                    error.close()
+                    delay_end = time.monotonic() + max(0, retry_backoff) * 2**attempt
+                    log.warning("completion transient HTTP %s; retry %s/2", error.code, attempt + 1)
+                    while time.monotonic() < delay_end:
+                        if should_stop is not None and should_stop():
+                            return ""
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("completion retry deadline exceeded")
+                        time.sleep(min(0.05, remaining, max(0, delay_end - time.monotonic())))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:300]
             # Returned rather than raised: a failed model call is a failed

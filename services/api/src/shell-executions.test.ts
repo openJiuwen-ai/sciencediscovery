@@ -12,9 +12,11 @@ import type { TestContext } from "node:test";
 
 import { RefStore, VersionStore } from "@sciencediscovery/cas";
 import { RunnerClient } from "@sciencediscovery/executor";
-import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
+import type { AgentShellExecution, ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
+import { ResearchPackageIds, remapRunEvent } from "./research-package-history.js";
+import { verifyResearchCopy } from "./research-snapshot-integrity.js";
 
 const owner = { sessionId: "session", agentId: "main" };
 const identity = { runnerId: "remote", workspaceId: "workspace", turnId: "original-turn" };
@@ -35,6 +37,43 @@ async function fixture(context: TestContext) {
   const result = { exitCode: 0, stdout: "done", stderr: "", workspaceSnapshot: ref } as ShellExecutionResult;
   return { db, versions, notices, service, ref, result };
 }
+
+test("historical shell restore round-trips output evidence and passes research copy verification", async (context) => {
+  const f = await fixture(context);
+  const source: AgentShellExecution = { id: "shell-source", sessionId: "session-source", agentId: "main",
+    runnerId: "remote", workspaceId: "workspace-source", turnId: "turn-source", state: "completed",
+    queuedAt: "2026-10-20T10:00:00.000Z", finishedAt: "2026-10-20T10:01:00.000Z", accepted: true, provenance: "committed",
+    result: { ...f.result, workspaceVersion: f.ref } };
+  const ids = new ResearchPackageIds();
+  const targetId = ids.id(source.sessionId);
+  const mapped = { ...remapRunEvent(source, ids), id: ids.id(source.id) };
+  await f.service.restoreHistorical(mapped);
+  const restored = await f.service.get(mapped.id, { sessionId: targetId, agentId: "main" });
+  assert.equal(restored.result?.stdout, "done");
+  assert.equal(restored.result?.workspaceSnapshot, undefined);
+  assert.equal(restored.result?.workspaceVersion, undefined);
+  const records = (id: string, execution: AgentShellExecution) => ({ sessions: [{ session: { id }, shellExecutions: [execution] }] });
+  assert.doesNotThrow(() => verifyResearchCopy(records(source.sessionId, source), records(targetId, restored), ids, new Map([[source.sessionId, targetId]]), "project"));
+  assert.deepEqual(f.notices.unread({ sessionId: targetId, agentId: "main" }), [], "restoring evidence does not execute or notify");
+});
+
+test("historical shell executions are never reconciled after restoration", async (context) => {
+  const f = await fixture(context);
+  const source: AgentShellExecution = { ...owner, ...identity, id: "historical", state: "unknown",
+    queuedAt: "2026-10-20T10:00:00.000Z", accepted: true, provenance: "unconfirmed" };
+  await f.service.restoreHistorical(source);
+  const restarted = new ShellExecutions(f.db, f.versions, f.notices);
+  context.after(() => restarted.close());
+  let calls = 0;
+  const handlers = { runner: () => { calls++; throw new Error("historical execution must not contact Runner"); },
+    finalize: async (_context: unknown, result: ShellExecutionResult) => result };
+  restarted.configureRecovery(handlers);
+  await restarted.reconcilePending(undefined, true);
+  const record = await restarted.reconcile(source.id, owner, handlers);
+  assert.equal(record.state, "cancelled");
+  assert.equal(calls, 0);
+  assert.equal("historical" in record, false);
+});
 
 test("accepted background work outlives waiting and publishes a notice only after provenance", async (context) => {
   const f = await fixture(context);
@@ -96,6 +135,55 @@ test("four consecutive Runner status transport failures do not turn accepted wor
   assert.equal(result.result?.stdout, "done");
   assert.equal(submitted, 1);
   assert.equal(observations, 5);
+});
+
+test("a Runner accepted request whose pre-admission failure is deterministic settles failed, not unknown", async (context) => {
+  // The Runner accepted the managed request and refused it before launching a
+  // process: a terminal `failed` record with `not_started` evidence and no
+  // result or workspace version. The API must settle that as committed,
+  // because a 503 for the same condition would be indistinguishable from a
+  // lost submission and would block the workspace.
+  const f = await fixture(context); let submitted = 0;
+  const failed = (id: string): ManagedExecution => ({ ...owner, id, state: "failed",
+    queuedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z",
+    error: "Managed Bash is unavailable: ENOENT", receipt: receipt(),
+    evidence: { runnerInstanceId: "original-ledger", runnerBootId: "boot-one", revision: 1,
+      processTerminated: true, terminationReason: "not_started" } });
+  const runner = {
+    startShellExecution: async (input: ShellExecutionRequest) => { submitted++; return failed(input.executionId); },
+    getShellExecution: async () => { throw new Error("a terminal submit response must not be observed again"); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)));
+  const record = await f.service.wait(job.id, owner, 1_000);
+  assert.equal(record.state, "failed");
+  assert.equal(record.provenance, "committed", "a pre-admission failure is recorded, not left unconfirmed");
+  assert.equal(record.error, "Managed Bash is unavailable: ENOENT");
+  assert.equal(record.result, undefined, "no execution result is fabricated");
+  assert.equal(record.evidence?.terminationReason, "not_started");
+  assert.equal(record.startedAt, undefined, "the API must not file a start time for a process that never ran");
+  assert.equal(record.observation?.status, "fresh");
+  assert.equal(submitted, 1);
+  assert.equal(f.notices.unread(owner).length, 1);
+});
+
+test("a true submit-outcome-unknown still stays unconfirmed and blocks the workspace", async (context) => {
+  // Network failure on the submit call proves nothing about whether the
+  // Runner ran the command, so it must not reuse the deterministic-failure
+  // path added for a Runner's own pre-admission rejection.
+  const f = await fixture(context); let submissions = 0;
+  const runner = {
+    startShellExecution: async () => { submissions++; throw new TypeError("fetch failed"); },
+    getShellExecution: async () => { throw Object.assign(new Error("not found"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  const record = await f.service.wait(job.id, owner, 1_000);
+  assert.equal(record.state, "unknown");
+  assert.equal(record.provenance, "unconfirmed");
+  assert.equal(record.observation?.lastError?.code, "SUBMIT_OUTCOME_UNKNOWN");
+  // The same workspace stays blocked; the unknown work is never resubmitted.
+  await assert.rejects(f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext),
+    { code: "ORIGINAL_EXECUTION_UNCONFIRMED" });
+  assert.equal(submissions, 1);
 });
 
 test("a successful Runner observation clears the consecutive transport failure count", async (context) => {

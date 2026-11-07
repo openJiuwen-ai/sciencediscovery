@@ -19,6 +19,25 @@ async function fixture(context: { after(action: () => Promise<void>): void }) {
   const framework = configurationFramework(store, { nativeExecutor: true, connector: () => undefined, resume: async (sessionId, requestId) => { scheduled.push({ sessionId, requestId }); return run; } });
   return { store, session, run, framework, scheduled };
 }
+
+test("CFG-XE2E-04: web.credential continues its bound task using the approved receipt", async context => {
+  const h = await fixture(context);
+  await h.store.updateWebSettings({ providerApiKeys: { jina: "synthetic-continuation-fixture" } });
+  const frozen = structuredClone(h.run.settingsSnapshot);
+  const card = await h.framework.propose(h.session.id, {
+    protocolVersion: 3, runId: h.run.id, capabilityId: "web.credential", values: { webProvider: "jina", operation: "clear" },
+  });
+  const applied = await h.framework.decide(h.session.id, card.id, {
+    revision: card.revision, previewDigest: card.previewDigest!, selectedOptionId: "persist", decision: "apply",
+  });
+  assert.equal(applied.activation.mode, "next_request");
+  assert.equal(applied.activation.state, "needs_user_action");
+  assert.equal(applied.resumption.state, "queued");
+  assert.deepEqual(h.scheduled, [{ sessionId: h.session.id, requestId: card.id }]);
+  assert.doesNotThrow(() => verifyNativeConfigurationToolAssembly({ store: h.store, sessionId: h.session.id, runId: h.run.id, requestId: card.id, enabledConnectorIds: [], tools: [] }));
+  assert.deepEqual((await h.store.getSessionRun(h.session.id, h.run.id))?.settingsSnapshot, frozen);
+});
+
 test("CFG-X09a: saving a bound Reviewer setting resumes the task without changing its snapshot", async context => {
   const h = await fixture(context);
   await h.store.updateReviewerSpecialistSettings({ enabled: true });

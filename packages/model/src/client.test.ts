@@ -496,6 +496,227 @@ test("chat variants map thinking controls without cross-provider fields", async 
   assert.equal(requests[6]!.reasoning_split, undefined);
 });
 
+test("remembers rejected thinking controls for an OpenAI-compatible gateway", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.thinking) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Unknown parameter: thinking" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn(
+      { apiProtocol: "openai-chat-completions", apiVariant: "deepseek", baseUrl, model: "stub", thinkingMode: "enabled" },
+      "s", [{ role: "user", content: "hi" }], [], policy, new AbortController().signal,
+    );
+    assert.equal(turn.assistantMessage.content, "ok");
+    const next = await streamModelTurn(
+      { apiProtocol: "openai-chat-completions", apiVariant: "deepseek", baseUrl, model: "stub", thinkingMode: "enabled" },
+      "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal,
+    );
+    assert.equal(next.assistantMessage.content, "ok");
+  });
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[0]!.thinking, { type: "enabled" });
+  assert.ok(requests[0]!.reasoning_effort);
+  assert.equal(requests[1]!.thinking, undefined);
+  assert.ok(requests[1]!.reasoning_effort, "only the rejected field is stripped from the retry");
+  assert.equal(requests[2]!.thinking, undefined);
+  assert.ok(requests[2]!.reasoning_effort, "and the accepted control is not remembered as rejected");
+});
+
+test("does not retry or suppress a control when the 400 complains about its value", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "thinking budget exceeds max_tokens" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "value-error", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    assert.equal(failure.statusCode, 400);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 2, "a value complaint is not retried");
+  assert.deepEqual(requests[0]!.thinking, { type: "enabled" });
+  assert.deepEqual(requests[1]!.thinking, { type: "enabled" }, "and it does not suppress the control later");
+});
+
+test("recognizes a rejection worded as an unrecognized request argument", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.thinking) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: null, message: "Unrecognized request argument supplied: thinking",
+        param: null, type: "invalid_request_error" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "unrecognized-argument", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "one" }], [], policy, new AbortController().signal);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "two" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 3, "one rejected attempt, the stripped retry, then no 400");
+  assert.equal(requests[1]!.thinking, undefined);
+  assert.equal(requests[1]!.reasoning_effort, "high", "only the named control is stripped");
+  assert.equal(requests[2]!.thinking, undefined, "and the rejection is remembered");
+  assert.equal(requests[2]!.reasoning_effort, "high");
+});
+
+test("a value complaint that points at a control does not suppress it", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: {
+        code: "invalid_value",
+        message: "Invalid value for 'reasoning_effort': 'minimal'. Supported values are: 'low', 'medium', and 'high'.",
+        param: "reasoning_effort",
+      } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "invalid-value", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    assert.equal(failure.statusCode, 400);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 2, "an invalid value is not a parameter rejection");
+  assert.deepEqual(requests[1]!.thinking, { type: "enabled" }, "and it suppresses nothing");
+  assert.equal(requests[1]!.reasoning_effort, "high");
+});
+
+test("a 400 about another parameter in the same sentence does not strip a control", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "temperature is not supported when thinking is enabled" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "state-complaint", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1]!.thinking, { type: "enabled" });
+});
+
+test("does not remember a rejection whose stripped retry fails", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (requests.length === 1) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Unknown parameter: thinking" } }));
+      return;
+    }
+    if (requests.length === 2) {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "bad key" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "failed-fallback", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    const failure = await streamModelTurn(endpoint, "s", [{ role: "user", content: "hi" }], [],
+      { ...policy, maxRetries: 0 }, new AbortController().signal).then(() => null, (error) => error);
+    assert.ok(failure instanceof ModelRequestError);
+    assert.equal(failure.statusCode, 401);
+    await streamModelTurn(endpoint, "s", [{ role: "user", content: "again" }], [], policy, new AbortController().signal);
+  });
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[1]!.thinking, undefined);
+  assert.deepEqual(requests[2]!.thinking, { type: "enabled" }, "the endpoint keeps its thinking mode");
+  assert.equal(requests[2]!.reasoning_effort, "high");
+});
+
+test("accumulates fields a gateway rejects one 400 at a time", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.thinking) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Unknown parameter: thinking" } }));
+      return;
+    }
+    if (body.reasoning_effort) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "Unknown parameter: reasoning_effort" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const endpoint = { apiProtocol: "openai-chat-completions" as const, apiVariant: "deepseek" as const,
+      baseUrl, model: "per-field", thinkingMode: "enabled" as const, thinkingEffort: "high" as const };
+    for (const content of ["one", "two"]) {
+      await streamModelTurn(endpoint, "s", [{ role: "user", content }], [], policy, new AbortController().signal);
+    }
+  });
+  assert.equal(requests.length, 4, "two rejected attempts, then the clean turn, then no 400s");
+  assert.deepEqual(requests[0]!.thinking, { type: "enabled" });
+  assert.equal(requests[1]!.thinking, undefined);
+  assert.equal(requests[1]!.reasoning_effort, "high");
+  assert.equal(requests[2]!.thinking, undefined);
+  assert.equal(requests[2]!.reasoning_effort, undefined);
+  assert.equal(requests[3]!.thinking, undefined);
+  assert.equal(requests[3]!.reasoning_effort, undefined);
+});
+
+test("recognizes a rejection the provider reports through its param pointer", async () => {
+  const requests: Record<string, unknown>[] = [];
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+    requests.push(body);
+    if (body.chat_template_kwargs) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "invalid request", param: "enable_thinking" } }));
+      return;
+    }
+    sse(response, [{ choices: [{ delta: { content: "ok" } }] }]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn(
+      { apiProtocol: "openai-chat-completions", apiVariant: "qwen", baseUrl, model: "param", thinkingMode: "enabled" },
+      "s", [{ role: "user", content: "hi" }], [], policy, new AbortController().signal,
+    );
+    assert.equal(turn.assistantMessage.content, "ok");
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0]!.chat_template_kwargs, { enable_thinking: true });
+  assert.equal(requests[1]!.chat_template_kwargs, undefined);
+});
+
 test("explicit protocol changes the endpoint even when the saved URL has an old suffix", async () => {
   const paths: string[] = [];
   await withServer(async (request, response) => {

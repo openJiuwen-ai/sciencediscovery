@@ -26,7 +26,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "../agent-notifications.js";
 import { ShellExecutions } from "../shell-executions.js";
 
-import type { NpuJob } from "@sciencediscovery/schema";
+import type { NpuJob, RunnerExecutionCapability } from "@sciencediscovery/schema";
 import { VersionStore } from "@sciencediscovery/cas";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
@@ -34,6 +34,61 @@ import { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
+
+for (const scenario of [
+  { name: "missing shell utilities", sandbox: "none", ready: false, reason: "dependency-unavailable",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason: "Managed Bash is missing required utilities: head" },
+    expected: /Managed Bash is missing required utilities: head.*Recreate or update the starter environment/ },
+  { name: "ready Runner with unavailable shell", sandbox: "none", ready: true, reason: "ready",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason: "Managed Bash is missing required utilities: head" },
+    expected: /Managed Bash is missing required utilities: head.*Recreate or update the starter environment/ },
+  { name: "missing managed Bash", sandbox: "none", ready: false, reason: "dependency-unavailable",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason: "Managed Bash is unavailable: ENOENT" },
+    expected: /Managed Bash is unavailable: ENOENT.*Recreate or update the starter environment/ },
+  { name: "shell failure without detail", sandbox: "none", ready: false, reason: "dependency-unavailable",
+    shell: { available: false, name: "bash", utilities: [] },
+    expected: /The managed shell environment is unavailable.*Recreate or update the starter environment/ },
+  { name: "missing sandbox executable", sandbox: "bubblewrap", ready: false, reason: "dependency-unavailable",
+    expected: /Install or repair the sandbox executable/ },
+  { name: "unusable sandbox with available shell", sandbox: "bubblewrap", ready: false, reason: "sandbox-unusable",
+    shell: { available: true, name: "bash", utilities: [] },
+    expected: /Inspect the target Runner logs and host\/container sandbox permissions/ },
+  { name: "ready managed shell", sandbox: "none", ready: true, reason: "ready",
+    shell: { available: true, name: "bash", utilities: [] }, expected: undefined },
+] satisfies Array<Pick<RunnerExecutionCapability, "sandbox" | "ready" | "reason" | "shell"> & { name: string; expected: RegExp | undefined }>) {
+  test(`Runner repair advice: ${scenario.name}`, async t => {
+    const queue = new ExecutionBlocks();
+    t.after(() => queue.close());
+    const capability: RunnerExecutionCapability = {
+      instanceId: "runner", checkedAt: new Date().toISOString(),
+      dependencyAvailable: scenario.ready, sandboxUsable: false,
+      sandbox: scenario.sandbox, ready: scenario.ready, reason: scenario.reason,
+      ...("shell" in scenario ? { shell: scenario.shell } : {}),
+    };
+    const bindings = createWorkspaceExecutionBindings({
+      agentId: "main", executionId: "run", sessionId: "s", workspaceRoot: "/workspace", permissionScopeLabel: "test",
+      runnerClient: { executionCapability: async () => capability } as RunnerClient,
+      permission: {} as AgentPermissionRuntime,
+      provenanceRecorder: {} as ProvenanceRecorder,
+      store: { executionBlocks: queue, assertSessionWritable() {}, assertSessionAllowsRunner() {} } as unknown as SessionStore,
+    });
+    assert.ok(bindings.runnerReadiness);
+    const result = await bindings.runnerReadiness.check("local");
+    assert.equal(result.connected, true);
+    assert.equal(result.ready, scenario.ready);
+    assert.deepEqual(result.capability, capability);
+    if (scenario.expected) {
+      assert.match(result.suggestions[0] ?? "", scenario.expected);
+      assert.equal(result.suggestions.length, 2);
+      assert.match(result.suggestions[1] ?? "", /After repair use check_runner/);
+      if (capability.shell?.available === false) {
+        assert.doesNotMatch(result.suggestions.join(" "), /sandbox executable|sandbox permissions/);
+      }
+    } else {
+      assert.deepEqual(result.suggestions, []);
+    }
+  });
+}
 
 for (const action of ["retry", "cancel", "switch"] as const) {
   test(`execution readiness ${action} is pre-dispatch and releases the external wait`, async t => {
@@ -85,6 +140,81 @@ for (const action of ["retry", "cancel", "switch"] as const) {
       await bindings.executePython("print('a NEW call')"); assert.equal(dispatched, 1);
     }
     assert.equal(waits, 0); assert.deepEqual(queue.list("session"), []);
+  });
+}
+
+async function shellPrecheckBindings(t: TestContext, capability: () => Record<string, unknown>) {
+  const root = await mkdtemp(resolve(tmpdir(), "shell-precheck-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const queue = new ExecutionBlocks(); t.after(() => queue.close());
+  const shellDispatches: Array<Record<string, unknown>> = [];
+  const pythonDispatches: Array<Record<string, unknown>> = [];
+  const runnerClient = { executionCapability: async () => capability() } as unknown as RunnerClient;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main", executionId: "run", sessionId: "session", workspaceRoot: root, permissionScopeLabel: "test",
+    runnerClient,
+    permission: { getEpoch: () => ({ id: "epoch" }), requirePrivilege: async () => undefined } as unknown as AgentPermissionRuntime,
+    provenanceRecorder: {
+      executeShell: async (input: Record<string, unknown>) => {
+        shellDispatches.push(input); return { exitCode: 0, stdout: "ok", stderr: "" };
+      },
+      executePython: async (input: Record<string, unknown>) => {
+        pythonDispatches.push(input); return { exitCode: 0, stdout: "ok", stderr: "" };
+      },
+    } as unknown as ProvenanceRecorder,
+    store: { dataDir: root, executionBlocks: queue, assertSessionWritable() {}, assertSessionAllowsRunner() {},
+      effectiveRunnerIds: () => ["local"], npuDeviceSelection: () => [], resolveSandboxEgressProxy: () => undefined,
+    } as unknown as SessionStore,
+  });
+  return { bindings, queue, shellDispatches, pythonDispatches };
+}
+
+test("an explicitly unavailable managed Shell blocks run_shell before any execution record exists", async t => {
+  const unavailableReason = "Managed Bash is missing required utilities: head";
+  const f = await shellPrecheckBindings(t, () => ({ ready: true, reason: "ready",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason } }));
+  let operationId = "";
+  await assert.rejects(f.bindings.executeShell!("echo hi", "ephemeral"), (error: Error) => {
+    const result = JSON.parse(error.message);
+    operationId = result.operationId;
+    assert.equal(result.code, "RUNNER_UNAVAILABLE");
+    assert.equal(result.dispatched, false);
+    assert.equal(result.runner.ready, false);
+    assert.equal(result.runner.reason, unavailableReason);
+    assert.match(result.instruction, /no Shell execution record was created/);
+    return true;
+  });
+  assert.equal(f.shellDispatches.length, 0, "no Shell execution is recorded or dispatched");
+  // The failed call is a real blocked operation the Agent can discuss, not a
+  // throw with no continuation path.
+  const waiting = f.bindings.runnerReadiness!.wait(operationId);
+  for (let i = 0; i < 50 && !f.queue.list("session").length; i++) await new Promise(resolve => setImmediate(resolve));
+  const block = f.queue.list("session")[0]!;
+  assert.equal(block.reason, unavailableReason);
+  f.queue.decide("session", block.id, { action: "retry" });
+  const decided = await waiting as { dispatched: boolean; runner: { ready: boolean } };
+  assert.equal(decided.dispatched, false, "a failed recheck never executes the call");
+  assert.equal(decided.runner.ready, false);
+});
+
+test("a Shell gap never blocks Python execution on the same Runner", async t => {
+  const f = await shellPrecheckBindings(t, () => ({ ready: true, reason: "ready",
+    shell: { available: false, name: "bash", utilities: [],
+      unavailableReason: "Managed Bash is missing required utilities: head" } }));
+  await f.bindings.executePython!("print('ok')");
+  assert.equal(f.pythonDispatches.length, 1);
+  assert.equal(f.shellDispatches.length, 0);
+});
+
+for (const [label, capability] of [
+  ["an older Runner that cannot report a Shell capability", () => ({ ready: true, reason: "ready" })],
+  ["a ready Runner whose managed Shell is available", () => ({ ready: true, reason: "ready",
+    shell: { available: true, name: "bash", utilities: ["cat", "grep", "head", "sed", "tail", "wc"] } })],
+] as Array<[string, () => Record<string, unknown>]>) {
+  test(`run_shell still dispatches on ${label}`, async t => {
+    const f = await shellPrecheckBindings(t, capability);
+    await f.bindings.executeShell!("echo hi", "ephemeral");
+    assert.equal(f.shellDispatches.length, 1, "only an explicit unavailability blocks the call");
   });
 }
 

@@ -43,7 +43,6 @@ const DEFERRED_EVENT_TYPES: ReadonlySet<string> = new Set([
   "agent.record",
   "artifact.upserted",
   "artifact_review.completed",
-  "evolve_run.created",
   "idea_research.created",
   "idea_tree.phase",
   "plan.updated",
@@ -237,6 +236,12 @@ export function reduceRunStream(
 
     case "run.history.truncated":
       return { ...advanced, droppedEvents: advanced.droppedEvents + event.droppedEvents };
+
+    case "evolve_run.created":
+      // The transcript draws nothing here, but the shelf outside it does, and
+      // the list is not polled until something is running. Counting the event
+      // is what lets the app re-read the list at the moment a search appears.
+      return { ...advanced, evolveRunsCreated: advanced.evolveRunsCreated + 1 };
 
     default:
       if (DEFERRED_EVENT_TYPES.has(event.type) || STREAMED_ELSEWHERE.has(event.type)) return advanced;

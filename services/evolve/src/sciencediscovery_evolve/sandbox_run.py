@@ -73,7 +73,8 @@ def run_killable(
         list(argv), cwd=str(cwd), env=dict(env) if env is not None else None,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         # Its own group, so a kill reaches the sandbox and everything under it
-        # without touching this service.
+        # without touching this service. Windows has no process groups to
+        # signal; `_kill` walks the tree with `taskkill /T` there instead.
         start_new_session=True,
     )
     deadline = time.monotonic() + timeout
@@ -95,13 +96,38 @@ def run_killable(
 def _kill(process: "subprocess.Popen[str]") -> None:
     """End the process group and reap it. Never raises: the caller is already leaving."""
     try:
-        if hasattr(os, "killpg"):
+        # Windows first: `start_new_session` is a no-op there, so there is no
+        # group to signal even if `os.killpg` happens to exist.
+        if os.name == "nt":
+            _kill_tree_windows(process)
+        elif hasattr(os, "killpg"):
             os.killpg(process.pid, signal.SIGKILL)
-        else:  # pragma: no cover - non-POSIX
+        else:  # pragma: no cover - neither POSIX process groups nor Windows
             process.kill()
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         pass
     try:
         process.communicate(timeout=_REAP_SECONDS)
     except Exception:  # noqa: BLE001 - reaping is best effort
         log.warning("a killed sandbox process did not exit within %.0fs", _REAP_SECONDS)
+
+
+def _kill_tree_windows(process: "subprocess.Popen[str]") -> None:
+    """End the child **and everything it started** on Windows.
+
+    ``Popen.kill`` only reaches the direct child, and a stopped search that
+    leaves a candidate's own subprocesses running is the failure this module
+    exists to prevent. ``start_new_session`` has no meaning here — Windows has
+    no process groups to signal — so the tree is walked by ``taskkill /T``,
+    which is what the Runner uses for the same reason.
+    """
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # taskkill itself failed (missing from PATH, or wedged). Ending the
+        # direct child is still better than leaving it running.
+        process.kill()

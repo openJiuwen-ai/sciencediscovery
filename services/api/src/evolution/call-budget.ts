@@ -23,7 +23,7 @@
  * makes "what a run gets" and "what a run needs" the same number.
  */
 
-import type { EvolveAlgorithm, EvolveBudgetPlan, ModelProfile } from "@sciencediscovery/schema";
+import type { EvolveAlgorithm, EvolveBudgetPlan, ModelProfile, ModelThinkingEffort, ModelThinkingMode } from "@sciencediscovery/schema";
 
 import { thinkingControlGap, type ThinkingControlGap } from "./model-thinking.js";
 
@@ -65,7 +65,7 @@ export const DEFAULT_MAX_SECONDS = 7_200;
 
 /** The per-call ceiling `create_evolve_run` will apply, from the setting the
  *  run will actually record. */
-export function perCallCeiling(algorithm: EvolveAlgorithm, thinking: "enabled" | "disabled"): number {
+export function perCallCeiling(algorithm: EvolveAlgorithm, thinking: ModelThinkingMode): number {
   if (thinking === "disabled") return QUIET_TOKENS_PER_CALL;
   return (MIN_TOKENS_PER_CALL[algorithm] ?? MIN_TOKENS_PER_CALL.puct!).thinking;
 }
@@ -95,10 +95,17 @@ const UNHONORED: Record<ThinkingControlGap, string> = {
 
 export function describeEvolveBudget(
   model: ModelProfile | undefined,
-  requestedThinking: "enabled" | "disabled" = "disabled",
+  requestedThinking: ModelThinkingMode = "auto",
+  thinkingEffort?: ModelThinkingEffort,
 ): EvolveBudgetPlan {
   const gap = requestedThinking === "disabled" ? thinkingControlGap(model) : undefined;
   const effective = gap ? "enabled" : requestedThinking;
+  // Keep the effort in the frozen run settings even when mode is `auto`: the
+  // parent Run has a complete, auditable configuration and switching to
+  // `enabled` later must use the same fallback. The sidecar omits the effort
+  // on the wire while `auto` is active, so this does not override the
+  // provider's own automatic mode.
+  const effort = effective === "disabled" ? undefined : thinkingEffort ?? "high";
   return {
     maxSeconds: DEFAULT_MAX_SECONDS,
     model: model?.name ?? null,
@@ -107,8 +114,8 @@ export function describeEvolveBudget(
       puct: perCallCeiling("puct", effective),
     },
     thinking: gap
-      ? { effective, note: UNHONORED[gap] }
-      : { effective },
+      ? { effective, ...(effort ? { effort } : {}), note: UNHONORED[gap] }
+      : { effective, ...(effort ? { effort } : {}) },
     totalTokenCap: DEFAULT_MAX_TOKENS,
   };
 }

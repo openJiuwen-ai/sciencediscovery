@@ -150,11 +150,27 @@ export async function preflight(input: PreflightInput): Promise<PreflightIssue[]
   if (executes && !input.sandbox.backend) {
     issues.push({
       code: "sandbox_unavailable",
-      fix: "install bubblewrap (bwrap) on Linux; macOS ships sandbox-exec",
-      // Not a portability concession: a candidate is model-written Python that
-      // gets executed, and running it unconfined is not a fallback.
+      fix: "install bubblewrap (bwrap) on Linux; macOS ships sandbox-exec; on Windows start the "
+        + "run from the 程序演进 dialog with direct execution allowed",
+      // A candidate is model-written Python that gets executed, and running it
+      // unconfined is not a fallback. Windows can only get past this with the
+      // user's own confirmation, which is the branch below.
       message: "there is no isolation backend for candidates, and a candidate is model-written "
         + "code that will not be executed unisolated",
+    });
+  } else if (executes && input.sandbox.backend === "direct" && input.goal.allowUnisolated !== true) {
+    // `direct` is the desktop's opt-in for Windows, where neither bwrap nor
+    // Seatbelt exists. It is still not a sandbox: the candidate reads and
+    // writes with the user's own access, reaches the network, and can see the
+    // process environment. The goal carries the user's answer to the warning,
+    // and a goal without it is a run nobody confirmed.
+    issues.push({
+      code: "unisolated_run_unconfirmed",
+      fix: "ask the user to start it again from the 程序演进 dialog with direct execution "
+        + "allowed (`/evolve-design --allow-direct`), and only then create the run",
+      message: "this installation runs candidates without isolation, and the user has not "
+        + "confirmed that for this search — candidate code would run with their full file and "
+        + "network access",
     });
   }
 

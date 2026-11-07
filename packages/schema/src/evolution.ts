@@ -27,7 +27,20 @@
  */
 
 /** Which search algorithm runs the loop. Not two code paths — one field. */
+import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
+
 export type EvolveAlgorithm = "puct" | "openevolve";
+
+/**
+ * How the design conversation paces its checkpoints.
+ *
+ * `"confirm"` stops at each checkpoint and waits; `"auto"` does the remaining
+ * steps in one pass and starts the search without a reply in between. It is a
+ * pacing choice made before the design begins, not a mode of the search: every
+ * checkpoint's work still happens, and a blocker it uncovers still stops the
+ * run.
+ */
+export type EvolveCheckpointMode = "auto" | "confirm";
 
 /**
  * The name `"puct"` used to be `"era"`, after the upstream example the port came
@@ -326,7 +339,8 @@ export interface EvolveBudgetPlan {
   /** Applied by `create_evolve_run`, keyed by algorithm. */
   perCallCeiling: Record<EvolveAlgorithm, number>;
   thinking: {
-    effective: "enabled" | "disabled";
+    effective: ModelThinkingMode;
+    effort?: ModelThinkingEffort;
     /** Present only when the requested setting could not be honored. */
     note?: string;
   };
@@ -348,6 +362,21 @@ export interface EvolveRunProposal {
    *  may carry `--algorithm openevolve`; the agent reads that and puts it here.
    *  Unset defaults to `"puct"`. */
   algorithm?: EvolveAlgorithm;
+  /** Whether the design conversation stops at each checkpoint.
+   *
+   *  The user's `/evolve-design` command may carry `--no-confirm`; the agent
+   *  reads that and puts `"auto"` here. Unset defaults to `"confirm"`, so a
+   *  goal written by an older client or typed by hand keeps stopping. The
+   *  choice is a pace, not a different search: the scorecard, the probe and
+   *  the run itself are identical either way. */
+  checkpointMode?: EvolveCheckpointMode;
+  /** The user's answer to the no-isolation warning, on Windows.
+   *
+   *  Set from `/evolve-design --allow-direct`, which the desktop writes only
+   *  when the user turned the warning switch on in the setup dialog. The
+   *  control plane refuses a run that needs it and does not carry it; a host
+   *  with bubblewrap or Seatbelt ignores it. Default false. */
+  allowUnisolated?: boolean;
   /** What the search is for, in the user's terms. Shown on the run card. */
   statement: string;
   /** How a candidate gets its number, in plain words — the one line a person
@@ -383,7 +412,8 @@ export interface EvolveRunProposal {
   packages?: string[];
   expansions: number;
   workers: number;
-  thinking?: "disabled" | "enabled";
+  thinking?: ModelThinkingMode;
+  thinkingEffort?: ModelThinkingEffort;
   /** How the search explores. Omit to take upstream's settings, which is the
    *  right answer whenever nothing about the task argues against them. */
   search?: EvolveSearchTuning;
@@ -449,6 +479,29 @@ export interface EvolveGoal {
   baselineProgramCas: string;
   budget: EvolveBudget;
   /**
+   * The pace the user chose for the design conversation.
+   *
+   * Recorded so a run card can say a search was started without pausing, and
+   * so the choice survives in the run record after the conversation is gone.
+   * Nothing in the engine reads it: checkpoints are a conversation, and the
+   * search itself is the same either way.
+   *
+   * Absent on goals written before the switch existed, which all stopped at
+   * every checkpoint — read absent as `"confirm"`.
+   */
+  checkpointMode?: EvolveCheckpointMode;
+  /**
+   * Whether this run executes candidates without isolation.
+   *
+   *  Present only when the installation has no sandbox (the Windows desktop)
+   *  *and* the user confirmed the warning for this run. Read as a record, not
+   *  a permission: pre-flight is what decides whether a run may start, and it
+   *  will not accept a goal that carries this without the sandbox being
+   *  `direct`. A run card shows it so a result from an unconfined search is
+   *  never mistaken for one that was contained.
+   */
+  allowUnisolated?: boolean;
+  /**
    * Whether the mutation calls may use the model's hidden reasoning.
    *
    * A real trade-off, measured on GLM5.2 rewriting a small program:
@@ -463,7 +516,8 @@ export interface EvolveGoal {
    * and needs a ceiling high enough to hold the thinking *and* the program.
    * `undefined` sends nothing and lets the provider decide.
    */
-  thinking?: "disabled" | "enabled";
+  thinking?: ModelThinkingMode;
+  thinkingEffort?: ModelThinkingEffort;
   /**
    * Packages the candidates need that the runtime does not already have.
    *

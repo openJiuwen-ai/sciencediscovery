@@ -692,10 +692,22 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     let finalText = "";
     let failure: string | undefined;
     let receivedTerminal = false;
+    let releaseUserInputWait: (() => void) | undefined;
     for await (const line of ndjson(response.body)) {
       if (receivedTerminal) throw new Error("Swarm adapter sent data after its terminal result");
       this.markProgress("event" in line ? `adapter:${line.event.type}` : "adapter:done");
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
+      if ("event" in line && line.event.type === "user_input.required") {
+        releaseUserInputWait ??= this.beginExternalWait();
+        continue;
+      }
+      // Accounting/phase frames do not mean the run resumed: the adapter
+      // interleaves them with a paused question, so releasing on them would drop
+      // the wait and let the idle deadline fire while the user is still deciding.
+      if (!("event" in line && (line.event.type === "model.usage" || line.event.type === "agent.phase"))) {
+        releaseUserInputWait?.();
+        releaseUserInputWait = undefined;
+      }
       if ("done" in line) {
         receivedTerminal = true;
         finalText = line.done.finalText;

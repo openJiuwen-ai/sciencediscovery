@@ -604,6 +604,18 @@ export function createRunnerServer(
           sendJson(response, 503, { error: capability.detail ?? capability.reason, code: "EXECUTION_UNAVAILABLE", capability });
           return;
         }
+        // The synchronous route has no execution record to settle, so it fails
+        // closed. The managed route accepts the request and records a
+        // deterministic pre-admission failure instead: a 503 there is
+        // indistinguishable from a lost submission to the API, which would
+        // record an unverified outcome and block the workspace.
+        if (url.pathname === "/execute-shell" && capability.shell?.available === false) {
+          sendJson(response, 503, {
+            error: capability.shell.unavailableReason ?? "The managed shell environment is unavailable",
+            code: "EXECUTION_UNAVAILABLE", capability,
+          });
+          return;
+        }
       }
       if (request.method === "GET" && url.pathname === "/resources") {
         sendJson(response, 200, await collectRunnerResources(config.dataDir, {
@@ -1008,7 +1020,16 @@ export function createRunnerServer(
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
               return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log, environmentStore, expectedEnvironmentRevisionId);
             }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log, environmentStore, expectedEnvironmentRevisionId));
+          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log, environmentStore, expectedEnvironmentRevisionId),
+        direct ? undefined : async () => {
+          // Admission-time check: the managed Shell may be repaired while this
+          // request waits behind earlier work in the same Workspace queue. A
+          // rejection here never launches a process.
+          const capability = await readiness.get();
+          if (capability.shell?.available === false) {
+            throw new Error(capability.shell.unavailableReason ?? "The managed shell environment is unavailable");
+          }
+        });
         sendJson(response, accepted.accepted ? 202 : 200, accepted.execution);
         return;
       }
@@ -1145,13 +1166,6 @@ async function sandboxNetworkCapability(
 export async function startRunnerServer(config = loadRunnerConfig()): Promise<Server> {
   const sandbox = executorSandboxKind(config);
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
-  const readiness = new RunnerReadiness(sandbox, sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath);
-  const capability = await readiness.get();
-  if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
-  // The operational log is a file. A missing sandbox executable is a setup
-  // step the operator must take, so it also goes to the terminal that started
-  // the Runner (source mode no longer blocks startup on it).
-  if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
   const environmentStore = new EnvironmentStore({
     allowedChannels: config.scientificAllowedChannels ?? ["conda-forge"],
     enabled: config.scientificEnvsEnabled === true,
@@ -1161,6 +1175,17 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     runnerVersion: RUNNER_VERSION,
   });
   await environmentStore.initialize();
+  const readiness = new RunnerReadiness(
+    sandbox,
+    sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath,
+    // The managed Bash/package contract is provisioned only on Windows.
+    sandbox === "none" && process.platform === "win32" ? () => environmentStore.shellCapability() : undefined,
+  );
+  const capability = await readiness.get();
+  if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
+  // The operational log is a file. A missing execution dependency is a setup
+  // step the operator must take, so it also goes to the starting terminal.
+  if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
   const envProfiles = new SessionEnvProfileStore();
   // A short runtime directory keeps the socket independent of how deep the
   // checkout (and therefore the data directory) happens to be. Resolution is
