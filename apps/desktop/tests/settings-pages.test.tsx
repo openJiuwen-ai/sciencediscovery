@@ -30,7 +30,9 @@ import type {
   Specialist,
 } from "../src/api/types.js";
 import type { WorkspaceActions, WorkspaceState } from "../src/app/use-workspace.js";
-import { TEXT } from "../src/text.js";
+import { getLanguage, setLanguage, TEXT } from "../src/text.js";
+import { writeSettingsCache } from "../src/app/settings-cache.js";
+import { StubClient } from "./api-stub.js";
 import { GeneralSettings } from "../src/views/settings/GeneralSettings.js";
 import { ModelForm } from "../src/views/ModelForm.js";
 import { ModelPicker, ModelSettings, providerChoices } from "../src/views/settings/ModelSettings.js";
@@ -40,7 +42,7 @@ import { RunnerSection } from "../src/views/settings/RemoteHosts.js";
 import { NetworkSettings } from "../src/views/settings/NetworkSettings.js";
 import { RuntimeSettings } from "../src/views/settings/RuntimeSettings.js";
 import { SkillForm } from "../src/views/settings/SkillForm.js";
-import { enabledAfterCreate, skillMeta, SkillsSettings } from "../src/views/settings/SkillsSettings.js";
+import { skillMeta, SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { AbilityPicker } from "../src/views/settings/system/AbilityPicker.js";
 import { McpServers } from "../src/views/settings/system/McpServers.js";
 import { SpecialistForm } from "../src/views/settings/system/SpecialistForm.js";
@@ -575,13 +577,49 @@ describe("the skill card", () => {
     ...fields,
   }) as SkillDescriptor;
 
+  it("identifies all three sources before expanding a card", () => {
+    const sourceClient = new StubClient().asClient();
+    writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
+      enabled: [],
+      native: false,
+      switchesAvailable: true,
+      skills: [skill({ id: "sd-review", source: "built-in" }), skill({ id: "custom-review" })],
+      jiuwenSwarmSkills: [{ name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" }],
+    });
+    const markup = renderToStaticMarkup(
+      <SkillsSettings adding={false} client={sourceClient} onAddingChange={noConfirm} />,
+    );
+    for (const label of ["SD 内置", "JiuwenSwarm 内置", "自建"]) {
+      assert.ok(markup.includes(label), `The collapsed list does not identify ${label}`);
+    }
+    assert.ok(markup.includes(TEXT.settings.skills.scope));
+    assert.ok(!markup.includes("settings-detail-heading"), "Sources must be visible before opening instructions");
+  });
+
+  it("reads source badges in the current language after the module was loaded", () => {
+    const previous = getLanguage();
+    const sourceClient = new StubClient().asClient();
+    writeSettingsCache(sourceClient, "skills:jiuwenswarm", {
+      enabled: [], native: false, switchesAvailable: true, jiuwenSwarmSkills: [],
+      skills: [skill({ source: "built-in" }), skill({ id: "custom" })],
+    });
+    try {
+      for (const language of ["en", "zh-CN"] as const) {
+        setLanguage(language);
+        const markup = renderToStaticMarkup(<SkillsSettings adding={false} client={sourceClient} onAddingChange={noConfirm} />);
+        assert.ok(markup.includes(TEXT.settings.skills.source.builtIn));
+        assert.ok(markup.includes(TEXT.settings.skills.source.managed));
+      }
+    } finally { setLanguage(previous); }
+  });
+
   it("names the revision a skill was installed at instead of the server's label", () => {
     // The server's own label for an undeclared version is `revision:1`; put
     // after a `v` it read as `vrevision:1`.
     const meta = skillMeta(skill());
     assert.ok(meta.includes("第 1 版"), `the revision is not spelled out: ${meta}`);
     assert.ok(!meta.includes("vrevision"), "the server's revision label is being read as a version");
-    assert.ok(meta.includes(TEXT.settings.skills.source.managed), "the card does not say where the skill came from");
+    assert.ok(!meta.includes(TEXT.settings.skills.source.managed), "the source is already in the badge");
   });
 
   it("reads a declared version as a version", () => {
@@ -605,23 +643,7 @@ describe("the skill card", () => {
       skillMeta(withScript).includes(TEXT.workspace.filesCount(4)),
       "the resources do not count alongside SKILL.md",
     );
-    assert.ok(skillMeta(skill({ source: "built-in" })).includes(TEXT.settings.skills.source.builtIn));
-  });
-});
 
-describe("a skill created from the form", () => {
-  it("joins a project's explicit selection", () => {
-    // `selected` carries an explicit list, so a new package would arrive off.
-    assert.deepEqual(enabledAfterCreate("selected", ["a", "b"], "c"), ["a", "b", "c"]);
-    assert.equal(enabledAfterCreate("selected", ["a", "c"], "c"), undefined, "an already-selected skill is written twice");
-  });
-
-  it("needs no write where the mode already means every installed skill", () => {
-    // `all` is the default and resolves to the whole catalog, so the new
-    // package is on without a write — and writing the list would pin the
-    // project to `selected` and freeze the catalog behind it.
-    assert.equal(enabledAfterCreate("all", ["a"], "c"), undefined);
-    assert.equal(enabledAfterCreate(undefined, [], "c"), undefined);
   });
 });
 
@@ -686,10 +708,7 @@ describe("each settings page", () => {
     asksForItsData("超时", <TimeoutSettings client={client} />);
   });
 
-  it("技能 says why it cannot read a choice when there is no project yet", () => {
-    // The skill selection lives in the project layer, so a page without a
-    // project has nothing to read — and says so rather than showing a list of
-    // switches that would write nowhere.
+  it("技能 loads global switches without requiring a project", () => {
     const markup = renderToStaticMarkup(
       <SkillsSettings adding={false} client={client} onAddingChange={noConfirm} />,
     );

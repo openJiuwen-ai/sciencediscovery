@@ -175,9 +175,6 @@ export const ZH = {
     } as Record<string, string>,
     /** Fills in a cancellation whose reason the stream did not carry. */
     cancelledReason: "运行已取消",
-    /** A run that ended in an error, with and without the server's code. */
-    errorLine: (message: string) => `运行失败：${message}`,
-    errorWithCode: (code: string, message: string) => `运行失败（${code}）：${message}`,
     thinking: "思考过程",
     thinkingSteps: (count: number) => `${count} 步`,
     /** The folded line standing in for a run that has not finished yet. */
@@ -504,11 +501,13 @@ export const ZH = {
     },
     skills: {
       detail: "详情",
-      empty: "没有读到内置技能。",
+      empty: "没有读到技能。",
       heading: "技能",
+      jiuwenSwarmOnly: "当前执行器不是 JiuwenSwarm，技能开关不可用。",
       noProject: "还没有可用的项目，无法读取技能选择。",
       off: "已停用",
       on: "已启用",
+      scope: "这里的开关控制 JiuwenSwarm 的全局技能状态，适用于使用其技能机制的新任务。ScienceDiscovery 技能包在首次启用时导入。",
       toggle: (name: string) => `启用或停用「${name}」`,
       add: "新增技能",
       create: "创建",
@@ -531,7 +530,9 @@ export const ZH = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `第 ${revision} 版`,
       source: {
-        builtIn: "内置",
+        builtIn: "SD 内置",
+        jiuwenBuiltIn: "JiuwenSwarm 内置",
+        jiuwenLocal: "JiuwenSwarm 安装",
         managed: "自建",
       },
       instructionsHeading: "指令",
@@ -1354,6 +1355,45 @@ export const ZH = {
     notice: {
       placeholder: "这次实验的评分卡是占位符，不是为它设计的真实评分卡。",
     },
+  },
+
+  runFailure: {
+    title: "运行失败",
+    titles: {
+      timeout: "运行超时",
+      "rate-limited": "模型请求受限",
+      "semantic-error": "运行异常",
+      "server-error": "模型服务异常",
+      "transport-error": "模型服务连接失败",
+      unauthorized: "模型鉴权失败",
+      "invalid-tool-call": "工具调用无效",
+    },
+    timeout: "运行已因超时终止。建议重试，或在系统设置中检查对应的超时设置。",
+    timeoutNoticeTitle: "超时提示",
+    timeoutNotice: "检测到超时，请展开技术详情确认受影响的操作，并检查对应的超时设置。",
+    timeoutTitles: {
+      gateway_idle: "运行超时",
+      gateway_turn: "运行超时",
+      permission_wait: "授权等待超时",
+      runner_exec: "工具执行超时",
+      kernel_idle: "内核空闲超时",
+    },
+    timeouts: {
+      gateway_idle: (seconds: number) => `Agent 在 ${seconds} 秒内没有产生进展，运行已终止。建议重试，或在系统设置中适当增加 Agent 空闲超时时间。`,
+      gateway_turn: (seconds: number) => `Agent 单轮运行已超过 ${seconds} 秒，运行已终止。建议拆分任务后重试，或在系统设置中适当增加单轮超时时间。`,
+      permission_wait: (seconds: number) => `授权请求在 ${seconds} 秒内未得到处理，运行已终止。建议重试并及时处理授权请求，或在系统设置中适当增加授权等待超时时间。`,
+      runner_exec: (seconds: number) => `工具执行已超过 ${seconds} 秒。建议缩小单次执行范围后重试，或在系统设置中适当增加执行超时时间。`,
+      kernel_idle: (seconds: number) => `内核空闲时间已达到 ${seconds} 秒。建议重试，或在系统设置中适当增加内核空闲超时时间。`,
+    },
+    "rate-limited": "请求次数或用量已达到模型服务限制，运行已停止。建议稍后重试；若持续出现，请检查服务商的限额和可用额度。",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "运行中遇到了意外问题，任务未能完成。建议重试；若持续出现，请展开技术详情排查原因。",
+    "server-error": "模型服务返回服务器错误，运行已停止。建议稍后重试；若持续出现，请检查服务状态或更换模型。",
+    "transport-error": "无法连接模型服务，运行已停止。建议检查网络、代理设置及模型服务地址后重试。",
+    unauthorized: "模型服务拒绝了当前凭据，运行已停止。建议在系统设置的模型注册表中检查 API Key 及访问权限后重试。",
+    "invalid-tool-call": "模型生成的工具调用参数无法解析，该调用未执行，运行已停止。建议重试；若反复出现，可更换模型。",
+    unknown: "任务未能完成，运行已停止。建议重试；若再次失败，请展开技术详情排查原因。",
+    technicalDetails: "技术详情",
   },
 
   errors: {

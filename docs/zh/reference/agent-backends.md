@@ -22,6 +22,8 @@ adapter 把运行请求转给 JiuwenSwarm，其余 HTTP 路由代理到 API。Pr
 | `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` | `task` | 平台 `task` 派发独立子运行，子运行也由 JiuwenSwarm 执行，并保留产品沙箱、权限、交接和审计；`jiuwenswarm` 改用原生 `subagent_spawn`/`subagent_wait`。 |
 | `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `jiuwenswarm` | 默认提示词和工具模式下，把选中的技能安装给 `skill_tool`；`ours` 使用产品技能加载方式。JiuwenSwarm 加载失败时可回退到 `read_skill` 和 `read_skill_resource`。 |
 
+使用默认 JiuwenSwarm 技能机制时，其持久化全局开关是唯一依据：运行不会改写开关，读取开关状态失败会中止启用了技能的运行。Desktop（`SCIENCE_AGENT_SKILL_SELECTION=desktop`）目录技能包在首次显式启用时导入；非 Desktop 部署选中的技能和召回的 Skill Library 技能包保留首次运行导入行为。已有的全局禁用始终优先，包括 Library 技能包。这些开关不控制 `ours` 技能/工具模式或 `replace` 提示词模式。native 模式保留目录浏览和新建功能，不提供 JiuwenSwarm 开关。
+
 使用默认 JiuwenSwarm 工具时，模型工具表里的产品 `web_search`/`web_fetch` 换成 JiuwenSwarm 的 `free_search` 或 `paid_search`、`fetch_webpage`；没有对应替代的产品工具继续可用。Swarm 原生子代理不具备平台 `task` 的工作区、产品工具、审批、交接、溯源及任务卡片，需要这些能力时应保持默认的 `task`。
 
 部分实现文档**仅适用于 native executor**，包括[原生 Agent 后端](../developer-docs/agent-backend.md)中的上下文压缩、重复工具调用阈值和原生延迟工具可见性；不能直接套用于 JiuwenSwarm。另见[运行时架构](../developer-docs/architecture.md)、[子代理编排](../developer-docs/subagent-orchestration.md)及[历史迁移记录](jiuwenswarm-migration-status.md)。

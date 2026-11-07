@@ -170,8 +170,6 @@ export const EN: Text = {
       timeout_notice: "Timeout",
     },
     cancelledReason: "The run was cancelled",
-    errorLine: (message: string) => `Run failed: ${message}`,
-    errorWithCode: (code: string, message: string) => `Run failed (${code}): ${message}`,
     thinking: "Reasoning",
     thinkingSteps: (count: number) => `${count} ${count === 1 ? "step" : "steps"}`,
     thinkingNow: "Planning the next step",
@@ -476,11 +474,13 @@ export const EN: Text = {
     },
     skills: {
       detail: "Details",
-      empty: "No built-in skills found.",
+      empty: "No skills found.",
       heading: "Skills",
+      jiuwenSwarmOnly: "The current agent backend is not JiuwenSwarm, so skill switches are unavailable.",
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
+      scope: "These switches control JiuwenSwarm’s global skill state for new tasks using its skill mechanism. ScienceDiscovery packages are imported on first enable.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       add: "Add skill",
       create: "Create",
@@ -503,7 +503,9 @@ export const EN: Text = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `revision ${revision}`,
       source: {
-        builtIn: "built-in",
+        builtIn: "SD built-in",
+        jiuwenBuiltIn: "JiuwenSwarm built-in",
+        jiuwenLocal: "Installed in JiuwenSwarm",
         managed: "managed",
       },
       instructionsHeading: "Instructions",
@@ -1310,6 +1312,45 @@ export const EN: Text = {
     notice: {
       placeholder: "This run used a placeholder scorecard, not one designed for it.",
     },
+  },
+
+  runFailure: {
+    title: "Run failed",
+    titles: {
+      timeout: "Run timed out",
+      "rate-limited": "Model request limit reached",
+      "semantic-error": "Unexpected run error",
+      "server-error": "Model service error",
+      "transport-error": "Model connection failed",
+      unauthorized: "Model authentication failed",
+      "invalid-tool-call": "Invalid tool call",
+    },
+    timeout: "The run timed out and was terminated. Retry, or check the relevant timeout in System settings.",
+    timeoutNoticeTitle: "Timeout notice",
+    timeoutNotice: "A timeout was reported. Open the technical details to identify the affected operation and check the relevant timeout setting.",
+    timeoutTitles: {
+      gateway_idle: "Run timed out",
+      gateway_turn: "Run timed out",
+      permission_wait: "Permission wait timed out",
+      runner_exec: "Tool execution timed out",
+      kernel_idle: "Kernel idle timeout",
+    },
+    timeouts: {
+      gateway_idle: (seconds: number) => `The Agent made no progress for ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry, or increase the Agent idle timeout in System settings.`,
+      gateway_turn: (seconds: number) => `The Agent turn exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Split the task and retry, or increase the turn timeout in System settings.`,
+      permission_wait: (seconds: number) => `The permission request was not handled within ${seconds} ${seconds === 1 ? "second" : "seconds"}, so the run was terminated. Retry and respond to permission requests promptly, or increase the permission wait timeout in System settings.`,
+      runner_exec: (seconds: number) => `Tool execution exceeded ${seconds} ${seconds === 1 ? "second" : "seconds"}. Reduce the work per execution and retry, or increase the execution timeout in System settings.`,
+      kernel_idle: (seconds: number) => `The kernel was idle for ${seconds} ${seconds === 1 ? "second" : "seconds"}. Retry, or increase the kernel idle timeout in System settings.`,
+    },
+    "rate-limited": "The model service is limiting requests because a request or usage limit was reached. The run has stopped. Retry later; if this persists, check the provider's limits and available quota.",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "An unexpected issue prevented the task from completing. Retry; if this persists, open the technical details to investigate.",
+    "server-error": "The model service returned a server error and the run has stopped. Retry later; if this persists, check the service status or switch models.",
+    "transport-error": "The model service could not be reached and the run has stopped. Check your network, proxy settings and model service URL, then retry.",
+    unauthorized: "The model service rejected the credentials and the run has stopped. Check the API key and access permissions in System settings' model registry, then retry.",
+    "invalid-tool-call": "The model's tool call arguments could not be parsed. That call was not executed and the run has stopped. Retry; if this persists, switch models.",
+    unknown: "The task stopped before it could finish. Retry; if it fails again, open the technical details to investigate.",
+    technicalDetails: "Technical details",
   },
 
   errors: {

@@ -825,6 +825,7 @@ async function executeAgentRun(
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
   let activeSkills: RuntimeSkillSnapshot[];
+  const librarySkillIds = new Set<string>();
   try {
     // `/` attachments must stay inside the Session's effective skill set: in
     // `selected` mode a skill outside the whitelist is not usable at all.
@@ -850,6 +851,9 @@ async function executeAgentRun(
         )
       : [];
     const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
+    for (const skill of librarySkills) {
+      if (!manualSkillIds.has(skill.id)) librarySkillIds.add(skill.id);
+    }
     activeSkills = [
       ...manualSkills,
       ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
@@ -864,6 +868,7 @@ async function executeAgentRun(
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
   const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
+    ...(librarySkillIds.has(id) ? { importOnRun: true } : {}),
     content,
     description,
     hash,
