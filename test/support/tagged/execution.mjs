@@ -65,7 +65,7 @@ export function mockedBatches(plan) {
   return mockedShards(plan).flatMap(partition => {
     const entries = plan.entries.filter(entry => partition.keys.includes(entry.key));
     const batch = (suffix, selected, checks = []) => ({
-      group: 'mocked', fixture: partition.fixture,
+      shard: partition.name, group: 'mocked', fixture: partition.fixture,
       key: `mocked-${partition.name}${suffix}`, entries: selected, checks,
     });
     if (partition.name !== 'standard-config') return [batch('', entries, partition.checks)];

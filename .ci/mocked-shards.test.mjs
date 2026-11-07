@@ -22,10 +22,12 @@ function evidence(t, p = plan()) {
     const worker = subplan(p, p.entries.filter(e => shard.keys.includes(e.key)));
     writeFileSync(join(dir, 'plan.json'), JSON.stringify(worker));
     writeFileSync(join(dir, 'summary.json'), JSON.stringify(verifyResults(worker, worker.entries.map(pass))));
-    if (shard.checks.length) {
-      const checkDir = join(base, `mocked-${shard.name}-global/e2e`); mkdirSync(checkDir, { recursive: true });
-      writeFileSync(join(checkDir, 'jiuwenswarm-checks.json'), JSON.stringify(shard.checks.map(name => ({ name, outcome: 'PASS' }))));
-    }
+  }
+  // The checks land where the run writes them: the batch key that carries
+  // them, which is the same projection shared.mjs turns into CI_RESULTS_DIR.
+  for (const batch of mockedBatches(p).filter(batch => batch.checks.length)) {
+    const checkDir = join(root, `mocked-e2e-results-${batch.shard}`, batch.key, 'e2e'); mkdirSync(checkDir, { recursive: true });
+    writeFileSync(join(checkDir, 'jiuwenswarm-checks.json'), JSON.stringify(batch.checks.map(name => ({ name, outcome: 'PASS' }))));
   }
   return root;
 }
@@ -119,12 +121,18 @@ test('a failed case remains executed and failed in the suite totals', t => {
 });
 
 test('supplemental checks must run once, in order, on their designated stack', t => {
-  for (const mutation of ['missing', 'omitted', 'duplicate', 'failed', 'order', 'wrong-worker']) {
+  for (const mutation of ['missing', 'omitted', 'duplicate', 'failed', 'order', 'wrong-worker', 'wrong-batch']) {
     const p = plan(), root = evidence(t, p), path = file(root, 'mocked-standard-config-global/e2e/jiuwenswarm-checks.json');
     const checks = JSON.parse(readFileSync(path));
     if (mutation === 'missing') rmSync(path);
     else if (mutation === 'wrong-worker') {
-      const dest = join(root, 'mocked-e2e-results-standard-journeys/mocked-standard-journeys-global/e2e'); mkdirSync(dest, { recursive: true });
+      // A sibling shard's own batch directory, which is where a checks run on
+      // that stack would actually write.
+      const dest = join(root, 'mocked-e2e-results-standard-journeys/mocked-standard-journeys/e2e'); mkdirSync(dest, { recursive: true });
+      writeFileSync(join(dest, 'jiuwenswarm-checks.json'), JSON.stringify(checks));
+    } else if (mutation === 'wrong-batch') {
+      // The other standard-config stack: the checks belong to the global one.
+      const dest = file(root, 'mocked-standard-config-fresh/e2e'); mkdirSync(dest, { recursive: true });
       writeFileSync(join(dest, 'jiuwenswarm-checks.json'), JSON.stringify(checks));
     } else {
       if (mutation === 'omitted') checks.pop();
@@ -144,6 +152,10 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   assert.match(job('e2e'), /max-parallel: 4/);
   assert.match(job('e2e'), /fail-fast: false/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
+  // The summary step reads the stack that actually runs the checks, named by
+  // the same batch key the run writes under.
+  const checkKey = mockedBatches(plan()).find(batch => batch.checks.length).key;
+  assert.ok(job('e2e').includes(`checks=.ci-results/${checkKey}/e2e/jiuwenswarm-checks.log`));
   const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
   for (const block of [real, job('merge-gate')]) {
     assert.match(block, /path: \.ci-mocked-results\n/);
