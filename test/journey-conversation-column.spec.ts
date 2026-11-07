@@ -144,7 +144,13 @@ test.describe("conversation column", { tag: ["@isolation:session", "@category:e2
         const route = `**/api/sessions/${fixture!.session.id}`;
         await page.route(route, async request => { await gate; await request.continue(); });
         try {
-          await page.goto("/", { waitUntil: "domcontentloaded" });
+          // Reload the Session's own address rather than "/". A bare "/" does
+          // not name a Session, so the app falls back to the first one in the
+          // default Project; that request is not the gated one, the transcript
+          // replaces the skeleton before it can be measured, and the Session
+          // under test never loads. The deep link is the app's normal restore
+          // path: a Session named by the URL wins over the "first item" default.
+          await page.goto(`/projects/${encodeURIComponent(fixture!.project.id)}/sessions/${encodeURIComponent(fixture!.session.id)}`, { waitUntil: "domcontentloaded" });
           const skeleton = page.locator(".message-skeleton");
           await expect(skeleton).toBeVisible();
           const skeletonBox = (await skeleton.boundingBox())!;
