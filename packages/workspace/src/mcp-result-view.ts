@@ -30,6 +30,12 @@ const REDACTED_MCP_KEY = /^(?:authorization|api[_-]?key|apiToken|authToken|acces
 const RECORD_PRESENTATION_KEYS = new Set(["citations", "identifierType", "source", "fullTextRetrieved"]);
 const RESULT_ENVELOPE_KEYS = new Set(["records", "data", "warnings", "sourceId", "toolId", "invocationId", "attribution", "license", "retrievedAt", "untrusted", "sourceVersion", "artifacts"]);
 const CANDIDATE_KEYS = new Set(["id", "logicalName", "kind", "format", "mimeType", "sourceId", "sourceRecordId", "license", "attribution", "expectedBytes"]);
+// Literature connectors copy the provider's raw entry into structuredData,
+// repeating the title and abstract. Spending budget on that duplicate while
+// shortening the abstract loses the content models actually cite, so these
+// sources shed the duplicate payload first. Structured sources keep the generic
+// order because there structuredData is the result itself.
+const LITERATURE_SOURCE_IDS = new Set(["arxiv", "pubmed", "europe-pmc", "biorxiv", "medrxiv"]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -154,13 +160,27 @@ function artifactView(result: JsonObject, sourceId: string, toolId: string, stat
   };
 }
 
-function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records", state: ProjectionState): JsonObject {
+function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records", state: ProjectionState, duplicatePayloadFirst = false): JsonObject {
   const records = view[recordsKey] as JsonObject[];
   let omitted = 0;
   let payloadTruncated = false;
   const payloadMarker = { truncated: true, reason: "maximum size reached" };
+  const reduceLargestPayload = (keys: readonly string[]): boolean => {
+    const largestPayload = [
+      ...records.flatMap(record => keys.map(key => ({ owner: record, key }))),
+      ...(keys.includes("data") ? [{ owner: view, key: "data" }] : []),
+    ].filter(({ owner, key }) => owner[key] !== undefined && owner[key] !== payloadMarker)
+      .map(candidate => ({ ...candidate, bytes: utf8Bytes(candidate.owner[candidate.key]) }))
+      .filter(candidate => candidate.bytes > utf8Bytes(payloadMarker))
+      .toSorted((left, right) => right.bytes - left.bytes)[0];
+    if (!largestPayload) return false;
+    largestPayload.owner[largestPayload.key] = payloadMarker;
+    payloadTruncated = true;
+    return true;
+  };
   while (utf8Bytes(view) > MCP_VIEW_BUDGET) {
     state.lossy = true;
+    if (duplicatePayloadFirst && reduceLargestPayload(["structuredData"])) continue;
     const withAbstract = records
       .filter((record) => typeof record.abstract === "string" && Buffer.byteLength(record.abstract, "utf8") > 256)
       .toSorted((left, right) => Buffer.byteLength(String(right.abstract), "utf8") - Buffer.byteLength(String(left.abstract), "utf8"))[0];
@@ -179,18 +199,7 @@ function fitEvidenceView(view: JsonObject, recordsKey: "papers" | "records", sta
     }
     // Reduce business payloads before sacrificing record identity. Per-field
     // limits alone cannot bound a wide structured document or reference list.
-    const largestPayload = [
-      ...records.flatMap(record => ["structuredData", "crossReferences"].map(key => ({ owner: record, key }))),
-      { owner: view, key: "data" },
-    ].filter(({ owner, key }) => owner[key] !== undefined && owner[key] !== payloadMarker)
-      .map(candidate => ({ ...candidate, bytes: utf8Bytes(candidate.owner[candidate.key]) }))
-      .filter(candidate => candidate.bytes > utf8Bytes(payloadMarker))
-      .toSorted((left, right) => right.bytes - left.bytes)[0];
-    if (largestPayload) {
-      largestPayload.owner[largestPayload.key] = payloadMarker;
-      payloadTruncated = true;
-      continue;
-    }
+    if (reduceLargestPayload(["structuredData", "crossReferences", "data"])) continue;
     if (records.length > 1) {
       records.pop();
       omitted += 1;
@@ -250,7 +259,7 @@ function evidenceView(result: JsonObject, sourceId: string, toolId: string, stat
     view.instruction = "Use nextOffset to request the next result page.";
   }
   if (Object.keys(result).some(key => !RESULT_ENVELOPE_KEYS.has(key))) state.lossy = true;
-  return fitEvidenceView(view, recordsKey, state);
+  return fitEvidenceView(view, recordsKey, state, LITERATURE_SOURCE_IDS.has(sourceId));
 }
 
 function compactUnknown(value: unknown, state: ProjectionState, depth = 0): unknown {
