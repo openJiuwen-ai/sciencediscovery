@@ -31,10 +31,10 @@ const skill: SkillDescriptor = {
 };
 const detail: SkillDetail = { ...skill, instructions: "Review carefully", frontmatter: {}, resources: [] };
 // Modal keyboard listeners are outside these component-state checks.
-Object.defineProperty(globalThis, "document", { configurable: true, value: {
+Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: {
   addEventListener() {}, removeEventListener() {},
 } });
-Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
 const noChange = () => {};
 const text = (view: ReactTestRenderer) => JSON.stringify(view.toJSON());
 
