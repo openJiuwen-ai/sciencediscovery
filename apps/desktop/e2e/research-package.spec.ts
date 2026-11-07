@@ -79,6 +79,8 @@ test("both import menus restore a writable conversation in the chosen location",
     await route.fulfill({ json: { id: `op-${source}`, sourceSessionId: source, state: "ready", entrySessionId: id } });
   });
   await page.goto("/");
+  await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
+  await expect(page.locator(".conversation")).toContainText("下文结论");
   for (const [label, project] of [["新建会话选项", "inbox-1"], ["在「默认项目」中导入会话", "project-1"]]) {
     await test.step(`Import through ${label} and continue in ${project}`, async () => {
       await page.getByRole("button", { name: label, exact: true }).click();
