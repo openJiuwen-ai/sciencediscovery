@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, rm, symlink } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { assertRef, type AgentStateRef, type DataRef, type VersionStore, type WorkspaceTree } from "./versioning.js";
 import { withWorkspaceMutation } from "./workspace-lease.js";
 
@@ -49,10 +49,16 @@ export async function* streamSnapshotFile(store: VersionStore, content: DataRef)
  * The caller may hand the directory to a consumer only after this resolves.
  * Preserve raw Linux names, empty directories and link targets without following
  * links or consulting the original live tree. No hardlinks to mutable files/CAS. */
-export async function materializeWorkspaceSnapshot(store: VersionStore, tree: AgentStateRef, destination: string): Promise<void> {
+export interface MaterializeWorkspaceResult {
+  /** Workspace-relative paths of excluded directories that were not materialized. */
+  excludedPaths: string[];
+}
+
+export async function materializeWorkspaceSnapshot(store: VersionStore, tree: AgentStateRef, destination: string): Promise<MaterializeWorkspaceResult> {
   const root = resolve(destination);
   await mkdir(dirname(root), { recursive: true });
   await mkdir(root, { mode: 0o700 }); // Exclusive: failure must not remove someone else's directory.
+  const excludedPaths: string[] = [];
   try {
     await withWorkspaceMutation(store, root, async () => {
       const walk = async (ref: AgentStateRef, directory: Buffer): Promise<void> => {
@@ -66,6 +72,10 @@ export async function materializeWorkspaceSnapshot(store: VersionStore, tree: Ag
           }
           names.add(entry.name);
           const path = Buffer.concat([directory, Buffer.from("/"), name]);
+          if (entry.type === "excluded") {
+            excludedPaths.push(relative(root, path.toString("utf8")));
+            continue;
+          }
           if (entry.type === "directory") {
             await mkdir(path); await walk(entry.tree, path);
           } else if (entry.type === "file") {
@@ -82,6 +92,7 @@ export async function materializeWorkspaceSnapshot(store: VersionStore, tree: Ag
       };
       await walk(tree, Buffer.from(root));
     }, { kind: "snapshot-export", id: tree.digest });
+    return { excludedPaths };
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
