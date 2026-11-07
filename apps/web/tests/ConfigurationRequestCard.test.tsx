@@ -16,6 +16,26 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X02f: shared provider key stays unavailable until separate destination confirmation and is never an ordinary value", async () => {
+  const view = request({ capabilityId: "provider.credential", scope: { kind: "global" }, state: "collecting_input", allowedActions: ["preview", "dismiss"], fields: [
+    { id: "providerId", label: "Provider", kind: "enum", required: true, value: "owned", choices: [{ id: "owned", label: "Owned provider" }] },
+    { id: "apiToken", label: "Replacement", kind: "credential", required: true, status: "missing" },
+  ], endpointAuthorization: { endpointTarget: "opaque-recipient-digest", host: "owned.invalid", classification: "public_https", status: "required", revision: 2,
+    destinations: [{ label: "Model requests", url: "https://owned.invalid/v1/chat/completions" }, { label: "Discovery", url: "https://owned.invalid/v1/models" }] } });
+  const previews: unknown[] = [], uploads: unknown[] = [], confirmed = { ...view, endpointAuthorization: { ...view.endpointAuthorization!, status: "confirmed" as const } };
+  const api = actions({ preview: async input => { previews.push(input); return { ...confirmed, revision: input.expectedRevision + 1 }; }, credential: async input => { uploads.push(input); return { handle: "owned-draft", expiresAt: "2099-01-01T00:00:00Z" }; } });
+  const renderer = await mount(view, api);
+  assert.equal(renderer.root.findAllByType("input").filter(input => input.props.type === "password").length, 0);
+  assert.match(JSON.stringify(renderer.toJSON()), /https:\/\/owned.invalid\/v1\/models/u);
+  await act(async () => renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate() {} }))));
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "synthetic-provider-input" } }));
+  await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(uploads.length, 1); assert.doesNotMatch(JSON.stringify(previews), /synthetic-provider-input/u);
+  assert.deepEqual(previews, [{ expectedRevision: 2, values: { providerId: "owned" } }, { expectedRevision: 3, values: { providerId: "owned" }, credentialHandle: "owned-draft" }]);
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
 test("CFG-X02b: changing Web provider clears the typed key and cannot recover it by switching back", async () => {
   const renderer = await mount(request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
     { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }, { id: "exa", label: "Exa" }] },
@@ -26,6 +46,36 @@ test("CFG-X02b: changing Web provider clears the typed key and cannot recover it
   await act(async () => renderer.root.findByProps({ name: "webProvider" }).props.onChange({ target: { value: "jina" } }));
   assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
   await act(async () => renderer.unmount());
+});
+
+test("CFG-X02e: shared-provider consent displays every recipient and protocol edits choose matching finite defaults", async () => {
+  const view = request({ capabilityId: "provider.connection", scope: { kind: "global" }, fields: [
+    { id: "apiProtocol", label: "Protocol", kind: "enum", required: true, value: "openai-chat-completions", choices: Object.keys(MODEL_API_VARIANTS).map(id => ({ id, label: id })) },
+    { id: "apiVariant", label: "Default variant", kind: "enum", required: true, value: "openai", choices: [{ id: "openai", label: "openai" }] },
+    { id: "modelDiscovery", label: "Discovery", kind: "enum", required: true, value: "openai-models", choices: ["openai-models", "anthropic-models"].map(id => ({ id, label: id })) },
+  ], endpointAuthorization: { endpointTarget: "opaque-provider-consent-digest", host: "owned.invalid", classification: "public_https", revision: 2, status: "required",
+    destinations: [{ label: "Model requests", url: "https://owned.invalid/v1/chat/completions" }, { label: "Model discovery", url: "https://owned.invalid/v1/models" }] } });
+  const confirmed = { ...view, endpointAuthorization: { ...view.endpointAuthorization!, status: "confirmed" as const } }, api = actions({ consent: async () => confirmed });
+  const renderer = await mount(view, api), shown = JSON.stringify(renderer.toJSON());
+  assert.match(shown, /https:\/\/owned.invalid\/v1\/chat\/completions/u); assert.match(shown, /https:\/\/owned.invalid\/v1\/models/u); assert.doesNotMatch(shown, /opaque-provider-consent-digest/u);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => { renderer.root.findByProps({ name: "apiProtocol" }).props.onChange({ target: { value: "anthropic-messages" } }); });
+  assert.equal(renderer.root.findByProps({ name: "apiVariant" }).props.value, "anthropic-adaptive"); assert.equal(renderer.root.findByProps({ name: "modelDiscovery" }).props.value, "anthropic-models");
+});
+
+test("CFG-X02d: existing model identity cannot save before exact endpoint consent and edits fence the old consent", async () => {
+  const view = request({ capabilityId: "model.api_identity", fields: [{ id: "apiModel", label: "API model identifier", kind: "text", required: true, value: "owned-model" }],
+    endpointAuthorization: { endpointTarget: "owned-exact-target", host: "owned.invalid", classification: "public_https", revision: 2, status: "required" } });
+  const api = actions(), renderer = await mount(view, api);
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  const confirmed = { ...view, endpointAuthorization: { ...view.endpointAuthorization!, status: "confirmed" as const } };
+  await act(async () => { renderer.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, { request: confirmed, actions: api, onUpdate: () => undefined }))); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false);
+  await act(async () => { renderer.root.findByProps({ name: "apiModel" }).props.onChange({ target: { value: "edited-api" } }); });
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => { renderer.unmount(); });
 });
 
 test("CFG-X02b: a backend target change during Web preview clears the old key before any upload", async () => {
@@ -639,7 +689,59 @@ test("CFG-R02 custom endpoints require a separate user destination approval befo
   assert.equal(button(renderer!, "Allow this exact endpoint"), undefined);
   await act(async () => { latest = { ...latest, endpointAuthorization: { ...latest.endpointAuthorization!, classification: "public_http", status: "confirmed" } }; renderer!.update(render()); });
   assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0, "remote cleartext endpoint never collects a credential");
+  assert.match(JSON.stringify(renderer!.toJSON()), /Public HTTP is unencrypted/);
   await act(async () => renderer!.unmount());
+});
+
+test("CFG-R02 keyless public HTTP states the plaintext risk in both locales before confirmation", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "model.connect", fields: [
+      { id: "baseUrl", kind: "url", label: "API URL", required: true, value: "http://203.0.113.10/v1" },
+      { id: "tokenOptional", kind: "boolean", label: "No key", required: false, value: true },
+    ], endpointAuthorization: { endpointTarget: "http://203.0.113.10/v1/chat/completions", host: "203.0.113.10", classification: "public_http", status: "required", revision: 2 } }), actions({ consent: async () => request() }), () => undefined, locale);
+    const text = JSON.stringify(renderer.toJSON());
+    assert.match(text, locale === "zh" ? /公网 HTTP 不加密/ : /Public HTTP is unencrypted/);
+    assert.match(text, locale === "zh" ? /提示词、模型输出和连接检查/ : /Prompts, model output and connection checks/);
+    assert.equal(button(renderer, locale === "zh" ? "允许此精确端点" : "Allow this exact endpoint").props.disabled, false);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG-X02d/e insecure endpoint guidance replaces the generic field error in both locales", async () => {
+  const identityMessage = "Conversational API identity changes require HTTPS or a local/private endpoint. Edit the endpoint in Model Settings first.";
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "model.api_identity", fields: [
+      { id: "apiModel", label: "API model identifier", kind: "text", required: true, value: "owned-model" },
+    ], error: { code: "CONFIGURATION_ENDPOINT_INSECURE", message: identityMessage, retryable: false } }), actions({
+      preview: async () => { throw new ApiRequestError(identityMessage, 400, "CONFIGURATION_ENDPOINT_INSECURE"); },
+    }), () => undefined, locale);
+    const shown = () => JSON.stringify(renderer.toJSON());
+    assert.match(shown(), locale === "zh" ? /请先在模型设置中修改端点/ : /Edit the endpoint in Model Settings first/);
+    assert.doesNotMatch(shown(), /highlighted fields|标出的字段|Conversational API identity/);
+    await act(async () => { renderer.root.findByProps({ name: "apiModel" }).props.onChange({ target: { value: "edited-model" } }); });
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+    assert.match(shown(), locale === "zh" ? /请先在模型设置中修改端点/ : /Edit the endpoint in Model Settings first/);
+    assert.doesNotMatch(shown(), /highlighted fields|标出的字段|Conversational API identity/);
+    assert.equal(renderer.root.findByProps({ name: "apiModel" }).props["aria-invalid"], undefined);
+    await act(async () => renderer.unmount());
+  }
+  const connectionMessage = "Conversational provider connection changes require HTTPS or a local/private endpoint. Choose a supported API base URL.";
+  for (const [locale, field] of [["en", undefined], ["zh", undefined], ["en", "baseUrl"]] as const) {
+    const renderer = await mount(request({ capabilityId: "provider.connection", scope: { kind: "global" }, fields: [
+      { id: "name", label: "Provider display name", kind: "text", required: true, value: "Owned" },
+      { id: "baseUrl", label: "Provider API base URL", kind: "url", required: true, value: "http://remote-public.invalid/v1" },
+    ] }), actions({
+      preview: async () => { throw new ApiRequestError(connectionMessage, 400, "CONFIGURATION_ENDPOINT_INSECURE", field ? { field } : undefined); },
+    }), () => undefined, locale);
+    await act(async () => { renderer.root.findByProps({ name: field === "baseUrl" ? "baseUrl" : "name" }).props.onChange({ target: { value: field === "baseUrl" ? "http://203.0.113.10/v1" : "Renamed" } }); });
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+    const shown = JSON.stringify(renderer.toJSON());
+    assert.match(shown, locale === "zh" ? /请改用受支持的 API 地址/ : /Choose a supported API base URL/);
+    assert.doesNotMatch(shown, /highlighted fields|标出的字段|Conversational provider/);
+    assert.equal(renderer.root.findByProps({ name: "baseUrl" }).props["aria-invalid"], field === "baseUrl" ? true : undefined);
+    assert.equal(renderer.root.findByProps({ name: "name" }).props["aria-invalid"], undefined);
+    await act(async () => renderer.unmount());
+  }
 });
 
 test("CFG-R02 a model card with no destination cannot collect a key before its first target preview", async () => {
@@ -916,5 +1018,20 @@ test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after 
   assert.equal(button(renderer, "Confirm this change").props.disabled, false, "A fresh explicit preview survives exact recipient consent");
   await act(async () => button(renderer, "Confirm this change").props.onClick());
   assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
+  await act(async () => renderer.unmount());
+});
+
+test("shared model metadata labels identify profile edits rather than task-model selection or provider renaming", async () => {
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: "zh" }, createElement(ConfigurationRequestCard, {
+    request: request({ capabilityId: "model.metadata", scope: { kind: "global" }, fields: [
+      { id: "modelId", label: "Existing shared model", kind: "enum", required: true, choices: [{ id: "a", label: "Model A" }], value: "a" },
+      { id: "name", label: "Model profile name", kind: "text", required: false, value: "Model A" },
+    ] }), actions: actions(), onUpdate: () => undefined,
+  }))); });
+  const labels = renderer.root.findAllByType("label").map(label => label.children.filter(child => typeof child === "string").join(""));
+  assert.ok(labels.some(label => label.includes("共享模型档案")));
+  assert.ok(labels.some(label => label.includes("模型档案名称")));
+  assert.ok(labels.every(label => !label.includes("任务模型") && !label.includes("服务商名称")));
   await act(async () => renderer.unmount());
 });

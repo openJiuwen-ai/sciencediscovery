@@ -157,13 +157,13 @@ export function createConfigurationDomainAdapters(options: Options): Configurati
       baseUrl: text(input, "baseUrl"), apiProtocol: input.apiProtocol as ModelProfile["apiProtocol"], apiVariant: input.apiVariant as ModelProfile["apiVariant"],
       hasApiToken: Boolean(context.credentialHandle), proxyPolicy: "inherit", vision: false, createdAt: "", updatedAt: "" };
     const probe = async (apiToken?: string) => {
-      options.destinations.assertContext(context, profile, Boolean(apiToken));
+      options.destinations.assertContext(context, isRepair ? "model.repair_credential" : "model.connect", profile, Boolean(apiToken));
       const tested = await testModelConnectivity({ profile, apiToken, allowMissingToken: !isRepair && input.tokenOptional === true,
         beforeDispatch: () => {
           if (store.notifications.generation(context.sessionId) !== context.snapshot.stopGeneration) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped before the probe was sent", 409);
           const current = isRepair ? store.getModel(text(context.input, "modelId")) : profile;
           if (!current) throw new ConfigurationError("MODEL_NOT_FOUND", "The model no longer exists", 409);
-          options.destinations.assertContext(context, current, Boolean(apiToken));
+          options.destinations.assertContext(context, isRepair ? "model.repair_credential" : "model.connect", current, Boolean(apiToken));
         },
         resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl) });
       return { ok: tested.ok, code: tested.ok ? undefined : `MODEL_${tested.category.toUpperCase()}`, message: tested.message, retryable: !tested.ok, field: tested.ok ? undefined : "apiToken" };
