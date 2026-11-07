@@ -92,11 +92,14 @@ const PAPER: JsonRecord = {
   label: "Paper",
   id: "paper-1",
   // Europe PMC returns a structured abstract as markup; the card has to read
-  // the sections out of it rather than print the tags.
+  // the abstract out of it rather than print either the tags or the section
+  // labels.
   extra: {
-    abstract: "<h4>Background/purpose</h4><p>Nickel catalysts convert methane.</p>"
+    abstract: "<h4>Background/purpose</h4><p>Nickel catalysts convert methane, but activity falls as coke deposits above 400 °C.</p>"
+      + "<h4>Methods</h4><p>A fixed-bed reactor ran from 250 to 500 °C at 1 bar, with conversion measured by gas chromatography.</p>"
       + "<h4>Results</h4><p>Methane conversion over a nickel catalyst rises with temperature up to 350 °C.</p>",
     identifier: "10.1000/example",
+    link: "https://europepmc.org/article/MED/12345678",
     title: "A paper on methane",
   },
 };
@@ -356,18 +359,20 @@ test("a report's evidence chip opens its details and provenance", async ({ page 
   await expect(dialog.locator(".evidence-source-paper")).toHaveCount(1);
   await expect(dialog.locator(".evidence-source-paper-label")).toHaveText("文献");
   await expect(dialog.locator(".evidence-source-paper-title")).toHaveText("A paper on methane");
-  // The abstract keeps the source's own section labels, and no tag reaches the
-  // reader: the card draws text, never markup.
-  await expect(dialog.locator(".evidence-source-paper-abstract-heading")).toHaveText([
-    "Background/purpose",
-    "Results",
-  ]);
+  // The abstract reads as its sentences, one paragraph per block: no tag and
+  // none of the source's section labels reach the reader.
   await expect(dialog.locator(".evidence-source-paper-abstract")).toHaveText([
-    "Nickel catalysts convert methane.",
+    "Nickel catalysts convert methane, but activity falls as coke deposits above 400 °C.",
+    "A fixed-bed reactor ran from 250 to 500 °C at 1 bar, with conversion measured by gas chromatography.",
     "Methane conversion over a nickel catalyst rises with temperature up to 350 °C.",
   ]);
   await expect(dialog).not.toContainText("<h4>");
   await expect(dialog).not.toContainText("<p>");
+  await expect(dialog).not.toContainText("Background/purpose");
+  await expect(dialog).not.toContainText("Methods");
+  await expect(dialog).not.toContainText("Results");
+  // The DOI-bearing record links out to where it was read.
+  await expect(dialog.locator(".evidence-source-paper-link")).toHaveText("https://europepmc.org/article/MED/12345678");
   await expect(dialog.getByText("来源", { exact: true })).toHaveCount(0);
   await expect(dialog.getByText("Methane conversion is high")).toHaveCount(0);
   const chainCalls = mock.calls.filter((call) => call.path === "/api/memory/query/chain");

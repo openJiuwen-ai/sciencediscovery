@@ -15,64 +15,57 @@
 import assert from "node:assert/strict";
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-import { decodeEntities, paperAbstractSections } from "../src/app/paper-abstract.js";
+import { decodeEntities, paperAbstractParagraphs } from "../src/app/paper-abstract.js";
 
 const { describe, it } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
-describe("paperAbstractSections", () => {
-  it("splits a Europe PMC abstract on its headings", () => {
+describe("paperAbstractParagraphs", () => {
+  it("reads a Europe PMC abstract out of its section markup", () => {
     const raw = "<h4>Background/purpose</h4><p>Nickel catalysts matter.</p>"
       + "<h4>Methods</h4><p>We ran a fixed-bed reactor at 350 °C.</p>"
       + "<h4>Results</h4><p>Conversion rose with temperature.</p>";
 
-    assert.deepEqual(paperAbstractSections(raw), [
-      { heading: "Background/purpose", text: "Nickel catalysts matter." },
-      { heading: "Methods", text: "We ran a fixed-bed reactor at 350 °C." },
-      { heading: "Results", text: "Conversion rose with temperature." },
+    assert.deepEqual(paperAbstractParagraphs(raw), [
+      "Nickel catalysts matter.",
+      "We ran a fixed-bed reactor at 350 °C.",
+      "Conversion rose with temperature.",
     ]);
   });
 
-  it("keeps text that precedes the first heading as its own section", () => {
-    const raw = "Methane conversion over nickel. <h4>Methods</h4><p>Reactors.</p>";
-
-    assert.deepEqual(paperAbstractSections(raw), [
-      { text: "Methane conversion over nickel." },
-      { heading: "Methods", text: "Reactors." },
-    ]);
-  });
-
-  it("returns one headingless section for plain prose", () => {
+  it("keeps prose that precedes the first heading", () => {
     assert.deepEqual(
-      paperAbstractSections("Methane conversion over a nickel catalyst rises with temperature up to 350 °C."),
-      [{ text: "Methane conversion over a nickel catalyst rises with temperature up to 350 °C." }],
+      paperAbstractParagraphs("Methane conversion over nickel. <h4>Methods</h4><p>Reactors.</p>"),
+      ["Methane conversion over nickel.", "Reactors."],
     );
   });
 
-  it("drops inline markup and separates block ends", () => {
+  it("returns plain prose unchanged, as one paragraph", () => {
+    assert.deepEqual(
+      paperAbstractParagraphs("Methane conversion over a nickel catalyst rises with temperature up to 350 °C."),
+      ["Methane conversion over a nickel catalyst rises with temperature up to 350 °C."],
+    );
+  });
+
+  it("drops inline markup and separates paragraphs", () => {
     const raw = "<p>Alpha <b>beta</b> &amp; gamma.</p><p>Delta.</p>";
 
-    assert.deepEqual(paperAbstractSections(raw), [{ text: "Alpha beta & gamma. Delta." }]);
+    assert.deepEqual(paperAbstractParagraphs(raw), ["Alpha beta & gamma.", "Delta."]);
   });
 
-  it("decodes entities in headings too", () => {
-    assert.deepEqual(
-      paperAbstractSections("<h4>Pathways &amp; targets</h4><p>Body.</p>"),
-      [{ heading: "Pathways & targets", text: "Body." }],
-    );
+  it("treats a line break as a paragraph break", () => {
+    assert.deepEqual(paperAbstractParagraphs("One<br/>Two"), ["One", "Two"]);
   });
 
   it("has nothing to say about an empty abstract", () => {
-    assert.deepEqual(paperAbstractSections("   "), []);
-    assert.deepEqual(paperAbstractSections("<p></p>"), []);
+    assert.deepEqual(paperAbstractParagraphs("   "), []);
+    assert.deepEqual(paperAbstractParagraphs("<h4>Methods</h4>"), []);
+    assert.deepEqual(paperAbstractParagraphs("<p></p>"), []);
   });
 
-  it("never leaves a tag on screen", () => {
+  it("never leaves a tag or a section label on screen", () => {
     const raw = "<h4>Methods</h4><p>We used <i>in situ</i> XRD<br/>and GC-MS.</p>";
 
-    for (const section of paperAbstractSections(raw)) {
-      assert.doesNotMatch(section.text, /[<>]/u);
-      if (section.heading !== undefined) assert.doesNotMatch(section.heading, /[<>]/u);
-    }
+    assert.deepEqual(paperAbstractParagraphs(raw), ["We used in situ XRD", "and GC-MS."]);
   });
 });
 
