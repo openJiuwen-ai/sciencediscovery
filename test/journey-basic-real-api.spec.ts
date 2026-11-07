@@ -184,15 +184,14 @@ for (const [id,title] of scenarios) {
           expect(JSON.stringify(events)).toContain('run.completed');
         }
       });
-      await journey.step('Collect optional usage evidence', 'Provider accounting does not gate task completion', async () => {
-        let evidence: unknown;
-        try {
-          const usage=await drbApi<any>(page,`${prefix}/usage`);
-          evidence = { usage, completedRunIds: completedRuns, gating: false };
-        } catch {
-          evidence = { status: 'unavailable', completedRunIds: completedRuns, gating: false };
-        }
-        await info.attach('real-api-usage',{body:JSON.stringify(evidence),contentType:'application/json'});
+      await journey.step('Collect usage evidence', 'Provider accounting is recorded but does not gate task completion', async () => {
+        // A missing or zero count is diagnostic evidence, not a failed journey. A
+        // route that cannot answer at all is still a failure: these journeys are
+        // the only real-provider exercise of the usage endpoint.
+        const usageResponse=await page.request.get(`${apiBaseUrl()}${prefix}/usage`,{headers:authorizationHeader()});
+        if (!usageResponse.ok()) throw new Error(`GET ${prefix}/usage: HTTP ${usageResponse.status()}`);
+        const usage=await usageResponse.json();
+        await info.attach('real-api-usage',{body:JSON.stringify({ usage, completedRunIds: completedRuns, gating: false }),contentType:'application/json'});
       });
     } finally {
       try {
