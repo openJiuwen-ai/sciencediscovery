@@ -2039,7 +2039,7 @@ test("a globally disabled skill cannot be loaded through the bridge fallback", a
       method: "POST", headers: { authorization: `Bearer ${body.bridge.token}`, "content-type": "application/json" },
       body: JSON.stringify({ name: "read_skill", arguments: args }),
     });
-    reply = await result.json();
+    reply = await result.json() as { isError: boolean; text: string };
     response.end(line({ done: { finalText: "ok" } }));
   });
   try {
