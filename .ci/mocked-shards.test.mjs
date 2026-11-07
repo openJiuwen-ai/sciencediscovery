@@ -23,7 +23,7 @@ function evidence(t, p = plan()) {
     writeFileSync(join(dir, 'plan.json'), JSON.stringify(worker));
     writeFileSync(join(dir, 'summary.json'), JSON.stringify(verifyResults(worker, worker.entries.map(pass))));
     if (shard.checks.length) {
-      const checkDir = join(base, `mocked-${shard.fixture}/e2e`); mkdirSync(checkDir, { recursive: true });
+      const checkDir = join(base, `mocked-${shard.name}-global/e2e`); mkdirSync(checkDir, { recursive: true });
       writeFileSync(join(checkDir, 'jiuwenswarm-checks.json'), JSON.stringify(shard.checks.map(name => ({ name, outcome: 'PASS' }))));
     }
   }
@@ -120,11 +120,11 @@ test('a failed case remains executed and failed in the suite totals', t => {
 
 test('supplemental checks must run once, in order, on their designated stack', t => {
   for (const mutation of ['missing', 'omitted', 'duplicate', 'failed', 'order', 'wrong-worker']) {
-    const p = plan(), root = evidence(t, p), path = file(root, 'mocked-standard/e2e/jiuwenswarm-checks.json');
+    const p = plan(), root = evidence(t, p), path = file(root, 'mocked-standard-config-global/e2e/jiuwenswarm-checks.json');
     const checks = JSON.parse(readFileSync(path));
     if (mutation === 'missing') rmSync(path);
     else if (mutation === 'wrong-worker') {
-      const dest = join(root, 'mocked-e2e-results-standard-journeys/mocked-standard/e2e'); mkdirSync(dest, { recursive: true });
+      const dest = join(root, 'mocked-e2e-results-standard-journeys/mocked-standard-journeys-global/e2e'); mkdirSync(dest, { recursive: true });
       writeFileSync(join(dest, 'jiuwenswarm-checks.json'), JSON.stringify(checks));
     } else {
       if (mutation === 'omitted') checks.pop();

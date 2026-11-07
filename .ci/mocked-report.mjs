@@ -21,7 +21,7 @@ export function reconcileMocked(plan, root) {
       // its cases, whereas an absent or mismatched artifact proves no run.
       results.push(...summary.results);
       if (summary.status !== 'PASS' || verifyResults(worker, summary.results).exitCode) errors.push(`${shard.name}: SHARD_FAILED`);
-      const evidence = join(directory, `mocked-${shard.fixture}`, 'e2e/jiuwenswarm-checks.json');
+      const evidence = join(directory, `mocked-${shard.name}-global`, 'e2e/jiuwenswarm-checks.json');
       if (shard.checks.length) {
         const checks = JSON.parse(readFileSync(evidence));
         if (canonical(checks) !== canonical(shard.checks.map(name => ({ name, outcome: 'PASS' })))) throw new Error('SWARM_CHECKS_INCOMPLETE');
