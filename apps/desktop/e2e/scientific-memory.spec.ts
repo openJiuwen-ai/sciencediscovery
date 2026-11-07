@@ -91,8 +91,11 @@ const INPUT: JsonRecord = {
 const PAPER: JsonRecord = {
   label: "Paper",
   id: "paper-1",
+  // Europe PMC returns a structured abstract as markup; the card has to read
+  // the sections out of it rather than print the tags.
   extra: {
-    abstract: "Methane conversion over a nickel catalyst rises with temperature up to 350 °C.",
+    abstract: "<h4>Background/purpose</h4><p>Nickel catalysts convert methane.</p>"
+      + "<h4>Results</h4><p>Methane conversion over a nickel catalyst rises with temperature up to 350 °C.</p>",
     identifier: "10.1000/example",
     title: "A paper on methane",
   },
@@ -353,9 +356,18 @@ test("a report's evidence chip opens its details and provenance", async ({ page 
   await expect(dialog.locator(".evidence-source-paper")).toHaveCount(1);
   await expect(dialog.locator(".evidence-source-paper-label")).toHaveText("文献");
   await expect(dialog.locator(".evidence-source-paper-title")).toHaveText("A paper on methane");
-  await expect(dialog.locator(".evidence-source-paper-abstract")).toHaveText(
+  // The abstract keeps the source's own section labels, and no tag reaches the
+  // reader: the card draws text, never markup.
+  await expect(dialog.locator(".evidence-source-paper-abstract-heading")).toHaveText([
+    "Background/purpose",
+    "Results",
+  ]);
+  await expect(dialog.locator(".evidence-source-paper-abstract")).toHaveText([
+    "Nickel catalysts convert methane.",
     "Methane conversion over a nickel catalyst rises with temperature up to 350 °C.",
-  );
+  ]);
+  await expect(dialog).not.toContainText("<h4>");
+  await expect(dialog).not.toContainText("<p>");
   await expect(dialog.getByText("来源", { exact: true })).toHaveCount(0);
   await expect(dialog.getByText("Methane conversion is high")).toHaveCount(0);
   const chainCalls = mock.calls.filter((call) => call.path === "/api/memory/query/chain");
