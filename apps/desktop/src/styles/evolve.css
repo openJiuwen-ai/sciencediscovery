@@ -775,6 +775,12 @@
 
 .evolve-detail {
   position: relative;
+  /* The narrow-column rules at the foot of this file are container queries,
+     because the panel is resizable and the window's width says nothing about
+     the column's: a 1440px window with the panel at its floor is 568px of
+     column, and the five overview cells then collide. Without this line there
+     is no container to ask and every query in this file is dead. */
+  container-type: inline-size;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -1275,6 +1281,10 @@
 .evolve-tree-arrowhead { fill: #b8bec8; }
 
 .evolve-tree-node { cursor: pointer; outline: 0; }
+/* The node is a tab stop, so it has to say where the keyboard is: a pointer
+   answers with the ring below, and the keyboard answers with the same ring
+   drawn from the outside, where an outline over a dense drawing is legible. */
+.evolve-tree-node:focus-visible .evolve-tree-ring { stroke: #1968f0; stroke-width: 2.5; }
 .evolve-tree-ring { fill: none; stroke: transparent; stroke-width: 2; }
 .evolve-tree-node:hover .evolve-tree-ring { stroke: #a9c6ff; }
 .evolve-tree-node.is-selected .evolve-tree-ring { stroke: #7aa7ff; stroke-width: 2.5; }

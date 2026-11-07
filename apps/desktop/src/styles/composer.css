@@ -106,6 +106,25 @@
   text-overflow: ellipsis;
 }
 
+/* The ✕ on the token. The flags came from a dialog, so declining them has to
+   be as easy as accepting them — otherwise the only way out is to send a
+   search the reader no longer wants. */
+.composer-command-clear {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-right: -2px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: inherit;
+  opacity: .65;
+  transition: background .12s ease, opacity .12s ease;
+}
+
+.composer-command-clear:hover { background: rgba(20, 118, 255, .13); opacity: 1; }
+.composer-command-clear:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; opacity: 1; }
+
 .composer-footer {
   display: flex;
   align-items: center;

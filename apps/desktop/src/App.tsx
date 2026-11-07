@@ -167,16 +167,23 @@ export function App({ initialToken }: Props) {
   /** A design command the dialog placed in the composer instead of sending.
    *  Held here because the composer has two mounts — the welcome page and the
    *  conversation — and the dialog opens over either. Cleared when the composer
-   *  sends, so a session switch cannot resurrect a token already used. */
+   *  sends, when the reader removes the token, and when the session changes: a
+   *  token that outlived its session would turn the next ordinary message into
+   *  a long, costly search the reader never asked for. */
   const [seededCommand, setSeededCommand] = useState<SeededCommand>();
 
   // An open panel belongs to one session's searches, like a selected
   // subagent. The create dialog is deliberately left alone: it starts a run
   // in whichever session is open when it sends, and the session the app is
   // opening as it boots is not a reason to close a dialog the user just opened.
+  //
+  // The seeded command is not left alone: the dialog collected its goal for
+  // the session it was opened in, and the composer it would land in survives
+  // the switch.
   useEffect(() => {
     setEvolveRunId(undefined);
     setAwaitingRun(false);
+    setSeededCommand(undefined);
     seenRunIds.current = new Set();
   }, [state.sessionId]);
 
@@ -754,6 +761,7 @@ export function App({ initialToken }: Props) {
     models: state.models,
     onApprovalMode: (mode) => void actions.setApprovalMode(mode),
     onClearAttachments: actions.clearAttachments,
+    onClearCommand: () => setSeededCommand(undefined),
     onCreateProject: (name) => void actions.createProject(name),
     onEvolve: openEvolve,
     onOpenSettings: () => openSettings("models"),
