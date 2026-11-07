@@ -31,7 +31,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { writeSettingsCache } from "../src/app/settings-cache.js";
-import type { RuntimeSettingsOverrides, SkillDescriptor, Specialist } from "../src/api/types.js";
+import type { SkillDescriptor, Specialist } from "../src/api/types.js";
 import { TEXT } from "../src/text.js";
 import { LoadGate } from "../src/views/settings/rows.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
@@ -70,7 +70,7 @@ function specialist(name: string): Specialist {
 }
 
 function skillsPage(skills: SkillDescriptor[], enabled: string[]) {
-  return { enabled, overrides: {} as RuntimeSettingsOverrides, skills };
+  return { enabled, jiuwenSwarmSkills: [], native: false, skills, switchesAvailable: true };
 }
 
 describe("a settings pane's remembered answer", () => {
@@ -103,21 +103,22 @@ describe("a settings pane's remembered answer", () => {
     assert.ok(!markup.includes("审稿人"), "another client's list leaked into this one");
   });
 
-  it("does not paint one Project's enabled Skills as another's", () => {
+  it("paints the remembered Skills for the client that visited, and not for another", () => {
     const client = new StubClient().asClient();
-    writeSettingsCache(client, "skills:project-a", skillsPage([skill("draft-review", "draft-review")], ["draft-review"]));
+    writeSettingsCache(client, "skills:jiuwenswarm", skillsPage([skill("draft-review", "draft-review")], ["draft-review"]));
 
     const visited = renderToStaticMarkup(
-      <SkillsSettings activeProjectId="project-a" adding={false} client={client} onAddingChange={noop} />,
+      <SkillsSettings adding={false} client={client} onAddingChange={noop} />,
     );
     assert.ok(visited.includes("draft-review"), "the remembered Skills are not on screen");
     assert.ok(!visited.includes(TEXT.settings.loading), "the loading frame is still drawn over remembered Skills");
 
+    const fresh = new StubClient().asClient();
     const other = renderToStaticMarkup(
-      <SkillsSettings activeProjectId="project-b" adding={false} client={client} onAddingChange={noop} />,
+      <SkillsSettings adding={false} client={fresh} onAddingChange={noop} />,
     );
-    assert.ok(other.includes(TEXT.settings.loading), "an unvisited Project does not start at the loading frame");
-    assert.ok(!other.includes("draft-review"), "one Project's enabled Skills leaked into another");
+    assert.ok(other.includes(TEXT.settings.loading), "a client that never visited starts at the loading frame");
+    assert.ok(!other.includes("draft-review"), "another client's remembered Skills leaked into this one");
   });
 });
 

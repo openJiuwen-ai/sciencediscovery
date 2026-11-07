@@ -296,7 +296,7 @@ test.describe("MCP 服务器", () => {
     });
   });
 
-  test("a server can be tested, stopped and started from its card", async ({ page }) => {
+  test("a server can be tested from its card and stopped or started in its edit form", async ({ page }) => {
     const mock = await installMockApi(page, {
       mcpServers: [mcpServer()],
       mcpSources: sources,
@@ -312,13 +312,101 @@ test.describe("MCP 服务器", () => {
       true,
     );
 
-    // A server's switch writes the whole record, so it is a PUT of the card
-    // with `enabled` flipped rather than a separate route of its own.
-    const power = card.getByRole("switch", { name: "检索服务 · 启用" });
-    await expect(power).toHaveAttribute("aria-checked", "true");
-    await power.click();
-    await expect(power).toHaveAttribute("aria-checked", "false");
-    expect(writeCall(mock, "PUT", "/api/mcp/servers/mcp-1")).toMatchObject({ enabled: false });
+    const selection = card.getByRole("switch", { name: "检索服务 · 默认使用" });
+    await expect(selection).toHaveAttribute("aria-checked", "false");
+    for (const enabled of [false, true]) {
+      await card.getByRole("button", { name: "编辑" }).click();
+      const form = page.getByRole("dialog", { name: "编辑服务器" });
+      await form.getByRole("checkbox", { name: "启用服务", exact: true }).setChecked(enabled);
+      await form.getByRole("button", { name: "保存", exact: true }).click();
+      await expect(form).toBeHidden();
+      await expect(card.getByRole("button", { name: "编辑" })).toBeEnabled();
+      expect(lastWriteCall(mock, "PUT", "/api/mcp/servers/mcp-1")).toMatchObject({ enabled });
+      expect(mock.state.mcpServers[0]?.enabled).toBe(enabled);
+      await expect(selection).toHaveAttribute("aria-checked", "false");
+    }
+    expect(mock.calls.filter((call) => call.method === "PUT" && call.path === "/api/settings")).toHaveLength(0);
+  });
+
+  test("default source selection survives reopening without changing permissions or service state", async ({ page }) => {
+    const plugins = { "connector.builtin-search": { enabled: false, config: { mode: "fixture" } } };
+    const mock = await installMockApi(page, {
+      mcpServers: [mcpServer({ enabled: false, status: "disabled" })],
+      mcpSources: sources,
+      overrides: { plugins },
+    });
+    let dialog = await openSettings(page, "MCP 服务器");
+    const builtin = () => dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    const custom = () => dialog.getByRole("switch", { name: "检索服务 · 默认使用" });
+    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await builtin().click();
+    await expect(builtin()).toHaveAttribute("aria-checked", "true");
+    await custom().click();
+    await expect(custom()).toHaveAttribute("aria-checked", "true");
+    expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
+      enabledConnectorIds: ["web", "builtin-search", "mcp-1"], plugins,
+    });
+    expect(mock.state.mcpServers[0]?.enabled).toBe(false);
+    expect(mock.calls.some((call) => call.method === "PUT" && call.path.startsWith("/api/mcp/servers/"))).toBe(false);
+
+    // A fresh page reads the stored selection, including a source whose
+    // permission still prohibits calls. Selection never grants permission.
+    dialog = await openSettings(page, "MCP 服务器");
+    await expect(builtin()).toHaveAttribute("aria-checked", "true");
+    await expect(custom()).toHaveAttribute("aria-checked", "true");
+    await builtin().click();
+    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await custom().click();
+    await expect(custom()).toHaveAttribute("aria-checked", "false");
+    dialog = await openSettings(page, "MCP 服务器");
+    await expect(builtin()).toHaveAttribute("aria-checked", "false");
+    await expect(custom()).toHaveAttribute("aria-checked", "false");
+    expect(mock.state.overrides.enabledConnectorIds).toEqual(["web"]);
+    expect(mock.state.overrides.plugins).toEqual(plugins);
+  });
+
+  test("select all and clear selection preserve unlisted sources and unrelated overrides", async ({ page }) => {
+    const plugins = { "connector.builtin-search": { enabled: false } };
+    const mock = await installMockApi(page, {
+      mcpServers: [mcpServer()], mcpSources: sources,
+      overrides: { enabledConnectorIds: ["unlisted"], plugins },
+    });
+    const dialog = await openSettings(page, "MCP 服务器");
+    const builtin = dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    const custom = dialog.getByRole("switch", { name: "检索服务 · 默认使用" });
+    await dialog.getByRole("button", { name: "全部选用", exact: true }).click();
+    await expect(builtin).toHaveAttribute("aria-checked", "true");
+    await expect(custom).toHaveAttribute("aria-checked", "true");
+    expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
+      enabledConnectorIds: ["unlisted", "builtin-search", "mcp-1"], plugins,
+    });
+    await dialog.getByRole("button", { name: "取消全选", exact: true }).click();
+    await expect(builtin).toHaveAttribute("aria-checked", "false");
+    await expect(custom).toHaveAttribute("aria-checked", "false");
+    expect(lastWriteCall(mock, "PUT", "/api/settings")).toMatchObject({
+      enabledConnectorIds: ["unlisted"], plugins,
+    });
+    expect(mock.state.mcpServers[0]?.enabled).toBe(true);
+  });
+
+  test("a rejected default selection keeps the saved value and allows retry", async ({ page }) => {
+    const options = {
+      mcpSources: sources,
+      fail: { message: "selection save refused", method: "PUT", path: "/api/settings" },
+    };
+    const mock = await installMockApi(page, options);
+    const dialog = await openSettings(page, "MCP 服务器");
+    const selection = dialog.getByRole("switch", { name: "内置检索 · 默认使用" });
+    await selection.click();
+    await expect(dialog.locator(".row-note.is-error")).toHaveText("selection save refused");
+    await expect(selection).toHaveAttribute("aria-checked", "false");
+    await expect(selection).toBeEnabled();
+    expect(mock.state.overrides.enabledConnectorIds).toBeUndefined();
+    options.fail.path = "/not-this-request";
+    await selection.click();
+    await expect(selection).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.locator(".row-note.is-error")).toHaveCount(0);
+    expect(mock.state.overrides.enabledConnectorIds).toEqual(["web", "builtin-search"]);
   });
 
   test("a failed test shows the provider's own reason", async ({ page }) => {
@@ -486,10 +574,78 @@ test.describe("技能", () => {
     skill({ description: "画分子图", id: "skill-2", name: "分子绘图", resourceSummary: { bytes: 4, files: 3, kinds: {} } }),
   ];
 
-  test("a switch pins the selection mode and survives a reload", async ({ page }) => {
+  test("JiuwenSwarm built-in and local switches work without ScienceDiscovery skills", async ({ page }, testInfo) => {
+    await installMockApi(page, {
+      models: MODELS,
+      jiuwenSwarmSkills: [
+        { name: "xlsx", description: "Read spreadsheets", enabled: true, source: "builtin" },
+        { name: "local-tool", description: "A local skill", enabled: false, source: "local" },
+      ],
+    });
+    let dialog: Locator;
+    await test.step("1. Open skills and identify JiuwenSwarm sources", async () => {
+      dialog = await openSettings(page, "技能");
+      await expect(dialog.locator(".settings-card")).toHaveCount(2);
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("JiuwenSwarm 内置");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("JiuwenSwarm 安装");
+    });
+    await test.step("2. Disable the built-in and enable the local skill", async () => {
+      await dialog.getByRole("switch", { name: "启用或停用「xlsx」" }).click();
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已停用");
+      await dialog.getByRole("switch", { name: "启用或停用「local-tool」" }).click();
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("已启用");
+      await page.screenshot({ path: testInfo.outputPath("jiuwenswarm-skills.png") });
+    });
+    await test.step("3. Reload and verify both saved switches", async () => {
+      await page.reload();
+      dialog = await openSettings(page, "技能");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已停用");
+      await expect(dialog.locator(".settings-card").filter({ hasText: "local-tool" })).toContainText("已启用");
+    });
+  });
+
+  test("same-named skills use separate switches and bulk actions include built-ins", async ({ page }) => {
     const mock = await installMockApi(page, {
       models: MODELS,
-      projectSettings: { effective: { enabledSkillIds: ["skill-1"] }, overrides: {}, sources: {} },
+      skills: [skill({ id: "xlsx", name: "SD spreadsheets" })],
+      jiuwenSwarmSkills: [
+        { name: "xlsx", description: "Native spreadsheets", enabled: true, source: "builtin" },
+        { name: "sciencediscovery-xlsx", skillId: "xlsx", description: "Imported spreadsheets", enabled: true, source: "sciencediscovery" },
+      ],
+    });
+    const dialog = await openSettings(page, "技能");
+    await expect(dialog.locator(".settings-card")).toHaveCount(2);
+    await dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true }).click();
+    await expect(dialog.locator(".settings-card").filter({ hasText: "Native spreadsheets" })).toContainText("已停用");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "SD spreadsheets" })).toContainText("已启用");
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills\/xlsx$/u)).toEqual({ enabled: false });
+    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(0);
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/xlsx$/u)).toEqual({ enabled: false });
+    await dialog.getByRole("button", { name: "一键启用", exact: true }).click();
+    await expect(dialog.getByRole("switch", { checked: true })).toHaveCount(2);
+  });
+
+  test("a refused built-in switch keeps its saved state and reports the failure", async ({ page }) => {
+    await installMockApi(page, {
+      models: MODELS, skills, skillToggleFailures: ["xlsx"],
+      jiuwenSwarmSkills: [{ name: "xlsx", description: "Native spreadsheets", enabled: true, source: "builtin" }],
+    });
+    const dialog = await openSettings(page, "技能");
+    await expect(dialog.locator(".settings-card")).toHaveCount(3);
+    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
+    await expect(dialog.locator(".settings-card").filter({ hasText: "xlsx" })).toContainText("已启用");
+    await expect(dialog).toContainText("xlsx: Skill switch failed");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已停用");
+    await dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true }).click();
+    await expect(dialog).toContainText("Skill switch failed");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「xlsx」", exact: true })).toBeChecked();
+  });
+
+  test("a switch updates JiuwenSwarm globally and survives a reload", async ({ page }) => {
+    const mock = await installMockApi(page, {
+      models: MODELS,
+      jiuwenSwarmSkills: [{ skillId: "skill-1", name: "skill-1", description: "", enabled: true, source: "sciencediscovery" }],
       skills,
     });
     const dialog = await openSettings(page, "技能");
@@ -499,11 +655,9 @@ test.describe("技能", () => {
     await card.getByRole("switch", { name: "启用或停用「分子绘图」" }).click();
     await expect(card).toContainText("已启用");
 
-    const sent = writeCall(mock, "PUT", /^\/api\/projects\/[^/]+\/settings$/u);
-    expect(sent).toMatchObject({
-      enabledSkillIds: ["skill-1", "skill-2"],
-      skillSelectionMode: "selected",
-    });
+    expect(writeCall(mock, "PUT", /^\/api\/jiuwenswarm\/skills-by-id\/skill-2$/u)).toEqual({ enabled: true });
+    expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
+    expect(mock.calls.some((call) => call.method === "PUT" && /\/projects\/[^/]+\/settings$/u.test(call.path))).toBe(false);
 
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
@@ -512,6 +666,19 @@ test.describe("技能", () => {
     const reopened = page.getByRole("dialog", { name: "设置" });
     await reopened.getByRole("button", { name: "技能", exact: true }).click();
     await expect(reopened.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已启用");
+  });
+
+  test("bulk enable continues after one skill fails and shows the saved state", async ({ page }) => {
+    const mock = await installMockApi(page, {
+      models: MODELS, skills, skillToggleFailures: ["skill-1"],
+    });
+    const dialog = await openSettings(page, "技能");
+    await expect(dialog.locator(".settings-card")).toHaveCount(2);
+    await dialog.getByRole("button", { name: "一键启用", exact: true }).click();
+    await expect(dialog.locator(".settings-card").filter({ hasText: "分子绘图" })).toContainText("已启用");
+    await expect(dialog.locator(".settings-card").filter({ hasText: "文献检索" })).toContainText("已停用");
+    await expect(dialog).toContainText("Skill switch failed");
+    expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
   });
 
   test("a card opens to the skill's source, version and file count", async ({ page }) => {

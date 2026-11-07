@@ -14,6 +14,8 @@
 
 import { useEffect, useState } from "react";
 
+import type { ConnectorId } from "@sciencediscovery/schema";
+
 import type { ApiClient } from "../../../api/client.js";
 import {
   deleteMcpServer,
@@ -34,7 +36,7 @@ import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
-import { BulkToggles, Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
+import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
 
 interface Props {
   client: ApiClient;
@@ -43,12 +45,14 @@ interface Props {
 }
 
 interface Page {
-  /** The product's own servers; read-only here, tools come from the catalog. */
+  /** Built-in data sources from the server catalog. */
   builtins: McpSource[];
-  /** Effective plugin switches, which decide whether a built-in server is on. */
-  plugins: Record<string, { enabled?: boolean }>;
+  /** Custom MCP servers registered on this machine. */
+  custom: CustomMcpServerDetails[];
+  /** Current global overrides so we can write a field-sparing update. */
   overrides: RuntimeSettingsOverrides;
-  servers: CustomMcpServerDetails[];
+  /** The effective default selection at this layer. */
+  enabledConnectorIds: ConnectorId[];
 }
 
 /** One secret slot. A saved key keeps `originalKey` and an empty value, which
@@ -215,16 +219,10 @@ function initialOf(name: string): string {
 }
 
 /**
- * MCP 服务器: the custom servers registered on this machine and the built-in
- * catalog the product ships with, in the same card list 专家 and 技能 use.
+ * 数据源设置：选择会话默认使用的数据源。
  *
- * A server is written whole, so enabling one resends the record with `enabled`
- * flipped. Secrets are write-only: saved slots come back as keys with null
- * values, and this form sends them back untouched unless a value is typed.
- *
- * A server's 编辑 opens the record in a modal, as 添加模型 does: the list stays
- * in place behind the scrim, and a built-in entry expands in place because it
- * has nothing to edit.
+ * 内置来源和自定义 MCP 都通过全局 `enabledConnectorIds` 管理是否默认选用；
+ * 自定义服务的连接状态仍由各自的 `enabled` 字段控制，二者相互独立。
  */
 export function McpServers({ client, onConfirm, onToast }: Props) {
   const loaded = useLoaded<Page>(async () => {
@@ -233,14 +231,12 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       listMcpSources(client),
       getGlobalSettings(client),
     ]);
-    const effective = settings.effective as
-      | { plugins?: Record<string, { enabled?: boolean }> }
-      | undefined;
+    const effective = settings.effective as { enabledConnectorIds?: ConnectorId[] } | undefined;
     return {
       builtins: sources.filter((source) => !source.manifest.id.startsWith("custom-")),
+      custom: servers,
       overrides: settings.overrides,
-      plugins: effective?.plugins ?? {},
-      servers,
+      enabledConnectorIds: effective?.enabledConnectorIds ?? ["web"],
     };
   }, { client, key: "mcp-servers" });
   const [draft, setDraft] = useState<Draft>();
@@ -259,35 +255,20 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
 
   const closeForm = () => setDraft(undefined);
 
-  const write = async (server: CustomMcpServerDetails, body: CustomMcpServerInput) => {
+  /** Toggle whether a data source is selected by default for new sessions. */
+  const toggleDefaultUse = async (id: string) => {
+    const page = loaded.value;
+    if (!page) return;
     setBusy(true);
     setFailure(undefined);
     try {
-      await saveMcpServer(client, body, server.id);
-      loaded.reload();
-      onToast(TEXT.settings.system.mcp.saved);
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Built-in servers have no record of their own: their switch is the plugin
-   *  override, which starts on because the runtime only hides an explicit
-   *  `enabled: false`. The global layer is where the catalog lives. */
-  const toggleSource = async (source: McpSource, next: boolean) => {
-    const key = `connector.${source.manifest.id}`;
-    const overrides = loaded.value?.overrides ?? {};
-    setBusy(true);
-    setFailure(undefined);
-    try {
+      const selected = new Set(page.enabledConnectorIds);
+      const next = selected.has(id)
+        ? page.enabledConnectorIds.filter((value) => value !== id)
+        : [...page.enabledConnectorIds, id];
       await putGlobalSettings(client, {
-        ...overrides,
-        plugins: {
-          ...overrides.plugins,
-          [key]: { ...(overrides.plugins?.[key] ?? {}), enabled: next },
-        },
+        ...page.overrides,
+        enabledConnectorIds: next,
       });
       loaded.reload();
     } catch (reason) {
@@ -297,29 +278,27 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   };
 
-  /** 一键启用 / 一键关闭 over both kinds of server: a custom server's own
-   *  `enabled` flag, and a built-in's plugin override. A server is written
-   *  whole, so each custom one is resaved from its own record — sequentially,
-   *  because some of them reconnect on the way in. */
-  const setAll = async (next: boolean) => {
+  /** Select or clear every visible data source. Only the default selection
+   *  list changes; custom server connection settings are untouched. */
+  const setAllSelected = async (next: boolean) => {
     const page = loaded.value;
     if (!page) return;
     setBusy(true);
     setFailure(undefined);
     try {
-      for (const server of page.servers) {
-        if (server.enabled === next) continue;
-        await saveMcpServer(client, { ...inputOf(draftOf(server)), enabled: next }, server.id);
+      const ids = new Set([...page.enabledConnectorIds]);
+      for (const source of page.builtins) {
+        if (next) ids.add(source.manifest.id);
+        else ids.delete(source.manifest.id);
       }
-      if (page.builtins.length > 0) {
-        const overrides = page.overrides ?? {};
-        const plugins = { ...overrides.plugins };
-        for (const source of page.builtins) {
-          const key = `connector.${source.manifest.id}`;
-          plugins[key] = { ...(plugins[key] ?? {}), enabled: next };
-        }
-        await putGlobalSettings(client, { ...overrides, plugins });
+      for (const server of page.custom) {
+        if (next) ids.add(server.id);
+        else ids.delete(server.id);
       }
+      await putGlobalSettings(client, {
+        ...page.overrides,
+        enabledConnectorIds: [...ids],
+      });
       loaded.reload();
     } catch (reason) {
       setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
@@ -351,6 +330,11 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   };
 
+  const isSelected = (id: string) => {
+    const page = loaded.value;
+    return page ? page.enabledConnectorIds.includes(id) : false;
+  };
+
   return (
     <>
       <p className="settings-note">{TEXT.settings.system.mcp.help}</p>
@@ -358,12 +342,19 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       <LoadGate loaded={loaded}>
         {(page) => (
           <Group>
-            {page.servers.length === 0 && page.builtins.length === 0 ? (
+            {page.custom.length === 0 && page.builtins.length === 0 ? (
               <p className="settings-empty">{TEXT.settings.system.mcp.empty}</p>
             ) : (
               <div className="settings-list">
-                <BulkToggles busy={busy} onAll={(next) => void setAll(next)} />
-                {page.servers.map((server) => (
+                <div className="settings-bulk">
+                  <button className="bulk-button" disabled={busy} onClick={() => void setAllSelected(true)} type="button">
+                    {TEXT.settings.system.mcp.selectAll}
+                  </button>
+                  <button className="bulk-button" disabled={busy} onClick={() => void setAllSelected(false)} type="button">
+                    {TEXT.settings.system.mcp.clearSelection}
+                  </button>
+                </div>
+                {page.custom.map((server) => (
                   <div className="settings-card" key={server.id}>
                     <span className="settings-card-mark">{initialOf(server.name)}</span>
                     <div className="settings-card-main">
@@ -428,12 +419,9 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                       </button>
                       <Switch
                         disabled={busy}
-                        label={`${server.name} · ${TEXT.settings.system.mcp.enable}`}
-                        onChange={(next) => void write(server, {
-                          ...inputOf(draftOf(server)),
-                          enabled: next,
-                        })}
-                        value={server.enabled}
+                        label={`${server.name} · ${TEXT.settings.system.mcp.useByDefault}`}
+                        onChange={() => void toggleDefaultUse(server.id)}
+                        value={isSelected(server.id)}
                       />
                     </div>
                   </div>
@@ -441,7 +429,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
 
                 {page.builtins.map((source) => {
                   const open = openId === source.manifest.id;
-                  const on = page.plugins[`connector.${source.manifest.id}`]?.enabled !== false;
+                  const on = isSelected(source.manifest.id);
                   const tools = Object.values(source.manifest.tools ?? {});
                   const meta = [
                     source.manifest.publisher,
@@ -463,13 +451,9 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                         <strong>
                           {source.manifest.displayName || source.manifest.id}
                           <Tag tone="off">{TEXT.settings.system.mcp.builtin}</Tag>
-                          {on ? (
-                            <Tag tone={catalogTone(source.status.status)}>
-                              {statusLabel(source.status.status)}
-                            </Tag>
-                          ) : (
-                            <Tag tone="off">{TEXT.settings.system.mcp.statusDisabled}</Tag>
-                          )}
+                          <Tag tone={catalogTone(source.status.status)}>
+                            {statusLabel(source.status.status)}
+                          </Tag>
                           <Tag tone="off">{TEXT.settings.system.mcp.toolCount(tools.length)}</Tag>
                         </strong>
                         <small>{source.manifest.description || source.manifest.id}</small>
@@ -494,8 +478,8 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                       <div className="settings-card-actions">
                         <Switch
                           disabled={busy}
-                          label={`${source.manifest.displayName || source.manifest.id} · ${TEXT.settings.system.mcp.enable}`}
-                          onChange={(next) => void toggleSource(source, next)}
+                          label={`${source.manifest.displayName || source.manifest.id} · ${TEXT.settings.system.mcp.useByDefault}`}
+                          onChange={() => void toggleDefaultUse(source.manifest.id)}
                           value={on}
                         />
                       </div>
@@ -516,14 +500,14 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
         >
           <section className="settings-card is-form">
             <div className="settings-card-form">
-              <Row title={TEXT.settings.system.mcp.enable}>
+              <Row title={TEXT.settings.system.mcp.enableService}>
                 <label className="settings-check">
                   <input
                     checked={current.enabled}
                     onChange={(event) => change({ enabled: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>{TEXT.settings.system.mcp.enabled}</span>
+                  <span>{TEXT.settings.system.mcp.enableService}</span>
                 </label>
               </Row>
               <Row title={TEXT.settings.system.mcp.name}>

@@ -51,7 +51,19 @@ adds a spec, that the evidence is local — do not describe it as a CI gate.
 |---|---|
 | `boot.spec.ts` | credential gate, offline screen, rejected token, empty workspace, resume |
 | `setup.spec.ts` | first run with no model: test, then continue |
+| `failure-cards.spec.ts` | timeout cards, keyboard diagnostics, narrow layout, persisted replay, repeated failures, recovery and language switch |
 | `conversation.spec.ts` | compose, Enter vs Shift+Enter, SSE answer, persisted transcript |
 | `sessions.spec.ts` | rename and delete, both proved across a reload |
 | `settings.spec.ts` | default model and interface language surviving a reload |
 | `workspace.spec.ts` | file picker upload, and the health-reported size ceiling |
+
+`failure-cards.spec.ts` uses the same per-page API isolation and shares only the
+step reporter with `test/helpers/journey-report.ts`. It requires no API server,
+model stub or global timeout changes. The main journey’s five steps check Desktop rendering of
+mocked SSE failures and replay; they do not verify real backend timeout
+classification or persistence. Run it with the Desktop config above, appending
+`failure-cards.spec.ts`. It is intentionally outside the Web E2E catalogue.
+
+Three additional cases cover standalone tool, kernel and untyped timeout notices
+beside a later completed answer. Each reloads in Chinese and English, checks the
+operation-specific or neutral title, and opens the unchanged raw diagnostic.

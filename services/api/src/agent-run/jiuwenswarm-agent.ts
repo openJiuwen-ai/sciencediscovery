@@ -22,7 +22,7 @@ import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool
 import { DurableContextStore } from "@sciencediscovery/context";
 
 import { startModelGateway, withoutWithheldNotice, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
-import { importSkillsToJiuwenSwarm, reconcileJiuwenSwarmSkills, skillLoadedBy } from "./jiuwenswarm-skills.js";
+import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, skillLoadedBy } from "./jiuwenswarm-skills.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
 import { waitForRecording } from "./recording-wait.js";
 import { RunDeadlines } from "./run-deadlines.js";
@@ -89,11 +89,8 @@ export interface JiuwenSwarmAgentConfig {
    */
   skills?: "jiuwenswarm" | "ours";
   /**
-   * Whose switches decide which skills are on. `desktop` (SCIENCE_AGENT_SKILL_SELECTION=desktop, the desktop
-   * app): the UI's selection in project settings — each run stages just what it enabled, installs that in
-   * JiuwenSwarm and aligns its on/off switches to it (skills installed earlier but no longer selected are
-   * switched off; JiuwenSwarm's builtin skills are never touched). Unset (default, server deployments):
-   * every installed skill is staged for every run and JiuwenSwarm's own switches are the user's.
+   * Desktop catalog packages require explicit first enable (SCIENCE_AGENT_SKILL_SELECTION=desktop).
+   * JiuwenSwarm owns the global switches; starting a run never changes them.
    */
   skillSelection?: "desktop";
   /**
@@ -245,6 +242,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   /** The run's skills installed in JiuwenSwarm: JiuwenSwarm's name for each, and back. */
   private readonly skillNames = new Map<string, string>();
   private readonly skillIds = new Map<string, string>();
+  /** Skill ids that are enabled in JiuwenSwarm's global switch. Used to keep disabled skills out of the read_skill fallback. */
+  private enabledSkillIds = new Set<string>();
   /** Loads a skill the ScienceDiscovery way, so that what depends on a loaded skill (create_skill) sees it. */
   private loadSkill?: (id: string) => void;
   /** The run's trajectory (model inputs, answers, tool observations), recorded as the built-in loop records it. */
@@ -309,7 +308,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       history: this.options.gatewayHistory,
       ...(this.options.runContract ? { runContract: this.options.runContract } : {}),
     });
-    const plugins = await startPluginScope(this.options, durable, this.controller.signal);
+    const runtimeOptions = await this.skillRuntimeOptions();
+    const plugins = await startPluginScope(runtimeOptions, durable, this.controller.signal);
     const trajectory = new JiuwenSwarmTrajectory(this.options);
     this.trajectory = trajectory;
     // The same registry the native loop dispatches through: output guard, detail sanitisation,
@@ -317,10 +317,11 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // Recovery multiplexes several source/tool identities through one tool. Enforce
     // approval at dispatch with the concrete identity, never an adapter-wide
     // remembered grant for the generic mcp_recovered_call name.
-    const registryOptions: NativeAgentOptions = this.options.mcpReadiness ? {
-      ...this.options,
+    const mcpReadiness = runtimeOptions.mcpReadiness;
+    const registryOptions: NativeAgentOptions = mcpReadiness ? {
+      ...runtimeOptions,
       mcpReadiness: {
-        ...this.options.mcpReadiness,
+        ...mcpReadiness,
         invoke: async (sourceId, toolId, input, signal, toolCallId) => {
           signal?.throwIfAborted();
           const resource = `mcp__${sourceId.replace(/[^A-Za-z0-9_-]/g, "_")}__${toolId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -331,10 +332,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
           } finally { release(); }
           signal?.throwIfAborted();
           if (decision === "deny") throw new Error(`MCP recovery approval denied: ${sourceId}/${toolId}`);
-          return this.options.mcpReadiness!.invoke(sourceId, toolId, input, signal, toolCallId);
+          return mcpReadiness.invoke(sourceId, toolId, input, signal, toolCallId);
         },
       },
-    } : this.options;
+    } : runtimeOptions;
     const registry = createToolRegistry(registryOptions, plugins, durable, {
       onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       ...(trajectory.enabled ? { recordResult: (input) => trajectory.observe(input as never) } : {}),
@@ -461,6 +462,33 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     }
   }
 
+  private usesJiuwenSwarmSkills(): boolean {
+    return (this.config.skills ?? "jiuwenswarm") === "jiuwenswarm"
+      && (this.config.tools ?? "jiuwenswarm") === "jiuwenswarm"
+      && (this.config.prompt ?? "prepend") === "prepend";
+  }
+
+  /** Filter before plugins register readers, resources and skill-dependent tools. */
+  private async skillRuntimeOptions(): Promise<NativeAgentOptions> {
+    const skills = this.options.skills ?? [];
+    if (!this.usesJiuwenSwarmSkills()) {
+      this.enabledSkillIds = new Set(skills.map((skill) => skill.id));
+      return this.options;
+    }
+    if (!skills.length) return this.options;
+    // A failed read must not silently turn off skills or bypass the global switches.
+    const installed = await listJiuwenSwarmSkills(this.config, this.controller.signal);
+    const installedById = new Map(installed.flatMap((skill) => skill.skillId ? [[skill.skillId, skill] as const] : []));
+    this.enabledSkillIds = new Set(skills.filter((skill) => {
+      const existing = installedById.get(skill.id);
+      if (existing) return existing.enabled;
+      // Desktop catalog packages enter through explicit enable. Library references
+      // and non-Desktop runs retain first-use import; neither may override a saved disable.
+      return this.config.skillSelection !== "desktop" || skill.importOnRun === true;
+    }).map((skill) => skill.id));
+    return { ...this.options, skills: skills.filter((skill) => this.enabledSkillIds.has(skill.id)) };
+  }
+
   /**
    * With JiuwenSwarm's skill mechanism, the run's skills are installed there and the model loads them with its
    * `skill_tool`; retain ScienceDiscovery's skill readers as a fallback when JiuwenSwarm's loader fails.
@@ -469,18 +497,12 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   private async installSkills(tools: Map<string, AgentTool>, allJiuwenSwarmTools: boolean): Promise<void> {
     const skills = this.options.skills ?? [];
     const root = this.options.skillPackagesRoot;
-    const wanted = (this.config.skills ?? "jiuwenswarm") === "jiuwenswarm" && allJiuwenSwarmTools
-      && (this.config.prompt ?? "prepend") === "prepend";
-    if (!wanted || (skills.length > 0 && (!root || !tools.has("read_skill")))) return;
-    const imported = skills.length && root
-      ? await importSkillsToJiuwenSwarm(this.config, skills, root, this.controller.signal)
+    if (!this.usesJiuwenSwarmSkills() || !allJiuwenSwarmTools || !root || !tools.has("read_skill")) return;
+    const skillsToStage = skills.filter((skill) => this.enabledSkillIds.has(skill.id));
+    const imported = skillsToStage.length && root
+      ? await importSkillsToJiuwenSwarm(this.config, skillsToStage.map(({ hash, id }) => ({ hash, id })), root, this.controller.signal)
       : new Map<string, string>();
-    // Desktop selection: align JiuwenSwarm's switches with what this run staged — also when that is nothing,
-    // so switching every skill off really turns them off there (a run with no staged skills installs none,
-    // and leftovers from earlier runs would otherwise stay on).
-    if (this.config.skillSelection === "desktop") {
-      await reconcileJiuwenSwarmSkills(this.config, new Set(imported.values()));
-    }
+
     for (const [id, name] of imported) {
       this.skillNames.set(id, name);
       this.skillIds.set(name, id);
@@ -591,7 +613,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // same on every request (and can be cached by the provider).
     // Skills installed in JiuwenSwarm are listed by its prompt; the product prompt lists only those that were not.
     const composed = composeSystemPrompt({ ...this.options, runContract: undefined }, toolNames,
-      toolNames.has("read_skill") ? (this.options.skills ?? []).filter((skill) => !this.skillNames.has(skill.id)) : []).systemPrompt;
+      toolNames.has("read_skill") ? (this.options.skills ?? []).filter((skill) => !this.skillNames.has(skill.id) && this.enabledSkillIds.has(skill.id)) : []).systemPrompt;
     const runContract = this.options.runContract ? formatRunContract(this.options.runContract) : undefined;
     // Appended after JiuwenSwarm's own prompt, its todo section already says how to plan; only when its prompt is
     // replaced does the model need to be told about the todo tools here.

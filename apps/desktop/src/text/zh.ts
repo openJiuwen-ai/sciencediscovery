@@ -175,9 +175,6 @@ export const ZH = {
     } as Record<string, string>,
     /** Fills in a cancellation whose reason the stream did not carry. */
     cancelledReason: "运行已取消",
-    /** A run that ended in an error, with and without the server's code. */
-    errorLine: (message: string) => `运行失败：${message}`,
-    errorWithCode: (code: string, message: string) => `运行失败（${code}）：${message}`,
     thinking: "思考过程",
     thinkingSteps: (count: number) => `${count} 步`,
     /** The folded line standing in for a run that has not finished yet. */
@@ -506,11 +503,13 @@ export const ZH = {
     },
     skills: {
       detail: "详情",
-      empty: "没有读到内置技能。",
+      empty: "没有读到技能。",
       heading: "技能",
+      jiuwenSwarmOnly: "当前执行器不是 JiuwenSwarm，技能开关不可用。",
       noProject: "还没有可用的项目，无法读取技能选择。",
       off: "已停用",
       on: "已启用",
+      scope: "这里的开关控制 JiuwenSwarm 的全局技能状态，适用于使用其技能机制的新任务。ScienceDiscovery 技能包在首次启用时导入。",
       toggle: (name: string) => `启用或停用「${name}」`,
       add: "新增技能",
       create: "创建",
@@ -533,7 +532,9 @@ export const ZH = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `第 ${revision} 版`,
       source: {
-        builtIn: "内置",
+        builtIn: "SD 内置",
+        jiuwenBuiltIn: "JiuwenSwarm 内置",
+        jiuwenLocal: "JiuwenSwarm 安装",
         managed: "自建",
       },
       instructionsHeading: "指令",
@@ -759,7 +760,7 @@ export const ZH = {
         general: { label: "通用", description: "界面语言与这台设备上的偏好" },
         models: { label: "模型", description: "模型档案与服务商凭据" },
         skills: { label: "技能", description: "创建、启用或停用技能" },
-        mcp: { label: "MCP 服务器", description: "自定义服务器与外部工具" },
+        mcp: { label: "MCP 服务器", description: "管理内置与自定义 MCP 服务，选择会话默认使用的工具来源" },
         specialists: { label: "专家", description: "可复用的指令与工具组合" },
         "sandbox-network": { label: "网络", description: "run_shell 的网络访问" },
         remote: { label: "远程", description: "远端 Runner 与项目可用机器" },
@@ -777,9 +778,13 @@ export const ZH = {
       },
       mcp: {
         heading: "MCP 服务器",
-        help: "内置服务器随产品提供、默认开启，工具由服务端目录维护。开关只控制服务器本身，会话能用哪些数据源仍由会话决定。",
+        help: "“默认使用”选择继承全局设置的会话所用的来源；项目或会话的显式选择优先。专家可能补充其他来源，实际工具调用仍受服务就绪状态和权限限制。自定义服务器编辑表单中的“启用服务”单独控制连接。更改不会重新配置正在运行的任务。",
         builtin: "内置",
-        empty: "还没有登记自定义 MCP 服务器。",
+        useByDefault: "默认使用",
+        enableService: "启用服务",
+        selectAll: "全部选用",
+        clearSelection: "取消全选",
+        empty: "暂无可用的内置或自定义 MCP 来源。",
         editTitle: "编辑服务器",
         name: "名称",
         description: "说明",
@@ -791,9 +796,6 @@ export const ZH = {
         url: "地址",
         timeout: "超时（秒）",
         optional: "可选",
-        enable: "启用",
-        enabled: "启用这个服务器",
-        disable: "停用",
         env: "环境变量",
         headers: "请求头",
         key: "键",
@@ -1355,6 +1357,47 @@ export const ZH = {
     notice: {
       placeholder: "这次实验的评分卡是占位符，不是为它设计的真实评分卡。",
     },
+  },
+
+  runFailure: {
+    title: "运行失败",
+    titles: {
+      timeout: "运行超时",
+      "rate-limited": "模型请求受限",
+      "semantic-error": "运行异常",
+      "server-error": "模型服务异常",
+      "transport-error": "模型服务连接失败",
+      unauthorized: "模型鉴权失败",
+      "invalid-tool-call": "工具调用无效",
+      SESSION_MODEL_UNAVAILABLE: "所选模型不可用",
+    },
+    timeout: "运行已因超时终止。建议重试，或在系统设置中检查对应的超时设置。",
+    timeoutNoticeTitle: "超时提示",
+    timeoutNotice: "检测到超时，请展开技术详情确认受影响的操作，并检查对应的超时设置。",
+    timeoutTitles: {
+      gateway_idle: "运行超时",
+      gateway_turn: "运行超时",
+      permission_wait: "授权等待超时",
+      runner_exec: "工具执行超时",
+      kernel_idle: "内核空闲超时",
+    },
+    timeouts: {
+      gateway_idle: (seconds: number) => `Agent 在 ${seconds} 秒内没有产生进展，运行已终止。建议重试，或在系统设置中适当增加 Agent 空闲超时时间。`,
+      gateway_turn: (seconds: number) => `Agent 单轮运行已超过 ${seconds} 秒，运行已终止。建议拆分任务后重试，或在系统设置中适当增加单轮超时时间。`,
+      permission_wait: (seconds: number) => `授权请求在 ${seconds} 秒内未得到处理，运行已终止。建议重试并及时处理授权请求，或在系统设置中适当增加授权等待超时时间。`,
+      runner_exec: (seconds: number) => `工具执行已超过 ${seconds} 秒。建议缩小单次执行范围后重试，或在系统设置中适当增加执行超时时间。`,
+      kernel_idle: (seconds: number) => `内核空闲时间已达到 ${seconds} 秒。建议重试，或在系统设置中适当增加内核空闲超时时间。`,
+    },
+    "rate-limited": "请求次数或用量已达到模型服务限制，运行已停止。建议稍后重试；若持续出现，请检查服务商的限额和可用额度。",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "运行中遇到了意外问题，任务未能完成。建议重试；若持续出现，请展开技术详情排查原因。",
+    "server-error": "模型服务返回服务器错误，运行已停止。建议稍后重试；若持续出现，请检查服务状态或更换模型。",
+    "transport-error": "无法连接模型服务，运行已停止。建议检查网络、代理设置及模型服务地址后重试。",
+    unauthorized: "模型服务拒绝了当前凭据，运行已停止。建议在系统设置的模型注册表中检查 API Key 及访问权限后重试。",
+    "invalid-tool-call": "模型生成的工具调用参数无法解析，该调用未执行，运行已停止。建议重试；若反复出现，可更换模型。",
+    SESSION_MODEL_UNAVAILABLE: "本次运行所选的模型已被删除或不再可用，运行已停止。请重新选择模型后重试。",
+    unknown: "任务未能完成，运行已停止。建议重试；若再次失败，请展开技术详情排查原因。",
+    technicalDetails: "技术详情",
   },
 
   errors: {

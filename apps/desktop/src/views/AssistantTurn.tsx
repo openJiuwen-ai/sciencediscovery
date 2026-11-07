@@ -17,6 +17,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Markdown } from "../Markdown.js";
 import type { ApiClient } from "../api/client.js";
 import type { ToolDetail } from "../app/tool-io.js";
+import { RunFailureCard } from "./RunFailureCard.js";
 import { TEXT } from "../text.js";
 import type { AssistantTurn as Turn, PermissionEntry, RunStreamState } from "../run-stream/model.js";
 import { permissionMatchingKey, pendingPermissions } from "../run-stream/permission.js";
@@ -337,18 +338,13 @@ function StopDivider({ reason, word }: { reason?: string; word: string }) {
  *  anything that went wrong or is worth investigating — an error, dropped
  *  events, a stream that ended without saying — keeps the marked notice row. */
 function RunStatusLine({ run }: { run: RunStreamState }) {
-  const lines: string[] = [];
-  if (run.droppedEvents > 0) lines.push(TEXT.conversation.droppedEvents(run.droppedEvents));
-  if (run.unknownEvents > 0) lines.push(TEXT.conversation.unknownEvents(run.unknownEvents));
+  const lines: ReactNode[] = [];
+  if (run.droppedEvents > 0) lines.push(<div className="status-strip" key="dropped">{TEXT.conversation.droppedEvents(run.droppedEvents)}</div>);
+  if (run.unknownEvents > 0) lines.push(<div className="status-strip" key="unknown">{TEXT.conversation.unknownEvents(run.unknownEvents)}</div>);
   let stop: { reason?: string; word: string } | undefined;
   if (run.error) {
-    // The whole line comes from TEXT: the code's brackets and the colon are
-    // punctuation of the language, not of the render.
-    lines.push(
-      run.error.code === undefined
-        ? TEXT.conversation.errorLine(run.error.message)
-        : TEXT.conversation.errorWithCode(run.error.code, run.error.message),
-    );
+    // The failure card carries the run's own wording; this line is the one
+    // place that names the recovery the user has to take.
     if (run.error.code === "SESSION_MODEL_UNAVAILABLE") lines.push(TEXT.errors.modelUnavailable);
   } else if (run.status === "cancelled") {
     const reason = run.cancelledReason !== undefined && !GENERIC_CANCEL_REASONS.has(run.cancelledReason)
@@ -358,23 +354,18 @@ function RunStatusLine({ run }: { run: RunStreamState }) {
   } else if (run.status === "interrupted") {
     stop = { word: TEXT.conversation.interrupted };
   } else if (run.terminal && run.status === undefined) {
-    lines.push(TEXT.conversation.streamEnded);
+    lines.push(<div className="status-strip" key="ended">{TEXT.conversation.streamEnded}</div>);
   }
   return (
     <>
+      {run.error && <RunFailureCard code={run.error.code} message={run.error.message} timeout={run.error.timeout} />}
       {stop === undefined ? null : <StopDivider reason={stop.reason} word={stop.word} />}
       {lines.length === 0 ? null : (
         <div className="message assistant is-notice">
           <div aria-hidden="true" className="avatar-mini">
             !
           </div>
-          <div className="body">
-            {lines.map((line) => (
-              <div className="status-strip" key={line}>
-                {line}
-              </div>
-            ))}
-          </div>
+          <div className="body">{lines}</div>
         </div>
       )}
     </>

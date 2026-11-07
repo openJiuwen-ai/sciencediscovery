@@ -25,8 +25,10 @@ import type {
   WorkspaceFile,
 } from "../api/types.js";
 import type { RunStreamState } from "../run-stream/model.js";
-import { placeReplays, type RunReplay } from "../run-stream/replay.js";
+import { hasReplayContent, placeReplays, type RunReplay } from "../run-stream/replay.js";
 import { TEXT } from "../text.js";
+import { coalesceTimeoutNotices } from "../run-failure.js";
+import { RunFailureCard } from "./RunFailureCard.js";
 import { AnswerBlock, AssistantAvatar, AssistantTurns } from "./AssistantTurn.js";
 import { UploadCards } from "./UploadCards.js";
 import { placeUploads, type UploadedFile } from "./uploads.js";
@@ -76,6 +78,9 @@ const HIDDEN_NOTICE_KINDS: ReadonlySet<string> = new Set(["review_notice", "revi
  */
 function NoticeRow({ message }: { message: ChatMessage }) {
   const label = message.kind ? (TEXT.conversation.notices[message.kind] ?? message.kind) : "";
+  if (message.kind === "timeout_notice") {
+    return <RunFailureCard code="timeout" scope="notice" message={message.content} timeout={message.timeout} />;
+  }
   return (
     <div className="message assistant is-notice">
       <div aria-hidden="true" className="avatar-mini">
@@ -220,7 +225,9 @@ export function Conversation({
   const pinned = useRef({ height: 0 });
 
   const messages = detail?.messages ?? [];
-  const { following, replacing, trailing } = placeReplays(replays, messages);
+  const failures = coalesceTimeoutNotices(messages, replays, run);
+  const { following, replacing, trailing } = placeReplays(failures.replays, messages);
+  const visibleRun = failures.run;
   /** The files each question was sent with, and the ones still waiting for a
    *  question. Uploads are workspace files rather than message fields, so they
    *  are matched to turns by time — see `placeUploads`. */
@@ -239,7 +246,7 @@ export function Conversation({
     }
     return flags;
   }, [messages, pending]);
-  const reconstructed = run.turns.length > 0 || run.finalContent !== undefined;
+  const reconstructed = hasReplayContent(visibleRun);
   /** A message just sent has no run events yet — the request is still in
    *  flight — but the run exists from the press, and its line is what says so.
    *  Waiting for the first event would leave the user's message alone in the
@@ -248,7 +255,7 @@ export function Conversation({
    *  has said anything. So the placeholder is drawn a beat late, and anything
    *  the stream has actually produced is drawn at once. */
   const placeholder = useAfter(pending !== undefined, RUN_LINE_DELAY_MS);
-  const liveRun = reconstructed || placeholder;
+  const liveRun = (reconstructed || placeholder) && !replays.some(replay => replay.runId === visibleRun.runId);
 
   // `liveRun` pins too: the run line is drawn a beat after the press, and a
   // pin that skipped it would leave the one line saying the run exists below
@@ -295,6 +302,7 @@ export function Conversation({
     <section className="conversation" onScroll={onScroll} ref={scroller}>
       <div className="messages" ref={content}>
         {messages.map((message, index) => {
+          if (failures.hiddenNoticeIds.has(message.id)) return null;
           const replacement = replacing.get(message.id);
           return (
             <Fragment key={message.id}>
@@ -355,7 +363,7 @@ export function Conversation({
             onDecide={onDecidePermission}
             onOpenSubagent={onOpenSubagent}
             onOpenTool={onOpenTool}
-            run={run}
+            run={visibleRun}
             sessionId={detail?.id}
           />
         ) : null}
