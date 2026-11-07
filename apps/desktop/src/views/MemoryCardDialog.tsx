@@ -54,7 +54,7 @@ import {
   memoryNodeTitle,
 } from "../app/memory.js";
 import { referenceNodeLabel } from "../app/memory-chips.js";
-import { paperAbstractSections, type AbstractSection } from "../app/paper-abstract.js";
+import { paperAbstractParagraphs } from "../app/paper-abstract.js";
 import { TEXT } from "../text.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 
@@ -463,21 +463,15 @@ function MemoryProvenance({ client, hit, sessionId }: {
 }
 
 /**
- * A paper's abstract, keeping the section labels the source gave it. A
- * structured abstract reads as 背景 / 方法 / 结果 rather than as one run-on
- * paragraph, and the labels are the publisher's own words — not translated,
- * because they are part of the citation.
+ * A paper's abstract, one paragraph per block. The source's section labels are
+ * scaffolding, not prose, so they are not shown: under the paper's title the
+ * reader wants the abstract, not a table of contents for it.
  */
-function PaperAbstract({ sections }: { sections: AbstractSection[] }) {
+function PaperAbstract({ paragraphs }: { paragraphs: string[] }) {
   return (
-    <div className="evidence-source-paper-abstract-sections">
-      {sections.map((section, index) => (
-        <div className="evidence-source-paper-abstract-section" key={`${String(index)}:${section.heading ?? ""}`}>
-          {section.heading === undefined ? null : (
-            <h6 className="evidence-source-paper-abstract-heading">{section.heading}</h6>
-          )}
-          <p className="evidence-source-paper-abstract">{section.text}</p>
-        </div>
+    <div className="evidence-source-paper-abstract-paragraphs">
+      {paragraphs.map((paragraph, index) => (
+        <p className="evidence-source-paper-abstract" key={String(index)}>{paragraph}</p>
       ))}
     </div>
   );
@@ -507,9 +501,9 @@ function EvidenceSources({ client, nodes, sessionId }: {
       {papers.map((paper) => {
         const extra = paper.extra ?? {};
         // The source's abstract arrives as markup (`<h4>Methods</h4>…`), so it
-        // is read into sections here and drawn as text: the card never inserts
-        // third-party HTML.
-        const abstract = typeof extra.abstract === "string" ? paperAbstractSections(extra.abstract) : [];
+        // is read into paragraphs here and drawn as text: the card never
+        // inserts third-party HTML.
+        const abstract = typeof extra.abstract === "string" ? paperAbstractParagraphs(extra.abstract) : [];
         const link = memoryNodeLink(paper);
         return (
           <article className="evidence-source-paper" key={paper.id}>
@@ -518,7 +512,7 @@ function EvidenceSources({ client, nodes, sessionId }: {
             <div className="evidence-source-paper-detail">
               {abstract.length === 0
                 ? <p className="memory-trace-empty">{TEXT.memory.provenance.noAbstract}</p>
-                : <PaperAbstract sections={abstract} />}
+                : <PaperAbstract paragraphs={abstract} />}
               {link === undefined ? null : (
                 <a className="evidence-source-paper-link" href={link} rel="noreferrer" target="_blank">{link}</a>
               )}
