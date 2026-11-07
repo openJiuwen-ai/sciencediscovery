@@ -54,6 +54,7 @@ import {
   memoryNodeTitle,
 } from "../app/memory.js";
 import { referenceNodeLabel } from "../app/memory-chips.js";
+import { paperAbstractSections, type AbstractSection } from "../app/paper-abstract.js";
 import { TEXT } from "../text.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 
@@ -462,6 +463,27 @@ function MemoryProvenance({ client, hit, sessionId }: {
 }
 
 /**
+ * A paper's abstract, keeping the section labels the source gave it. A
+ * structured abstract reads as 背景 / 方法 / 结果 rather than as one run-on
+ * paragraph, and the labels are the publisher's own words — not translated,
+ * because they are part of the citation.
+ */
+function PaperAbstract({ sections }: { sections: AbstractSection[] }) {
+  return (
+    <div className="evidence-source-paper-abstract-sections">
+      {sections.map((section, index) => (
+        <div className="evidence-source-paper-abstract-section" key={`${String(index)}:${section.heading ?? ""}`}>
+          {section.heading === undefined ? null : (
+            <h6 className="evidence-source-paper-abstract-heading">{section.heading}</h6>
+          )}
+          <p className="evidence-source-paper-abstract">{section.text}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * An Evidence's provenance, as the old web UI draws it: one card per upstream
  * source, with the card's own kind label. A Paper is its title, abstract and
  * link; an uploaded file is its name and content; a web page is its title,
@@ -484,16 +506,19 @@ function EvidenceSources({ client, nodes, sessionId }: {
     <div className="evidence-source-papers">
       {papers.map((paper) => {
         const extra = paper.extra ?? {};
-        const abstract = typeof extra.abstract === "string" ? extra.abstract.trim() : "";
+        // The source's abstract arrives as markup (`<h4>Methods</h4>…`), so it
+        // is read into sections here and drawn as text: the card never inserts
+        // third-party HTML.
+        const abstract = typeof extra.abstract === "string" ? paperAbstractSections(extra.abstract) : [];
         const link = memoryNodeLink(paper);
         return (
           <article className="evidence-source-paper" key={paper.id}>
             <h4 className="evidence-source-paper-label">{TEXT.memory.nodeLabels.Paper}</h4>
             <h5 className="evidence-source-paper-title">{memoryNodeTitle(paper)}</h5>
             <div className="evidence-source-paper-detail">
-              {abstract === ""
+              {abstract.length === 0
                 ? <p className="memory-trace-empty">{TEXT.memory.provenance.noAbstract}</p>
-                : <p className="evidence-source-paper-abstract">{abstract}</p>}
+                : <PaperAbstract sections={abstract} />}
               {link === undefined ? null : (
                 <a className="evidence-source-paper-link" href={link} rel="noreferrer" target="_blank">{link}</a>
               )}
