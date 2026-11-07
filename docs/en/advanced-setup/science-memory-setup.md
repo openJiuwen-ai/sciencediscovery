@@ -18,7 +18,7 @@ Run `ScienceDiscovery serve` as usual. Memory data is stored in `<data-dir>/memo
 
 ScienceMemory needs no external service. By default (System configuration → Memory → Storage backend = Local files) the graph is kept by the memory-graph sidecar itself and persisted as plain text under:
 
-- `<data-dir>/memory-graph/` when the stack is started by `scripts/start-stack.mjs` (the desktop host process) or by the single-file launcher (`ScienceDiscovery serve`), where `<data-dir>` is `SCIENCE_AGENT_DATA_DIR` (by default `.sciencediscovery-data/`);
+- `<data-dir>/memory-graph/` when the stack is started by `scripts/start-stack.mjs` (the desktop host process) or by the single-file launcher (`ScienceDiscovery serve`), where `<data-dir>` is `SCIENCE_DISCOVERY_DATA_DIR` (by default `.sciencediscovery-data/`; the former `SCIENCE_AGENT_DATA_DIR` is still read as a logged compatibility fallback);
 - `~/.science-agent/memory-graph/` when the sidecar runs under `scripts/start-stack.sh` (the source and Docker entry point) or is launched directly — that is the service's own default.
 
 `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` overrides either default verbatim, and no graph is moved automatically: an installation whose graph is still at `~/.science-agent/memory-graph/` opens an empty store once it is started through an entry point that passes `<data-dir>/memory-graph`. To keep the old graph, point `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` at it (or move the directory) before the first start.
