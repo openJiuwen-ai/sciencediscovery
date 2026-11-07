@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { setTimeout as runtimeDelay } from "node:timers/promises";
+import { ApiStatusError } from "../http/api-status-error.js";
+export { ApiStatusError };
 import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
 import { createNativeAgent } from "../native-agent/index.js";
 import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
@@ -29,6 +31,7 @@ import { CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -444,19 +447,6 @@ function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: str
   return store.getSpecialist(sessionSpecialistId);
 }
 
-export class ApiStatusError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-    /** Machine-readable reason, so a client can act on it instead of matching prose. */
-    readonly code?: string,
-    /** Structured payload the client needs to offer a next step. */
-    readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-  }
-}
-
 /** Empty match-response shape with a degradation reason (feature off / unreachable). */
 export function emptyMatch(reason: "memory_graph_disabled" | "memory_graph_unreachable") {
   return { hits: [] as unknown[], total: 0, truncated: false, reason };
@@ -691,6 +681,11 @@ async function executeAgentRun(
   }
   const project = store.getProject(session.projectId);
   if (!project) throw new ApiStatusError(404, "Project not found");
+  // Validate the queued run's frozen selection before touching execution services.
+  const selectedModel = store.getModel(settingsSnapshot.modelId);
+  if (!selectedModel) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   // Remote machines are an addition, not a replacement: this run always has the
   // local runner, and each allowed machine is one more place the model may ask
   // to run. A machine that is not connected only fails the calls that name it.
@@ -809,11 +804,7 @@ async function executeAgentRun(
   const enabledBuiltinSpecialists = store
     .listSpecialists()
     .filter((specialist) => specialist.builtIn && specialist.enabled !== false);
-  const selectedModel = store.getModel(settingsSnapshot.modelId);
   const initialPermissionEpoch = store.getSessionPermissionEpoch(sessionId);
-  if (!selectedModel) {
-    throw new ApiStatusError(400, "The session model is not available");
-  }
   if (!initialPermissionEpoch) {
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
@@ -835,6 +826,7 @@ async function executeAgentRun(
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
   let activeSkills: RuntimeSkillSnapshot[];
+  const librarySkillIds = new Set<string>();
   try {
     // `/` attachments must stay inside the Session's effective skill set: in
     // `selected` mode a skill outside the whitelist is not usable at all.
@@ -860,6 +852,9 @@ async function executeAgentRun(
         )
       : [];
     const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
+    for (const skill of librarySkills) {
+      if (!manualSkillIds.has(skill.id)) librarySkillIds.add(skill.id);
+    }
     activeSkills = [
       ...manualSkills,
       ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
@@ -874,6 +869,7 @@ async function executeAgentRun(
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
   const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
+    ...(librarySkillIds.has(id) ? { importOnRun: true } : {}),
     content,
     description,
     hash,
@@ -3105,7 +3101,9 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   if (!pluginEnabled(snapshot.plugins, "skill")) { snapshot.enabledSkillIds = []; snapshot.enabledSkillLibraries = []; }
   snapshot.enabledConnectorIds = filterEnabledMcpSources(snapshot.enabledConnectorIds, snapshot.plugins);
   const model = store.getModel(snapshot.modelId);
-  if (!model) return snapshot;
+  if (!model) {
+    throw new ApiStatusError(400, "The session model is not available", "SESSION_MODEL_UNAVAILABLE");
+  }
   const protocol = model.apiProtocol ?? (model.baseUrl.includes("/api/plan")
     ? "anthropic-messages"
     : "openai-chat-completions");
@@ -3357,9 +3355,17 @@ export async function createSkillEvolutionRun(
   }, ideaTreeRepository);
 }
 
-export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun> {
+export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun | undefined> {
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
-  const settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  let settingsSnapshot: EffectiveRuntimeSettings;
+  try {
+    settingsSnapshot = computeSettingsSnapshot(store, batch.sessionId);
+  } catch (error) {
+    // Keep the inbox unread until the user repairs the model selection. Other
+    // owners must still receive their notices during this tick.
+    if (error instanceof ApiStatusError && error.code === "SESSION_MODEL_UNAVAILABLE") return undefined;
+    throw error;
+  }
   const skillLibraryRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
   if (!store.notifications.deliveryAllowed(batch)) throw new Error("Notification delivery stopped");
   return store.createSessionRun({ sessionId: batch.sessionId, prompt: notificationPrompt(batch),
@@ -3388,11 +3394,12 @@ export function scheduleSessionRuns(
   evolve: EvolveRuntimeFactory | undefined,
   executionGovernance?: ExecutionGovernance,
 ): void {
-  if (scheduledSessions.has(sessionId)) return;
+  if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
   void (async () => {
     try {
       while (true) {
+        if (isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
         const runs = await store.listSessionRuns(sessionId);
         if (runs.some((run) => run.status === "blocked" && run.configurationWait)) return;
         const next = runs.find((run) => run.status === "queued");
@@ -3584,6 +3591,7 @@ export function scheduleSessionRuns(
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
+      if (isEvidenceSessionReadOnly(session)) continue;
       // A crashed child has no live process holding its busy state. Recover only
       // closed, committed turn context; never replay the unfinished model/tool call.
       for (const child of store.listSubagents(session.id)) {

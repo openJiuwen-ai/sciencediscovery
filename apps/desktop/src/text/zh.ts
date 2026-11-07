@@ -91,14 +91,21 @@ export const ZH = {
 
   composer: {
     placeholder: "需要帮你做些什么？输入“/”快速引用技能及指令",
+    /** After a design command is seeded the composer is no longer waiting for
+     *  any request: the only useful next line is the goal itself. */
+    evolvePlaceholder: "请描述你想要优化的对象和评估标准",
     send: "发送",
     stop: "停止",
+    /** 设计命令上的 ✕：对话框给的是建议，改主意的人要能把它去掉再说话。 */
+    clearCommand: "移除指令",
     modelSelect: "选择模型",
     addCustomModel: "添加自定义模型",
     pillLocked: "这一轮跑完才能切换模型",
     stopHint: "关闭页面或刷新不会停止运行，必须在这里显式停止。",
     uploadFile: "上传文件",
     sessionSettings: "会话设置",
+    /** 会话设置最上面的一项：进入程序演进。 */
+    evolveExperiment: "程序演进实验",
     experts: "专家",
     expertsNone: "无",
     expertsHint: "为此对话绑定一位个人专家。",
@@ -168,9 +175,6 @@ export const ZH = {
     } as Record<string, string>,
     /** Fills in a cancellation whose reason the stream did not carry. */
     cancelledReason: "运行已取消",
-    /** A run that ended in an error, with and without the server's code. */
-    errorLine: (message: string) => `运行失败：${message}`,
-    errorWithCode: (code: string, message: string) => `运行失败（${code}）：${message}`,
     thinking: "思考过程",
     thinkingSteps: (count: number) => `${count} 步`,
     /** The folded line standing in for a run that has not finished yet. */
@@ -478,7 +482,9 @@ export const ZH = {
       testOk: (latency: number) => `✓ 可用（${latency} ms）`,
       delete: "删除",
       deleteConfirm: (name: string) => `删除模型「${name}」？`,
-      deleteBody: "删除后它不再出现在列表和会话的模型菜单里。仍有项目或会话在用它时，服务会拒绝删除并说明原因。",
+      deleteBody: "删除后，明确指定此模型的会话需要重新选择模型。历史运行记录保留。",
+      replacement: "新主模型",
+      leaveUnset: "暂不设置",
       deleteFailed: "没能删除这个模型，请重试。",
       expand: "展开模型设置",
       name: "模型名称",
@@ -497,11 +503,13 @@ export const ZH = {
     },
     skills: {
       detail: "详情",
-      empty: "没有读到内置技能。",
+      empty: "没有读到技能。",
       heading: "技能",
+      jiuwenSwarmOnly: "当前执行器不是 JiuwenSwarm，技能开关不可用。",
       noProject: "还没有可用的项目，无法读取技能选择。",
       off: "已停用",
       on: "已启用",
+      scope: "这里的开关控制 JiuwenSwarm 的全局技能状态，适用于使用其技能机制的新任务。ScienceDiscovery 技能包在首次启用时导入。",
       toggle: (name: string) => `启用或停用「${name}」`,
       add: "新增技能",
       create: "创建",
@@ -524,7 +532,9 @@ export const ZH = {
        *  server's `revision:1` after a `v`. */
       revision: (revision: number) => `第 ${revision} 版`,
       source: {
-        builtIn: "内置",
+        builtIn: "SD 内置",
+        jiuwenBuiltIn: "JiuwenSwarm 内置",
+        jiuwenLocal: "JiuwenSwarm 安装",
         managed: "自建",
       },
       instructionsHeading: "指令",
@@ -750,7 +760,7 @@ export const ZH = {
         general: { label: "通用", description: "界面语言与这台设备上的偏好" },
         models: { label: "模型", description: "模型档案与服务商凭据" },
         skills: { label: "技能", description: "创建、启用或停用技能" },
-        mcp: { label: "MCP 服务器", description: "自定义服务器与外部工具" },
+        mcp: { label: "MCP 服务器", description: "管理内置与自定义 MCP 服务，选择会话默认使用的工具来源" },
         specialists: { label: "专家", description: "可复用的指令与工具组合" },
         "sandbox-network": { label: "网络", description: "run_shell 的网络访问" },
         remote: { label: "远程", description: "远端 Runner 与项目可用机器" },
@@ -768,9 +778,13 @@ export const ZH = {
       },
       mcp: {
         heading: "MCP 服务器",
-        help: "内置服务器随产品提供、默认开启，工具由服务端目录维护。开关只控制服务器本身，会话能用哪些数据源仍由会话决定。",
+        help: "“默认使用”选择继承全局设置的会话所用的来源；项目或会话的显式选择优先。专家可能补充其他来源，实际工具调用仍受服务就绪状态和权限限制。自定义服务器编辑表单中的“启用服务”单独控制连接。更改不会重新配置正在运行的任务。",
         builtin: "内置",
-        empty: "还没有登记自定义 MCP 服务器。",
+        useByDefault: "默认使用",
+        enableService: "启用服务",
+        selectAll: "全部选用",
+        clearSelection: "取消全选",
+        empty: "暂无可用的内置或自定义 MCP 来源。",
         editTitle: "编辑服务器",
         name: "名称",
         description: "说明",
@@ -782,9 +796,6 @@ export const ZH = {
         url: "地址",
         timeout: "超时（秒）",
         optional: "可选",
-        enable: "启用",
-        enabled: "启用这个服务器",
-        disable: "停用",
         env: "环境变量",
         headers: "请求头",
         key: "键",
@@ -1033,6 +1044,7 @@ export const ZH = {
     artifacts: "产物",
     collapsible: "工作区",
     groups: {
+      task: "任务",
       artifacts: "产物",
       files: "工作区",
     },
@@ -1116,17 +1128,28 @@ export const ZH = {
 
   /** 程序演进：一次在评分卡上自我改进的搜索。
    *
-   *  The shelf under the session header and the full panel share this block;
-   *  the words are written for the panel first and shortened for the shelf,
-   *  so a search is called the same thing in both places. */
+   *  The run card in the transcript and the full panel share this block; the
+   *  words are written for the panel first and shortened for the card, so a
+   *  search is called the same thing in both places. */
   evolve: {
     title: "程序演进",
     open: "程序演进",
-    newRun: "新建实验",
-    runningCount: (count: number) => `${count} 个实验运行中`,
     moreRuns: (count: number) => `还有 ${count} 个`,
     fewerRuns: "收起",
-    shelfHint: "让程序在评分卡上反复改进，保留得分更高的版本",
+    /* 对话末尾那张运行卡片：等它启动，或者它已经跑了多久。分钟以下的搜索也
+       要能看出在动，所以先报秒；一小时以上按设计稿写成「1小时28分钟」。 */
+    notStarted: "尚未启动",
+    working: "正在优化",
+    elapsed: (seconds: number) => {
+      const whole = Math.max(0, Math.floor(seconds));
+      if (whole < 60) return `已耗时 ${whole}秒`;
+      const minutes = Math.floor(whole / 60);
+      if (minutes < 60) return `已耗时 ${minutes}分钟`;
+      const rest = minutes % 60;
+      return rest === 0
+        ? `已耗时 ${Math.floor(minutes / 60)}小时`
+        : `已耗时 ${Math.floor(minutes / 60)}小时${rest}分钟`;
+    },
     autoPace: "自动",
     autoPaceTitle: "启动时未在每个检查点暂停",
     /* 这次 run 的候选代码没有在沙箱里跑。徽标和标题都必须说出来，否则一次
@@ -1134,29 +1157,25 @@ export const ZH = {
     unisolated: "无隔离",
     unisolatedTitle: "候选代码没有在沙箱中执行",
 
-    /* 表头胶囊的后半句：现在能不能开始一次搜索。比“能不能打开面板”更有用，
-       因为不能运行时点进去也是同一个安装界面。 */
-    runtime: {
-      ready: "可用",
-      running: "运行中",
-      installing: "准备中",
-      not_initialized: "未就绪",
-      error: "不可用",
-    },
-
     /* 检查点卡片。标题和正文是模型写在卡片里的内容，这里只有卡片自己的
-       外壳：序号、等谁回答、两个按钮。 */
+       外壳：顶上那条带（等谁回答 + 第几步）、底下的两个按钮。 */
     checkpoint: {
       eyebrow: (step: number, total?: number) => (total === undefined ? `检查点 ${step}` : `检查点 ${step}/${total}`),
       /* 不等待审批的卡片不是检查点：没有人需要在这里做决定，它只是记录一步
          已经做完的事。所以它不叫「检查点」，也不带「自动」之类的角标。 */
       stepEyebrow: (step: number, total?: number) => (total === undefined ? `步骤 ${step}` : `步骤 ${step}/${total}`),
-      waiting: "等待确认",
-      answered: "已回答",
+      /* 卡片顶上那条灰带分两段：左边说这张卡在等谁，右边是第几步。设计稿把
+         「检查点」和「等待确认」排成一段字，中间不留空格。 */
+      headerWaiting: "检查点等待确认",
+      headerAnswered: "检查点已回答",
+      headerStep: "步骤",
+      count: (step: number, total?: number) => (total === undefined ? `${step}` : `${step}/${total}`),
       confirm: "确认，继续",
       adjust: "需要调整",
-      send: "发送",
-      cancel: "取消",
+      /* 需要调整时，卡片里先写一句「调整内容」，下面的输入框是这一步要改的
+         地方；输入框为空时按钮不亮。 */
+      adjustLabel: "调整内容",
+      adjustPlaceholder: "描述你想调整的内容，例如：这一步的评估标准再严一些。",
       /* 每张卡的确认都是同一句话时，模型只看到「继续」，分不清回答的是哪一步：
          一次跑动里它因此把检查点 3 重新问了一遍。把步号带出去，回复本身
          就说明了它答的是哪张卡。 */
@@ -1173,41 +1192,81 @@ export const ZH = {
 
     create: {
       title: "新建程序演进实验",
-      intro: "描述你想改进的东西，以及“更好”应该怎么衡量。助手会先在对话里设计评分卡，确认后再开始搜索。",
-      goalLabel: "优化目标",
-      goalPlaceholder: "例如：让 compress / decompress 在完全无损的前提下压缩比尽可能高，不许使用 zlib / lzma / bz2 之类的现成库。",
-      algorithmLabel: "搜索算法",
-      puct: "PUCT",
-      puctHint: "沿树逐个扩展，适合有清晰父子改进关系的任务。",
-      openEvolve: "OpenEvolve",
-      openEvolveHint: "按岛屿和网格并行探索，适合差异较大的方案。",
+      algorithmLabel: "选择搜索算法",
+      puctName: "PUCT算法",
+      puctTags: ["逐步改进", "搜索空间窄"],
+      puctPoints: [
+        "基于PUCT策略，优先扩展高潜力节点",
+        "从根节点逐步拓展，保留全部候选方案",
+        "结合访问次数与排名，引导搜索方向",
+        "采用单树搜索，持续精炼候选方案",
+      ],
+      openEvolveName: "OpenEvolve算法",
+      openEvolveTags: ["搜索空间宽", "避免过早收敛"],
+      openEvolvePoints: [
+        "MAP-Elites网格保留多样化优质候选",
+        "多个种群独立进化，定期交换精英",
+        "环形迁移促进优质方案跨种群传播",
+        "变异参考全局最优与差异化候选",
+      ],
+      settingsLabel: "设置",
       confirmLabel: "检查点需要人工确认",
-      confirmHint: "每个检查点会停下来，等你确认后再继续。",
+      confirmHint: "每个检查点会停下来等你确认后再继续",
       autoHint: "关闭后，助手会连续完成设计与启动；检查点仍会在对话中说明，但不再等待确认。",
       /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
          横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
          命令发出（`--allow-direct`），不成为会被忘记的设置。 */
       unisolatedBannerTitle: "此实验会在没有沙箱的情况下运行候选代码",
-      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有 CPU / 内存限制。点击“开始设计”时会再确认一次。",
+      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有CPU/内存限制。点击“开始设计”时会再确认一次。",
       unisolatedConfirmTitle: "允许无隔离运行候选代码？",
-      unisolatedConfirmBody: "接下来会直接执行候选程序：没有沙箱、没有 CPU / 内存限制，可以读写你的文件并访问网络。只在你了解这些风险并愿意承担时继续。",
-      unisolatedConfirmCancel: "返回",
+      unisolatedConfirmBody: "接下来会直接执行候选程序：没有沙箱、没有CPU/内存限制，可以读写你的文件并访问网络。只在你了解这些风险并愿意承担时继续。",
+      unisolatedConfirmCancel: "取消",
+      unisolatedConfirmClose: "关闭",
       unisolatedConfirmContinue: "仍然继续",
-      sessionNote: "实验会记录在当前会话中；开始后可以随时在会话顶部查看进度。",
       send: "开始设计",
       cancel: "取消",
       blockedRunning: "当前会话正在运行，等它结束后再开始新的实验。",
       blockedArchived: "归档会话不能开始新的实验。",
     },
 
+    /* 运行时不可用时的说明。桌面端的人只能看文件、点按钮，所以这里给的是
+       这台机器上真实存在的路径和真实存在的操作，而不是“请联系支持”。 */
     setup: {
-      title: "需要准备演化运行时",
-      body: "第一次运行需要安装演化引擎。安装由本地服务完成，通常需要几分钟。",
-      missing: "演化运行时还没有准备",
-      installing: "正在准备演化运行时…",
+      bannerTitle: "优化进程不可用，可能导致无法得到预期结果",
+      bannerInstalling: "优化进程正在准备，完成后即可开始设计",
+      bannerAction: "查看详情",
+      title: "演化运行时不可用",
+      introMissing: "这台机器还没有安装演化运行时。装好之后，这个提示和“开始设计”会自动恢复。",
+      introError: "演化运行时没能启动，或者本地服务没有通过它的认证。",
+      introInstalling: "演化运行时正在准备中，完成后这个提示和“开始设计”会自动恢复。",
+      statusLabel: "本地服务返回",
+      whereTitle: "先看日志",
+      logs: [
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\api.log",
+          what: "本地服务的日志；安装或启动停在哪一步，末尾的报错会写出来。",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\evolve.log",
+          what: "演化引擎自己的日志；引擎起来了却仍然不可用时看这里。",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\evolve",
+          what: "运行时安装目录；目录缺失或文件不全，说明安装没有完成。",
+        },
+        {
+          path: "<安装目录>\\logs\\shell.log",
+          what: "桌面端启动日志，默认在 %LOCALAPPDATA%\\Programs\\ScienceDiscovery\\logs；应用连不上本地服务时看这里。",
+        },
+      ],
+      whyTitle: "常见原因",
+      whyBody: "第一次使用还没有安装；安装中途退出，或 evolve 目录被删除；代理或网络导致下载失败；磁盘剩余空间不足 1 GiB；部署没有开放自动安装。",
+      fixTitle: "怎么恢复",
+      fixBody: "点下面的“准备运行时”重新下载并安装。装过但已经损坏时，先退出应用，删除 %USERPROFILE%\\.sciencediscovery\\evolve，再重新安装。仍然失败时，对照 api.log 末尾的报错检查网络和磁盘，然后重启应用再试一次。",
+      operator: "当前部署没有开放自动安装，请联系管理员在服务端启用程序演进；上面的状态和日志可以直接交给管理员。",
+      installing: "正在准备…",
       install: "准备运行时",
-      operator: "当前部署没有开放自动安装，请联系管理员在服务端启用程序演进。",
-      error: "演化运行时不可用",
+      close: "关闭",
     },
 
     panel: {
@@ -1238,75 +1297,107 @@ export const ZH = {
       depth: "最大深度",
     },
 
+    /* 任务详情：右栏「任务」页。版面照三张设计稿：顶部一排总览，下面依次是
+       折线图、优化树和预算；节点列表和树是同一份数据的两种看法。 */
+    detail: {
+      best: "最优解",
+      valid: "有效节点数/总数",
+      generations: "层数",
+      algorithm: "算法",
+      tokens: "Token",
+      chartTitle: "实时算法优化结果",
+      treeTitle: "优化树",
+      nodeList: "节点列表",
+      generation: (depth: number) => `层数 ${String(depth).padStart(2, "0")}`,
+      bestTag: "最佳",
+      budgetTitle: "预算",
+      score: "优化分数",
+      children: "子节点数",
+      source: "代码变更",
+      expandSource: "展开代码变更",
+      closeInspector: "关闭节点详情",
+      closeSource: "关闭代码变更",
+      nodeTitle: (index: number) => `Node #${index}`,
+      root: "起点",
+      treeEmpty: "还没有节点。",
+      treeAria: (count: number) => `优化树，共 ${count} 个节点`,
+    },
+
     chart: {
-      title: "最优得分随扩展次数变化",
+      title: "实时算法优化结果",
       aria: (baseline: string, best: string, candidates: number) =>
-        `得分曲线：起点 ${baseline}，当前最优 ${best}，共 ${candidates} 个候选。`,
+        `得分曲线：基线 ${baseline}，当前最优 ${best}，共 ${candidates} 个候选。`,
       xAxis: "扩展次数",
-      best: "当前最优",
-      gate: "留出集得分",
-      rollout: "搜索内得分",
+      best: "最优产物",
+      significant: "得分节点",
       test: "测试",
-      failed: "未跑起来",
-      baseline: "起点",
+      failed: "失败",
+      belowBaseline: "低于基线",
+      baseline: "基线",
       empty: "还没有可以画出的得分。",
     },
 
-    table: {
-      title: "候选",
-      filterAll: "全部",
-      filterAccepted: "已接受",
-      filterRejected: "次优",
-      filterFailed: "失败",
-      search: "搜索改动或编号",
-      empty: "还没有候选。",
-      noMatch: "没有匹配的候选。",
-      node: "编号",
-      parent: "来源",
-      change: "改动",
-      score: "得分",
-      verdict: "判定",
-      root: "起点",
-      accepted: "已接受",
-      rejected: "次优",
-      violated: "违反约束",
-      failed: "未跑起来",
-      truncated: (shown: number, total: number) => `仅显示前 ${shown} / ${total} 个候选`,
-    },
-
     inspector: {
-      title: "候选",
-      emptyTitle: "选择一个候选",
-      emptyBody: "点表格中的一行，查看它相对父代的改动、得分和判定原因。",
       parent: "父代",
       depth: "深度",
-      gate: "留出门",
-      rollout: "搜索内",
-      prior: "模型先验",
-      visits: "访问",
-      diff: "改动",
       loading: "正在读取源码…",
       unavailable: "源码不可用（可能已被清理）。",
       unchanged: "与父代相同。",
       noParent: "这是起点，没有父代。",
       error: "失败原因",
       hidden: (count: number) => `已折叠 ${count} 行未改动内容`,
-      close: "关闭候选详情",
     },
 
     budget: {
-      expansions: "扩展次数",
       tokens: "Token",
-      elapsed: "用时",
-      cost: "成本",
+      elapsed: "耗时",
+      nodes: "节点",
     },
 
     notice: {
       placeholder: "这次实验的评分卡是占位符，不是为它设计的真实评分卡。",
-      stoppedShort: (made: number, planned: number, reason: string) =>
-        `计划 ${planned} 次扩展，实际完成 ${made} 次（${reason}）。`,
-      log: "引擎日志",
     },
+  },
+
+  runFailure: {
+    title: "运行失败",
+    titles: {
+      timeout: "运行超时",
+      "rate-limited": "模型请求受限",
+      "semantic-error": "运行异常",
+      "server-error": "模型服务异常",
+      "transport-error": "模型服务连接失败",
+      unauthorized: "模型鉴权失败",
+      "invalid-tool-call": "工具调用无效",
+      SESSION_MODEL_UNAVAILABLE: "所选模型不可用",
+    },
+    timeout: "运行已因超时终止。建议重试，或在系统设置中检查对应的超时设置。",
+    timeoutNoticeTitle: "超时提示",
+    timeoutNotice: "检测到超时，请展开技术详情确认受影响的操作，并检查对应的超时设置。",
+    timeoutTitles: {
+      gateway_idle: "运行超时",
+      gateway_turn: "运行超时",
+      permission_wait: "授权等待超时",
+      runner_exec: "工具执行超时",
+      kernel_idle: "内核空闲超时",
+    },
+    timeouts: {
+      gateway_idle: (seconds: number) => `Agent 在 ${seconds} 秒内没有产生进展，运行已终止。建议重试，或在系统设置中适当增加 Agent 空闲超时时间。`,
+      gateway_turn: (seconds: number) => `Agent 单轮运行已超过 ${seconds} 秒，运行已终止。建议拆分任务后重试，或在系统设置中适当增加单轮超时时间。`,
+      permission_wait: (seconds: number) => `授权请求在 ${seconds} 秒内未得到处理，运行已终止。建议重试并及时处理授权请求，或在系统设置中适当增加授权等待超时时间。`,
+      runner_exec: (seconds: number) => `工具执行已超过 ${seconds} 秒。建议缩小单次执行范围后重试，或在系统设置中适当增加执行超时时间。`,
+      kernel_idle: (seconds: number) => `内核空闲时间已达到 ${seconds} 秒。建议重试，或在系统设置中适当增加内核空闲超时时间。`,
+    },
+    "rate-limited": "请求次数或用量已达到模型服务限制，运行已停止。建议稍后重试；若持续出现，请检查服务商的限额和可用额度。",
+    // The backend uses semantic-error as a catch-all; do not assert a cause.
+    "semantic-error": "运行中遇到了意外问题，任务未能完成。建议重试；若持续出现，请展开技术详情排查原因。",
+    "server-error": "模型服务返回服务器错误，运行已停止。建议稍后重试；若持续出现，请检查服务状态或更换模型。",
+    "transport-error": "无法连接模型服务，运行已停止。建议检查网络、代理设置及模型服务地址后重试。",
+    unauthorized: "模型服务拒绝了当前凭据，运行已停止。建议在系统设置的模型注册表中检查 API Key 及访问权限后重试。",
+    "invalid-tool-call": "模型生成的工具调用参数无法解析，该调用未执行，运行已停止。建议重试；若反复出现，可更换模型。",
+    SESSION_MODEL_UNAVAILABLE: "本次运行所选的模型已被删除或不再可用，运行已停止。请重新选择模型后重试。",
+    unknown: "任务未能完成，运行已停止。建议重试；若再次失败，请展开技术详情排查原因。",
+    technicalDetails: "技术详情",
   },
 
   errors: {
@@ -1314,6 +1405,7 @@ export const ZH = {
     sessionCreate: "创建会话失败",
     /** A response that claims to be an event stream but has no body. */
     noStream: "响应没有可读的流",
+    modelUnavailable: "原模型已删除，请重新选择",
     modelRequired: "还没有可用的模型，请先在设置里配置。",
     rename: "重命名失败",
     deleteWarning: (title: string) => `删除「${title}」会连同它的工作区数据一起清掉，且无法恢复。`,

@@ -202,6 +202,7 @@ export function ScopedSettingsEditor({
       <span>{t(FIELD_LABELS.modelId)}</span>
       <select disabled={disabled || saving} value={draft.modelId ?? ""} onChange={(event) => setScalar("modelId", event.target.value)}>
         <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models, t)) : t("common.notConfigured")}</option>
+        {draft.modelId && !models.some(model => model.id === draft.modelId) ? <option value={draft.modelId}>{t("composer.modelUnavailable")}</option> : null}
         {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? t("scopedSettings.overrideOption", { label: modelOptionLabel(model, models, t) }) : modelOptionLabel(model, models, t)}</option>)}
       </select>
       {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}

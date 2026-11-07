@@ -34,7 +34,7 @@ import {
 } from "../api/evolve.js";
 import type { ApiClient } from "../api/client.js";
 
-/** While a search is expanding, how often its row in the shelf is re-read.
+/** While a search is expanding, how often its run card is re-read.
  *  Three seconds is the web dashboard's cadence: fast enough that a card is
  *  never visibly stale, slow enough that a long search does not turn into a
  *  request loop. */
@@ -76,13 +76,13 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
    *  it saw an active search. A failed read answers nothing about the search
    *  itself — a restarted server, a proxy hiccup or a dropped request is not a
    *  search that ended — so the poll keeps the cadence the last *answer*
-   *  established instead of stopping for good with the shelf frozen on a run
-   *  that is still going.
+   *  established instead of stopping for good with a card frozen on a run that
+   *  is still going.
    *
    *  The session is part of it because the cadence belongs to a list: a read
    *  that fails for a session the last good read never covered is not a search
-   *  to keep polling, and the shelf must not keep showing one session's runs
-   *  under another's header. */
+   *  to keep polling, and the transcript must not keep showing one session's
+   *  runs under another's answer. */
   const lastRead = useRef<{ active: boolean; sessionId?: string }>({ active: false });
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
           statusRead.current = true;
           // A read failure is not "no runtime", and a ready runtime that
           // missed one poll is still ready: keep the state the last good read
-          // established so the shelf keeps its list through a blip. Only a
+          // established so the cards keep their list through a blip. Only a
           // state nobody has read yet settles as `error`, which is what stops
           // the panel from offering an install the server would refuse anyway.
           setStatus((current) => current.state === "ready"
@@ -126,7 +126,7 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
       setRuns([]);
       return;
     }
-    // The shelf is this session's list. Rows read for another session are not
+    // The cards are this session's list. Rows read for another session are not
     // this session's to show, and the cadence that read established is not
     // this session's to keep.
     if (lastRead.current.sessionId !== sessionId) {
@@ -157,7 +157,7 @@ export function useEvolve(client: ApiClient, sessionId: string | undefined): Evo
           setError(reason instanceof Error ? reason.message : String(reason));
           // One failed read used to end the poll: the effect's dependencies do
           // not change on a rejection, so nothing scheduled another `load` and
-          // a live search's shelf stayed frozen on whatever the last good read
+          // a live search's cards stayed frozen on whatever the last good read
           // said — including "running" for a search that had finished. The
           // cadence is the last good read's to set; the failure only decides
           // whether there was a cadence to keep.

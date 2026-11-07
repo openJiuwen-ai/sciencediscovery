@@ -31,4 +31,5 @@ export const renameReplace: OsAdaptation["renameReplace"] = adaptation.renameRep
 export const starterPackages: OsAdaptation["starterPackages"] = adaptation.starterPackages;
 export const packageInstallGuidance: OsAdaptation["packageInstallGuidance"] = adaptation.packageInstallGuidance;
 export const environmentShellPath: OsAdaptation["environmentShellPath"] = adaptation.environmentShellPath;
+export const environmentShellUtilityPath: OsAdaptation["environmentShellUtilityPath"] = adaptation.environmentShellUtilityPath;
 export type { RestrictToOwnerOptions } from "./types.js";

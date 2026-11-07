@@ -53,14 +53,16 @@ export interface ComposerRunAction {
 export function ComposerNoModelNotice({
   onOpenConfiguration,
   reason,
+  modelUnavailable = false,
 }: {
   onOpenConfiguration: () => void;
   reason: ComposerNoModelReason;
+  modelUnavailable?: boolean;
 }) {
   const { t } = useLocale();
   return <div className="composer-model-notice" role="status">
-    <span>{t(reason === "no-system-models" ? "composer.noModels" : "composer.noTaskModel")}</span>
-    <button onClick={onOpenConfiguration} type="button">{t("configuration.card.open")}</button>
+    <span>{t(modelUnavailable ? "composer.modelUnavailable" : reason === "no-system-models" ? "composer.noModels" : "composer.noTaskModel")}</span>
+    <button onClick={() => onOpenConfiguration()} type="button">{t(reason === "no-system-models" ? "composer.modelPicker.openSettings" : "composer.modelPicker.title")}</button>
   </div>;
 }
 

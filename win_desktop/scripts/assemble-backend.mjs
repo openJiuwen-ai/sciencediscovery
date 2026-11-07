@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { replaceVenvTrampolines, copyVenvRuntimeDlls } from "./lib/venv-launchers.mjs";
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
 import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
+import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
 
 const shellRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -748,7 +749,15 @@ say(`installed ${dllCopies} runtime DLL file(s) beside venv launchers`);
 // downstream copy chains (electron-builder → NSIS → dataDir) may restamp
 // mtimes freely without invalidating what we ship.
 say("precompiling Python bytecode for bundled venvs");
-const compileEnv = { ...process.env, PYTHONWARNINGS: "ignore" };
+// Do NOT spread process.env into the compile environment unfiltered. It used to
+// read `{...process.env, PYTHONWARNINGS: "ignore"}`, which let a build script's
+// exported PYTHONPYCACHEPREFIX redirect all 73,752 .pyc files (1011 MB) into a
+// mirror tree outside the payload while compileall still exited 0 — release6
+// shipped 446.5 MiB with 1,384 bytecode files instead of ~577 MiB with ~37,000,
+// and every gate stayed green (problems W25, lesson L56). The filter below is
+// the same defence already applied to SD_PROBE_DEV_TREE for the runtime probe;
+// A6 further down is the net for a cause nobody thought to blocklist.
+const compileEnv = payloadCompileEnv(process.env, { warn: say });
 const compileAll = (pythonExe, target, exclude) =>
   execFileSync(pythonExe, ["-m", "compileall", "-q", "--invalidation-mode", "checked-hash",
     ...(exclude ? ["-x", exclude] : []), target], { env: compileEnv, windowsHide: true, stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
@@ -964,6 +973,14 @@ const installRootRel = (p) => join(PAYLOAD_SEGMENT, relative(out, p));
 let maxRel = 0;
 let maxRelPath = "";
 const topRel = []; // [len, relPath] kept sorted desc, capped at 10
+// A6 piggybacks on this same walk: counting bytecode needs the identical
+// traversal, so it is accumulated here rather than paying for a second pass
+// over ~95,000 files. `pycByRegion` buckets by the payload's top-level
+// directory (python, envs-template, backend, ...) so the advisory can name
+// WHICH subtree lost coverage.
+let pyCount = 0;
+let pycCount = 0;
+const pycByRegion = {};
 {
   const stack = [out];
   while (stack.length > 0) {
@@ -976,6 +993,24 @@ const topRel = []; // [len, relPath] kept sorted desc, capped at 10
       const rel = installRootRel(p);
       if (rel.length > maxRel) { maxRel = rel.length; maxRelPath = rel; }
       topRel.push([rel.length, rel]);
+      if (e.name.endsWith(".py")) {
+        pyCount += 1;
+      } else if (e.name.endsWith(".pyc")) {
+        pycCount += 1;
+      } else {
+        continue;
+      }
+      // Bucket by the payload's top-level DIRECTORY. A file sitting directly at
+      // the payload root (e.g. version.json itself) has no separator in its
+      // relative path, so split()[0] would be the FILENAME — bucketing root files
+      // under their own names and polluting byRegion with one-entry buckets that
+      // bootstrap never reads. Test for the separator explicitly; "(root)" is the
+      // honest bucket for them.
+      const relFromOut = relative(out, p);
+      const sep = relFromOut.search(/[\\/]/);
+      const region = sep === -1 ? "(root)" : relFromOut.slice(0, sep);
+      const bucket = (pycByRegion[region] ??= { py: 0, pyc: 0 });
+      if (e.name.endsWith(".py")) bucket.py += 1; else bucket.pyc += 1;
     }
   }
   topRel.sort((a, b) => b[0] - a[0]);
@@ -996,6 +1031,45 @@ if (maxRel > maxRelBuild) {
   say(`A5 advisory: maxRel=${maxRel} exceeds the compileall build budget (${maxRelBuild}); safe only while the shipped checked-hash .pyc set stays complete (first-run precompile must remain a no-op)`);
 }
 
+// A6 bytecode-budget gate (SIZEOPT W25): A5's advisory above says the build
+// limit is only safe "while the shipped .pyc set stays complete" — this is the
+// check that makes that sentence enforceable instead of decorative.
+//
+// release6 shipped with 1,384 .pyc where it should have had ~37,000, because
+// the build environment exported PYTHONPYCACHEPREFIX and compileall (which
+// spreads process.env) redirected every bytecode file into a mirror tree
+// outside the payload. compileall exited 0 — right content, wrong place — and
+// all four existing gates stayed green: A1 imports fine (the .py sources all
+// shipped), A1b runs code without counting bytecode, A2's manifest has no
+// bytecode entry, A5 measures path length. The installer came out 139.7 MiB
+// SMALLER (446.5 vs the rebuild's 586.2 MiB) and so looked like a win for a
+// size-optimisation branch; the first launch recompiled everything instead.
+//
+// Like A4 and A5 this prints on EVERY build: coverage is a trend quantity
+// (upstream adds tests, a sweep rule changes) and a budget nobody can see
+// eroding is a budget that fails all at once. The ratio and its calibration
+// live in scripts/lib/pyc-budget.mjs, pinned against both release6 trees by
+// test/pyc-budget.test.ts — change the limit there, not here.
+{
+  const verdict = pycBudgetVerdict(pyCount, pycCount);
+  const pct = (n) => `${(n * 100).toFixed(1)}%`;
+  say(`A6 bytecode budget: ${pycCount} .pyc for ${pyCount} .py = ${pct(verdict.ratio)} (limit ${pct(PYC_MIN_RATIO)})`);
+  const weak = regionsBelowRatio(pycByRegion);
+  if (weak.length > 0) {
+    // Advisory, not a failure: the gate is whole-tree, and a whole-tree ratio
+    // has a blind spot proportional to a region's size — a SMALL target losing
+    // every .pyc can leave the total above the limit while that subtree ships
+    // uncompiled and pays the recompile on first run. Naming it keeps the loss
+    // visible instead of hiding inside a passing total.
+    say(`A6 advisory: below-limit regions — ${weak.map((r) => `${r.name} ${r.pyc}/${r.py} (${pct(r.ratio)})`).join(", ")}`);
+  }
+  if (!verdict.ok) {
+    fail(`payload bytecode budget failed: ${verdict.reason}.\n` +
+      `  The .pyc files are either missing or were written OUTSIDE the payload. Check the build environment for PYTHONPYCACHEPREFIX (it redirects compileall's output and still exits 0 — problems W25) and check the "precompiled bytecode for <label>" lines above for a target that was skipped.\n` +
+      `  Do NOT ship: the installed tree recompiles on first run, a multi-minute startup regression.`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 10. version.json manifest
 
@@ -1014,6 +1088,16 @@ const manifest = {
   builtAt: new Date().toISOString(),
   piecesMB: pieces,
   micromambaSha256: createHash("sha256").update(mmBuf).digest("hex"),
+  // #897 §2 first half: record the precompiled set so bootstrap can verify the
+  // COPY against what this build actually shipped. The counts come from the A6
+  // walk above (no second traversal). byRegion is keyed by the payload's
+  // top-level directory; bootstrap reads the "envs-template" entry, the region
+  // copyTreeConcurrent unpacks into <dataDir>\envs (unpackedBytecodeVerdict).
+  bytecode: {
+    py: pyCount,
+    pyc: pycCount,
+    byRegion: pycByRegion,
+  },
 };
 await writeFile(join(out, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 

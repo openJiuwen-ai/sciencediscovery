@@ -64,6 +64,7 @@ import { buildSeatbeltProfile, canonicalPath, seatbeltPwdShim, seatbeltWorkspace
 // win32: taskkill /T /F). See #482.
 import { condaActivationPaths, environmentShellPath, terminateTree } from "./platform/index.js";
 import { RunnerSkillPackages } from "./skill-packages.js";
+import { shellFailureDiagnostic } from "./shell-diagnostics.js";
 
 import { RUNNER_VERSION } from "./version.js";
 export { RUNNER_VERSION } from "./version.js";
@@ -1636,9 +1637,10 @@ export async function executeDirectShell(
       child.once("close", () => sandboxProcessGroups.delete(child));
       return child;
     });
+  const diagnostic = shellFailureDiagnostic(result.exitCode, result.stderr);
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
   const after = request.explicitHandoff ? new Map<string, string>() : await workspaceSnapshot(workspaceRoot);
-  return { ...result, cgroupMode: "none", createdFiles: [...after.keys()].filter(path => !before.has(path)).sort(),
+  return { ...result, ...(diagnostic ? { diagnostic } : {}), cgroupMode: "none", createdFiles: [...after.keys()].filter(path => !before.has(path)).sort(),
     modifiedFiles: [...after.keys()].filter(path => before.has(path) && before.get(path) !== after.get(path)).sort(),
     environmentRevisionId: "system-shell-direct-v1", environmentVariables: env, executionId: request.executionId,
     finishedAt: new Date().toISOString(), kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral",
@@ -1729,6 +1731,7 @@ async function executeEnvironmentShell(
     "baseline",
     onOutput,
   );
+  const diagnostic = shellFailureDiagnostic(processResult.exitCode, processResult.stderr);
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
   const after = await workspaceSnapshot(workspaceRoot);
@@ -1739,6 +1742,7 @@ async function executeEnvironmentShell(
     .toSorted();
   return {
     ...processResult,
+    ...(diagnostic ? { diagnostic } : {}),
     cgroupMode: RESOURCE_LIMIT_MODE,
     createdFiles,
     environmentRevisionId: resolved.revision.id,

@@ -20,12 +20,14 @@ import type { EvolveEventRecord, EvolveRun } from "@sciencediscovery/schema";
 
 import type { RunStreamEvent } from "../src/api/types.js";
 import {
+  composeEvolveMessage,
   evolveCommand,
   evolveCommandAlgorithm,
   evolveCommandCheckpointMode,
   evolveCommandGoal,
   isEvolveCommand,
   isEvolveSkill,
+  splitEvolveCommand,
 } from "../src/evolve/command.js";
 import {
   adoptRunStatus,
@@ -300,6 +302,27 @@ test("a goal that starts with a flag keeps its own text", () => {
   );
 });
 
+test("a command placed in the composer splits into the token and the sentence", () => {
+  // The dialog's message is not sent: its flags become a token in the input
+  // and its goal becomes the first draft after it.
+  assert.deepEqual(
+    splitEvolveCommand("/evolve-design --algorithm openevolve --no-confirm 让压缩比更高"),
+    { command: "/evolve-design --algorithm openevolve --no-confirm", goal: "让压缩比更高" },
+  );
+  assert.deepEqual(
+    splitEvolveCommand("/evolve-design --algorithm puct --allow-direct"),
+    { command: "/evolve-design --algorithm puct --allow-direct", goal: "" },
+  );
+  // The token and the sentence rejoin into the same message, including the
+  // line break that keeps a flag-looking goal from being read as a flag.
+  const split = splitEvolveCommand("/evolve-design --algorithm puct --no-confirm 更少字节");
+  assert.equal(composeEvolveMessage(split.command, split.goal), "/evolve-design --algorithm puct --no-confirm 更少字节");
+  assert.equal(
+    composeEvolveMessage("/evolve-design --algorithm puct", "--no-confirm 是参数"),
+    "/evolve-design --algorithm puct\n--no-confirm 是参数",
+  );
+});
+
 test("the direct-execution flag is a flag, not part of the goal", () => {
   // The dialog writes it only after the warning is answered, so the client
   // never reads it back as an approval; it is still flags, not goal text, and
@@ -338,7 +361,7 @@ test("the diff shows an insertion as an insertion, not as a rewritten file", () 
 
 test("a run whose stream ended without an event still learns it failed", () => {
   // A failed run used to keep showing 运行中: its error banner came from the
-  // run record the shelf polls, but the header only ever read statuses off
+  // run record the cards poll, but the header only ever read statuses off
   // events, and a run the control plane settles emits no terminal event.
   const running = { ...emptyRunView(), status: "running" as const };
   const failed = adoptRunStatus(running, "failed");

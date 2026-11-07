@@ -196,7 +196,9 @@ describe("a run folds into one line", () => {
     });
     assert.doesNotMatch(html, /<div class="role">/u);
     assert.doesNotMatch(html, /run-fold/u);
+    // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
+    assert.match(html, /class="run-failure-details"/u);
   });
 
   it("says what it is waiting for rather than that it is thinking", () => {
@@ -303,13 +305,74 @@ describe("a stopped run ends on a hairline, not a notice", () => {
     assert.match(html, /已中断/u);
   });
 
+  it("offers model selection recovery for a queued run with a deleted model", () => {
+    const html = render({ error: { code: "SESSION_MODEL_UNAVAILABLE", message: "The session model is not available" }, status: "failed", terminal: true });
+    assert.match(html, /SESSION_MODEL_UNAVAILABLE/u);
+    assert.match(html, /原模型已删除，请重新选择/u);
+  });
+
   it("keeps the marked notice for what actually went wrong", () => {
     // The divider is for a run that stopped; an error is a run that broke, and
     // it still owes the reader a mark and the reason.
     const html = render({ error: { message: "gateway died" }, status: "failed", terminal: true });
-    assert.match(html, /is-notice/u);
+    assert.match(html, /run-failure-row/u);
+    // The raw diagnostic is preserved inside the expandable technical details.
     assert.match(html, /gateway died/u);
+    assert.match(html, /class="run-failure-details"/u);
     assert.doesNotMatch(html, /is-divider/u);
+  });
+
+  it("surfaces a localized run-failure summary and tucks raw diagnostics into details", () => {
+    const html = render({
+      error: { code: "timeout", message: "no gateway progress for 1000 ms" },
+      status: "failed",
+      terminal: true,
+    });
+    assert.match(html, /run-failure-row/u);
+    assert.match(html, /<h3>运行超时<\/h3>/u);
+    assert.match(html, /Agent 在 1 秒内没有产生进展，运行已终止/u);
+    assert.match(html, /适当增加 Agent 空闲超时时间/u);
+    assert.match(html, /<circle cx="12" cy="12" r="9"><\/circle>/u);
+    // The original errorCode and error.message live inside the technical details.
+    assert.match(html, /class="run-failure-details"/u);
+    assert.match(html, /class="run-failure-code"/u);
+    assert.match(html, /timeout/u);
+    assert.match(html, /no gateway progress for 1000 ms/u);
+  });
+
+  it("uses the unknown summary for an unrecognised error code", () => {
+    const html = render({
+      error: { code: "mystery-code", message: "something odd happened" },
+      status: "failed",
+      terminal: true,
+    });
+    assert.match(html, /任务未能完成/u);
+    assert.match(html, /mystery-code/u);
+    assert.match(html, /something odd happened/u);
+  });
+
+  it("uses the unknown summary when no error code is supplied", () => {
+    const html = render({ error: { message: "no code attached" }, status: "failed", terminal: true });
+    assert.match(html, /任务未能完成/u);
+    assert.match(html, /no code attached/u);
+  });
+
+  it("does not render a run-failure summary when a tool timed out but the run succeeded", () => {
+    // A failed tool call (e.g. execution timeout) is shown by the tool card;
+    // it must not be mistaken for a run failure.
+    const html = render({
+      status: "completed",
+      terminal: true,
+      turns: [
+        turn({
+          responses: [{ content: "done", responseId: "r1", settled: true, truncated: false }],
+          tools: [{ after: 0, id: "t1", trace: { id: "t1", name: "execute", status: "failed" } }],
+        }),
+      ],
+    });
+    assert.doesNotMatch(html, /run-failure-details/u);
+    assert.doesNotMatch(html, /任务未能完成/u);
+    assert.doesNotMatch(html, /运行超时/u);
   });
 });
 

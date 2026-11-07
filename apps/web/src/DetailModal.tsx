@@ -29,20 +29,23 @@ export interface DetailModalProps {
   controls?: ReactNode;
   /** Panel title. */
   title: string;
+  /** Accessible names for specialized viewers; generic defaults are retained. */
+  ariaLabel?: string;
+  closeLabel?: string;
   /** Body content. */
   children: ReactNode;
 }
 
-export function DetailModal({ children, controls, eyebrow, onClose, title }: DetailModalProps) {
+export function DetailModal({ ariaLabel, children, closeLabel, controls, eyebrow, onClose, title }: DetailModalProps) {
   const { t } = useLocale();
   return (
     <div className="artifact-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section aria-label={t("detailModal.aria", { title })} aria-modal="true" className="artifact-modal-panel" role="dialog">
+      <section aria-label={ariaLabel ?? t("detailModal.aria", { title })} aria-modal="true" className="artifact-modal-panel" role="dialog">
         <header className="artifact-modal-header">
           <div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>
           <div className="artifact-modal-controls">
             {controls}
-            <button aria-label={t("detailModal.close")} className="icon-button" onClick={onClose} title={t("detailModal.close")} type="button">✕</button>
+            <button aria-label={closeLabel ?? t("detailModal.close")} className="icon-button" onClick={onClose} title={closeLabel ?? t("detailModal.close")} type="button">✕</button>
           </div>
         </header>
         <div className="artifact-modal-body">
