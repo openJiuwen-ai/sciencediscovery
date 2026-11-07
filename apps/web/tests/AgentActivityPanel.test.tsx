@@ -8,6 +8,7 @@ import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { AgentActivityPanel } from "../src/AgentActivityPanel.js";
 import { ApiClient } from "../src/api/client.js";
+import { LocaleProvider } from "../src/i18n/index.js";
 
 test("Session activity reads logs and cancels explicitly, never starts Shell", async () => {
   const calls: string[] = [];
@@ -200,4 +201,41 @@ test("a directory transfer counts the files it expands to, not the mappings", as
     progress: [progressed("a.csv", "completed"), progressed("b.csv", "completed"), progressed("c.csv", "pending")],
   }));
   assert.match(partial, /2\/3 files committed/);
+});
+
+test("a zh-CN badge names its state and provenance instead of printing the API token", async () => {
+  const activity = { executions: [
+    { id: "job", agentId: "main", runnerId: "local", workspaceId: "ws_a", state: "running", provenance: "pending" },
+    // Values the catalogues do not carry: a newer API can add one, and it must not blank out.
+    { id: "odd", agentId: "main", runnerId: "local", workspaceId: "ws_a", state: "paused", provenance: "unconfirmed" },
+  ], transfers: [], timers: [], agents: [] };
+  const client = { getAgentActivity: async () => activity } as unknown as ApiClient;
+  const render = async (initialLocale: "en" | "zh-CN") => {
+    let view: ReactTestRenderer;
+    await act(async () => {
+      view = create(createElement(LocaleProvider, { initialLocale }, createElement(AgentActivityPanel, { client, sessionId: "session" })));
+    });
+    return view!;
+  };
+  // The class keeps the state so styling does not move; only the visible text is named.
+  const badge = (view: ReactTestRenderer, state: string) => {
+    const node = view.root.findAllByType("span").filter((item) => String(item.props.className).startsWith("activity-badge"))
+      .find((item) => String(item.props.className).includes(` ${state}`))!;
+    return [node.props.className, node.children.join("")];
+  };
+
+  const zh = await render("zh-CN");
+  try {
+    assert.deepEqual(badge(zh, "running"), ["activity-badge running", "运行中"]);
+    assert.deepEqual(badge(zh, "paused"), ["activity-badge paused", "paused"]);
+    const text = JSON.stringify(zh.toJSON());
+    assert.match(text, /溯源 待提交/);
+    assert.doesNotMatch(text, /溯源 pending/);
+  } finally { await act(async () => zh.unmount()); }
+
+  const en = await render("en");
+  try {
+    assert.deepEqual(badge(en, "running"), ["activity-badge running", "Running"]);
+    assert.match(JSON.stringify(en.toJSON()), /provenance Pending/);
+  } finally { await act(async () => en.unmount()); }
 });

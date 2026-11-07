@@ -85,9 +85,9 @@ test("执行日志、取消与一次性提醒可管理", { tag: "@mocked" }, asy
       const summary = (contains: string) => panel.locator("details.process-record > summary")
         .filter({ hasText: contains });
       await panel.getByRole("button", { name: "Cancel execution" }).click();
-      await expect(summary("local · main")).toContainText("cancelled");
+      await expect(summary("local · main")).toContainText("Cancelled");
       await panel.getByRole("button", { name: "Cancel reminder" }).click();
-      await expect(summary("Inspect training output")).toContainText("cancelled");
+      await expect(summary("Inspect training output")).toContainText("Cancelled");
     });
     await journey.step("窄视口和空状态", "标识与操作可读，无水平溢出；任务清空后三个折叠区一起消失，面板不再占位。", async () => {
       await page.setViewportSize({ width: 1000, height: 900 });

@@ -2757,6 +2757,15 @@ export const en = {
   "activity.resumeAgent": "Resume {id}",
   "activity.resumeAgentScope": "If this Session was stopped, resuming a subagent also reopens it. Main and other subagents that were not stopped individually can continue.",
 
+  "activity.state.queued": "Queued",
+  "activity.state.running": "Running",
+  "activity.state.completed": "Completed",
+  "activity.state.failed": "Failed",
+  "activity.state.cancelled": "Cancelled",
+  "activity.state.unknown": "Unknown",
+  "activity.provenance.pending": "Pending",
+  "activity.provenance.committed": "Committed",
+
   "reviewer.controlsAria": "Reviewer Specialist controls",
   "reviewer.builtInSpecialist": "Built-in Specialist",
   "reviewer.automaticReview": "Automatic review",
@@ -5785,6 +5794,15 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "activity.cancelReminder": "取消提醒",
   "activity.resumeAgent": "恢复 {id}",
   "activity.resumeAgentScope": "如果该会话已停止，恢复子代理也会重新开启会话；主代理和未被单独停止的其他子代理可继续运行。",
+
+  "activity.state.queued": "排队中",
+  "activity.state.running": "运行中",
+  "activity.state.completed": "已完成",
+  "activity.state.failed": "失败",
+  "activity.state.cancelled": "已取消",
+  "activity.state.unknown": "未知",
+  "activity.provenance.pending": "待提交",
+  "activity.provenance.committed": "已提交",
 
   "reviewer.controlsAria": "评审专家控制",
   "reviewer.builtInSpecialist": "内置专家",
