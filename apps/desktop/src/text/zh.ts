@@ -434,10 +434,10 @@ export const ZH = {
       loading: "正在打开产物…",
       versionAria: "产物版本",
     },
-    /** Artifact 的溯源沿用旧版 UI 的产物溯源页：派生自哪些文件、跑了什么
+    /** Artifact 的溯源沿用旧版 UI 的产物溯源页：上游文件、跑了什么
      *  代码、执行日志，以及当时的受管环境。 */
     artifactProvenance: {
-      dependencies: "派生自",
+      dependencies: "上游文件",
       code: "代码",
       downloadScript: "下载脚本",
       execution: "执行日志",
