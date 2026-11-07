@@ -37,6 +37,7 @@ import { EvolveRuns } from "../src/views/evolve/EvolveRuns.js";
 import { EvolveTree, layoutTree, zoomToward } from "../src/views/evolve/EvolveTree.js";
 import type { TreeView } from "../src/views/evolve/EvolveTree.js";
 import { ScoreChart, collectSeries } from "../src/views/evolve/ScoreChart.js";
+import { act, create } from "./support/dom-renderer.js";
 
 const client = {} as ApiClient;
 
@@ -85,6 +86,13 @@ function candidate(over: Partial<EvolveCandidateView>): EvolveCandidateView {
     visits: 0,
     ...over,
   };
+}
+
+/** The words a rendered subtree shows, in document order. */
+function nodeText(node: unknown): string {
+  if (typeof node === "string") return node;
+  const children = (node as { children?: unknown[] }).children ?? [];
+  return children.map(nodeText).join(" ");
 }
 
 function switchTag(html: string): string {
@@ -335,6 +343,75 @@ test("the chart keeps the gate and the failures apart", () => {
   assert.match(html, /evolve-chart-best/);
   // The significant point's title carries its score.
   assert.match(html, /0\.6200/);
+});
+
+test("pointing at a node names it, its generation and its score", async () => {
+  let chart;
+  await act(async () => { chart = create(<ScoreChart view={view()} />); });
+  try {
+    // Nothing follows the pointer until one is over a point.
+    assert.equal(
+      chart!.root.findAll((node) => node.props.className === "evolve-chart-tooltip").length,
+      0,
+    );
+
+    const hit = chart!.root.findAll((node) =>
+      node.props.className === "evolve-chart-hit"
+      && String(node.props["aria-label"]).startsWith("#1"))[0];
+    assert.ok(hit, "the best node has a hit area larger than its dot");
+    await act(async () => { (hit.props.onMouseEnter as () => void)(); });
+
+    // The dashed rule marks the expansion the point belongs to.
+    assert.equal(chart!.root.findAll((node) => node.props.className === "evolve-chart-guide").length, 1);
+    const tooltip = chart!.root.findAll((node) =>
+      typeof node.props.className === "string"
+      && node.props.className.startsWith("evolve-chart-tooltip")
+      && !node.props.className.startsWith("evolve-chart-tooltip-"))[0];
+    const text = nodeText(tooltip);
+    assert.match(text, /Node #1/);
+    assert.match(text, /代际 01/);
+    // The handoff tags the best node rather than leaving the reader to compare
+    // the score with the rule above.
+    assert.match(text, /最佳/);
+    assert.match(
+      String(chart!.root.findByProps({ className: "evolve-chart-tooltip-score" }).children),
+      /0\.6200/,
+    );
+
+    // Leaving the point takes the reading with it.
+    await act(async () => { (hit.props.onMouseLeave as () => void)(); });
+    assert.equal(
+      chart!.root.findAll((node) => node.props.className === "evolve-chart-tooltip").length,
+      0,
+    );
+    assert.equal(chart!.root.findAll((node) => node.props.className === "evolve-chart-guide").length, 0);
+  } finally {
+    await act(async () => { chart!.unmount(); });
+  }
+});
+
+test("a failed node answers the pointer with its verdict, not a score", async () => {
+  let chart;
+  await act(async () => { chart = create(<ScoreChart view={view()} />); });
+  try {
+    const hit = chart!.root.findAll((node) =>
+      node.props.className === "evolve-chart-hit"
+      && String(node.props["aria-label"]).startsWith("#3"))[0];
+    assert.ok(hit, "the failed node is hoverable too");
+    await act(async () => { (hit.props.onMouseEnter as () => void)(); });
+
+    const tooltip = chart!.root.findAll((node) =>
+      typeof node.props.className === "string"
+      && node.props.className.startsWith("evolve-chart-tooltip")
+      && !node.props.className.startsWith("evolve-chart-tooltip-"))[0];
+    const text = nodeText(tooltip);
+    assert.match(text, /Node #3/);
+    assert.match(text, /失败/);
+    // It never ran, so there is no score to print.
+    assert.equal(chart!.root.findAll((node) => node.props.className === "evolve-chart-tooltip-score").length, 0);
+  } finally {
+    await act(async () => { chart!.unmount(); });
+  }
 });
 
 test("a chart with nothing measured says so instead of drawing an empty frame", () => {
