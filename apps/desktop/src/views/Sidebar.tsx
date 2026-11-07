@@ -37,7 +37,7 @@ type Renaming =
 interface Props {
   actions: WorkspaceActions;
   onExportSession?: (session: Session) => void;
-  onImportSession?: (projectId?: string) => void;
+  onImportSession?: () => void;
   /** The Project of the open Session, for the fold's highlight. */
   activeProjectId?: string;
   activeSessionId?: string;
@@ -207,7 +207,7 @@ export function Sidebar({
                     label: TEXT.menu.rename,
                     onSelect: () => setRenaming({ kind: "session", session, value: sessionTitle(session.title) }),
                   },
-                  ...(onExportSession ? [{ icon: "↓", label: TEXT.researchPackage.export, onSelect: () => onExportSession(session) }] : []),
+                  ...(onExportSession ? [{ icon: <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg>, label: TEXT.researchPackage.export, onSelect: () => onExportSession(session) }] : []),
                   {
                     icon: "🗑",
                     label: TEXT.menu.delete,
@@ -255,7 +255,14 @@ export function Sidebar({
           <path d="M12 5v14M5 12h14" />
         </svg>
         <span>{TEXT.sidebar.newTask}</span>
-      </button><button className="side-mini-button" aria-label={TEXT.researchPackage.newOptions} aria-haspopup="menu" onClick={event => setMenu({ ...anchor(event), items: [{ label: TEXT.researchPackage.import, onSelect: () => onImportSession?.() }] })} type="button">⌄</button></div>
+      </button>
+        <div className="side-import-dropdown">
+          <button className="side-import-trigger" aria-label={TEXT.researchPackage.newOptions} aria-haspopup="menu" type="button">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m7 10 5 5 5-5" /></svg>
+          </button>
+          <div className="side-import-menu" role="menu"><button className="ctx-item" role="menuitem" onClick={() => onImportSession?.()} type="button"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></svg><span>{TEXT.researchPackage.import}</span></button></div>
+        </div>
+      </div>
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
@@ -313,7 +320,6 @@ export function Sidebar({
                   >
                     +
                   </button>
-                  <button aria-label={TEXT.researchPackage.projectImport(project.name)} aria-haspopup="menu" className="side-mini-button" onClick={event => setMenu({ ...anchor(event), items: [{ label: TEXT.researchPackage.import, onSelect: () => onImportSession?.(project.id) }] })} type="button">⌄</button>
                   <button
                     aria-label={TEXT.sidebar.projectMenu}
                     className="side-mini-button"

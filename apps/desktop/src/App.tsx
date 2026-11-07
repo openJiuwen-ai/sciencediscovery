@@ -829,7 +829,7 @@ export function App({ initialToken }: Props) {
           <Sidebar
             actions={actions}
             onExportSession={session => setPackageRequest({ kind: "export", sessionId: session.id, projectId: session.projectId })}
-            onImportSession={projectId => setPackageRequest({ kind: "import", projectId: projectId ?? state.inboxProject?.id })}
+            onImportSession={() => setPackageRequest({ kind: "import", projectId: state.inboxProject?.id })}
             activeProjectId={state.activeProjectId}
             activeSessionId={state.sessionId}
             onToggleSidebar={() => setSidebarOpen(false)}
@@ -879,7 +879,7 @@ export function App({ initialToken }: Props) {
               {evidenceReadOnly(state.detail) ? null : <Composer {...composerProps} />}
             </>
           )}
-          <ResearchPackage client={client} request={packageRequest} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshCatalog} />
+          <ResearchPackage client={client} request={packageRequest} projects={state.projects} detail={state.detail} onOpen={(id) => void actions.openSession(id)} onRefresh={actions.refreshCatalog} />
         </main>
 
         <WorkspacePanel

@@ -24,6 +24,7 @@ import type { Text } from "./zh.js";
 
 export const EN: Text = {
   researchPackage: {
+    projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to recent conversations by default. You may choose an existing project.", necessaryContents: "Conversation · Current files and artifacts · Dependencies", completeContents: "Conversation · File and artifact versions · Research history",
     newOptions: "New conversation options", projectImport: (name: string) => `Import conversation into ${name}`, messageMenu: "Reply menu", sessionScope: "Export the whole conversation and its research materials, beyond the visible chat text.", packageContents: "Conversation, workspace files, artifacts and related research evidence.",
     title: "Research package", import: "Import conversation", export: "Export conversation", continue: "Continue chatting", branch: "Create branch chat", source: "Return to source",
     readOnly: "Imported evidence · Read-only. Create an independent copy to continue with the retained materials.", copying: "Copying research in the background…", ready: "Research copy ready", failed: "Operation failed", open: "Open conversation", download: "Download", preparing: "Preparing the package in the background…", close: "Close",
