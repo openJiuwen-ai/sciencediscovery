@@ -197,9 +197,6 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
         {isPlaceholderGoal(run.goal) ? <p className="evolve-notice is-warn">
           {TEXT.evolve.notice.placeholder}
         </p> : null}
-        {run.goal.allowUnisolated === true ? <p className="evolve-notice is-warn evolve-unisolated">
-          {TEXT.evolve.unisolatedTitle}
-        </p> : null}
         {run.error ? <p className="evolve-notice is-error">{run.error}</p> : null}
       </div>
 

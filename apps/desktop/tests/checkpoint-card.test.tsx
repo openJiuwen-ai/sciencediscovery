@@ -96,7 +96,7 @@ test("a waiting checkpoint offers the two answers the flow expects", () => {
 
 test("a record is a step, not a checkpoint: no badge, nothing to press", () => {
   const html = render(card({ pace: "auto", step: 3 }));
-  assert.match(html, /class="evolve-checkpoint is-auto"/);
+  assert.match(html, /class="evolve-checkpoint is-auto is-record"/);
   assert.match(html, /class="evolve-checkpoint-step">步骤</);
   // A step nobody answers carries no counter: there is no "which question of
   // how many" to report.
@@ -107,12 +107,24 @@ test("a record is a step, not a checkpoint: no badge, nothing to press", () => {
   assert.doesNotMatch(html, /evolve-checkpoint-actions/);
 });
 
+test("a record folds to its header like an answered card", () => {
+  // The record is the longest thing in the transcript and asks for nothing, so
+  // it is closed by default: the header says which step it is and what it was
+  // about, and the body is one click away.
+  const html = render(card({ pace: "auto", step: 3, title: "搜索已启动" }));
+  assert.match(html, /<details aria-label="步骤 3" class="evolve-checkpoint is-auto is-record"/);
+  assert.match(html, /<summary class="evolve-checkpoint-head"/);
+  assert.match(html, /搜索已启动/);
+  assert.match(html, /collapse-chev/);
+  assert.doesNotMatch(html, /evolve-checkpoint-main/);
+});
+
 test("the last step is a record: the run already started", () => {
   // A live run labelled step 4 `confirm` and offered 「确认，继续」 eight
   // seconds after the search started. There is nothing to confirm at that
   // point, so the card is drawn as a record whatever pace the model wrote.
   const html = render(card({ step: 4, title: "探针结果" }));
-  assert.match(html, /class="evolve-checkpoint is-auto"/);
+  assert.match(html, /class="evolve-checkpoint is-auto is-record"/);
   assert.match(html, /data-pace="confirm"/);
   assert.match(html, /class="evolve-checkpoint-step">步骤</);
   assert.doesNotMatch(html, /evolve-checkpoint-count/);

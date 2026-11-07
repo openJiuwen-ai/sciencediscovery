@@ -168,19 +168,6 @@
   font-weight: 650;
 }
 
-/* A search whose candidates did not run in a sandbox. Warm rather than
-   neutral: it changes how the result should be read. */
-.evolve-chip-unisolated {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  border: 1px solid var(--warning-border);
-  border-radius: var(--radius-pill);
-  background: var(--warning-soft);
-  color: var(--warning-strong);
-  font-size: 10px;
-  font-weight: 650;
-}
-
 .evolve-dot {
   flex: 0 0 auto;
   width: 6px;
