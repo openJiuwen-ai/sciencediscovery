@@ -280,7 +280,7 @@ export function ModelPicker({
               active={model.id === activeModelId}
               key={model.id}
               model={model}
-              onSelect={(id) => { setOpen(false); onSelect(id); }}
+              onSelect={onSelect}
               {...(group.provider ? { provider: group.provider } : {})}
             />)}
           </ul>
