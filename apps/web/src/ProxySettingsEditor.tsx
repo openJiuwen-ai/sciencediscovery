@@ -142,7 +142,13 @@ function ProxyUrlGuideTooltip() {
       if (!rootRef.current?.contains(event.target as Node)) dismiss();
     }
     function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === "Escape") dismiss();
+      if (event.key === "Escape") {
+        // Escape belongs to the topmost layer: dismiss this popover without
+        // letting the dialog-level Escape close the whole System configuration
+        // window underneath it.
+        event.stopPropagation();
+        dismiss();
+      }
     }
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
@@ -177,7 +183,9 @@ function ProxyUrlGuideTooltip() {
       // the vertical flip decision without ever entering document flow.
       popover.style.width = `${width}px`;
       popover.style.maxHeight = `${maxHeight}px`;
-      popover.style.visibility = "hidden";
+      // Measure synchronously in the layout effect/scroll handler. Mutating
+      // visibility here would leave an already open tooltip hidden: React
+      // does not rewrite an unchanged `visibility: visible` style on rerender.
       const popoverHeight = popover.getBoundingClientRect().height;
       const triggerRect = trigger.getBoundingClientRect();
       const left = Math.max(boundaryLeft, Math.min(triggerRect.left, boundaryRight - width));

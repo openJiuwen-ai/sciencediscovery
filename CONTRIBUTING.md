@@ -130,7 +130,6 @@ npm run test:real        # live group; explicit opt-in with declared credentials
 npm run test:real:list   # safe discovery of the live group; does not run it
 npm run test:mixed       # mocked + live groups; explicit opt-in
 npm run test:list        # default mocked-only discovery check
-npm run test:legacy:list # inventory quarantined, unaudited specs
 npm run check:meta       # validates the per-test E2E-META comment blocks
 ```
 
@@ -267,9 +266,9 @@ into `coverage/` without running anything. CI's Coverage job does exactly that
 with the UT and ST jobs' uploads; see
 [.ci/README.md](.ci/README.md#coverage-reporting).
 
-Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`,
-`ci:e2e:legacy`) fail closed behind their `CI_ALLOW_*` variables and are never
-part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
+Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`) fail
+closed behind their `CI_ALLOW_*` variables and are never part of a default
+command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 

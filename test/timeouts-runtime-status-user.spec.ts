@@ -12,17 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "./helpers/e2e.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("timeouts-runtime-status-user.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("timeouts-runtime-status-user.spec", { tag: ["@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
 
 const SCREENSHOTS = "screenshots";
 
-test("用户视角：默认超时策略与 Runtime Status 可读性", async ({ page }) => {
+/**
+ * E2E-META
+ * Purpose: 用户能在系统设置中读到默认超时策略与 Runtime Status 空态，且对话框可正常关闭。
+ * Steps:
+ *   1. 打开系统设置 → Timeouts。
+ *   2. 断言 Agent idle timeout 默认 240 秒，其余四项默认 Unlimited。
+ *   3. 打开 Runtime status，断言空态说明 Runner 健康且无执行。
+ *   4. 通过标题栏 X 关闭对话框，确认其可访问名与底部按钮一致。
+ * Environment: 隔离本地栈；没有活跃运行。
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none — 只读本地设置页。
+ * Credentials: 隔离实例的 E2E_API_TOKEN。
+ * CostSideEffects: none
+ */
+test("用户视角：默认超时策略与 Runtime Status 可读性", { tag: "@mocked" }, async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await expect(page.locator(".app-shell")).toBeVisible();
 
   // 1. 系统设置 → Timeouts：验证默认值
   await page.getByRole("button", { name: "System configuration" }).click();
@@ -47,11 +67,11 @@ test("用户视角：默认超时策略与 Runtime Status 可读性", async ({ p
   await expect(configuration.getByText("Runner is healthy; no execution is active.")).toBeVisible();
   await page.screenshot({ path: `${SCREENSHOTS}/runtime-status-empty.png` });
 
-  await configuration.getByRole("button", { name: "Done" }).click();
+  // The header's X carries the same accessible name as the footer button.
+  await configuration.getByRole("button", { name: "Cancel and close" }).last().click();
 });
 
-test("Kernel Teardown 场景 — BLOCKED", async () => {
-  test.skip(true, "构造 persistent kernel 需要跨 API/Runner 的长时间运行与 kernel 保持会话，现有 E2E 工具链未暴露一键入口；本轮标记为 BLOCKED 并在报告中说明原因。");
-});
-
+// Kernel Teardown 场景仍无 E2E 入口：构造 persistent kernel 需要跨 API/Runner
+// 的长时间运行与 kernel 保持会话，现有工具链没有一键入口，因此不编入可执行
+// 用例，避免共享计划里出现一个永远只报 skip 的身份。
 });

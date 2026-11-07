@@ -48,7 +48,6 @@ export const tagDimensions = {
       none: "No LLM endpoint",
       real: "Live LLM API and credentials",
       stub: "Local deterministic model stub only",
-      unreviewed: "Legacy coverage whose external behavior is not audited",
     },
   },
   network: {
@@ -57,7 +56,6 @@ export const tagDimensions = {
       external: "Outbound access to a live service",
       local: "Loopback services only",
       none: "No runtime network",
-      unreviewed: "Legacy coverage whose egress is not audited",
     },
   },
   npu: {
@@ -65,7 +63,6 @@ export const tagDimensions = {
     values: {
       none: "No NPU",
       required: "Ascend device, driver and runtime required",
-      unreviewed: "Legacy coverage whose hardware dependency is not audited",
     },
   },
   sandbox: {
@@ -75,7 +72,6 @@ export const tagDimensions = {
       seatbelt: "A native macOS Seatbelt sandbox",
       host: "Dedicated native host capability",
       none: "No execution sandbox",
-      unreviewed: "Legacy coverage whose sandbox dependency is not audited",
     },
   },
 };
@@ -192,17 +188,6 @@ export const testCases = [
     tags: [
       "arch:amd64", "arch:arm64", "container:conditional", "layer:e2e",
       "llm:real", "network:external", "npu:none", "sandbox:bubblewrap",
-    ],
-  },
-  {
-    id: "e2e.legacy",
-    description: "Explicitly quarantined Playwright specs pending dependency audit",
-    command: ["pnpm", "ci:e2e:legacy"],
-    gates: { allowEnv: "CI_ALLOW_LEGACY", requiredEnv: [] },
-    resultPath: "e2e-legacy",
-    tags: [
-      "arch:amd64", "arch:arm64", "container:conditional", "layer:e2e",
-      "llm:unreviewed", "network:unreviewed", "npu:unreviewed", "sandbox:unreviewed",
     ],
   },
   {

@@ -599,7 +599,7 @@ pnpm ci:run -- --case e2e.mocked
 `ci:run` requires at least one positive `--tag` or `--case`, verifies the
 native architecture, and preflights every selected case before starting any
 of them. Live cases additionally require `CI_ALLOW_REAL=1` and their documented
-credential variables. Legacy E2E requires `CI_ALLOW_LEGACY=1`. The NPU smoke
+credential variables. The NPU smoke
 requires `CI_ALLOW_NPU=1` and an explicit `SCIENCE_AGENT_NPU_PYTHON` from the
 dedicated NPU environment; it fails closed in this generic image. Its catalog
 entry explains the host requirement.
