@@ -125,6 +125,7 @@ import type {
   PromptManifest,
   PromptSkillLibraryRef,
   PlanSnapshot,
+  PermissionRequest,
   RuntimeNotice,
   SubagentStep,
   UpdateSpecialistRequest,
@@ -2929,6 +2930,132 @@ export function subagentStreamId(subagentId: string): string {
 }
 
 /**
+ * What the stream knows about one permission request: the run its events
+ * belong on, and whether its resolution has already been written.
+ *
+ * A request records only the `executionId` it was asked with, and that is not
+ * always a run id: a subagent asks with its own id, and the Reviewer's MCP
+ * tools ask with a toolCallId (`turnId: toolCallId ?? runId`). Publishing is
+ * the one moment that knows the run, so it remembers it here; a decision
+ * recorded outside the run's own wait then has somewhere to go.
+ *
+ * The same entry keeps one decision from being written twice. A request that
+ * is answered while its run polls for the answer arrives from both the
+ * endpoint that recorded the decision and the poll that noticed it, and the
+ * timeline should carry the resolution once.
+ */
+interface PermissionEventOwner {
+  resolved: boolean;
+  runId: string;
+}
+
+const permissionEventOwners = new Map<string, PermissionEventOwner>();
+/** Enough history for every request a long session could still be answering;
+ *  the oldest entry is dropped past this, and the fallback in
+ *  `publishResolvedPermissions` still finds the run. */
+const PERMISSION_EVENT_OWNERS_LIMIT = 10_000;
+
+function permissionEventKey(sessionId: string, requestId: string): string {
+  return `${sessionId}:${requestId}`;
+}
+
+function rememberPermissionOwner(sessionId: string, runId: string, requestId: string): void {
+  const key = permissionEventKey(sessionId, requestId);
+  const existing = permissionEventOwners.get(key);
+  if (existing) {
+    existing.runId = runId;
+    return;
+  }
+  if (permissionEventOwners.size >= PERMISSION_EVENT_OWNERS_LIMIT) {
+    const oldest = permissionEventOwners.keys().next().value;
+    if (oldest !== undefined) permissionEventOwners.delete(oldest);
+  }
+  permissionEventOwners.set(key, { resolved: false, runId });
+}
+
+/** True when this request's resolution is already on a run stream. The catalog
+ *  accepts one decision per request, so a duplicate is always the same answer
+ *  arriving by a second path. */
+function markPermissionResolved(sessionId: string, runId: string, requestId: string): boolean {
+  const key = permissionEventKey(sessionId, requestId);
+  const existing = permissionEventOwners.get(key);
+  if (existing?.resolved) return true;
+  if (existing) {
+    existing.resolved = true;
+    return false;
+  }
+  if (permissionEventOwners.size >= PERMISSION_EVENT_OWNERS_LIMIT) {
+    const oldest = permissionEventOwners.keys().next().value;
+    if (oldest !== undefined) permissionEventOwners.delete(oldest);
+  }
+  permissionEventOwners.set(key, { resolved: true, runId });
+  return false;
+}
+
+/** Where to write a resolution whose request this process never saw raised —
+ *  the API restarted between the question and the answer. */
+async function permissionOwnerRunId(
+  store: SessionStore,
+  sessionId: string,
+  request: PermissionRequest,
+  runs: readonly SessionRun[],
+): Promise<string | undefined> {
+  const executionId = request.executionId;
+  if (executionId) {
+    if (runs.some((run) => run.id === executionId)) return executionId;
+    const owner = store.getSubagent(sessionId, executionId);
+    if (owner) return owner.parentTurnId;
+  }
+  // A Reviewer MCP tool asks with its toolCallId, which nothing maps back to a
+  // run. A Session runs one run at a time, so the one still going is the one
+  // that asked.
+  return runs.findLast((run) => run.status === "running" || run.status === "blocked")?.id;
+}
+
+/**
+ * Write the resolutions a decision recorded in the catalog onto the run stream.
+ *
+ * Most requests are answered by the run that asked: it polls for the answer
+ * and publishes `permission.resolved` itself. The ones decided outside a run's
+ * own wait — artifact downloads, remote jobs, and every pending request an
+ * approval-mode switch settles — have no such poller, so without this the
+ * decision reached only the catalog. A reloaded Session then replays the
+ * request as still pending: a card whose buttons can never work.
+ *
+ * A publishing failure is logged and swallowed. The decision is already
+ * committed; losing its audit line must not turn a successful authorization
+ * into an HTTP error.
+ */
+export async function publishResolvedPermissions(
+  store: SessionStore,
+  sessionId: string,
+  requests: readonly PermissionRequest[],
+): Promise<void> {
+  if (requests.length === 0) return;
+  // Read the run index at most once: it carries every run's settings snapshot,
+  // and "allow matching" can settle several requests in one decision.
+  let runs: SessionRun[] | undefined;
+  const sessionRuns = async (): Promise<SessionRun[]> => (runs ??= await store.listSessionRuns(sessionId));
+  for (const request of requests) {
+    try {
+      const registered = permissionEventOwners.get(permissionEventKey(sessionId, request.id));
+      const runId = registered?.runId || await permissionOwnerRunId(store, sessionId, request, await sessionRuns());
+      if (!runId) {
+        runLog.warn("permission_resolved_unowned", { requestId: request.id, sessionId });
+        continue;
+      }
+      await publishRunEvent(store, sessionId, runId, { request, type: "permission.resolved" });
+    } catch (error) {
+      runLog.warn("permission_resolved_publish_failed", {
+        errorMessage: error instanceof Error ? error.message : String(error),
+        requestId: request.id,
+        sessionId,
+      });
+    }
+  }
+}
+
+/**
  * Persist an event where it belongs before fanning it out to live subscribers.
  * Growable payloads (tool output, subagent process steps) land in the run's
  * child streams and are broadcast without a main-stream sequence; the catalog's
@@ -2942,6 +3069,13 @@ export async function publishRunEvent(
   event: RunStreamEvent,
   delivery?: RunEventDelivery,
 ): Promise<SessionRunEvent> {
+  if (event.type === "permission.required") {
+    rememberPermissionOwner(sessionId, runId, event.request.id);
+  } else if (event.type === "permission.resolved" && markPermissionResolved(sessionId, runId, event.request.id)) {
+    // Already on the stream: the same answer by a second path. Live-only
+    // record, so a caller that reads the return still gets one.
+    return { createdAt: new Date().toISOString(), event, runId, sequence: 0, sessionId };
+  }
   let record: SessionRunEvent;
   if (delivery?.transient) {
     // Live-only: no sequence is allocated because nothing is stored, matching

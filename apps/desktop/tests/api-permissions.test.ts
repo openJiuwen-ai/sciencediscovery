@@ -18,9 +18,9 @@ const { describe, it } = createTest(import.meta.url, {
 });
 import assert from "node:assert/strict";
 
-import { decidePermissionRequest } from "../src/api/permissions.js";
+import { decidePermissionRequest, listPermissionRequests } from "../src/api/permissions.js";
 import type { PermissionDecision } from "../src/api/types.js";
-import { StubClient, json } from "./api-stub.js";
+import { StubClient, json, split } from "./api-stub.js";
 
 type Decision = Parameters<typeof decidePermissionRequest>[2];
 
@@ -56,6 +56,30 @@ describe("answering a permission request", () => {
 
     await assert.rejects(
       () => decidePermissionRequest(stub.asClient(), "req/one", "allow" as Decision),
+      (reason: unknown) => reason === failure,
+    );
+  });
+});
+
+describe("reading a Session's permission requests", () => {
+  it("asks the Session-wide route with the Session id", async () => {
+    const stub = new StubClient().reply([]);
+
+    const requests = await listPermissionRequests(stub.asClient(), "session/one");
+
+    assert.deepEqual(requests, []);
+    const { pathname, query } = split(stub.calls[0]!);
+    assert.equal(pathname, "/api/permission-requests");
+    assert.equal(query.get("sessionId"), "session/one");
+    assert.equal(stub.calls[0]!.init.method, undefined, "a read sends no method");
+  });
+
+  it("hands a failed read back to the caller", async () => {
+    const failure = new Error("offline");
+    const stub = new StubClient().fail(failure);
+
+    await assert.rejects(
+      () => listPermissionRequests(stub.asClient(), "session/one"),
       (reason: unknown) => reason === failure,
     );
   });
