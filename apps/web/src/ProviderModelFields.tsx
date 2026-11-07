@@ -184,12 +184,27 @@ export function ManualModelFields({
   </div>;
 }
 
-/** Large token counts as integers: 1,000,000 → "1M", 200,000 → "200k". */
+/** Compact token counts: whole numbers where the fraction is noise, one decimal
+ *  where it is not: 1,000,000 → "1M", 1,500,000 → "1.5M", 200,000 → "200k",
+ *  999,999 → "1M". Integers from 10M up, because a fraction there is smaller
+ *  than the label's own margin. */
 export function compactTokenCount(value: number | undefined): string | undefined {
   if (value === undefined) return undefined;
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  if (value >= 10_000_000) return `${Math.round(value / 1_000_000)}M`;
+  if (value >= 1_000_000) return `${trimWholeFraction((value / 1_000_000).toFixed(1))}M`;
+  if (value >= 1_000) {
+    const thousands = Math.round(value / 1_000);
+    // 999,999 tokens are 1000k after rounding; cross into M rather than print a
+    // count the data has not reached.
+    if (thousands >= 1_000) return `${trimWholeFraction((value / 1_000_000).toFixed(1))}M`;
+    return `${thousands}k`;
+  }
   return String(value);
+}
+
+/** `1.0` → `1`: a whole value keeps its integer form (`1M`, not `1.0M`). */
+function trimWholeFraction(text: string): string {
+  return text.endsWith(".0") ? text.slice(0, -2) : text;
 }
 
 /** Compact facts as hover-labelled badges: context/output as 1M/200k, vision
