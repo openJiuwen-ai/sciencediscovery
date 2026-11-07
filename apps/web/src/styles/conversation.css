@@ -42,7 +42,10 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 /* Short capability badge: it never competes for width with the title, so it
    always renders in full; host names live on the title tooltip. */
 .session-runner-target { flex: 0 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-soft); padding: 3px 8px; color: var(--muted); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.session-bar .session-usage-chip { min-height: 28px; flex: 0 1 320px; min-width: 0; padding: 3px 9px; row-gap: 2px; }
+.session-bar .session-usage-chip { flex: 0 1 320px; min-width: 0; /* keep shell.css padding/min-height so radius 8 is not clipped */ }
+@media (max-height: 900px) {
+  .session-bar .session-usage-chip { min-height: 32px; /* keep shell padding 7px; avoid 3-4px kink band */ }
+}
 .session-bar .connection { font-size: 12px; }
 .subagent-conversation { flex: 1; border-right: 0; }
 .subagent-session-bar { flex-wrap: nowrap; }
