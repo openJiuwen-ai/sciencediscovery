@@ -115,8 +115,8 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/runners/${encodeURIComponent(runnerId)}/execution-capability`, { method: refresh ? "POST" : "GET" });
   }
 
-  listExecutionBlocks(sessionId: string): Promise<import("@sciencediscovery/schema").ExecutionBlock[]> {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/execution-blocks`);
+  listExecutionBlocks(sessionId: string, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").ExecutionBlock[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/execution-blocks`, { signal });
   }
 
   decideExecutionBlock(sessionId: string, id: string, decision: import("@sciencediscovery/schema").ExecutionBlockDecision): Promise<void> {
