@@ -390,22 +390,22 @@ test("sending a seeded design joins the token to the sentence once", async () =>
     );
   });
   try {
-    const area = view!.root.findByProps({ id: "composer-textarea" });
+    const area = view.root.findByProps({ id: "composer-textarea" });
     await act(async () => {
       (area.props.onChange as (event: { target: { value: string } }) => void)({
         target: { value: "让压缩比更高，并且要快" },
       });
     });
-    const send = view!.root.findByProps({ "aria-label": "发送" });
+    const send = view.root.findByProps({ "aria-label": "发送" });
     await act(async () => { (send.props.onClick as () => void)(); });
     // The flags and the sentence travel together, in that order.
     assert.deepEqual(sent, [
       { command: "/evolve-design --algorithm puct", content: "让压缩比更高，并且要快" },
     ]);
     // The token belonged to that message: the next draft starts empty.
-    assert.equal(view!.root.findByProps({ id: "composer-textarea" }).props.value, "");
-    assert.equal(view!.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+    assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "");
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
   } finally {
-    await act(async () => { view!.unmount(); });
+    await act(async () => { view.unmount(); });
   }
 });
