@@ -96,6 +96,8 @@ export const ZH = {
     evolvePlaceholder: "请描述你想要优化的对象和评估标准",
     send: "发送",
     stop: "停止",
+    /** 设计命令上的 ✕：对话框给的是建议，改主意的人要能把它去掉再说话。 */
+    clearCommand: "移除指令",
     modelSelect: "选择模型",
     addCustomModel: "添加自定义模型",
     pillLocked: "这一轮跑完才能切换模型",

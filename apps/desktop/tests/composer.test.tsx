@@ -352,9 +352,9 @@ test("a design's command is a token in front of the sentence, not text", () => {
   // The goal the dialog collected is the sentence after the token, ready to be
   // completed.
   assert.match(markup, /<textarea[^>]*>让压缩比更高<\/textarea>/u);
-  // It is not a control: unlike the landing category tag, nothing invites
-  // deleting it, and no close button is drawn.
-  assert.equal(markup.includes("composer-tag-clear"), false);
+  // The dialog proposed the search, so the token can be taken back: it carries
+  // its own ✕ rather than leaving sending as the only way out.
+  assert.match(markup, /aria-label="移除指令"/u);
   // Once a search is seeded the composer is not waiting for any request; it
   // asks for the one sentence the design still needs.
   assert.match(markup, /placeholder="请描述你想要优化的对象和评估标准"/u);
@@ -404,6 +404,55 @@ test("sending a seeded design joins the token to the sentence once", async () =>
     ]);
     // The token belonged to that message: the next draft starts empty.
     assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "");
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("a design's flags can be taken back without losing the sentence", async () => {
+  const cleared: string[] = [];
+  const element = (seededCommand: { command: string; nonce: number; text: string } | undefined) => (
+    <Composer
+      attachments={[]}
+      landing
+      models={[{ id: "m1", name: "测试模型" } as never]}
+      onApprovalMode={() => {}}
+      onClearAttachments={() => {}}
+      onClearCommand={() => { cleared.push("cleared"); }}
+      onCreateProject={() => {}}
+      onOpenSettings={() => {}}
+      onRemoveAttachment={() => {}}
+      onRetryAttachment={() => {}}
+      onSelectModel={() => {}}
+      onSelectProject={() => {}}
+      onSend={() => { cleared.push("sent"); }}
+      onStop={() => {}}
+      onUpload={() => {}}
+      projects={[]}
+      running={false}
+      seededCommand={seededCommand}
+      selectedModelId="m1"
+      uploading={false}
+    />
+  );
+  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" };
+  let view;
+  await act(async () => { view = create(element(seeded)); });
+  try {
+    const close = view.root.findByProps({ "aria-label": "移除指令" });
+    await act(async () => { (close.props.onClick as () => void)(); });
+    // The flags are gone and nothing was sent; the goal the dialog collected
+    // is still the draft, because it is the reader's sentence.
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+    assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "让压缩比更高");
+    assert.deepEqual(cleared, ["cleared"]);
+
+    // The shell dropping the seed takes the token with it — this is what a
+    // session switch does, and the composer survives that switch.
+    await act(async () => { view.update(element({ ...seeded, nonce: 2 })); });
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), true);
+    await act(async () => { view.update(element(undefined)); });
     assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
   } finally {
     await act(async () => { view.unmount(); });

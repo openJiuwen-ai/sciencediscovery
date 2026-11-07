@@ -96,6 +96,8 @@ export const EN: Text = {
     evolvePlaceholder: "Describe what you want to optimize and how it should be scored",
     send: "Send",
     stop: "Stop",
+    /** The ✕ on the design command token; the dialog only suggested it. */
+    clearCommand: "Remove command",
     modelSelect: "Choose a model",
     addCustomModel: "Add a custom model",
     pillLocked: "You can switch models when this run finishes",

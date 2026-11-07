@@ -127,6 +127,9 @@ interface Props {
   /** A design command a setup dialog placed here, drawn as a token before the
    *  input. Distinct from `seed`: the token is sent with the draft. */
   seededCommand?: SeededCommand;
+  /** Told when the reader drops that token. The seed is owned by the shell, so
+   *  the composer cannot clear it alone: the other mount would keep drawing it. */
+  onClearCommand?: () => void;
   selectedModelId?: string;
   /** The expert the open session is bound to, if any. */
   selectedSpecialistId?: string;
@@ -683,6 +686,7 @@ export function Composer({
   models,
   onApprovalMode,
   onClearAttachments,
+  onClearCommand,
   onCreateProject,
   onEvolve,
   onOpenSettings,
@@ -867,8 +871,17 @@ export function Composer({
   // A design's command lands here as a token, with the dialog's goal after it
   // and the caret at the end: the next keystroke continues the sentence, which
   // is the whole point of placing it in the input instead of sending it.
+  //
+  // A seed that is taken away takes the token with it. The shell drops it when
+  // the session changes, and this composer outlives that switch, so a token
+  // left behind would turn the next ordinary message into a search in a
+  // session that never asked for one. The sentence stays: it is the reader's,
+  // and the only thing the dialog contributed is the flags.
   useEffect(() => {
-    if (seededCommand === undefined) return;
+    if (seededCommand === undefined) {
+      setCommand(undefined);
+      return;
+    }
     setCommand(seededCommand.command);
     setText(seededCommand.text);
     const node = area.current;
@@ -888,6 +901,13 @@ export function Composer({
     onSend(text, command);
     setText("");
     setCommand(undefined);
+  };
+
+  /** Drop the dialog's flags and keep the sentence: the reader changed their
+   *  mind about the search, not about what they were going to say. */
+  const clearCommand = () => {
+    setCommand(undefined);
+    onClearCommand?.();
   };
 
   const chooseFiles = () => {
@@ -960,6 +980,14 @@ export function Composer({
         {command === undefined ? null : <span className="composer-command" ref={token} title={command}>
           <EvolveTreeGlyph size={13} />
           <span className="composer-command-text">{command}</span>
+          <button
+            aria-label={TEXT.composer.clearCommand}
+            className="composer-command-clear"
+            onClick={clearCommand}
+            type="button"
+          >
+            <CloseGlyph />
+          </button>
         </span>}
         <textarea
           disabled={running || jwBlocked !== undefined}
