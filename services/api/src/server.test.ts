@@ -7360,6 +7360,75 @@ test("WSP-003 rejects traversal upload paths and leaves the host untouched", asy
   await assert.rejects(stat(workspaceOutside), { code: "ENOENT" });
 });
 
+test("WSP-005 a reserved device name in a session file write answers 400 and names the file", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `wsp-write-reserved-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Reserved write name" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ modelId: model.id, title: "Reserved write name" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(session.response.status, 201);
+  const write = (path: string) => jsonRequest<ApiError>(
+    `${origin}/api/sessions/${session.body.id}/files`,
+    {
+      body: JSON.stringify({ content: "x", path }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "POST",
+    },
+  );
+
+  // Windows resolves these names in every directory and with any extension, so the
+  // write route must refuse them before touching the disk: `nul.txt` otherwise fails
+  // as a bare EPERM (500) and `CON` silently writes to the console device instead of
+  // creating a file. `CON .csv` covers the trailing space Windows ignores.
+  for (const path of ["CON", "nul.txt", "COM1.log", "CON .csv", "nul:stream", "con:$DATA", "COM¹.txt"]) {
+    const refused = await write(path);
+    assert.equal(refused.response.status, 400, `${path} must be refused as a bad request`);
+    assert.match(refused.body.error, /reserved device name/, `${path} must say why`);
+    assert.ok(refused.body.error.includes(path.trim()), `the message must name ${path}`);
+  }
+
+  // A device name in a directory segment is just as unusable: the route creates the
+  // parent directories, so on Windows `mkdir("…/CON")` fails (an unclassified 500, the
+  // failure this guard exists to remove) and on Linux it creates an unportable `CON/`
+  // directory. The check is per segment, not per basename; the last case is the control
+  // for a clean directory that already worked before the segment rule.
+  for (const [path, segment] of [
+    ["CON/notes.txt", "CON"],
+    ["CON\\notes.txt", "CON"],
+    ["nul.dir/x.csv", "nul.dir"],
+    ["notes/CON.txt", "CON.txt"],
+  ] as const) {
+    const refused = await write(path);
+    assert.equal(refused.response.status, 400, `${path} must be refused as a bad request`);
+    assert.match(refused.body.error, /reserved device name/, `${path} must say why`);
+    assert.ok(refused.body.error.includes(segment), `the message must name the segment ${segment}`);
+  }
+
+  // Nothing was written under a refused name.
+  const listed = await jsonRequest<WorkspaceFile[]>(
+    `${origin}/api/sessions/${session.body.id}/files`,
+    { headers: authorization },
+  );
+  assert.deepEqual(listed.body, []);
+
+  // Stems that merely begin with a reserved word, ports above 9, and a directory that is
+  // clean are ordinary paths; the walk must not start refusing legitimate nested names.
+  for (const path of ["conifer.csv", "console.log", "auxiliary.csv", "com10.csv", "conifer/notes.txt"]) {
+    const accepted = await write(path);
+    assert.equal(accepted.response.status, 201, `${path} must be writable`);
+  }
+});
+
 test("same-named uploads remain physically isolated and append one Project artifact version chain", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-iso-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

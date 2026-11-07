@@ -32,7 +32,7 @@ import { sessionTrajectory } from "../trajectory.js";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
 import { listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
 import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-settings.js";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
 type ResearchPackageInspectionCacheEntry = { projectId: string; bytes: Buffer; imported: ImportedResearchPackage; expiresAt: number };
@@ -103,7 +103,7 @@ import {
   type UpdateModelProviderRequest,
 } from "@sciencediscovery/schema";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
+import { isWindowsReservedDeviceName, resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
 import {
   handleGetCandidate as handleEvolveGetCandidate,
@@ -4143,9 +4143,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (filesMatch && request.method === "POST") {
         store.assertSessionWritable(filesMatch[1]!);
         const body = await readJson<UploadFileRequest>(request);
-        const target = resolveWorkspaceFile(store.workspacePath(filesMatch[1]!), body.path ?? "");
+        const workspaceRoot = store.workspacePath(filesMatch[1]!);
+        const target = resolveWorkspaceFile(workspaceRoot, body.path ?? "");
+        // Windows resolves a device name in every directory and with any extension, so this
+        // write would target the device (`CON`) or fail as a bare EPERM (`nul.txt`) instead
+        // of creating a file. The route creates the parent directories too, so every segment
+        // is checked, not only the last: `CON/notes.txt` would otherwise run `mkdir("…/CON")`,
+        // which fails on Windows and creates an unportable directory on Linux.
+        // Both separators are segment boundaries here: the rule is platform-independent,
+        // and on a POSIX host `CON\notes.txt` is one filename whose Windows reading is a
+        // path through the device, so splitting on the host separator alone let it pass.
+        const reserved = relative(workspaceRoot, target)
+          .split(/[\\/]+/)
+          .find((segment) => isWindowsReservedDeviceName(segment));
+        if (reserved) {
+          return sendError(response, 400, `"${reserved}" is a reserved device name on Windows; choose another name`);
+        }
         if (Buffer.byteLength(body.content ?? "") > 1_000_000) return sendError(response, 413, "File exceeds 1 MB");
-        await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(filesMatch[1]!), async () => {
+        await withWorkspaceMutation(new VersionStore(store.dataDir), workspaceRoot, async () => {
           await mkdir(dirname(target), { recursive: true });
           await writeFile(target, body.content ?? "", "utf8");
           await provenanceRecorder.registerWorkspaceArtifact({
@@ -4153,7 +4168,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             originMeta: { uploadedFilename: body.path },
             path: body.path,
             sessionId: filesMatch[1]!,
-            workspaceRoot: store.workspacePath(filesMatch[1]!),
+            workspaceRoot,
           });
         }, { kind: "user-file-write" });
         sendJson(response, 201, (await listWorkspaceFiles(store, filesMatch[1]!)).find((file) => file.path === body.path));
