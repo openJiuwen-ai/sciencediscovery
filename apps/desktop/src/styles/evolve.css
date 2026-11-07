@@ -1820,13 +1820,15 @@
   outline: none;
 }
 
-/* A checkpoint the conversation has moved past folds to its band: the state,
-   the question it asked and the step it was, as one scannable line. Opening it
-   shows what the step said, never the buttons — that answer is already in the
-   transcript. */
-.evolve-checkpoint.is-answered { margin: 8px 0; }
+/* A card the conversation has moved past, or a record written after the search
+   started, folds to its band: the state, the question it asked and the step it
+   was, as one scannable line. Opening it shows what the step said, never the
+   buttons — that answer is already in the transcript. The two states differ in
+   `is-answered` / `is-record` only for what a state-specific rule may tint; the
+   folded shape is one set of rules keyed on `is-folded`. */
+.evolve-checkpoint.is-folded { margin: 8px 0; }
 
-.evolve-checkpoint.is-answered > summary {
+.evolve-checkpoint.is-folded > summary {
   list-style: none;
   cursor: pointer;
   /* A folded card has no body under it: its one line is centred in the band,
@@ -1835,9 +1837,9 @@
   padding: 0 24px;
 }
 
-.evolve-checkpoint.is-answered > summary::-webkit-details-marker { display: none; }
+.evolve-checkpoint.is-folded > summary::-webkit-details-marker { display: none; }
 
-.evolve-checkpoint.is-answered .evolve-checkpoint-title {
+.evolve-checkpoint.is-folded .evolve-checkpoint-title {
   /* On the band it is one line of the header, not the body's lead-in: the
      body rule's bottom margin would lift it out of the row's centre. */
   margin: 0;
@@ -1852,13 +1854,13 @@
   white-space: nowrap;
 }
 
-.evolve-checkpoint.is-answered .collapse-chev {
+.evolve-checkpoint.is-folded .collapse-chev {
   flex: none;
   color: var(--text-faint);
   font-size: 14px;
   transition: transform .15s ease;
 }
 
-.evolve-checkpoint.is-answered[open] > summary .collapse-chev { transform: rotate(90deg); }
+.evolve-checkpoint.is-folded[open] > summary .collapse-chev { transform: rotate(90deg); }
 
-.evolve-checkpoint.is-answered > .evolve-checkpoint-body { padding: 16px 24px; }
+.evolve-checkpoint.is-folded > .evolve-checkpoint-body { padding: 16px 24px; }
