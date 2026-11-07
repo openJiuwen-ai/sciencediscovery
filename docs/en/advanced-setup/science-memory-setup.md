@@ -16,7 +16,14 @@ Run `ScienceDiscovery serve` as usual. Memory data is stored in `<data-dir>/memo
 
 ## 0. Zero setup: the local file store
 
-ScienceMemory needs no external service. By default (System configuration → Memory → Storage backend = Local files) the graph is kept by the memory-graph sidecar itself and persisted as plain text under `~/.science-agent/memory-graph/` (override with `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR`):
+ScienceMemory needs no external service. By default (System configuration → Memory → Storage backend = Local files) the graph is kept by the memory-graph sidecar itself and persisted as plain text under:
+
+- `<data-dir>/memory-graph/` when the stack is started by `scripts/start-stack.mjs` (the desktop host process) or by the single-file launcher (`ScienceDiscovery serve`), where `<data-dir>` is `SCIENCE_AGENT_DATA_DIR` (by default `.sciencediscovery-data/`);
+- `~/.science-agent/memory-graph/` when the sidecar runs under `scripts/start-stack.sh` (the source and Docker entry point) or is launched directly — that is the service's own default.
+
+`SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` overrides either default verbatim, and no graph is moved automatically: an installation whose graph is still at `~/.science-agent/memory-graph/` opens an empty store once it is started through an entry point that passes `<data-dir>/memory-graph`. To keep the old graph, point `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` at it (or move the directory) before the first start.
+
+The store holds:
 
 - `nodes.jsonl`: one JSON line per node (`id`, `labels`, `props`); a deleted node is a `{"id": ..., "deleted": true}` line.
 - `edges.jsonl`: one JSON line per relationship (`id`, `type`, `src`, `dst`, `props`).
