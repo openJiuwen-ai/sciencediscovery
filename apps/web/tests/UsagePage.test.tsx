@@ -411,6 +411,31 @@ test("USG-012 usage page renders model drilldown, chart and inline/table usage",
   assert.match(dateFilteredPage, /Model B/);
   assert.match(dateFilteredPage, /Beta/);
   assert.doesNotMatch(dateFilteredPage, /Session A/);
+  // The header counts the same date-scoped collection as the tokens beside it
+  // and the model list below it: only model-b has usage on 2026-08-04.
+  assert.match(dateFilteredPage, /30 tokens across 1 model/);
+  assert.doesNotMatch(dateFilteredPage, /across 2 models/);
+  // Unfiltered, both models still appear in that sentence.
+  assert.match(page, /85 tokens across 2 models/);
+
+  // A range that excludes every invocation has no model count to announce: the
+  // header must agree with the "no usage in this view" body, not pair a
+  // zero-token total with every model ever seen.
+  const emptyRangePage = renderToStaticMarkup(React.createElement(UsagePage, {
+    analytics: {
+      ...analytics,
+      dailyByModel: [],
+      filters: { from: "2026-09-01", to: "2026-09-02" },
+      overview: { cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCosts: [], inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    },
+    filters: { from: "2026-09-01", to: "2026-09-02" },
+    onExport: () => undefined,
+    onFiltersChange: () => undefined,
+    onOpenSession: () => undefined,
+    summary,
+  }));
+  assert.doesNotMatch(emptyRangePage, /0 tokens across/);
+  assert.match(emptyRangePage, /No usage in the selected range/);
   const filteredSummary = filterGlobalUsageSummary(summary, { from: "2026-08-04", to: "2026-08-04" }, "UTC");
   assert.equal(filteredSummary.totals.totalTokens, 30);
   assert.equal(filteredSummary.byModel[0]?.projects[0]?.sessions[0]?.sessionTitle, "Session B");
