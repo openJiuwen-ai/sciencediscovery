@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, type Page } from '@playwright/test';
 import { requireRealEnv, requireRealStack, test } from './helpers/e2e.ts';
+import { writeCaseMetrics } from './helpers/case-measurements.ts';
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal } from './helpers/journeys.ts';
 import { drbApi } from './helpers/deepresearchbench.ts';
 import { collectFinalDelivery } from './helpers/real-delivery.ts';
@@ -202,6 +203,7 @@ for (const [id,title] of scenarios) {
           await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`, {
             headers: authorizationHeader(), data: {},
           }).catch(() => undefined);
+          await writeCaseMetrics(page.request, info, fixture.session.id);
           await cleanupJourney(page, fixture);
         }
       } finally {
