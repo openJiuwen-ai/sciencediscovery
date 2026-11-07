@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ApiClient } from "../api/client.js";
 import { listSkills, listSpecialists } from "../api/settings.js";
@@ -30,6 +30,7 @@ import type { LandingCategory, LandingSeed } from "../app/landing.js";
 import { skillChoices, skillDraft, skillMark, slashQuery } from "../app/slash.js";
 import { TEXT } from "../text.js";
 import { AttachmentTray } from "./AttachmentTray.js";
+import { EvolveGlyph, EvolveTreeGlyph } from "./evolve/glyphs.js";
 import { filterExperts } from "./expert-catalog.js";
 import { modelBrand } from "./model-brand.js";
 import { modelLabel, providerName } from "./provider-name.js";
@@ -40,6 +41,23 @@ export interface ComposerTag {
   kind: LandingCategory;
   label: string;
   onClear: () => void;
+}
+
+/** A command a setup dialog placed in the input.
+ *
+ *  The flags are not prose: a user who edits `/evolve-design --algorithm
+ *  puct` by hand can break the one word the agent reads. So the dialog's
+ *  output is drawn as a token at the start of the input, and the sentence it
+ *  collected becomes the first draft after it. Both leave together, joined at
+ *  submit time — until then the token is part of the input, not a message. */
+export interface SeededCommand {
+  /** The flags, exactly as they will be sent. */
+  command: string;
+  /** Bumped on every seed, so choosing the same design twice still lands. */
+  nonce: number;
+  /** What the dialog collected, written after the token for the user to
+   *  finish or replace. */
+  text: string;
 }
 
 interface Props {
@@ -68,6 +86,10 @@ interface Props {
   onApprovalMode: (mode: ApprovalMode) => void;
   /** 新建项目 from the landing strip: a Project needs nothing but a name. */
   onCreateProject: (name: string) => void;
+  /** Opens the session's searches, or starts a new experiment when it has
+   *  none. It is a row in 会话设置 rather than a control of its own: the
+   *  header no longer carries a second entry point. */
+  onEvolve?: () => void;
   onOpenSettings: () => void;
   /** A skill whose choice has more to it than its command: the pick is handed
    *  here, and `true` means the surface it opened has taken the draft, so no
@@ -84,7 +106,10 @@ interface Props {
   onRemoveAttachment: (id: string) => void;
   /** Upload a failed attachment again. */
   onRetryAttachment: (id: string) => void;
-  onSend: (content: string) => void;
+  /** `command` is the seeded token when the draft started from a setup
+   *  dialog; the two are one message, but only the caller knows how to join
+   *  them. */
+  onSend: (content: string, command?: string) => void;
   onStop: () => void;
   onUpload: (files: File[]) => void;
   /** Shown in the landing strip, beside the folder. Absent when the next
@@ -99,6 +124,12 @@ interface Props {
   running: boolean;
   /** A starter prompt chosen on the welcome page, to be placed in the input. */
   seed?: LandingSeed;
+  /** A design command a setup dialog placed here, drawn as a token before the
+   *  input. Distinct from `seed`: the token is sent with the draft. */
+  seededCommand?: SeededCommand;
+  /** Told when the reader drops that token. The seed is owned by the shell, so
+   *  the composer cannot clear it alone: the other mount would keep drawing it. */
+  onClearCommand?: () => void;
   selectedModelId?: string;
   /** The expert the open session is bound to, if any. */
   selectedSpecialistId?: string;
@@ -281,6 +312,7 @@ export function SessionSettingsMenu({
   expertsLoading,
   onApprovalMode,
   onClose,
+  onEvolve,
   onSelectSpecialist,
   running,
   selectedSpecialistId,
@@ -293,6 +325,9 @@ export function SessionSettingsMenu({
   expertsLoading?: boolean;
   onApprovalMode: (mode: ApprovalMode) => void;
   onClose: () => void;
+  /** Opens the evolve surface. Absent in a static render, where the entry has
+   *  nowhere to go. */
+  onEvolve?: () => void;
   onSelectSpecialist?: (specialistId?: string) => void;
   running: boolean;
   selectedSpecialistId?: string;
@@ -306,6 +341,27 @@ export function SessionSettingsMenu({
     <div className="composer-dropdown is-settings" onPointerDown={(event) => event.stopPropagation()}>
       <div className="session-menu">
         <div className="session-menu-panel">
+          {/* An action rather than a setting: it opens a surface instead of
+              showing a value, so it carries no value capsule or chevron. It
+              sits first, the way the handoff orders this menu. */}
+          {onEvolve === undefined ? null : (
+            <>
+              <button
+                className="session-menu-row"
+                onClick={() => {
+                  onClose();
+                  onEvolve();
+                }}
+                type="button"
+              >
+                <span className="session-menu-icon">
+                  <EvolveGlyph size={18} />
+                </span>
+                <span className="session-menu-label">{TEXT.composer.evolveExperiment}</span>
+              </button>
+              <div className="session-menu-divider" />
+            </>
+          )}
           <button
             aria-expanded={panel === "permission"}
             aria-haspopup="true"
@@ -398,6 +454,22 @@ function expertTone(id: string): string {
   let hash = 0;
   for (const character of id) hash = (hash * 31 + (character.codePointAt(0) ?? 0)) % 997;
   return EXPERT_TONES[hash % EXPERT_TONES.length] ?? "is-blue";
+}
+
+/**
+ * Put focus and the caret at the end of a draft that was just filled in — on
+ * the next frame, after React has painted the new text into the field — and
+ * return the cancel an effect hands back. Both a starter prompt and a design's
+ * command land in the input rather than sending immediately, so the reader is
+ * meant to keep typing after them.
+ */
+function focusAtEnd(node: HTMLTextAreaElement): () => void {
+  const frame = window.requestAnimationFrame(() => {
+    node.focus();
+    const end = node.value.length;
+    node.setSelectionRange(end, end);
+  });
+  return () => window.cancelAnimationFrame(frame);
 }
 
 
@@ -614,7 +686,9 @@ export function Composer({
   models,
   onApprovalMode,
   onClearAttachments,
+  onClearCommand,
   onCreateProject,
+  onEvolve,
   onOpenSettings,
   onPickSkill,
   onRemoveAttachment,
@@ -630,15 +704,26 @@ export function Composer({
   providers = [],
   running,
   seed,
+  seededCommand,
   selectedModelId,
   selectedSpecialistId,
   tag,
   uploading,
 }: Props) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(seededCommand?.text ?? "");
+  /** The dialog's flags, kept apart from the sentence so the token cannot be
+   *  edited into something the agent no longer understands. Seeded in the
+   *  initial state as well as in the effect below, so a composer mounted with
+   *  a token already in hand draws it on the first frame. */
+  const [command, setCommand] = useState<string | undefined>(seededCommand?.command);
   const [menu, setMenu] = useState<Menu>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  /** The input row and the command token inside it, measured together: the
+   *  token sits on the first line only and the field is indented by its width,
+   *  so both numbers have to come from the actual layout. */
+  const row = useRef<HTMLDivElement>(null);
+  const token = useRef<HTMLSpanElement>(null);
 
   /** 专家's catalog. Read once per client, not per menu opening: the row's
    *  value is the bound expert's name, and reopening the menu must not show 无
@@ -729,7 +814,48 @@ export function Composer({
     if (!node) return;
     node.style.height = "auto";
     node.style.height = `${node.scrollHeight}px`;
+    // Growing or shrinking the field resets its scroll, and the token rides on
+    // that scroll (see the layout effect below).
+    row.current?.style.setProperty("--composer-command-shift", `${-node.scrollTop}px`);
   }, [text]);
+
+  // The command token is drawn out of flow at the start of the first line, and
+  // the field's first line is indented past it. As a flex sibling the token
+  // would push the whole paragraph right, leaving a blank gutter under it on
+  // every wrapped line. Both numbers are measured rather than fixed: the
+  // token's width depends on the language, the loaded font, and whether a
+  // category chip sits in front of it.
+  useLayoutEffect(() => {
+    const box = row.current;
+    if (box === null) return;
+    let live = true;
+    const measure = () => {
+      const pill = token.current;
+      const field = area.current;
+      if (!live || pill === null || field === null) {
+        box.style.removeProperty("--composer-command-left");
+        box.style.removeProperty("--composer-command-indent");
+        return;
+      }
+      // The token starts where the field's text starts: with the token out of
+      // flow, the field is the first thing in the row (after any category
+      // chip, which is why this is measured and not a constant).
+      const left = field.getBoundingClientRect().left - box.getBoundingClientRect().left;
+      box.style.setProperty("--composer-command-left", `${left}px`);
+      box.style.setProperty("--composer-command-indent", `${pill.getBoundingClientRect().width + 8}px`);
+    };
+    measure();
+    // A font finishing its load changes the token's width without a render.
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measure);
+    if (observer !== undefined && token.current !== null) observer.observe(token.current);
+    void document.fonts?.ready.then(measure).catch(() => undefined);
+    window.addEventListener("resize", measure);
+    return () => {
+      live = false;
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [command, tag]);
 
   // A starter prompt from the welcome page replaces whatever the input holds:
   // it is a deliberate choice, not text inserted at the caret. The cursor goes
@@ -739,13 +865,29 @@ export function Composer({
     setText(seed.text);
     const node = area.current;
     if (!node) return;
-    const frame = window.requestAnimationFrame(() => {
-      node.focus();
-      const end = node.value.length;
-      node.setSelectionRange(end, end);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    return focusAtEnd(node);
   }, [seed]);
+
+  // A design's command lands here as a token, with the dialog's goal after it
+  // and the caret at the end: the next keystroke continues the sentence, which
+  // is the whole point of placing it in the input instead of sending it.
+  //
+  // A seed that is taken away takes the token with it. The shell drops it when
+  // the session changes, and this composer outlives that switch, so a token
+  // left behind would turn the next ordinary message into a search in a
+  // session that never asked for one. The sentence stays: it is the reader's,
+  // and the only thing the dialog contributed is the flags.
+  useEffect(() => {
+    if (seededCommand === undefined) {
+      setCommand(undefined);
+      return;
+    }
+    setCommand(seededCommand.command);
+    setText(seededCommand.text);
+    const node = area.current;
+    if (!node) return;
+    return focusAtEnd(node);
+  }, [seededCommand]);
 
   useEffect(() => {
     if (!menu) return;
@@ -756,8 +898,16 @@ export function Composer({
 
   const submit = () => {
     if (!canSend) return;
-    onSend(text);
+    onSend(text, command);
     setText("");
+    setCommand(undefined);
+  };
+
+  /** Drop the dialog's flags and keep the sentence: the reader changed their
+   *  mind about the search, not about what they were going to say. */
+  const clearCommand = () => {
+    setCommand(undefined);
+    onClearCommand?.();
   };
 
   const chooseFiles = () => {
@@ -809,7 +959,7 @@ export function Composer({
           onRetry={onRetryAttachment}
         />
       ) : null}
-      <div className="composer-input">
+      <div className="composer-input" ref={row}>
         {tag ? (
           <span className="composer-tag">
             <span aria-hidden="true" className="composer-tag-icon" data-kind={tag.kind} />
@@ -824,6 +974,21 @@ export function Composer({
             </button>
           </span>
         ) : null}
+        {/* The design's flags, before the sentence they belong to: one token,
+            in the accent colour, so it reads as something the app placed here
+            rather than text the user has to keep intact. */}
+        {command === undefined ? null : <span className="composer-command" ref={token} title={command}>
+          <EvolveTreeGlyph size={13} />
+          <span className="composer-command-text">{command}</span>
+          <button
+            aria-label={TEXT.composer.clearCommand}
+            className="composer-command-clear"
+            onClick={clearCommand}
+            type="button"
+          >
+            <CloseGlyph />
+          </button>
+        </span>}
         <textarea
           disabled={running || jwBlocked !== undefined}
           id="composer-textarea"
@@ -860,7 +1025,17 @@ export function Composer({
               submit();
             }
           }}
-          placeholder={jwBlocked ?? (landing ? TEXT.landing.placeholder : TEXT.composer.placeholder)}
+          onScroll={(event) => {
+            // The token is out of flow, so it does not scroll with the text on
+            // its own; past the max-height it would sit over the lines that
+            // scrolled under it. It moves by the field's own offset instead.
+            row.current?.style.setProperty(
+              "--composer-command-shift",
+              `${-event.currentTarget.scrollTop}px`,
+            );
+          }}
+          placeholder={jwBlocked ?? (command !== undefined ? TEXT.composer.evolvePlaceholder
+            : landing ? TEXT.landing.placeholder : TEXT.composer.placeholder)}
           ref={area}
           rows={1}
           value={text}
@@ -899,6 +1074,7 @@ export function Composer({
               expertsLoading={expertsLoading}
               onApprovalMode={onApprovalMode}
               onClose={() => setMenu(undefined)}
+              onEvolve={onEvolve}
               onSelectSpecialist={onSelectSpecialist}
               running={running}
               selectedSpecialistId={selectedSpecialistId}

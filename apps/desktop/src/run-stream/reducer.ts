@@ -238,9 +238,9 @@ export function reduceRunStream(
       return { ...advanced, droppedEvents: advanced.droppedEvents + event.droppedEvents };
 
     case "evolve_run.created":
-      // The transcript draws nothing here, but the shelf outside it does, and
-      // the list is not polled until something is running. Counting the event
-      // is what lets the app re-read the list at the moment a search appears.
+      // The transcript draws nothing here, but the run cards at its foot do,
+      // and the list is not polled until something is running. Counting the
+      // event is what lets the app re-read the list when a search appears.
       return { ...advanced, evolveRunsCreated: advanced.evolveRunsCreated + 1 };
 
     default:

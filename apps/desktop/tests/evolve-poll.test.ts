@@ -19,7 +19,7 @@
  * idle session from costing a request every three seconds. The catch is that
  * the poll has to re-arm itself: a rejection changes none of the effect's
  * dependencies, so a branch that returns without scheduling is a branch that
- * ends the poll — and a shelf frozen on "running" is indistinguishable from a
+ * ends the poll — and a card frozen on "running" is indistinguishable from a
  * search that is still expanding.
  */
 
@@ -132,7 +132,7 @@ test("a live search keeps polling through a failed read", async () => {
     // good read set is kept rather than dropped.
     assert.equal(timers.armed(), 1);
     assert.match(latest?.error ?? "", /proxy hiccup/);
-    // And the shelf still shows what the last good read said.
+    // And the cards still show what the last good read said.
     assert.equal(latest?.runs[0]?.status, "running");
 
     await timers.fire();
@@ -179,7 +179,7 @@ test("a failed read on an idle session does not start polling it", async () => {
 test("a session switch does not inherit the previous session's poll", async () => {
   // Session A has a live search; the user switches to B, whose first read
   // fails. The cadence belonged to A's list, so B is not polled — and the
-  // shelf does not keep showing A's running run under B's header.
+  // cards do not keep showing A's running run under B's answer.
   const timers = clock();
   try {
     const api = client([
