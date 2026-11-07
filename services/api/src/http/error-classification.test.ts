@@ -29,9 +29,19 @@ test("keeps known validation failures at 400 without hiding internal faults", ()
     "Model is referenced by runtime settings and cannot be deleted",
     "Unsafe skill package path: ../escape.txt",
     "Upload filename must be a plain basename without path separators or traversal",
+    // A caller-supplied string over its length limit is client input, not a fault.
+    "The LLM API token is too long",
+    "The proxy URL is too long",
+    "neo4jHttp is too long",
+    "neo4jUser is too long",
+    "The Neo4j password is too long",
+    "Model ID is too long",
+    "The stored runnerToken is too long",
   ]) {
     assert.equal(isKnownClientInputError(new Error(message)), true, message);
   }
   assert.equal(isKnownClientInputError(new SyntaxError("Malformed JSON")), true);
   assert.equal(isKnownClientInputError(new Error("Database invariant failed")), false);
+  // Mentioning a length alone is not a validation shape: a real fault stays a fault.
+  assert.equal(isKnownClientInputError(new Error("Chunk length 16384 exceeds the internal buffer budget")), false);
 });
