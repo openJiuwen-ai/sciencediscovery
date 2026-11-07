@@ -95,10 +95,23 @@ function success(): McpInvokeResponse {
     durationMs: 1, isError: false, requestId: "success", serverId: "biomed", toolName: "search" };
 }
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
-async function waitFor(predicate: () => boolean) {
-  for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 1)); }
+const FAULT_OBSERVATION_DEADLINE_MS = 10_000;
+async function waitFor(predicate: () => boolean, timeoutMs = FAULT_OBSERVATION_DEADLINE_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 1)); }
   assert.fail("Timed out waiting for local fault injection");
 }
+
+test("the fault wait tolerates a loaded runner instead of a 200 ms budget", async () => {
+  // CI runs sixteen UT workers with coverage instrumentation, so the injected fault
+  // can land hundreds of milliseconds late. A fixed wall-clock budget turns that
+  // into a red gate on an unrelated pull request; a deadline does not.
+  let observed = false;
+  const timer = setTimeout(() => { observed = true; }, 500);
+  try { await waitFor(() => observed); } finally { clearTimeout(timer); }
+  // A genuinely missing fault still fails fast rather than hanging the layer.
+  await assert.rejects(() => waitFor(() => false, 50), /Timed out waiting for local fault injection/);
+});
 
 test("parallel 429 callers share cooldown, drain their queue and do not retry inside one slot", async t => {
   const f = await fixture(t);
