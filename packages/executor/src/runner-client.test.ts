@@ -16,6 +16,7 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import { executionDigestVectors } from "../../../test/support/execution-digest-vectors.js";
 import { RunnerClient } from "./runner-client.js";
@@ -41,7 +42,7 @@ test("RunnerClient resolves environment proxy for each setup and install operati
 });
 
 test("RunnerClient retains an HTTP failure status but never copies the remote error text", async (context) => {
-const server = createServer((_request, response) => {
+  const server = createServer((_request, response) => {
     response.writeHead(503, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: "SENTINEL_SECRET_XYZ temporarily unavailable" }));
   });

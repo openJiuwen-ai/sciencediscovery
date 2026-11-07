@@ -125,6 +125,10 @@ test("environment operations apply scoped proxy policy without changing process 
   assert.ok(executions.length > 0);
   assert.ok(executions.every(item => item.environment?.HTTPS_PROXY === "http://proxy.example.test:8080"));
   assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("localhost")));
+  // Consumers match NO_PROXY against a bare hostname, so the bracket form the URL
+  // uses would never match and IPv6 loopback traffic would keep using the proxy.
+  assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("::1") && !item.environment?.NO_PROXY?.includes("[::1]")));
+  assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("internal.test")));
   executions.length = 0;
   await store.withNetworkProxy({ mode: "direct" }, () => store.createTask("direct-task", "python"));
   assert.ok(executions.length > 0);
