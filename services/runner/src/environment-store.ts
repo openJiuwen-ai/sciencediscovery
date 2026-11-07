@@ -39,7 +39,7 @@ import micromambaManifest from "./micromamba-releases.json" with { type: "json" 
 import { EnvironmentAccess } from "./environment-access.js";
 // [windows-desktop] win-64 binary name (.exe), conda interpreter layout
 // and rename retry live in the platform adaptation layer ().
-import { environmentInterpreterPath, micromambaBinaryName, packageInstallGuidance, renameReplace, starterPackages } from "./platform/index.js";
+import { environmentInterpreterPath, environmentShellPath, environmentShellUtilityPath, micromambaBinaryName, packageInstallGuidance, renameReplace, starterPackages } from "./platform/index.js";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_VERSION = 1;
@@ -55,6 +55,7 @@ const MANAGED_PROVISIONER_TIMEOUT_MS = 120_000;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
 );
+const MANAGED_SHELL_UTILITIES = ["cat", "grep", "head", "sed", "tail", "wc"] as const;
 // [windows-desktop] starter specs are platform-dispatched (win32 uses
 // matplotlib-base, see platform/win32.ts ). POSIX list unchanged.
 
@@ -439,6 +440,31 @@ export class EnvironmentStore {
     };
   }
 
+  async shellCapability(): Promise<{ available: boolean; name: "bash"; utilities: string[]; unavailableReason?: string }> {
+    if (!this.capability.available) {
+      return { available: false, name: "bash", utilities: [],
+        unavailableReason: this.capability.unavailableReason ?? "The managed shell environment is unavailable" };
+    }
+    const runtime = this.resolveRuntime(undefined, "python");
+    try {
+      await access(environmentShellPath(runtime.prefixPath), constants.X_OK);
+      const utilities: string[] = [];
+      for (const utility of MANAGED_SHELL_UTILITIES) {
+        if (await access(environmentShellUtilityPath(runtime.prefixPath, utility), constants.X_OK).then(() => true, () => false)) {
+          utilities.push(utility);
+        }
+      }
+      const missing = MANAGED_SHELL_UTILITIES.filter((utility) => !utilities.includes(utility));
+      return missing.length
+        ? { available: false, name: "bash", utilities,
+            unavailableReason: `Managed Bash is missing required utilities: ${missing.join(", ")}` }
+        : { available: true, name: "bash", utilities };
+    } catch (error) {
+      return { available: false, name: "bash", utilities: [],
+        unavailableReason: `Managed Bash is unavailable: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
   async initialize(): Promise<void> {
     await mkdir(this.config.root, { recursive: true });
     await mkdir(this.revisionsRoot, { recursive: true });
@@ -455,6 +481,7 @@ export class EnvironmentStore {
         this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
         component = "conda";
         this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base", { started: true });
+        await this.upgradeStarterPackages("python");
         await this.validateStarter("python");
         this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
         this.updateSetup("ready", "complete", "Python base environment is ready", { completed: true });
@@ -511,13 +538,15 @@ export class EnvironmentStore {
       this.updateSetupComponent("micromamba", "ready", "complete", "micromamba is ready", { completed: true });
       component = "conda";
       if (this.config.packageCacheDir) await access(this.config.packageCacheDir);
-      if (!this.catalog.environments.some((environment) => environment.id === "starter-python")) {
+      const pythonStarterExisted = this.catalog.environments.some((environment) => environment.id === "starter-python");
+      if (!pythonStarterExisted) {
         this.updateSetup("installing", "creating-python-base", "Creating the managed Python base environment");
         this.updateSetupComponent("conda", "installing", "creating-python-base", "Creating the managed Python base environment", { started: true });
         await this.bootstrapStarter("python");
       }
       this.updateSetup("installing", "verifying-python-base", "Verifying the managed Python base environment");
       this.updateSetupComponent("conda", "installing", "verifying-python-base", "Verifying the managed Python base environment", { started: true });
+      if (pythonStarterExisted) await this.upgradeStarterPackages("python");
       await this.validateStarter("python");
       this.initialized = true;
       this.updateSetupComponent("conda", "ready", "complete", "Conda environments are ready", { completed: true });
@@ -1111,6 +1140,45 @@ export class EnvironmentStore {
     const runtime = this.resolveRuntimeUnchecked(undefined, language);
     await access(runtime.interpreterPath, constants.X_OK);
     await this.snapshotBytes(runtime.revision.id);
+  }
+
+  /** Bring a persisted starter forward when the product's required package
+   * contract grows. The prefix is updated in place, while the new inventory is
+   * recorded as a distinct audit revision just like an ordinary task update. */
+  private async upgradeStarterPackages(language: ScientificLanguage): Promise<void> {
+    const environment = this.requiredEnvironment(`starter-${language}`);
+    const previousRevision = this.currentRevision(environment.id);
+    const installedNames = new Set(previousRevision.packages
+      .filter((value) => !value.includes(":"))
+      .map((value) => value.split(/[<>=!~]/, 1)[0]!.toLowerCase()));
+    const missing = starterPackages(language).filter((specification) => {
+      const name = specification.split(/[<>=!~]/, 1)[0]!.toLowerCase();
+      return !installedNames.has(name);
+    });
+    if (!missing.length) return;
+
+    const revisionId = `rev-${randomUUID()}`;
+    const prefix = this.revisionPath(environment.id, environment.runtimeRevisionId ?? previousRevision.id);
+    await this.beginUpdate(environment);
+    try {
+      await this.runProvisioner([
+        "install", "--yes", ...this.offlineArguments(), "--strict-channel-priority", "--override-channels", "--prefix", prefix,
+        ...this.config.allowedChannels.flatMap((channel) => ["--channel", channel]),
+        ...missing,
+      ], `upgrade-${environment.id}-${revisionId}`);
+      const revision = await this.recordRevision(
+        environment.id, revisionId, language, prefix, this.config.allowedChannels,
+        missing.map((specification) => `runner:starter-upgrade:${specification}`),
+      );
+      environment.currentRevisionId = revision.id;
+      environment.status = "ready";
+      delete environment.error;
+      environment.updatedAt = new Date().toISOString();
+      await this.saveCatalog();
+    } catch (error) {
+      await this.failUpdate(environment, previousRevision.id);
+      throw withPackageInstallGuidance(error);
+    }
   }
 
   private updateSetup(

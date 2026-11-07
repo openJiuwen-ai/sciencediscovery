@@ -14,6 +14,8 @@ import type { ExecutionLogPage, ExecutionOwner, ManagedExecution, ShellExecution
 export type ExecutionLogSink = (stream: "stdout" | "stderr", chunk: Buffer) => void;
 /** Resolving or rejecting must join every launched child, including cancellation. */
 type Operation = (signal: AbortSignal, log: ExecutionLogSink, expectedEnvironmentRevisionId?: string) => Promise<ShellExecutionResult>;
+/** Rejecting here records a deterministic pre-admission failure; no process is launched. */
+type Preflight = (signal: AbortSignal) => Promise<void>;
 const terminal = (state: ManagedExecution["state"]) => state !== "queued" && state !== "running";
 
 export class ExecutionManagerError extends Error {
@@ -178,7 +180,7 @@ export class ExecutionManager {
     return this.submit(request, operation).execution;
   }
 
-  submit(request: ShellExecutionRequest, operation: Operation): { execution: ManagedExecution; accepted: boolean } {
+  submit(request: ShellExecutionRequest, operation: Operation, preflight?: Preflight): { execution: ManagedExecution; accepted: boolean } {
     if (this.closing) throw new ExecutionManagerError("RUNNER_SHUTTING_DOWN", "Runner is shutting down", 503);
     if (!this.storageHealthy) throw new ExecutionManagerError("EXECUTION_LEDGER_UNAVAILABLE", "Execution ledger cannot be trusted; new submissions are disabled", 503);
     if (!/^[A-Za-z0-9_:.-]{1,160}$/.test(request.executionId)) throw new Error("Invalid Execution ID");
@@ -219,7 +221,26 @@ export class ExecutionManager {
     const controller = new AbortController();
     this.controllers.set(execution.id, controller);
     const previous = this.queues.get(key) ?? Promise.resolve();
-    const work = previous.then(() => withWorkspaceAdmission(this.versions, key, () => withWorkspaceLease(key, async () => {
+    const work = previous.then(async () => {
+      if (preflight) {
+        try {
+          await preflight(controller.signal);
+        } catch (error) {
+          // A preflight rejection dispatched nothing, so it is a deterministic
+          // pre-admission failure, not an unverified outcome. It carries
+          // `not_started` evidence and no result or workspace version, and it
+          // leaves the queue usable for later work.
+          execution.state = controller.signal.aborted ? "cancelled" : "failed";
+          execution.error = controller.signal.aborted ? "Execution cancelled before start"
+            : error instanceof Error ? error.message : "Execution rejected before start";
+          execution.evidence = { ...this.identity, revision: execution.receipt!.revision,
+            processTerminated: true, terminationReason: "not_started" };
+          execution.finishedAt = new Date().toISOString();
+          this.save(execution);
+          return;
+        }
+      }
+      return withWorkspaceAdmission(this.versions, key, () => withWorkspaceLease(key, async () => {
       if (!request.explicitHandoff) await ensureWorkspaceBaseline(this.versions, key);
       let changed = false;
       let cursor = 0;
@@ -326,7 +347,8 @@ export class ExecutionManager {
       }
       execution.finishedAt = new Date().toISOString();
       this.save(execution); // before releasing this Workspace queue
-    }, controller.signal), controller.signal)).then(() => {
+    }, controller.signal), controller.signal);
+    }).then(() => {
       // Keep the journal until the Workspace lease (including its active marker)
       // was released. A crash after index commit can still retain a write fence.
       if (execution.version) this.clearPublication(execution.id);

@@ -596,5 +596,19 @@ export class ArtifactsApiClient extends RunsApiClient {
     return await response.blob();
   }
 
+  async readFilePreview(sessionId: string, path: string, signal?: AbortSignal): Promise<{ blob: Blob; size: number; truncated: boolean }> {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/file?path=${encodeURIComponent(path)}&preview=true`,
+      { headers: { authorization: `Bearer ${this.token}` }, signal },
+    );
+    if (!response.ok) {
+      this.reportAuthStatus(response.status);
+      throw new ApiRequestError(translateActive("error.loadFile", { path }), response.status);
+    }
+    const blob = await response.blob();
+    const size = Number(response.headers.get("x-workspace-file-size") ?? blob.size);
+    return { blob, size, truncated: response.headers.get("x-workspace-preview-truncated") === "true" };
+  }
+
   /** Stop the run currently streaming for this Session; 409 when nothing is running. */
 }

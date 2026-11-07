@@ -30,7 +30,7 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "settings.inherit" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "reviewer.enable" | "plugin.json_viewer" | "environment.sources" | "runner.assign";
+export type ConfigurationCapabilityId = "web.credential" | "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure" | "timeouts.configure" | "quotas.configure" | "idea_tree.configure" | "web.configure" | "environment.sources" | "runner.assign" | "settings.inherit" | "reviewer.enable" | "plugin.json_viewer";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
 export type ConfigurationValue = ConfigurationScalar | string[];
@@ -85,6 +85,8 @@ export interface ConfigurationRequestView {
   runId?: string;
   revision: number;
   stateVersion: number;
+  /** Server-owned opaque credential target identity; never a secret. */
+  credentialTargetDigest?: string;
   capabilityId: ConfigurationCapabilityId;
   adapterVersion: number;
   schemaVersion: number;

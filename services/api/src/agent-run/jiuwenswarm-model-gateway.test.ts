@@ -137,6 +137,90 @@ const post = (g: { url: string; token: string }, body: unknown, token = g.token)
 const events = async (response: Response) => (await response.text()).split("\n\n").filter((part) => part.startsWith("data: ") && !part.includes("[DONE]"))
   .map((part) => JSON.parse(part.slice(6)));
 
+test("gateway accepts Swarm's tool-less modality probe controls without changing the configured model", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, {
+      enable_thinking: true,
+      messages: [{ role: "user", content: "capability probe" }],
+      reasoning: false,
+      stream: false,
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]?.endpoint, ENDPOINT, "the configured endpoint controls thinking for real turns");
+  } finally { await g.close(); }
+});
+
+test("gateway rejects the image probe with the code openjiuwen classifies as no image input", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  try {
+    // The exact body openjiuwen's image-modality probe sends: one image part
+    // next to the text question, plus the reasoning-off switches from
+    // `_THINKING_DISABLED_EXTRA_BODY` — including `reasoning` as an *object*,
+    // which the capability-control checks reject. The image check keeps its
+    // position above those checks (and below the request-shape ones), so a real
+    // probe is still classified as a capability verdict rather than as the
+    // validation error that object would otherwise raise.
+    const response = await post(g, {
+      enable_thinking: false,
+      max_tokens: 8,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+          { type: "text", text: "What color is this image? Reply with one word." },
+        ],
+      }],
+      reasoning: { enabled: false },
+      stream: false,
+      temperature: 0,
+      thinking: { type: "disabled" },
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { error: { code?: string; message: string; type: string } };
+    // `is_image_modality_rejection` (openjiuwen/harness/image_modality_probe.py)
+    // accepts any of its allowlisted codes, so the classification no longer
+    // rests on our wording matching one of its text fragments — today
+    // "images are not supported" does match, and the message stays as the
+    // second signal.
+    assert.equal(body.error.code, "unsupported_image_input");
+    assert.equal(body.error.type, "model_gateway_error");
+    assert.match(body.error.message, /images are not supported/);
+    assert.equal(calls.length, 0, "a capability rejection must never reach the model");
+  } finally { await g.close(); }
+});
+
+test("a malformed request keeps its own diagnosis instead of the image verdict", async () => {
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await gateway(streamer);
+  const [image] = [{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }];
+  const messages = [{ role: "user", content: [image, { type: "text", text: "What color is this image?" }] }];
+  const diagnose = async (body: unknown) => {
+    const response = await post(g, body);
+    assert.equal(response.status, 400);
+    return (await response.json() as { error: { code?: string; message: string } }).error;
+  };
+  try {
+    // A request that is wrong in a way this gateway can name keeps naming it:
+    // answering "images are not supported" here would be cached by the probe as
+    // a capability verdict for a model whose request was merely misshapen.
+    const parameter = await diagnose({ messages, frequency_penalty: 1 });
+    assert.match(parameter.message, /Unsupported gateway parameters: frequency_penalty/);
+    assert.equal(parameter.code, undefined);
+    const completion = await diagnose({ messages, n: 2 });
+    assert.match(completion.message, /one completion only/);
+    assert.equal(completion.code, undefined);
+    // A message entry that is not an object used to reach the image check as-is
+    // and surface a `TypeError`; the shape check now reports it by name.
+    const shape = await diagnose({ messages: [null] });
+    assert.equal(shape.message, "Invalid gateway messages or tools");
+    assert.equal(calls.length, 0);
+  } finally { await g.close(); }
+});
+
 test("gateway diagnostics report an active model request without logging its payload", async () => {
   let release!: () => void;
   let started!: () => void;
@@ -495,6 +579,74 @@ test("a finished response with unparseable arguments withholds ALL its calls for
       assert.match(g.lastFailure()?.requestId ?? "", /^chatcmpl-/);
       assert.equal(g.lastTurn()?.truncated, false);
       assert.ok(payloads.at(-1).usage);
+    } finally { await g.close(); }
+  }
+});
+
+test("clean EOF inside tool arguments withholds every call, preserves missing usage and allows a fresh correction", async () => {
+  for (const stream of [false, true]) {
+    let calls = 0;
+    const corrected = { id: "corrected", type: "function" as const,
+      function: { name: "run_shell", arguments: '{"command":"printf corrected"}' } };
+    const g = await gateway(async () => ++calls === 1 ? answer({
+      completionObserved: false, usage: undefined,
+      streamDiagnostics: { protocol: "openai-chat-completions", unparseableSsePayloads: 0, toolCallDeltasWithoutIndex: 0 },
+      assistantMessage: { role: "assistant", content: "", tool_calls: [
+        { id: "valid", type: "function", function: { name: "read_file", arguments: '{"path":"notes.md"}' } },
+        { id: "bad", type: "function", function: { name: "run_shell", arguments: '{"command":"unfinished' } },
+      ] },
+      toolCalls: [{ id: "valid", name: "read_file", args: { path: "notes.md" } },
+        { id: "bad", name: "run_shell", args: {}, argsParseError: "Unterminated string in JSON" }],
+    }) : answer({ completionObserved: true,
+      assistantMessage: { role: "assistant", content: "", tool_calls: [corrected] },
+      toolCalls: [{ id: "corrected", name: "run_shell", args: { command: "printf corrected" } }],
+    }));
+    const payloadsOf = (wire: string) => stream
+      ? wire.split("\n\n").filter(s => s.startsWith("data: {")).map(s => JSON.parse(s.slice(6))) : [JSON.parse(wire)];
+    try {
+      const first = await post(g, { stream, messages: [{ role: "user", content: "go" }] });
+      assert.equal(first.status, 200);
+      const wire = await first.text();
+      const payloads = payloadsOf(wire);
+      assert.match(wire, /invalid_tool_arguments:tool_calls_withheld/);
+      assert.equal(payloads.at(-1).choices[0].finish_reason, "length");
+      for (const payload of payloads) {
+        assert.equal(payload.error, undefined);
+        assert.equal((payload.choices[0].delta ?? payload.choices[0].message).tool_calls, undefined);
+        assert.equal(payload.usage, undefined, "missing provider usage must not become fabricated zero usage");
+      }
+      assert.deepEqual(g.lastFailure()?.tools, ["run_shell"]);
+      assert.equal(calls, 1, "only the existing Swarm boundary may request a correction");
+      const next = await post(g, { stream, messages: [{ role: "user",
+        content: "[Tool argument recovery 1/2; invalid_tool_arguments] Re-issue the call." }] });
+      const correctedPayloads = payloadsOf(await next.text());
+      assert.equal(next.status, 200);
+      assert.equal(correctedPayloads.at(-1).choices[0].finish_reason, "tool_calls");
+      const forwarded = correctedPayloads.flatMap(p => (p.choices[0].delta ?? p.choices[0].message).tool_calls ?? []);
+      assert.equal(forwarded.length, 1);
+      assert.equal(forwarded[0].function.arguments, corrected.function.arguments);
+      assert.equal(g.lastFailure(), undefined);
+    } finally { await g.close(); }
+  }
+});
+
+test("missing completion still rejects valid calls, corrupt SSE and requesters without a recovery boundary", async () => {
+  for (const kind of ["valid-call", "corrupt-sse", "no-boundary", "housekeeping"] as const) {
+    const g = await gatewayWithLifecycle(async () => answer({ completionObserved: false,
+      toolCalls: [{ id: "call", name: "run_shell", args: { command: "printf must-not-run" },
+        ...(kind === "valid-call" ? {} : { argsParseError: "Unterminated string in JSON" }) }],
+      ...(kind === "corrupt-sse" ? { streamDiagnostics: { protocol: "openai-chat-completions" as const, unparseableSsePayloads: 1 } } : {}),
+    }), { progress() {}, recoversWithheldCalls: kind !== "no-boundary" });
+    try {
+      for (const stream of [false, true]) {
+        const response = await fetch(`${g.url}/chat/completions`, { method: "POST", headers: {
+          authorization: `Bearer ${g.token}`, "content-type": "application/json",
+          ...(kind === "housekeeping" ? { "x-sciencediscovery-model-purpose": "housekeeping" } : {}),
+        }, body: JSON.stringify({ stream, messages: [{ role: "user", content: "go" }] }) });
+        const wire = await response.text();
+        assert.match(wire, /Model stream ended without a completion event/, kind);
+        assert.doesNotMatch(wire, /tool_calls_withheld|must-not-run/, kind);
+      }
     } finally { await g.close(); }
   }
 });

@@ -219,7 +219,7 @@ export function createPlatformServices(
   const connectorPlugins = createPluginScope(builtinMcpSourcePlugins, dependencies.disabledConnectorPlugins);
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
   const mcpGateway: McpTransportClient = dependencies.mcpTransport
-    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
+    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog, { dataDir: config.dataDir });
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
@@ -687,7 +687,10 @@ export async function initializePlatformServices(
   // A run left "running" by a previous process is never going to finish: the
   // sidecar's stream died with that connection. Settle them at boot so the UI
   // never shows a spinner for a run nobody is driving.
-  void evolutionStore.initialize()
+  // Evolution recovery touches the data directory. Keep it in the startup
+  // lifecycle so closing an API during boot cannot race a test/fixture that
+  // removes its temporary data directory.
+  await evolutionStore.initialize()
     .then(() => evolveOrchestrator.adoptOrphanedRuns())
     .catch((error: unknown) => {
       apiLog.warn("evolve_boot_failed", { reason: error instanceof Error ? error.message : String(error) });

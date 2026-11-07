@@ -174,6 +174,31 @@ test("scientific environments accept micromamba's package-list envelope", async 
   assert.ok(revision?.packages.some((item) => item.startsWith("python=3.12")));
 });
 
+test("startup upgrades a persisted starter when the required package contract grows", async (context) => {
+  const { commands, executor, provisionerPath, root, store } = await fixture(context);
+  await store.initialize();
+  await store.setupManagedEnvironments();
+  const before = store.list().find((environment) => environment.id === "starter-python")!;
+  const catalogPath = resolve(root, "envs", "catalog.json");
+  const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
+  const revision = catalog.revisions.find((candidate: { id: string }) => candidate.id === before.currentRevisionId);
+  revision.packages = revision.packages.filter((value: string) => !value.startsWith("numpy="));
+  await writeFile(catalogPath, JSON.stringify(catalog));
+
+  const reloaded = new EnvironmentStore({
+    allowedChannels: ["conda-forge"], enabled: true, provisionerPath,
+    root: resolve(root, "envs"), runnerVersion: "test-runner",
+  }, executor);
+  await reloaded.initialize();
+
+  const after = reloaded.list().find((environment) => environment.id === "starter-python")!;
+  assert.notEqual(after.currentRevisionId, before.currentRevisionId);
+  const upgrade = commands.findLast((command) => command[1] === "install");
+  assert.ok(upgrade?.includes("numpy=2.0"));
+  assert.equal(after.status, "ready");
+  assert.ok(reloaded.getRevision(before.currentRevisionId), "the prior starter revision remains auditable");
+});
+
 test("updates retain one runtime prefix, preserve untracked files, and reject historical runtime selection", async (context) => {
   const { store, commands } = await fixture(context);
   await store.initialize(); await store.setupManagedEnvironments();
