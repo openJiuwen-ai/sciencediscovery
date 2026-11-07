@@ -16,25 +16,15 @@
  * A Paper's abstract, as the reader should see it.
  *
  * The graph stores the string the source returned, and Europe PMC returns a
- * structured abstract with its own markup: `<h4>Background/purpose</h4>…<h4>
- * Methods</h4>…`. Rendering that string as one paragraph puts the tags on
- * screen, so this reads the section labels back out and hands each one to the
- * card as a heading over the prose it introduced.
+ * structured abstract with its own markup: `<h4>Background/purpose</h4><p>…`.
+ * Printed as-is, that puts tags on the card. What belongs under the paper's
+ * title is the abstract itself — its sentences, not the publisher's section
+ * scaffolding — so this reads the prose out of the markup and returns it one
+ * paragraph per block.
  *
- * No HTML is rendered. The card draws text nodes only — an abstract is
- * third-party content and the two tags that carry meaning here (section
- * headings) are recognised by this parser rather than handed to a browser.
+ * No HTML is rendered: an abstract is third-party content, and the card draws
+ * text nodes only.
  */
-
-/** One part of an abstract: prose, and the label the source gave it when the
- *  source marked a section at all. */
-export interface AbstractSection {
-  heading?: string;
-  text: string;
-}
-
-/** `<h1>`–`<h6>` opening a section; the capture is the label. */
-const SECTION_HEADING = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]\s*>/giu;
 
 const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
   ["amp", "&"],
@@ -51,6 +41,8 @@ const CHARACTER_REFERENCE = /&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|([a-zA-Z]
 
 const MAX_CODE_POINT = 0x10_ffff;
 
+const PARAGRAPH_BREAK = "\n";
+
 function decodable(point: number): boolean {
   if (!Number.isInteger(point) || point <= 0 || point > MAX_CODE_POINT) return false;
   if (point >= 0xd800 && point <= 0xdfff) return false;
@@ -66,45 +58,25 @@ export function decodeEntities(value: string): string {
   });
 }
 
-/** Prose with its inline markup removed: block ends become spaces, so a
- *  `</p><p>` boundary never glues two sentences together. */
-function plainText(fragment: string): string {
-  return decodeEntities(
-    fragment
-      .replace(/<br\s*\/?>/giu, " ")
-      .replace(/<\/(?:p|div|li|h[1-6])\s*>/giu, " ")
-      .replace(/<[^>]*>/gu, ""),
-  )
-    .replace(/\s+/gu, " ")
-    .trim();
-}
-
 /**
- * Split an abstract into its sections, dropping markup.
+ * Split an abstract into the paragraphs it reads as.
  *
- * Text before the first heading, or an abstract with no headings at all, comes
- * back as one headingless section — the same card the reader had before, minus
- * the tags.
+ * Block boundaries — `</p>`, `<br>`, a section heading's tag — end a
+ * paragraph; a heading's *text* is scaffolding rather than prose, so `<h1>`–
+ * `<h6>` take their label with them. Inline markup is dropped without
+ * disturbing the words it wrapped.
  */
-export function paperAbstractSections(raw: string): AbstractSection[] {
-  const source = raw.trim();
-  if (source === "") return [];
+export function paperAbstractParagraphs(raw: string): string[] {
+  if (raw.trim() === "") return [];
 
-  const sections: AbstractSection[] = [];
-  let heading: string | undefined;
-  let cursor = 0;
+  const withoutHeadings = raw.replace(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]\s*>/giu, PARAGRAPH_BREAK);
+  const blocks = withoutHeadings
+    .replace(/<br\s*\/?>/giu, PARAGRAPH_BREAK)
+    .replace(/<\/(?:p|div|li)\s*>/giu, PARAGRAPH_BREAK)
+    .replace(/<[^>]*>/gu, "");
 
-  for (const match of source.matchAll(SECTION_HEADING)) {
-    const start = match.index ?? 0;
-    const body = plainText(source.slice(cursor, start));
-    if (body !== "") sections.push(heading === undefined ? { text: body } : { heading, text: body });
-    const label = plainText(match[1] ?? "");
-    heading = label === "" ? undefined : label;
-    cursor = start + match[0].length;
-  }
-
-  const tail = plainText(source.slice(cursor));
-  if (tail !== "") sections.push(heading === undefined ? { text: tail } : { heading, text: tail });
-
-  return sections;
+  return decodeEntities(blocks)
+    .split(/\n+/u)
+    .map((block) => block.replace(/\s+/gu, " ").trim())
+    .filter((block) => block !== "");
 }
