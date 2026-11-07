@@ -39,8 +39,9 @@ export interface PreviewSlot {
   /** The document's text, for everything the panel reads rather than draws. */
   content?: string;
   /** The document's bytes as a data URL, for a picture, a PDF or a workbook —
-   *  the three kinds a text read would have turned into replacement
-   *  characters. Exactly one of this and `content` is set. */
+   *  the kinds a text read would have turned into replacement characters — and
+   *  for a container this build cannot draw, whose bytes only the download
+   *  needs. Exactly one of this and `content` is set. */
   dataUrl?: string;
   error?: string;
   /** The initial tab — still holding the artifacts section and the tree. */

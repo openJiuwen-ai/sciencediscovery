@@ -37,7 +37,10 @@ import { completeChatRequest, InvalidModelResponseError, type ChatCompletionRequ
 
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 
-import { MODEL_THINKING_EFFORTS, roleThinking, type ModelInvocationUsage, type ModelThinkingEffort } from "@sciencediscovery/schema";
+import {
+  MODEL_THINKING_EFFORTS, roleThinking,
+  type ModelInvocationUsage, type ModelThinkingEffort, type ModelThinkingMode,
+} from "@sciencediscovery/schema";
 
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
@@ -51,6 +54,8 @@ interface RunGrant {
   runId: string;
   sessionId: string;
   token: string;
+  controller: AbortController;
+  thinking?: { thinkingMode?: ModelThinkingMode; thinkingEffort?: ModelThinkingEffort };
 }
 
 /**
@@ -72,15 +77,16 @@ export class RunTokenRegistry {
    */
   private readonly grants = new Map<string, RunGrant[]>();
 
-  issue(runId: string, sessionId: string, modelId: string): string {
+  issue(runId: string, sessionId: string, modelId: string, thinking?: RunGrant["thinking"]): string {
     const token = randomBytes(32).toString("base64url");
     const existing = this.grants.get(runId) ?? [];
-    existing.push({ modelId, runId, sessionId, token });
+    existing.push({ modelId, runId, sessionId, token, controller: new AbortController(), ...(thinking ? { thinking: { ...thinking } } : {}) });
     this.grants.set(runId, existing);
     return token;
   }
 
   revoke(runId: string): void {
+    for (const grant of this.grants.get(runId) ?? []) grant.controller.abort();
     // Every token for the run, so a judge token cannot outlive the search it
     // was issued for any more than a mutation token can.
     this.grants.delete(runId);
@@ -169,8 +175,8 @@ export async function handleEvolveCompletion(
   try {
     const controller = new AbortController();
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
-    upstream = await completeChatRequest({ ...model, ...stageThinking, apiToken, proxy: resolveProxyForUrl(deps.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, body,
-      AbortSignal.any([controller.signal, AbortSignal.timeout(CALL_CEILING_MS)]), deps.fetchImpl);
+    upstream = await completeChatRequest({ ...model, ...grant.thinking, ...stageThinking, apiToken, proxy: resolveProxyForUrl(deps.store.resolveProxy(model.proxyPolicy), model.baseUrl) }, body,
+      AbortSignal.any([controller.signal, grant.controller.signal, AbortSignal.timeout(CALL_CEILING_MS)]), deps.fetchImpl, undefined, true);
   } catch (error) {
     inFlight.delete(began);
     const invalidResponse = error instanceof InvalidModelResponseError;

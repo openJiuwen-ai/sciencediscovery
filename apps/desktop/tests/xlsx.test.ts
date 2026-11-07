@@ -173,3 +173,47 @@ test("a 1900 date serial before March reads as the day Excel shows", () => {
   // the 1899-12-30 epoch is only right from serial 61 on.
   assert.deepEqual(sheet?.table.rows, [["1900-01-01", "1900-02-28", "1900-03-01"]]);
 });
+
+// A phonetic guide (`<rPh>`) is a reading drawn above the cell, not part of the
+// cell's value: Excel shows 漢字 for `<si><t>漢字</t><rPh><t>カンジ</t></rPh></si>`.
+// Reading its `<t>` as a text run doubles the cell, which is what a Japanese or
+// Chinese workbook written by Excel would then preview as.
+test("a shared string's phonetic run is not part of the cell", () => {
+  const [sheet] = readWorkbook(workbook({
+    "xl/sharedStrings.xml": "<sst>"
+      + "<si><t>漢字</t><rPh sb=\"0\" eb=\"2\"><t>カンジ</t></rPh></si>"
+      + "<si><t>山川</t><rPh sb=\"0\" eb=\"2\"/></si>"
+      + "</sst>",
+    "xl/workbook.xml": WORKBOOK("<sheet name=\"表1\" r:id=\"rId1\"/>"),
+    "xl/_rels/workbook.xml.rels": RELS([["rId1", "worksheets/sheet1.xml"]]),
+    "xl/worksheets/sheet1.xml": SHEET(
+      "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c></row>",
+    ),
+  })) ?? [];
+  assert.deepEqual(sheet?.table.columns, ["漢字", "山川"]);
+});
+
+test("an inline string's phonetic run is not part of the cell", () => {
+  const [sheet] = readWorkbook(workbook({
+    "xl/workbook.xml": WORKBOOK("<sheet name=\"表1\" r:id=\"rId1\"/>"),
+    "xl/_rels/workbook.xml.rels": RELS([["rId1", "worksheets/sheet1.xml"]]),
+    "xl/worksheets/sheet1.xml": SHEET(
+      "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>東京</t><rPh sb=\"0\" eb=\"2\"><t>トウキョウ</t></rPh></is></c></row>",
+    ),
+  })) ?? [];
+  assert.deepEqual(sheet?.table.columns, ["東京"]);
+});
+
+test("rich text runs keep their text and drop the phonetic run", () => {
+  const [sheet] = readWorkbook(workbook({
+    "xl/sharedStrings.xml": "<sst>"
+      + "<si><r><t>東</t></r><r><t>京</t></r><rPh sb=\"0\" eb=\"2\"><t>トウキョウ</t></rPh></si>"
+      + "</sst>",
+    "xl/workbook.xml": WORKBOOK("<sheet name=\"表1\" r:id=\"rId1\"/>"),
+    "xl/_rels/workbook.xml.rels": RELS([["rId1", "worksheets/sheet1.xml"]]),
+    "xl/worksheets/sheet1.xml": SHEET(
+      "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c></row>",
+    ),
+  })) ?? [];
+  assert.deepEqual(sheet?.table.columns, ["東京"]);
+});

@@ -16,6 +16,35 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X02b: changing Web provider clears the typed key and cannot recover it by switching back", async () => {
+  const renderer = await mount(request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
+    { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }, { id: "exa", label: "Exa" }] },
+    { id: "apiToken", kind: "credential", label: "Web key", required: true, status: "missing" }] }));
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "belongs-only-to-jina" } }));
+  await act(async () => renderer.root.findByProps({ name: "webProvider" }).props.onChange({ target: { value: "exa" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => renderer.root.findByProps({ name: "webProvider" }).props.onChange({ target: { value: "jina" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X02b: a backend target change during Web preview clears the old key before any upload", async () => {
+  let latest = request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
+    { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }] },
+    { id: "apiToken", kind: "credential", label: "Web key", required: true, status: "missing" }] });
+  let renderer: ReactTestRenderer; let uploads = 0;
+  const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1, credentialTargetDigest: "sha256:jina-jiuwen" }),
+    credential: async () => { uploads++; return { handle: "must-not-upload", expiresAt: "2099-01-01T00:00:00Z" }; } });
+  const draw = () => createElement(ConfigurationRequestCard, { request: latest, actions: api,
+    onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } });
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "backend-bound-fixture" } }));
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(uploads, 0); assert.equal(renderer!.root.findByProps({ name: "apiToken" }).props.value, "");
+  assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /backend-bound-fixture/);
+  await act(async () => renderer!.unmount());
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
@@ -55,6 +84,15 @@ async function mount(view: ConfigurationRequestView, api = actions(), onUpdate: 
   return renderer!;
 }
 const button = (renderer: ReactTestRenderer, text: string) => renderer.root.findAllByType("button").find((item) => item.children.join("") === text)!;
+
+test("CFG-X09a: saved global Reviewer switch describes later admission without claiming verified activation", async () => {
+  const renderer = await mount(request({ capabilityId: "reviewer.enable", state: "applied", runId: undefined,
+    activation: { mode: "next_request", state: "needs_user_action" }, allowedActions: [] }));
+  const content = JSON.stringify(renderer.toJSON());
+  assert.match(content, /Configure global Reviewer Specialist · Saved · Subsequent review admissions; running work may finish/);
+  assert.match(content, /User action required/); assert.doesNotMatch(content, /Verified active/);
+  await act(async () => renderer.unmount());
+});
 
 test("CFG generic renderer requires a new preview after edits and binds approval to the exact revision and digest", async () => {
   const decisions: unknown[] = [];
@@ -664,6 +702,80 @@ test("CFG-R11 Chinese alternatives retain their distinct destinations", async ()
   await act(async () => renderer.unmount());
 });
 
+test("CFG English web.configure input labels use the message table instead of raw field ids", async () => {
+  const rawIds = ["maxResults", "deepseekEnabled", "fetchProvider", "freeSearchEngines", "paidSearchProviders", "searchCacheTtlSeconds", "fetchCacheTtlSeconds", "proxyPolicy"];
+  const renderer = await mount(request({ capabilityId: "web.configure", fields: [
+    { id: "deepseekEnabled", label: "deepseekEnabled", kind: "boolean", required: false, value: false },
+    { id: "fetchProvider", label: "Fetch provider saved for JiuwenSwarm", kind: "enum", required: false, value: "jina", choices: [{ id: "jina", label: "jina" }] },
+    { id: "freeSearchEngines", label: "freeSearchEngines", kind: "multiselect", required: false, value: ["bing"], choices: [{ id: "bing", label: "bing" }] },
+    { id: "paidSearchProviders", label: "paidSearchProviders", kind: "multiselect", required: false, value: [], choices: [{ id: "exa", label: "exa" }] },
+    { id: "searchCacheTtlSeconds", label: "searchCacheTtlSeconds", kind: "number", required: false, value: 3600 },
+    { id: "fetchCacheTtlSeconds", label: "fetchCacheTtlSeconds", kind: "number", required: true, value: 3600 },
+    { id: "proxyPolicy", label: "proxyPolicy", kind: "enum", required: false, value: "direct", choices: [{ id: "direct", label: "direct" }] },
+    { id: "operatorNote", label: "Operator note", kind: "text", required: false, value: "" },
+  ] }), actions(), () => undefined, "en");
+  const labels = renderer.root.findAllByType("label").map(item => item.children.join(""));
+  assert.deepEqual(labels, [
+    "Enable DeepSeek Web search", "Fetch provider", "Free search engines", "Paid search providers",
+    "Search cache TTL (seconds)", "Fetch cache TTL (seconds) *", "Proxy policy", "Operator note",
+  ]);
+  for (const id of rawIds) assert.equal(labels.some(label => label === id || label.startsWith(`${id} `)), false, id);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG English choices and credential operations use the message table, with an unknown option falling back", async () => {
+  const choices = await mount(choiceRequest(), actions(), () => undefined, "en");
+  const described = choices.root.findAllByType("strong").map(item => item.children.join(""));
+  assert.ok(described.includes("Save configuration"));
+  assert.ok(described.includes("Use only for this task"));
+  assert.ok(described.includes("Use an available alternative · Use Web search"));
+  assert.equal(described.includes("Save for this session"), false);
+  assert.equal(described.includes("Use for this task"), false);
+  await act(async () => choices.unmount());
+
+  for (const [locale, replace, clear, unknown] of [
+    ["en", "Replace key", "Clear stored key", "Rotate later"],
+    ["zh", "替换密钥", "清除已存密钥", "稍后轮换"],
+  ] as const) {
+    const renderer = await mount(request({ capabilityId: "web.credential", fields: [
+      { id: "operation", label: "operation", kind: "enum", required: true, value: "replace", choices: [
+        { id: "replace", label: "replace" }, { id: "clear", label: "clear" }, { id: "later", label: unknown },
+      ] },
+    ] }), actions(), () => undefined, locale);
+    const options = renderer.root.findAllByType("option").map(item => item.children.join(""));
+    assert.deepEqual(options, [locale === "zh" ? "请选择" : "Choose an option", replace, clear, unknown]);
+    assert.equal(renderer.root.findByType("label").children.join("").startsWith(locale === "zh" ? "凭据操作" : "Credential operation"), true);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG message-table lookups ignore inherited prototype keys and keep the server label", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "web.credential", fields: [
+      { id: "toString", label: "Server field label", kind: "text", required: false, value: "" },
+      { id: "operation", label: "operation", kind: "enum", required: true, value: "replace", choices: [
+        { id: "replace", label: "replace" },
+        { id: "toString", label: "Server operation label" },
+        { id: "constructor", label: "Server constructor label" },
+      ] },
+    ], changes: [{ field: "toString", before: "old", after: "new" }] }), actions(), () => undefined, locale);
+    const labels = renderer.root.findAllByType("label").map(item => item.children.join(""));
+    assert.ok(labels.includes("Server field label"), locale);
+    assert.equal(labels.some(label => label.startsWith(locale === "zh" ? "凭据操作" : "Credential operation")), true, locale);
+    const options = renderer.root.findAllByType("option").map(item => item.children.join(""));
+    assert.deepEqual(options, [
+      locale === "zh" ? "请选择" : "Choose an option",
+      locale === "zh" ? "替换密钥" : "Replace key",
+      "Server operation label",
+      "Server constructor label",
+    ]);
+    const changeLabels = renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(item => item.children.join(""));
+    assert.deepEqual(changeLabels, [locale === "zh" ? "拟修改内容" : "Proposed changes", "toString"]);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /function toString|function Object/);
+    await act(async () => renderer.unmount());
+  }
+});
+
 test("CFG-R04 a repair target changed by intermediate preview clears the old key and never uploads it, even to a trusted preset", async () => {
   let latest = request({ capabilityId: "model.repair_credential", fields: [{ id: "modelId", kind: "text", label: "Model", required: true, value: "same-model" },
     { id: "apiToken", kind: "credential", label: "Key", required: true, status: "missing" }] });
@@ -774,4 +886,35 @@ test("Jiuwen live-wait card is actionable while its original run remains running
     assert.equal(button(renderer, "Decline").props.disabled, !liveWait);
     await act(async () => renderer.unmount());
   }
+});
+
+test("CFG-XBUG-06: a refreshed recipient preview becomes confirmable only after exact new consent", async () => {
+  let latest = request({ capabilityId: "model.connect", fields: [{ id: "baseUrl", label: "URL", kind: "url", required: true, value: "https://old-owned.example" }],
+    endpointAuthorization: { endpointTarget: "old-target", host: "old-owned.example", classification: "public_https", status: "confirmed", revision: 2 } });
+  let renderer!: ReactTestRenderer;
+  const decisions: unknown[] = [], updates: ConfigurationRequestView[] = [];
+  const api = actions({
+    preview: async input => { assert.deepEqual(input.values, { baseUrl: "https://new-owned.example" }); return { ...latest, revision: 3, stateVersion: 4,
+      previewDigest: "sha256:new-target", fields: [{ ...latest.fields[0]!, value: "https://new-owned.example" }],
+      endpointAuthorization: { endpointTarget: "new-target", host: "new-owned.example", classification: "public_https", status: "required", revision: 3 } }; },
+    consent: async input => { assert.deepEqual(input, { revision: 3, endpointTarget: "new-target" }); return { ...latest, stateVersion: 5,
+      endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; },
+    decide: async input => { decisions.push(input); return { ...latest, state: "applied", allowedActions: [] }; },
+  });
+  const draw = () => createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConfigurationRequestCard, {
+    request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { updates.push(next); },
+  }));
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => renderer.root.findByProps({ name: "baseUrl" }).props.onChange({ target: { value: "https://new-owned.example" } }));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true);
+  await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true, "The parent still supplies the old preview");
+  latest = updates.shift()!; await act(async () => renderer.update(draw()));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, true, "The new recipient is not independently approved");
+  await act(async () => button(renderer, "Allow this exact endpoint").props.onClick());
+  latest = updates.shift()!; await act(async () => renderer.update(draw()));
+  assert.equal(button(renderer, "Confirm this change").props.disabled, false, "A fresh explicit preview survives exact recipient consent");
+  await act(async () => button(renderer, "Confirm this change").props.onClick());
+  assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:new-target", decision: "apply" }]);
+  await act(async () => renderer.unmount());
 });

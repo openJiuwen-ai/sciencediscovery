@@ -58,6 +58,18 @@ test("putFile streams bytes into the same address space", async () => {
   });
 });
 
+test("a corrupted object is absent for has() and verify(), and read() still rejects it", async () => {
+  await withStore(async (store, root) => {
+    const object = await store.put("hello world");
+    const blob = resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash);
+    await writeFile(blob, "HELLO WORLD");
+
+    assert.equal(await store.verify(object.hash), false);
+    assert.equal(await store.has(object.hash), false);
+    await assert.rejects(store.read(object.hash), /CAS integrity failure/);
+  });
+});
+
 test("invalid hashes are rejected and missing objects do not verify", async () => {
   await withStore(async (store) => {
     await assert.rejects(store.read("../escape"), /Invalid CAS hash/);
@@ -141,5 +153,70 @@ test("a hash that was never stored keeps the ENOENT shape", async () => {
       assert.equal(error.message, "CAS object not found");
       return true;
     });
+  });
+});
+
+test("stream() does not hand out a corrupt pool copy when the legacy copy is intact", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of store.stream(object.hash)) chunks.push(chunk as Buffer);
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  });
+});
+
+test("stream() emits no bytes when every copy is corrupt", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, "corrupted legacy copy");
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    let delivered = 0;
+    await assert.rejects(async () => {
+      for await (const chunk of store.stream(object.hash)) delivered += (chunk as Buffer).length;
+    }, /CAS integrity failure/);
+    assert.equal(delivered, 0);
+  });
+});
+
+test("retain() promotes the intact legacy copy instead of giving up on the corrupted pool copy", async () => {
+  await withStore(async (store, root) => {
+    const bytes = Buffer.from("recoverable scientific artifact");
+    const object = await store.put(bytes);
+
+    const legacy = resolve(root, "cas", "sha256", object.hash.slice(0, 2), object.hash);
+    await mkdir(resolve(legacy, ".."), { recursive: true });
+    await writeFile(legacy, bytes);
+    await writeFile(resolve(root, "versioning", "agent-state", "blobs", "sha256", object.hash), "corrupted pool copy");
+
+    const promoted = await store.retain({ hash: object.hash, size: bytes.length }, "data");
+    assert.equal(promoted.digest, `sha256:${object.hash}`);
+    assert.equal(promoted.size, bytes.length);
+  });
+});
+
+test("stream() leaves an intact first layout untouched across several chunks", async () => {
+  await withStore(async (store, root) => {
+    // Larger than one pipe chunk, so the generator yields a sequence rather than
+    // a single buffer: the pre-check must not change what a healthy object looks
+    // like on the wire (#708 probe c).
+    const bytes = Buffer.from(Array.from({ length: 400_000 }, (_, index) => index % 251));
+    const object = await store.put(bytes);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of store.stream(object.hash)) chunks.push(chunk as Buffer);
+    assert.equal(chunks.length > 1, true, "a 400KB object is expected to arrive in several chunks");
+    assert.deepEqual(Buffer.concat(chunks), bytes);
   });
 });

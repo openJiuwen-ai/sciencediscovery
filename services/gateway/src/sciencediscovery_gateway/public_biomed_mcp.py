@@ -21,6 +21,7 @@ downloads remain in the Node governance broker.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import hashlib
 import json
@@ -29,7 +30,7 @@ import re
 import ssl
 import time
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -82,11 +83,15 @@ def _log_arxiv_http(
         pass
 
 
-async def _get_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
-        response = await client.get(url, params=params, headers={"accept": "application/json"})
-        _raise_for_status(response)
-        return response.json()
+async def _get_json(
+    url: str, *, params: dict[str, Any] | None = None, client: httpx.AsyncClient | None = None
+) -> Any:
+    if client is None:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as owned:
+            return await _get_json(url, params=params, client=owned)
+    response = await client.get(url, params=params, headers={"accept": "application/json"})
+    _raise_for_status(response)
+    return response.json()
 
 
 async def _get_text(
@@ -426,45 +431,221 @@ async def europe_pmc_prepare_paper_download(identifier: str) -> dict[str, Any]:
 # bioRxiv / medRxiv
 
 
+_PREPRINT_PAGE_SIZE = 30
+_PREPRINT_MAX_PAGES = 20
+_PREPRINT_CONCURRENCY = 4
+# The Node MCP transport kills a search tool call after 30 s, so the scan has
+# to leave room for the response to travel back.
+_PREPRINT_SCAN_SECONDS = 20.0
+# The provider uses this status for a window that legitimately holds no posts;
+# it carries no total and an empty collection, exactly like a rejection.
+_PREPRINT_EMPTY_STATUS = "no posts found"
+
+
+def _preprint_provider_message(payload: Any) -> dict[str, Any]:
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        return messages[0]
+    return {}
+
+
+def _preprint_status(payload: Any) -> str:
+    return str(_preprint_provider_message(payload).get("status", "")).strip().lower()
+
+
+def _preprint_total(payload: Any) -> int | None:
+    total = _preprint_provider_message(payload).get("total")
+    try:
+        return max(0, int(total))
+    except (TypeError, ValueError):
+        return None
+
+
+def _require_preprint_provider_ok(server: str, payload: Any) -> None:
+    status = str(_preprint_provider_message(payload).get("status", "")).strip()
+    # Rejected requests still return HTTP 200 with an empty collection, so the
+    # provider's status message is the only failure signal available. An empty
+    # window is not a rejection: it reports its own status, and the caller
+    # turns that into "no preprints published between ...".
+    if status and status.lower() not in {"ok", _PREPRINT_EMPTY_STATUS}:
+        raise RuntimeError(f"{server} rejected the preprint request: {status}")
+
+
+def _preprint_record(server: str, item: dict[str, Any]) -> dict[str, Any]:
+    doi = str(item.get("doi", ""))
+    title = str(item.get("title", doi))
+    url = format_external_url(
+        "data_sources.preprints.content_template", server=server, doi=doi, version=item.get("version", "1")
+    )
+    return _record(
+        server,
+        doi,
+        title,
+        url,
+        item,
+        abstract=str(item.get("abstract", "")) or None,
+        authors=[name.strip() for name in str(item.get("authors", "")).split(";") if name.strip()],
+        role="preprint",
+        scope="abstract",
+        warnings=["This record is a preprint and has not completed peer review."],
+        year=str(item.get("date", ""))[:4] or None,
+    )
+
+
 async def _preprint_search(server: str, query: str, days: int, limit: int, category: str | None) -> dict[str, Any]:
     if not query.strip():
         raise ValueError("query must not be empty")
-    payload = await _get_json(
-        format_external_url("data_sources.preprints.details_by_days_template", server=server, days=days),
-        params={"category": category} if category else None,
-    )
+    if days < 1:
+        raise ValueError("days must be at least 1")
+    # The provider only accepts yyyy-mm-dd ranges; UTC keeps "today" from
+    # landing in the future for the provider's timezone.
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=days - 1)
+    params = {"category": category} if category else None
+    deadline = time.monotonic() + _PREPRINT_SCAN_SECONDS
+
     terms = query.lower().split()
-    records = []
-    for item in payload.get("collection", []):
-        searchable = " ".join(str(item.get(key, "")) for key in ("title", "abstract", "authors", "category")).lower()
-        if terms and not all(term in searchable for term in terms):
-            continue
-        doi = str(item.get("doi", ""))
-        title = str(item.get("title", doi))
-        url = format_external_url(
-            "data_sources.preprints.content_template", server=server, doi=doi, version=item.get("version", "1")
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # Offsets whose records have actually been scanned; pages overlap by design
+    # at the tail, so the reported coverage counts distinct records.
+    covered: set[int] = set()
+    pages: dict[int, Any] = {}
+    truncated = False
+
+    def absorb(cursor: int) -> bool:
+        """Scan one page newest-first; True when the caller's limit is met."""
+        payload = pages[cursor]
+        collection = payload.get("collection", []) if isinstance(payload, dict) else []
+        covered.update(range(cursor, cursor + len(collection)))
+        for item in reversed(collection):
+            doi = str(item.get("doi", ""))
+            if doi in seen:
+                continue
+            searchable = " ".join(
+                str(item.get(key, "")) for key in ("title", "abstract", "authors", "category")
+            ).lower()
+            if terms and not all(term in searchable for term in terms):
+                continue
+            seen.add(doi)
+            records.append(_preprint_record(server, item))
+            if len(records) >= limit:
+                return True
+        return False
+
+    # One connection for the whole scan: every page otherwise pays a fresh TLS
+    # handshake, which is what pushed a full scan past the tool deadline.
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
+
+        async def fetch(cursor: int) -> Any:
+            url = format_external_url(
+                "data_sources.preprints.details_by_range_template",
+                server=server,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                cursor=cursor,
+            )
+            for attempt in range(2):
+                try:
+                    return await _get_json(url, params=params, client=client)
+                except httpx.TimeoutException:
+                    raise
+                except httpx.TransportError:
+                    # The provider can close an idle keep-alive connection
+                    # between pages; one retry reconnects instead of failing
+                    # the whole scan. The pool discards the broken connection.
+                    if attempt:
+                        raise
+
+        try:
+            # The probe is the first thing the search does, so it has to be
+            # inside the same budget; otherwise a slow first page alone can put
+            # the call past the transport deadline before any scan begins.
+            pages[0] = await asyncio.wait_for(
+                fetch(0), timeout=max(0.0, deadline - time.monotonic())
+            )
+        except TimeoutError:
+            window = f"{start.isoformat()} to {end.isoformat()}"
+            return _result(server, "search_preprints", [], warnings=[
+                f"The provider did not answer the first page for {window} within the "
+                f"{_PREPRINT_SCAN_SECONDS:.0f}-second time budget, so no preprints were scanned; "
+                "try again or narrow the window."
+            ])
+        _require_preprint_provider_ok(server, pages[0])
+        total = _preprint_total(pages[0])
+        if total is None and _preprint_status(pages[0]) == _PREPRINT_EMPTY_STATUS:
+            total = 0
+        if total is None:
+            queue = [0]
+        else:
+            # The provider serves the window oldest-first and the trailing path
+            # segment is a record offset (cursor 1 starts one record after
+            # cursor 0), so scan from the newest offset down to the oldest. The
+            # probe already paid for offset 0, so it is reused as the tail
+            # instead of being fetched again.
+            newest_cursor = max(0, total - _PREPRINT_PAGE_SIZE)
+            queue = list(range(newest_cursor, 0, -_PREPRINT_PAGE_SIZE))[:_PREPRINT_MAX_PAGES - 1]
+            if 0 not in queue:
+                queue.append(0)
+
+        first_batch = True
+        while queue and len(records) < limit:
+            if queue[0] in pages:
+                if absorb(queue.pop(0)):
+                    break
+                continue
+            if time.monotonic() >= deadline:
+                truncated = True
+                break
+            # The newest page is fetched alone, because it usually fills the
+            # limit; only a scan that needs more pays for parallel requests.
+            width = 1 if first_batch else _PREPRINT_CONCURRENCY
+            first_batch = False
+            batch: list[int] = []
+            while queue and len(batch) < width and queue[0] not in pages:
+                batch.append(queue.pop(0))
+            # Each page gets the budget that is left; a page that does not
+            # answer in time is dropped, but the rest of the batch is still
+            # used rather than thrown away with it.
+            remaining = max(0.0, deadline - time.monotonic())
+            outcomes = await asyncio.gather(
+                *(asyncio.wait_for(fetch(cursor), timeout=remaining) for cursor in batch),
+                return_exceptions=True,
+            )
+            for cursor, outcome in zip(batch, outcomes):
+                if isinstance(outcome, (TimeoutError, httpx.TimeoutException)):
+                    truncated = True
+                    continue
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                _require_preprint_provider_ok(server, outcome)
+                pages[cursor] = outcome
+            for cursor in batch:
+                if cursor in pages and absorb(cursor):
+                    break
+            if truncated:
+                break
+
+    scanned = len(covered)
+    window = f"{start.isoformat()} to {end.isoformat()}"
+    if total == 0:
+        warning = f"The provider reports no preprints published between {window}."
+    elif total is None:
+        warning = (
+            f"The provider did not report a total for {window}, so only the first {scanned} preprints "
+            "(oldest first) were scanned; text filtering was applied client-side."
         )
-        records.append(_record(
-            server,
-            doi,
-            title,
-            url,
-            item,
-            abstract=str(item.get("abstract", "")) or None,
-            authors=[name.strip() for name in str(item.get("authors", "")).split(";") if name.strip()],
-            role="preprint",
-            scope="abstract",
-            warnings=["This record is a preprint and has not completed peer review."],
-            year=str(item.get("date", ""))[:4] or None,
-        ))
-        if len(records) >= limit:
-            break
-    return _result(
-        server,
-        "search_preprints",
-        records,
-        warnings=["The provider API exposes date/category retrieval; text filtering was applied to the returned recent window."],
-    )
+    else:
+        warning = (
+            f"Scanned {scanned} of {total} preprints published between {window}, newest first; "
+            "text filtering was applied client-side."
+        )
+    if truncated:
+        warning += (
+            f" The scan stopped at its {_PREPRINT_SCAN_SECONDS:.0f}-second time budget after "
+            f"{scanned} preprints, so older matches may be missing."
+        )
+    return _result(server, "search_preprints", records, warnings=[warning])
 
 
 async def _preprint_lookup(server: str, doi: str) -> dict[str, Any]:
@@ -843,10 +1024,17 @@ def _chembl_records(kind: str, items: list[dict[str, Any]]) -> list[dict[str, An
         identifier = str(item.get(f"{kind}_chembl_id") or item.get("activity_id") or item.get("molecule_chembl_id") or "")
         title = str(item.get("pref_name") or item.get("target_pref_name") or item.get("standard_type") or identifier)
         if identifier:
+            # ChEMBL retired explore/molecule; explore/compound is the live molecule page
+            # (compound_report_card is only a 301 hop to it).
+            template = (
+                "data_sources.chembl.molecule_template"
+                if kind == "molecule"
+                else "data_sources.chembl.explore_template"
+            )
             records.append(_record(
                 "chembl", identifier, title,
                 format_external_url(
-                    "data_sources.chembl.explore_template",
+                    template,
                     kind=kind,
                     identifier=identifier.removeprefix("CHEMBL"),
                 ),

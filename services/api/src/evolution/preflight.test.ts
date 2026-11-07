@@ -27,6 +27,8 @@ import assert from "node:assert/strict";
 
 import type { EvolveGoal, ModelProfile, ScorecardCriterion } from "@sciencediscovery/schema";
 
+import { describeEvolveBudget, perCallCeiling } from "./call-budget.js";
+import { endpointCanDisableThinking } from "./model-thinking.js";
 import { preflight } from "./preflight.js";
 import type { EvolveSandboxCapability } from "./sandbox.js";
 
@@ -76,12 +78,14 @@ async function codes(overrides: Partial<EvolveGoal> = {}, extra: {
   casHas?: (hash: string) => Promise<boolean>;
   model?: ModelProfile | undefined;
   sandbox?: EvolveSandboxCapability;
+  thinkingSupported?: boolean;
 } = {}): Promise<string[]> {
   const issues = await preflight({
     casHas: extra.casHas ?? (async () => true),
     goal: goal(overrides),
     model: "model" in extra ? extra.model : MODEL,
     sandbox: extra.sandbox ?? SANDBOX,
+    thinkingSupported: extra.thinkingSupported,
   });
   return issues.map((issue) => issue.code);
 }
@@ -123,6 +127,29 @@ test("the token floor follows the thinking setting, not just the algorithm", asy
     .includes("max_tokens_too_low"));
 });
 
+test("an endpoint with no thinking control cannot lower the floor by being asked", async () => {
+  // The quiet floor assumes the endpoint carries the request. A plain OpenAI
+  // dialect accepts "thinking off" and reasons anyway — measured on a custom
+  // gateway, every call returned exactly at the 16k quiet ceiling with no
+  // content at all — so the setting must not buy the lower floor there.
+  const quiet = { budget: { ...goal().budget, maxTokensPerCall: 16_000 }, thinking: "disabled" as const };
+  assert.deepEqual(await codes(quiet), []);
+  assert.deepEqual(await codes(quiet, { thinkingSupported: false }), ["max_tokens_too_low"]);
+
+  const issues = await preflight({
+    casHas: async () => true,
+    goal: goal(quiet),
+    model: MODEL,
+    sandbox: SANDBOX,
+    thinkingSupported: false,
+  });
+  const issue = issues.find((candidate) => candidate.code === "max_tokens_too_low");
+  assert.match(issue?.message ?? "", /no thinking-control field/);
+  // Offering the setting as a way out would send the user to a knob this
+  // endpoint ignores.
+  assert.doesNotMatch(issue?.fix ?? "", /turn thinking off/);
+});
+
 test("a refused ceiling offers turning thinking off as the other way out", async () => {
   const issues = await preflight({
     casHas: async () => true,
@@ -134,6 +161,43 @@ test("a refused ceiling offers turning thinking off as the other way out", async
   // Two knobs solve this, and naming only one sends the user to the expensive
   // side of a forty-times token difference.
   assert.match(issue?.fix ?? "", /thinking off/);
+});
+
+test("the ceiling the checkpoint shows is the one this gate accepts", async () => {
+  // The checkpoint asks the user to spend and states per-call ceiling ×
+  // expansions. Two ways that sentence can be false: the number shown sits
+  // below the floor enforced here, so the user approves a run that refuses
+  // itself; or it is the quiet figure on an endpoint that ignores "thinking
+  // off", so every call spends the ceiling on hidden reasoning and returns
+  // nothing. Both algorithms, both kinds of endpoint, because the two numbers
+  // are written in two places.
+  for (const algorithm of ["puct", "openevolve"] as const) {
+    for (const apiVariant of [undefined, "openai", "deepseek", "gemini", "kimi-k3"] as const) {
+      const where = `${algorithm} on ${apiVariant ?? "the default variant"}`;
+      const model: ModelProfile = { ...MODEL, apiVariant, model: "some-gateway-model" };
+      const thinkingSupported = endpointCanDisableThinking(model);
+      const plan = describeEvolveBudget(model);
+      const shown = plan.perCallCeiling[algorithm];
+      const accepted = goal({
+        algorithm,
+        budget: { ...goal().budget, maxTokensPerCall: shown },
+        thinking: plan.thinking.effective,
+      });
+      assert.deepEqual(await codes(accepted, { model, thinkingSupported }), [],
+        `${where}: the ceiling the checkpoint shows has to pass this gate`);
+
+      if (!thinkingSupported) {
+        // What the run would have been given if the request had been believed.
+        const asAsked = {
+          ...accepted,
+          budget: { ...accepted.budget, maxTokensPerCall: perCallCeiling(algorithm, "disabled") },
+          thinking: "disabled" as const,
+        };
+        assert.ok((await codes(asAsked, { model, thinkingSupported })).includes("max_tokens_too_low"),
+          `${where}: the quiet ceiling cannot be what the user is shown, because this gate refuses it`);
+      }
+    }
+  }
 });
 
 test("expansions that do not divide by workers are refused", async () => {
@@ -150,6 +214,41 @@ test("a run with no isolation is refused rather than run unconfined", async () =
     backend: null, bwrapPath: "bwrap", disableUserns: false, procMode: "proc",
   };
   assert.ok((await codes({}, { sandbox: none })).includes("sandbox_unavailable"));
+});
+
+test("direct execution is refused until the user confirms it for this run", async () => {
+  // `direct` is the Windows opt-in, and it is not a sandbox. The deployment
+  // flag only says the installation *may* run candidates unconfined; the goal's
+  // own flag is the user's answer to the warning, and a goal without it is a
+  // run nobody agreed to.
+  const direct: EvolveSandboxCapability = { ...SANDBOX, backend: "direct" };
+  assert.deepEqual(await codes({}, { sandbox: direct }), ["unisolated_run_unconfirmed"]);
+  assert.deepEqual(await codes({ allowUnisolated: true }, { sandbox: direct }), []);
+
+  const issue = (await preflight({
+    casHas: async () => true,
+    goal: goal(),
+    model: MODEL,
+    sandbox: direct,
+  })).find((candidate) => candidate.code === "unisolated_run_unconfirmed");
+  assert.match(issue?.message ?? "", /full file and network access/);
+  assert.match(issue?.fix ?? "", /--allow-direct/);
+});
+
+test("a confirmation cannot leak into a run that is still isolated", async () => {
+  // A goal may say yes while the host has a real sandbox; the sandbox wins and
+  // there is nothing to confirm.
+  assert.deepEqual(await codes({ allowUnisolated: true }), []);
+});
+
+test("a judged run needs no confirmation for direct execution", async () => {
+  // Nothing is executed, so there is nothing to warn about — the same reason a
+  // judged run needs no sandbox at all.
+  const direct: EvolveSandboxCapability = { ...SANDBOX, backend: "direct" };
+  assert.equal(
+    (await codes(judged(), { sandbox: direct })).includes("unisolated_run_unconfirmed"),
+    false,
+  );
 });
 
 test("a model that cannot be called is caught before the run exists", async () => {

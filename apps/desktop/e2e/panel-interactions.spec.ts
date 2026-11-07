@@ -296,8 +296,8 @@ test.describe("子代理的运行记录", () => {
    * The two halves of the record are where the product keeps them: the run's
    * log holds the snapshot that names the task and its status, and the catalog
    * holds the steps — a run stream deliberately keeps a child without them,
-   * which is what the panel's own read of `.../subagents` is for. The snapshot
-   * still carries an empty `steps` array, as the server's does.
+   * which is what the panel's own read of `.../subagents/:childId` is for. The
+   * snapshot still carries an empty `steps` array, as the server's does.
    */
   function recorded(): MockOptions {
     const snapshot = {
@@ -385,6 +385,201 @@ test.describe("子代理的运行记录", () => {
     await panel.getByRole("button", { name: "返回产物和文件" }).click();
     await expect(panel.getByRole("tab", { name: "产物" })).toBeVisible();
     await expect(panel.locator(".subagent-detail")).toHaveCount(0);
+  });
+
+  test("a long record opens at once, and each folded step is mounted when it is opened", async ({ page }) => {
+    // A realistic long child: dozens of tool results, each far larger than a
+    // screen. Parsing them all at click time is what used to freeze the page.
+    const body = "x".repeat(40 * 1024);
+    const toolSteps = Array.from({ length: 24 }, (_, index) => ({
+      content: `result-${index} ${body}`,
+      createdAt: CREATED_AT,
+      id: `tool-${index}`,
+      input: `{"path":"file-${index}.txt"}`,
+      kind: "tool",
+      status: "completed",
+      toolName: "read_file",
+    }));
+    const options = recorded();
+    // The brief comes from the run's snapshot, which is the copy the panel
+    // resolves first; the catalog only fills in the steps.
+    const updated = options.runsBySession![SESSION]![0]!.events
+      .find((event) => event.type === "subagent.updated")!;
+    updated.subagent = {
+      ...(updated.subagent as JsonRecord),
+      input: { description: DESCRIPTION, inputPaths: ["papers/a.pdf"], prompt: "PROMPT-BODY" },
+    };
+    const catalog = options.subagentsBySession![SESSION]![0]!;
+    options.subagentsBySession = {
+      [SESSION]: [{
+        ...catalog,
+        steps: [
+          // The runtime's bookkeeping is not work the child did and is left
+          // out even after the timeline is opened.
+          { content: "TURN-MARKER", createdAt: CREATED_AT, id: "system-1", kind: "system", status: "completed" },
+          ...toolSteps,
+          { content: ANSWER, createdAt: CREATED_AT, id: "step-2", kind: "assistant", status: "completed" },
+        ],
+      }],
+    };
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+
+    const panel = page.locator(".workspace-panel");
+    // A budget that a loaded CI runner can still meet on the slow path. The
+    // timing is not the guard here — a wall-clock assertion on a shared runner
+    // is noisy either way. What proves the panel opened cheaply is the mount
+    // check below: nothing behind a closed fold is in the DOM.
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+
+    // Nothing behind a closed fold is in the DOM: not the brief, not the
+    // timeline's step rows, and certainly not a step's body.
+    await expect(panel.locator(".subagent-step")).toHaveCount(0);
+    await expect(panel.locator(".subagent-tool-output")).toHaveCount(0);
+    await expect(panel.getByText("PROMPT-BODY")).toHaveCount(0);
+
+    // Opening 任务 draws the brief and its input-file chip.
+    await panel.locator("summary", { hasText: "任务" }).click();
+    await expect(panel.getByText("PROMPT-BODY")).toBeVisible();
+    await expect(panel.locator(".subagent-task-path")).toHaveText("papers/a.pdf");
+
+    // Opening 执行详情 draws the step summaries, still without any body.
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    await expect(panel.locator(".subagent-step.is-tool")).toHaveCount(24);
+    await expect(panel.locator(".subagent-tool-output")).toHaveCount(0);
+    await expect(panel.getByText("TURN-MARKER")).toHaveCount(0);
+
+    // Opening one step mounts only that step's body, boxed and labelled.
+    await panel.locator(".subagent-step.is-tool summary").first().click();
+    const outputs = panel.locator(".subagent-tool-output");
+    await expect(outputs).toHaveCount(1);
+    await expect(outputs.first()).toContainText("result-0");
+    await expect(outputs.first()).not.toContainText("result-1");
+    await expect(panel.locator(".subagent-step-body").first().getByText("输入")).toBeVisible();
+    await expect(panel.locator(".subagent-step-body").first().getByText("输出")).toBeVisible();
+
+    // ...and opening another leaves the first one mounted.
+    await panel.locator(".subagent-step.is-tool summary").nth(1).click();
+    await expect(outputs).toHaveCount(2);
+  });
+
+  test("a running child shows the steps the catalog has flushed, not only its own stream", async ({ page }) => {
+    // The run that delegated this child is over; the child is not. A wake turn
+    // continues it under a run of its own, and those steps are published on
+    // that run's child stream — which this panel does not tail, because it
+    // follows the one the child was delegated from. The catalog is where the
+    // run loop flushes them, and reading it only after the child settled left
+    // the whole continuation missing while it ran.
+    const options = recorded();
+    const updated = options.runsBySession![SESSION]![0]!.events
+      .find((event) => event.type === "subagent.updated")!;
+    updated.subagent = { ...(updated.subagent as JsonRecord), status: "running" };
+    const catalog = options.subagentsBySession![SESSION]![0]!;
+    options.subagentsBySession = {
+      [SESSION]: [{
+        ...catalog,
+        steps: [
+          { content: "先看三组候选结构。", createdAt: CREATED_AT, id: "step-1", kind: "assistant", status: "completed" },
+          { content: "续跑：第二轮又核对了剩下的结构。", createdAt: CREATED_AT, id: "step-wake", kind: "assistant", status: "completed" },
+        ],
+      }],
+    };
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+
+    const panel = page.locator(".workspace-panel");
+    await expect(panel).toBeVisible();
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    // Both steps are in the catalog, and the run's own log has neither of
+    // them: the milestone it persists is slim. Seeing the second one proves
+    // the catalog was read while the child was still running.
+    await expect(panel.getByText("先看三组候选结构。")).toBeVisible({ timeout: 10_000 });
+    await expect(panel.getByText("续跑：第二轮又核对了剩下的结构。")).toBeVisible();
+
+    // The record keeps growing while the child works, and none of it is on the
+    // stream this panel tails. The panel re-reads the catalog, so a step the
+    // run loop flushes after the open arrives without the child settling.
+    options.subagentsBySession![SESSION]![0]!.steps.push({
+      content: "第三轮：结果写进了报告。",
+      createdAt: CREATED_AT,
+      id: "step-late",
+      kind: "assistant",
+      status: "completed",
+    });
+    await expect(panel.getByText("第三轮：结果写进了报告。")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("an opened fold stays with its child when another record is opened", async ({ page }) => {
+    // `Disclosure` remembers that a body was mounted. The panel draws whichever
+    // child is open at the same position, so without a key that memory carries
+    // over: opening a second child would parse its whole timeline while the
+    // fold is still closed — the cost this panel exists to keep out.
+    const SECOND = "复核第二组候选";
+    const options = recorded();
+    const events = options.runsBySession![SESSION]![0]!.events;
+    const milestone = events.find((event) => event.type === "subagent.updated")!;
+    const first = milestone.subagent as JsonRecord;
+    const second = {
+      ...first,
+      id: "child-2",
+      input: { ...(first.input as JsonRecord), description: SECOND },
+    };
+    events.splice(events.findIndex((event) => event.type === "run.completed"),
+      0, { subagent: second, type: "subagent.updated" });
+    // Both children keep a tool row, which is what their timelines show: the
+    // trailing assistant steps become 输出, not steps of the fold.
+    const catalog = options.subagentsBySession![SESSION]!;
+    catalog[0] = {
+      ...catalog[0]!,
+      steps: [
+        { content: "结果 A", createdAt: CREATED_AT, id: "tool-a", kind: "tool", status: "completed", toolName: "read_file" },
+        ...(catalog[0]!.steps as JsonRecord[]),
+      ],
+    };
+    catalog.push({
+      ...second,
+      steps: [
+        { content: "第二组复核完成。", createdAt: CREATED_AT, id: "tool-b", kind: "tool", status: "completed", toolName: "read_file" },
+        { content: "复核完成：第二组稳定。", createdAt: CREATED_AT, id: "b-1", kind: "assistant", status: "completed" },
+      ],
+    });
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+    const panel = page.locator(".workspace-panel");
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    await expect(panel.locator(".subagent-step.is-tool")).toHaveCount(1);
+
+    await page.getByRole("button", { name: `Subagent ${SECOND}` }).click();
+    // The second record is on screen — its catalog-only answer is under 输出 —
+    // and its timeline is still folded, so nothing behind it may be in the DOM.
+    await expect(panel.getByText("复核完成：第二组稳定。")).toBeVisible({ timeout: 10_000 });
+    await expect(panel.locator(".subagent-step")).toHaveCount(0);
+    await expect(panel.getByText("第二组复核完成。")).toHaveCount(0);
+  });
+
+  test("a child with no steps says so once its timeline is opened", async ({ page }) => {
+    const options = recorded();
+    const catalog = options.subagentsBySession![SESSION]![0]!;
+    options.subagentsBySession = { [SESSION]: [{ ...catalog, steps: [] }] };
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+
+    const panel = page.locator(".workspace-panel");
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    await expect(panel.getByText("这个 subagent 还没有留下可展示的执行记录。")).toBeVisible();
   });
 });
 

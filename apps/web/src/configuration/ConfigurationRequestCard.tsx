@@ -25,6 +25,11 @@ function fieldValues(request: ConfigurationRequestView): ConfigurationValues {
     ? [[field.id, field.value]] : []));
 }
 
+/** Message tables are plain objects. An inherited prototype key is not a translation. */
+function ownMessage(table: Record<string, string>, key: string, fallback: string): string {
+  return Object.hasOwn(table, key) ? table[key] ?? fallback : fallback;
+}
+
 export function isConfigurationRequestView(request: object): request is ConfigurationRequestView {
   return "capabilityId" in request;
 }
@@ -61,8 +66,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
-  const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation"];
+  const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.credentialTargetDigest ?? "", view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; credentialDraft.current = undefined; }; }, []);
@@ -83,7 +88,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     setMutationsBlocked(false);
     setErrorField(undefined);
     if (targetChanged) { credentialDraft.current = undefined; operationKeys.current.clear(); }
-  }, [request.id, request.revision, request.state, request.endpointAuthorization?.endpointTarget]);
+  }, [request.id, request.revision, request.state, request.endpointAuthorization?.endpointTarget, request.credentialTargetDigest]);
   useEffect(() => {
     if (!request.autoApplyAt || request.state !== "awaiting_confirmation") return;
     setNow(Date.now());
@@ -125,7 +130,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     const targetChanged = previousTarget.current !== targetIdentity(next);
     if (targetChanged) {
       setSecrets({}); credentialDraft.current = undefined; operationKeys.current.clear();
-      submittedPreview.current = { revision: -1 };
+      // An explicit preview already binds this new target. Invalidate only a
+      // prior preview; endpoint consent must not strand the fresh one.
+      if (submittedPreview.current?.revision !== next.revision || submittedPreview.current.digest !== next.previewDigest)
+        submittedPreview.current = { revision: -1 };
     }
     latestRequest.current = next;
     previousTarget.current = targetIdentity(next);
@@ -268,15 +276,19 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   }
   const title = m.capability[request.capabilityId] ?? request.capabilityId;
   const scope = `${m.scope[request.scope.kind]}${request.scope.kind !== "global" ? ` · ${request.scope.id}` : ""}`;
-  const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) => locale.startsWith("zh")
-    ? `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}` : option.label;
+  const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) =>
+    `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}`;
   const choiceLabel = request.choiceReceipt ? describeChoice(request.choiceReceipt) : undefined;
   const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
   const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+  const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "web.credential"
+    ? m.mode.domainNextRequest : m.mode[request.activation.mode];
+  const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];
@@ -285,12 +297,12 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     <dl className="configuration-impact">
       <dt>{m.resource}</dt><dd>{request.impact.resourceLocation}</dd>
       <dt>{m.scopeLabel}</dt><dd>{request.impact.effectiveScope || scope}</dd>
-      <dt>{m.activationLabel}</dt><dd>{m.mode[request.activation.mode]}</dd>
+      <dt>{m.activationLabel}</dt><dd>{activationModeLabel}</dd>
     </dl>
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{(request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -367,7 +379,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       </fieldset> : request.protocolVersion === 3 ? <section className="configuration-choice-options" aria-label={m.choosePath}>
         {!availableChoices.length ? <p role="status">{m.noAvailableChoice}</p> : null}
         {visibleChoices.map(option => <div key={option.id} aria-disabled={!option.available || undefined}>
-          <p><strong>{describeChoice(option)}{option.kind === "persisted_apply" ? ` · ${m.scope[request.scope.kind]} · ${m.mode[request.activation.mode]}` : ""}</strong></p>
+          <p><strong>{describeChoice(option)}{option.kind === "persisted_apply" ? ` · ${m.scope[request.scope.kind]} · ${activationModeLabel}` : ""}</strong></p>
           {option.kind !== "persisted_apply" ? <p>{option.description}</p> : null}
           {!option.available ? <p>{option.unavailableReason ?? m.choiceUnavailable}</p> : selectedOptionId !== option.id
             ? <button type="button" className="secondary-button" disabled={!editable || runActive} onClick={() => void selectOption(option.id)}>{m.selectChoice}</button> : null}
@@ -380,7 +392,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? m.field[field.id] ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
@@ -394,7 +406,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             <option value="">{m.choose}</option>
             {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
-              ?.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+              ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "web.credential" && field.id === "operation"
+                ? ownMessage(m.credentialOperation, choice.id, choice.label) : choice.label}</option>)}
           </select> : field.kind === "boolean" ? <input {...common} required={false} type="checkbox" checked={values[field.id] === true} onChange={(event) => edit(field, event.target.checked)} />
             : <input {...common} type={field.kind === "number" ? "number" : field.kind === "url" ? "url" : "text"}
               value={values[field.id] === undefined ? "" : String(values[field.id])} placeholder={field.placeholder}

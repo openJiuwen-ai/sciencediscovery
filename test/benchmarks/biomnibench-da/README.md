@@ -1,10 +1,29 @@
 # BiomniBench-DA L5 gate
 
-L5 (`release`) runs all **50 publicly released tasks** from
+L5 (`release`) runs **45 active tasks** from the 50 publicly released tasks in
 [BiomniBench-DA](https://huggingface.co/datasets/phylobio/BiomniBench-DA), in
-addition to L4. The other 50 upstream tasks are private and are not covered.
+addition to L4. L5 permanently excludes `da-1-3`, `da-1-4`, `da-17-1`,
+`da-17-5` and `da-17-3`; the other 50 upstream tasks are private and are not
+covered.
 The former `da-13-3` and `da-14-1` smoke cases are included in this corpus.
 L1–L4 do not select these paid benchmark tasks.
+
+The five IDs in [l5-excluded.json](./l5-excluded.json) are retired from the L5
+scope at the submitter's explicit request. This is an execution-scope policy,
+not a finding that their upstream data or rubrics are invalid. No per-case
+scientific-validity or flake evidence has been supplied for these exclusions.
+The pinned 50-task manifest remains unchanged for provenance; this gate must
+not be described as covering the full public benchmark. Maintainer acceptance
+of the reduced scope remains a review decision.
+
+Generator and rubric-judge thinking are fixed to `enabled` with effort `low`
+in Biomni workflow workers and the serial driver (including its evaluation-only
+recovery). This is the requested L5 budget policy, not an A/B-derived capability
+claim. Both workflows ignore `E2E_LLM_THINKING_MODE/EFFORT` and
+`BIOMNI_JUDGE_THINKING_MODE/EFFORT` repository variables for Biomni cases;
+other real workers retain those variables. Changing variables cannot perform
+a Biomni thinking A/B: use a separate configuration change for that experiment.
+The A/B and valid scored-suite evidence requested in #817 remain outstanding.
 
 ## Resumable serial execution on a shared host
 
@@ -19,11 +38,11 @@ CI_ALLOW_REAL=1 python test/benchmarks/biomnibench-da/suite.py \
   --data-root /path/to/verified-dataset --python /path/to/benchmark-python
 ```
 
-The driver freezes the release plan, derives exactly the pinned public 50 from
+The driver freezes the release plan, derives exactly the 45 active cases from
 its source identities, and runs one case at a time. AMD64 remains the default
 release target; this driver explicitly selects the actual Linux AMD64 or ARM64
 host using `--target-arch`. Actual measured architecture must match the frozen
-identity. No machine restriction is disabled, and the 50 cases are not doubled.
+identity. No machine restriction is disabled, and the 45 cases are not doubled.
 
 Failures are retained and deferred until every previously unattempted case has
 run. Preparation, process and resource-check failures are recorded per case and
@@ -54,6 +73,7 @@ the driver continues checking the remaining tasks and eventually fails if incomp
 For manual evaluation-only recovery:
 
 ```bash
+BIOMNI_JUDGE_THINKING_MODE=enabled BIOMNI_JUDGE_THINKING_EFFORT=low \
 python test/benchmarks/biomnibench-da/rescore.py \
   --evidence /path/to/original-test-results \
   --rubric /path/to/verified-task/tests/rubric.txt \
@@ -254,25 +274,35 @@ An explicitly local or diagnostic rubric in the official field fails the gate.
 ## Temporary A3 aggregate gate
 
 The default [gate policy](../../../.ci/biomni-gate.json) uses `mode: temporary`.
-Its fixed baseline equally weights the two complete historical A3 result sets.
-These mixed-revision observations are a provisional operational reference, not
-an approved identity-matched capability certification. Recalibrate in the formal
-environment. The quality target is rounded from 67.73 to the agreed 67.7.
+Its recorded reference equally weights two complete historical **50-case** A3
+result sets. The observations remain unchanged in `temporary_baseline`;
+`temporary_population` explicitly records 50 reference and 45 active cases.
+Only additive resource budgets (tokens, tool rounds and summed research time)
+are multiplied by **45/50 = 0.9** before applying the existing warning/block
+ratios. This preserves the average per-case budget instead of adding headroom.
+It is budget normalization, not a measured 45-case baseline.
 
-| Metric | Temporary baseline | Warning | Block |
-| --- | ---: | ---: | ---: |
-| Mean score over exactly 50 tasks | 67.7 | <=64.7 | <=62.7 |
-| Total tokens | 195,099,712 | >=224,364,669 | >=243,874,640 |
-| Total tool rounds | 2,042 | >=2,655 | >=3,063 |
-| Sum of research minutes | 1,312.753472 | +20% | +30% |
-| P95 of per-task peak RSS, GiB | 11.201639801 | +max(20%, 1 GiB) | +max(30%, 2 GiB) |
+The historical mean and P95 cannot be scaled by case count. They remain
+population-shifted provisional references until remeasured on the active set;
+their suitability for the reduced scope has not been established. The quality
+target is rounded from the historical 67.73 to 67.7. Recalibrate in the formal
+environment; these mixed-revision observations are not an approved
+identity-matched capability certification.
+
+| Metric | Historical 50-case reference | Effective reference for 45-case gate | Warning | Block |
+| --- | ---: | ---: | ---: | ---: |
+| Mean score (50-case observation, not remeasured) | 67.7 | 67.7 (unscaled provisional target) | <=64.7 | <=62.7 |
+| Total tokens | 195,099,712 | 175,589,740.8 (x45/50) | >=201,928,202 | >=219,487,176 |
+| Total tool rounds | 2,042 | 1,837.8 (x45/50) | >=2,390 | >=2,757 |
+| Sum of research minutes | 1,312.753472 | 1,181.478125 (x45/50) | +20% | +30% |
+| P95 of per-task peak RSS, GiB (50-case observation, not remeasured) | 11.201639801 | 11.201639801 (unscaled) | +max(20%, 1 GiB) | +max(30%, 2 GiB) |
 
 Limits are inclusive; blocking takes precedence over warnings. Memory P95 uses
 linear interpolation (Excel PERCENTILE.INC convention). Maximum RSS remains
 visible, but the historical 131.07 GiB outlier is not a normal maximum baseline.
 The implementation compares unrounded values; table count limits round up.
 
-All 50 selected tasks must have valid delivery, evaluation and complete required
+All 45 selected tasks must have valid delivery, evaluation and complete required
 metrics. Missing, duplicate or mismatched results fail, and partial means never
 certify the suite. Only aggregate quality is gated; per-task zero scores remain
 visible without automatically triggering retries. There are no hard per-task
@@ -285,9 +315,12 @@ unknown usage is not replaced by zero. A new evaluation cannot repair unknown
 cost from an earlier request, and required accounting incompleteness still
 blocks the gate. A recovered score and resource completeness are separate facts.
 
-`biomni-gate.json` and `biomni-gate.md` contain all 50 task statuses, delivery and
+`biomni-gate.json` and `biomni-gate.md` contain all 45 active task statuses, delivery and
 evaluation states, available measurements, structured failure codes, aggregate
-values and threshold outcomes. GitHub's real-report step publishes the same
+values and threshold outcomes. The report identifies `scope: public-45-active`,
+retains `dataset_scope: public-50` and the excluded IDs, and exposes the original
+references, budget scale and effective references alongside threshold outcomes.
+GitHub's real-report step publishes the same
 per-task table in its step summary. Detailed attempt errors stay in diagnostic
 logs and the serial driver's status/summary files, outside public score fields.
 

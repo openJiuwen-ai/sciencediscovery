@@ -645,6 +645,13 @@ class NativeAgent implements NativeAgentHandle {
         });
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, withWireSummary(modelTurnStreamer, "task"));
       let reportedModelUsage = false;
+      // The runtime ends the loop on a turn cut at the output limit that called
+      // no tool. That is not a finished task: the model was interrupted
+      // mid-answer, so whatever it was going to write was never written. The
+      // JiuwenSwarm backend already refuses to report that shape as done
+      // (`agent-run/jiuwenswarm-agent.ts`), and the two backends must agree on
+      // what "completed" means.
+      let truncatedTerminalTurn = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
         maxParallelToolCalls: configuredMaxParallelToolCalls(),
@@ -691,6 +698,7 @@ class NativeAgent implements NativeAgentHandle {
         eventSink: (event) => {
           this.emitRuntimeEvent(event, this.versionRecorder?.event(event));
           if (event.type === "model_usage") reportedModelUsage = true;
+          if (event.type === "completed" && event.truncated) truncatedTerminalTurn = true;
         },
         turnLifecycle: this.versionRecorder,
         suspendAfterTurn: this.options.suspendAfterTurn,
@@ -702,6 +710,16 @@ class NativeAgent implements NativeAgentHandle {
       const usage = result.usage;
       if (!reportedModelUsage) this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
       if (usage) this.emit({ type: "usage", usage });
+      if (truncatedTerminalTurn) {
+        // Fail closed with the one knob that fixes it, rather than reporting a
+        // run that produced nothing as `completed`. `result.history` is kept, so
+        // the trajectory still shows the turn that was cut off.
+        throw new Error(
+          "Native agent ended with an unrecovered output limit: the model was cut off by "
+          + `max_tokens (${this.policy.maxTokens}) before it finished answering. `
+          + "Raise SCIENCE_AGENT_LLM_MAX_TOKENS and retry, or ask for a smaller step.",
+        );
+      }
       return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")),
         ...(result.suspended ? { suspended: true } : {}) };
     } finally {

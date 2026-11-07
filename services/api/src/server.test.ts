@@ -124,11 +124,43 @@ import type { NativeAgentOptions } from "./native-agent/index.js";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
 import { SessionStore } from "./store.js";
+import { EvolutionStore } from "./evolution/store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
 
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
+
+test("closing an API during startup waits for evolution initialization", async () => {
+  const root = resolve(process.cwd(), ".tmp", `startup-close-${randomUUID()}`);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const initializeStarted = new Promise<void>((resolveStarted) => { started = resolveStarted; });
+  const originalInitialize = EvolutionStore.prototype.initialize;
+  let server: ReturnType<typeof createProductionApiServer> | undefined;
+  let closing: Promise<void> | undefined;
+  EvolutionStore.prototype.initialize = async function (): Promise<void> {
+    started();
+    await gate;
+    await originalInitialize.call(this);
+  };
+  try {
+    server = createProductionApiServer(testConfig(root));
+    await initializeStarted;
+    let closed = false;
+    closing = closeApiServer(server).then(() => { closed = true; });
+    await new Promise((done) => setTimeout(done, 20));
+    assert.equal(closed, false);
+    release();
+    await closing;
+  } finally {
+    release();
+    EvolutionStore.prototype.initialize = originalInitialize;
+    if (server) await (closing ?? closeApiServer(server));
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 /**
  * Agent turns run on JiuwenSwarm (behind a real adapter) in the tests that declare `swarm:required`: the shared
@@ -582,6 +614,66 @@ test("closing the API server drains active connections before closing the MCP tr
   assert.equal(closeCalls, 1);
 });
 
+test("request errors after headers terminate the response without rejecting the HTTP listener", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `sent-headers-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const server = createApiServer(testConfig(root));
+  context.after(async () => {
+    await removeTestRoot(root);
+    await closeApiServer(server);
+  });
+  // Capture escaped rejections so the unfixed handler fails an assertion instead
+  // of crashing the test process with ERR_HTTP_HEADERS_SENT.
+  const handler = server.listeners("request")[0]!;
+  const escaped: unknown[] = [];
+  server.removeListener("request", handler);
+  server.on("request", (request, response) => {
+    void Promise.resolve(handler(request, response)).catch((error) => {
+      escaped.push(error);
+      response.destroy();
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
+    headers: authorization, method: "POST", body: JSON.stringify({ name: "Streaming failure" }),
+  });
+  assert.equal(project.response.status, 201);
+  testApiOrigins.set(root, { origin, close: () => closeApiServer(server) });
+  for (const code of [undefined, "ENOENT"]) {
+    let writes = 0;
+    let contentType: string | number | string[] | undefined;
+    server.prependOnceListener("request", (_request, response) => {
+      const writeHead = response.writeHead.bind(response);
+      context.mock.method(response, "writeHead", (...args: Parameters<typeof response.writeHead>) => {
+        writes += 1;
+        writeHead(...args);
+        contentType = response.getHeader("content-type");
+        // Fault injection after a real response has committed its headers:
+        // exercise both the unclassified and classified catch branches.
+        response.flushHeaders();
+        throw Object.assign(new Error("injected streaming failure"), { code });
+      });
+    });
+    await assert.rejects(async () => {
+      const response = await fetch(`${origin}/api/sessions/${project.body.firstSession.id}/messages`, {
+        headers: authorization, method: "POST", body: JSON.stringify({ content: "hello" }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      await response.text();
+    });
+    assert.deepEqual(escaped, [], "the async HTTP listener must not reject");
+    assert.match(String(contentType), /^text\/event-stream/, "inject the failure into the actual SSE response");
+    assert.equal(writes, 1, "error handling must not write a second response header");
+    const response = await fetch(`${origin}/api/projects`, { headers: authorization });
+    assert.equal(response.status, 200, "the server must continue serving requests");
+    await response.json();
+  }
+  const missing = await fetch(`${origin}/api/not-a-route`, { headers: authorization });
+  assert.equal(missing.status, 404);
+  assert.match(await missing.text(), /Not found/);
+});
+
 async function startScientificTestApi(
   context: TestContext,
   dataDir: string,
@@ -922,10 +1014,8 @@ test("updating SSH credentials immediately probes with the newly stored username
   const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(async () => {
-    await new Promise<void>((resolveClose) => {
-      server.close(() => resolveClose());
-      server.closeAllConnections();
-    });
+    // Drain asynchronous API cleanup before removing the stores it still owns.
+    await closeApiServer(server);
     await rm(tempRoot, { force: true, recursive: true });
   });
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -4388,6 +4478,25 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.equal(assistantSteps.length, 1);
   assert.equal(assistantSteps[0]?.id, streamedAssistantSteps[0]?.id);
   assert.equal(assistantSteps[0]?.content, "Subagent inspected the workspace and returned a concise result.");
+  // The panel reads only the child it opens; the single record must match the
+  // one the roster carries, and an unknown id or Session is a 404 rather than
+  // an empty success.
+  const single = await jsonRequest<Subagent>(
+    `${origin}/api/sessions/${session.body.id}/subagents/${subagents.body[0]?.id}`,
+    { headers: authorization },
+  );
+  assert.equal(single.response.status, 200);
+  assert.deepEqual(single.body, subagents.body[0]);
+  const unknownChild = await jsonRequest(
+    `${origin}/api/sessions/${session.body.id}/subagents/no-such-child`,
+    { headers: authorization },
+  );
+  assert.equal(unknownChild.response.status, 404);
+  const unknownSession = await jsonRequest(
+    `${origin}/api/sessions/no-such-session/subagents/${subagents.body[0]?.id}`,
+    { headers: authorization },
+  );
+  assert.equal(unknownSession.response.status, 404);
   // The run stream stores one record per logical step. The snapshots streamed
   // while a message is still arriving are broadcast to live subscribers and
   // never stored, so this file cannot grow with the length of the message.
@@ -7932,13 +8041,7 @@ test("closing the server closes the MCP transport it connected at startup", asyn
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 
   assert.equal(closed, 0, "the transport must stay open while the server is serving");
-  await new Promise<void>((resolveClose) => {
-    server.close(() => resolveClose());
-    server.closeAllConnections();
-  });
-  // The listener's close callback and the teardown both run on `close`; give
-  // the asynchronous one a turn before reading the count.
-  await new Promise((settled) => setImmediate(settled));
+  await closeApiServer(server);
 
   assert.equal(closed, 1);
 });

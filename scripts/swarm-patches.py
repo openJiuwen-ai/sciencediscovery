@@ -12,6 +12,28 @@ import subprocess
 
 PATCH_ENCODING = "utf-8"
 
+# Dev/test assets a wheel install never ships. A source checkout carries
+# tests/ and every patch applies; a wheel install (site-packages) omits them,
+# so a patch whose targets are all optional-and-absent is skipped there, and a
+# mixed patch applies with --exclude for its absent optional targets. Without
+# this, the required-paths check below hard-fails on the wheel form the
+# moment any patch touches tests/ (0016b ships test-side adapters).
+OPTIONAL_PATH_PREFIXES = ("tests/",)
+
+# Build metadata a wheel install never ships either. 0018/0019 (SIZEOPT W1/W2)
+# slim the dependency set and align workspace versions, which lives in the
+# checkout's root pyproject.toml and uv.lock — neither of which is inside the
+# package, so neither survives into site-packages. A wheel therefore cannot and
+# must not carry those hunks: 0019 is root-only and no-ops there, and 0018 still
+# applies its in-package hunk. Exact names, not prefixes, so nothing under
+# jiuwenswarm/ can be swept up by accident.
+OPTIONAL_ROOT_PATHS = ("pyproject.toml", "uv.lock")
+
+
+def is_optional(name):
+    return name in OPTIONAL_ROOT_PATHS or any(
+        name.startswith(prefix) for prefix in OPTIONAL_PATH_PREFIXES)
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -26,15 +48,29 @@ def restore_pinned(target, tag, paths, env):
     """Return patched paths to the pinned tag, so that patches revised in place apply again.
 
     Only a source checkout can do this: its Git history has the unpatched files. A
-    path the tag does not have was created by a patch and is removed.
+    path the tag does not have was created by a patch and is removed. Restored
+    paths are printed, so a manual edit inside a patched file that is about to
+    be discarded is visible rather than silent.
     """
+    restored = []
     for name in sorted(paths):
+        # A wheel-form tree legitimately lacks optional (tests/) paths; do not
+        # resurrect them from the tag — restore_pinned must return the tree to
+        # ITS pre-patch shape, not the source checkout's.
+        if is_optional(name) and not (target / name).is_file():
+            continue
         pinned = subprocess.run(["git", "-C", str(target), "cat-file", "-e", f"{tag}:{name}"],
                                 env=env, capture_output=True).returncode == 0
         if pinned:
+            restored.append(name)
             subprocess.run(["git", "-C", str(target), "checkout", tag, "--", name], env=env, check=True)
         else:
+            restored.append(f"{name} (added by a patch; removed)")
             (target / name).unlink(missing_ok=True)
+    if restored:
+        print("swarm-patches: restoring pinned state (any local edits to these files are discarded):")
+        for name in restored:
+            print(f"  - {name}")
 
 
 def process(mode, target, tag, patch_dir=None):
@@ -50,9 +86,16 @@ def process(mode, target, tag, patch_dir=None):
             raise ValueError(f"Unsafe patch path: {name}")
     # New files have a +++ header too, but are intentionally absent before the
     # patch. Only the old-side headers name files a patch must find in the
-    # checked-out JiuwenSwarm source.
+    # checked-out JiuwenSwarm source. Optional paths (tests/) may be absent
+    # in a wheel install (site-packages); they are excluded from the required
+    # set, and every git apply invocation below passes --exclude for the
+    # absent ones, so a tests-only patch (0016b) becomes a no-op there while
+    # mixed patches still apply their product-code hunks. A source checkout
+    # (and the shipped installer payload, which carries the whole src tree)
+    # has tests/ and applies everything.
     required_paths = patch_paths(patches, "---")
-    missing = [name for name in required_paths if not (target / name).is_file()]
+    missing = [name for name in required_paths
+               if not (target / name).is_file() and not is_optional(name)]
     if missing:
         expected = tag
         if (target / ".git").exists():
@@ -78,20 +121,59 @@ def process(mode, target, tag, patch_dir=None):
         # and a revised new-file patch finds its file already there. Start a source
         # checkout from the pinned files whenever the recorded patch set changed.
         previous = json.loads(manifest.read_text()) if manifest.exists() else None
+        # [windows-desktop] 0015 note: later patches may touch the same hunks
+        # as earlier ones (0015 removes a call site 0001 added), so
+        # reverse-checking 0001 over a fully patched tree fails even though
+        # the tree is correct. Short-circuit first: an unchanged patch set
+        # whose recorded file digests still match the tree IS the fully
+        # patched state — nothing to apply, and no per-patch reverse check
+        # can succeed (each later patch invalidates its predecessors'
+        # reverse context). This covers both source checkouts and tag-less
+        # scratch trees (patch tests).
+        # The receipt may come from another tree form: a wheel build exports
+        # the manifest of the SOURCE checkout it patched, and the wheel's
+        # site-packages legitimately lacks optional (tests/) paths. Absent
+        # optional paths do not disqualify the digest short-circuit — only
+        # present-but-mismatching digests do.
+        skip_apply = previous is not None and previous.get("patches") == expected["patches"] and all(
+            (not (target / name).is_file() and is_optional(name))
+            or (digest(target / name) == recorded if (target / name).is_file() else False)
+            for name, recorded in previous.get("files", {}).items()
+        ) and all((target / name).is_file() for name in paths
+                  if not is_optional(name))
         if previous and previous.get("patches") != expected["patches"] and (target / ".git").exists():
             restore_pinned(target, tag, set(paths) | set(previous.get("files", {})), env)
-        for patch in patches:
-            command = ["git", "-C", str(target), "apply"]
-            if subprocess.run(command + ["--reverse", "--check", str(patch)],
-                              env=env, capture_output=True).returncode == 0:
-                continue
-            subprocess.run(command + ["--check", str(patch)], env=env, check=True)
-            subprocess.run(command + [str(patch)], env=env, check=True)
-        expected["files"] = {name: digest(target / name) for name in paths}
+        # A source checkout with the tag available replays from the pinned
+        # state (a few seconds of git apply) — correct even when the digest
+        # short-circuit above did not trigger (mixed manual edits, missing
+        # files). Fresh trees without .git (packaged site-packages) or without
+        # the tag (scratch test dirs) keep the legacy forward/skip cycle.
+        elif not skip_apply and (target / ".git").exists() and subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "-q", "--verify", f"{tag}^{{commit}}"],
+            capture_output=True).returncode == 0:
+            restore_pinned(target, tag, set(paths) | set(previous.get("files", {}) if previous else {}), env)
+        if not skip_apply:
+            # Wheel form: pass --exclude for every optional path the tree does
+            # not carry, so tests-only patches no-op and mixed patches apply
+            # just their product-code hunks. Source form: excludes are empty.
+            excludes = [arg for name in required_paths
+                        if is_optional(name) and not (target / name).is_file()
+                        for arg in ("--exclude", name)]
+            for patch in patches:
+                command = ["git", "-C", str(target), "apply"] + excludes
+                if subprocess.run(command + ["--reverse", "--check", str(patch)],
+                                  env=env, capture_output=True).returncode == 0:
+                    continue
+                subprocess.run(command + ["--check", str(patch)], env=env, check=True)
+                subprocess.run(command + [str(patch)], env=env, check=True)
+        expected["files"] = {name: digest(target / name) for name in paths
+                             if (target / name).is_file()}
         manifest.write_text(json.dumps(expected, indent=2) + "\n")
     else:
         actual = json.loads(manifest.read_text())
-        expected["files"] = {name: digest(target / name) for name in paths}
+        # Mirror the wheel form: absent optional paths are not recorded.
+        expected["files"] = {name: digest(target / name) for name in paths
+                             if (target / name).is_file()}
         if actual != expected:
             raise ValueError("Swarm patch verification failed; rebuild or run setup before starting")
 

@@ -71,6 +71,13 @@ test("a triple-quoted string is split across the lines it spans", () => {
   assert.deepEqual(lines[1], [{ kind: "string", text: "two\"\"\"" }]);
 });
 
+test("closes a triple-quoted string after an escaped backslash", () => {
+  // The second backslash is itself escaped, so the delimiter is not escaped.
+  const lines = highlightPython("x = \"\"\"a\\\\\"\"\"\ny = 2\n");
+  assert.equal(lines.length, 2);
+  assert.ok(lines[1]!.every((token) => token.kind !== "string"), `line 2 is code, not string: ${kinds(lines[1]!)}`);
+});
+
 test("a file that ends in a newline has no extra blank line after it", () => {
   assert.equal(highlightPython("x = 1\n").length, 1);
   assert.equal(highlightPython("x = 1\n\n").length, 2, "a blank line in the file is still one");

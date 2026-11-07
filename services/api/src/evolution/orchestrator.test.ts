@@ -102,6 +102,9 @@ const FINISHED = (status: string, best: number | null): EvolveEvent => ({
 
 interface FakeSidecar {
   close: () => Promise<void>;
+  /** A run stream the client walked away from without it ending the response —
+   *  what an aborted connection looks like on this side of the wire. */
+  disconnected: () => boolean;
   /** Run requests as they arrived, so a test can assert what was sent. */
   requests: () => Array<Record<string, unknown>>;
   stopped: () => boolean;
@@ -117,6 +120,7 @@ async function startFakeSidecar(options: {
   status?: number;
 }): Promise<FakeSidecar> {
   let stopped = false;
+  let dropped = false;
   const requests: Array<Record<string, unknown>> = [];
   const server: Server = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/runs") {
@@ -138,6 +142,10 @@ async function startFakeSidecar(options: {
       return;
     }
     response.writeHead(200, { "content-type": "application/x-ndjson" });
+    // A client that aborts the request is the sidecar's shutdown signal. The
+    // fake records it so a test can tell "the search was told to stop" from
+    // "the API hung up on a search nobody is recording any more".
+    response.on("close", () => { if (!response.writableEnded) dropped = true; });
     if (options.raw) {
       for (const line of options.raw) response.write(line);
       response.end();
@@ -160,6 +168,7 @@ async function startFakeSidecar(options: {
         })}\n`);
         response.end();
       }, 5);
+      response.on("close", () => clearInterval(timer));
       return;
     }
     response.end();
@@ -168,7 +177,14 @@ async function startFakeSidecar(options: {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   return {
-    close: () => new Promise<void>((closed) => { server.close(() => closed()); }),
+    // A stream the code under test left open must not keep the test process
+    // alive: closing the server has to mean closing its connections, or a
+    // regression shows up as a hung suite instead of a failed assertion.
+    close: () => new Promise<void>((closed) => {
+      server.closeAllConnections();
+      server.close(() => closed());
+    }),
+    disconnected: () => dropped,
     requests: () => requests,
     stopped: () => stopped,
     url: `http://127.0.0.1:${port}`,
@@ -319,6 +335,25 @@ test("a stream that ends without a terminal event fails the run rather than hang
   }, "the run to be failed");
 
   assert.match((await store.readRun(run.id))?.error ?? "", /no terminal event arrived/);
+});
+
+test("a record that cannot be persisted stops the search instead of leaving it live", async () => {
+  // The Windows symptom: `run.json` could not be replaced while another handle
+  // held it, the run was recorded as failed, and the search kept expanding
+  // with nobody reading it — stop returned "already over" so the button did
+  // nothing. Failing to record a record is the API hanging up, not a reason to
+  // leave a paying search running.
+  const sidecar = await startFakeSidecar({ events: [EXPANDED], holdUntilStop: true });
+  cleanup(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "evolve-persist-failure");
+  store.appendEvents = async () => {
+    throw new Error("EPERM: operation not permitted, rename 'run.json'");
+  };
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "failed", "the run to be failed");
+  assert.match((await store.readRun(run.id))?.error ?? "", /EPERM/);
+  await waitFor(() => sidecar.disconnected(), "the sidecar connection to close");
 });
 
 test("an unreachable sidecar fails the run with a readable error", async () => {

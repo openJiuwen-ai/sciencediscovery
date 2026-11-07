@@ -22,6 +22,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 // @ts-expect-error — plain .mjs helper shared with scripts/assemble-backend.mjs (no .d.mts in scope)
 import { copyVenvRuntimeDlls, replaceVenvTrampolines } from "../scripts/lib/venv-launchers.mjs";
+// @ts-expect-error — plain .mjs helper shared with scripts/assemble-backend.mjs (no .d.mts in scope)
+import { payloadCompileEnv, unpackedBytecodeVerdict } from "../scripts/lib/pyc-budget.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,8 +55,14 @@ export function packagedPaths(resourcesPath: string): PackagedPaths {
     python: join(resourcesPath, "python"),
     micromamba: join(resourcesPath, "micromamba", "micromamba.exe"),
     envsTemplate: join(resourcesPath, "envs-template"),
-    venvNames: ["gateway", "memory-graph", "evolve", "adapter", "paper"],
-    jwSrc: join(resourcesPath, "backend", ".sciencediscovery-data", "jiuwenswarm", "src"),
+    // SIZEOPT W2: the five Python sidecars share one venv ("sd-services",
+    // staged by assemble-backend from the uv workspace lock) — see
+    // sizeopt\agent-knowledge\design\D1 for the 6→2 merge decision.
+    venvNames: ["sd-services"],
+    // SIZEOPT W6 / design D11: short payload layout backend\jw (was
+    // backend\.sciencediscovery-data\jiuwenswarm\src) — the deep path burned
+    // all MAX_PATH headroom under the default install root (problems W6).
+    jwSrc: join(resourcesPath, "backend", "jw"),
   };
 }
 
@@ -63,6 +71,12 @@ export function packagedPaths(resourcesPath: string): PackagedPaths {
 export interface UnpackStamp {
   installRoot: string;
   at: string;
+  /** Identity of the payload whose bytecode was judged when this stamp was
+  *  written (payloadIdentity()). Optional on purpose: stamps written before
+  *  this field existed carry none, and an unidentified predecessor is judged
+  *  again rather than trusted — the upgrade path is exactly what the first-launch
+  *  check exists for (see needsBytecodeJudgement). */
+  payload?: string | null;
 }
 
 export function stampPath(dataDir: string): string {
@@ -91,10 +105,19 @@ export function packagedEnv(paths: PackagedPaths, dataDir: string): NodeJS.Proce
     JIUWENSWARM_ROOT: join(dataDir, "jiuwenswarm"),
     JIUWENSWARM_SRC: paths.jwSrc,
     // The api defaults paper's interpreter to a POSIX-style venv path that
-    // never exists on Windows; point it at the bundled paper venv.
-    SCIENCE_AGENT_PAPER_PYTHON_PATH: join(envsRoot, "paper", "Scripts", "python.exe"),
+    // never exists on Windows; point it at the shared sidecar venv
+    // (SIZEOPT W2: one "sd-services" venv for all five Python sidecars).
+    SCIENCE_AGENT_PAPER_PYTHON_PATH: join(envsRoot, "sd-services", "Scripts", "python.exe"),
     // Tell the stack where to find the sidecar venvs (in-place or copied).
     SCIENCE_AGENT_ENVS_DIR: envsRoot,
+    // Windows has no bubblewrap or Seatbelt, so program evolution would be
+    // refused outright. This opts the installation into direct candidate
+    // execution — which is *not* a sandbox: a candidate runs with the user's
+    // own file, network and environment access. The API still refuses any run
+    // whose goal does not carry the user's confirmation, collected by the
+    // create dialog's warning switch. Set here and nowhere else, so a server
+    // deployment cannot pick it up by accident.
+    SCIENCE_AGENT_EVOLVE_UNISOLATED: "1",
     // Ship the new desktop UI as the renderer payload.
     SCIENCE_AGENT_WEB_DIR: "apps/desktop/dist",
   };
@@ -171,7 +194,11 @@ export interface BootstrapResult {
   precompiled: number;
 }
 
-/** True when the envs under this data dir must be (re)unpacked. Pure decision. */
+/** True when the envs under this data dir must be (re)unpacked. Pure decision.
+ *  NOTE: this is the UNPACK decision and compares install location only. It must
+ *  not be repurposed as "is this payload new" — a same-location upgrade keeps
+ *  the install root, and answering that question here would silently start
+ *  re-copying trees (see needsBytecodeJudgement). */
 export function needsUnpack(dataDir: string, installRoot: string): boolean {
   const stampFile = stampPath(dataDir);
   if (!existsSync(stampFile)) return true;
@@ -180,6 +207,65 @@ export function needsUnpack(dataDir: string, installRoot: string): boolean {
     return stamp.installRoot !== installRoot;
   } catch {
     return true; // unreadable stamp: treat as not unpacked
+  }
+}
+
+/** Identity of the payload an install is running from, or null when version.json
+ *  does not carry one. Built from the two fields assemble-backend.mjs already
+ *  writes: repoCommit (what was built) and builtAt (which build of it). One small
+ *  synchronous read, so calling it once per launch costs nothing measurable.
+ *
+ *  This exists because install location cannot tell two payloads apart. An
+ *  upgrade replaces <install>\resources while keeping the install root (the
+ *  installer reads it back from the registry) and the data dir (pinned to
+ *  %LOCALAPPDATA%\ScienceDiscovery), so a stamp keyed on location alone survives
+ *  the very event that puts a new payload on disk. */
+export function payloadIdentity(resourcesPath: string): string | null {
+  try {
+    const v = JSON.parse(readFileSync(join(resourcesPath, "version.json"), "utf8")) as {
+      repoCommit?: unknown;
+      builtAt?: unknown;
+    };
+    const commit = typeof v.repoCommit === "string" ? v.repoCommit : null;
+    const built = typeof v.builtAt === "string" ? v.builtAt : null;
+    if (commit === null && built === null) return null;
+    return `${commit ?? "?"}@${built ?? "?"}`;
+  } catch {
+    return null; // no manifest: nothing to compare, and the caller degrades safely
+  }
+}
+
+/** True when the first-launch bytecode judgement must run again. Deliberately a
+ *  SEPARATE predicate from needsUnpack, because the two questions differ:
+ *  needsUnpack asks "is there an unpacked tree for this install location" and
+ *  gates a ~7s copy, while this asks "has THIS PAYLOAD been judged here yet".
+ *  Folding the payload check into needsUnpack would silently change the unpack
+ *  decision — a same-location upgrade would start re-copying — which is a
+ *  behaviour change nobody asked for and would be invisible in this file.
+ *
+ *  Both halves of the stamp's identity are preserved across an upgrade (the
+ *  installer keeps $INSTDIR from the registry, and the data dir is pinned), so
+ *  gating on needsUnpack alone let every upgrade skip the judgement:
+ *  the payload is read-only between launches of ONE payload, but an upgrade
+ *  swaps it, and the swapped-in payload is the one whose bytecode can be
+ *  incomplete (problems W25). Judging it once per payload costs the measured
+ *  ~750ms walk on the upgrade launch and nothing on any later launch. */
+export function needsBytecodeJudgement(
+  dataDir: string,
+  installRoot: string,
+  payloadId: string | null,
+): boolean {
+  // No stamp for this location, or an unreadable one: judge.
+  if (needsUnpack(dataDir, installRoot)) return true;
+  try {
+    const stamp = JSON.parse(readFileSync(stampPath(dataDir), "utf8")) as Partial<UnpackStamp>;
+    // A stamp predating the `payload` field describes a payload that cannot be
+    // identified. Trusting it would inherit an unknown predecessor's verdict;
+    // judging costs one walk. The unsafe direction is trusting (lesson L62).
+    if (stamp.payload === undefined) return true;
+    return stamp.payload !== payloadId;
+  } catch {
+    return true;
   }
 }
 
@@ -241,6 +327,133 @@ export async function treeHasPycache(root: string): Promise<boolean> {
     }
   }
   return false;
+}
+
+/** Shape of the `bytecode` block assemble writes into resources/version.json
+ *  (issue #897 section 2, first half). Absent in payloads built before it. */
+interface PayloadBytecodeManifest {
+  py: number;
+  pyc: number;
+  byRegion: Record<string, { py: number; pyc: number }>;
+}
+
+/**
+ * Read the build's own bytecode count for the region bootstrap unpacks
+ * (envs-template -> <dataDir>\envs). Returns null when version.json is missing,
+ * unreadable, or predates the `bytecode` field, so the caller degrades to the
+ * absolute coverage limit rather than passing blind on a missing input
+ * (lesson L51). Synchronous and tiny (the manifest is ~300 bytes), matching
+ * needsUnpack's stamp read.
+ */
+export function readPayloadBytecodeManifest(resourcesPath: string): { py: number; pyc: number } | null {
+  try {
+    const manifest = JSON.parse(readFileSync(join(resourcesPath, "version.json"), "utf8")) as { bytecode?: PayloadBytecodeManifest };
+    const region = manifest.bytecode?.byRegion?.["envs-template"];
+    if (region && Number.isFinite(region.py) && Number.isFinite(region.pyc)) {
+      return { py: region.py, pyc: region.pyc };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Count .py / .pyc under a tree — the full walk behind the first-launch
+ * bytecode check. Unlike treeHasPycache() this visits EVERY directory (no
+ * short-circuit on the first hit), because the question is "how much coverage
+ * survived the copy", not "is there any". Measured on the release6 env tree:
+ * ~750ms for ~6,100 modules across ~1,700 dirs, paid once on first launch only
+ * — every later start short-circuits on the unpack stamp before reaching this.
+ *
+ * The walk is iterative (explicit stack), matching the build-side A6 walk in
+ * assemble-backend.mjs: the venv tree is thousands of directories in aggregate,
+ * and an async recursion that awaits per level is both slower and stack-fragile.
+ */
+export async function countBytecode(root: string): Promise<{ py: number; pyc: number }> {
+  let py = 0;
+  let pyc = 0;
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop() as string;
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue; // unreadable directory: count what is reachable, never crash first launch
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        stack.push(join(dir, entry.name));
+      } else if (entry.name.endsWith(".py")) {
+        py += 1;
+      } else if (entry.name.endsWith(".pyc")) {
+        pyc += 1;
+      }
+    }
+  }
+  return { py, pyc };
+}
+
+/**
+ * Judge the env tree bootstrap will run Python from against the build's own
+ * recorded count (#897 §2, second half) and log the outcome. Returns the verdict
+ * so each branch can decide what to compile; the walk and the wording live here
+ * so the two branches cannot drift apart.
+ *
+ * BOTH branches must call this. SCIENCE_AGENT_IN_PLACE_ENVS=1 is what a packaged
+ * install actually runs with — main.ts sets it before bootstrapPackaged so a cold
+ * start reaches the UI in ~10-20s — so wiring the check only into the copy
+ * branch would leave it unreachable on every real install. That is exactly what
+ * the first version of this guard did (lesson L55: the code existing is not the
+ * code running), and it is why test/bootstrap.test.ts drives this branch for
+ * real instead of asserting on source text.
+ *
+ * `treeName` only shapes the log line ("in-place" / "copied"), so a field report
+ * says WHICH tree was judged — the two fail differently: a partial copy loses
+ * whole directories, while the read-only payload cannot, but can ship
+ * uncompiled (problems W4).
+ */
+async function judgeBytecodeCoverage(
+  treeName: string,
+  envsDir: string,
+  resourcesPath: string,
+  log: (line: string) => void,
+): Promise<{ ok: boolean; ratio: number; reason: string; expectedPyc: number | null; kind: string | null }> {
+  const counts = await countBytecode(envsDir);
+  const expectedRegion = readPayloadBytecodeManifest(resourcesPath);
+  const verdict = unpackedBytecodeVerdict(counts, expectedRegion);
+  // Name BOTH recorded counts. The suffix used to report only the .pyc, which
+  // contradicted the reason on the source-loss shape ("3,062 of the 6,124 .py"
+  // followed by "the build recorded 6,119 .pyc") and sent a field report
+  // looking at the wrong number.
+  const recorded = expectedRegion
+    ? ` (the build recorded ${expectedRegion.py} .py and ${expectedRegion.pyc} .pyc for this region)`
+    : " (no build manifest to compare against)";
+  if (verdict.ok) {
+    log(`first run: bytecode coverage verified (${treeName}) — ${counts.pyc} .pyc for ${counts.py} .py`
+      + ` = ${(verdict.ratio * 100).toFixed(1)}%${recorded}; no remedial compile needed`);
+  } else {
+    // §2's "names itself at first launch": say WHICH tree, HOW incomplete, and
+    // WHY it matters, before any ImportError can. The remedial compile each
+    // branch runs next is best-effort — under the default install root the
+    // deepest venv path already breaches MAX_PATH (63 + 1 + 192 + 14 > 259,
+    // problems W6/W15), so it may only recover part of the set. Naming it is
+    // the load-bearing half; the compile is the recovery attempt.
+    // What the remedial compile below can actually do depends on which limit
+    // fired, so promise only that. Missing caches are recompilable; missing
+    // SOURCES are not — compileall has nothing to read — and claiming otherwise
+    // would be a log that reports a recovery which never happened (the defect
+    // recorded in problems W25 item 5).
+    const recovery = verdict.kind === "py-count"
+      ? " A first-launch compile cannot restore files that are gone from the payload, so the affected modules will"
+        + " keep failing to import until this installation is repaired or reinstalled; compiling now to recover"
+        + " whatever caches the surviving sources are missing."
+      : " Attempting a first-launch compile to recover it; if that cannot finish, some Python modules"
+        + " will fail to import until the payload is rebuilt.";
+    log(`first run: WARNING — the ${treeName} env tree has incomplete bytecode: ${verdict.reason}${recorded}.` + recovery);
+  }
+  return { ok: verdict.ok, ratio: verdict.ratio, reason: verdict.reason, expectedPyc: verdict.expectedPyc, kind: verdict.kind };
 }
 
 /**
@@ -356,11 +569,18 @@ export async function bootstrapPackaged(
 ): Promise<BootstrapResult> {
   const bootstrapStarted = Date.now();
   log("[perf] bootstrapPackaged start");
+  const perfB = (event: string, extra = ""): void => {
+    log(`[perf] bootstrap ${event} +${Date.now() - bootstrapStarted}ms${extra ? ` ${extra}` : ""}`);
+  };
+  perfB("enter");
   // Optionally run venvs straight from the read-only payload.
   // Packaged mode never mutates venvs at runtime, so copying them into the
   // data directory is pure overhead on first start.
   const inPlaceEnvs = process.env.SCIENCE_AGENT_IN_PLACE_ENVS === "1";
   const envsDir = inPlaceEnvs ? paths.envsTemplate : join(dataDir, "envs");
+  // Which payload this launch is running from. Stamped below so an upgrade is
+  // told apart from a relaunch of the same payload (needsBytecodeJudgement).
+  const payloadId = payloadIdentity(paths.resourcesPath);
 
   if (!inPlaceEnvs && !needsUnpack(dataDir, paths.resourcesPath)) {
     // A same-location reinstall keeps a valid unpack stamp, so
@@ -374,14 +594,19 @@ export async function bootstrapPackaged(
     if (existsSync(join(jwVenv, "pyvenv.cfg"))) {
       await fixVenvHome(jwVenv, paths.python, log);
     }
+    perfB("short-circuit", `unpackNeeded=false`);
     log(`[perf] bootstrapPackaged short-circuit elapsed=${Date.now() - bootstrapStarted}ms`);
     return { unpacked: false, jwFixed: false, precompiled: 0 };
   }
 
-  const compileEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    PYTHONWARNINGS: "ignore",
-  };
+  // The remedial compile must not inherit a bytecode redirect from the USER's
+  // environment either. assemble-backend.mjs filters its build environment for
+  // exactly this reason (problems W25): PYTHONPYCACHEPREFIX makes compileall
+  // write every .pyc into a mirror tree OUTSIDE the target while still exiting
+  // 0, so an unfiltered {...process.env} here would let the first-launch
+  // recovery "succeed" without caching anything, and the stamp written below
+  // would freeze the gap in for every later launch. Same defence, same library.
+  const compileEnv: NodeJS.ProcessEnv = payloadCompileEnv(process.env, { warn: log });
 
   // Fix the in-place jw venv launchers + runtime DLLs and its pyvenv.cfg
   // home BEFORE anything spawns it (on a fresh data dir envsDir doesn't
@@ -395,6 +620,7 @@ export async function bootstrapPackaged(
     await fixVenvHome(jwVenv, paths.python, log);
     log("first run: pointed the bundled JiuwenSwarm venv at the bundled interpreter");
   }
+  perfB("jw-venv-fix-done");
 
   // In-place path — skip the expensive copy and just fix the bundled
   // venvs in their read-only template. The payload normally ships
@@ -402,6 +628,7 @@ export async function bootstrapPackaged(
   // cache-less so one bad payload cannot tax every launch.
   if (inPlaceEnvs) {
     const inPlaceFixStarted = Date.now();
+    perfB("in-place-fix-enter");
     for (const name of paths.venvNames) {
       await fixVenvHome(join(envsDir, name), paths.python, log);
       await fixEditablePths(join(envsDir, name), paths.backend, log);
@@ -409,18 +636,59 @@ export async function bootstrapPackaged(
     // Second pass catches any venv that was missed because the directory did not
     // exist during the first pass above.
     await fixVenvLaunchers(paths, envsDir, log);
+    perfB("in-place-fix-done", `self=${Date.now() - inPlaceFixStarted}ms`);
     log(`[perf] in-place venv fix elapsed=${Date.now() - inPlaceFixStarted}ms`);
 
-    // Bytecode fallback: this branch used to return with precompiled: 0 no
-    // matter what, blindly trusting the payload caches. All venvs run from
-    // the resources here, so every target applies (stdlib, the five template
-    // venvs, the jiuwenswarm venv).
+    // Bytecode: verify the payload's coverage instead of trusting "is there any
+    // .pyc". This branch is the packaged DEFAULT (main.ts sets
+    // SCIENCE_AGENT_IN_PLACE_ENVS=1), so §2's promise is only kept if the check
+    // runs here — see judgeBytecodeCoverage.
+    //
+    // Gated so the walk is not paid on every launch: this branch runs on EVERY
+    // start (the copy branch short-circuits on a valid stamp above, this one
+    // does not), and the walk is ~750ms on the real envs-template region
+    // (measured), which the "first run must not get slower" constraint only
+    // allows on a first run.
+    //
+    // The gate is needsBytecodeJudgement, NOT needsUnpack. The distinction is
+    // the whole fix: needsUnpack compares install location, and an upgrade keeps
+    // it (the installer restores $INSTDIR from the registry and the data dir is
+    // pinned), so gating on location judged each payload exactly once per
+    // INSTALL and never judged the payload an upgrade just put on disk — the one
+    // launch where bytecode can be incomplete. The payload is read-only between
+    // launches of one payload; an upgrade replaces it. Now the walk is paid on
+    // the first launch of each PAYLOAD, which is the launch that needs it.
     const compileStarted = Date.now();
-    const results = await Promise.all(precompileTargets(paths, envsDir)
-      .map((t) => compileIfCacheless(t, compileEnv, log)));
-    log(`[perf] in-place bytecode fallback elapsed=${Date.now() - compileStarted}ms`);
+    perfB("in-place-bytecode-fallback-enter");
+    const needsJudgement = needsBytecodeJudgement(dataDir, paths.resourcesPath, payloadId);
+    const targets = precompileTargets(paths, envsDir);
+    let results: boolean[];
+    if (!needsJudgement) {
+      // This exact payload was already judged here, and the resources are
+      // read-only, so nothing it ships can have changed since: skip the ~750ms
+      // walk. The per-target probe stays as a cheap safety net (a target the
+      // build skipped still self-heals).
+      perfB("in-place-bytecode-skip", "same payload already judged");
+      results = await Promise.all(targets.map((t) => compileIfCacheless(t, compileEnv, log)));
+    } else {
+      const verdict = await judgeBytecodeCoverage("in-place", envsDir, paths.resourcesPath, log);
+      if (verdict.ok) {
+        // Coverage proven for the judged region (envs-template). The read-only
+        // targets OUTSIDE it — the stdlib and the jw venv — are not covered by
+        // that verdict, so they keep their own first-hit probe: a W4-style skip
+        // of one target must still self-heal even when the region looks whole.
+        results = await Promise.all(targets.map((t) => compileIfCacheless(t, compileEnv, log)));
+      } else {
+        // Named incomplete: compile EVERY target unconditionally. compileIfCacheless
+        // would skip most of them, because its treeHasPycache probe answers "is
+        // there ANY .pyc" — the very first-hit question that let release6's
+        // 1,384-of-37,000 tree through.
+        results = await Promise.all(targets.map((t) => runCompileall(t, compileEnv, log)));
+      }
+    }
+    perfB("in-place-bytecode-fallback-done", `self=${Date.now() - compileStarted}ms precompiled=${results.filter(Boolean).length}`);
 
-    const stamp: UnpackStamp = { installRoot: paths.resourcesPath, at: new Date().toISOString() };
+    const stamp: UnpackStamp = { installRoot: paths.resourcesPath, at: new Date().toISOString(), payload: payloadId };
     // The stamp still lives under <dataDir>\envs even when venvs are in-place,
     // so tooling can find it and needsUnpack keeps working if we ever switch back.
     await mkdir(join(dataDir, "envs"), { recursive: true });
@@ -440,6 +708,7 @@ export async function bootstrapPackaged(
 
   log(`first run: unpacking bundled Python environments into ${envsDir}`);
   const unpackStarted = Date.now();
+  perfB("unpack-enter");
   await rm(envsDir, { recursive: true, force: true });
   await mkdir(dataDir, { recursive: true });
   let lastReportedPct = -1;
@@ -452,14 +721,17 @@ export async function bootstrapPackaged(
       }
     },
   });
+  perfB("unpack-done", `self=${Date.now() - unpackStarted}ms`);
   log(`[perf] copyTreeConcurrent elapsed=${Date.now() - unpackStarted}ms`);
   log("first run: unpack complete");
 
   const fixStarted = Date.now();
+  perfB("venv-fix-enter");
   for (const name of paths.venvNames) {
     await fixVenvHome(join(envsDir, name), paths.python, log);
     await fixEditablePths(join(envsDir, name), paths.backend, log);
   }
+  perfB("venv-fix-done", `self=${Date.now() - fixStarted}ms`);
   log(`[perf] fixVenvHome/fixEditablePths elapsed=${Date.now() - fixStarted}ms`);
   // The freshly copied envs may still come from a pre-fix payload —
   // replace their trampolines (+ runtime DLLs) before the unpacked-phase
@@ -467,27 +739,43 @@ export async function bootstrapPackaged(
   await fixVenvLaunchers(paths, envsDir, log);
 
   // Bytecode: the payload ships __pycache__ precompiled at build time
-  // (assemble-backend.mjs, content-hash mode) and pyFilter no longer strips
-  // it, so the copy above already carries valid caches. Compile here ONLY
-  // when the copy arrived cache-less (old payload / dev tree) as a fallback.
+  // (assemble-backend.mjs A6, content-hash mode) and pyFilter no longer strips
+  // it, so the copy above normally carries valid caches.
+  //
+  // #897 section 2 (second half) — verify the COPY kept that coverage instead of
+  // trusting "is there any .pyc". treeHasPycache() answered the latter and
+  // short-circuited on the first hit, so release6's 1,384-of-~37,000 payload
+  // (PYTHONPYCACHEPREFIX had redirected the rest outside the payload — problems
+  // W25) still looked complete: the remedial compile was skipped and the gap only
+  // surfaced later as an ImportError the first time a tool imported a missing
+  // module. judgeBytecodeCoverage() walks the copied tree once and compares it
+  // against the build's own manifest count, so an incomplete set NAMES ITSELF
+  // here, at first launch, rather than at first tool use.
+  //
+  // This is on the first-launch path only (a valid unpack stamp short-circuits at
+  // needsUnpack above), and the walk covers the copied envs-template region
+  // (measured ~750ms on release6), NOT the read-only in-place jw venv (measured
+  // ~3.2s): "partial copy / interrupted unpack" — the failures section 2 names —
+  // can only happen to the tree copyTreeConcurrent just wrote.
   let precompiled = 0;
   const compileStarted = Date.now();
-  if (await treeHasPycache(envsDir)) {
-    log("first run: bytecode precompiled at build time; skipping the compile step");
+  perfB("precompile-phase-enter");
+  const verdict = await judgeBytecodeCoverage("copied", envsDir, paths.resourcesPath, log);
+  if (verdict.ok) {
     // Template-phase fallbacks kicked off before the copy may still be in
     // flight (cache-less stdlib/jw venv) — never leave them unawaited.
     precompiled = (await Promise.all(templateRuns)).filter(Boolean).length;
   } else {
-    log("first run: no bytecode caches found; compiling (this may take a minute)...");
     const unpackedRuns = precompileTargets(paths, envsDir)
       .filter((t) => t.phase === "unpacked")
       .map((t) => runCompileall(t, compileEnv, log));
     const results = await Promise.all([...unpackedRuns, ...templateRuns]);
     precompiled = results.filter(Boolean).length;
   }
+  perfB("precompile-phase-done", `self=${Date.now() - compileStarted}ms precompiled=${precompiled}`);
   log(`[perf] precompile/fallback elapsed=${Date.now() - compileStarted}ms`);
 
-  const stamp: UnpackStamp = { installRoot: paths.resourcesPath, at: new Date().toISOString() };
+  const stamp: UnpackStamp = { installRoot: paths.resourcesPath, at: new Date().toISOString(), payload: payloadId };
   await mkdir(envsDir, { recursive: true });
   await writeFile(stampPath(dataDir), JSON.stringify(stamp, null, 2), "utf8");
   log(`[perf] bootstrapPackaged total=${Date.now() - bootstrapStarted}ms`);

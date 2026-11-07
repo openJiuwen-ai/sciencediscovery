@@ -21,6 +21,7 @@ import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 import { RunPollRecovery } from "./run-poll-recovery.js";
 import { RunChainSettler } from "./run-chain.ts";
 import { stopAndVerifySession, type SessionActivity, type SessionShutdownResult } from "./session-shutdown.ts";
+import type { ModelApiVariant, ModelThinkingEffort, ModelThinkingMode } from "@sciencediscovery/schema";
 
 export interface JourneyModel {
   id: string;
@@ -387,7 +388,8 @@ export function scriptedModel(
 /** Register either a spec-owned local stub or an explicitly gated real model. */
 export function registerModel(
   page: Page,
-  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" },
+  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: ModelApiVariant;
+    thinkingEffort?: ModelThinkingEffort; thinkingMode?: ModelThinkingMode },
 ): Promise<JourneyModel> {
   return apiJson(page, "/api/models", { data: { vision: false, ...input }, method: "POST" });
 }
@@ -425,10 +427,13 @@ export async function createProjectAndSession(
   page: Page,
   input: {
     approvalMode?: "always_allow" | "ask_for_dangerous";
-    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" };
+    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: ModelApiVariant;
+      thinkingEffort?: ModelThinkingEffort; thinkingMode?: ModelThinkingMode };
     modelId?: string;
     projectName: string;
     sessionTitle: string;
+    thinkingEffort?: ModelThinkingEffort;
+    thinkingMode?: ModelThinkingMode;
   },
 ): Promise<JourneyFixture> {
   const model = input.model ? await registerModel(page, input.model) : undefined;
@@ -443,6 +448,8 @@ export async function createProjectAndSession(
     let session = await apiJson<JourneySession>(page, `/api/sessions/${encodeURIComponent(created.firstSession.id)}`, {
       data: {
         ...(model?.id || input.modelId ? { modelId: model?.id ?? input.modelId } : {}),
+        ...((input.thinkingEffort ?? input.model?.thinkingEffort) ? { thinkingEffort: input.thinkingEffort ?? input.model?.thinkingEffort } : {}),
+        ...((input.thinkingMode ?? input.model?.thinkingMode) ? { thinkingMode: input.thinkingMode ?? input.model?.thinkingMode } : {}),
         title: input.sessionTitle,
       },
       method: "PATCH",
@@ -579,7 +586,7 @@ export async function waitForRunChainTerminal(
 }
 
 /** Stop wake admission first, then cancel and verify all work in this isolated E2E Session. */
-export async function cancelActiveSessionRuns(page: Page, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
+export async function cancelActiveSessionRuns(page: Pick<Page, "request">, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
   const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
   const request = <T>(path: string, method: "GET" | "POST" = "GET", timeoutMs = 5_000) =>
     apiJson<T>(page, path, { method, timeoutMs: Math.min(5_000, timeoutMs) });
@@ -663,6 +670,25 @@ export function journeyViews(page: Page): {
   };
 }
 
+/**
+ * Expand the timeline's own grouping containers.
+ *
+ * A live run folds adjacent exploration steps into a collapsed
+ * `<details class="timeline-exploration">`, so a nested tool card — and its
+ * summary — does not exist visibly until that ancestor is open. Whether the
+ * wrapper appears at all depends on the model's tool sequence, which a journey
+ * does not pin; opening it first keeps reading the timeline independent of it.
+ *
+ * The region name is localized, so match both UI languages the journeys use.
+ * The 30s cap on a card summary click is headroom for a loaded runner on a
+ * local DOM toggle, not a measured latency.
+ */
+async function expandTimelineGroups(page: Page): Promise<void> {
+  await page.getByRole("region", { name: /^(Agent activity|Agent 活动)$/ })
+    .locator("details.timeline-exploration:not([open])")
+    .evaluateAll((groups) => groups.forEach((group) => group.setAttribute("open", "")));
+}
+
 /** Read the currently rendered timeline and expandable tool process cards. */
 export async function readRunActivity(page: Page, options: { expandTools?: boolean } = {}): Promise<{
   text: string[];
@@ -670,10 +696,11 @@ export async function readRunActivity(page: Page, options: { expandTools?: boole
 }> {
   const views = journeyViews(page);
   await expect(views.timelines.first()).toBeVisible();
+  if (options.expandTools) await expandTimelineGroups(page);
   const tools: ToolProcess[] = [];
   for (let index = 0; index < await views.toolProcesses.count(); index += 1) {
     const card = views.toolProcesses.nth(index);
-    if (options.expandTools && await card.getAttribute("open") === null) await card.locator(":scope > summary").click();
+    if (options.expandTools && await card.getAttribute("open") === null) await card.locator(":scope > summary").click({ timeout: 30_000 });
     tools.push({
       details: (await card.locator(".timeline-content").textContent())?.trim() ?? "",
       status: (await card.locator(".timeline-status").textContent())?.trim() ?? "",
@@ -686,12 +713,13 @@ export async function readRunActivity(page: Page, options: { expandTools?: boole
 
 /** Locate a tool process by a marker in its rendered input/output, then expand it. */
 export async function expandToolStep(page: Page, options: { contains: string | RegExp }): Promise<Locator> {
+  await expandTimelineGroups(page);
   const cards = page.getByRole("region", { name: /^(Agent activity|Agent 活动)$/ })
     .locator("details.timeline-disclosure.tool")
     .filter({ hasText: options.contains });
   await expect(cards.first(), `a tool step should contain ${String(options.contains)}`).toBeVisible({ timeout: 60_000 });
   const card = cards.first();
-  if (await card.getAttribute("open") === null) await card.locator(":scope > summary").click();
+  if (await card.getAttribute("open") === null) await card.locator(":scope > summary").click({ timeout: 30_000 });
   await expect(card.locator(".timeline-content")).toBeVisible();
   return card;
 }
@@ -956,10 +984,21 @@ export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promi
   const api = await request.newContext();
   try {
     const client = { request: api };
+    // A blocked/repairing run still owns project resources. Stop and verify the
+    // session first so project deletion cannot race the run scheduler and yield
+    // a transient 409 during teardown.
+    await cancelActiveSessionRuns(client, fixture.session.id).catch((error) => {
+      console.warn(`[journey-cleanup] session shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     await apiJson(client, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
       data: { confirmationId: fixture.project.id },
       method: "DELETE",
-    }).catch(() => undefined);
+    }).catch(async (error) => {
+      // A fixture may have been removed by a failed setup path; preserve that
+      // benign case while exposing real teardown conflicts to the test runner.
+      if (error instanceof Error && /-> 404:/.test(error.message)) return;
+      throw error;
+    });
     if (fixture.model) await deleteJourneyModel(client, fixture.model).catch(() => undefined);
   } finally { await api.dispose(); }
 }

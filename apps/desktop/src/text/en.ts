@@ -91,14 +91,21 @@ export const EN: Text = {
 
   composer: {
     placeholder: "What can I help you with? Type “/” to reference a skill or instruction",
+    /** After a design command is seeded the composer is no longer waiting for
+     *  any request: the only useful next line is the goal itself. */
+    evolvePlaceholder: "Describe what you want to optimize and how it should be scored",
     send: "Send",
     stop: "Stop",
+    /** The ✕ on the design command token; the dialog only suggested it. */
+    clearCommand: "Remove command",
     modelSelect: "Choose a model",
     addCustomModel: "Add a custom model",
     pillLocked: "You can switch models when this run finishes",
     stopHint: "Closing the page or reloading will not stop the run. Stop it here explicitly.",
     uploadFile: "Upload files",
     sessionSettings: "Session settings",
+    /** The action at the top of 会话设置: the way into program evolution. */
+    evolveExperiment: "Program evolution experiment",
     experts: "Experts",
     expertsNone: "None",
     expertsHint: "Bind a personal expert to this conversation.",
@@ -232,6 +239,7 @@ export const EN: Text = {
     inputFiles: "Input files",
     emptySteps: "This subagent has not recorded any execution to show yet.",
     loading: "Loading the execution record…",
+    stale: "The execution record is not refreshing, so what is shown may be behind.",
     thinking: "Reasoning",
     tool: "Tool",
     turns: (count: number) => `${count} ${count === 1 ? "turn" : "turns"}`,
@@ -1008,6 +1016,7 @@ export const EN: Text = {
     artifacts: "Artifacts",
     collapsible: "Workspace",
     groups: {
+      task: "Task",
       artifacts: "Artifacts",
       files: "Workspace",
     },
@@ -1056,6 +1065,7 @@ export const EN: Text = {
     imageFit: "Fit to the panel",
     pdfFallback: "If the page does not appear, download it:",
     tooLarge: "This file is too large to preview here. Download it to open it.",
+    unrenderable: "This build has no preview for this file's format. Download it to open it.",
     sourceTruncated: "This file is long; only the beginning is shown.",
   },
 
@@ -1066,6 +1076,240 @@ export const EN: Text = {
     atoms: (count: number) => `${count} atoms`,
     expand: "Expand to full screen",
     close: "Exit full screen",
+  },
+
+  /** Program evolution: a search that improves itself against a scorecard.
+   *
+   *  The run card and the full panel share this block; the wording is written
+   *  for the panel and shortened for the card, so a run is called the same
+   *  thing in both places. */
+  evolve: {
+    title: "Program evolution",
+    open: "Program evolution",
+    moreRuns: (count: number) => `${count} more`,
+    fewerRuns: "Show fewer",
+    /* The run card at the foot of the transcript: waiting to start, or how long
+       the search has been going. */
+    notStarted: "Not started",
+    working: "Optimising",
+    elapsed: (seconds: number) => {
+      const whole = Math.max(0, Math.floor(seconds));
+      if (whole < 60) return `${whole}s elapsed`;
+      const minutes = Math.floor(whole / 60);
+      if (minutes < 60) return `${minutes} min elapsed`;
+      const rest = minutes % 60;
+      return rest === 0
+        ? `${Math.floor(minutes / 60)} h elapsed`
+        : `${Math.floor(minutes / 60)} h ${rest} min elapsed`;
+    },
+    autoPace: "Auto",
+    autoPaceTitle: "Started without pausing at checkpoints",
+    /* This run's candidates did not run in a sandbox. Both the badge and its
+       tooltip have to say so, or an unconfined result reads like a contained
+       one. */
+    unisolated: "No sandbox",
+    unisolatedTitle: "Candidate code ran without a sandbox",
+
+    /* The checkpoint card's own chrome. The title and body are the model's
+       words and arrive in the conversation's language already. */
+    checkpoint: {
+      eyebrow: (step: number, total?: number) => (total === undefined ? `Checkpoint ${step}` : `Checkpoint ${step}/${total}`),
+      /* A card nobody is asked to approve is not a checkpoint: it records a step
+         that is already done, so it is not called one and carries no badge. */
+      stepEyebrow: (step: number, total?: number) => (total === undefined ? `Step ${step}` : `Step ${step}/${total}`),
+      /* The band across the top of the card: what this card is waiting for on
+         the left, which step it is on the right. */
+      headerWaiting: "Checkpoint waiting for you",
+      headerAnswered: "Checkpoint answered",
+      headerStep: "Step",
+      count: (step: number, total?: number) => (total === undefined ? `${step}` : `${step}/${total}`),
+      confirm: "Looks right — continue",
+      adjust: "Needs a change",
+      /* "Needs a change" opens a labelled box inside the card; the confirm
+         button stays dark until something is written in it. */
+      adjustLabel: "What to change",
+      adjustPlaceholder: "Describe the change, e.g. score this step more strictly.",
+      /* Every confirmation reading the same left the model unable to tell which
+         step it was answering; naming the step in the reply fixes that. */
+      confirmReply: (step: number, total?: number) =>
+        total === undefined ? `Confirm checkpoint ${step}, continue.` : `Confirm checkpoint ${step}/${total}, continue.`,
+      autoContinue: (step: number, total?: number) =>
+        total === undefined ? `Continue with step ${step}.` : `Continue with step ${step}/${total}.`,
+      adjustDraft: "I'd like to change this step: ",
+      busy: "This reply is still running; wait for it to finish.",
+    },
+
+    create: {
+      title: "New evolution run",
+      algorithmLabel: "Choose a search algorithm",
+      puctName: "PUCT algorithm",
+      puctTags: ["Refines step by step", "Narrow search space"],
+      puctPoints: [
+        "PUCT expands the nodes most likely to pay off first",
+        "Grows from the root one step at a time, keeping every candidate",
+        "Visit counts and rank steer where the search goes next",
+        "A single tree keeps refining the candidates it holds",
+      ],
+      openEvolveName: "OpenEvolve algorithm",
+      openEvolveTags: ["Wide search space", "Avoids early convergence"],
+      openEvolvePoints: [
+        "A MAP-Elites grid keeps a diverse set of good candidates",
+        "Populations evolve independently and swap elites regularly",
+        "Ring migration spreads good designs across populations",
+        "Mutations reference the global best and distinct candidates",
+      ],
+      settingsLabel: "Settings",
+      confirmLabel: "Pause at each checkpoint",
+      confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
+      autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
+      /* Windows has no bwrap/seatbelt. There is no switch here, only two
+         warnings: a banner under the title so the risk is seen at a glance,
+         and an alert that asks again when the search is started. The answer
+         travels with this one command (`--allow-direct`); it never becomes a
+         setting someone sets once and forgets. */
+      unisolatedBannerTitle: "This search runs candidate code without a sandbox",
+      unisolatedBannerBody: "This machine has no usable sandbox. Candidates run as you: they can read and write your files, reach the network, and have no CPU or memory limits. You will be asked once more when you click “Start designing”.",
+      unisolatedConfirmTitle: "Run candidate code without a sandbox?",
+      unisolatedConfirmBody: "The search will execute candidate programs directly: no sandbox, no CPU or memory limits, and access to your files and network. Continue only if you understand those risks and accept them.",
+      unisolatedConfirmCancel: "Cancel",
+      unisolatedConfirmClose: "Close",
+      unisolatedConfirmContinue: "Continue anyway",
+      send: "Start designing",
+      cancel: "Cancel",
+      blockedRunning: "This session is already running; wait for it to finish before starting another.",
+      blockedArchived: "An archived session cannot start a new run.",
+    },
+
+    /* The runtime is not usable. A person on a desktop can only read files and
+       click a button, so this names the paths this product actually writes on
+       Windows and the actions that actually exist. */
+    setup: {
+      bannerTitle: "The optimization process is unavailable; results may not be what you expect",
+      bannerInstalling: "The optimization process is being prepared; you can start designing when it finishes",
+      bannerAction: "View details",
+      title: "The evolution runtime is unavailable",
+      introMissing: "This machine has not installed the evolution runtime yet. Once it is installed, this message and “Start designing” recover on their own.",
+      introError: "The evolution runtime did not start, or the local service could not authenticate to it.",
+      introInstalling: "The evolution runtime is being prepared. This message and “Start designing” recover when it finishes.",
+      statusLabel: "Reported by the local service",
+      whereTitle: "Start with the logs",
+      logs: [
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\api.log",
+          what: "The local service log; the error at the end names the step the install or start-up stopped at.",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\evolve.log",
+          what: "The evolution engine's own log; read this when the engine starts but is still unusable.",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\evolve",
+          what: "The runtime install folder; a missing folder or missing files means the install did not finish.",
+        },
+        {
+          path: "<install folder>\\logs\\shell.log",
+          what: "The desktop start-up log, by default in %LOCALAPPDATA%\\Programs\\ScienceDiscovery\\logs; read this when the app cannot reach the local service.",
+        },
+      ],
+      whyTitle: "Common causes",
+      whyBody: "First use with no runtime installed; the install was closed midway, or the evolve folder was deleted; a proxy or network failure blocked the download; less than 1 GiB of disk space is free; the deployment does not allow automatic installation.",
+      fixTitle: "How to recover",
+      fixBody: "Click “Prepare runtime” below to download and install again. If it was installed before and is broken, quit the app, delete %USERPROFILE%\\.sciencediscovery\\evolve, and install again. If it still fails, check the network and disk against the error at the end of api.log, then restart the app and try once more.",
+      operator: "This deployment does not allow automatic installation. Ask an administrator to enable program evolution on the server; the status and logs above can be handed over as they are.",
+      installing: "Preparing…",
+      install: "Prepare runtime",
+      close: "Close",
+    },
+
+    panel: {
+      eyebrow: "Program evolution",
+      close: "Close",
+      stop: "Stop",
+      stopping: "Stopping…",
+      stopHint: "Candidates found so far remain available after stopping.",
+      fullscreen: "Full screen",
+      exitFullscreen: "Exit full screen",
+      fullTask: "Show the full goal",
+    },
+
+    status: {
+      pending: "Queued",
+      running: "Running",
+      succeeded: "Succeeded",
+      stopped: "Stopped",
+      budget_exhausted: "Budget used up",
+      failed: "Failed",
+    },
+
+    metric: {
+      best: "Best score",
+      baseline: "Baseline",
+      test: "Held-out test",
+      candidates: "Candidates",
+      depth: "Max depth",
+    },
+
+    /* The task detail: the right column's 任务 tab. The three handoffs set the
+       order — overview, chart, tree and budget — and the node list and the tree
+       are two readings of the same candidates. */
+    detail: {
+      best: "Best",
+      valid: "Valid / total",
+      generations: "Generations",
+      algorithm: "Algorithm",
+      tokens: "Token",
+      chartTitle: "Live search results",
+      treeTitle: "Search tree",
+      nodeList: "Nodes",
+      generation: (depth: number) => `Gen ${String(depth).padStart(2, "0")}`,
+      bestTag: "Best",
+      budgetTitle: "Budget",
+      score: "Score",
+      children: "Children",
+      source: "Code changes",
+      expandSource: "Expand code changes",
+      closeInspector: "Close node details",
+      closeSource: "Close code changes",
+      nodeTitle: (index: number) => `Node #${index}`,
+      root: "Baseline",
+      treeEmpty: "No nodes yet.",
+      treeAria: (count: number) => `Search tree with ${count} nodes`,
+    },
+
+    chart: {
+      title: "Live search results",
+      aria: (baseline: string, best: string, candidates: number) =>
+        `Score chart: baseline ${baseline}, current best ${best}, ${candidates} candidates.`,
+      xAxis: "Expansions",
+      best: "Best so far",
+      significant: "Scored",
+      test: "Test",
+      failed: "Failed",
+      belowBaseline: "Below baseline",
+      baseline: "Baseline",
+      empty: "No scores to plot yet.",
+    },
+
+    inspector: {
+      parent: "Parent",
+      depth: "Depth",
+      loading: "Reading source…",
+      unavailable: "Source unavailable (it may have been pruned).",
+      unchanged: "Identical to the parent.",
+      noParent: "This is the baseline; it has no parent.",
+      error: "Failure",
+      hidden: (count: number) => `${count} unchanged lines folded`,
+    },
+
+    budget: {
+      tokens: "Tokens",
+      elapsed: "Elapsed",
+      nodes: "Nodes",
+    },
+
+    notice: {
+      placeholder: "This run used a placeholder scorecard, not one designed for it.",
+    },
   },
 
   errors: {
@@ -1084,5 +1328,102 @@ export const EN: Text = {
     localOnline: "Local runtime · Online",
     localDegraded: "Local runtime · Degraded",
     localOffline: "Local runtime · Offline",
+  },
+
+  feedback: {
+    entry: "Send feedback",
+    dialogTitle: "Send feedback",
+    selectPlaceholder: "Select one",
+    requiredHint: "Frequency and impact are required",
+    close: "Close",
+    tab: {
+      compose: "Compose",
+      history: "My feedback",
+    },
+    kind: {
+      label: "Type",
+      bug: "Report a problem",
+      idea: "Suggest an idea",
+      other: "Other",
+    },
+    body: {
+      label: "Description",
+      placeholder: "Describe what happened or your idea (10–2000 characters)",
+      counter: (count: number, max: number) => `${count}/${max}`,
+      tooShort: (min: number) => `Please write at least ${min} characters`,
+    },
+    contact: {
+      label: "Contact (optional)",
+      placeholder: "Email or GitHub username",
+      invalid: "This does not look like an email or GitHub username",
+    },
+    reproducibility: {
+      label: "Frequency",
+      always: "Always",
+      sometimes: "Sometimes",
+      once: "Once",
+    },
+    impact: {
+      label: "Impact",
+      blocker: "Unusable",
+      major: "Slows down my work",
+      minor: "Affects the experience",
+    },
+    diagnostics: {
+      label: "Attach diagnostics",
+      preview: "Preview what will be sent",
+      none: "No diagnostics available for this feedback",
+    },
+    images: {
+      label: "Screenshots (optional)",
+      add: "Upload image",
+      limit: (max: number) => `Up to ${max} images`,
+      remove: "Remove screenshot",
+      preparing: "Processing images…",
+      privacy: "Screenshots are visible to anyone with repository access; hide sensitive information first.",
+      error: {
+        type: "Only PNG, JPEG or WebP images are supported.",
+        size: "This image is still too large after compression.",
+        decode: "This image could not be read.",
+      },
+    },
+    submit: "Submit",
+    submitting: "Submitting…",
+    success: {
+      title: "Thank you",
+      note: "Here is your receipt. We use it to update you on progress.",
+      copyReceipt: "Copy receipt",
+      copied: "Copied",
+      done: "Done",
+    },
+    failure: {
+      network: "Could not reach the feedback service. Your draft is kept.",
+      timeout: "The request timed out. Your draft is kept.",
+      forbidden: "The service rejected this request.",
+      rateLimited: "You submitted too quickly. Please wait a bit and try again.",
+      duplicate: "This feedback was already submitted.",
+      tooLarge: "The message is too long. Shorten it and try again.",
+      unavailable: "The service is temporarily unavailable. Please try again later.",
+      invalid: "Some fields need attention.",
+      fieldsTitle: "What needs attention",
+      kept: "Your draft is kept; you can copy it or open a GitHub issue instead.",
+      copyAll: "Copy everything",
+      openIssue: "Open GitHub issue instead",
+    },
+    back: "Back",
+    history: {
+      empty: "No feedback submitted yet",
+      delete: "Delete",
+      status: {
+        submitted: "Submitted",
+      },
+    },
+    pii: {
+      warning: (kinds: string) => `This looks like it may contain personal information (${kinds}). Please remove it or confirm it is safe to send.`,
+      confirm: "I confirm this is safe to send",
+      phone: "phone number",
+      idCard: "ID number",
+      email: "email",
+    },
   },
 };

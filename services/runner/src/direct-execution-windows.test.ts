@@ -253,7 +253,7 @@ test("executePython none runs the interpreter directly with conda activation pat
       agentId: "main",
       code: [
         "import os, pathlib",
-        "head = os.environ['PATH'].split(os.pathsep)[:3]",
+        "head = os.environ['PATH'].split(os.pathsep)[:4]",
         "print('PATH_HEAD=' + '|'.join(head))",
         "print('PYTHONHOME=' + str(os.environ.get('PYTHONHOME')))",
         "pathlib.Path('out.txt').write_text('ok')",

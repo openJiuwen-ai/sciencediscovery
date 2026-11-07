@@ -34,6 +34,8 @@ Typing `/evolve-design` opens an algorithm picker. Select **PUCT**, then send th
 
 You can also specify the algorithm explicitly: `/evolve-design --algorithm puct …`.
 
+Add `--no-confirm` to let the design and the launch run in one pass, without pausing at each checkpoint; the desktop create dialog exposes the same choice as a switch. The checkpoints are still reported in the conversation, and a missing dataset or an ambiguous goal still stops and asks.
+
 The picker also offers OpenEvolve for population-based search. This tutorial uses PUCT throughout; see [Program evolution](../core/evolve.md) for the differences between the engines.
 
 ## Confirm requirements
@@ -57,7 +59,7 @@ Next, check how evaluation data is divided. You will encounter three names:
 
 For a first attempt, try **12 gate shards, 6 rollout shards, 6 test shards, 16 expansions, and 4 workers**. A shard represents a group of test texts; an expansion generates and evaluates a candidate; workers control search concurrency. This is a suggested size, not a requirement that every generated proposal be identical.
 
-The skill defines four checkpoints for requirements, evaluation, sizing, and launch results. When the Agent pauses, confirm or request changes. To accept reasonable defaults, you can reply:
+The skill defines four checkpoints for requirements, evaluation, sizing, and launch results. When the Agent pauses, confirm or request changes. In the desktop app each checkpoint is drawn as a card with buttons to confirm it or ask for changes; a client that does not draw cards, such as the browser workspace, shows the same checkpoint record as a code block, and you answer it in the composer as usual. To accept reasonable defaults, you can reply:
 
 ```text
 You decide. Use the recommended search size from the tutorial, keep PUCT,

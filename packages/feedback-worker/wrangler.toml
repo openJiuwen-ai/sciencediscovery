@@ -1,0 +1,34 @@
+# Cloudflare Worker that relays in-app feedback into a private GitHub issue.
+#
+# Deploy flow (owner-only, needs a Cloudflare account):
+#   1. pnpm build            (build @sciencediscovery/operational-logging + this worker)
+#   2. Create the KV namespace once (see README) and put its id below.
+#   3. Set every variable in the Cloudflare dashboard — Workers → this worker →
+#      Settings → Variables and Secrets. Nothing operational lives in this file:
+#      a missing value makes the Worker answer 503 `misconfigured` and log the
+#      variable name, so a deployment cannot silently run with an unchosen limit.
+#        REPO_OWNER, REPO_NAME, INSTALL_DAILY_LIMIT, IP_HOURLY_LIMIT,
+#        DAILY_ISSUE_LIMIT, DEDUP_TTL_SECONDS  (plain text variables)
+#        ALLOWED_ORIGINS                        (optional, comma-separated)
+#        GITHUB_TOKEN                           (secret)
+#   4. npx wrangler deploy
+#
+# The endpoint is `https://sciencediscovery-feedback.sciencediscovery.workers.dev` (see `FEEDBACK_ENDPOINT`
+# in packages/operational-logging/src/feedback.ts).
+
+name = "sciencediscovery-feedback"
+main = "src/index.ts"
+compatibility_date = "2026-11-03"
+
+# Every operational value lives in the dashboard, not in this file. Without this
+# flag `wrangler deploy` treats the absent `[vars]` section as "delete them all",
+# which leaves the new deployment answering 503 `misconfigured` even though the
+# dashboard still lists them for the previous version.
+keep_vars = true
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "FEEDBACK_KV"
+id = "47aee115f6dc4b628e0a85ef13c4bc95"

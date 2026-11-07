@@ -280,6 +280,7 @@ export class EvolveOrchestrator {
         searchId: probeId,
         statement: goal.statement,
         ...(goal.thinking ? { thinking: goal.thinking } : {}),
+        ...(goal.thinkingEffort ? { thinkingEffort: goal.thinkingEffort } : {}),
       });
     } finally {
       this.runTokens?.revoke(probeId);
@@ -480,6 +481,8 @@ export class EvolveOrchestrator {
     if (!entry) return false;
     if (entry.stopping) return true;
     entry.stopping = true;
+    // Stop paid model work immediately, including calls waiting for headers.
+    this.runTokens?.revoke(runId);
     const stopped = await this.sidecar.stop(runId);
     if (!stopped) {
       // The sidecar does not know this search (it may have just finished, or
@@ -501,7 +504,10 @@ export class EvolveOrchestrator {
       // Issued here and revoked in `finally`: the token's lifetime is the
       // search's, so a leaked one cannot outlive the thing it was for. The
       // provider key stays in this process and is never part of the spec.
-      const llmToken = this.runTokens?.issue(run.id, run.sessionId, run.goal.modelId ?? "");
+      const llmToken = this.runTokens?.issue(run.id, run.sessionId, run.goal.modelId ?? "", {
+        thinkingMode: run.goal.thinking,
+        thinkingEffort: run.goal.thinkingEffort,
+      });
       // Staged before the stream opens: a search whose dataset cannot be built
       // has nothing to measure, and finding that out at the first expansion
       // costs a model call and tells the user their candidate failed.
@@ -555,6 +561,7 @@ export class EvolveOrchestrator {
         searchId: run.id,
         statement: run.goal.statement,
         ...(run.goal.thinking ? { thinking: run.goal.thinking } : {}),
+        ...(run.goal.thinkingEffort ? { thinkingEffort: run.goal.thinkingEffort } : {}),
         workers: run.goal.budget.workers,
       };
       for await (const record of this.sidecar.stream(spec, abort.signal, (message) => {
@@ -592,7 +599,20 @@ export class EvolveOrchestrator {
         ? error.message
         : String(error);
       apiLog.warn("evolve_run_failed", { reason: message, runId: run.id });
-      await this.finish(run.id, "failed", message).catch(() => undefined);
+      // Whatever ended the loop, the search behind it is no longer being
+      // recorded. A failure to persist a record used to leave the sidecar
+      // expanding and spending with nobody reading it; aborting closes the
+      // connection, which is the sidecar's wind-down signal.
+      abort.abort();
+      await this.finish(run.id, "failed", message).catch((reason: unknown) => {
+        // The run is failed in memory but not on disk. Saying so beats a
+        // silent swallow, which is what made a stuck "running" run look like
+        // a live one.
+        apiLog.warn("evolve_run_settle_failed", {
+          reason: reason instanceof Error ? reason.message : String(reason),
+          runId: run.id,
+        });
+      });
     } finally {
       // Revoked before anyone is told the run is over, not after. "Settled"
       // has to mean the tokens are already dead: a subscriber that reacts to

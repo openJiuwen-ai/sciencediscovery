@@ -37,9 +37,26 @@ test("public status/init require API auth; uninitialized Tasks/API paths refuse 
     origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     for (const path of ["status", "init"]) assert.equal((await fetch(`${origin}/api/evolve/${path}`, { method: path === "init" ? "POST" : "GET" })).status, 401);
     const headers = { authorization: "Bearer synthetic-access" };
+    // The body also reports the isolation backend, which is a property of this
+    // host rather than of the uninitialized service — so the assertion pins
+    // the availability fields and only insists that the backend is one of the
+    // values the client understands.
+    const availability = (body: { canInitialize?: unknown; state?: unknown }) => ({
+      canInitialize: body.canInitialize,
+      state: body.state,
+    });
+    const backends: unknown[] = [null, "bwrap", "seatbelt", "direct"];
     const status = await fetch(`${origin}/api/evolve/status`, { headers });
-    assert.deepEqual(await status.json(), { state: "not_initialized", canInitialize: false });
-    assert.deepEqual(await (await fetch(`${origin}/api/evolve/init`, { headers, method: "POST" })).json(), { state: "not_initialized", canInitialize: false });
+    const statusBody = await status.json() as {
+      canInitialize?: unknown; sandbox?: unknown; state?: unknown;
+    };
+    assert.deepEqual(availability(statusBody), { state: "not_initialized", canInitialize: false });
+    assert.ok(backends.includes(statusBody.sandbox),
+      `the status did not name a sandbox backend: ${String(statusBody.sandbox)}`);
+    const initBody = await (await fetch(`${origin}/api/evolve/init`, { headers, method: "POST" })).json() as {
+      canInitialize?: unknown; state?: unknown;
+    };
+    assert.deepEqual(availability(initBody), { state: "not_initialized", canInitialize: false });
     assert.equal((await fetch(`${origin}/api/settings/idea-tree`, { headers })).status, 200);
     const before = sidecarRequests;
     for (const path of ["/api/evolve/runs", "/api/evolve/runs/fake/stop", "/api/sessions/fake/idea-tree/research", "/api/sessions/fake/idea-tree/graph"]) {

@@ -873,6 +873,34 @@ test("gateway progress cannot re-arm idle while an external wait is active", asy
   }
 });
 
+test("a terminal turn cut at the output limit fails the run instead of reporting it completed", async () => {
+  // The shape of #953: the model spends the whole per-call budget, the reply is
+  // truncated with no tool call, and the run used to end as `completed` with no
+  // files and no artifacts. The JiuwenSwarm backend already refuses that.
+  // A turn that got partway through its answer is the same shape: what the run
+  // still needs is the rest of it, and nothing produces that once the loop ends.
+  for (const content of ["", "Here is the first half of the answer"]) {
+    const streamer: ModelTurnStreamer = () => Promise.resolve({
+      assistantMessage: { content, role: "assistant" as const },
+      toolCalls: [],
+      truncated: true,
+    });
+    const restore = setModelTurnStreamerForTest(streamer);
+    try {
+      const agent = createNativeAgent(workspace() as NativeAgentOptions);
+      await assert.rejects(agent.execute("write the whole thing in one answer"), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /unrecovered output limit/);
+        assert.match(error.message, /max_tokens/);
+        assert.match(error.message, /SCIENCE_AGENT_LLM_MAX_TOKENS/);
+        return true;
+      });
+    } finally {
+      restore();
+    }
+  }
+});
+
 test("one completed parallel wait cannot start parent idle while another remains", async () => {
   let finish!: () => void;
   let markProgress!: () => void;
@@ -1101,6 +1129,11 @@ test("evolve tools appear on the first model step only when a runtime is registe
   // does not report a missing tool; it hand-rolls a search instead.
   const runtime = {
     createEvolveRun: async () => ({ refusedBecause: "probe" }),
+    getEvolveBudget: async () => ({
+      maxSeconds: 7_200, model: "test-model",
+      perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+      thinking: { effective: "enabled" }, totalTokenCap: 600_000,
+    }),
     getEvolveRun: async () => ({
       baselineScore: null, bestScore: null, bestTestScore: null,
       candidates: 0, id: "run-1", status: "running" as const, tokens: 0,
@@ -1111,6 +1144,7 @@ test("evolve tools appear on the first model step only when a runtime is registe
     const { streamer } = scriptStreamer([
       (call) => {
         assert.equal(call.tools.some((tool) => tool.name === "create_evolve_run"), expected);
+        assert.equal(call.tools.some((tool) => tool.name === "get_evolve_budget"), expected);
         assert.equal(call.tools.some((tool) => tool.name === "get_evolve_run"), expected);
         return textTurn("done");
       },

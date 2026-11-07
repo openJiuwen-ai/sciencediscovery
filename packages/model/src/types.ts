@@ -28,5 +28,7 @@ export interface ModelUsage {
   cacheWriteTokens?: number | null;
   inputTokens: number;
   outputTokens: number;
+  /** Tokens the provider reports as hidden reasoning; null when it does not report them. */
+  reasoningTokens?: number | null;
   totalTokens: number;
 }

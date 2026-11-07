@@ -238,7 +238,7 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       overrides: settings.overrides,
       enabledConnectorIds: effective?.enabledConnectorIds ?? ["web"],
     };
-  });
+  }, { client, key: "mcp-servers" });
   const [draft, setDraft] = useState<Draft>();
   const [openId, setOpenId] = useState<string>();
   const [busy, setBusy] = useState(false);

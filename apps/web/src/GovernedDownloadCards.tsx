@@ -58,6 +58,23 @@ const JOB_STATE_KEYS: Record<ArtifactJob["state"], MessageKey> = {
 };
 
 /**
+ * The state line of one download job: its state, the percentage when the size
+ * is known, and the bytes moved so far. A chunked download has no total — and
+ * no `percent` — so it prints the bytes alone; a substituted zero would read as
+ * "not started" while the byte counter climbs.
+ */
+function progressLine(
+  job: ArtifactJob,
+  t: (key: MessageKey, variables?: Record<string, string | number>) => string,
+): string {
+  const state = JOB_STATE_KEYS[job.state] ? t(JOB_STATE_KEYS[job.state]) : job.state.replaceAll("_", " ");
+  const moved = t("downloads.bytes", { count: job.progress.bytesDownloaded.toLocaleString() });
+  return job.progress.percent === undefined
+    ? `${state} · ${moved}`
+    : `${state} · ${job.progress.percent}% · ${moved}`;
+}
+
+/**
  * A plan stays `awaiting_approval` after its permission was decided, so the
  * card must follow the linked permission: a decided download is reported as
  * decided instead of waiting forever for an approval that already happened.
@@ -148,7 +165,7 @@ export function GovernedDownloadCards({
           </article>;
         })}
         {jobs.toReversed().map((job) => <ProcessRecord active={ACTIVE_STATES.has(job.state)} failed={job.state === "failed"} key={job.id} label={`${job.sourceId} · ${job.sourceRecordId} · ${t(JOB_STATE_KEYS[job.state])}`}><article className={`governed-download-item ${job.state}`}>
-          <span><strong>{job.sourceId} · {job.sourceRecordId}</strong><small>{JOB_STATE_KEYS[job.state] ? t(JOB_STATE_KEYS[job.state]) : job.state.replaceAll("_", " ")} · {job.progress.percent ?? 0}% · {t("downloads.bytes", { count: job.progress.bytesDownloaded.toLocaleString() })}</small>{job.finalPath ? <small>{job.finalPath}</small> : null}{job.error ? <small className="governed-download-error" role="alert">{job.error.message}</small> : null}</span>
+          <span><strong>{job.sourceId} · {job.sourceRecordId}</strong><small>{progressLine(job, t)}</small>{job.finalPath ? <small>{job.finalPath}</small> : null}{job.error ? <small className="governed-download-error" role="alert">{job.error.message}</small> : null}</span>
           {ACTIVE_STATES.has(job.state) ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "cancel"))} type="button">{t("common.cancel")}</button> : null}
           {job.state === "failed" ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "retry"))} type="button">{busyIds.has(job.id) ? t("downloads.retrying") : t("downloads.retry")}</button> : null}
         </article></ProcessRecord>)}

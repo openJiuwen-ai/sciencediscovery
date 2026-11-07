@@ -23,7 +23,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useMemorySubgraph } from "../src/MemoryGraphView.js";
 import { ApiClient } from "../src/api.js";
 import { ApiRequestError, isAuthFailure } from "../src/api/auth.js";
-import { createAuthTokenPromptGate } from "../src/auth-token-prompt.js";
+import { createAuthTokenPromptGate, shouldShowTokenRejected } from "../src/auth-token-prompt.js";
 import { addToastToQueue, type Toast } from "../src/Toasts.js";
 
 /** Run one API call against a stubbed response and report whether the client
@@ -93,6 +93,13 @@ test("the next token the user tries earns a fresh prompt", () => {
 
   assert.equal(gate.shouldPrompt("still-wrong"), true);
   assert.equal(gate.shouldPrompt("still-wrong"), false);
+});
+
+test("empty startup failures do not clear a replacement-token rejection", () => {
+  let rejected = true;
+  if (shouldShowTokenRejected("")) rejected = false;
+  assert.equal(rejected, true);
+  assert.equal(shouldShowTokenRejected("wrong-token"), true);
 });
 
 test("a token that starts working never reopens the dialog", async () => {

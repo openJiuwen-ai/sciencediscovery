@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { setTimeout as runtimeDelay } from "node:timers/promises";
+import { ApiStatusError } from "../http/api-status-error.js";
+export { ApiStatusError };
 import { routeSpecialistPermissions } from "../specialist-runtime/permissions.js";
 import { createNativeAgent } from "../native-agent/index.js";
 import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
@@ -29,6 +31,7 @@ import { CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
+import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -134,6 +137,7 @@ import {
   DEFAULT_MODEL_API_VARIANT,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   lookupModelCatalog,
+  MODEL_THINKING_EFFORTS,
   resolveModelFacts,
   SKILL_PACKAGES_PORTABLE_ROOT,
   THINKING_CONTROL_VARIANTS,
@@ -164,6 +168,7 @@ import { resolveExecutorCapability } from "../idea-tree/executor-capability.js";
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "@sciencediscovery/executor";
 import { classifyRunFailure, runFailureMessage } from "../run-failure.js";
+import { runnerNpuBrokerEnabled } from "./runner-health.js";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import {
@@ -442,19 +447,6 @@ function resolveSubagentSpecialist(store: SessionStore, sessionSpecialistId: str
   return store.getSpecialist(sessionSpecialistId);
 }
 
-export class ApiStatusError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-    /** Machine-readable reason, so a client can act on it instead of matching prose. */
-    readonly code?: string,
-    /** Structured payload the client needs to offer a next step. */
-    readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-  }
-}
-
 /** Empty match-response shape with a degradation reason (feature off / unreachable). */
 export function emptyMatch(reason: "memory_graph_disabled" | "memory_graph_unreachable") {
   return { hits: [] as unknown[], total: 0, truncated: false, reason };
@@ -551,7 +543,7 @@ export function splitArtifactVersionSuffix(raw: string): { id: string; version: 
  * Declared `| undefined` rather than `?` on purpose. It still travels through
  * `executeAgentRun`, `scheduleSessionRuns` and `streamAgentRun` as a positional
  * parameter, and while it was optional a new route could be added without it
- * and lose both tools with no type error — silently, because the model does not
+ * and lose the tools with no type error — silently, because the model does not
  * report a missing tool, it hand-rolls a search instead. Required-but-nullable
  * makes that omission a compile error while still letting a deployment without
  * the evolve sidecar pass `undefined` and offer nothing.
@@ -560,6 +552,8 @@ export type EvolveRuntimeFactory = (context: EvolveTurnContext) => EvolveToolRun
 
 /** What the capability needs from the turn that is running it. */
 export interface EvolveTurnContext {
+  thinkingMode?: EffectiveRuntimeSettings["thinkingMode"];
+  thinkingEffort?: EffectiveRuntimeSettings["thinkingEffort"];
   approvalMode?: "always_allow" | "ask_for_dangerous";
   /** Publishes `evolve_run.created` into the turn's event stream. */
   emit: RunEventSink;
@@ -1346,7 +1340,7 @@ async function executeAgentRun(
       kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
       maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
       maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-      npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
+      npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
       permission: requestExecution.permission,
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
@@ -1593,6 +1587,8 @@ async function executeAgentRun(
       // loop neither knows its dependencies nor forwards them.
       const turnExecution = mainExecution;
       const runtime = evolve?.({
+        thinkingMode: settingsSnapshot.thinkingMode,
+        thinkingEffort: settingsSnapshot.thinkingEffort,
         approvalMode: session.approvalMode,
         beginExternalWait: turnExecution ? () => turnExecution.beginExternalWait() : undefined,
         emit,
@@ -1879,7 +1875,7 @@ async function executeAgentRun(
               kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
               maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
               maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-              npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
+              npuBrokerEnabled: runnerNpuBrokerEnabled(runnerHealth),
               permission: childExecution.permission,
               permissionScopeLabel: `in subagent ${subagent.id}`,
               artifactPathPrefix: handoff.privateWorkspacePath,
@@ -2654,6 +2650,12 @@ async function executeAgentRun(
       await emit({ reason: "Run cancelled", runId, type: "run.cancelled" });
       return "cancelled";
     }
+    runLog.error("run_execution_failed", {
+      errorMessage: shortErrorMessage(runFailureMessage(error)),
+      ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
+      runId,
+      sessionId,
+    });
     rememberTimeout(timeoutFailure(error));
     try {
       await persistObservedTimeouts();
@@ -3122,7 +3124,8 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
     ? [...model.facts.thinkingEfforts]
     : catalog?.thinking?.efforts ?? [];
   if (!model.facts?.thinkingEfforts?.length && !catalog?.thinking && THINKING_EFFORT_VARIANTS.includes(variant)) {
-    if (variant === "gemini") efforts = ["low", "medium", "high"];
+    if (variant === "deepseek") efforts = [...MODEL_THINKING_EFFORTS];
+    else if (variant === "gemini") efforts = ["low", "medium", "high"];
     else if (variant === "responses") efforts = ["low", "medium", "high", "xhigh", "max"];
     else if (variant === "anthropic-adaptive") efforts = ["low", "medium", "high", "max"];
     else if (variant === "kimi-k3") efforts = ["low", "high", "max"];
@@ -3375,11 +3378,12 @@ export function scheduleSessionRuns(
   evolve: EvolveRuntimeFactory | undefined,
   executionGovernance?: ExecutionGovernance,
 ): void {
-  if (scheduledSessions.has(sessionId)) return;
+  if (isEvidenceSessionReadOnly(store.getSession(sessionId)) || scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
   void (async () => {
     try {
       while (true) {
+        if (isEvidenceSessionReadOnly(store.getSession(sessionId))) return;
         const runs = await store.listSessionRuns(sessionId);
         if (runs.some((run) => run.status === "blocked" && run.configurationWait)) return;
         const next = runs.find((run) => run.status === "queued");
@@ -3571,6 +3575,7 @@ export function scheduleSessionRuns(
 export async function recoverSessionRuns(store: SessionStore, memoryGraphClient: MemoryGraphClient | null = null): Promise<void> {
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
+      if (isEvidenceSessionReadOnly(session)) continue;
       // A crashed child has no live process holding its busy state. Recover only
       // closed, committed turn context; never replay the unfinished model/tool call.
       for (const child of store.listSubagents(session.id)) {

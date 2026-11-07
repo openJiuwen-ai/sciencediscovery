@@ -1431,6 +1431,17 @@
      ]
     },
     {
+     "name": "one subagent after the run",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/subagents/{{subagentId}}"
+     },
+     "covers": [
+      "GET /api/sessions/:id/subagents/:sid"
+     ],
+     "expectStatus": 200
+    },
+    {
      "name": "delete the project",
      "request": {
       "method": "DELETE",

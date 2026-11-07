@@ -140,7 +140,7 @@ export class ConfigurationRequestService {
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) invalid("Verification target cannot contain credentials or query data");
       return url.href;
     });
-    if (!["before_first_run", "same_run", "next_run", "requires_restart"].includes(source.activationMode)) invalid("Invalid activation mode");
+    if (!["before_first_run", "same_run", "next_run", "next_request", "requires_restart"].includes(source.activationMode)) invalid("Invalid activation mode");
     const maxRequests = integer(verification.maxRequests, "maxRequests", 0);
     if (maxRequests > 10 || typeof source.ready !== "boolean") invalid("Verification budget exceeds the supported limit");
     return { fields, changes, disposition: source.disposition ?? (source.ready ? "change" : "missing_input"),
@@ -171,6 +171,7 @@ export class ConfigurationRequestService {
         ...(view.choiceReceipt ? { choiceReceipt: projectChoiceReceipt(view.choiceReceipt) } : {}) } : {}),
       id: view.id, sessionId: view.sessionId, projectId: view.projectId,
       ...(view.runId ? { runId: view.runId } : {}), revision: view.revision, stateVersion: view.stateVersion,
+      ...(view.fields.some(field => field.kind === "credential") ? { credentialTargetDigest: digest([view.capabilityId, record.plan.data?.credentialTarget ?? record.target, view.fields.filter(field => field.kind === "credential").map(field => field.id)]) } : {}),
       capabilityId: view.capabilityId, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, state: view.state,
       ...(endpointAuthorization ? { endpointAuthorization } : {}),
       ...(view.autoApplyAt ? { autoApplyAt: view.autoApplyAt } : {}),
@@ -201,7 +202,7 @@ export class ConfigurationRequestService {
   private async proposeInternal(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>, trustedReversal = false): Promise<ConfigurationRequestView> {
     const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
-    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+    if (["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);

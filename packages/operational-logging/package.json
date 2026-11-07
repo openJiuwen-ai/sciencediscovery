@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": { "types": "./src/index.ts", "default": "./dist/index.js" },
-    "./diagnostics": { "types": "./src/diagnostics.ts", "default": "./dist/diagnostics.js" }
+    "./diagnostics": { "types": "./src/diagnostics.ts", "default": "./dist/diagnostics.js" },
+    "./feedback": { "types": "./src/feedback.ts", "default": "./dist/feedback.js" },
+    "./feedback-client": { "types": "./src/feedback-client.ts", "default": "./dist/feedback-client.js" }
   },
   "types": "./src/index.ts",
   "scripts": {

@@ -27,6 +27,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { replaceVenvTrampolines, copyVenvRuntimeDlls } from "./lib/venv-launchers.mjs";
 import { makeJwSrcFilter } from "./lib/jw-src-filter.mjs";
+import { matchJwVenvSweep, isDeadVenvScript, JW_VENV_SWEEP_NESTED, codexVendorDirs, leftoverCodexVendorDirs } from "./lib/payload-slim.mjs";
+import { payloadCompileEnv, pycBudgetVerdict, regionsBelowRatio, PYC_MIN_RATIO } from "./lib/pyc-budget.mjs";
 
 const shellRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -42,7 +44,9 @@ const repo = arg("repo", join(shellRoot, ".."));
 const data = arg("data", join(repo, ".sciencediscovery-data"));
 const out = arg("out", join(shellRoot, "build", "resources"));
 
-const VENV_NAMES = ["gateway", "memory-graph", "evolve", "adapter", "paper"];
+// SIZEOPT W2: the five Python sidecars share one venv (uv workspace,
+// "sd-services"); assemble stages that single venv instead of five.
+const VENV_NAMES = ["sd-services"];
 /** Placeholder bootstrap.ts substitutes with the real <resources>\backend. */
 const BACKEND_PLACEHOLDER = "@@SD_BACKEND_ROOT@@";
 
@@ -123,7 +127,7 @@ for (const name of VENV_NAMES) {
     ...VENV_NAMES.map((name) => ({ label: `envs/${name}`, dir: join(data, "envs", name) })),
     { label: "jiuwenswarm", dir: join(data, "jiuwenswarm", "src", ".venv") },
   ];
-  const base = venvPython(join(data, "envs", "gateway"));
+  const base = venvPython(join(data, "envs", "sd-services"));
   for (const { label, dir } of bundled) {
     const v = venvPython(dir);
     if (v !== base) {
@@ -420,7 +424,10 @@ const copySet = [
   { src: join(repo, "services", "runner", "dist", "sea"), dest: join(backendOut, "node_modules", "@sciencediscovery", "runner", "dist", "sea") },
   { src: join(repo, "services", "paper", "paper_worker.py"), dest: join(backendOut, "services", "paper", "paper_worker.py") },
   { src: join(repo, "services", "paper", "pyproject.toml"), dest: join(backendOut, "services", "paper", "pyproject.toml") },
-  { src: join(repo, "services", "paper", "uv.lock"), dest: join(backendOut, "services", "paper", "uv.lock") },
+  // SIZEOPT W2: five per-service uv.lock files became one workspace lock at
+  // the repo root — ship that (paper's old per-service lock is gone).
+  { src: join(repo, "uv.lock"), dest: join(backendOut, "uv.lock") },
+  { src: join(repo, "pyproject.toml"), dest: join(backendOut, "pyproject.toml") },
   { src: join(repo, "apps", "web", "dist"), dest: join(backendOut, "apps", "web", "dist") },
   { src: join(repo, "apps", "desktop", "dist"), dest: join(backendOut, "apps", "desktop", "dist") },
   { src: join(repo, "skills"), dest: join(backendOut, "skills") },
@@ -461,10 +468,62 @@ for (const { src, dest } of copySet) {
 // the node_modules layout copied separately, so drop the duplicate here.
 await rm(join(backendOut, "services", "runner", "dist", "sea"), { recursive: true, force: true });
 
-// ---------------------------------------------------------------------------
-// 5. JiuwenSwarm src tree (backend/.sciencediscovery-data/jiuwenswarm/src)
+// SIZEOPT 1B-2: drop the @openai/codex vendored native toolchain (~437 MB).
+// The SDK resolves these binaries lazily at Codex construction time
+// (dist/index.js:448-460), so api startup is unaffected; only a codex
+// specialist run errors at use time. The JS SDK itself stays.
+//
+// Enumerated instead of one hardcoded path: which of the three reachable
+// shapes the platform package lands in depends on the primary-version pick
+// below (assemble-backend.mjs:307-323), so pinning one shape would make the
+// 437 MB win depend on readdir order. See payload-slim.mjs for the shapes.
+for (const vendorDir of codexVendorDirs(nmOut)) {
+  await rm(vendorDir, { recursive: true, force: true });
+  say(`swept codex vendor toolchain: ${relative(backendOut, vendorDir)}`);
+}
+// Verify the sweep by CONTENT, not by re-running its own enumeration. If
+// codexPackageDirs' name rule stops matching, the loop above deletes nothing and
+// a check built on the same rule would also find nothing — both green, 437 MB
+// shipped. This is review finding F12 applied to the node_modules half, which
+// probe-payload-runtime.py cannot see at all (it runs the Python venv only).
+// The marker file `codex-package.json` is unique to a vendored toolchain here:
+// measured once in the pnpm store and zero times under @openai/codex-sdk.
+{
+  const leftovers = leftoverCodexVendorDirs(nmOut);
+  if (leftovers.length > 0) {
+    fail(
+      "codex vendor sweep left native toolchains in the payload:\n"
+      + leftovers.map((d) => `  ${relative(backendOut, d)}`).join("\n")
+      + "\nThese carry a vendored codex-package.json, so they are the ~437 MB "
+      + "toolchain the sweep exists to remove. The usual cause is that "
+      + "codexPackageDirs' name filter no longer matches how the flattener laid "
+      + "the package out (see payload-slim.mjs for the four shapes) — fix the "
+      + "enumeration, do not widen this marker check.",
+    );
+  }
+  say("codex vendor sweep verified: no vendored toolchain left (content marker)");
+}
 
-const jwSrcOut = join(backendOut, ".sciencediscovery-data", "jiuwenswarm", "src");
+// ---------------------------------------------------------------------------
+// 5. JiuwenSwarm src tree (backend/jw — shortened payload layout)
+//
+// SIZEOPT W6 / design D11: the payload JW tree used to live at
+//   backend/.sciencediscovery-data/jiuwenswarm/src
+// which pushed the deepest relative path (a venv .pyc) to maxRel=228, leaving
+// ZERO MAX_PATH headroom under the default per-user install root (problems W6).
+// (The installed-tree walk reported 224, but that walk is self-blinded: the
+// deepest .pyc sits at an absolute path > 259, so NSIS silently skips it and
+// the tree never carries the file that would reveal the true budget — see
+// problems W15. maxRel must be read from the A5 build-time measurement below.)
+// The layout is now the short backend/jw (saves 36 chars → maxRel=192, A5
+// measured), giving the default root room for any Windows username (≤20 chars).
+// Only the OUTPUT
+// layout changes; the INPUT dev data dir (data/jiuwenswarm/src) is untouched.
+// JIUWENSWARM_SRC (bootstrap packagedPaths.jwSrc) follows, and jiuwenswarm.mjs
+// follows that env var — the editable finder uses parents[3] relative to
+// site-packages, so it is layout-name agnostic (assemble-backend §5b).
+const jwPayload = join(backendOut, "jw");
+const jwSrcOut = jwPayload;
 const jwSrcIn = join(data, "jiuwenswarm", "src");
 
 // The filter-rule lessons live with the rules themselves:
@@ -520,6 +579,38 @@ async function sweepNodeModules(dir) {
   }
 }
 await sweepNodeModules(jwSrcOut);
+
+// SIZEOPT 1B-1: sweep audit-proven dead weight out of the bundled venv.
+// Fresh trees should not contain any of these (setup syncs slim, JW patch
+// 0018 drops playwright/uv from pyproject) — this is the backstop for stale
+// data dirs, same philosophy as the sweeps above. Best-effort by design.
+{
+  const sp = join(jwSrcOut, ".venv", "Lib", "site-packages");
+  let sweptAny = false;
+  try {
+    for (const e of await readdir(sp, { withFileTypes: true })) {
+      const rule = matchJwVenvSweep(e.name);
+      if (!rule) continue;
+      await rmIfPresent(join(sp, e.name));
+      say(`swept dead weight: ${e.name} (${rule.why})`);
+      sweptAny = true;
+    }
+    for (const nested of JW_VENV_SWEEP_NESTED) {
+      const p = join(sp, ...nested.split("/"));
+      if (existsSync(p)) { await rmIfPresent(p); say(`swept dead weight: ${nested} (google_adk namespace subtree)`); sweptAny = true; }
+    }
+  } catch { /* site-packages unreadable — sweep is best-effort */ }
+  const scriptsDir = join(jwSrcOut, ".venv", "Scripts");
+  try {
+    for (const e of await readdir(scriptsDir, { withFileTypes: true })) {
+      if (!e.isFile() || !isDeadVenvScript(e.name)) continue;
+      await rmIfPresent(join(scriptsDir, e.name));
+      say(`swept dead venv script: ${e.name}`);
+      sweptAny = true;
+    }
+  } catch { /* no Scripts dir (POSIX venv) — nothing to sweep */ }
+  if (!sweptAny) say("dead-weight sweep: nothing to remove (tree was already slim)");
+}
 
 // Rewrite the setuptools editable finder so package paths resolve relative to
 // wherever the payload got installed (site-packages → .venv → src).
@@ -592,7 +683,7 @@ for (const name of VENV_NAMES) {
 // ---------------------------------------------------------------------------
 // 7. Base interpreter (venv `home`), realpath'd (uv dirs can be symlinks)
 
-const pythonHome = await realpath(pyvenvHome(join(data, "envs", "gateway")));
+const pythonHome = await realpath(pyvenvHome(join(data, "envs", "sd-services")));
 if (!existsSync(join(pythonHome, "python.exe"))) fail(`no python.exe under ${pythonHome}`);
 say(`copying base interpreter from ${pythonHome}`);
 await cp(pythonHome, join(out, "python"), { recursive: true, force: true, filter: pyFilter() });
@@ -609,7 +700,7 @@ await cp(pythonHome, join(out, "python"), { recursive: true, force: true, filter
 say("replacing uv trampoline launchers in bundled venvs");
 const launcherDirs = [
   ...VENV_NAMES.map((name) => join(out, "envs-template", name)),
-  join(out, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv"),
+  join(jwPayload, ".venv"),
 ];
 const launcherReplaced = await replaceVenvTrampolines(launcherDirs, join(out, "python"), say);
 if (launcherReplaced === 0) {
@@ -658,24 +749,32 @@ say(`installed ${dllCopies} runtime DLL file(s) beside venv launchers`);
 // downstream copy chains (electron-builder → NSIS → dataDir) may restamp
 // mtimes freely without invalidating what we ship.
 say("precompiling Python bytecode for bundled venvs");
-const compileEnv = { ...process.env, PYTHONWARNINGS: "ignore" };
+// Do NOT spread process.env into the compile environment unfiltered. It used to
+// read `{...process.env, PYTHONWARNINGS: "ignore"}`, which let a build script's
+// exported PYTHONPYCACHEPREFIX redirect all 73,752 .pyc files (1011 MB) into a
+// mirror tree outside the payload while compileall still exited 0 — release6
+// shipped 446.5 MiB with 1,384 bytecode files instead of ~577 MiB with ~37,000,
+// and every gate stayed green (problems W25, lesson L56). The filter below is
+// the same defence already applied to SD_PROBE_DEV_TREE for the runtime probe;
+// A6 further down is the net for a cause nobody thought to blocklist.
+const compileEnv = payloadCompileEnv(process.env, { warn: say });
 const compileAll = (pythonExe, target, exclude) =>
   execFileSync(pythonExe, ["-m", "compileall", "-q", "--invalidation-mode", "checked-hash",
     ...(exclude ? ["-x", exclude] : []), target], { env: compileEnv, windowsHide: true, stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
 const basePythonExe = join(out, "python", "python.exe");
-const jwVenvPython = join(out, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv", "Scripts", "python.exe");
+const jwVenvPython = join(jwPayload, ".venv", "Scripts", "python.exe");
 const compileTargets = [
   { label: "python stdlib", python: basePythonExe, path: join(out, "python", "Lib") },
   ...VENV_NAMES.map(name => ({ label: `venv ${name}`, python: basePythonExe, path: join(out, "envs-template", name, "Lib", "site-packages") })),
   // jw's venv compiles with ITS OWN interpreter (site-packages + the editable
   // src mount both resolve through it; the base python failed on this pair).
-  { label: "jiuwenswarm venv", python: jwVenvPython, path: join(out, "backend", ".sciencediscovery-data", "jiuwenswarm", "src", ".venv", "Lib", "site-packages") },
+  { label: "jiuwenswarm venv", python: jwVenvPython, path: join(jwPayload, ".venv", "Lib", "site-packages") },
   // Lesson: compiling the WHOLE src tree also compiles tests/**, which
   // resurrects the very __pycache__ the post-copy sweep removed (~40 dirs of
   // dead weight that shipped in every installer). -x skips path
   // components named tests so the bytecode is never generated in the first
   // place; the post-compile sweep below is the belt-and-suspenders net.
-  { label: "jiuwenswarm src", python: jwVenvPython, path: join(out, "backend", ".sciencediscovery-data", "jiuwenswarm", "src"), exclude: "[/\\\\]tests[/\\\\]" },
+  { label: "jiuwenswarm src", python: jwVenvPython, path: jwPayload, exclude: "[/\\\\]tests[/\\\\]" },
 ];
 for (const { label, python, path: target, exclude } of compileTargets) {
   if (!existsSync(target)) continue;
@@ -683,6 +782,15 @@ for (const { label, python, path: target, exclude } of compileTargets) {
     compileAll(python, target, exclude);
     say(`precompiled bytecode for ${label}`);
   } catch (error) {
+    // SIZEOPT (problems W4): the JW venv/src precompile is W15-critical — a
+    // silent skip ships an installer whose first run re-compiles everything
+    // (multi-minute startup regression caught in the field 2026-11-03: a
+    // >260-char payload path broke compileall atomically and this warning
+    // was the only signal). JW failures must kill the build; the service
+    // venvs keep the soft warning.
+    if (label.startsWith("jiuwenswarm")) {
+      fail(`bytecode precompile FAILED for ${label}: ${error.message}`);
+    }
     say(`warning: bytecode precompile skipped for ${label}: ${error.message}`);
   }
 }
@@ -699,7 +807,271 @@ await cp(join(data, "scientific-envs", "bin", "micromamba.exe"),
   join(out, "micromamba", "micromamba.exe"), { force: true });
 
 // ---------------------------------------------------------------------------
-// 9. version.json manifest
+// 9. Payload self-verification (SIZEOPT A1/A2, modelled on the JW official
+// packaging scripts' import smoke check)
+
+// A1 payload self-check: run the PAYLOAD's own interpreters — if the assembled venvs
+// cannot import the product modules, the installer is broken and must not
+// ship. This is the check that would have caught the silent precompile skip.
+say("verifying payload imports (self-check)");
+const sdVenvPython = join(out, "envs-template", "sd-services", "Scripts", "python.exe");
+const sdServiceSrcs = ["gateway", "memory-graph", "evolve", "adapter"]
+  .map((name) => join(out, "backend", "services", name, "src"));
+const smokeRuns = [
+  {
+    label: "jiuwenswarm venv",
+    python: jwVenvPython,
+    code: "import jiuwenswarm.common.config, jiuwenswarm.gateway.app_gateway, jiuwenswarm.server.app_agentserver",
+  },
+  {
+    // The sd-services venv ships with PLACEHOLDERED editable .pth files
+    // (the shell rewrites them to the installed backend path at first run),
+    // so services are not importable from the raw payload — simulate what
+    // the .pth will resolve to via PYTHONPATH instead. This still exercises
+    // the payload's venv deps + shipped service sources.
+    label: "sd-services venv",
+    python: sdVenvPython,
+    code: "import sciencediscovery_gateway, sciencediscovery_memory_graph, sciencediscovery_evolve, sciencediscovery_adapter",
+    extraEnv: { PYTHONPATH: sdServiceSrcs.join(";") },
+  },
+];
+for (const { label, python, code, extraEnv } of smokeRuns) {
+  try {
+    execFileSync(python, ["-c", code], { env: { ...compileEnv, ...extraEnv }, windowsHide: true, stdio: "pipe", maxBuffer: 16 * 1024 * 1024 });
+    say(`payload import OK: ${label}`);
+  } catch (error) {
+    fail(`payload self-check FAILED (${label}): ${error.message}`);
+  }
+}
+
+// A1b runtime-path probe. The two import checks above prove module-scope imports
+// resolve; they CANNOT see a lazily imported dependency, nor a dependency that
+// only appears several hops down the third-party graph, and the sweep rules in
+// payload-slim.mjs sit exactly on those two blind spots:
+//   * onnxruntime — chromadb imports it inside its default embedding function, so
+//     `import chromadb` stays green whether or not it ships;
+//   * kubernetes  — imported by chromadb's distributed segment client, which the
+//     product never loads (it builds the embedded PersistentClient);
+//   * babel       — reached only as openjiuwen -> trafilatura -> courlan -> babel.
+//     A rule once swept it as a "jinja2 hard dep" while jinja2 was not even
+//     installed; the HTML compressor then silently degraded to its beautifulsoup
+//     fallback in the shipped payload. It is no longer swept.
+// So this runs the swept venv through two things the product really builds: the
+// store its memory provider opens (write + ranked query, plus chromadb's
+// default-embedding fallback, which must fail with its own readable ValueError
+// and never a bare ModuleNotFoundError) and its HTML compressor, which must still
+// extract with trafilatura rather than fall back. So the probe now fails the
+// build in BOTH directions a rule can be wrong: one that removes something the
+// runtime needs (assertions 1-4), and one that stops matching and quietly ships
+// its dead weight again (assertion 5, which enforces the package table instead
+// of only printing it — review finding F12). The node_modules sweeps cannot be
+// checked from Python, so they have their own content-marker verification above
+// at the codex vendor sweep.
+// See scripts/probe-payload-runtime.py and review findings F2 / F12.
+const probeScript = join(dirname(fileURLToPath(import.meta.url)), "probe-payload-runtime.py");
+if (!existsSync(probeScript)) {
+  fail(`runtime probe script missing: ${relative(out, probeScript)}`);
+}
+try {
+  // A payload build must NOT inherit SD_PROBE_DEV_TREE: compileEnv spreads
+  // process.env, so a dev machine that happens to export it (to run the probe
+  // against a dev venv) would silently skip the probe's ABSENT half here and
+  // let an unswept payload through — exactly the "gate green but nothing swept"
+  // failure F12 is about. The switch is for a human running the probe by hand,
+  // never for this path, so it is removed rather than passed through.
+  const probeEnv = { ...compileEnv };
+  delete probeEnv.SD_PROBE_DEV_TREE;
+  if ("SD_PROBE_DEV_TREE" in compileEnv) {
+    say("warning: SD_PROBE_DEV_TREE was set in the build environment; ignoring it for the payload probe");
+  }
+  const probeOut = execFileSync(jwVenvPython, [probeScript], { env: probeEnv, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
+  // Require the sentinel, not just exit 0: a probe that dies before its own
+  // assertions would still leave an interpreter exit code behind, and this repo
+  // has already shipped one check that trusted an exit code (problems W22 /
+  // lesson L51 — makensis exits 0 on an undefined symbol).
+  if (!/^PROBE_OK$/m.test(probeOut ?? "")) {
+    fail(`payload runtime probe FAILED (jw venv): no PROBE_OK sentinel in output\n${probeOut ?? ""}`);
+  }
+  say("payload runtime probe OK: package table swept as the rules intend, jw venv store write+query, default-EF fallback readable, HTML compressor on trafilatura");
+} catch (error) {
+  const detail = (error.stdout?.toString?.() ?? "") + (error.stderr?.toString?.() ?? error.message);
+  fail(`payload runtime probe FAILED (jw venv):\n${detail}`);
+}
+
+
+// A2 RequiredFiles manifest: every file an installer must contain, checked
+// before the build is accepted (field history: a missing patch directory
+// killed the stack cold start in a shipped installer).
+const requiredFiles = [
+  join(jwPayload, ".sciencediscovery-patches.json"),
+  join(jwPayload, ".venv", "Scripts", "jiuwenswarm-start.exe"),
+  join(out, "backend", "node_modules", "@sciencediscovery", "runner", "dist", "sea", "linux-x64", "sciencediscovery-runner"),
+  join(out, "backend", "node_modules", "@sciencediscovery", "runner", "dist", "sea", "linux-arm64", "sciencediscovery-runner"),
+  join(out, "backend", "services", "api", "dist", "server.js"),
+  join(out, "backend", "services", "runner", "dist", "server.js"),
+  join(out, "envs-template", "sd-services", "Lib", "site-packages", "_editable_impl_sciencediscovery_gateway.pth"),
+  join(out, "micromamba", "micromamba.exe"),
+  join(out, "python", "python.exe"),
+];
+const missingRequired = requiredFiles.filter((p) => !existsSync(p));
+if (missingRequired.length > 0) {
+  fail(`required payload files missing:\n  ${missingRequired.map((p) => relative(out, p)).join("\n  ")}`);
+}
+say(`required-files manifest OK (${requiredFiles.length} entries)`);
+
+// A5 path-budget gate (SIZEOPT W9 / design D11): W6 burned ALL MAX_PATH headroom
+// (maxRel=228, margin 0) and no existing gate noticed — assemble exit 0 while
+// the installed tree was one long username away from ImportError. The budget
+// is a TREND quantity (every upstream dep that nests deeper eats it), so it is
+// printed on EVERY build, not only on failure.
+//
+// Model (problems W6, lesson L29):
+//   maxAbs = rootLen + 1 + maxRel     (root = install dir, e.g. C:\…\ScienceDiscovery)
+//   runtime limit : maxAbs + 1 ≤ 260  → longest usable path is 259
+//   build limit   : compileall writes "<pyc>.<id(path)>" temp files (suffix
+//                     measured 14 chars; margin below kept at 19, a wide bound)
+//                   — modeled explicitly so the margin is never a surprise.
+//   default root  : C:\Users\<u>\AppData\Local\ScienceDiscoveryApp = 43 + username
+//                   (set explicitly by installer.nsh customInit; the electron-builder
+//                   default's intermediate "Programs" level was dropped on 2026-11-04
+//                   by owner decision); Windows caps usernames at 20 → root ≤ 63.
+//                   The "App" suffix is not cosmetic: the unsuffixed name is the
+//                   default DATA directory (wizard-data-dir.ts:22), and sharing one
+//                   path made uninstall delete user data — see problems W16.
+//
+// Closure with the installer guard: installer.nsh SD_INSTALL_ROOT_MAX=66 is
+// derived from the maxRel measured HERE ("longest install root the current
+// payload still fits in", 259 - 1 - 192 = 66). Change the payload layout →
+// maxRel moves → both sides must be updated (printing maxRel on every build is
+// exactly what keeps that coupling visible).
+// DEFAULT_ROOT_LEN below is coupled the same way, to the install root NAME in
+// installer.nsh customInit. Rename that root and this constant is wrong — and
+// wrong in the unsafe direction: a too-small rootLen reports a maxRelRuntime
+// the payload does not actually have, so the gate passes a tree that breaches
+// (the same "threshold derived from a stale measurement" failure as W15).
+// ⚠️ Derive the threshold from this MEASUREMENT, never from a number computed
+// by subtracting a saved-layout delta from an installed-tree walk: the walk is
+// truncated by MAX_PATH itself (problems W15), so such a derivation once
+// produced 70 — 4 chars too loose, letting roots 67..70 pass the guard while
+// actually breaching.
+// maxRel is measured from the INSTALL ROOT, so it must include the leading
+// "resources\" segment: electron-builder packs `out` as <install>\resources.
+// NOTE: derive it from relative(out, …) + a literal "resources" prefix, NOT
+// from relative(dirname(out), …) — the build tree is routinely staged at a
+// short path (`--out X:\pld`) to keep compileall inside the MAX_PATH budget
+// (lesson L29), and dirname() of that would label every payload file
+// "pld\backend\…", under-reporting the budget by 6 chars and hiding exactly
+// the breach this gate exists to catch (problems W9).
+const MAX_PATH_USABLE = 259;
+const DEFAULT_ROOT_LEN = 63; // C:\Users\<u20>\AppData\Local\ScienceDiscoveryApp
+const COMPILEALL_TEMP_MARGIN = 19;
+const PAYLOAD_SEGMENT = "resources";
+const maxRelRuntime = MAX_PATH_USABLE - DEFAULT_ROOT_LEN - 1; // 195
+const maxRelBuild = maxRelRuntime - COMPILEALL_TEMP_MARGIN;   // 176
+const installRootRel = (p) => join(PAYLOAD_SEGMENT, relative(out, p));
+
+let maxRel = 0;
+let maxRelPath = "";
+const topRel = []; // [len, relPath] kept sorted desc, capped at 10
+// A6 piggybacks on this same walk: counting bytecode needs the identical
+// traversal, so it is accumulated here rather than paying for a second pass
+// over ~95,000 files. `pycByRegion` buckets by the payload's top-level
+// directory (python, envs-template, backend, ...) so the advisory can name
+// WHICH subtree lost coverage.
+let pyCount = 0;
+let pycCount = 0;
+const pycByRegion = {};
+{
+  const stack = [out];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { stack.push(p); continue; }
+      const rel = installRootRel(p);
+      if (rel.length > maxRel) { maxRel = rel.length; maxRelPath = rel; }
+      topRel.push([rel.length, rel]);
+      if (e.name.endsWith(".py")) {
+        pyCount += 1;
+      } else if (e.name.endsWith(".pyc")) {
+        pycCount += 1;
+      } else {
+        continue;
+      }
+      // Bucket by the payload's top-level DIRECTORY. A file sitting directly at
+      // the payload root (e.g. version.json itself) has no separator in its
+      // relative path, so split()[0] would be the FILENAME — bucketing root files
+      // under their own names and polluting byRegion with one-entry buckets that
+      // bootstrap never reads. Test for the separator explicitly; "(root)" is the
+      // honest bucket for them.
+      const relFromOut = relative(out, p);
+      const sep = relFromOut.search(/[\\/]/);
+      const region = sep === -1 ? "(root)" : relFromOut.slice(0, sep);
+      const bucket = (pycByRegion[region] ??= { py: 0, pyc: 0 });
+      if (e.name.endsWith(".py")) bucket.py += 1; else bucket.pyc += 1;
+    }
+  }
+  topRel.sort((a, b) => b[0] - a[0]);
+  topRel.length = Math.min(topRel.length, 10);
+}
+say(`A5 path budget: maxRel=${maxRel} (runtime limit ${maxRelRuntime} @ default root ${DEFAULT_ROOT_LEN}, build limit ${maxRelBuild} incl. compileall +${COMPILEALL_TEMP_MARGIN}) — longest: ${maxRelPath}`);
+if (maxRel > maxRelRuntime) {
+  fail(`payload path budget exceeded: maxRel=${maxRel} > ${maxRelRuntime} (over by ${maxRel - maxRelRuntime}) under the worst-case default install root (${DEFAULT_ROOT_LEN} chars).\n` +
+    `  Longest paths:\n    ${topRel.map(([n, p]) => `${n}  ${p}`).join("\n    ")}\n` +
+    `  Shorten the payload layout (design D11 §S2: rename/move the deep venv prefix) — do NOT ship: the installed tree will ImportError under long usernames.`);
+}
+if (maxRel > maxRelBuild) {
+  // Advisory, not a failure: the payload ships fully precompiled
+  // (checked-hash, step 7c), so first-run compileall over the install tree is
+  // a no-op and never materializes the +19 temp names in practice. The line
+  // stays visible so the eroding margin cannot hide (W9: the budget is a trend
+  // quantity — every upstream dep that nests deeper eats it).
+  say(`A5 advisory: maxRel=${maxRel} exceeds the compileall build budget (${maxRelBuild}); safe only while the shipped checked-hash .pyc set stays complete (first-run precompile must remain a no-op)`);
+}
+
+// A6 bytecode-budget gate (SIZEOPT W25): A5's advisory above says the build
+// limit is only safe "while the shipped .pyc set stays complete" — this is the
+// check that makes that sentence enforceable instead of decorative.
+//
+// release6 shipped with 1,384 .pyc where it should have had ~37,000, because
+// the build environment exported PYTHONPYCACHEPREFIX and compileall (which
+// spreads process.env) redirected every bytecode file into a mirror tree
+// outside the payload. compileall exited 0 — right content, wrong place — and
+// all four existing gates stayed green: A1 imports fine (the .py sources all
+// shipped), A1b runs code without counting bytecode, A2's manifest has no
+// bytecode entry, A5 measures path length. The installer came out 139.7 MiB
+// SMALLER (446.5 vs the rebuild's 586.2 MiB) and so looked like a win for a
+// size-optimisation branch; the first launch recompiled everything instead.
+//
+// Like A4 and A5 this prints on EVERY build: coverage is a trend quantity
+// (upstream adds tests, a sweep rule changes) and a budget nobody can see
+// eroding is a budget that fails all at once. The ratio and its calibration
+// live in scripts/lib/pyc-budget.mjs, pinned against both release6 trees by
+// test/pyc-budget.test.ts — change the limit there, not here.
+{
+  const verdict = pycBudgetVerdict(pyCount, pycCount);
+  const pct = (n) => `${(n * 100).toFixed(1)}%`;
+  say(`A6 bytecode budget: ${pycCount} .pyc for ${pyCount} .py = ${pct(verdict.ratio)} (limit ${pct(PYC_MIN_RATIO)})`);
+  const weak = regionsBelowRatio(pycByRegion);
+  if (weak.length > 0) {
+    // Advisory, not a failure: the gate is whole-tree, and a whole-tree ratio
+    // has a blind spot proportional to a region's size — a SMALL target losing
+    // every .pyc can leave the total above the limit while that subtree ships
+    // uncompiled and pays the recompile on first run. Naming it keeps the loss
+    // visible instead of hiding inside a passing total.
+    say(`A6 advisory: below-limit regions — ${weak.map((r) => `${r.name} ${r.pyc}/${r.py} (${pct(r.ratio)})`).join(", ")}`);
+  }
+  if (!verdict.ok) {
+    fail(`payload bytecode budget failed: ${verdict.reason}.\n` +
+      `  The .pyc files are either missing or were written OUTSIDE the payload. Check the build environment for PYTHONPYCACHEPREFIX (it redirects compileall's output and still exits 0 — problems W25) and check the "precompiled bytecode for <label>" lines above for a target that was skipped.\n` +
+      `  Do NOT ship: the installed tree recompiles on first run, a multi-minute startup regression.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 10. version.json manifest
 
 let repoCommit = "unknown";
 try {
@@ -716,12 +1088,24 @@ const manifest = {
   builtAt: new Date().toISOString(),
   piecesMB: pieces,
   micromambaSha256: createHash("sha256").update(mmBuf).digest("hex"),
+  // #897 §2 first half: record the precompiled set so bootstrap can verify the
+  // COPY against what this build actually shipped. The counts come from the A6
+  // walk above (no second traversal). byRegion is keyed by the payload's
+  // top-level directory; bootstrap reads the "envs-template" entry, the region
+  // copyTreeConcurrent unpacks into <dataDir>\envs (unpackedBytecodeVerdict).
+  bytecode: {
+    py: pyCount,
+    pyc: pycCount,
+    byRegion: pycByRegion,
+  },
 };
 await writeFile(join(out, "version.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
 // ---------------------------------------------------------------------------
-// 10. Cleanup + report
+// 11. Cleanup + report
 
 await rm(deployDir, { recursive: true, force: true });
 say("removed deploy temp dir");
+const payloadTotal = Math.round(Object.values(pieces).reduce((a, b) => a + b, 0) * 10) / 10;
 say(`done — payload pieces (MB): ${JSON.stringify(pieces)}`);
+say(`payload total: ${payloadTotal} MB — installer size follows after electron-builder`);

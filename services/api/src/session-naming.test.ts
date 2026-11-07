@@ -112,6 +112,7 @@ test("Session title refinement uses an OpenAI-compatible model and records provi
     cacheWriteTokens: null,
     inputTokens: 18,
     outputTokens: 6,
+    reasoningTokens: null,
     totalTokens: 24,
     usageStatus: "reported",
   });
@@ -307,6 +308,7 @@ test("Session title refinement retries with the bounded default budget when a ga
     cacheWriteTokens: null,
     inputTokens: 60,
     outputTokens: 184,
+    reasoningTokens: null,
     totalTokens: 244,
     usageStatus: "reported",
   });
@@ -363,7 +365,7 @@ test("Session title refinement summarizes long Chinese and English responses ins
     assert.match(requests[1]!.messages[1]!.content, /Summarize the original topic again/);
     assert.ok(requests[1]!.messages[1]!.content.includes(scenario.firstMessage));
     assert.deepEqual(result.usage, {
-      cacheReadTokens: null, cacheWriteTokens: null, inputTokens: 20, outputTokens: 10, totalTokens: 30, usageStatus: "reported",
+      cacheReadTokens: null, cacheWriteTokens: null, inputTokens: 20, outputTokens: 10, reasoningTokens: null, totalTokens: 30, usageStatus: "reported",
     });
   }
 });

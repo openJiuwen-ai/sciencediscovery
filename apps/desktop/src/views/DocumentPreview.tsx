@@ -200,6 +200,9 @@ export function DocumentPreview({ expanded, onExpand, slot }: Props) {
   const name = previewName(slot.label, slot.path);
   if (slot.tooLarge === true) return <div className="doc-placeholder">{TEXT.workspace.tooLarge}</div>;
   const kind = documentKind(name, slot.mediaType);
+  // A container or a legacy office file this build cannot draw is not shown as
+  // its bytes: the tab says there is no renderer and leaves the download.
+  if (kind === "unrenderable") return <div className="doc-placeholder">{TEXT.workspace.unrenderable}</div>;
   const dataUrl = slot.dataUrl;
   if (dataUrl !== undefined) {
     if (kind === "pdf") return <PdfView name={name} src={dataUrl} />;

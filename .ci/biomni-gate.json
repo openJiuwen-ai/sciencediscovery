@@ -3,6 +3,10 @@
   "baseline": null,
   "score_drop_points": 0,
   "resource_increase_ratio": 0,
+  "temporary_population": {
+    "reference_case_count": 50,
+    "active_case_count": 45
+  },
   "temporary_baseline": {
     "name": "a3-two-complete-runs-2026-10-21",
     "scope": "final-valid-results-excluding-earlier-failed-attempts",

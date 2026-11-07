@@ -73,6 +73,11 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
     cacheReadTokens = protocol === "openai-responses" ? read ?? cacheReadTokens : cacheReadTokens ?? read;
     cacheWriteTokens = protocol === "openai-responses" ? write ?? cacheWriteTokens : cacheWriteTokens ?? write;
   }
+  const completionDetails = raw.completion_tokens_details;
+  const outputDetails = raw.output_tokens_details;
+  const reasoningTokens = count(raw, ["reasoning_tokens"])
+    ?? (isRecord(completionDetails) ? count(completionDetails, ["reasoning_tokens"]) : undefined)
+    ?? (isRecord(outputDetails) ? count(outputDetails, ["reasoning_tokens"]) : undefined);
 
   if (totalTokens === undefined && inputTokens !== undefined && outputTokens !== undefined) {
     totalTokens = inputTokens + outputTokens;
@@ -90,6 +95,7 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
     totalTokens,
     cacheReadTokens: cacheReadTokens ?? null,
     cacheWriteTokens: cacheWriteTokens ?? null,
+    reasoningTokens: reasoningTokens ?? null,
     ...(protocol === undefined && conflicts ? { aliasConflict: {
       ...(prompt === undefined ? {} : { prompt_tokens: prompt }),
       ...(completion === undefined ? {} : { completion_tokens: completion }),

@@ -112,7 +112,10 @@ function parseTotalBytes(response: Response, offset: number): number | undefined
   const contentRange = response.headers.get("content-range");
   const rangeTotal = contentRange?.match(/\/(\d+)$/)?.[1];
   if (rangeTotal) return Number(rangeTotal);
-  const contentLength = Number(response.headers.get("content-length"));
+  // An absent content-length means the body is chunked and its size is unknown;
+  // it must not be read as 0, which would report a running download as 100%.
+  const header = response.headers.get("content-length");
+  const contentLength = header === null ? Number.NaN : Number(header);
   return Number.isFinite(contentLength) && contentLength >= 0 ? offset + contentLength : undefined;
 }
 

@@ -12,6 +12,7 @@ import { createConnection, createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { bootstrapPackaged, needsUnpack, packagedEnv, packagedPaths, type PackagedPaths } from "./bootstrap.ts";
 import { healthUrl, resolveDataDir, resolveRepoRoot, tokenFilePath, uiUrl } from "./config.ts";
+import { FIRST_CHAT_WARMUP_PATH, runFirstChatWarmup } from "./first-chat-warmup.ts";
 import { provisioningLineToStage, STAGE_TEXTS, stackLineToStage, stageProgress } from "./loading-stage.ts";
 import {
   epochFromEnv, firstFreeEpoch, healthUrlForPorts, MAX_PORT_EPOCH,
@@ -40,6 +41,16 @@ const log = (line: string): void => {
   console.log(`[sd-shell] ${line}`);
   logToDisk(line);
 };
+// [SD-PERF instrumentation] 壳侧统一毫秒打点：`[perf]` 前缀沿用既有行格式，
+// 事件名对齐 start-stack/jiuwenswarm 侧的 [SD-PERF] 命名（shell-/jw-/stack-
+// 三域时间线靠 ISO 时间戳对齐）。移除打点时 git checkout 本文件即可。
+const SD_PERF = (event: string, extra = ""): void => {
+  log(`[perf] ${event} elapsed=${Date.now() - sdPerfT0}ms${extra ? ` ${extra}` : ""}`);
+};
+// 模块加载即取 T0 —— 比 appStartAt（whenReady 前一行）更早，覆盖 Electron
+// 引导 + 模块 import + 单实例锁的全部耗时。
+const sdPerfT0 = Date.now();
+SD_PERF("module-load");
 /** Fresh-machine provisioning (uv venvs + micromamba) can dwarf the 120s startup budget. */
 const WIZARD_BACKEND_TIMEOUT_MS = 1_200_000;
 /** Wait for JiuwenSwarm to be reachable through the adapter before loading the
@@ -65,6 +76,25 @@ function shellLogDir(): string {
   return app.isPackaged
     ? join(dirname(app.getPath("exe")), "logs")
     : join(app.getPath("userData"), "logs");
+}
+
+/**
+ * The install root the data-dir wizard must keep the user's data clear of, or
+ * null in dev (where the shell lives in the repo and there is no install dir).
+ *
+ * This is the directory NSIS's uninstall tail deletes UNCONDITIONALLY
+ * (build/installer.nsh customUnInstall → DeleteFastThenHelper "$INSTDIR"), even
+ * with "also delete user data" left unticked. The packaged shell exe sits
+ * directly in $INSTDIR, so its dirname is that directory — the same reasoning
+ * shellLogDir() above already uses for <install>\logs.
+ *
+ * Without this the two DEFAULTS colliding (problems W16: the old
+ * $LOCALAPPDATA\ScienceDiscovery install root was literally defaultDataDir())
+ * would only be fixed by the rename, and a user typing the install dir into the
+ * wizard would reproduce the same silent data loss.
+ */
+function installRootForWizard(): string | null {
+  return app.isPackaged ? dirname(app.getPath("exe")) : null;
 }
 
 function ensureShellLog(): string | null {
@@ -194,6 +224,7 @@ async function loadUi(endpoints: Endpoints, token: string | null): Promise<void>
   if (!reachable) log(`loadUi: ui origin not answering within 30s; loading anyway (did-fail-load retry is the backstop)`);
   if (!mainWindow || quitConfirmed) return;
   log(`[perf] loadUi elapsed=${Date.now() - appStartAt}ms`);
+  SD_PERF("loadUi-loadURL", `ui=${endpoints.ui}`);
   attachAuthFallback(endpoints);
   // Preload consumes the fragment before page JS runs.
   const target = token ? `${endpoints.ui}/#token=${encodeURIComponent(token)}` : endpoints.ui;
@@ -260,6 +291,15 @@ function watchAgentReady(endpoints: Endpoints, dataDir: string | null): void {
       if (res.ok) {
         const body = (await res.json()) as AgentInfo;
         if (body.jiuwenswarm?.reachable) {
+          SD_PERF("AGENT-READY", `watchAttempts=${attempt}`);
+          // [first-message-latency] fire-and-forget MCP catalog warmup: the
+          // catalog load (stdio spawn + tools/list) overlaps the ready screen
+          // instead of the first chat run. Best-effort, off the critical path;
+          // failures are logged only and never surface to the user.
+          void runFirstChatWarmup(endpoints.ui, token).then(
+            (status) => logToDisk(`[warmup] first-chat ${FIRST_CHAT_WARMUP_PATH} -> ${status}`),
+            (err: unknown) => logToDisk(`[warmup] first-chat ${FIRST_CHAT_WARMUP_PATH} failed: ${String(err)}`),
+          );
           send({ ready: true });
           clearAgentWatch();
           return;
@@ -574,8 +614,10 @@ async function ensureBackend(
 ): Promise<boolean> {
   // 1s first probe — ECONNREFUSED returns instantly anyway, the poll
   // interval means a 3s budget wasted ~2s before spawning the stack.
+  SD_PERF("ensureBackend-enter");
   if (await waitHealthy(endpoints.health, 1_000, fetch)) {
     log("backend already healthy; reusing running stack");
+    SD_PERF("backend-reused-healthy");
     return true;
   }
   const repoRoot = resolveRepoRoot(process.env, shellDir, packagedRoot);
@@ -618,12 +660,15 @@ async function ensureBackend(
     };
     if (packaged && dataDir) {
       provisioningThisRun = needsUnpack(dataDir, packaged.resourcesPath);
+      SD_PERF("bootstrapPackaged-enter", `provisioning=${provisioningThisRun}`);
       await bootstrapPackaged(packaged, dataDir, stageAwareLog);
+      SD_PERF("bootstrapPackaged-done");
       Object.assign(extraEnv, packagedEnv(packaged, dataDir));
     }
     pushStage("stack");
     stackErrTail.length = 0; // per-spawn failure tail
     stack = spawnStack(process.execPath, repoRoot, extraEnv, stageAwareLog);
+    SD_PERF("stack-spawned", `pid=${stack.pid ?? "?"}`);
     startConsoleSweep(); // hide any stray console window (see sweep docs)
     stackOwnedByShell = true;
     stackDir = dataDir;
@@ -641,6 +686,10 @@ async function ensureBackend(
   // before the fallback page shows anything.
   const up = await waitHealthyOrExited(handle, endpoints.health, budgetMs, fetch);
   if (up.kind === "healthy") {
+    // The health 200 moment = "backend ready" (the shell.log anchor the
+    // measurement protocol keys on). waitedMs vs spawn: derived by the
+    // report from the stack-spawned mark, kept here as a single anchor.
+    SD_PERF("HEALTH-200", `url=${endpoints.health}`);
     return true;
   }
   if (up.kind === "exited") {
@@ -701,6 +750,7 @@ let startupProxyEnv: NodeJS.ProcessEnv | null = null;
 let startupFlowInFlight = false;
 
 async function startupFlow(proxyEnv: NodeJS.ProcessEnv | null): Promise<void> {
+  SD_PERF("startupFlow-enter");
   // The window shows the local loading page while we probe and (if needed)
   // cold-start the stack; loadUi replaces it once healthy.
   showLoading();
@@ -710,8 +760,10 @@ async function startupFlow(proxyEnv: NodeJS.ProcessEnv | null): Promise<void> {
   provisioningThisRun = !!(packaged && dataDir && needsUnpack(dataDir, packaged.resourcesPath));
   pushStage("connect");
   const endpoints = await startupEndpoints(dataDir);
+  SD_PERF("startupEndpoints-done", `epoch=${endpoints.epoch ?? "env"} ui=${endpoints.ui}`);
   currentEndpoints = endpoints;
   const healthy = await ensureBackend(endpoints, proxyEnv, dataDir);
+  SD_PERF("ensureBackend-done", `healthy=${healthy}`);
   if (healthy && !quitConfirmed) {
     void loadUi(endpoints, readToken(dataDir));
     watchAgentReady(endpoints, dataDir);
@@ -934,12 +986,13 @@ function registerWizardIpc(proxyEnv: NodeJS.ProcessEnv | null): void {
     return picked.canceled ? null : picked.filePaths[0] ?? null;
   });
 
-  ipcMain.handle("sd-shell:wizard-check-dir", (_event, path: unknown) => probeDataDir(String(path ?? "")));
+  ipcMain.handle("sd-shell:wizard-check-dir",
+    (_event, path: unknown) => probeDataDir(String(path ?? ""), installRootForWizard()));
 
   ipcMain.handle("sd-shell:wizard-confirm-dir", async (_event, path: unknown) => {
     const clean = String(path ?? "").trim();
     if (!clean) return { ok: false, message: "路径不能为空。" };
-    const check = probeDataDir(clean);
+    const check = probeDataDir(clean, installRootForWizard());
     if (!check.ok) return { ok: false, message: check.reason ?? "目录不可用。" };
     // Wizard half-takeover: confirming the data dir is all the shell wizard
     // still owns — the SPA takes over model config and boot waiting from
@@ -1311,7 +1364,7 @@ void app.whenReady().then(async () => {
   // Second instance that failed to take the lock: it called app.quit() at
   // module load; never start windows/stack in a process that is leaving.
   if (!gotSingleInstanceLock) return;
-  log(`[perf] app ready elapsed=${Date.now() - appStartAt}ms`);
+  SD_PERF("app-ready", `sinceModuleLoad=${Date.now() - sdPerfT0}ms`);
   // Be explicit that renderer traffic follows the Windows system proxy
   // (Chromium default, stated here so no one "fixes" it to direct).
   void session.defaultSession.setProxy({ mode: "system" }).catch(() => { /* keep default */ });
@@ -1348,11 +1401,13 @@ void app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   buildTray();
   createWindow();
+  SD_PERF("window-created");
 
   if (wizardMode) {
     wizardData = wizardState ?? { step: "data-dir" };
     registerWizardIpc(proxyEnv);
     void mainWindow?.loadFile(join(distDir, "wizard.html"));
+    SD_PERF("wizard-mode-enter");
   } else {
     // The window shows the local loading page while we probe and (if needed)
     // cold-start the stack; loadUi replaces it once healthy.

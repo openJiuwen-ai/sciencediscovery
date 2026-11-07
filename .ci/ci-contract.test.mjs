@@ -241,6 +241,7 @@ function artifactUploads(workflow) {
       name: step.match(/- name:\s*(.+)/)?.[1] ?? "(unnamed)",
       artifact: step.match(/^\s+name:\s*(.+)$/m)?.[1],
       always: /^\s*if:\s*always\(\)\s*$/m.test(step),
+      condition: step.match(/^\s*if:\s*(.+)$/m)?.[1],
       retention: Number(step.match(/^\s*retention-days:\s*(\d+)/m)?.[1]),
       missing: step.match(/^\s*if-no-files-found:\s*(\S+)/m)?.[1],
       paths: listed.filter((path) => !path.startsWith("!")),
@@ -376,7 +377,7 @@ test("mocked E2E keeps the complete HTML and results upload", async () => {
   assert.deepEqual(upload.paths, [".ci-results"]);
   assert.deepEqual(upload.excluded, []);
   assert.equal(upload.hidden, true);
-  assert.equal(upload.always, true);
+  assert.equal(upload.condition, "${{ always() && needs.policy.outputs.docs_only != 'true' }}");
   assert.equal(upload.missing, "warn");
   assert.equal(upload.retention, 14);
 });

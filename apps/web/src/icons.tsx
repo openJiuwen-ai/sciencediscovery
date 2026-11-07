@@ -55,6 +55,16 @@ export function BrandIcon(props: IconProps) {
   );
 }
 
+export function FeedbackIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M8 9h8" />
+      <path d="M8 13h5" />
+    </IconBase>
+  );
+}
+
 export function ProjectIcon(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -263,6 +273,10 @@ export function EllipsisIcon(props: IconProps) {
       <circle cx="5" cy="12" r="1" fill="currentColor" />
     </IconBase>
   );
+}
+
+export function BranchIcon(props: IconProps) {
+  return <IconBase {...props}><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><path d="M6 7v10M18 7v1a5 5 0 0 1-5 5H6" /></IconBase>;
 }
 
 export function CheckIcon(props: IconProps) {

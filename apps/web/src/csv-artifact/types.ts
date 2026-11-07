@@ -33,6 +33,8 @@ export type ColumnKind =
 
 export interface ColumnProfile {
   examples: DataValue[];
+  /** Header text as written in the file when it differs from a unique id. */
+  header?: string;
   id: string;
   kind: ColumnKind;
   label: string;

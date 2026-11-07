@@ -14,9 +14,10 @@
 
 import { createContext, useContext, useMemo, useRef, useState } from "react";
 
-import { formatErrorDiagnostic, errorIssueUrl, type DiagnosticIds, type DiagnosticSnapshot } from "@sciencediscovery/operational-logging/diagnostics";
+import { formatErrorDiagnostic, type DiagnosticIds, type DiagnosticSnapshot } from "@sciencediscovery/operational-logging/diagnostics";
 
 import { errorDiagnosticIds } from "./error-diagnostics.js";
+import { openFeedback } from "./feedback-open.js";
 import { useLocale } from "./i18n/index.js";
 
 declare const __SCIENCE_DISCOVERY_BUILD__: string;
@@ -29,7 +30,7 @@ export function ErrorDiagnosticActions({ title, detail = "", ids }: { title: str
   const { locale, t } = useLocale();
   const correlation = useMemo(() => ids ?? { ...errorDiagnosticIds(detail) }, [detail, ids]);
   const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<"copied" | "copyFailed" | "popupBlocked">();
+  const [feedback, setFeedback] = useState<"copied" | "copyFailed">();
   const cache = useRef<{ key: string; bundle: Promise<string> } | undefined>(undefined);
 
   function bundle(): Promise<string> {
@@ -64,16 +65,17 @@ export function ErrorDiagnosticActions({ title, detail = "", ids }: { title: str
       finally { setBusy(false); }
     }}>{t("diagnostics.copy")}</button>
     <button type="button" className="secondary-button" disabled={busy} onClick={async () => {
-      // Reserve the tab during the gesture; awaiting the local snapshot first
-      // would trigger popup blockers. No opener or referrer reaches GitHub.
-      const tab = window.open("about:blank", "_blank");
-      if (!tab) { setFeedback("popupBlocked"); return; }
-      tab.opener = null;
-      tab.document.write('<meta name="referrer" content="no-referrer">');
       setBusy(true); setFeedback(undefined);
-      try { tab.location.replace(errorIssueUrl(title, await bundle())); }
-      finally { setBusy(false); }
-    }}>{t("diagnostics.issue")}</button>
+      try {
+        openFeedback({
+          kind: "bug",
+          title,
+          body: detail ? `${title}\n\n${detail}` : title,
+          diagnostics: await bundle(),
+          meta: correlation,
+        });
+      } finally { setBusy(false); }
+    }}>{t("diagnostics.submitAnonymous")}</button>
     {feedback ? <span role="status">{t(`diagnostics.${feedback}`)}</span> : null}
   </div>;
 }

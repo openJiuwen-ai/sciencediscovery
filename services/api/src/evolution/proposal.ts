@@ -47,11 +47,15 @@ import type {
   EvolveScoring,
   EvolveSearchTuning,
   EvolveSplit,
+  ModelThinkingEffort,
+  ModelThinkingMode,
   ScorecardCriterion,
 } from "@sciencediscovery/schema";
 import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
+import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
+import type { EvolveSandboxCapability } from "./sandbox.js";
 import { EvolveSidecarError } from "./sidecar.js";
 import { preflight, type PreflightIssue } from "./preflight.js";
 import { basename } from "node:path";
@@ -66,7 +70,22 @@ export interface ProposalDeps {
   model?: (id: string) => unknown;
   modelId: string;
   orchestrator: EvolveOrchestrator;
+  /** Whether the user's own `/evolve-design` command carried `--allow-direct`.
+   *  Required on purpose: the proposal's `allowUnisolated` is the model's
+   *  argument, and a goal records direct execution only when the model asked
+   *  and the user's command approved. A caller that cannot answer must not
+   *  inherit the approval. */
+  approvedUnisolated: boolean;
   sessionId: string;
+  /** Frozen parent Run settings; explicit proposal settings take precedence. */
+  thinking?: ModelThinkingMode;
+  thinkingEffort?: ModelThinkingEffort;
+  /** Whether the run's model can be told to stop thinking. False when its API
+   *  variant has no thinking-control field, or a toggle but no "disabled" stop:
+   *  the request is accepted and ignored, and the quiet ceiling then pays for
+   *  reasoning nobody sees. Required: a caller that cannot answer must not
+   *  silently inherit the quiet ceiling. */
+  thinkingSupported: boolean;
 }
 
 /** The gate is what every candidate's score is measured on — the number the
@@ -146,9 +165,13 @@ export async function startProposedRun(
   const shape = shapeOf(proposal);
   if (typeof shape === "string") return { refusedBecause: shape };
 
+  // Probed before the goal is assembled, not after: whether this search runs
+  // unconfined is a property of what the goal records, and a stray
+  // `allowUnisolated` on a host with a real sandbox must not end up in it.
+  const sandbox = await deps.orchestrator.sandboxCapability();
   let goal;
   try {
-    goal = await assembleGoal(proposal, deps);
+    goal = await assembleGoal(proposal, deps, sandbox);
   } catch (error) {
     // A path the agent got wrong is something it can fix, so it comes back as a
     // refusal naming the field. Anything else is this side breaking, and throws.
@@ -159,7 +182,8 @@ export async function startProposedRun(
     casHas: deps.casHas,
     goal,
     model: deps.model?.(goal.modelId) as never,
-    sandbox: await deps.orchestrator.sandboxCapability(),
+    sandbox,
+    thinkingSupported: deps.thinkingSupported,
   });
   if (issues.length) return { refusedBecause: describe(issues) };
 
@@ -315,17 +339,30 @@ const DEFAULT_CASE_SPLIT: EvolveCaseSplit = {
 
 /** The proposal's own text and paths, resolved into a goal. */
 async function assembleGoal(
-  proposal: EvolveRunProposal, deps: ProposalDeps,
+  proposal: EvolveRunProposal, deps: ProposalDeps, sandbox: EvolveSandboxCapability,
 ): Promise<EvolveGoal> {
   const now = new Date().toISOString();
   const split = proposal.split ?? DEFAULT_SPLIT;
-  // Stated, never left to the provider. Pre-flight's per-call floor is keyed on
-  // this field, so an absent one is read as "thinking on" — and the ceiling this
-  // side would then pick is the quiet one, which pre-flight refuses. Off is also
-  // the right default on its merits: with thinking on, one whole-program rewrite
-  // has been measured taking longer than the proxy's ceiling and returning
-  // nothing at all.
-  const thinking = proposal.thinking ?? "disabled";
+  // Freeze the effective parent settings rather than independently defaulting
+  // background mutations to disabled. The budget follows this same mode.
+  const requestedThinking = proposal.thinking ?? deps.thinking ?? "auto";
+  // "Off" is a budget plan only if the endpoint carries the request. A model on
+  // a dialect with no thinking-control field ignores it and reasons anyway, and
+  // the ceiling is then spent on hidden tokens: a custom gateway returned
+  // exactly at 16k with no content on every expansion. Record what will
+  // actually happen, so the ceiling and pre-flight's floor agree with the
+  // model's behaviour rather than with the setting it was asked for.
+  const thinking = requestedThinking === "disabled" && deps.thinkingSupported === false
+    ? "enabled"
+    : requestedThinking;
+  // Keep the parent Run's effort in the frozen goal for `auto` as well. The
+  // sidecar omits it at the provider boundary while auto is active; retaining
+  // it here keeps the run snapshot complete and preserves the high fallback
+  // when no effort was supplied. Disabled thinking remains effort-free because
+  // strict providers reject an effort beside `thinking: disabled`.
+  const thinkingEffort = thinking === "disabled"
+    ? undefined
+    : proposal.thinkingEffort ?? deps.thinkingEffort ?? "high";
 
   const startCas = proposal.mode === "test_gate"
     ? ""
@@ -352,19 +389,35 @@ async function assembleGoal(
     weight: 1,
   };
 
+  const algorithm = proposal.algorithm ?? "puct";
   return {
-    algorithm: proposal.algorithm ?? "puct",
+    algorithm,
     baselineProgramCas: startCas,
+    // Stated, never omitted: the run card reads this to say whether the search
+    // was designed with pauses, and an absent field would only be read as
+    // "confirm" anyway. An older client that never sends it keeps the old
+    // behaviour.
+    checkpointMode: proposal.checkpointMode ?? "confirm",
+    // Written only when this run really does execute candidates unconfined.
+    // The proposal's flag alone is not enough, twice over: it is the model's
+    // argument rather than the user's answer, and a host with a sandbox that
+    // somehow received it is still isolated — a goal claiming otherwise would
+    // put a warning badge on a safe run.
+    ...(sandbox.backend === "direct" && proposal.allowUnisolated === true && deps.approvedUnisolated
+      ? { allowUnisolated: true }
+      : {}),
     budget: {
       candidateTimeoutSeconds: 180,
       expansions: proposal.expansions,
       maxCostCents: 0,
-      maxSeconds: 7_200,
-      maxTokens: 600_000,
+      maxSeconds: DEFAULT_MAX_SECONDS,
+      maxTokens: DEFAULT_MAX_TOKENS,
       // Enough for a reasoning model to think *and* answer when thinking is on;
       // a ceiling below that produced whole runs of hidden reasoning and no
-      // program, which read as a model that could not write code.
-      maxTokensPerCall: thinking === "enabled" ? 96_000 : 16_000,
+      // program, which read as a model that could not write code. Keyed on the
+      // algorithm because OpenEvolve's floor is higher than PUCT's — written as
+      // one number once, the path refused its own default.
+      maxTokensPerCall: perCallCeiling(algorithm, thinking),
       workers: proposal.workers,
     },
     frozen: scoringCas ? [scoringCas] : [],
@@ -391,6 +444,7 @@ async function assembleGoal(
     statement: proposal.statement,
     target: targetOf(proposal, startCas),
     thinking,
+    thinkingEffort,
   };
 }
 

@@ -1,0 +1,1877 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Program evolution.
+ *
+ * One namespace, `.evolve-*`, because the surface is one object seen at two
+ * distances: a card at the foot of the transcript and a panel that takes the
+ * window.
+ * The accent is the discovery green rather than the primary blue — an
+ * experiment is a different kind of act from asking a question, and the
+ * difference is easier to read as colour than as another label.
+ */
+
+/* ── the run cards ─────────────────────────────────────────────────────────── */
+
+/* The handoff draws a session's searches as the last card of the answer that
+   started them: a light sheet, the search's mark, what it is called, how long
+   it has been going, and its state in the corner. They sit in the transcript
+   because they are part of what the conversation produced — the run outlives
+   the turn, but not the conversation. */
+.evolve-runs {
+  display: flex;
+  /* The transcript spaces its rows with a gap and each message with its own
+     bottom margin; the card belongs to the answer above it, so it gives that
+     margin back and sits one row step below the prose instead of two. */
+  margin-top: -18px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.evolve-run-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  height: 60px;
+  padding: 0 16px;
+  border: 1px solid #f1f1f1;
+  border-radius: 12px;
+  background: #fafafa;
+  text-align: left;
+  transition: border-color .12s ease, background .12s ease;
+}
+
+.evolve-run-card:hover {
+  border-color: var(--border-strong);
+  background: #f7f7f7;
+}
+
+.evolve-run-mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #eaeaea;
+  color: #191919;
+}
+
+/* The name and the clock are one column; the clock keeps its line even when
+   the name is long enough to be cut with an ellipsis. */
+.evolve-run-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evolve-run-title {
+  overflow: hidden;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolve-run-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #808080;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.evolve-run-elapsed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The state chip: the one coloured thing on the card, so it carries the whole
+   tone of the run. */
+.evolve-run-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: #e1f6f5;
+  color: #079d98;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.evolve-run-state.is-quiet { background: var(--surface-subtle); color: var(--muted); }
+.evolve-run-state.is-warn { background: var(--warning-soft); color: var(--warning-strong); }
+.evolve-run-state.is-bad { background: var(--danger-soft); color: var(--danger); }
+
+/* A live search's chip turns; a finished one's has nothing to say, so the
+   mark only exists while the run does. */
+.evolve-run-spin {
+  display: grid;
+  place-items: center;
+  animation: evolve-spin 1.6s linear infinite;
+}
+
+@keyframes evolve-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evolve-run-spin { animation: none; }
+}
+
+.evolve-runs-more {
+  align-self: flex-start;
+  height: 24px;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evolve-runs-more:hover { color: var(--text-strong); }
+
+/* A search designed without pauses says so on its card: the run card is how
+   someone returning later learns the design was not reviewed checkpoint by
+   checkpoint. */
+.evolve-chip-auto {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--discovery-soft);
+  color: var(--discovery-strong);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+/* A search whose candidates did not run in a sandbox. Warm rather than
+   neutral: it changes how the result should be read. */
+.evolve-chip-unisolated {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning-strong);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.evolve-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted-light);
+}
+
+.evolve-dot.is-live {
+  background: var(--discovery);
+  box-shadow: 0 0 0 0 rgba(31, 157, 122, .45);
+  animation: evolvePulse 1.8s ease-out infinite;
+}
+
+.evolve-dot.is-good { background: var(--success); }
+.evolve-dot.is-warn { background: var(--insight); }
+.evolve-dot.is-bad { background: var(--danger); }
+.evolve-dot.is-quiet { background: var(--muted-light); }
+
+@keyframes evolvePulse {
+  0% { box-shadow: 0 0 0 0 rgba(31, 157, 122, .4); }
+  70% { box-shadow: 0 0 0 6px rgba(31, 157, 122, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(31, 157, 122, 0); }
+}
+
+/* ── the create dialog ─────────────────────────────────────────────────────── */
+
+.modal-panel.evolve-create {
+  width: min(552px, calc(100vw - 40px));
+}
+
+/* The reference draws no rule under the title and no grey band under the
+   buttons: the dialog is one white surface, and the warnings are what divide
+   it. */
+.evolve-create .modal-header {
+  padding: 24px 24px 8px;
+  border-bottom: 0;
+}
+
+/* 18px, not the modal's 22: this dialog is the narrower one, and its title is
+   drawn at the size the handoff uses for it. */
+.evolve-create .modal-header h2 {
+  margin-top: 0;
+  font-size: 18px;
+  line-height: 27px;
+}
+
+.evolve-create-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 24px 0;
+  overflow-y: auto;
+}
+
+.evolve-create-body .modal-footer {
+  gap: 8px;
+  margin: 0 -24px;
+  padding: 1px 24px 24px;
+  border-top: 0;
+  background: transparent;
+}
+
+/* Amber, because it is an error: the runtime cannot run this search. It is
+   drawn only while the runtime is not ready, and it is the only way into the
+   explanation — a warning with no next step is just discouragement. */
+.evolve-create-runtime {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: #ffebd1;
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.evolve-create-runtime-text {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.evolve-create-runtime-icon { flex: 0 0 auto; }
+
+.evolve-create-runtime-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.evolve-create-runtime-more:hover { text-decoration: underline; }
+
+.evolve-create-runtime-more:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* Blue, because this is a fact about the host rather than an error: nothing
+   here is broken, and nothing the user can click changes it. The consent to
+   accept it is asked at the moment of sending, not from this banner. */
+.evolve-create-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7.5px 14px;
+  border-radius: 10px;
+  background: #f0f7ff;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.evolve-create-notice-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.evolve-create-notice-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* The title is the body's size, bold: it is one line of the same block, not a
+   heading over it. */
+.evolve-create-notice strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+/* ── the algorithm cards ── */
+
+.evolve-create-algorithms {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* The legend is not a flex item of the fieldset, so the gap above does not
+   reach it: it carries its own distance to the cards. */
+.evolve-create-algorithms legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.evolve-create-algorithms > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* The card is the radio: the illustration and every line inside it are one
+   target, so a click anywhere means "this search". */
+.evolve-algorithm-choice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #dbdbdb;
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text-strong);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .12s ease;
+}
+
+.evolve-algorithm-choice:hover { border-color: #bdbdbd; }
+
+/* The selected outline is 1.5px in the design, not 2: a one-pixel border plus
+   a half-pixel ring. The ring can only be a box-shadow — Chrome truncates a
+   fractional border-width and an outline to a whole pixel — and it is drawn on
+   a pseudo-element so it paints over the illustration rather than under it.
+   Its radius is the border box's minus the border, so the two curves share one
+   edge instead of doubling at the corners. */
+.evolve-algorithm-choice.is-checked {
+  border-color: var(--primary);
+}
+
+.evolve-algorithm-choice.is-checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 13px;
+  box-shadow: inset 0 0 0 .5px var(--primary);
+  pointer-events: none;
+}
+
+.evolve-algorithm-choice:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.evolve-algorithm-art {
+  display: block;
+  aspect-ratio: 239 / 119;
+  background-color: #f5faff;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.evolve-algorithm-art.is-puct {
+  background-image: url("../assets/evolve/puct.webp");
+}
+
+.evolve-algorithm-art.is-openevolve {
+  background-image: url("../assets/evolve/open-evolve.webp");
+}
+
+.evolve-algorithm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 14px;
+}
+
+.evolve-algorithm-name {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.evolve-algorithm-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.evolve-algorithm-tag {
+  padding: 0 4px;
+  border-radius: 6px;
+  background: #e6e6e6;
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* The list sits a little further under the tags than the tags sit under the
+   name: the gap above it belongs to the list, not to the card's rhythm. It is
+   grey, not black: the name is the card's claim, the points only qualify it. */
+.evolve-algorithm-points {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
+
+.evolve-algorithm-points > span {
+  position: relative;
+  padding-left: 7px;
+  color: #595959;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.evolve-algorithm-points > span::before {
+  content: "·";
+  position: absolute;
+  left: 1px;
+  color: var(--muted);
+}
+
+/* ── the pace ── */
+
+.evolve-create-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evolve-create-settings h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.evolve-create-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.evolve-create-confirm input {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #d9d9d9;
+  cursor: pointer;
+  appearance: none;
+  transition: background 140ms ease;
+}
+
+.evolve-create-confirm input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
+  transition: transform 140ms ease;
+}
+
+.evolve-create-confirm input:checked { background: var(--primary); }
+
+.evolve-create-confirm input:checked::after { transform: translateX(20px); }
+
+.evolve-create-confirm input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.evolve-create-confirm-hint {
+  margin: 0;
+  color: #808080;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* ── the footer ── */
+
+.evolve-create-cancel,
+.evolve-create-submit {
+  min-width: 84px;
+  height: 28px;
+  padding: 0 24px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.evolve-create-cancel {
+  border: 1px solid #595959;
+  background: var(--surface);
+  color: var(--text-strong);
+}
+
+.evolve-create-cancel:hover { background: var(--surface-soft); }
+
+.evolve-create-submit {
+  border: 1px solid var(--text-strong);
+  background: var(--text-strong);
+  color: #fff;
+}
+
+.evolve-create-submit:hover:not(:disabled) { background: #000; border-color: #000; }
+
+.evolve-create-submit:disabled {
+  border-color: #dbdbdb;
+  background: #f0f0f0;
+  color: #c2c2c2;
+  cursor: not-allowed;
+}
+
+/* The alert is the topmost surface; it darkens the dialog it was opened from
+   rather than replacing it, so returning costs nothing. */
+.evolve-confirm-backdrop { z-index: 1310; }
+
+/* The alert keeps the create dialog's gutter and title size, and grows only as
+   far as its two lines of copy need. The title is black, not the warning
+   brown used elsewhere: the sentence under it is the warning, and a coloured
+   title made the whole dialog read as an error page rather than a question. */
+.modal-panel.evolve-unisolated-confirm {
+  width: min(452px, calc(100vw - 40px));
+}
+
+.evolve-unisolated-confirm .modal-header {
+  padding: 24px 24px 0;
+  border-bottom: 0;
+}
+
+.evolve-unisolated-confirm .modal-header h2 {
+  margin-top: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  line-height: 27px;
+}
+
+/* Darker than the create dialog's ×: here closing is one of the two answers,
+   so it is drawn at the weight the design gives it. */
+.evolve-unisolated-confirm .modal-close { color: var(--text-strong); }
+
+.evolve-unisolated-body {
+  padding: 21px 24px 0;
+  color: var(--text-strong);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* No divider and no tint above the answer: the buttons belong to the same
+   surface as the sentence they answer. */
+.evolve-unisolated-confirm .modal-footer {
+  gap: 8px;
+  padding: 20px 24px 24px;
+  border-top: 0;
+  background: transparent;
+}
+
+.evolve-unisolated-confirm .modal-footer button {
+  min-width: 80px;
+  min-height: 0;
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.evolve-unisolated-confirm .secondary-button {
+  border: 1px solid #c2c2c2;
+  background: var(--surface);
+  color: var(--text-strong);
+}
+
+.evolve-unisolated-confirm .secondary-button:hover { background: var(--surface-soft); }
+
+.evolve-unisolated-confirm .evolve-confirm-continue {
+  border: 1px solid var(--text-strong);
+  background: var(--text-strong);
+  color: #fff;
+}
+
+.evolve-unisolated-confirm .evolve-confirm-continue:hover { background: #000; border-color: #000; }
+
+.evolve-create-blocked {
+  padding: 8px 11px;
+  border-radius: var(--radius-s);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12px;
+}
+
+/* ── the runtime explanation ───────────────────────────────────────────────── */
+
+.modal-panel.evolve-runtime-dialog {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.evolve-runtime-body {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 18px 28px 18px;
+  overflow-y: auto;
+}
+
+.evolve-runtime-dialog .modal-header h2 {
+  color: var(--warning-strong);
+}
+
+.evolve-runtime-intro {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* The server's own words, not a paraphrase: they are what a person pastes
+   into a ticket. Monospace keeps file names and codes from being reflowed
+   into prose. */
+.evolve-runtime-report {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--surface-sunk);
+}
+
+.evolve-runtime-report > span {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.evolve-runtime-report code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.evolve-runtime-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evolve-runtime-section h3 {
+  color: var(--text-heading);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.evolve-runtime-section p {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.evolve-runtime-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.evolve-runtime-logs li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.evolve-runtime-logs code {
+  color: var(--text-heading);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.evolve-runtime-logs span {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.evolve-runtime-operator {
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ── the task detail ──────────────────────────────────────────────────────── */
+
+/* 任务 is a mode of the right column, not a floating window: a search outlives
+   the turn that started it, and the reader has to keep the conversation in
+   view while it runs. The three handoffs fix the order — totals, chart, tree,
+   budget — and every block is one white card with the same border. */
+
+.panel-body.is-task {
+  display: flex;
+  min-height: 0;
+}
+
+.evolve-detail {
+  position: relative;
+  /* The narrow-column rules at the foot of this file are container queries,
+     because the panel is resizable and the window's width says nothing about
+     the column's: a 1440px window with the panel at its floor is 568px of
+     column, and the five overview cells then collide. Without this line there
+     is no container to ask and every query in this file is dead. */
+  container-type: inline-size;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.evolve-task-head {
+  flex: 0 0 auto;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.evolve-task-head h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolve-task-stop {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid #e4e4e4;
+  border-radius: 8px;
+  background: #fff;
+  color: #4d4d4d;
+  font-size: 12px;
+}
+
+.evolve-task-stop:hover:not(:disabled) {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.evolve-task-stop:disabled { opacity: .55; cursor: default; }
+
+.evolve-detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* The column scrolls; a block must not be shrunk to make room for the blocks
+   below it. Without this the overview — a grid with `overflow: hidden` — loses
+   its automatic minimum height and collapses to its border. */
+.evolve-detail-scroll > * { flex: 0 0 auto; }
+
+/* notices */
+
+.evolve-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evolve-notices:empty { display: none; }
+
+.evolve-notice {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.evolve-notice.is-warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.evolve-notice.is-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* The row of totals. Five cells, because the handoff's five are the five
+   questions a reader asks first: how good, how much of it worked, how deep,
+   by what, and at what token cost. */
+
+.evolve-overview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid #eee;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.evolve-overview-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px 18px;
+}
+
+.evolve-overview-cell + .evolve-overview-cell { border-left: 1px solid #f0f0f0; }
+
+.evolve-overview-label {
+  color: #909090;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.evolve-overview-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 7px;
+  min-width: 0;
+  color: #191919;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.6px;
+  white-space: nowrap;
+}
+
+.evolve-overview-delta {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.evolve-overview-delta.is-up { color: #12a05f; }
+.evolve-overview-delta.is-down { color: #e0393e; }
+.evolve-overview-delta.is-flat { color: #909090; }
+
+/* section cards */
+
+.evolve-section {
+  border: 1px solid #eee;
+  border-radius: 12px;
+  padding: 18px 20px 20px;
+  background: #fff;
+}
+
+.evolve-section-title {
+  margin: 0 0 14px;
+  color: #191919;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+/* ── the chart ─────────────────────────────────────────────────────────────── */
+
+.evolve-chart { margin: 0; }
+
+.evolve-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.evolve-chart-grid { stroke: #e9e9e9; stroke-dasharray: 3 4; stroke-width: 1; }
+.evolve-chart-axis { stroke: #cfcfcf; stroke-width: 1; }
+
+.evolve-chart-tick { fill: #9b9b9b; font-size: 10px; }
+.evolve-chart-tick.is-best { fill: #1968f0; }
+.evolve-chart-x { fill: #9b9b9b; font-size: 10.5px; }
+.evolve-chart-x-label { fill: #b0b0b0; font-size: 10px; }
+
+.evolve-chart-baseline { stroke: #6a97ea; stroke-dasharray: 4 4; stroke-width: 1; }
+.evolve-chart-baseline-label { fill: #8a8a8a; font-size: 10px; }
+.evolve-chart-best-line { stroke: #1968f0; stroke-dasharray: 4 4; stroke-width: 1; }
+
+.evolve-chart-hatch-line { stroke: #e9e9e9; stroke-width: 2; }
+
+.evolve-chart-line {
+  fill: none;
+  stroke: #1968f0;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.evolve-chart-dot.is-significant { fill: #1968f0; stroke: #fff; stroke-width: 1; }
+.evolve-chart-dot.is-best { fill: #1968f0; stroke: #9cc0ff; stroke-width: 3; }
+.evolve-chart-failed { fill: #fff; stroke: #f0393e; stroke-width: 1.4; }
+.evolve-chart-test circle { fill: #0aa9a2; stroke: #fff; stroke-width: 1.2; }
+.evolve-chart-best circle { fill: #fff; stroke: #1968f0; stroke-width: 2.2; }
+.evolve-chart-best svg { color: #1968f0; }
+
+/* The pointer's reading: a dashed rule down the plot, and a small card below
+   the point. The hit areas are larger than the dots, because a 3.8-unit dot is
+   a target nobody can find with a mouse. */
+.evolve-chart-canvas { position: relative; }
+
+.evolve-chart-guide { stroke: #b9b9b9; stroke-dasharray: 4 4; stroke-width: 1; }
+
+/* No outline box: the node is a point on a drawing, and a rectangle around it
+   on click reads as a selection frame the chart does not have. A focused node
+   answers the way a hovered one does — the dot grows and its card opens. */
+.evolve-chart-hit { cursor: pointer; fill: none; pointer-events: all; outline: none; }
+
+/* Pixels rather than viewBox units: the drawing scales with the panel, the
+   card's text does not, and an 8-unit label would be a caption at one width
+   and a billboard at another. Only the anchor point follows the drawing. */
+.evolve-chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  min-width: 128px;
+  padding: 8px 12px 9px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(22, 32, 55, 0.14), 0 2px 6px rgba(22, 32, 55, 0.06);
+  transform: translate(10px, 16px);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* The handoff places the card below-right; near an edge it flips rather than
+   being clipped. */
+.evolve-chart-tooltip.is-left { transform: translate(calc(-100% - 10px), 16px); }
+.evolve-chart-tooltip.is-above { transform: translate(10px, calc(-100% - 16px)); }
+.evolve-chart-tooltip.is-left.is-above {
+  transform: translate(calc(-100% - 10px), calc(-100% - 16px));
+}
+
+.evolve-chart-tooltip-head { display: flex; align-items: center; gap: 5px; }
+
+.evolve-chart-tooltip-bullet {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1968f0;
+}
+.evolve-chart-tooltip-bullet.is-failed { background: #fff; border: 1.5px solid #f0393e; }
+
+.evolve-chart-tooltip-node {
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.evolve-chart-tooltip-gen { color: #9b9b9b; font-size: 12px; }
+
+.evolve-chart-tooltip-best,
+.evolve-chart-tooltip-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.evolve-chart-tooltip-best { color: #1968f0; }
+.evolve-chart-tooltip-failed { color: #f0393e; }
+
+.evolve-chart-tooltip-score {
+  margin-top: 3px;
+  color: #191919;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.evolve-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 18px;
+  margin-top: 4px;
+}
+
+.evolve-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6b6b6b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.evolve-key::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b6bcc7;
+}
+
+.evolve-key.is-best::before { display: none; }
+.evolve-key.is-best svg { color: #1968f0; }
+
+.evolve-key.is-significant::before { background: #1968f0; }
+.evolve-key.is-test::before { background: #0aa9a2; }
+
+.evolve-key.is-failed::before {
+  width: 7px;
+  height: 7px;
+  background: #fff;
+  border: 1.5px solid #f0393e;
+}
+
+.evolve-key.is-below::before {
+  width: 14px;
+  height: 9px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(45deg, #ececec 0 1.5px, #fbfbfb 1.5px 4px);
+}
+
+.evolve-chart-empty {
+  margin: 0;
+  padding: 30px 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ── the tree and its node list ────────────────────────────────────────────── */
+
+.evolve-tree-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px 20px;
+}
+
+.evolve-node-list {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 320px;
+  /* The list runs beside a fixed-height tree, so it scrolls inside the same
+     height rather than making the section taller than the drawing. About ten
+     rows fit at the usual height; the head stays put. */
+  display: flex;
+  flex-direction: column;
+  max-height: clamp(380px, 62vh, 720px);
+}
+
+.evolve-node-list-head {
+  padding: 0 8px 8px;
+  color: #9a9a9a;
+  font-size: 12px;
+}
+
+.evolve-node-rows {
+  min-height: 0;
+  margin: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evolve-node-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.evolve-node-row:hover { background: #f7f8fa; }
+.evolve-node-row.is-selected { background: #f1f4f8; }
+
+.evolve-node-rank {
+  flex: 0 0 18px;
+  color: #a3a3a3;
+  font-size: 12px;
+  text-align: right;
+}
+
+.evolve-node-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b6bcc7;
+}
+
+.evolve-node-row.is-significant .evolve-node-dot,
+.evolve-node-row.is-best .evolve-node-dot { background: #1968f0; }
+.evolve-node-row.is-failed .evolve-node-dot { background: #f0393e; }
+
+.evolve-node-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.evolve-node-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.evolve-node-gen {
+  color: #a0a0a0;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.evolve-node-score {
+  flex: 0 0 auto;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The best tag is bare text beside the name, in the list and in the drawer
+   alike: the crown carries the emphasis, the label only names it. */
+.evolve-node-best {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+  color: #1968f0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.evolve-node-best svg { flex: 0 0 auto; }
+
+.evolve-tree {
+  position: relative;
+  flex: 3 1 340px;
+  min-width: 260px;
+  /* The handoff lets the tree take most of the column's height; four
+     generations have to sit in it at once. */
+  height: clamp(380px, 62vh, 720px);
+  border-radius: 10px;
+  background-color: #fbfcfd;
+  background-image: radial-gradient(#d3d8e0 1px, transparent 1px);
+  background-size: 14px 14px;
+  overflow: hidden;
+}
+
+.evolve-tree-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.evolve-tree-viewport.is-dragging { cursor: grabbing; }
+
+.evolve-tree-canvas {
+  /* Top-centred, not middle-centred: a shallow tree used to float halfway down
+     an otherwise empty canvas. Dragging moves the drawing from this position. */
+  margin: 0 auto;
+  flex: 0 0 auto;
+}
+
+.evolve-tree-canvas svg { display: block; overflow: visible; }
+
+.evolve-tree-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evolve-tree-edge { stroke: #c5cad3; stroke-width: 1.1; }
+.evolve-tree-arrowhead { fill: #b8bec8; }
+
+.evolve-tree-node { cursor: pointer; outline: 0; }
+/* The node is a tab stop, so it has to say where the keyboard is: a pointer
+   answers with the ring below, and the keyboard answers with the same ring
+   drawn from the outside, where an outline over a dense drawing is legible. */
+.evolve-tree-node:focus-visible .evolve-tree-ring { stroke: #1968f0; stroke-width: 2.5; }
+.evolve-tree-ring { fill: none; stroke: transparent; stroke-width: 2; }
+.evolve-tree-node:hover .evolve-tree-ring { stroke: #a9c6ff; }
+.evolve-tree-node.is-selected .evolve-tree-ring { stroke: #7aa7ff; stroke-width: 2.5; }
+.evolve-tree-node.is-best.is-selected .evolve-tree-ring { stroke: #1968f0; }
+
+.evolve-tree-node.is-quiet .evolve-tree-disc { fill: #e9edf5; }
+.evolve-tree-node.is-significant .evolve-tree-disc { fill: #dce8fb; }
+.evolve-tree-node.is-failed .evolve-tree-disc { fill: #ffe0e4; }
+.evolve-tree-node.is-best .evolve-tree-disc { fill: #1968f0; }
+
+.evolve-tree-id { fill: #7d879c; font-size: 11px; }
+.evolve-tree-score { fill: #14233f; font-size: 16px; font-weight: 600; }
+.evolve-tree-node.is-best .evolve-tree-id { fill: rgba(255, 255, 255, .78); }
+.evolve-tree-node.is-best .evolve-tree-score { fill: #fff; }
+
+.evolve-tree-badge circle { fill: #fff; }
+.evolve-tree-badge svg { color: #1968f0; }
+
+/* ── the budget ────────────────────────────────────────────────────────────── */
+
+.evolve-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.evolve-budget-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evolve-budget-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #191919;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.evolve-budget-head span:last-child {
+  color: #191919;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.evolve-budget-head span.is-over { color: #ff2b2b; }
+
+.evolve-budget-track {
+  height: 7px;
+  border-radius: 4px;
+  background: #ececec;
+  overflow: hidden;
+}
+
+.evolve-budget-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #2f6bff;
+  transition: width .2s ease;
+}
+
+.evolve-budget-track.is-over,
+.evolve-budget-track.is-over .evolve-budget-fill { background: #ff2b2b; }
+
+/* ── the node drawer ───────────────────────────────────────────────────────── */
+
+.evolve-node-drawer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.evolve-drawer {
+  pointer-events: auto;
+  width: min(440px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 22px 28px;
+  border-left: 1px solid #eee;
+  background: #fff;
+  box-shadow: -12px 0 32px rgba(15, 18, 24, .08);
+}
+
+.evolve-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 34px;
+}
+
+.evolve-drawer-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  color: #191919;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.evolve-drawer-close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: #6b6b6b;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.evolve-drawer-close:hover { background: var(--surface-hover); color: var(--text-heading); }
+
+.evolve-drawer-meta {
+  margin: -8px 0 0;
+  color: #9a9a9a;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.evolve-drawer-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.evolve-drawer-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 10px;
+}
+
+.evolve-drawer-tile.is-score { background: #eefaf1; color: #17794a; }
+.evolve-drawer-tile.is-children { background: #eef4ff; color: #2457c5; }
+
+.evolve-drawer-tile-icon {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .7);
+}
+
+.evolve-drawer-tile-value {
+  color: #12233f;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.evolve-drawer-tile-label { color: #6b7a90; font-size: 11px; line-height: 15px; }
+
+.evolve-drawer-note {
+  margin: 0;
+  color: #333;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.evolve-drawer-error h3 {
+  margin: 0 0 6px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.evolve-drawer-error pre {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger-deep);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.evolve-drawer-source header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.evolve-drawer-source h3 {
+  margin: 0;
+  color: #191919;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.evolve-drawer-expand {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #7a7a7a;
+}
+
+.evolve-drawer-expand:hover:not(:disabled) { background: var(--surface-hover); color: #191919; }
+.evolve-drawer-expand:disabled { opacity: .4; cursor: default; }
+
+.evolve-source-hidden {
+  margin: 6px 0 0;
+  color: #9a9a9a;
+  font-size: 11px;
+}
+
+/* ── the source diff ───────────────────────────────────────────────────────── */
+
+.evolve-diff {
+  overflow: auto;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fafafa;
+  padding: 8px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.evolve-diff-row {
+  display: flex;
+  align-items: flex-start;
+  min-width: max-content;
+  padding-right: 12px;
+}
+
+.evolve-diff-num {
+  flex: 0 0 34px;
+  padding-right: 8px;
+  color: #b3b3b3;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.evolve-diff-mark {
+  flex: 0 0 16px;
+  color: #b3b3b3;
+  text-align: center;
+  user-select: none;
+}
+
+.evolve-diff-text {
+  flex: 1;
+  color: #333;
+  white-space: pre;
+}
+
+.evolve-diff-row.is-added { background: #eaf8ef; }
+.evolve-diff-row.is-added .evolve-diff-mark,
+.evolve-diff-row.is-added .evolve-diff-text { color: #17794a; }
+
+.evolve-diff-row.is-removed { background: #fdeeee; }
+.evolve-diff-row.is-removed .evolve-diff-mark,
+.evolve-diff-row.is-removed .evolve-diff-text { color: var(--danger-deep); }
+
+.evolve-inspector-note {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ── the source modal ──────────────────────────────────────────────────────── */
+
+.evolve-source-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: rgba(15, 18, 24, .38);
+  animation: fadeIn .15s ease;
+}
+
+.evolve-source-modal {
+  position: relative;
+  width: min(900px, 100%);
+  /* Height follows the diff: a three-line change gets a short dialog, a long
+     program stops at the viewport and scrolls inside. */
+  max-height: min(800px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: var(--shadow-3);
+}
+
+.evolve-source-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 20px 24px 14px;
+}
+
+.evolve-source-head h2 {
+  margin: 0;
+  color: #191919;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.evolve-source-head .evolve-drawer-close { top: 16px; right: 18px; }
+
+.evolve-source-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 24px 24px;
+}
+
+.evolve-source-scroll .evolve-diff { font-size: 12px; }
+
+/* ── narrower columns ──────────────────────────────────────────────────────── */
+
+/* Three across before two. Five cells need about 880px before the widest one —
+   a six-digit token count at 30px plus the cell's own padding — fits; below
+   that the last cell's value was clipped by the card's `overflow: hidden`, and
+   a 720-wide panel is the default, not an edge case. */
+@container (max-width: 880px) {
+  .evolve-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .evolve-overview-cell:nth-child(3n + 1) { border-left: 0; }
+  .evolve-overview-cell:nth-child(n + 4) { border-top: 1px solid #f0f0f0; }
+}
+
+@container (max-width: 620px) {
+  .evolve-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evolve-overview-cell + .evolve-overview-cell { border-left: 0; }
+  .evolve-overview-cell:nth-child(even) { border-left: 1px solid #f0f0f0; }
+  .evolve-overview-cell:nth-child(n + 3) { border-top: 1px solid #f0f0f0; }
+  .evolve-overview-value { font-size: 22px; }
+  .evolve-node-list { max-width: none; }
+}
+
+@media (max-width: 760px) {
+  .evolve-run-card { gap: 12px; }
+
+  .evolve-create-algorithms > div { grid-template-columns: 1fr; }
+  .evolve-create .modal-header { padding-inline: 20px; }
+  .evolve-create-body { padding: 8px 20px 0; }
+  .evolve-create-body .modal-footer { margin-inline: -20px; padding-inline: 20px; }
+  .evolve-runtime-body { padding-inline: 20px; }
+  .evolve-unisolated-body { padding-inline: 20px; }
+
+  .evolve-detail-scroll { padding-inline: 14px; }
+  .evolve-source-backdrop { padding: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evolve-dot.is-live { animation: none; }
+  .evolve-budget-fill { transition: none; }
+}
+
+/* ── checkpoint cards ───────────────────────────────────────────────────────── */
+
+/* A checkpoint is a place the conversation stops, so it reads as a block of
+   its own inside the answer rather than as another paragraph. The handoff's
+   1_6 artboard draws it as a white sheet: a 38px grey band names the state and
+   carries the step counter, the question follows in the body, and a footer
+   band holds the two answers away from the prose. */
+.evolve-checkpoint {
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface);
+}
+
+.evolve-checkpoint-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  /* The artboard sets the label a couple of pixels below the band's centre;
+     the asymmetric padding is what puts it there. */
+  padding: 4px 24px 0;
+  background: #f5f5f5;
+  color: #595959;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+/* The mark is drawn in the band's own ink (currentColor); it only has to keep
+   its size when the label is long. */
+.evolve-checkpoint-icon { flex: none; }
+
+.evolve-checkpoint-step {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "2/4" is the one dark thing in the band, as the artboard draws it. */
+.evolve-checkpoint-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.evolve-checkpoint-main { padding: 16px 24px; }
+
+.evolve-checkpoint-title {
+  margin: 0 0 8px;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+/* The body is prose, and the card prints it a shade lighter than the title:
+   the bold lead-ins are the model's own structure, so they stay at full ink. */
+.evolve-checkpoint-body.text {
+  color: #595959;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.evolve-checkpoint-body.text p { margin: 0 0 8px; }
+
+.evolve-checkpoint-body.text strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.evolve-checkpoint-body.text > :last-child { margin-bottom: 0; }
+
+.evolve-checkpoint-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.evolve-checkpoint-actions button {
+  height: 24px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.evolve-checkpoint-actions button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+/* The answer that keeps the design going is the dark pill; the one that asks
+   for a change is the outlined pill beside it. */
+.evolve-checkpoint-confirm {
+  border: 1px solid var(--text-strong);
+  background: var(--text-strong);
+  color: #fff;
+}
+
+.evolve-checkpoint-confirm:hover:not(:disabled) { background: #000; border-color: #000; }
+
+.evolve-checkpoint-adjust {
+  border: 1px solid #595959;
+  background: var(--surface);
+  color: var(--text-strong);
+}
+
+.evolve-checkpoint-adjust:hover:not(:disabled) { background: var(--surface-subtle); }
+
+/* 需要调整 writes the change in the card, under a label, so the change is
+   described where the step is. */
+.evolve-checkpoint.is-adjusting .evolve-checkpoint-main { padding-bottom: 0; }
+
+/* The form is layout only; the band and the note carry the borders. */
+.evolve-checkpoint-adjust-form { margin: 0; padding: 0; border: 0; background: none; }
+
+.evolve-checkpoint-adjust-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 24px 16px;
+}
+
+.evolve-checkpoint-adjust-label {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.evolve-checkpoint-note {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid #c2c2c2;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  resize: vertical;
+}
+
+.evolve-checkpoint-note::placeholder { color: var(--text-faint); }
+
+/* No glow: the field's own border darkening is the cue, the way the settings
+   form fields do it. */
+.evolve-checkpoint-note:focus {
+  border-color: var(--text-strong);
+  box-shadow: 0 0 0 1px var(--text-strong);
+  outline: none;
+}
+
+/* A checkpoint the conversation has moved past folds to its band: the state,
+   the question it asked and the step it was, as one scannable line. Opening it
+   shows what the step said, never the buttons — that answer is already in the
+   transcript. */
+.evolve-checkpoint.is-answered { margin: 8px 0; }
+
+.evolve-checkpoint.is-answered > summary {
+  list-style: none;
+  cursor: pointer;
+  /* A folded card has no body under it: its one line is centred in the band,
+     the same distance from either edge, where the open card's label sits a
+     couple of pixels low to match the artboard. */
+  padding: 0 24px;
+}
+
+.evolve-checkpoint.is-answered > summary::-webkit-details-marker { display: none; }
+
+.evolve-checkpoint.is-answered .evolve-checkpoint-title {
+  /* On the band it is one line of the header, not the body's lead-in: the
+     body rule's bottom margin would lift it out of the row's centre. */
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolve-checkpoint.is-answered .collapse-chev {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  transition: transform .15s ease;
+}
+
+.evolve-checkpoint.is-answered[open] > summary .collapse-chev { transform: rotate(90deg); }
+
+.evolve-checkpoint.is-answered > .evolve-checkpoint-body { padding: 16px 24px; }

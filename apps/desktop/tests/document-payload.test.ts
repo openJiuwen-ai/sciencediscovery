@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { strToU8, zipSync } from "fflate";
 
 import {
   MAX_INLINE_BYTES,
@@ -75,4 +76,53 @@ test("a document past the inline ceiling says so and carries nothing", () => {
   const huge = { byteLength: MAX_INLINE_BYTES + 1 } as Uint8Array;
   const payload = documentPayload(huge, "huge.png", "image/png");
   assert.deepEqual(payload, { mediaType: "image/png", tooLarge: true });
+});
+
+const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+function docxBytes(): Uint8Array {
+  return zipSync({ "word/document.xml": strToU8("<w:document/>") });
+}
+
+test("a container this build cannot draw is not decoded as text", () => {
+  const bytes = docxBytes();
+  const payload = documentPayload(bytes, "report.docx", DOCX_MEDIA_TYPE);
+  assert.equal(payload.content, undefined);
+  assert.equal(payload.tooLarge, undefined);
+  assert.equal(payload.mediaType, DOCX_MEDIA_TYPE);
+  // The bytes are kept for the download, so opening the notice still lets the
+  // reader save the document they were told this build could not show.
+  assert.deepEqual([...bytesOfDataUrl(payload.dataUrl!)], [...bytes]);
+});
+
+test("a .zip and an extensionless archive are containers too, whatever the server said", () => {
+  const bytes = zipSync({ "notes.txt": strToU8("hello") });
+  for (const [name, type] of [
+    ["bundle.zip", "application/octet-stream"],
+    ["bundle.zip", ""],
+    ["attachment", "application/zip"],
+  ] as Array<[string, string]>) {
+    const payload = documentPayload(bytes, name, type);
+    assert.equal(payload.content, undefined, `${name} ${type}`);
+    assert.match(payload.dataUrl ?? "", /^data:.*;base64,/u, `${name} ${type}`);
+  }
+});
+
+test("a log, a config, a script and a text page are still decoded as text", () => {
+  const cases: Array<[string, string]> = [
+    ["run.log", "text/plain"],
+    ["pyproject.toml", "application/toml"],
+    ["plot.py", "application/octet-stream"],
+    ["notes.txt", "text/plain"],
+  ];
+  for (const [name, type] of cases) {
+    const payload = documentPayload(encoder.encode("hello\n"), name, type);
+    assert.equal(payload.content, "hello\n", name);
+    assert.equal(payload.dataUrl, undefined, name);
+  }
+});
+
+test("a workbook is still carried as a data URL of its own type, not as a container", () => {
+  const sheet = documentPayload(zipSync({ "xl/workbook.xml": strToU8("<workbook/>") }), "results.xlsx", "");
+  assert.match(sheet.dataUrl ?? "", /^data:application\/vnd\.openxmlformats/u);
 });

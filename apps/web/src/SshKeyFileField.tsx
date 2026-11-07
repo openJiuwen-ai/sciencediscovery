@@ -4,6 +4,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { SshKeyFileListing } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
+import { commitsOnEnter } from "./ime-enter.js";
 import { useLocale } from "./i18n/index.js";
 
 /** Browse the API machine, not the browser's upload filesystem. */
@@ -80,7 +81,7 @@ export function SshKeyFileField({ client, label, value, placeholder, disabled, o
         <input id={id + "-location"} value={location} disabled={disabled || loading} placeholder="~/.ssh"
           onChange={(event) => setLocation(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); void browse(location || undefined); }
+            if (commitsOnEnter(event)) { event.preventDefault(); event.stopPropagation(); void browse(location || undefined); }
           }} />
         <button className="secondary-button" type="button" disabled={disabled || loading}
           onClick={() => void browse(location || undefined)}>{t("sshBrowser.go")}</button>

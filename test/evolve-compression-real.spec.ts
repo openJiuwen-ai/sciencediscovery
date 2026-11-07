@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { execFile } from "node:child_process";
+import { realModelThinking } from "./helpers/real-model-thinking.ts";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
@@ -10,6 +11,14 @@ import { cleanupJourney, createProjectAndSession, openProjectSession } from "./h
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { evolutionScorecard } from "./helpers/evolve-result.mjs";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import type { ModelApiVariant } from "@sciencediscovery/schema";
+import { THINKING_CONTROL_VARIANTS, THINKING_EFFORT_VARIANTS } from "../packages/schema/src/model-usage.ts";
+
+function optionalModelSetting<T extends string>(value: string | undefined, name: string, allowed: readonly T[]): T | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (!allowed.includes(value as T)) throw new Error(`${name} must be one of: ${allowed.join(", ")}`);
+  return value as T;
+}
 
 /**
  * E2E-META
@@ -40,6 +49,9 @@ test("PUCT-COMPRESS documented text compression search", {
   const modelId = process.env.E2E_LLM_MODEL_ID;
   if (modelId) allowRealEnvException(info, "Use the configured real server-side model.");
   const env = modelId ? undefined : requireRealEnv(info, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
+  const apiVariant = optionalModelSetting(process.env.E2E_LLM_API_VARIANT, "E2E_LLM_API_VARIANT",
+    ["openai", "deepseek"] as const) as ModelApiVariant | undefined;
+  const thinking = realModelThinking();
   const headers = authorizationHeader();
   const api = <T = any>(path: string) => drbApi<T>(page, path);
   const save = (name: string, data: unknown) => writeFile(info.outputPath(name), JSON.stringify(data, null, 2));
@@ -55,9 +67,11 @@ test("PUCT-COMPRESS documented text compression search", {
     if (!prompt?.startsWith("/evolve-design ")) throw new Error("Tutorial task prompt is missing");
     metrics.document = "docs/zh/domains/evolve-a-solution.md";
     metrics.prompt = prompt;
-    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", projectName: `PUCT compression ${Date.now()}`,
+    metrics.thinking = thinking;
+    fixture = await createProjectAndSession(page, { approvalMode: "always_allow", ...thinking, projectName: `PUCT compression ${Date.now()}`,
       sessionTitle: "PUCT text compression", ...(modelId ? { modelId } : { model: {
         apiToken: env!.E2E_LLM_TOKEN!, baseUrl: env!.E2E_LLM_BASE_URL!, model: env!.E2E_LLM_MODEL!, name: "PUCT tutorial generator",
+        ...(apiVariant ? { apiVariant } : {}), ...thinking,
       } }) });
     const prefix = `/api/sessions/${fixture.session.id}`;
     metrics.session_id = fixture.session.id;
@@ -67,7 +81,8 @@ test("PUCT-COMPRESS documented text compression search", {
     await page.getByRole("option").filter({ hasText: "PUCT" }).click();
     const selectedCommand = await box.inputValue();
     expect(selectedCommand).toContain("--algorithm puct");
-    await box.fill(selectedCommand.trimEnd() + " " + prompt.slice("/evolve-design ".length));
+    await box.fill(selectedCommand.trimEnd() + " " + prompt.slice("/evolve-design ".length)
+      + `\nBackground candidate generation must inherit this Run's thinking mode (${thinking.thinkingMode}) and effort (${thinking.thinkingEffort}); do not override them in the proposal.`);
     await page.screenshot({ path: info.outputPath("selected-puct.png") });
 
     const send = async (text: string) => {
@@ -114,6 +129,12 @@ test("PUCT-COMPRESS documented text compression search", {
     await save("quality-scorecard.json", metrics.evaluation);
     await info.attach("quality-scorecard", { path: info.outputPath("quality-scorecard.json"), contentType: "application/json" });
     expect(search.algorithm).toBe("puct");
+    const supportsThinking = apiVariant !== undefined && THINKING_CONTROL_VARIANTS.includes(apiVariant);
+    const expectedGoalThinking = thinking.thinkingMode === "disabled" && !supportsThinking ? "enabled" : thinking.thinkingMode;
+    expect(search.goal.thinking, "Background mutations inherit the Run's thinking mode").toBe(expectedGoalThinking);
+    if (apiVariant !== undefined && THINKING_EFFORT_VARIANTS.includes(apiVariant) && thinking.thinkingMode === "enabled") {
+      expect(search.goal.thinkingEffort, "Background mutations inherit the Run's thinking effort").toBe(thinking.thinkingEffort);
+    }
     expect(["succeeded", "budget_exhausted"], "Background search must complete normally").toContain(search.status);
     const finished = events.findLast(record => record.event.type === "search_finished");
     expect(finished?.event.status, "Completion event must agree with persisted search state").toBe(search.status);

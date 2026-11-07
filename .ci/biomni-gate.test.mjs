@@ -11,10 +11,10 @@ import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 import { profiles } from '../test/support/tagged/profiles.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
-import { dataset, manifestHash, evaluateSuite, projectMetrics, validateMetrics, renderSuite } from './biomni-gate.mjs';
+import { dataset, l5Tasks, manifestHash, evaluateSuite, projectMetrics, validateMetrics, renderSuite } from './biomni-gate.mjs';
 import { generationTokens, judgeTokens, toolMetrics, settled, selectedProcesses, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64', 'arch:arm64'] });
-const catalog = dataset.tasks.map(t => ({ id: `playwright:test/biomnibench-da-swarm.spec.ts::BiomniBench-${t.id}%20analysis`,
+const catalog = l5Tasks.map(t => ({ id: `playwright:test/biomnibench-da-swarm.spec.ts::BiomniBench-${t.id}%20analysis`,
   source: 'test/biomnibench-da-swarm.spec.ts', sourceHash: 'a'.repeat(64), runner: 'playwright',
   tags: ['category:e2e','model:real','judge:llm','os:linux','arch:amd64','tier:l5','status:external'] }));
 const plan = { ...createPlan(catalog, { revision: 'candidate', profile: 'release', selector: profiles.release.selector,
@@ -30,17 +30,20 @@ const documents = () => plan.entries.map(e => ({ schema_version: 2, benchmark: '
     judge_tokens: 20, total_tokens: 120, generation_input_tokens: 80, generation_output_tokens: 20,
     judge_input_tokens: 15, judge_output_tokens: 5, judge_ms: 100, memory_samples: 2, memory_interval_ms: 1000, memory_scope: 'isolated-local-worker-rss-sum' } }));
 
-test('all 50 public cases are L5-only, partitioned exactly once', () => {
-  assert.equal(catalog.length, 50);
+test('the active public cases are L5-only, partitioned exactly once', () => {
+  assert.equal(dataset.tasks.length, 50);
+  assert.equal(catalog.length, 45);
   for (const profile of ['pr','merge','daily']) assert.throws(() => createPlan(catalog, { revision: 'test', targets: [{os:'linux',arch:'amd64'}], selector: profiles[profile].selector }), /EMPTY_SELECTION/);
-  assert.equal(realShards(plan).length, 50);
-  assert.equal(new Set(realShards(plan).flatMap(s => s.keys)).size, 50);
+  assert.equal(realShards(plan).length, 45);
+  assert.equal(new Set(realShards(plan).flatMap(s => s.keys)).size, 45);
 });
 
 test('Biomni workers receive the 40 GiB workspace and three-hour run budgets', () => {
   const workflow = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
   assert.match(workflow, /SCIENCE_AGENT_MAX_WORKSPACE_BYTES:.*'42949672960'/);
   assert.match(workflow, /E2E_BIOMNI_RUN_TIMEOUT_MS:.*'10800000'/);
+  assert.match(workflow, /E2E_LLM_THINKING_EFFORT:.*matrix\.biomni_case.*'low'/);
+  assert.match(workflow, /BIOMNI_JUDGE_THINKING_EFFORT:.*matrix\.biomni_case.*'low'/);
   const journey = readFileSync(new URL('../test/biomnibench-da-swarm.spec.ts', import.meta.url), 'utf8');
   assert.match(journey, /E2E_BIOMNI_RUN_TIMEOUT_MS", 10_800_000/);
   assert.match(journey, /SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 \* 1024 \*\* 3/);
@@ -51,7 +54,7 @@ test('complete evidence creates an unapproved candidate, including a valid zero 
   const result = evaluateSuite(plan, docs, policy);
   assert.equal(result.status, 'baseline_candidate');
   assert.equal(result.non_regression_certified, false);
-  assert.equal(result.measured, 50); assert.equal(result.summary.min_score, 0);
+  assert.equal(result.measured, 45); assert.equal(result.summary.min_score, 0);
 });
 
 test('missing, duplicate, foreign, incomplete and non-finite metrics fail closed', () => {
@@ -176,9 +179,9 @@ test('suite reports all missing workers even when no artifact directory exists',
   assert.doesNotMatch(run.stderr, /ENOENT/);
   const verdict = JSON.parse(readFileSync(join(resultRoot, 'verdict.json')));
   assert.equal(verdict.status, 'FAIL');
-  assert.equal(verdict.planned, 50);
+  assert.equal(verdict.planned, 45);
   assert.equal(verdict.executed, 0);
-  assert.equal(verdict.problems.filter(p => p.includes('SHARD_EVIDENCE_MISSING')).length, 50);
+  assert.equal(verdict.problems.filter(p => p.includes('SHARD_EVIDENCE_MISSING')).length, 45);
   assert.equal(verdict.biomni.measured, 0);
   assert.ok(existsSync(join(resultRoot, 'biomni-gate.md')));
 });
@@ -191,8 +194,8 @@ test('matrix, score packaging and suite accounting preserve all metrics and reje
   const githubOutput=join(root,'matrix.txt');
   execFileSync(process.execPath,[fileURLToPath(new URL('./real-matrix.mjs',import.meta.url)),parentPath],{env:{...process.env,GITHUB_OUTPUT:githubOutput}});
   const matrix=JSON.parse(readFileSync(githubOutput,'utf8').trim().slice('matrix='.length));
-  assert.equal(matrix.include.length,50);
-  assert.deepEqual(matrix.include.map(e=>e.biomni_case).sort(),dataset.tasks.map(t=>t.id).sort());
+  assert.equal(matrix.include.length,45);
+  assert.deepEqual(matrix.include.map(e=>e.biomni_case).sort(),l5Tasks.map(t=>t.id).sort());
   const docs=documents();
   for(const shard of realShards(parent)) {
     const worker=subplan(parent,parent.entries.filter(e=>shard.keys.includes(e.key)));
@@ -207,7 +210,7 @@ test('matrix, score packaging and suite accounting preserve all metrics and reje
   const run=()=>spawnSync(process.execPath,[report,parentPath,root,policyPath],{cwd:root,encoding:'utf8'});
   const first=run();assert.equal(first.status,0,first.stderr);
   const candidate=join(root,'biomni-baseline-candidate.json');
-  assert.equal(JSON.parse(readFileSync(candidate)).cases.length,50);
+  assert.equal(JSON.parse(readFileSync(candidate)).cases.length,45);
   await prepareRealE2EResults(root);
   const projected=JSON.parse(readFileSync(join(root,'.tmp/real-e2e-results/research-1/e2e-real/benchmark-metrics.json')));
   assert.deepEqual(projected.measurements,docs[0].measurements);
@@ -227,12 +230,12 @@ test('ARM64 metrics keep their actual architecture and reject a mismatched host'
   assert.throws(() => validateMetrics(doc, entry, plan), /METRIC_CONFIGURATION/);
 });
 
-test('default release stays AMD64 and explicit ARM64 selects exactly fifty Biomni cases', () => {
+test('default release stays AMD64 and explicit ARM64 selects exactly 45 active Biomni cases', () => {
   assert.deepEqual(profiles.release.targets, [{ os: 'linux', arch: 'amd64' }]);
   const portable = catalog.map(e => ({ ...e, tags: [...e.tags, 'arch:arm64'] }));
   const arm = createPlan(portable, { revision: 'candidate', profile: 'release',
     selector: profiles.release.selector, targets: [{ os: 'linux', arch: 'arm64' }],
     execution: { backend: 'jiuwenswarm', model: 'generator', judge: 'judge' } });
-  assert.equal(arm.entries.length, 50);
+  assert.equal(arm.entries.length, 45);
   assert.ok(arm.entries.every(e => e.target.arch === 'arm64'));
 });

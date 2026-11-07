@@ -55,6 +55,7 @@ import {
   uptimeHours,
   usableNpuCards,
 } from "../../app/resource-format.js";
+import { commitsOnEnter } from "../../app/ime-enter.js";
 import { TEXT } from "../../text.js";
 import { Tag } from "./rows.js";
 
@@ -585,7 +586,7 @@ export function SshKeyFileField({
                   disabled={disabled || loading}
                   onChange={(event) => setLocation(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
+                    if (!commitsOnEnter(event)) return;
                     event.preventDefault();
                     void browse(location || undefined);
                   }}

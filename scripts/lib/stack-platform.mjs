@@ -187,15 +187,41 @@ export function serviceCommand(command, env) {
     : findOnPath(command, { ...process.env, ...env });
 }
 
+let commandShimSequence = 0;
+
+function commandShimLine(command, args, env) {
+  const prefix = `SCIENCE_DISCOVERY_CMD_${process.pid}_${commandShimSequence += 1}`;
+  const references = [command, ...args].map((value, index) => {
+    if (/[\0\r\n"]/u.test(value)) throw new Error("Windows command arguments cannot contain NUL, newlines, or quotes");
+    const name = `${prefix}_${index}`;
+    env[name] = value;
+    return `"%${name}%"`;
+  });
+  // /s /c expects an extra outer quote when the command itself is quoted.
+  // Values travel through the child environment so cmd.exe never parses
+  // metacharacters in them as part of this parent command line.
+  return `"${references.join(" ")}"`;
+}
+
 /** Spawn a long-lived stack process. argv[0] is an absolute interpreter or a
  *  bare command resolved through PATH (.cmd suffix handled by findOnPath). */
 export function spawnService(command, args, { env, cwd, stdio = "inherit" } = {}) {
   const resolved = serviceCommand(command, env);
   if (!resolved) throw new Error(`command not found on PATH: ${command}`);
-  return spawn(resolved, args, {
+  const childEnv = { ...process.env, ...env };
+  // Windows CreateProcess cannot execute .cmd/.bat shims directly. Recent
+  // Node releases reject that call with EINVAL instead of implicitly routing
+  // it through cmd.exe. Invoke only those two script types through ComSpec;
+  // native executables keep the shell-free path below.
+  const commandShim = isWindows && /\.(?:cmd|bat)$/i.test(resolved);
+  const executable = commandShim ? (childEnv.ComSpec ?? "C:\\Windows\\System32\\cmd.exe") : resolved;
+  const commandLine = commandShim ? commandShimLine(resolved, args, childEnv) : undefined;
+  const childArgs = commandShim ? ["/d", "/s", "/c", commandLine] : args;
+  return spawn(executable, childArgs, {
     cwd,
-    env: { ...process.env, ...env },
+    env: childEnv,
     stdio,
+    windowsVerbatimArguments: commandShim,
     // Windows: no POSIX signals, children die via killTree (taskkill /T).
     // posix: keep default (same process group semantics as the bash script).
     windowsHide: true,
