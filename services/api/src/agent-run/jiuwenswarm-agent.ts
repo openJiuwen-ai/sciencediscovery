@@ -17,7 +17,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { AgentEvent } from "@sciencediscovery/orchestration";
-import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool } from "@sciencediscovery/tools";
+import { fenceUntrustedContent, modelToolSpec, neutralizeUntrustedTags, TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, requiredArgumentsOf, type AgentTool } from "@sciencediscovery/tools";
 
 import { DurableContextStore } from "@sciencediscovery/context";
 
@@ -253,6 +253,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   private deadlines?: RunDeadlines;
   private lastProgressAt = Date.now();
   private lastProgressSource = "setup";
+  private readonly untrustedFenceNonce = randomUUID().replaceAll("-", "").slice(0, 12);
   /** Waits begun before the deadlines exist (an approval asked while the run is set up). */
   private pendingWaits = 0;
 
@@ -306,6 +307,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     if (this.executed) throw new Error("Agent handle has already been executed");
     this.executed = true;
     const durable = new DurableContextStore({
+      fenceUntrusted: (content, category) => fenceUntrustedContent(
+        neutralizeUntrustedTags(content), category, this.untrustedFenceNonce),
       history: this.options.gatewayHistory,
       ...(this.options.runContract ? { runContract: this.options.runContract } : {}),
     });
@@ -338,6 +341,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     const registry = createToolRegistry(registryOptions, plugins, durable, {
       onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       ...(trajectory.enabled ? { recordResult: (input) => trajectory.observe(input as never) } : {}),
+      untrustedFenceNonce: this.untrustedFenceNonce,
     });
     const tools = new Map(registry.values().map((tool) => [tool.name, tool]));
     await offerDeferredTools(registry, tools, this.controller.signal);
@@ -387,7 +391,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     await trajectory.start({
       executor: "jiuwenswarm",
       model: { model: endpoint.model, apiProtocol: endpoint.apiProtocol, apiVariant: endpoint.apiVariant },
-      tools: [...tools.values()].map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
+      tools: [...tools.values()].map((tool) => modelToolSpec(tool)),
       config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "task" },
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
@@ -623,6 +627,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       body: JSON.stringify({
         sessionId: this.options.sessionId,
         runId: this.options.versioning?.trajectoryId,
+        untrustedFenceNonce: this.untrustedFenceNonce,
         agentId: this.options.versioning?.agentId,
         sessionKey: jiuwenSwarmSessionKey(this.options),
         prompt: text,
@@ -648,9 +653,15 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
           tools.has("task") ? subagentCapableParentRunTimeoutMs() : 0,
         ) / 1000) } : {}),
         ...(tools.has("configuration") ? { configurationWaitTimeoutSeconds: 24 * 60 * 60 + 60 } : {}),
-        tools: [...tools.values()].map((tool) => ({
-          name: tool.name, description: this.describe(tool), inputSchema: tool.parameters, approval: approvalFor(tool.name),
-        })),
+        tools: [...tools.values()].map((tool) => {
+          const spec = modelToolSpec(tool);
+          return {
+            name: tool.name,
+            description: this.describe({ ...tool, description: spec.description }),
+            inputSchema: spec.parameters,
+            approval: approvalFor(tool.name),
+          };
+        }),
         bridge: { url: bridgeUrl, token: bridgeToken },
       }),
       signal: this.controller.signal,
@@ -660,7 +671,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     }
     const planStore = this.options.planStore;
     const translator = new EventTranslator((event) => this.emit(event), announcements, transcript,
-      new Set(nativeToolNames),
+      new Set(nativeToolNames), this.untrustedFenceNonce,
       planStore ? (items, toolCallId) => this.recordPlan(planStore, items, toolCallId) : undefined,
       (call) => {
         this.recordWeb(call);
@@ -877,6 +888,18 @@ class Transcript {
   }
 }
 
+const JIUWENSWARM_NATIVE_REMOTE_RESULTS = new Set(["free_search", "paid_search", "fetch_webpage"]);
+const JIUWENSWARM_NATIVE_SUBAGENT_RESULTS = new Set([
+  "subagent_spawn", "subagent_wait", "task_tool", "subagent_send_input", "subagent_resume",
+]);
+
+/** Model-facing native results; observers and web recording retain raw output. */
+function fenceNativeResult(name: string, content: string, nonce: string): string {
+  const category = JIUWENSWARM_NATIVE_REMOTE_RESULTS.has(name) ? "remote"
+    : JIUWENSWARM_NATIVE_SUBAGENT_RESULTS.has(name) ? "subagent" : undefined;
+  return category ? fenceUntrustedContent(neutralizeUntrustedTags(content), category, nonce) : content;
+}
+
 /**
  * Turns the adapter's run events into the agent events the run consumes. Tool
  * Platform events normally come from the bridge. Pre-bridge failures have no
@@ -890,7 +913,8 @@ class EventTranslator {
     private readonly announcements: ToolAnnouncements,
     private readonly transcript: Transcript,
     /** JiuwenSwarm's own tools the model may call; they run there, so their events come from here. */
-    private readonly nativeTools: ReadonlySet<string> = new Set(),
+    private readonly nativeTools: ReadonlySet<string>,
+    private readonly untrustedFenceNonce: string,
     private readonly onPlan?: (items: Array<{ content: string; status: string }>, toolCallId: string) => void,
     /** Called when one of JiuwenSwarm's own tools has finished (to record its web results). */
     private readonly onNativeResult?: (call: { args: unknown; id: string; name: string; output: string; failed: boolean }) => void,
@@ -963,7 +987,7 @@ class EventTranslator {
           type: "tool_execution_end", toolCallId: trace.id, toolName: trace.name, isError: trace.status === "failed",
           result: { content: [{ type: "text", text }] },
         });
-        this.transcript.toolResult(trace.id, trace.name, text);
+        this.transcript.toolResult(trace.id, trace.name, fenceNativeResult(trace.name, text, this.untrustedFenceNonce));
         this.onNativeResult?.({ args: this.nativeCalls.get(trace.id)?.args, id: trace.id, name: trace.name, output: text, failed: trace.status === "failed" });
         this.nativeCalls.delete(trace.id);
         break;

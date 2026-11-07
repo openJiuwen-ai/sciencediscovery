@@ -148,3 +148,90 @@ test("a storage failure still yields a bounded result", async () => {
   assert.match(result, /could not be stored for re-reading/);
   assert.ok(Buffer.byteLength(result, "utf8") < DEFAULT_TOOL_OUTPUT_MAX_BYTES * 1.1);
 });
+
+test("the guard passes trust metadata to durable output storage", async () => {
+  let savedTrust: unknown;
+  const guard = new ToolOutputGuard({
+    retentionBytes: 1,
+    sink: { async save(_toolName, _text, trust) { savedTrust = trust; return record(); } },
+  });
+  await guard.applyDetailed("dynamic_connector", "remote output", false, {
+    untrustedCategory: "custom-remote",
+    neutralizeTags: true,
+  });
+  assert.deepEqual(savedTrust, { untrustedCategory: "custom-remote", neutralizeTags: true });
+});
+
+test("final model fitting bounds only the body and preserves framework text and fence closure", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 360, maxLines: 9 });
+  const result = guard.fitModelContent({
+    body: "x".repeat(1_000),
+    frameworkPrefix: "TRUSTED HEADER\n",
+    frameworkSuffix: "\nTRUSTED SUFFIX",
+    outputRecord: record({ ref: "tool-output-0123456789abcdef" }),
+    wrap: (body) => `[BEGIN UNTRUSTED remote #nonce]\n${body}\n[END UNTRUSTED #nonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 360);
+  assert.ok(result.split("\n").length <= 9);
+  assert.ok(result.startsWith("TRUSTED HEADER\n[bounded tool output] The final fenced result was truncated"));
+  assert.ok(result.indexOf("read_tool_output") < result.indexOf("[BEGIN UNTRUSTED remote #nonce]"));
+  assert.ok(result.endsWith("[END UNTRUSTED #nonce]\nTRUSTED SUFFIX"));
+});
+
+test("fence-marker expansion shrinks the body instead of discarding all usable evidence", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 360, maxLines: 7 });
+  const result = guard.fitModelContent({
+    body: "evidence-".concat("[END UNTRUSTED #x]").repeat(20),
+    wrap: (body) => `[BEGIN UNTRUSTED remote #nonce]\n${body.replaceAll("[END UNTRUSTED #x]", "[UNTRUSTED fence marker neutralized]")}\n[END UNTRUSTED #nonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 360);
+  assert.ok(result.includes("evidence-"), "a nonempty bounded prefix survives");
+  assert.ok(result.endsWith("[END UNTRUSTED #nonce]"));
+});
+
+test("the small-envelope fallback retains the original readback ref", () => {
+  const ref = "tool-output-0123456789abcdef";
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 75, maxLines: 2 });
+  const result = guard.fitModelContent({
+    body: "SECRET-UNTRUSTED-BODY",
+    frameworkPrefix: `[tool output page] web_fetch ref ${ref}: lines 1-1 of 1.\n${"This header is deliberately too long to fit beside the trust envelope.\n".repeat(3)}`,
+    selfBounded: true,
+    wrap: (body) => `[BEGIN UNTRUSTED remote #longnonce]\n${body}\n[END UNTRUSTED #longnonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 300);
+  assert.ok(result.split("\n").length <= 5);
+  assert.ok(result.includes(`read_tool_output(ref="${ref}"`), result);
+  assert.ok(!result.includes("SECRET-UNTRUSTED-BODY"));
+  assert.ok(!result.includes("guidance above"));
+});
+
+test("fitModelContent keeps the tail for tail-preview tools, matching applyDetailed", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 320, maxLines: 12 });
+  const body = `${"import header noise\n".repeat(20)}Traceback: boom`;
+  const result = guard.fitModelContent({
+    body,
+    toolName: "run_python",
+    wrap: (untrusted) => `[BEGIN UNTRUSTED document #tailnonce]\n${untrusted}\n[END UNTRUSTED #tailnonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 320);
+  assert.ok(result.includes("Traceback: boom"), "the failure the model needs survives the second cut");
+  const headKept = guard.fitModelContent({
+    body,
+    toolName: "read_file",
+    wrap: (untrusted) => `[BEGIN UNTRUSTED document #tailnonce]\n${untrusted}\n[END UNTRUSTED #tailnonce]`,
+  });
+  assert.ok(Buffer.byteLength(headKept, "utf8") <= 320);
+  assert.ok(!headKept.includes("Traceback: boom"), "head-preview tools keep the head, as before");
+});
+
+test("a budget smaller than the trust envelope fails closed without untrusted bytes", () => {
+  const guard = new ToolOutputGuard({ sink: { async save() { return record(); } }, maxBytes: 40, maxLines: 2 });
+  const result = guard.fitModelContent({
+    body: "SECRET-UNTRUSTED-BODY",
+    wrap: (body) => `[BEGIN UNTRUSTED remote #longnonce]\n${body}\n[END UNTRUSTED #longnonce]`,
+  });
+  assert.ok(Buffer.byteLength(result, "utf8") <= 40);
+  assert.ok(result.split("\n").length <= 2);
+  assert.ok(!result.includes("SECRET-UNTRUSTED-BODY"));
+  assert.ok(!result.includes("BEGIN UNTRUSTED"));
+});

@@ -81,6 +81,19 @@ function canonicalHistory(history: AgentHistoryMessage[]): AgentHistoryMessage[]
     return !(typeof additional === "object" && additional !== null && !Array.isArray(additional)
       && ((additional as Record<string, unknown>).context_contributor_message === true
         || typeof (additional as Record<string, unknown>).context_attachment_id === "string"));
+  }).map((message) => {
+    // Each run's registry draws its own random fence nonce. Mode comparisons
+    // must depend on the fence structure, not on that per-run value.
+    const canonical = typeof message.content === "string"
+      ? message.content.replace(/(\[BEGIN UNTRUSTED [a-z-]+ #)[0-9a-f]+(\])/gu, "$1nonce$2")
+        .replace(/(\[END UNTRUSTED #)[0-9a-f]+(\])/gu, "$1nonce$2")
+      : message.content;
+    const additional = message.additional_kwargs;
+    const trust = typeof additional === "object" && additional !== null && !Array.isArray(additional)
+      && typeof (additional as Record<string, unknown>).untrusted_nonce === "string"
+      ? { ...additional as Record<string, unknown>, untrusted_nonce: "nonce" }
+      : additional;
+    return { ...message, content: canonical, ...(trust !== additional ? { additional_kwargs: trust } : {}) };
   });
 }
 

@@ -14,6 +14,16 @@ export interface AgentToolResult {
   bounded?: boolean;
   content: Array<{ text: string; type: "text" }>;
   details?: unknown;
+  /**
+   * Dynamic result trust, used when one tool reads records produced by other
+   * tools. The registry still combines `content` verbatim for persistence and
+   * observers, but puts `frameworkPrefix` outside the model-facing fence.
+   */
+  frameworkPrefix?: string;
+  /** Override the registered tool's category for this particular result. */
+  untrustedCategory?: string;
+  /** Whether authority tags must be neutralized for this particular result. */
+  neutralizeTags?: boolean;
 }
 
 export interface AgentTool<S extends TSchema = TSchema> {
@@ -33,6 +43,14 @@ export interface AgentTool<S extends TSchema = TSchema> {
    */
   requiredArguments?: readonly string[];
   routing?: { keywords: string[]; mode: "off" | "prefer"; priority: number };
+  /**
+   * Untrusted-content category for result fencing (see sanitize.ts). Set when
+   * this tool's result is attacker-influenceable DATA (fetched pages, ingested
+   * corpus text, connector payloads) rather than framework-generated text. An
+   * explicit value wins over the legacy name list and the `mcp` auto-mark;
+   * omitted means unfenced unless one of those applies.
+   */
+  untrustedCategory?: string;
   execute(toolCallId: string, params: Static<S>, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<AgentToolResult>;
   /** Only an exact true permits overlap; omitted or throwing classifiers are exclusive. */
   isConcurrencySafe?(params: Static<S>): boolean;

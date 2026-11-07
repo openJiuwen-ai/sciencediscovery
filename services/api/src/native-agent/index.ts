@@ -70,6 +70,8 @@ import {
 } from "@sciencediscovery/runtime-core";
 import {
   createToolOutputTools,
+  fenceUntrustedContent,
+  neutralizeUntrustedTags,
   resolveToolOutputSettings,
   ToolOutputGuard,
   ToolOutputReadTracker,
@@ -273,7 +275,7 @@ export function createToolRegistry(
   options: NativeAgentOptions,
   plugins: Awaited<ReturnType<typeof startPluginScope>>,
   durable: DurableContextStore,
-  hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
+  hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void>; untrustedFenceNonce?: string } = {},
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
   const errorGuidance = executionTools.some((tool) => tool.name === "configuration")
@@ -293,14 +295,29 @@ export function createToolRegistry(
     }),
   ], {
     batchPolicies: plugins.contributions.flatMap((item) => item.batchPolicies),
-    createResultMessage: (call, content, output) => ({
+    createResultMessage: (call, content, output, trust) => ({
       role: "tool", tool_call_id: call.id, name: call.name, content,
-      ...(output ? { additional_kwargs: { tool_output: output } } : {}),
+      ...(output || trust?.frameworkGenerated || trust?.untrustedCategory ? {
+        additional_kwargs: {
+          ...(output ? { tool_output: output } : {}),
+          ...(trust?.frameworkGenerated ? { framework_generated: true } : {}),
+          ...(trust?.untrustedCategory && trust.untrustedFenceNonce ? {
+            untrusted_category: trust.untrustedCategory,
+            untrusted_fenced: true,
+            untrusted_nonce: trust.untrustedFenceNonce,
+          } : {}),
+        },
+      } : {}),
     }),
-    commitResult: async ({ call, content, isError, sequence }) => {
-      durable.observe(call, { content, isError }, sequence);
+    commitResult: async ({ call, content, durableContent, frameworkGenerated, isError, sequence, untrustedCategory }) => {
+      durable.observe(call, {
+        content: durableContent ?? content,
+        frameworkGenerated,
+        isError,
+        ...(untrustedCategory ? { untrustedCategory } : {}),
+      }, sequence);
       for (const contribution of plugins.contributions) {
-        await contribution.commitResult?.({ call, content, isError, sequence });
+        await contribution.commitResult?.({ call, content, frameworkGenerated, isError, sequence });
       }
     },
     recordResult: hooks.recordResult,
@@ -312,6 +329,7 @@ export function createToolRegistry(
       retentionBytes: toolOutputSettings.retentionBytes,
       sink: toolOutputStore,
     }),
+    ...(hooks.untrustedFenceNonce ? { untrustedFenceNonce: hooks.untrustedFenceNonce } : {}),
   });
 }
 
@@ -358,6 +376,7 @@ class NativeAgent implements NativeAgentHandle {
   private endpoint!: ModelEndpoint;
   private policy!: ModelClientPolicy;
   private readonly waitController = new ExternalWaitController();
+  private readonly untrustedFenceNonce = randomUUID().replaceAll("-", "").slice(0, 12);
   private readonly durableContext: DurableContextStore;
   private history: WireMessage[] = [];
   private controller: AbortController | undefined;
@@ -376,6 +395,8 @@ class NativeAgent implements NativeAgentHandle {
   constructor(private readonly options: NativeAgentOptions) {
     this.contextId = `${options.sessionId}:${randomUUID()}`;
     this.durableContext = new DurableContextStore({
+      fenceUntrusted: (content, category) => fenceUntrustedContent(
+        neutralizeUntrustedTags(content), category, this.untrustedFenceNonce),
       history: options.gatewayHistory,
       ...(options.runContract ? { runContract: options.runContract } : {}),
     });
@@ -391,6 +412,7 @@ class NativeAgent implements NativeAgentHandle {
     this.toolRegistry = createToolRegistry(options, this.plugins, this.durableContext, {
       onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       recordResult: options.versioning ? async (input) => { await this.versionRecorder?.recordObservation(input); } : undefined,
+      untrustedFenceNonce: this.untrustedFenceNonce,
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("read_skill")

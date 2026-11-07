@@ -85,6 +85,8 @@ class AgentRunRequest(BaseModel):
     sessionId: str
     runId: str | None = None
     agentId: str | None = None
+    # Shared with the run's tool registry; native tool history is fenced with it too.
+    untrustedFenceNonce: str | None = None
     prompt: str
     mode: str = "agent.work.normal"
     cwd: str = "/tmp"
@@ -510,6 +512,7 @@ class AgentRunner:
                     system_prompt_tail=request.systemPromptTail,
                     native_tools=frozenset(request.nativeTools) - hidden, all_native_tools=request.jiuwenSwarmTools == "all",
                     hidden_native_tools=hidden, run_tag=token,
+                    untrusted_fence_nonce=request.untrustedFenceNonce or uuid.uuid4().hex[:12],
                 ))
                 params["model_name"] = request.model.model
                 # Private, in-memory session binding. Never publish per-run credentials

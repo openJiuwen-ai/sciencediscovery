@@ -51,6 +51,7 @@ import {
   splitKeepingLineEndings,
   type ToolOutputRecord,
   type ToolOutputSink,
+  type ToolOutputTrust,
 } from "./bounded-output.js";
 import type { AgentTool } from "./types.js";
 
@@ -67,16 +68,24 @@ export function toolOutputStoreRoot(dataDir: string, sessionId: string): string 
 }
 
 /** Sidecar metadata; the output itself lives beside it in `<ref>.txt`. */
-interface StoredMeta {
+interface StoredMeta extends ToolOutputTrust {
   createdAt: string;
   toolName: string;
+  /** Distinguishes new, explicitly trusted-local records from legacy sidecars. */
+  trustVersion?: 1;
 }
 
 interface StoredOutput extends StoredMeta {
   text: string;
 }
 
-export interface ToolOutputPage {
+function trustMetadata(trust: ToolOutputTrust): ToolOutputTrust {
+  return trust.untrustedCategory
+    ? { untrustedCategory: trust.untrustedCategory, neutralizeTags: trust.neutralizeTags === true }
+    : {};
+}
+
+export interface ToolOutputPage extends ToolOutputTrust {
   bytes: number;
   /** Last 1-based line included in this page; `startLine - 1` for an empty page. */
   endLine: number;
@@ -101,7 +110,7 @@ export interface ToolOutputPage {
   totalLines: number;
 }
 
-export interface ToolOutputCharacterPage {
+export interface ToolOutputCharacterPage extends ToolOutputTrust {
   bytes: number;
   endChar: number;
   hasMore: boolean;
@@ -120,7 +129,7 @@ export interface ToolOutputSearchMatch {
   text: string;
 }
 
-export interface ToolOutputSearchResult {
+export interface ToolOutputSearchResult extends ToolOutputTrust {
   bytes: number;
   caseSensitive: boolean;
   matches: ToolOutputSearchMatch[];
@@ -235,8 +244,8 @@ export class ToolOutputStore implements ToolOutputSink {
     this.root = options.root;
   }
 
-  async save(toolName: string, text: string): Promise<ToolOutputRecord> {
-    const stored: StoredOutput = { createdAt: new Date().toISOString(), text, toolName };
+  async save(toolName: string, text: string, trust: ToolOutputTrust = {}): Promise<ToolOutputRecord> {
+    const stored: StoredOutput = { createdAt: new Date().toISOString(), text, toolName, ...trustMetadata(trust) };
     const ref = `tool-output-${randomBytes(8).toString("hex")}`;
     this.memory.set(ref, stored);
     await this.persist(ref, stored);
@@ -245,6 +254,7 @@ export class ToolOutputStore implements ToolOutputSink {
       lines: splitKeepingLineEndings(text).length,
       ref,
       toolName,
+      ...trustMetadata(stored),
     };
   }
 
@@ -271,6 +281,7 @@ export class ToolOutputStore implements ToolOutputSink {
       startLine,
       text: page.text,
       toolName: stored.toolName,
+      ...trustMetadata(stored),
       totalBytes: Buffer.byteLength(stored.text, "utf8"),
       totalLines: lines.length,
     };
@@ -312,6 +323,7 @@ export class ToolOutputStore implements ToolOutputSink {
       startChar,
       text: pageCharacters.join(""),
       toolName: stored.toolName,
+      ...trustMetadata(stored),
       totalBytes: Buffer.byteLength(stored.text, "utf8"),
       totalChars,
     };
@@ -371,6 +383,7 @@ export class ToolOutputStore implements ToolOutputSink {
       query: normalizedQuery,
       ref,
       toolName: stored.toolName,
+      ...trustMetadata(stored),
       totalBytes: Buffer.byteLength(stored.text, "utf8"),
       totalMatches,
       truncated: matches.length < totalMatches,
@@ -398,7 +411,7 @@ export class ToolOutputStore implements ToolOutputSink {
     await mkdir(this.root, { recursive: true });
     const textPath = resolve(this.root, `${ref}.txt`);
     const metaPath = resolve(this.root, `${ref}.json`);
-    const meta: StoredMeta = { createdAt: stored.createdAt, toolName: stored.toolName };
+    const meta: StoredMeta = { createdAt: stored.createdAt, toolName: stored.toolName, trustVersion: 1, ...trustMetadata(stored) };
     await writeFile(`${textPath}.${process.pid}.tmp`, stored.text, { encoding: "utf8", mode: 0o600 });
     await writeFile(`${metaPath}.${process.pid}.tmp`, JSON.stringify(meta), { encoding: "utf8", mode: 0o600 });
     await rename(`${textPath}.${process.pid}.tmp`, textPath);
@@ -411,7 +424,13 @@ export class ToolOutputStore implements ToolOutputSink {
       const meta = JSON.parse(await readFile(resolve(this.root, `${ref}.json`), "utf8")) as StoredMeta;
       const text = await readFile(resolve(this.root, `${ref}.txt`), "utf8");
       if (typeof meta?.toolName !== "string") return undefined;
-      const stored: StoredOutput = { createdAt: meta.createdAt, text, toolName: meta.toolName };
+      const trust: ToolOutputTrust = meta.trustVersion === 1
+        ? trustMetadata(meta)
+        : {
+          untrustedCategory: meta.untrustedCategory ?? "legacy",
+          neutralizeTags: meta.untrustedCategory ? meta.neutralizeTags === true : true,
+        };
+      const stored: StoredOutput = { createdAt: meta.createdAt, text, toolName: meta.toolName, ...trust };
       this.memory.set(ref, stored);
       return stored;
     } catch {
@@ -530,6 +549,8 @@ export function createToolOutputTools(
           bounded: true,
           content: [{ type: "text", text: `${header}\n${body}` }],
           details: { ...result, readObservation: observation },
+          frameworkPrefix: `${header}\n`,
+          ...trustMetadata(result),
         };
       }
       if (characterMode) {
@@ -554,6 +575,8 @@ export function createToolOutputTools(
           bounded: true,
           content: [{ type: "text", text: `${header}\n${page.text}` }],
           details: { ...page, readObservation: observation },
+          frameworkPrefix: `${header}\n`,
+          ...trustMetadata(page),
         };
       }
       const page = await store.read(params.ref, {
@@ -584,6 +607,8 @@ export function createToolOutputTools(
         bounded: true,
         content: [{ type: "text", text: `${header}\n${page.text}` }],
         details: { ...page, readObservation: observation },
+        frameworkPrefix: `${header}\n`,
+        ...trustMetadata(page),
       };
     },
     isConcurrencySafe: () => true,

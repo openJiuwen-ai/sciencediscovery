@@ -75,6 +75,8 @@ class LlmRoute:
     hidden_native_tools: frozenset[str] = frozenset()
     # The run's tag: put in each call of one of its tools, it tells the shared MCP server which run the call is for.
     run_tag: str | None = None
+    # Per-run boundary for native web/subagent results in model-visible history.
+    untrusted_fence_nonce: str = field(default_factory=lambda: secrets.token_hex(6))
     # The calls the model made, oldest first, as JiuwenSwarm is asked to run them (name, arguments without the run
     # tag): an approval question from JiuwenSwarm names the tool but not the arguments, which the user needs to see.
     recent_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
@@ -106,9 +108,8 @@ class LlmRoutes:
     def remove(self, token: str) -> None:
         self._routes.pop(token, None)
 
-    def latest(self) -> LlmRoute | None:
-        """The model of the run that started last and is still going."""
-        return next(reversed(self._routes.values()), None)
+    def active(self) -> tuple[LlmRoute, ...]:
+        return tuple(self._routes.values())
 
 
 # The prefix JiuwenSwarm gave the tools of each run's own MCP server, before there was one server for all (`mcp_` + the server name `sci` + 10 characters,
@@ -145,6 +146,83 @@ _DEBUG = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") in ("1", "2")
 # 2: every message of every model request, as far as the first 1500 characters (what JiuwenSwarm adds around the prompt).
 _DEBUG_FULL = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") == "2"
 _TRACE_TOOLS = os.environ.get("SCIENCE_AGENT_TRACE_TOOLS") == "1"
+
+
+# Native Swarm web and subagent results never cross the TypeScript registry.
+# Apply the same authority-tag and nonce-boundary defenses when their history
+# is rewritten for the next real model request. Platform bridge results are
+# already handled by the registry and are deliberately excluded below.
+_BLOCKED_TAG_NAMES = frozenset({
+    "available-deferred-tools", "available_skills", "durable_context_data", "mcp_routing_hints",
+    "plan_state", "run_contract", "runtime_context_data", "skill_system", "subagent_system", "system-reminder", "system_reminder",
+    "analysis", "current_date", "ignore", "important", "instruction", "memory", "override", "prompt",
+    "role", "system", "think",
+})
+_BLOCKED_TAG_PATTERN = re.compile(
+    r"<\s*/?\s*(?:" + "|".join(re.escape(name) for name in sorted(_BLOCKED_TAG_NAMES)) + r")\b[^>]*>?", re.I)
+_FENCE_SHAPED_PATTERN = re.compile(r"\[\s*(?:BEGIN|END)\s+UNTRUSTED\b[^\]]{0,80}\]?", re.I)
+_NATIVE_REMOTE_RESULTS = frozenset({"free_search", "paid_search", "fetch_webpage"})
+_NATIVE_SUBAGENT_RESULTS = frozenset({
+    "subagent_spawn", "subagent_wait", "task_tool", "subagent_send_input", "subagent_resume",
+})
+
+
+def _neutralize_untrusted_tags(text: str) -> str:
+    escaped = _BLOCKED_TAG_PATTERN.sub(lambda match: match.group(0).replace("<", "&lt;").replace(">", "&gt;"), text)
+    return escaped.replace("--- BEGIN USER INPUT ---", "[BEGIN USER INPUT]").replace("--- END USER INPUT ---", "[END USER INPUT]")
+
+
+def _fence_native_result(name: str, content: str, nonce: str) -> str:
+    category = "remote" if name in _NATIVE_REMOTE_RESULTS else "subagent" if name in _NATIVE_SUBAGENT_RESULTS else None
+    if category is None:
+        return content
+    safe = _FENCE_SHAPED_PATTERN.sub("[UNTRUSTED fence marker neutralized]", _neutralize_untrusted_tags(content))
+    return f"[BEGIN UNTRUSTED {category} #{nonce}]\n{safe}\n[END UNTRUSTED #{nonce}]"
+
+
+def _fence_native_history(messages: list[dict[str, Any]], route: LlmRoute) -> list[dict[str, Any]]:
+    """Fence native results, including OpenAI tool messages without `name`.
+
+    Tool identity belongs to the preceding assistant call. In particular, a
+    name-less platform result must still be excluded because the registry has
+    already fenced it, while a name-less native web/subagent result must cross
+    the same boundary as its named counterpart. This helper deliberately does
+    not rewrite names, arguments, system prompts, or tool contracts, so the
+    housekeeping/compression route can use it without inheriting agent rewrites.
+    """
+    call_names: dict[str, str] = {}
+    out = []
+    for original in messages:
+        message = dict(original)
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            call_id, name = call.get("id"), function.get("name")
+            if isinstance(call_id, str) and isinstance(name, str):
+                call_names[call_id] = name
+        raw_name = message.get("name")
+        if message.get("role") == "tool" and not isinstance(raw_name, str):
+            mapped = call_names.get(message.get("tool_call_id"))
+            raw_name = mapped if isinstance(mapped, str) else ""
+        # A tool message whose producer cannot be identified (no name, no
+        # matching assistant call) is unattributable output in model-visible
+        # history. Fence it as remote rather than passing it through unfenced.
+        unidentified_remote = message.get("role") == "tool" and not raw_name
+        platform_result = message.get("role") == "tool" and isinstance(raw_name, str) and _is_ours(raw_name, route)
+        if message.get("role") == "tool" and not platform_result and raw_name:
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = _fence_native_result(raw_name, content, route.untrusted_fence_nonce)
+            elif content is not None:
+                message["content"] = _fence_native_result(
+                    raw_name, json.dumps(content, ensure_ascii=False), route.untrusted_fence_nonce)
+        if unidentified_remote:
+            content = message.get("content")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            safe = _FENCE_SHAPED_PATTERN.sub("[UNTRUSTED fence marker neutralized]", _neutralize_untrusted_tags(text))
+            nonce = route.untrusted_fence_nonce
+            message["content"] = f"[BEGIN UNTRUSTED remote #{nonce}]\n{safe}\n[END UNTRUSTED #{nonce}]"
+        out.append(message)
+    return out
 
 
 def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
@@ -188,8 +266,7 @@ def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
         print(f"[llm-proxy:jw-tools] {[t['function']['name'] for t in body.get('tools') or []]}", file=sys.stderr, flush=True)
     messages = []
     replaced = False
-    for message in body.get("messages", []):
-        message = dict(message)
+    for message in _fence_native_history(body.get("messages", []), route):
         if message.get("role") == "system" and route.system_prompt is not None:
             if replaced:
                 continue  # one system prompt
@@ -377,6 +454,48 @@ async def _rewrite_stream(upstream: httpx.Response, route: LlmRoute) -> AsyncIte
 DEFAULT_ALIAS = "sciencediscovery-default"
 
 
+def _request_has_run_tag(body: dict[str, Any], route: LlmRoute) -> bool:
+    """Prove which active run owns a housekeeping history.
+
+    Tool-name prefixes can be reused by sequential runs, so only the unique run
+    tag injected into a platform call's arguments is acceptable evidence.
+    """
+    if not route.run_tag:
+        return False
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            function = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            if not isinstance(name, str) or not name.startswith(route.tool_prefix):
+                continue
+            if name[len(route.tool_prefix):] not in route.tool_names:
+                continue
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(arguments, dict) and arguments.get(RUN_ARG) == route.run_tag:
+                return True
+    return False
+
+
+def _housekeeping_route(routes: LlmRoutes, body: dict[str, Any]) -> LlmRoute | None:
+    matches = [route for route in routes.active() if _request_has_run_tag(body, route)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
     router = APIRouter()
 
@@ -413,17 +532,22 @@ def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
     # Registered before the `{token}` route so that "default" is not taken for a run's token.
     @router.post("/llm/default/v1/chat/completions")
     async def default_completions(request: Request) -> Response:
-        """JiuwenSwarm's own model calls, sent on to the model of the run in progress, untouched.
+        """Forward housekeeping on the history's identified active run with native trust fencing.
 
-        No system prompt, tool list or tool name is rewritten: these are JiuwenSwarm's requests, not the
-        agent's. With no run in progress there is no model to use.
+        No system prompt, tool list or tool name is rewritten: these are
+        JiuwenSwarm's requests, not the agent's. Compression still receives the
+        same untrusted native-result boundary as an ordinary model request.
+        Without a unique run tag in platform-call history there is no safe way
+        to choose a provider, so the request fails closed.
         """
         if request.headers.get("authorization") != f"Bearer {routes.default_key}":
             return JSONResponse({"error": {"message": "unauthorized"}}, status_code=401)
-        route = routes.latest()
+        body = await request.json()
+        route = _housekeeping_route(routes, body)
         if route is None:
-            return JSONResponse({"error": {"message": "no run in progress: no model to use"}}, status_code=503)
-        return await forward(route, {**await request.json(), "model": route.model}, restore_names=False)
+            return JSONResponse({"error": {"message": "no run in progress matches this housekeeping history, or routing is ambiguous"}}, status_code=503)
+        body["messages"] = _fence_native_history(body.get("messages", []), route)
+        return await forward(route, {**body, "model": route.model}, restore_names=False)
 
     @router.post("/llm/{token}/v1/chat/completions")
     async def completions(token: str, request: Request) -> Response:
