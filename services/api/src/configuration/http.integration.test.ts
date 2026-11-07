@@ -120,7 +120,8 @@ async function fixture(context: TestContext) {
   }
   const values: ConfigurationValues = { name: "Isolated fixture provider", baseUrl: `${providerOrigin}/v1`, model: "fixture-model",
     apiProtocol: "openai-chat-completions", apiVariant: DEFAULT_MODEL_API_VARIANT["openai-chat-completions"] };
-  return { root, origin, providerOrigin, project, session, sibling, probes, values, call, ok, path, proposal, preview, withCredential, decision };
+  const closeApi = () => closeApiServer(api!);
+  return { root, origin, providerOrigin, project, session, sibling, probes, values, call, ok, path, proposal, preview, withCredential, decision, closeApi };
 }
 
 async function assertNoPlaintext(root: string, forbidden: string[]) {
@@ -155,7 +156,7 @@ test("CFG HTTP: invalid connection previews return a safe baseUrl field error be
 test("CFG HTTP: first connection is preview-only until confirmation, applies once, and establishes the global default", async (context) => {
   const f = await fixture(context);
   const capabilities = await f.ok<{ items: Array<{ id: string }>; executor: string }>(`/api/sessions/${f.session.id}/configuration/capabilities`);
-  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "security.approval_mode", "security.automatic_configuration", "security.default_approval", "security.network", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure"]);
+  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "environment.sources", "idea_tree.configure", "model.connect", "model.repair_credential", "model.select", "plugin.json_viewer", "quotas.configure", "review.configure", "reviewer.enable", "runner.assign", "security.approval_mode", "security.automatic_configuration", "security.default_approval", "security.network", "settings.inherit", "skill.select", "thinking.configure", "timeouts.configure", "web.configure", "web.credential"]);
   assert.equal(capabilities.executor, "native");
   const initial = await f.proposal("model.connect");
   assert.equal(initial.state, "collecting_input");
@@ -195,6 +196,8 @@ test("CFG HTTP: first connection is preview-only until confirmation, applies onc
   const mismatch = await f.call(f.path(ready, "decision"), { revision: ready.revision, previewDigest: ready.previewDigest, decision: "dismiss" }, "POST", key);
   assert.equal(mismatch.status, 409);
   assert.equal(mismatch.body.code, "IDEMPOTENCY_MISMATCH");
+  // Finish background export writes before inspecting the persisted files.
+  await f.closeApi();
   await assertNoPlaintext(f.root, ["good-first-credential"]);
 });
 
@@ -249,6 +252,7 @@ test("CFG HTTP: failed isolated repair preserves a shared provider credential; s
   assert.equal(f.probes.at(-1)?.authorization, "Bearer good-original-credential", "Sibling model keeps the shared provider credential");
   const list = await f.call(f.path());
   assert.doesNotMatch(list.text, /good-original-credential|good-replacement-credential|bad-credential|credentialHandle|ciphertext/);
+  await f.closeApi();
   await assertNoPlaintext(f.root, ["good-original-credential", "good-replacement-credential", "bad-credential-must-remain-isolated"]);
 });
 

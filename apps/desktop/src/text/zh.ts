@@ -91,14 +91,21 @@ export const ZH = {
 
   composer: {
     placeholder: "需要帮你做些什么？输入“/”快速引用技能及指令",
+    /** After a design command is seeded the composer is no longer waiting for
+     *  any request: the only useful next line is the goal itself. */
+    evolvePlaceholder: "请描述你想要优化的对象和评估标准",
     send: "发送",
     stop: "停止",
+    /** 设计命令上的 ✕：对话框给的是建议，改主意的人要能把它去掉再说话。 */
+    clearCommand: "移除指令",
     modelSelect: "选择模型",
     addCustomModel: "添加自定义模型",
     pillLocked: "这一轮跑完才能切换模型",
     stopHint: "关闭页面或刷新不会停止运行，必须在这里显式停止。",
     uploadFile: "上传文件",
     sessionSettings: "会话设置",
+    /** 会话设置最上面的一项：进入程序演进。 */
+    evolveExperiment: "程序演进实验",
     experts: "专家",
     expertsNone: "无",
     expertsHint: "为此对话绑定一位个人专家。",
@@ -750,7 +757,7 @@ export const ZH = {
         general: { label: "通用", description: "界面语言与这台设备上的偏好" },
         models: { label: "模型", description: "模型档案与服务商凭据" },
         skills: { label: "技能", description: "创建、启用或停用技能" },
-        mcp: { label: "MCP 服务器", description: "自定义服务器与外部工具" },
+        mcp: { label: "MCP 服务器", description: "管理内置与自定义 MCP 服务，选择会话默认使用的工具来源" },
         specialists: { label: "专家", description: "可复用的指令与工具组合" },
         "sandbox-network": { label: "网络", description: "run_shell 的网络访问" },
         remote: { label: "远程", description: "远端 Runner 与项目可用机器" },
@@ -768,9 +775,13 @@ export const ZH = {
       },
       mcp: {
         heading: "MCP 服务器",
-        help: "内置服务器随产品提供、默认开启，工具由服务端目录维护。开关只控制服务器本身，会话能用哪些数据源仍由会话决定。",
+        help: "“默认使用”选择继承全局设置的会话所用的来源；项目或会话的显式选择优先。专家可能补充其他来源，实际工具调用仍受服务就绪状态和权限限制。自定义服务器编辑表单中的“启用服务”单独控制连接。更改不会重新配置正在运行的任务。",
         builtin: "内置",
-        empty: "还没有登记自定义 MCP 服务器。",
+        useByDefault: "默认使用",
+        enableService: "启用服务",
+        selectAll: "全部选用",
+        clearSelection: "取消全选",
+        empty: "暂无可用的内置或自定义 MCP 来源。",
         editTitle: "编辑服务器",
         name: "名称",
         description: "说明",
@@ -782,9 +793,6 @@ export const ZH = {
         url: "地址",
         timeout: "超时（秒）",
         optional: "可选",
-        enable: "启用",
-        enabled: "启用这个服务器",
-        disable: "停用",
         env: "环境变量",
         headers: "请求头",
         key: "键",
@@ -1033,6 +1041,7 @@ export const ZH = {
     artifacts: "产物",
     collapsible: "工作区",
     groups: {
+      task: "任务",
       artifacts: "产物",
       files: "工作区",
     },
@@ -1114,6 +1123,239 @@ export const ZH = {
     close: "退出全屏",
   },
 
+  /** 程序演进：一次在评分卡上自我改进的搜索。
+   *
+   *  The run card in the transcript and the full panel share this block; the
+   *  words are written for the panel first and shortened for the card, so a
+   *  search is called the same thing in both places. */
+  evolve: {
+    title: "程序演进",
+    open: "程序演进",
+    moreRuns: (count: number) => `还有 ${count} 个`,
+    fewerRuns: "收起",
+    /* 对话末尾那张运行卡片：等它启动，或者它已经跑了多久。分钟以下的搜索也
+       要能看出在动，所以先报秒；一小时以上按设计稿写成「1小时28分钟」。 */
+    notStarted: "尚未启动",
+    working: "正在优化",
+    elapsed: (seconds: number) => {
+      const whole = Math.max(0, Math.floor(seconds));
+      if (whole < 60) return `已耗时 ${whole}秒`;
+      const minutes = Math.floor(whole / 60);
+      if (minutes < 60) return `已耗时 ${minutes}分钟`;
+      const rest = minutes % 60;
+      return rest === 0
+        ? `已耗时 ${Math.floor(minutes / 60)}小时`
+        : `已耗时 ${Math.floor(minutes / 60)}小时${rest}分钟`;
+    },
+    autoPace: "自动",
+    autoPaceTitle: "启动时未在每个检查点暂停",
+    /* 这次 run 的候选代码没有在沙箱里跑。徽标和标题都必须说出来，否则一次
+       无隔离搜索的结果会被当成受隔离保护的结果来看。 */
+    unisolated: "无隔离",
+    unisolatedTitle: "候选代码没有在沙箱中执行",
+
+    /* 检查点卡片。标题和正文是模型写在卡片里的内容，这里只有卡片自己的
+       外壳：顶上那条带（等谁回答 + 第几步）、底下的两个按钮。 */
+    checkpoint: {
+      eyebrow: (step: number, total?: number) => (total === undefined ? `检查点 ${step}` : `检查点 ${step}/${total}`),
+      /* 不等待审批的卡片不是检查点：没有人需要在这里做决定，它只是记录一步
+         已经做完的事。所以它不叫「检查点」，也不带「自动」之类的角标。 */
+      stepEyebrow: (step: number, total?: number) => (total === undefined ? `步骤 ${step}` : `步骤 ${step}/${total}`),
+      /* 卡片顶上那条灰带分两段：左边说这张卡在等谁，右边是第几步。设计稿把
+         「检查点」和「等待确认」排成一段字，中间不留空格。 */
+      headerWaiting: "检查点等待确认",
+      headerAnswered: "检查点已回答",
+      headerStep: "步骤",
+      count: (step: number, total?: number) => (total === undefined ? `${step}` : `${step}/${total}`),
+      confirm: "确认，继续",
+      adjust: "需要调整",
+      /* 需要调整时，卡片里先写一句「调整内容」，下面的输入框是这一步要改的
+         地方；输入框为空时按钮不亮。 */
+      adjustLabel: "调整内容",
+      adjustPlaceholder: "描述你想调整的内容，例如：这一步的评估标准再严一些。",
+      /* 每张卡的确认都是同一句话时，模型只看到「继续」，分不清回答的是哪一步：
+         一次跑动里它因此把检查点 3 重新问了一遍。把步号带出去，回复本身
+         就说明了它答的是哪张卡。 */
+      confirmReply: (step: number, total?: number) =>
+        total === undefined ? `确认检查点 ${step}，继续。` : `确认检查点 ${step}/${total}，继续。`,
+      /* 不需要审批时，卡片画完、模型却结束回合，整段设计就停在这一步。客户端
+         替用户把流程推下去，发出的这句话只说明"第 N 步已记录，继续"，不是
+         一次确认。 */
+      autoContinue: (step: number, total?: number) =>
+        total === undefined ? `继续步骤 ${step}。` : `继续步骤 ${step}/${total}。`,
+      adjustDraft: "我想调整这一步：",
+      busy: "这条回复还没结束，等它完成后再操作。",
+    },
+
+    create: {
+      title: "新建程序演进实验",
+      algorithmLabel: "选择搜索算法",
+      puctName: "PUCT算法",
+      puctTags: ["逐步改进", "搜索空间窄"],
+      puctPoints: [
+        "基于PUCT策略，优先扩展高潜力节点",
+        "从根节点逐步拓展，保留全部候选方案",
+        "结合访问次数与排名，引导搜索方向",
+        "采用单树搜索，持续精炼候选方案",
+      ],
+      openEvolveName: "OpenEvolve算法",
+      openEvolveTags: ["搜索空间宽", "避免过早收敛"],
+      openEvolvePoints: [
+        "MAP-Elites网格保留多样化优质候选",
+        "多个种群独立进化，定期交换精英",
+        "环形迁移促进优质方案跨种群传播",
+        "变异参考全局最优与差异化候选",
+      ],
+      settingsLabel: "设置",
+      confirmLabel: "检查点需要人工确认",
+      confirmHint: "每个检查点会停下来等你确认后再继续",
+      autoHint: "关闭后，助手会连续完成设计与启动；检查点仍会在对话中说明，但不再等待确认。",
+      /* Windows 没有 bwrap/seatbelt。这里不给开关，只给两处告警：标题下的
+         横幅让人一眼看见，点“开始设计”时的弹窗索取逐次同意。同意只随这一次
+         命令发出（`--allow-direct`），不成为会被忘记的设置。 */
+      unisolatedBannerTitle: "此实验会在没有沙箱的情况下运行候选代码",
+      unisolatedBannerBody: "这台机器没有可用的沙箱。候选代码会以你的身份直接运行：可以读写你的文件、访问网络，也没有CPU/内存限制。点击“开始设计”时会再确认一次。",
+      unisolatedConfirmTitle: "允许无隔离运行候选代码？",
+      unisolatedConfirmBody: "接下来会直接执行候选程序：没有沙箱、没有CPU/内存限制，可以读写你的文件并访问网络。只在你了解这些风险并愿意承担时继续。",
+      unisolatedConfirmCancel: "取消",
+      unisolatedConfirmClose: "关闭",
+      unisolatedConfirmContinue: "仍然继续",
+      send: "开始设计",
+      cancel: "取消",
+      blockedRunning: "当前会话正在运行，等它结束后再开始新的实验。",
+      blockedArchived: "归档会话不能开始新的实验。",
+    },
+
+    /* 运行时不可用时的说明。桌面端的人只能看文件、点按钮，所以这里给的是
+       这台机器上真实存在的路径和真实存在的操作，而不是“请联系支持”。 */
+    setup: {
+      bannerTitle: "优化进程不可用，可能导致无法得到预期结果",
+      bannerInstalling: "优化进程正在准备，完成后即可开始设计",
+      bannerAction: "查看详情",
+      title: "演化运行时不可用",
+      introMissing: "这台机器还没有安装演化运行时。装好之后，这个提示和“开始设计”会自动恢复。",
+      introError: "演化运行时没能启动，或者本地服务没有通过它的认证。",
+      introInstalling: "演化运行时正在准备中，完成后这个提示和“开始设计”会自动恢复。",
+      statusLabel: "本地服务返回",
+      whereTitle: "先看日志",
+      logs: [
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\api.log",
+          what: "本地服务的日志；安装或启动停在哪一步，末尾的报错会写出来。",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\logs\\evolve.log",
+          what: "演化引擎自己的日志；引擎起来了却仍然不可用时看这里。",
+        },
+        {
+          path: "%USERPROFILE%\\.sciencediscovery\\evolve",
+          what: "运行时安装目录；目录缺失或文件不全，说明安装没有完成。",
+        },
+        {
+          path: "<安装目录>\\logs\\shell.log",
+          what: "桌面端启动日志，默认在 %LOCALAPPDATA%\\Programs\\ScienceDiscovery\\logs；应用连不上本地服务时看这里。",
+        },
+      ],
+      whyTitle: "常见原因",
+      whyBody: "第一次使用还没有安装；安装中途退出，或 evolve 目录被删除；代理或网络导致下载失败；磁盘剩余空间不足 1 GiB；部署没有开放自动安装。",
+      fixTitle: "怎么恢复",
+      fixBody: "点下面的“准备运行时”重新下载并安装。装过但已经损坏时，先退出应用，删除 %USERPROFILE%\\.sciencediscovery\\evolve，再重新安装。仍然失败时，对照 api.log 末尾的报错检查网络和磁盘，然后重启应用再试一次。",
+      operator: "当前部署没有开放自动安装，请联系管理员在服务端启用程序演进；上面的状态和日志可以直接交给管理员。",
+      installing: "正在准备…",
+      install: "准备运行时",
+      close: "关闭",
+    },
+
+    panel: {
+      eyebrow: "程序演进",
+      close: "关闭",
+      stop: "停止",
+      stopping: "正在停止…",
+      stopHint: "停止后，已经产生的候选仍然可以查看。",
+      fullscreen: "全屏",
+      exitFullscreen: "退出全屏",
+      fullTask: "查看完整目标",
+    },
+
+    status: {
+      pending: "等待中",
+      running: "运行中",
+      succeeded: "已完成",
+      stopped: "已停止",
+      budget_exhausted: "预算用尽",
+      failed: "失败",
+    },
+
+    metric: {
+      best: "最优得分",
+      baseline: "起点",
+      test: "留出集测试",
+      candidates: "候选",
+      depth: "最大深度",
+    },
+
+    /* 任务详情：右栏「任务」页。版面照三张设计稿：顶部一排总览，下面依次是
+       折线图、优化树和预算；节点列表和树是同一份数据的两种看法。 */
+    detail: {
+      best: "最优解",
+      valid: "有效节点数/总数",
+      generations: "层数",
+      algorithm: "算法",
+      tokens: "Token",
+      chartTitle: "实时算法优化结果",
+      treeTitle: "优化树",
+      nodeList: "节点列表",
+      generation: (depth: number) => `层数 ${String(depth).padStart(2, "0")}`,
+      bestTag: "最佳",
+      budgetTitle: "预算",
+      score: "优化分数",
+      children: "子节点数",
+      source: "代码变更",
+      expandSource: "展开代码变更",
+      closeInspector: "关闭节点详情",
+      closeSource: "关闭代码变更",
+      nodeTitle: (index: number) => `Node #${index}`,
+      root: "起点",
+      treeEmpty: "还没有节点。",
+      treeAria: (count: number) => `优化树，共 ${count} 个节点`,
+    },
+
+    chart: {
+      title: "实时算法优化结果",
+      aria: (baseline: string, best: string, candidates: number) =>
+        `得分曲线：基线 ${baseline}，当前最优 ${best}，共 ${candidates} 个候选。`,
+      xAxis: "扩展次数",
+      best: "最优产物",
+      significant: "得分节点",
+      test: "测试",
+      failed: "失败",
+      belowBaseline: "低于基线",
+      baseline: "基线",
+      empty: "还没有可以画出的得分。",
+    },
+
+    inspector: {
+      parent: "父代",
+      depth: "深度",
+      loading: "正在读取源码…",
+      unavailable: "源码不可用（可能已被清理）。",
+      unchanged: "与父代相同。",
+      noParent: "这是起点，没有父代。",
+      error: "失败原因",
+      hidden: (count: number) => `已折叠 ${count} 行未改动内容`,
+    },
+
+    budget: {
+      tokens: "Token",
+      elapsed: "耗时",
+      nodes: "节点",
+    },
+
+    notice: {
+      placeholder: "这次实验的评分卡是占位符，不是为它设计的真实评分卡。",
+    },
+  },
+
   errors: {
     generic: "操作失败",
     sessionCreate: "创建会话失败",
@@ -1179,6 +1421,19 @@ export const ZH = {
       preview: "预览将要发送的内容",
       none: "本条反馈没有可用诊断信息",
     },
+    images: {
+      label: "截图（可选）",
+      add: "上传图片",
+      limit: (max: number) => `最多 ${max} 张`,
+      remove: "移除截图",
+      preparing: "正在处理图片…",
+      privacy: "截图对仓库协作者可见，请先遮挡敏感信息。",
+      error: {
+        type: "仅支持 PNG、JPEG 或 WebP 图片。",
+        size: "图片压缩后仍然过大，请换一张。",
+        decode: "无法读取这张图片。",
+      },
+    },
     submit: "提交",
     submitting: "提交中…",
     success: {
@@ -1197,6 +1452,7 @@ export const ZH = {
       tooLarge: "内容太长，请精简后再试。",
       unavailable: "服务暂时不可用，请稍后再试。",
       invalid: "部分字段需要检查。",
+      fieldsTitle: "需要检查的字段",
       kept: "内容已保留，你可以复制或改用 GitHub 提交。",
       copyAll: "复制全部内容",
       openIssue: "改用 GitHub 提交",

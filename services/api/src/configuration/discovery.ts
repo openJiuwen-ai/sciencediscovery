@@ -5,6 +5,8 @@ import type { SessionStore } from "../store.js";
 import { configurationFramework } from "./framework.js";
 import { configurationConnectorDirectory } from "./connector-directory.js";
 import { nativeRuntimeConnectorIds } from "./native-choices.js";
+import { webCredentialProviders } from "./web-credential-adapter.js";
+import { webConfigurationCurrent, webConfigurationFields } from "./web-adapter.js";
 import { INHERITABLE_CONFIGURATION_FIELDS } from "./inherit-fields.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { securityNetworkValues } from "./security-network-adapter.js";
@@ -16,6 +18,8 @@ import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
 import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
+  "web.credential": "web service provider credential search key 网页 搜索 服务商 凭据 密钥 替换 清除",
+
   "settings.inherit": "inherit reset restore parent override 继承 恢复 重置 上级 覆盖",
   "reviewer.enable": "reviewer specialist global enable disable 审阅 专家 全局 开启 关闭",
   "plugin.json_viewer": "json artifact preview viewer plugin JSON 预览 插件 文件 展示",
@@ -29,6 +33,7 @@ const aliases: Record<ConfigurationCapabilityId, string> = {
   "timeouts.configure": "timeout timeouts 超时 等待 时限",
   "quotas.configure": "quota quotas 配额 并发 上传 容量",
   "runner.assign": "runner machine allocation assignment execution 运行器 分配 机器 执行环境 继承",
+  "web.configure": "web search fetch cache browser 搜索 网页 抓取 缓存 搜索引擎 DeepSeek DuckDuckGo Bing Tavily Exa Brave Jina",
   "environment.sources": "environment package source pip conda mirror 包源 镜像源 环境 软件源",
   "security.approval_mode": "session approval mode always allow dangerous permission security 会话 审批 批准 权限 安全 自动允许",
   "security.default_approval": "new session default approval permission 新会话 默认 授权 审批 工具权限",
@@ -102,6 +107,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
     credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" }));
   const resources = async (id: ConfigurationCapabilityId): Promise<Row[]> => {
     if (id === "runner.assign") return store.configurationRunnerResources();
+    if (id === "web.credential") return store.getWebSettings().providers.filter(item => webCredentialProviders(Boolean(native)).includes(item.provider)).map(item => ({ id: item.provider, name: item.provider, credential: item.hasApiKey ? "provided" : "missing", authenticationVerified: false }));
+    if (id === "web.configure" && native) return store.configurationWebProxyPolicies().map(id => ({ id, kind: "proxy_policy", name: id }));
     if (id === "connector.enable") return (await connectors()).map(row => ({ ...row, name: text(row.name) }));
     if (["model.select", "model.repair_credential", "review.configure"].includes(id)) return models();
     if (id === "skill.select") {
@@ -128,7 +135,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   };
   const brief = async (id: ConfigurationCapabilityId): Promise<Row> => {
     const item = capabilities.find(item => item.id === id)!;
-    return { capabilityId: id, label: text(item.label), activation: item.activation, ...await availability(id) };
+    return { capabilityId: id, label: text(item.label), activation: (id === "web.credential" || id === "web.configure") && !native ? "requires_restart" : item.activation, ...await availability(id) };
   };
   if (action === "search") {
     const rows: Row[] = [];
@@ -160,6 +167,8 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
+  else if (id === "web.credential") current = { backend: native ? "native" : "jiuwenswarm", authenticationVerified: false };
+
   else if (id === "settings.inherit") current = { sessionExplicitFields: INHERITABLE_CONFIGURATION_FIELDS.filter(field => Object.hasOwn(settings.overrides, field)), projectExplicitFields: INHERITABLE_CONFIGURATION_FIELDS.filter(field => Object.hasOwn(store.getProjectSettings(store.getSession(sessionId)!.projectId).overrides, field)), skillSelectionAvailable: skills().selectionAvailable };
   else if (id === "reviewer.enable") current = { ...store.getReviewerSpecialistSettings() };
   else if (id === "plugin.json_viewer") current = { ...store.configurationJsonViewerSettings(sessionId) };
@@ -174,6 +183,7 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "security.default_approval") current = { global: store.getGlobalSettings().overrides.defaultApprovalMode ?? "inherit", project: store.getProjectSettings(store.assertSessionWritable(sessionId).projectId).overrides.defaultApprovalMode ?? "inherit", effectiveForNewProjectSession: store.getProjectSettings(store.assertSessionWritable(sessionId).projectId).effective.defaultApprovalMode ?? "ask_for_dangerous", currentSessionUnchanged: store.assertSessionWritable(sessionId).approvalMode, independentHumanConfirmation: true };
   else if (id === "security.automatic_configuration") current = { autoApplyLowRiskConfiguration: store.assertSessionWritable(sessionId).autoApplyLowRiskConfiguration === true, independentHumanConfirmation: true, v3ChoicesRemainManual: true };
   else if (id === "security.network") current = { ...securityNetworkValues(store.getSandboxNetworkSettings()), writableSessionCount: store.configurationSecurityNetwork().writableSessionCount, independentHumanConfirmation: true };
+  else if (id === "web.configure") current = { backend: native ? "native" : "jiuwenswarm", ...webConfigurationCurrent(store.getWebSettings(), native ? "native" : "jiuwenswarm"), providers: store.getWebSettings().providers.map(({ provider, hasApiKey }) => ({ provider, hasApiKey })) };
   else if (id === "idea_tree.configure") {
     const idea = store.getIdeaTreeSettings();
     current = { templateId: idea.templateId, explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection,
@@ -183,9 +193,13 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   if (input.targetId && !selected.length) throw new ConfigurationError("CONFIGURATION_RESOURCE_UNAVAILABLE", "The requested installed resource was not found");
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
-  return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
+  const registered = framework.service.registry.fields(id);
+  const fields = id === "web.configure" ? webConfigurationFields(native ? "native" : "jiuwenswarm")
+    : id === "web.credential" ? { ...registered, webProvider: { ...registered.webProvider, choices: webCredentialProviders(Boolean(native)) } }
+    : registered;
+  return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields,
     scopes: descriptor.scopes.filter(scope => ["plugin.json_viewer", "security.default_approval"].includes(id) || (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
-    instruction: id === "security.approval_mode" ? "Current session only. Existing pending permission cards must be resolved through their separate human controls; this capability never bulk-approves them. Independent human security acknowledgement followed by manual configuration confirmation is mandatory. Always allow affects future eligible actions; direct code remains separate. A bound original task can continue after cleanup. Never widen approval to work around a failed action." : id === "security.network" ? "Deployment security policy: omit scope. An independent user-only security acknowledgement followed by manual confirmation is mandatory; no Agent or ordinary tool permission can supply it. All writable sessions and persistent kernel/shell state may be affected. Do not widen permissions to work around a failed call." : id === "security.default_approval" ? "New-session defaults only. Omit scope for global; project changes only this Project. inherit removes the selected override. Independent human security acknowledgement AND manual configuration confirmation are required. Existing sessions, pending permissions, network policy and kernels are unchanged." : id === "security.automatic_configuration" ? "This Session only. Independent human security acknowledgement AND manual confirmation are mandatory. Only future eligible ready-connector compatibility proposals can be automatically saved after their existing cancellation window. v3/security/credential choices remain manual. Tool permissions, network policy and original task resumption are separate." : id === "settings.inherit" ? "Remove only selected finite ordinary override fields at the current Session (default) or its own Project. No Global or security reset. An equal explicit value still needs removal; absent fields produce no_change. Inherited Skill all mode can expose more installed content. Frozen task settings remain unchanged. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "reviewer.enable" ? "Only enabled:boolean may be proposed. Omit scope. This is the global Reviewer Specialist gate; it preserves session preferences and feedback policy, may admit paid reviews, and does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "plugin.json_viewer" ? "Only the bundled optional JSON viewer: mode enabled/disabled/inherit. Omit scope for this Session, or explicitly choose its Project or Global. inherit removes only this layer override. Generic source previews remain available. Do not supply arbitrary plugin IDs/config or claim all clients have refreshed." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+    instruction: id === "security.approval_mode" ? "Current session only. Existing pending permission cards must be resolved through their separate human controls; this capability never bulk-approves them. Independent human security acknowledgement followed by manual configuration confirmation is mandatory. Always allow affects future eligible actions; direct code remains separate. A bound original task can continue after cleanup. Never widen approval to work around a failed action." : id === "security.network" ? "Deployment security policy: omit scope. An independent user-only security acknowledgement followed by manual confirmation is mandatory; no Agent or ordinary tool permission can supply it. All writable sessions and persistent kernel/shell state may be affected. Do not widen permissions to work around a failed call." : id === "security.default_approval" ? "New-session defaults only. Omit scope for global; project changes only this Project. inherit removes the selected override. Independent human security acknowledgement AND manual configuration confirmation are required. Existing sessions, pending permissions, network policy and kernels are unchanged." : id === "security.automatic_configuration" ? "This Session only. Independent human security acknowledgement AND manual confirmation are mandatory. Only future eligible ready-connector compatibility proposals can be automatically saved after their existing cancellation window. v3/security/credential choices remain manual. Tool permissions, network policy and original task resumption are separate." : id === "web.credential" ? "Only this backend provider list is supported. Omit scope. Keys are write-only through the secure user card, never ordinary values. No authentication probe or automatic retry. Native later requests read the key; Jiuwen credential mirroring requires restart." : id === "web.configure" ? "Deployment-wide: omit scope. Only the displayed backend fields are supported. Provider selections do not test connectivity or change keys. Swarm saves require API restart and successful startup synchronization; remote activation is not verified. Existing proxy IDs only; never submit credentials or arbitrary URLs." : id === "settings.inherit" ? "Remove only selected finite ordinary override fields at the current Session (default) or its own Project. No Global or security reset. An equal explicit value still needs removal; absent fields produce no_change. Inherited Skill all mode can expose more installed content. Frozen task settings remain unchanged. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "reviewer.enable" ? "Only enabled:boolean may be proposed. Omit scope. This is the global Reviewer Specialist gate; it preserves session preferences and feedback policy, may admit paid reviews, and does not requeue historical review jobs. A bound original configuration wait may continue through the framework; activation timing and execution permissions remain separate." : id === "plugin.json_viewer" ? "Only the bundled optional JSON viewer: mode enabled/disabled/inherit. Omit scope for this Session, or explicitly choose its Project or Global. inherit removes only this layer override. Generic source previews remain available. Do not supply arbitrary plugin IDs/config or claim all clients have refreshed." : (DEPLOYMENT_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
       ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
       : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);

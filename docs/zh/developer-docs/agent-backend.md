@@ -118,13 +118,23 @@ Native executor 通过 ScienceDiscovery model package/client 直接调用用户�
 
 JiuwenSwarm 不直接绕过这些产品语义：其模型请求经 ScienceDiscovery 的 per-run model gateway/proxy 路径重新进入产品模型层。
 
+### 被拒绝的 thinking 控制
+
+所有发送方共用一条规则：上游用 400 指名了本次请求携带的某个 thinking 控制时，只剔除被指名的那些控制并重试一次。由哪一层执行、以及是否已经执行，按发送方而异。
+
+- 流式请求里目前只有 OpenAI-chat 那条发送路径（`streamOpenAiTurn`，`packages/model/src/client.ts`）自己恢复。只有上游的 `param` 指针点名该字段，或拒绝语出现在字段名附近，才算“被拒绝”；对控制项取值、或发送时所处状态的抱怨不算，把请求体回显一遍更不算。重试只剔除被指名的控制，并且只有在剔除后请求成功之后，才把这次拒绝记到该 endpoint 上。
+- 另外两条流式发送路径目前不恢复：`streamAnthropicTurn` 不做重试，所以 `anthropic-messages` 配置下被拒的 `thinking` 仍然失败；`openai-responses` 发的是 `reasoning`，不在那四个控制项名字里，因此永远不会被剔除。让它们也具备同样的有界重试是另一项改动。
+- 非流式请求走 `completeChatRequest`（`packages/model/src/completion.ts`），它保持为薄传输层：发什么、返回上游的状态码与正文，仅此而已。在它内部重试会替调用方吃掉那个 400 —— `services/api/src/session-naming.ts` 要在同一个 400 上重试*并且*把 `max_tokens` 从 64 提到 16 384，因为那条路径同时服务于“网关忽略控制项、把标题截断”的情况。
+- 需要恢复的非流式调用方用 `rejectedThinkingControlFields(detail)` 拿到这个 400 证明确实被拒绝的控制项，再用 `carriedThinkingControls(body)` 取交集（400 指的是上游拒绝的字段，不是本次请求发了什么），然后自行决定怎么做。恢复时必须把被指名的字段从已经构建好的请求体里删掉，而不是改请求另一个 thinking 模式：模式先经 catalog 归一（catalog 的 `modes` 不包含请求值时，`constrainCatalogThinking` 会把它改写成模型的声明默认值，`kimi-k3` 就声明了 `modes: ["enabled"]`），所以“换一个模式”完全可能把被拒绝的请求体一字不差地重建出来。Settings 的连通性探针（`services/api/src/model-connectivity.ts`）就是这么做的：删掉被指名的字段后重试一次；请求本来就没带这些字段时，这个 400 仍按上游错误上报。
+- `services/api/src/papers.ts` 与 `services/api/src/evolution/llm-proxy.ts` 保留上游错误、不做恢复；这是决定，不是遗漏。
+
 ### 模型请求的线上诊断
 
 每个流式模型请求输出一行 `[model-sse-summary]` JSON。记录包含本地请求 ID、响应头给出时的上游请求 ID、仅 scheme+host 的 endpoint 标识、模型别名、HTTP 状态、重试次数与每次重试的失败分类、dispatch / headers / first byte / first SSE record / completion 时间戳、传输块与 SSE 记录数、解析错误数、`finish_reason`、是否截断、是否组出文本或工具调用，以及上游是否流出了推理文本（`hasReasoning`）。记录不含提示词、响应正文、工具参数、请求头或凭证。`onWireDiagnostics` 在进程内传递同一条记录；native loop 与 JiuwenSwarm gateway 都会写入日志，因此 real-E2E 的 `stack.log` 保留逐请求证据。
 
 以错误结束的请求，其 `error.classification` 写在同一行上，空补全也是：gateway 先保留记录到结果确定后再写，因此 502 不会留下一条没有分类的成功行。
 
-任务回合已正常结束、却没有非空白文本也没有工具调用时，按错误处理，而不是成功终答，即使上游报告 `finish_reason=stop`。runtime client 与 gateway 都执行该规则，替代 streamer 也无法静默返回空结果。原本无法区分的两种情形，现在既有各自的 `hasReasoning` 取值，也有各自的分类：推理模型把预算全花在思考上、没有可见答案记为 `reasoning_only`（`hasReasoning: true`），relay 直接返回空 `stop` 记为 `empty_completion`（`hasReasoning: false`）；请求同样失败，只有记录的类别不同。被输出上限截断的回合仍走既有截断恢复。错误消息保留线上摘要（请求 ID、状态、记录数、结束原因、是否有推理），不包含正文。
+任务回合已正常结束、却没有非空白文本也没有工具调用时，按错误处理，而不是成功终答，即使上游报告 `finish_reason=stop`。runtime client 与 gateway 都执行该规则，替代 streamer 也无法静默返回空结果。原本无法区分的两种情形，现在既有各自的 `hasReasoning` 取值，也有各自的分类：推理模型把预算全花在思考上、没有可见答案记为 `reasoning_only`（`hasReasoning: true`），relay 直接返回空 `stop` 记为 `empty_completion`（`hasReasoning: false`）；请求同样失败，只有记录的类别不同。被输出上限截断的回合仍走既有截断恢复，但*终局*截断——被截断的那一轮没有任何工具调用，不会再有任何东西产出答案——按失败处理，而不是报成 `completed`：两个 backend 都拒绝"unrecovered output limit"，native 一侧在消息里带上配置的 `max_tokens`，让可调项一目了然。错误消息保留线上摘要（请求 ID、状态、记录数、结束原因、是否有推理），不包含正文。
 
 需要受控的 relay/direct 对比时，使用 `node scripts/model-endpoint-compare.mjs --model <alias> --a-base-url … --b-base-url … --prompt-file …`：两个 endpoint 收到同一份请求体，请求交错执行，凭证只从 token 环境变量读取，报告只含逐请求延迟、错误与 token 汇总。
 

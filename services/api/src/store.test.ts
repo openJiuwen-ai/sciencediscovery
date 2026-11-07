@@ -664,9 +664,14 @@ test("truncated Workspace scans preserve provenance beyond the 500-file list lim
     size: overflowMetadata.size,
   });
 
-  const listed = await listWorkspaceFiles(store, session.id);
+  const [listed, complete] = await Promise.all([
+    listWorkspaceFiles(store, session.id),
+    listWorkspaceFiles(store, session.id, true),
+  ]);
   assert.equal(listed.length, 500);
   assert.equal(listed.some((file) => file.path === overflowPath), false);
+  assert.equal(complete.length, 501);
+  assert.ok(complete.some((file) => file.path === overflowPath), "complete export cannot reuse a truncated UI scan");
   const afterList = store.getWorkspaceFileProvenance(session.id, overflowPath);
   assert.equal(afterList?.file.id, recorded.fileId);
   assert.equal(afterList?.currentRevision.id, recorded.id);

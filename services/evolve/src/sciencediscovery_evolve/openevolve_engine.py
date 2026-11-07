@@ -313,9 +313,6 @@ class OpenEvolveEngine:
         except CompletionUnavailable as error:
             raise _Refusal(f"this search has no model access: {error}") from error
 
-        max_retries = int(spec.options.get("model_retries", 2))
-        retry_backoff = float(spec.options.get("retry_backoff", 1.0))
-
         def call(prompt: str, iteration: int) -> Tuple[str, str]:
             if should_stop():
                 archive = reporter.archive
@@ -323,47 +320,18 @@ class OpenEvolveEngine:
                     archive.candidate_limit = 0
                 return "", ""
 
-            import time as _time
-            from .logging_config import get_logger as _get_logger
-            _log = _get_logger("openevolve.retry")
-
-            for attempt in range(max_retries + 1):
-                if should_stop():
-                    return "", ""
-                # Pass on_failure only on the last attempt; earlier failures
-                # are logged but don't emit events (no premature expanded).
-                on_failure_cb = (
-                    (lambda reason: reporter.note_failure(iteration, reason))
-                    if attempt == max_retries else None
-                )
-                reply = complete(
-                    prompt,
-                    lambda spent: usage.add(iteration, spent),
-                    on_failure_cb,
-                )
-                code, summary = extract_program_reply(reply)
-                if code.strip():
-                    return code, summary
-                # Empty reply — determine reason for retry logging.
+            # HTTP retry policy is shared with PUCT in completion_for. A valid
+            # empty/capped reply must not be paid for again unchanged here.
+            reply = complete(prompt, lambda spent: reporter.note_usage(iteration, spent),
+                             lambda reason: reporter.note_failure(iteration, reason))
+            code, summary = extract_program_reply(reply)
+            if not code.strip():
                 spent = usage.of(iteration)
-                if spent is not None and spent.capped:
-                    reason = (
-                        f"the model spent {spent.completion} output tokens on hidden thinking, "
-                        f"reaching the per-call ceiling of {self.spec.max_tokens_per_call}"
-                    )
-                else:
-                    reason = "the model returned an empty reply"
-                if attempt < max_retries:
-                    _log.warning("iteration %d attempt %d/%d failed: %s — retrying in %.1fs",
-                                  iteration, attempt + 1, max_retries + 1, reason,
-                                  retry_backoff * (2 ** attempt))
-                    _time.sleep(retry_backoff * (2 ** attempt))
-                    continue
-                # Last attempt failed — emit one failed expanded with the reason.
+                reason = (f"the model spent {spent.completion} output tokens on hidden thinking, "
+                          f"reaching the per-call ceiling of {spec.max_tokens_per_call}"
+                          if spent is not None and spent.capped else "the model returned an empty reply")
                 reporter.note_empty(iteration, reason)
-                return "", ""
-
-            return "", ""
+            return code, summary
 
         return call
 
@@ -400,6 +368,13 @@ class _Reporter:
         self._empty: Dict[int, str] = {}
         self._inspiration_by_iteration: Dict[int, Optional[int]] = {}
         self._lock = threading.Lock()
+
+    def note_usage(self, iteration: int, spent: CompletionUsage) -> None:
+        # Failed and non-winning candidates still spend tokens. Publish every
+        # reported completion so the control plane can enforce the total cap.
+        with self._lock:
+            self.usage.add(iteration, spent)
+            self.emit(events.cost(self.usage.read(), 0))
 
     def note_failure(self, iteration: int, reason: str) -> None:
         """The call itself did not come back. Emit once; skip if already emitted."""
@@ -529,7 +504,8 @@ class _Reporter:
         self.emit(events.merged(
             program.iteration, True, "became the current best",
         ))
-        self.emit(events.cost(self.usage.read(), 0))
+        with self._lock:
+            self.emit(events.cost(self.usage.read(), 0))
 
     def note_outcome(self, outcome: Any, planned: int) -> None:
         if outcome is None:
@@ -671,12 +647,18 @@ def _stages_rows(mode: str) -> bool:
 
 def _default_completion(spec: RunSpec, _usage: Any, should_stop: Callable[[], bool]) -> Callable[[str], str]:
     temperature = spec.options.get("temperature")
+    retries = spec.options.get("model_retries", 2)
+    backoff = spec.options.get("retry_backoff", 0.5)
     return completion_for(
         spec.llm_url,
         spec.llm_token,
         max_tokens=spec.max_tokens_per_call,
         temperature=float(temperature) if temperature is not None else None,
         thinking=spec.thinking or None,
+        thinking_effort=spec.thinking_effort or None,
+        timeout=float(spec.options.get("completion_timeout", 900.0)),
+        max_retries=int(retries) if isinstance(retries, (int, float)) and not isinstance(retries, bool) else 2,
+        retry_backoff=float(backoff) if isinstance(backoff, (int, float)) and not isinstance(backoff, bool) else 0.5,
         should_stop=should_stop,
     )
 

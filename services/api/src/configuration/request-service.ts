@@ -180,6 +180,7 @@ export class ConfigurationRequestService {
         ...(view.choiceReceipt ? { choiceReceipt: projectChoiceReceipt(view.choiceReceipt) } : {}) } : {}),
       id: view.id, sessionId: view.sessionId, projectId: view.projectId,
       ...(view.runId ? { runId: view.runId } : {}), revision: view.revision, stateVersion: view.stateVersion,
+      ...(view.fields.some(field => field.kind === "credential") ? { credentialTargetDigest: digest([view.capabilityId, record.plan.data?.credentialTarget ?? record.target, view.fields.filter(field => field.kind === "credential").map(field => field.id)]) } : {}),
       capabilityId: view.capabilityId, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, state: view.state,
       ...(endpointAuthorization ? { endpointAuthorization } : {}),
       ...(securityConsent ? { securityConsent } : {}),
@@ -213,7 +214,7 @@ export class ConfigurationRequestService {
     if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
     const capabilityId = String(value.capabilityId);
     if (input.protocolVersion !== 3 && (configurationNeedsSecurityConsent(capabilityId) ||
-        ["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(capabilityId)))
+        ["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure", "web.credential", "web.configure", "environment.sources", "runner.assign", "settings.inherit", "reviewer.enable", "plugin.json_viewer"].includes(capabilityId)))
       throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = trustedReversal ? structuredClone(input.values) : adapter.normalize(value.values);

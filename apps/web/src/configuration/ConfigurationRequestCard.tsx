@@ -26,11 +26,16 @@ function fieldValues(request: ConfigurationRequestView): ConfigurationValues {
     ? [[field.id, field.value]] : []));
 }
 
-/** Known capabilities keep their typed wording. A server-first id still needs a readable acknowledgement. */
+/** Known capabilities keep their typed wording. A server-first id still needs a readable acknowledgement.
+ * The fallback names no consequence of its own; it assumes the request's security statement stays visible above the checkbox. */
 function securityAcknowledgementText(capabilityId: string, copy: object, fallback: string): string {
   if (!Object.hasOwn(copy, capabilityId)) return fallback;
   const text = (copy as Record<string, unknown>)[capabilityId];
   return typeof text === "string" && text.length > 0 ? text : fallback;
+}
+/** Message tables are plain objects. An inherited prototype key is not a translation. */
+function ownMessage(table: Record<string, string>, key: string, fallback: string): string {
+  return Object.hasOwn(table, key) ? table[key] ?? fallback : fallback;
 }
 
 export function isConfigurationRequestView(request: object): request is ConfigurationRequestView {
@@ -70,8 +75,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model"];
-  const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation"];
+  const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.credentialTargetDigest ?? "", view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; credentialDraft.current = undefined; }; }, []);
@@ -92,7 +97,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     setMutationsBlocked(false);
     setErrorField(undefined);
     if (targetChanged) { credentialDraft.current = undefined; operationKeys.current.clear(); }
-  }, [request.id, request.revision, request.state, request.endpointAuthorization?.endpointTarget]);
+  }, [request.id, request.revision, request.state, request.endpointAuthorization?.endpointTarget, request.credentialTargetDigest]);
   useEffect(() => {
     if (!request.autoApplyAt || request.state !== "awaiting_confirmation") return;
     setNow(Date.now());
@@ -288,8 +293,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   }
   const title = m.capability[request.capabilityId] ?? request.capabilityId;
   const scope = `${m.scope[request.scope.kind]}${request.scope.kind !== "global" ? ` · ${request.scope.id}` : ""}`;
-  const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) => locale.startsWith("zh")
-    ? `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}` : option.label;
+  const describeChoice = (option: { kind: keyof typeof m.choiceKind; alternativeId?: string; label: string }) =>
+    `${m.choiceKind[option.kind]}${option.kind === "alternative" ? ` · ${option.alternativeId === "web-search" ? m.webSearchAlternative : option.label}` : ""}`;
   const choiceLabel = request.choiceReceipt ? describeChoice(request.choiceReceipt) : undefined;
   const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
   const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
@@ -299,7 +304,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "security.automatic_configuration"
-    ? m.mode.domainNextRequest : m.mode[request.activation.mode];
+    ? m.mode.domainNextRequest
+    : request.activation.mode === "next_request" && request.capabilityId === "web.credential"
+      ? m.mode.webCredentialNextRequest
+      : m.mode[request.activation.mode];
   const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = request.capabilityId === "security.approval_mode" && request.activation.state === "active" ? m.sessionApprovalActive
@@ -317,7 +325,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
     <p>{request.impact.message}</p>
     {request.changes.length ? <div className="configuration-diff" aria-label={m.changes}>
       <strong>{m.changes}</strong>
-      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
+      <ul>{request.changes.map((change, index) => <li key={`${change.field}:${index}`}><strong>{(request.capabilityId === "web.credential" || request.capabilityId === "web.configure") ? ownMessage(m.field, change.field, change.field) : change.field}</strong>: <span>{change.before ?? m.unset}</span> → <span>{change.after ?? m.unset}</span></li>)}</ul>
     </div> : null}
     <section className="configuration-verification" aria-label={m.verification}>
       <strong>{m.verification}</strong>
@@ -422,7 +430,9 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{locale.startsWith("zh") ? (request.capabilityId === "security.network" && field.id === "mode" ? m.field.networkMode : m.field[field.id]) ?? field.label : field.label}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{(request.capabilityId === "security.network" && field.id === "mode"
+            ? (locale.startsWith("zh") ? m.field.networkMode : field.label)
+            : ownMessage(m.field, field.id, field.label))}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}
@@ -436,8 +446,10 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
             <option value="">{m.choose}</option>
             {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
-              ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "security.approval_mode" && field.id === "approvalMode" && locale.startsWith("zh")
-                ? choice.id === "always_allow" ? "始终允许当前会话后续合格动作" : "危险动作前询问" : choice.label}</option>)}
+              ?.map((choice) => <option key={choice.id} value={choice.id}>{request.capabilityId === "web.credential" && field.id === "operation"
+                ? ownMessage(m.credentialOperation, choice.id, choice.label)
+                : request.capabilityId === "security.approval_mode" && field.id === "approvalMode" && locale.startsWith("zh")
+                  ? choice.id === "always_allow" ? "始终允许当前会话后续合格动作" : "危险动作前询问" : choice.label}</option>)}
           </select> : field.kind === "boolean" ? <input {...common} required={false} type="checkbox" checked={values[field.id] === true} onChange={(event) => edit(field, event.target.checked)} />
             : <input {...common} type={field.kind === "number" ? "number" : field.kind === "url" ? "url" : "text"}
               value={values[field.id] === undefined ? "" : String(values[field.id])} placeholder={field.placeholder}

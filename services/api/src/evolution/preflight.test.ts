@@ -216,6 +216,41 @@ test("a run with no isolation is refused rather than run unconfined", async () =
   assert.ok((await codes({}, { sandbox: none })).includes("sandbox_unavailable"));
 });
 
+test("direct execution is refused until the user confirms it for this run", async () => {
+  // `direct` is the Windows opt-in, and it is not a sandbox. The deployment
+  // flag only says the installation *may* run candidates unconfined; the goal's
+  // own flag is the user's answer to the warning, and a goal without it is a
+  // run nobody agreed to.
+  const direct: EvolveSandboxCapability = { ...SANDBOX, backend: "direct" };
+  assert.deepEqual(await codes({}, { sandbox: direct }), ["unisolated_run_unconfirmed"]);
+  assert.deepEqual(await codes({ allowUnisolated: true }, { sandbox: direct }), []);
+
+  const issue = (await preflight({
+    casHas: async () => true,
+    goal: goal(),
+    model: MODEL,
+    sandbox: direct,
+  })).find((candidate) => candidate.code === "unisolated_run_unconfirmed");
+  assert.match(issue?.message ?? "", /full file and network access/);
+  assert.match(issue?.fix ?? "", /--allow-direct/);
+});
+
+test("a confirmation cannot leak into a run that is still isolated", async () => {
+  // A goal may say yes while the host has a real sandbox; the sandbox wins and
+  // there is nothing to confirm.
+  assert.deepEqual(await codes({ allowUnisolated: true }), []);
+});
+
+test("a judged run needs no confirmation for direct execution", async () => {
+  // Nothing is executed, so there is nothing to warn about — the same reason a
+  // judged run needs no sandbox at all.
+  const direct: EvolveSandboxCapability = { ...SANDBOX, backend: "direct" };
+  assert.equal(
+    (await codes(judged(), { sandbox: direct })).includes("unisolated_run_unconfirmed"),
+    false,
+  );
+});
+
 test("a model that cannot be called is caught before the run exists", async () => {
   assert.ok((await codes({}, { model: undefined })).includes("model_missing"));
   assert.ok((await codes({}, { model: { ...MODEL, hasApiToken: false } })).includes("model_no_token"));

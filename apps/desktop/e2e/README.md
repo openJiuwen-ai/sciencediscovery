@@ -36,6 +36,15 @@ are the shared `.e2e/browsers` set. Neither is committed.
 
 Run one file by appending its name, for example `boot.spec.ts`.
 
+## This suite is a local gate, not a CI one
+
+No workflow runs `apps/desktop/e2e`: neither the config nor its port (4175)
+appears under `.github` or `.ci`, and `pnpm test` only runs
+`apps/desktop/tests/*.test.ts{,x}`. A spec added here is evidence when someone
+runs it by hand, and nothing will notice a regression in it. Wire it into a
+layer (pinned to the same Chromium as `.e2e`) or say plainly, in the PR that
+adds a spec, that the evidence is local — do not describe it as a CI gate.
+
 ## Specs
 
 | File | Journey |

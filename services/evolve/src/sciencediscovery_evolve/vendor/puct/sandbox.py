@@ -42,6 +42,14 @@ answers start to disagree.
    network are not. That is a weaker boundary than a per-directory allowlist and
    it is stated rather than glossed.
 
+   Windows has neither backend. There a run may use the **direct** backend
+   instead, and that is not a sandbox at all: the candidate runs with the user's
+   own file, network and environment access. The control plane only hands it
+   down for an installation that opted in *and* a goal that carries the user's
+   own confirmation, so the refusal lives there rather than here. What this file
+   still does for direct runs is pass a scrubbed environment instead of this
+   process's, so the candidate is not handed the sidecar's internal token.
+
    It is checked against the kernel rather than by reading the profile back —
    see `tests/test_puct_sandbox.py`.
 """
@@ -91,9 +99,16 @@ class SandboxUnavailable(RuntimeError):
 class SandboxCapability:
     """What the control plane's probe found, handed down with the run.
 
-    ``backend`` is ``"bwrap"``, ``"seatbelt"`` or ``None``. The two flags are
-    the container-specific corrections this repository learned the hard way and
-    that a bare ``which bwrap`` cannot see.
+    ``backend`` is ``"bwrap"``, ``"seatbelt"``, ``"direct"`` or ``None``. The
+    two flags are the container-specific corrections this repository learned
+    the hard way and that a bare ``which bwrap`` cannot see.
+
+    ``"direct"`` is Windows only. It is not isolation: the candidate runs with
+    the sidecar's own interpreter and the user's own file, network and
+    environment access. The control plane only sends it for an installation
+    that opted in, and it refuses a run whose goal does not carry the user's
+    confirmation — so this side can trust the backend it is told, the same way
+    it trusts the bwrap path.
     """
 
     backend: Optional[str] = None
@@ -106,7 +121,7 @@ class SandboxCapability:
 
     @property
     def available(self) -> bool:
-        return self.backend in ("bwrap", "seatbelt")
+        return self.backend in ("bwrap", "seatbelt", "direct")
 
 
 @lru_cache(maxsize=1)
@@ -156,6 +171,43 @@ def _python_roots() -> List[str]:
     return sorted(root for root in roots if root and Path(root).exists())
 
 
+#: What a direct-execution candidate inherits from this process's environment.
+#:
+#: An allowlist, not ``os.environ``. The sidecar holds the control plane's
+#: internal token, and a candidate is model-written code; handing it the whole
+#: environment would hand it that credential. These entries are what a Python
+#: interpreter and the common scientific stack need in order to start and
+#: import on Windows, and none of them names a secret.
+_DIRECT_ENV_KEYS = (
+    "SYSTEMDRIVE", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "OS",
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PUBLIC",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+)
+
+
+def _direct_env(scratch: Path) -> Dict[str, str]:
+    """The environment for a run with no sandbox (Windows).
+
+    ``PATH`` is kept because candidates and their evaluators legitimately call
+    out to the interpreter and to command-line tools; the thread caps are kept
+    because they are still what stops an OpenBLAS import from multiplying the
+    CPU a timeout measures. Everything else is either allowlisted above or
+    pointed at the scratch directory, so the candidate's temporaries stay with
+    the rest of its run.
+    """
+    env = dict(_THREAD_ENV)
+    env["PATH"] = os.environ.get("PATH", "")
+    for key in _DIRECT_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    # `tempfile` checks TMPDIR first and falls back to TEMP/TMP; all three point
+    # at the scratch directory so the three cannot disagree.
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        env[key] = str(scratch)
+    return env
+
+
 def sandbox_command(
     scratch: Path,
     inner: Sequence[str],
@@ -176,10 +228,25 @@ def sandbox_command(
     if not capability.available:
         raise SandboxUnavailable(
             "no candidate isolation available: install Bubblewrap (bwrap) on Linux, "
-            "or run on macOS where sandbox-exec ships with the system"
+            "run on macOS where sandbox-exec ships with the system, or confirm direct "
+            "execution for this run on Windows"
         )
 
     scratch = scratch.resolve()
+
+    if capability.backend == "direct":
+        # Windows only, and only for a goal that carries the user's
+        # confirmation — the control plane checks that before a run reaches
+        # this point. There is nothing to confine with: the interpreter starts
+        # as this process's own user, so the only work left here is to avoid
+        # handing the candidate the sidecar's secrets through the environment
+        # and to keep its temporaries in the scratch directory with the rest of
+        # its files.
+        direct_env = _direct_env(scratch)
+        if extra_env:
+            direct_env.update(extra_env)
+        return [sys.executable, "-I", *inner], direct_env
+
     env = dict(_THREAD_ENV)
     env["TMPDIR"] = str(scratch)
     env["PATH"] = "/usr/bin:/bin"

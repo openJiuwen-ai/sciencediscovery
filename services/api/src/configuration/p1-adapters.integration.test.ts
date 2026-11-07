@@ -44,6 +44,7 @@ test("CFG-T29/33: server registry keeps domain fields while the model transport 
     "quotas.configure", "review.configure", "skill.select", "thinking.configure", "timeouts.configure",
     "environment.sources", "runner.assign",
     "security.approval_mode", "security.automatic_configuration", "security.default_approval", "security.network",
+    "web.configure", "web.credential",
 
     "plugin.json_viewer", "reviewer.enable", "settings.inherit",
   ] as const) assert.ok(registeredIds.has(id), `Missing configuration capability: ${id}`);

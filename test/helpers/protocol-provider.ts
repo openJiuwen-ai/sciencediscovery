@@ -22,6 +22,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
   redirect?: (request: { path: string; body: Record<string, unknown> }) => string | undefined;
   usage?: "valid" | "missing" | "malformed";
   parallel?: boolean;
+  jsonResponse?: boolean;
   truncated?: boolean;
   invalidArgs?: boolean;
   status?: number;
@@ -55,7 +56,7 @@ export async function protocolProvider(selection: ModelApiProtocol | "all", opti
     const tool = (body.tools ?? []).some((t: any) => (t.name ?? t.function?.name) === "compatibility_echo") && !hasResult;
     const text = tool ? "" : options.acknowledgement ?? "OK";
     const items = [nativeState, ...(tool ? calls.map((c, index) => protocol === "anthropic-messages" ? { type: "tool_use", id: c.id, name: c.name, input: { value: "OK" } } : { type: "function_call", id: `item-${index}`, call_id: c.id, name: c.name, arguments: c.arguments }) : protocol === "anthropic-messages" ? [{ type: "text", text }] : [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }])];
-    if (!body.stream) {
+    if (!body.stream || options.jsonResponse) {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(protocol === "openai-chat-completions" ? { choices: [{ finish_reason: options.truncated ? "length" : tool ? "tool_calls" : "stop", message: { role: "assistant", content: text, ...(tool ? { tool_calls: calls.map(c => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })) } : {}) } }], usage }
         : protocol === "anthropic-messages" ? { type: "message", content: items, usage, stop_reason: options.truncated ? "max_tokens" : tool ? "tool_use" : "end_turn" }

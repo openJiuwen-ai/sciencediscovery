@@ -24,6 +24,7 @@ import { Composer, ExpertFlyout, ModelMenu, PermissionFlyout, SessionSettingsMen
 import { filterExperts } from "../src/views/expert-catalog.js";
 import { modelBrand } from "../src/views/model-brand.js";
 import { modelLabel } from "../src/views/provider-name.js";
+import { act, create } from "./support/dom-renderer.js";
 
 /** The dropdown only exists while open, and a static render never runs effects,
  *  so these cover the closed state: the triggers themselves. */
@@ -37,6 +38,7 @@ function render(
     limit?: string;
     projectName?: string;
     projects?: { id: string; name: string }[];
+    seededCommand?: { command: string; nonce: number; text: string };
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
   } = {},
@@ -63,6 +65,7 @@ function render(
       projectName={options.projectName}
       projects={(options.projects ?? []) as never}
       running={running}
+      seededCommand={options.seededCommand}
       selectedModelId="m1"
       tag={options.tag === undefined ? undefined : { ...options.tag, onClear: () => {} }}
       uploading={options.uploading ?? false}
@@ -72,12 +75,17 @@ function render(
 
 /** 会话设置's rows are rendered directly, since the menu they belong to is
  *  only mounted while open. */
-function settingsMenu(approvalMode?: "ask_for_dangerous" | "always_allow", running = false): string {
+function settingsMenu(
+  approvalMode?: "ask_for_dangerous" | "always_allow",
+  running = false,
+  evolve = false,
+): string {
   return renderToStaticMarkup(
     <SessionSettingsMenu
       approvalMode={approvalMode}
       onApprovalMode={() => {}}
       onClose={() => {}}
+      onEvolve={evolve ? () => {} : undefined}
       running={running}
     />,
   );
@@ -142,6 +150,17 @@ test("会话设置 carries 权限模式 and 专家, each with its current value"
   // Both rows open a panel; neither is a dead end.
   assert.match(markup, /aria-haspopup="true"/);
   assert.match(markup, /为此对话绑定一位个人专家。/);
+});
+
+test("会话设置 carries the way into program evolution above its own settings", () => {
+  const markup = settingsMenu("ask_for_dangerous", false, true);
+  assert.match(markup, />程序演进实验</);
+  // It is an action, not a setting: it has no current value and no flyout.
+  assert.ok(markup.indexOf("程序演进实验") < markup.indexOf("权限模式"));
+  assert.doesNotMatch(markup, /aria-haspopup="true"[\s\S]*?程序演进实验/);
+
+  // Without somewhere to go — a static render — the row is not drawn.
+  assert.doesNotMatch(settingsMenu(), /程序演进实验/);
 });
 
 test("a permission option says on screen what it allows", () => {
@@ -322,4 +341,120 @@ test("a row's mark comes from its provider, then from its name", () => {
   assert.equal(modelBrand({ model: "my-model", name: "my-model" }), "custom");
   assert.equal(modelLabel("月之暗面 · Kimi-K3"), "Kimi-K3");
   assert.equal(modelLabel("Kimi-K3"), "Kimi-K3");
+});
+
+test("a design's command is a token in front of the sentence, not text", () => {
+  const markup = render(false, {
+    seededCommand: { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" },
+  });
+  assert.match(markup, /class="composer-command"/u);
+  assert.match(markup, /composer-command-text">\/evolve-design --algorithm puct</u);
+  // The goal the dialog collected is the sentence after the token, ready to be
+  // completed.
+  assert.match(markup, /<textarea[^>]*>让压缩比更高<\/textarea>/u);
+  // The dialog proposed the search, so the token can be taken back: it carries
+  // its own ✕ rather than leaving sending as the only way out.
+  assert.match(markup, /aria-label="移除指令"/u);
+  // Once a search is seeded the composer is not waiting for any request; it
+  // asks for the one sentence the design still needs.
+  assert.match(markup, /placeholder="请描述你想要优化的对象和评估标准"/u);
+  assert.equal(render(false).includes("请描述你想要优化的对象和评估标准"), false);
+});
+
+test("sending a seeded design joins the token to the sentence once", async () => {
+  const sent: { command?: string; content: string }[] = [];
+  let view;
+  await act(async () => {
+    view = create(
+      <Composer
+        attachments={[]}
+        landing
+        models={[{ id: "m1", name: "测试模型" } as never]}
+        onApprovalMode={() => {}}
+        onClearAttachments={() => {}}
+        onCreateProject={() => {}}
+        onOpenSettings={() => {}}
+        onRemoveAttachment={() => {}}
+        onRetryAttachment={() => {}}
+        onSelectModel={() => {}}
+        onSelectProject={() => {}}
+        onSend={(content, command) => { sent.push({ command, content }); }}
+        onStop={() => {}}
+        onUpload={() => {}}
+        projects={[]}
+        running={false}
+        seededCommand={{ command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" }}
+        selectedModelId="m1"
+        uploading={false}
+      />,
+    );
+  });
+  try {
+    const area = view.root.findByProps({ id: "composer-textarea" });
+    await act(async () => {
+      (area.props.onChange as (event: { target: { value: string } }) => void)({
+        target: { value: "让压缩比更高，并且要快" },
+      });
+    });
+    const send = view.root.findByProps({ "aria-label": "发送" });
+    await act(async () => { (send.props.onClick as () => void)(); });
+    // The flags and the sentence travel together, in that order.
+    assert.deepEqual(sent, [
+      { command: "/evolve-design --algorithm puct", content: "让压缩比更高，并且要快" },
+    ]);
+    // The token belonged to that message: the next draft starts empty.
+    assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "");
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("a design's flags can be taken back without losing the sentence", async () => {
+  const cleared: string[] = [];
+  const element = (seededCommand: { command: string; nonce: number; text: string } | undefined) => (
+    <Composer
+      attachments={[]}
+      landing
+      models={[{ id: "m1", name: "测试模型" } as never]}
+      onApprovalMode={() => {}}
+      onClearAttachments={() => {}}
+      onClearCommand={() => { cleared.push("cleared"); }}
+      onCreateProject={() => {}}
+      onOpenSettings={() => {}}
+      onRemoveAttachment={() => {}}
+      onRetryAttachment={() => {}}
+      onSelectModel={() => {}}
+      onSelectProject={() => {}}
+      onSend={() => { cleared.push("sent"); }}
+      onStop={() => {}}
+      onUpload={() => {}}
+      projects={[]}
+      running={false}
+      seededCommand={seededCommand}
+      selectedModelId="m1"
+      uploading={false}
+    />
+  );
+  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" };
+  let view;
+  await act(async () => { view = create(element(seeded)); });
+  try {
+    const close = view.root.findByProps({ "aria-label": "移除指令" });
+    await act(async () => { (close.props.onClick as () => void)(); });
+    // The flags are gone and nothing was sent; the goal the dialog collected
+    // is still the draft, because it is the reader's sentence.
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+    assert.equal(view.root.findByProps({ id: "composer-textarea" }).props.value, "让压缩比更高");
+    assert.deepEqual(cleared, ["cleared"]);
+
+    // The shell dropping the seed takes the token with it — this is what a
+    // session switch does, and the composer survives that switch.
+    await act(async () => { view.update(element({ ...seeded, nonce: 2 })); });
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), true);
+    await act(async () => { view.update(element(undefined)); });
+    assert.equal(view.root.findAllByType("span").some((node) => node.props.className === "composer-command"), false);
+  } finally {
+    await act(async () => { view.unmount(); });
+  }
 });

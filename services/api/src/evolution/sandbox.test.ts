@@ -31,7 +31,7 @@ import { platform } from "node:process";
 import { resolve } from "node:path";
 
 
-import { probeEvolveSandbox, toSidecarCapability } from "./sandbox.js";
+import { probeEvolveSandbox, sandboxForPlatform, toSidecarCapability } from "./sandbox.js";
 
 test("the probe names the binary it probed, not a name to look up again", async (t) => {
   if (platform === "darwin") {
@@ -64,4 +64,29 @@ test("the probe names the binary it probed, not a name to look up again", async 
 test("a configured absolute path is passed through untouched", async () => {
   const capability = await probeEvolveSandbox("/opt/custom/bwrap");
   assert.equal(capability.bwrapPath, "/opt/custom/bwrap");
+});
+
+test("Windows has no backend unless the installation opted in", () => {
+  // The opt-in is the desktop's own, never a default: a server deployment that
+  // happened to run on Windows must not start executing model-written code
+  // unconfined because the platform has no bwrap.
+  const refused = sandboxForPlatform("win32");
+  assert.equal(refused?.backend, null);
+  assert.match(refused?.reason ?? "", /has not enabled direct execution/);
+
+  const optedIn = sandboxForPlatform("win32", { unisolated: true });
+  // `assert.ok` narrows the optional return; a `!` does the same narrowing by
+  // assertion, which the repo's CodeCheck reads as redundant.
+  assert.ok(optedIn);
+  assert.equal(optedIn.backend, "direct");
+  assert.equal(toSidecarCapability(optedIn).backend, "direct");
+  // An explicit `false` is not a truthy accident either.
+  assert.equal(sandboxForPlatform("win32", { unisolated: false })?.backend, null);
+});
+
+test("macOS is answered without probing, and Linux is left to the probe", () => {
+  assert.equal(sandboxForPlatform("darwin")?.backend, "seatbelt");
+  // Linux carries container-specific corrections only a real probe can find,
+  // so this helper must not answer for it.
+  assert.equal(sandboxForPlatform("linux"), undefined);
 });

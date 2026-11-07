@@ -12,6 +12,8 @@ import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { createRunnerConfigurationAdapter } from "./runner-adapter.js";
+import { createWebCredentialAdapter } from "./web-credential-adapter.js";
+import { createWebConfigurationAdapter } from "./web-adapter.js";
 import { createInheritanceAdapter } from "./inherit-adapter.js";
 import { createReviewerEnableAdapter } from "./reviewer-enable-adapter.js";
 import { createJsonViewerAdapter } from "./json-viewer-adapter.js";
@@ -125,7 +127,7 @@ export class ConversationalConfigurationFramework {
     this.security = new ConfigurationSecurityAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), createSessionApprovalAdapter(store, () => Boolean(this.options.sessionApprovalCleanup)), createDefaultApprovalAdapter(store), createAutomaticConfigurationAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), createRunnerConfigurationAdapter(store), createInheritanceAdapter(store), createReviewerEnableAdapter(store), createJsonViewerAdapter(store), createWebCredentialAdapter(store, this.credentials, () => this.options.nativeExecutor), createWebConfigurationAdapter(store, () => this.options.nativeExecutor ? "native" : "jiuwenswarm"), createSecurityNetworkAdapter(store, () => Boolean(this.options.securityNetworkCleanup)), createSessionApprovalAdapter(store, () => Boolean(this.options.sessionApprovalCleanup)), createDefaultApprovalAdapter(store), createAutomaticConfigurationAdapter(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor || this.options.jiuwenLiveWait === true)]) {
       if (configurationNeedsSecurityConsent(adapter.id)) {
         const apply = adapter.apply;
         if (!apply) throw new Error("Security policy adapters require a synchronous domain apply");
@@ -156,7 +158,7 @@ export class ConversationalConfigurationFramework {
         afterCommit: () => this.flushNotices(),
         projectEndpointAuthorization: record => this.destinations.view(record),
         projectSecurityConsent: record => this.security.view(record),
-        snapshot: (sessionId, capabilityId, target) => store.configurationSnapshot(sessionId, capabilityId, target),
+        snapshot: (sessionId, capabilityId, target) => this.snapshot(sessionId, capabilityId, target),
         choiceOptions: input => input.capabilityId === "connector.enable" && input.runId && this.options.nativeExecutor
           ? nativeConnectorChoiceOptions({ store, sessionId: input.sessionId, runId: input.runId,
             ready: this.options.connector(input.sessionId, String(input.input.connectorId))?.ready === true }) : [
@@ -203,6 +205,12 @@ export class ConversationalConfigurationFramework {
       } });
   }
 
+  private snapshot(sessionId: string, capabilityId: import("@sciencediscovery/schema").ConfigurationCapabilityId, target: string) {
+    const snapshot = this.store.configurationSnapshot(sessionId, capabilityId, target);
+    if (capabilityId === "web.configure") snapshot.resourceVersions.webBackend = this.options.nativeExecutor ? "native" : "jiuwenswarm";
+    return snapshot;
+  }
+
   async propose(sessionId: string, input: ConfigurationProposalInput, key?: string): Promise<ConfigurationRequestView> {
     const previous = this.proposalQueues.get(sessionId) ?? Promise.resolve();
     const work = previous.catch(() => undefined).then(() => this.proposeSerial(sessionId, input, key));
@@ -231,7 +239,7 @@ export class ConversationalConfigurationFramework {
         const adapter = this.service.registry.get(input.capabilityId);
         const normalized = adapter.normalize(input.values);
         const target = adapter.target(normalized);
-        const baseline = this.store.configurationSnapshot(sessionId, input.capabilityId, target);
+        const baseline = this.snapshot(sessionId, input.capabilityId, target);
         const needKey = configurationNeedKey({ runId: input.runId, capabilityId: input.capabilityId, target, snapshot: baseline });
         const prior = this.repository.list(sessionId).find(record => record.view.runId === input.runId && record.view.needKey === needKey
           && record.view.state === "dismissed" && ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? ""));
@@ -507,8 +515,10 @@ export class ConversationalConfigurationFramework {
           && !this.store.executionBlocks.configurationWait(this.waitOwner(source))) return false;
         const latest = this.repository.get(id, sessionId);
         if (!latest || latest.view.state !== "applied" || latest.approvedRevision !== saved.revision || latest.approvedDigest !== saved.previewDigest) return false;
-        const snapshot = this.store.configurationSnapshot(sessionId, source.view.capabilityId, source.target);
-        return snapshot.stopGeneration === source.stopGeneration && nativeExecutionDependenciesCurrent(this.store, source, saved);
+        const snapshot = this.snapshot(sessionId, source.view.capabilityId, source.target);
+        return snapshot.stopGeneration === source.stopGeneration && (source.view.capabilityId === "web.configure"
+          ? canonical(snapshot.resourceVersions) === canonical(saved.resourceVersions)
+          : nativeExecutionDependenciesCurrent(this.store, source, saved));
       },
       activate: async (source, saved) => {
         if (!this.options.nativeExecutor && source.view.runId) {

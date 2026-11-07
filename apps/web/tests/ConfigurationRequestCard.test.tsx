@@ -16,6 +16,35 @@ import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("CFG-X02b: changing Web provider clears the typed key and cannot recover it by switching back", async () => {
+  const renderer = await mount(request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
+    { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }, { id: "exa", label: "Exa" }] },
+    { id: "apiToken", kind: "credential", label: "Web key", required: true, status: "missing" }] }));
+  await act(async () => renderer.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "belongs-only-to-jina" } }));
+  await act(async () => renderer.root.findByProps({ name: "webProvider" }).props.onChange({ target: { value: "exa" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => renderer.root.findByProps({ name: "webProvider" }).props.onChange({ target: { value: "jina" } }));
+  assert.equal(renderer.root.findByProps({ name: "apiToken" }).props.value, "");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-X02b: a backend target change during Web preview clears the old key before any upload", async () => {
+  let latest = request({ capabilityId: "web.credential", credentialTargetDigest: "sha256:jina-native", fields: [
+    { id: "webProvider", kind: "enum", label: "Web provider", value: "jina", required: true, choices: [{ id: "jina", label: "Jina" }] },
+    { id: "apiToken", kind: "credential", label: "Web key", required: true, status: "missing" }] });
+  let renderer: ReactTestRenderer; let uploads = 0;
+  const api = actions({ preview: async input => ({ ...latest, revision: input.expectedRevision + 1, credentialTargetDigest: "sha256:jina-jiuwen" }),
+    credential: async () => { uploads++; return { handle: "must-not-upload", expiresAt: "2099-01-01T00:00:00Z" }; } });
+  const draw = () => createElement(ConfigurationRequestCard, { request: latest, actions: api,
+    onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); } });
+  await act(async () => { renderer = create(draw()); });
+  await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "backend-bound-fixture" } }));
+  await act(async () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.equal(uploads, 0); assert.equal(renderer!.root.findByProps({ name: "apiToken" }).props.value, "");
+  assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /backend-bound-fixture/);
+  await act(async () => renderer!.unmount());
+});
+
 test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
   assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
@@ -804,6 +833,80 @@ test("CFG-R11 Chinese alternatives retain their distinct destinations", async ()
   assert.ok(labels.includes("改用可用的替代路径 · 使用现有网页检索"));
   assert.ok(labels.includes("改用可用的替代路径 · Local library"));
   await act(async () => renderer.unmount());
+});
+
+test("CFG English web.configure input labels use the message table instead of raw field ids", async () => {
+  const rawIds = ["maxResults", "deepseekEnabled", "fetchProvider", "freeSearchEngines", "paidSearchProviders", "searchCacheTtlSeconds", "fetchCacheTtlSeconds", "proxyPolicy"];
+  const renderer = await mount(request({ capabilityId: "web.configure", fields: [
+    { id: "deepseekEnabled", label: "deepseekEnabled", kind: "boolean", required: false, value: false },
+    { id: "fetchProvider", label: "Fetch provider saved for JiuwenSwarm", kind: "enum", required: false, value: "jina", choices: [{ id: "jina", label: "jina" }] },
+    { id: "freeSearchEngines", label: "freeSearchEngines", kind: "multiselect", required: false, value: ["bing"], choices: [{ id: "bing", label: "bing" }] },
+    { id: "paidSearchProviders", label: "paidSearchProviders", kind: "multiselect", required: false, value: [], choices: [{ id: "exa", label: "exa" }] },
+    { id: "searchCacheTtlSeconds", label: "searchCacheTtlSeconds", kind: "number", required: false, value: 3600 },
+    { id: "fetchCacheTtlSeconds", label: "fetchCacheTtlSeconds", kind: "number", required: true, value: 3600 },
+    { id: "proxyPolicy", label: "proxyPolicy", kind: "enum", required: false, value: "direct", choices: [{ id: "direct", label: "direct" }] },
+    { id: "operatorNote", label: "Operator note", kind: "text", required: false, value: "" },
+  ] }), actions(), () => undefined, "en");
+  const labels = renderer.root.findAllByType("label").map(item => item.children.join(""));
+  assert.deepEqual(labels, [
+    "Enable DeepSeek Web search", "Fetch provider", "Free search engines", "Paid search providers",
+    "Search cache TTL (seconds)", "Fetch cache TTL (seconds) *", "Proxy policy", "Operator note",
+  ]);
+  for (const id of rawIds) assert.equal(labels.some(label => label === id || label.startsWith(`${id} `)), false, id);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG English choices and credential operations use the message table, with an unknown option falling back", async () => {
+  const choices = await mount(choiceRequest(), actions(), () => undefined, "en");
+  const described = choices.root.findAllByType("strong").map(item => item.children.join(""));
+  assert.ok(described.includes("Save configuration"));
+  assert.ok(described.includes("Use only for this task"));
+  assert.ok(described.includes("Use an available alternative · Use Web search"));
+  assert.equal(described.includes("Save for this session"), false);
+  assert.equal(described.includes("Use for this task"), false);
+  await act(async () => choices.unmount());
+
+  for (const [locale, replace, clear, unknown] of [
+    ["en", "Replace key", "Clear stored key", "Rotate later"],
+    ["zh", "替换密钥", "清除已存密钥", "稍后轮换"],
+  ] as const) {
+    const renderer = await mount(request({ capabilityId: "web.credential", fields: [
+      { id: "operation", label: "operation", kind: "enum", required: true, value: "replace", choices: [
+        { id: "replace", label: "replace" }, { id: "clear", label: "clear" }, { id: "later", label: unknown },
+      ] },
+    ] }), actions(), () => undefined, locale);
+    const options = renderer.root.findAllByType("option").map(item => item.children.join(""));
+    assert.deepEqual(options, [locale === "zh" ? "请选择" : "Choose an option", replace, clear, unknown]);
+    assert.equal(renderer.root.findByType("label").children.join("").startsWith(locale === "zh" ? "凭据操作" : "Credential operation"), true);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG message-table lookups ignore inherited prototype keys and keep the server label", async () => {
+  for (const locale of ["en", "zh"] as const) {
+    const renderer = await mount(request({ capabilityId: "web.credential", fields: [
+      { id: "toString", label: "Server field label", kind: "text", required: false, value: "" },
+      { id: "operation", label: "operation", kind: "enum", required: true, value: "replace", choices: [
+        { id: "replace", label: "replace" },
+        { id: "toString", label: "Server operation label" },
+        { id: "constructor", label: "Server constructor label" },
+      ] },
+    ], changes: [{ field: "toString", before: "old", after: "new" }] }), actions(), () => undefined, locale);
+    const labels = renderer.root.findAllByType("label").map(item => item.children.join(""));
+    assert.ok(labels.includes("Server field label"), locale);
+    assert.equal(labels.some(label => label.startsWith(locale === "zh" ? "凭据操作" : "Credential operation")), true, locale);
+    const options = renderer.root.findAllByType("option").map(item => item.children.join(""));
+    assert.deepEqual(options, [
+      locale === "zh" ? "请选择" : "Choose an option",
+      locale === "zh" ? "替换密钥" : "Replace key",
+      "Server operation label",
+      "Server constructor label",
+    ]);
+    const changeLabels = renderer.root.findByProps({ className: "configuration-diff" }).findAllByType("strong").map(item => item.children.join(""));
+    assert.deepEqual(changeLabels, [locale === "zh" ? "拟修改内容" : "Proposed changes", "toString"]);
+    assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /function toString|function Object/);
+    await act(async () => renderer.unmount());
+  }
 });
 
 test("CFG-R04 a repair target changed by intermediate preview clears the old key and never uploads it, even to a trusted preset", async () => {

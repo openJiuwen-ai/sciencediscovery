@@ -56,6 +56,53 @@ test("deletion admission failure is not a poisoned version store after a success
   await until(() => manager.get("after-rollback", owner).state === "completed");
 });
 
+test("a preflight rejection records a deterministic pre-admission failure without poisoning the workspace", async (context) => {
+  const { manager, workspace } = await fixture(context);
+  let launched = false;
+  const submitted = manager.submit(request(workspace, "blocked-shell"),
+    async () => { launched = true; return result("blocked-shell"); },
+    async () => { throw new Error("Managed Bash is unavailable: ENOENT"); });
+  assert.equal(submitted.accepted, true);
+  await until(() => manager.get("blocked-shell", owner).state === "failed");
+  const record = manager.get("blocked-shell", owner);
+  assert.equal(launched, false, "a rejected preflight must not launch the operation");
+  assert.equal(record.error, "Managed Bash is unavailable: ENOENT");
+  assert.equal(record.startedAt, undefined, "no process joined, so no start time is invented");
+  assert.equal(record.result, undefined);
+  assert.equal(record.version, undefined, "a pre-admission failure publishes no workspace version");
+  assert.equal(record.evidence?.terminationReason, "not_started");
+  assert.equal(record.evidence?.processTerminated, true);
+  assert.equal(record.evidence?.runnerInstanceId, record.receipt?.runnerInstanceId);
+  assert.equal(record.evidence?.revision, record.receipt?.revision);
+  // The rejected admission never reaches the workspace catch, which would
+  // mark the workspace as failed for every later execution.
+  manager.start(request(workspace, "after-preflight"), async () => result("after-preflight"));
+  await until(() => manager.get("after-preflight", owner).state === "completed");
+});
+
+test("a preflight recheck at admission catches a Shell that became unavailable while queued", async (context) => {
+  const { manager, workspace } = await fixture(context);
+  let release!: () => void;
+  const latch = new Promise<void>((done) => { release = done; });
+  manager.start(request(workspace, "holds-queue"), async () => { await latch; return result("holds-queue"); });
+  await until(() => manager.get("holds-queue", owner).state === "running");
+  // The API precheck passed before this request waited behind earlier work in
+  // the same Workspace queue.
+  let available = true;
+  const queued = manager.submit(request(workspace, "rechecked-shell"),
+    async () => { assert.fail("an unavailable Shell must never launch"); },
+    async () => { if (!available) throw new Error("Managed Bash became unavailable"); });
+  assert.equal(queued.execution.state, "queued");
+  available = false;
+  release();
+  await until(() => manager.get("rechecked-shell", owner).state === "failed");
+  assert.equal(manager.get("holds-queue", owner).state, "completed");
+  const record = manager.get("rechecked-shell", owner);
+  assert.equal(record.error, "Managed Bash became unavailable");
+  assert.equal(record.startedAt, undefined);
+  assert.equal(record.evidence?.terminationReason, "not_started");
+});
+
 test("background admission does not block observers; one workspace queues, another runs, CAS commits before release", async (context) => {
   const { manager, workspace, root } = await fixture(context);
   let release!: () => void;

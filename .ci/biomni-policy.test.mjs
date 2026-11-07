@@ -7,15 +7,17 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
-import { evaluateSuite, temporaryVerdict, percentile, renderSuite, dataset, manifestHash } from './biomni-gate.mjs';
+import { evaluateSuite, temporaryVerdict, percentile, renderSuite, dataset, l5Tasks, manifestHash } from './biomni-gate.mjs';
 import { MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'os:windows', 'os:macos', 'arch:amd64', 'arch:arm64'] });
 const policy = JSON.parse(readFileSync(new URL('./biomni-gate.json', import.meta.url)));
-const baseline = policy.temporary_baseline;
+const historical = policy.temporary_baseline;
+const baseline = { ...historical, total_tokens: historical.total_tokens * 45 / 50,
+  tool_rounds: historical.tool_rounds * 45 / 50, sum_e2e_ms: historical.sum_e2e_ms * 45 / 50 };
 function fixture() {
   const plan = { profile: 'release', revision: 'candidate', evaluatorRevision: 'evaluator',
     execution: { backend: 'jiuwenswarm', model: 'generator', judge: 'judge' },
-    entries: dataset.tasks.map(t => ({ key: t.id, id: `BiomniBench-${t.id} analysis`,
+    entries: l5Tasks.map(t => ({ key: t.id, id: `BiomniBench-${t.id} analysis`,
       source: 'test/biomnibench-da-swarm.spec.ts', target: { os: 'linux', arch: 'arm64' } })) };
   const documents = plan.entries.map(e => ({ schema_version: 2, benchmark: 'biomnibench-da', case_id: e.key, key: e.key,
     revision: plan.revision, integration_status: 'passed', evaluation: { status: 'scored', score: 70, gating: true },
@@ -28,6 +30,21 @@ function fixture() {
       memory_samples: 2, memory_interval_ms: 1000, memory_scope: 'isolated-local-worker-rss-sum' } }));
   return { plan, documents };
 }
+
+test('active sum budgets preserve per-case headroom without relabelling historical means or P95', () => {
+  const verdict = temporaryVerdict(baseline, policy);
+  for (const metric of verdict.metrics) {
+    assert.equal(metric.historical_baseline, historical[metric.metric]);
+    const additive = ['total_tokens', 'tool_rounds', 'sum_e2e_ms'].includes(metric.metric);
+    assert.equal(metric.budget_scale, additive ? 0.9 : 1);
+    if (additive) {
+      const rule = policy.thresholds[metric.metric];
+      assert.ok(Math.abs(metric.block / 45 - historical[metric.metric] * (1 + rule.block) / 50) < 1e-6);
+    } else assert.equal(metric.baseline, historical[metric.metric]);
+  }
+  const wrongPopulation = { ...policy, temporary_population: { reference_case_count: 50, active_case_count: 50 } };
+  assert.deepEqual(temporaryVerdict(baseline, wrongPopulation).problems, ['INVALID_TEMPORARY_POPULATION_POLICY']);
+});
 
 test('score boundaries are inclusive and improvements do not warn', () => {
   assert.equal(temporaryVerdict(baseline, policy).warnings.length, 0);
@@ -52,15 +69,20 @@ test('P95 uses linear interpolation and does not substitute the maximum', () => 
   assert.equal(percentile([1, 2, 3, 4, 100], .95), 80.79999999999998);
 });
 
-test('aggregate gate reports all fifty tasks and does not gate individual low scores', () => {
+test('aggregate gate reports all active tasks and does not gate individual low scores', () => {
   const { plan, documents } = fixture();
   documents[0].measurements.score = documents[0].evaluation.score = 0;
   const report = evaluateSuite(plan, documents, policy);
   assert.equal(report.status, 'temporary_baseline_passed');
-  assert.equal(report.summary.mean_score, 68.6);
-  assert.equal(report.case_statuses.length, 50);
+  assert.equal(report.summary.mean_score, 68.44444444444444);
+  assert.equal(report.case_statuses.length, 45);
+  assert.equal(report.scope, 'public-45-active');
+  assert.equal(report.dataset_scope, 'public-50');
+  assert.equal(report.excluded_case_ids.length, 5);
+  assert.equal(report.baseline_population.sum_budget_scale, 0.9);
+  assert.match(renderSuite(report), /have not been remeasured/);
   assert.equal(report.non_regression_certified, false);
-  assert.match(renderSuite(report), /da-1-3 \| completed/);
+  assert.match(renderSuite(report), /da-3-4 \| completed/);
 });
 
 test('missing task prevents certification and remains visible in the per-task report', () => {
@@ -91,7 +113,7 @@ test('serial CLI emits both JSON and Markdown, and returns failure for an incomp
     return spawnSync(process.execPath, [cli, join(root, 'plan.json'), join(root, 'metrics.json'), root], { encoding: 'utf8' });
   };
   assert.equal(run(documents).status, 0);
-  assert.match(readFileSync(join(root, 'biomni-gate.md'), 'utf8'), /50\/50/);
+  assert.match(readFileSync(join(root, 'biomni-gate.md'), 'utf8'), /45\/45/);
   assert.equal(run(documents.slice(1)).status, 1);
   assert.equal(JSON.parse(readFileSync(join(root, 'biomni-gate.json'))).status, 'failed');
 });

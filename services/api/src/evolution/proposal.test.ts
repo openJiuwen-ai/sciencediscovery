@@ -58,6 +58,7 @@ function proposal(over: Partial<EvolveRunProposal> = {}): EvolveRunProposal {
 function deps(over: Partial<ProposalDeps> = {}) {
   const stored: Array<{ content?: string; path?: string }> = [];
   const base: ProposalDeps = {
+    approvedUnisolated: true,
     casHas: async () => true,
     model: () => ({ hasApiToken: true, id: "m1", name: "M" }),
     modelId: "m1",
@@ -86,6 +87,60 @@ test("a coherent proposal becomes a run, and the probe's numbers come back with 
   assert.equal(result.refusedBecause, undefined);
 });
 
+test("a goal records direct execution only when the host has none and the user allowed it", async () => {
+  // The proposal carries the user's answer; the host decides whether it means
+  // anything. Both have to agree before a goal can claim its candidates ran
+  // unconfined — one is a checkbox on a machine that has a sandbox, the other
+  // is the only place the flag could honestly come from.
+  const startWith = async (
+    backend: "bwrap" | "direct",
+    allowed: boolean | undefined,
+    approvedUnisolated = true,
+  ) => {
+    let started: EvolveGoal | undefined;
+    const { deps: d } = deps({
+      approvedUnisolated,
+      orchestrator: {
+        probe: async () => ({
+          baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1,
+        }),
+        sandboxCapability: async () => ({
+          backend, bwrapPath: "bwrap", disableUserns: false, procMode: "proc",
+        }),
+        start: async (input: { goal: EvolveGoal }) => {
+          started = input.goal;
+          return { id: "run-1", status: "running" };
+        },
+      } as never,
+    });
+    const result = await startProposedRun(
+      proposal(allowed === undefined ? {} : { allowUnisolated: allowed }), d,
+    );
+    return { result, started };
+  };
+
+  const allowed = await startWith("direct", true);
+  assert.equal(allowed.result.refusedBecause, undefined);
+  assert.equal(allowed.started?.allowUnisolated, true);
+
+  // No confirmation: refused before a run exists, and nothing was started.
+  const refused = await startWith("direct", undefined);
+  assert.match(refused.result.refusedBecause ?? "", /without isolation/);
+  assert.equal(refused.started, undefined);
+
+  // The model asked, but the user's own command never approved it — the tool
+  // argument is not consent, so the goal gets nothing to run unconfined with.
+  const unapproved = await startWith("direct", true, false);
+  assert.match(unapproved.result.refusedBecause ?? "", /without isolation/);
+  assert.equal(unapproved.started, undefined);
+
+  // A host with a real sandbox: the flag is dropped, not merely ignored, so a
+  // run card cannot carry a warning badge for a run that was confined.
+  const isolated = await startWith("bwrap", true);
+  assert.equal(isolated.result.refusedBecause, undefined);
+  assert.equal("allowUnisolated" in (isolated.started ?? {}), false);
+});
+
 test("a model with no thinking control is budgeted as a thinking model", async () => {
   // The proposal's default asks for thinking off, and the ceiling follows that
   // setting. On a dialect with no thinking-control field the request is
@@ -104,7 +159,7 @@ test("a model with no thinking control is budgeted as a thinking model", async (
         },
       } as never,
     });
-    const result = await startProposedRun(proposal(), d);
+    const result = await startProposedRun(proposal({ thinking: "disabled" }), d);
     assert.equal(result.refusedBecause, undefined);
     return started;
   };
@@ -159,6 +214,70 @@ test("the budget the checkpoint shows is the budget the run starts with", async 
         `${where}: saying "thinking off" was overridden obliges the run to actually be a thinking run`);
     }
   }
+});
+
+test("the pace the user chose is recorded on the run, and silence means confirm", async () => {
+  let seen: EvolveGoal | undefined;
+  const world = () => deps({
+    orchestrator: {
+      probe: async () => ({ baseline: 0.4, flat: false, label: "return value replaced with a constant", worsened: 0.1 }),
+      sandboxCapability: async () => ({ available: true, backend: "bwrap" }),
+      start: async ({ goal }: { goal: EvolveGoal }) => {
+        seen = goal;
+        return { id: "run-1", status: "running" };
+      },
+    } as never,
+  });
+
+  await startProposedRun(proposal(), world().deps);
+  // An agent that has not heard the flag — or an older client that cannot send
+  // one — gets the pace every run had before the switch existed.
+  assert.equal(seen?.checkpointMode, "confirm");
+
+  await startProposedRun(proposal({ checkpointMode: "auto" }), world().deps);
+  assert.equal(seen?.checkpointMode, "auto");
+});
+
+test("background goals freeze inherited effort, explicit overrides and the high fallback", async () => {
+  for (const [parent, explicit, expected] of [
+    ["low", undefined, "low"], ["low", "medium", "medium"], [undefined, undefined, "high"],
+  ] as const) {
+    let goal: EvolveGoal | undefined;
+    const { deps: d } = deps({ thinking: "enabled", thinkingEffort: parent });
+    d.orchestrator.start = (async (input: { goal: EvolveGoal }) => {
+      goal = input.goal;
+      return { id: "run-1", status: "running" };
+    }) as never;
+    const result = await startProposedRun(proposal({ thinkingEffort: explicit }), d);
+    assert.equal(result.refusedBecause, undefined);
+    assert.equal(goal?.thinking, "enabled");
+    assert.equal(goal?.thinkingEffort, expected);
+    const plan = describeEvolveBudget(undefined, "enabled", expected);
+    assert.equal(goal?.budget.maxTokensPerCall, plan.perCallCeiling.puct);
+    assert.equal(goal?.thinkingEffort, plan.thinking.effort);
+    d.thinkingEffort = "max";
+    assert.equal(goal?.thinkingEffort, expected, "later settings cannot alter a frozen goal");
+  }
+});
+
+test("automatic goals retain effort for the snapshot but stay provider-default on the wire", async () => {
+  let goal: EvolveGoal | undefined;
+  const { deps: d } = deps({ thinking: "auto" });
+  d.orchestrator.start = (async (input: { goal: EvolveGoal }) => {
+    goal = input.goal;
+    return { id: "run-1", status: "running" };
+  }) as never;
+  const result = await startProposedRun(proposal(), d);
+  assert.equal(result.refusedBecause, undefined);
+  assert.equal(goal?.thinking, "auto");
+  assert.equal(goal?.thinkingEffort, "high");
+});
+
+test("automatic budget keeps auto mode while retaining the high effort fallback", () => {
+  const plan = describeEvolveBudget(undefined, "auto");
+  assert.equal(plan.thinking.effective, "auto");
+  assert.equal(plan.thinking.effort, "high");
+  assert.equal(plan.perCallCeiling.puct, 96_000);
 });
 
 test("the probe's own verdict reaches the agent unwrapped", async () => {

@@ -55,6 +55,28 @@ test("readFeedbackInstallId returns a stable id and persists it", () => {
   assert.notEqual(fresh, first);
 });
 
+test("readFeedbackInstallId keeps one id when storage throws on read", () => {
+  const storage: FeedbackStorage = {
+    getItem: () => { throw new Error("storage disabled"); },
+    setItem: () => { throw new Error("storage disabled"); },
+  };
+  const first = readFeedbackInstallId(storage);
+  const second = readFeedbackInstallId(storage);
+  assert.ok(first.length > 0);
+  assert.equal(second, first);
+});
+
+test("readFeedbackInstallId keeps one id when the write is rejected", () => {
+  const storage: FeedbackStorage = {
+    getItem: () => null,
+    setItem: () => { throw new Error("quota exceeded"); },
+  };
+  const first = readFeedbackInstallId(storage);
+  const second = readFeedbackInstallId(storage);
+  assert.ok(first.length > 0);
+  assert.equal(second, first);
+});
+
 test("emptyFeedbackDraft defaults to bug with diagnostics included", () => {
   assert.deepEqual(emptyFeedbackDraft(), {
     kind: "bug",

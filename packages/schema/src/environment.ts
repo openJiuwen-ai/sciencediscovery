@@ -289,6 +289,12 @@ export interface ShellExecutionRequest extends ShellRecoveryOptions {
 export interface ShellExecutionResult extends Omit<ScientificExecutionResult, "environmentRevisionId" | "language"> {
   /** Rooted publication receipt; separate from the content tree. */
   workspaceVersion?: ScientificExecutionResult["workspaceSnapshot"];
+  /** Actionable interpretation of a Shell failure; stderr remains the source evidence. */
+  diagnostic?: {
+    code: "COMMAND_NOT_FOUND";
+    command: string;
+    instruction: string;
+  };
   environmentRevisionId: string;
   language: "shell";
 }
@@ -513,6 +519,13 @@ export interface RunnerExecutionCapability {
   ready: boolean;
   reason: "ready" | "dependency-unavailable" | "incompatible" | "sandbox-unusable";
   detail?: string;
+  platform?: "linux" | "macos" | "windows";
+  shell?: {
+    available: boolean;
+    name: "bash";
+    utilities: string[];
+    unavailableReason?: string;
+  };
 }
 
 export interface ExecutionBlock {
