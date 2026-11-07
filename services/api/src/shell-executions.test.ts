@@ -137,6 +137,55 @@ test("four consecutive Runner status transport failures do not turn accepted wor
   assert.equal(observations, 5);
 });
 
+test("a Runner accepted request whose pre-admission failure is deterministic settles failed, not unknown", async (context) => {
+  // The Runner accepted the managed request and refused it before launching a
+  // process: a terminal `failed` record with `not_started` evidence and no
+  // result or workspace version. The API must settle that as committed,
+  // because a 503 for the same condition would be indistinguishable from a
+  // lost submission and would block the workspace.
+  const f = await fixture(context); let submitted = 0;
+  const failed = (id: string): ManagedExecution => ({ ...owner, id, state: "failed",
+    queuedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z",
+    error: "Managed Bash is unavailable: ENOENT", receipt: receipt(),
+    evidence: { runnerInstanceId: "original-ledger", runnerBootId: "boot-one", revision: 1,
+      processTerminated: true, terminationReason: "not_started" } });
+  const runner = {
+    startShellExecution: async (input: ShellExecutionRequest) => { submitted++; return failed(input.executionId); },
+    getShellExecution: async () => { throw new Error("a terminal submit response must not be observed again"); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)));
+  const record = await f.service.wait(job.id, owner, 1_000);
+  assert.equal(record.state, "failed");
+  assert.equal(record.provenance, "committed", "a pre-admission failure is recorded, not left unconfirmed");
+  assert.equal(record.error, "Managed Bash is unavailable: ENOENT");
+  assert.equal(record.result, undefined, "no execution result is fabricated");
+  assert.equal(record.evidence?.terminationReason, "not_started");
+  assert.equal(record.startedAt, undefined, "the API must not file a start time for a process that never ran");
+  assert.equal(record.observation?.status, "fresh");
+  assert.equal(submitted, 1);
+  assert.equal(f.notices.unread(owner).length, 1);
+});
+
+test("a true submit-outcome-unknown still stays unconfirmed and blocks the workspace", async (context) => {
+  // Network failure on the submit call proves nothing about whether the
+  // Runner ran the command, so it must not reuse the deterministic-failure
+  // path added for a Runner's own pre-admission rejection.
+  const f = await fixture(context); let submissions = 0;
+  const runner = {
+    startShellExecution: async () => { submissions++; throw new TypeError("fetch failed"); },
+    getShellExecution: async () => { throw Object.assign(new Error("not found"), { statusCode: 404 }); },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext);
+  const record = await f.service.wait(job.id, owner, 1_000);
+  assert.equal(record.state, "unknown");
+  assert.equal(record.provenance, "unconfirmed");
+  assert.equal(record.observation?.lastError?.code, "SUBMIT_OUTCOME_UNKNOWN");
+  // The same workspace stays blocked; the unknown work is never resubmitted.
+  await assert.rejects(f.service.start(owner, identity, () => runner, (id, dispatch) => dispatch(request(id)), recoveryContext),
+    { code: "ORIGINAL_EXECUTION_UNCONFIRMED" });
+  assert.equal(submissions, 1);
+});
+
 test("a successful Runner observation clears the consecutive transport failure count", async (context) => {
   const f = await fixture(context);
   const waits: number[] = [];

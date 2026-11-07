@@ -143,6 +143,81 @@ for (const action of ["retry", "cancel", "switch"] as const) {
   });
 }
 
+async function shellPrecheckBindings(t: TestContext, capability: () => Record<string, unknown>) {
+  const root = await mkdtemp(resolve(tmpdir(), "shell-precheck-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const queue = new ExecutionBlocks(); t.after(() => queue.close());
+  const shellDispatches: Array<Record<string, unknown>> = [];
+  const pythonDispatches: Array<Record<string, unknown>> = [];
+  const runnerClient = { executionCapability: async () => capability() } as unknown as RunnerClient;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main", executionId: "run", sessionId: "session", workspaceRoot: root, permissionScopeLabel: "test",
+    runnerClient,
+    permission: { getEpoch: () => ({ id: "epoch" }), requirePrivilege: async () => undefined } as unknown as AgentPermissionRuntime,
+    provenanceRecorder: {
+      executeShell: async (input: Record<string, unknown>) => {
+        shellDispatches.push(input); return { exitCode: 0, stdout: "ok", stderr: "" };
+      },
+      executePython: async (input: Record<string, unknown>) => {
+        pythonDispatches.push(input); return { exitCode: 0, stdout: "ok", stderr: "" };
+      },
+    } as unknown as ProvenanceRecorder,
+    store: { dataDir: root, executionBlocks: queue, assertSessionWritable() {}, assertSessionAllowsRunner() {},
+      effectiveRunnerIds: () => ["local"], npuDeviceSelection: () => [], resolveSandboxEgressProxy: () => undefined,
+    } as unknown as SessionStore,
+  });
+  return { bindings, queue, shellDispatches, pythonDispatches };
+}
+
+test("an explicitly unavailable managed Shell blocks run_shell before any execution record exists", async t => {
+  const unavailableReason = "Managed Bash is missing required utilities: head";
+  const f = await shellPrecheckBindings(t, () => ({ ready: true, reason: "ready",
+    shell: { available: false, name: "bash", utilities: [], unavailableReason } }));
+  let operationId = "";
+  await assert.rejects(f.bindings.executeShell!("echo hi", "ephemeral"), (error: Error) => {
+    const result = JSON.parse(error.message);
+    operationId = result.operationId;
+    assert.equal(result.code, "RUNNER_UNAVAILABLE");
+    assert.equal(result.dispatched, false);
+    assert.equal(result.runner.ready, false);
+    assert.equal(result.runner.reason, unavailableReason);
+    assert.match(result.instruction, /no Shell execution record was created/);
+    return true;
+  });
+  assert.equal(f.shellDispatches.length, 0, "no Shell execution is recorded or dispatched");
+  // The failed call is a real blocked operation the Agent can discuss, not a
+  // throw with no continuation path.
+  const waiting = f.bindings.runnerReadiness!.wait(operationId);
+  for (let i = 0; i < 50 && !f.queue.list("session").length; i++) await new Promise(resolve => setImmediate(resolve));
+  const block = f.queue.list("session")[0]!;
+  assert.equal(block.reason, unavailableReason);
+  f.queue.decide("session", block.id, { action: "retry" });
+  const decided = await waiting as { dispatched: boolean; runner: { ready: boolean } };
+  assert.equal(decided.dispatched, false, "a failed recheck never executes the call");
+  assert.equal(decided.runner.ready, false);
+});
+
+test("a Shell gap never blocks Python execution on the same Runner", async t => {
+  const f = await shellPrecheckBindings(t, () => ({ ready: true, reason: "ready",
+    shell: { available: false, name: "bash", utilities: [],
+      unavailableReason: "Managed Bash is missing required utilities: head" } }));
+  await f.bindings.executePython!("print('ok')");
+  assert.equal(f.pythonDispatches.length, 1);
+  assert.equal(f.shellDispatches.length, 0);
+});
+
+for (const [label, capability] of [
+  ["an older Runner that cannot report a Shell capability", () => ({ ready: true, reason: "ready" })],
+  ["a ready Runner whose managed Shell is available", () => ({ ready: true, reason: "ready",
+    shell: { available: true, name: "bash", utilities: ["cat", "grep", "head", "sed", "tail", "wc"] } })],
+] as Array<[string, () => Record<string, unknown>]>) {
+  test(`run_shell still dispatches on ${label}`, async t => {
+    const f = await shellPrecheckBindings(t, capability);
+    await f.bindings.executeShell!("echo hi", "ephemeral");
+    assert.equal(f.shellDispatches.length, 1, "only an explicit unavailability blocks the call");
+  });
+}
+
 test("failed recheck returns to the Agent; a second explicit wait is cancellable and checks authorization", async t => {
   const dataDir = await mkdtemp(resolve(tmpdir(), "runner-recheck-"));
   t.after(() => rm(dataDir, { recursive: true, force: true }));
