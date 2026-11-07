@@ -24,6 +24,8 @@
 
 import type {
   EffectiveRuntimeSettings,
+  JiuwenSwarmSkill,
+  JiuwenSwarmSkillsResponse,
   ModelProvider,
   ModelProviderPreset,
   RuntimeSettingsOverrides,
@@ -47,6 +49,8 @@ export type {
   EnvironmentSourceSettings,
   FreeSearchEngine,
   IdeaTreeSettingsDetails,
+  JiuwenSwarmSkill,
+  JiuwenSwarmSkillsResponse,
   KernelSession,
   McpProxyPolicies,
   MemoryGraphSettingsDetails,

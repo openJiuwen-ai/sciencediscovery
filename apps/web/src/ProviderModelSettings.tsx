@@ -49,6 +49,7 @@ import {
 import type { SettingsApiClient } from "./api/settings.js";
 import { isAuthFailure } from "./api/auth.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
+import { ModelDeletionDialog } from "./ModelDeletionDialog.js";
 import { ModelConnectWizard } from "./ModelConnectWizard.js";
 import { modelOptionLabel } from "./modelLabels.js";
 import {
@@ -621,6 +622,15 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   const [listings, setListings] = useState<Record<string, ListingState>>({});
   const [expandedId, setExpandedId] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [deletion, setDeletion] = useState<{ name: string; removedIds: string[]; provider: boolean; resolve: (replacement: string | null | false) => void }>();
+  const pendingDeletion = useRef<((replacement: string | null | false) => void) | undefined>(undefined);
+  useEffect(() => () => pendingDeletion.current?.(false), []);
+  function confirmDeletion(name: string, removedIds: string[], provider = false): Promise<string | null | false> {
+    return new Promise(resolve => {
+      pendingDeletion.current = resolve;
+      setDeletion({ name, removedIds, provider, resolve });
+    });
+  }
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
   const listingRequests = useRef(new Map<string, number>());
 
@@ -751,10 +761,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 
   async function deleteProvider(): Promise<void> {
     if (!draft?.providerId || busy) return;
-    if (!window.confirm(t("providers.delete.confirm", { name: draft.name }))) return;
+    const replacement = await confirmDeletion(draft.name, models.filter(model => model.providerId === draft.providerId).map(model => model.id), true);
+    if (replacement === false) return;
     setBusy(true);
     try {
-      await client.deleteProvider(draft.providerId);
+      await client.deleteProvider(draft.providerId, replacement);
       let nextProviders = providers.filter((provider) => provider.id !== draft.providerId);
       try {
         nextProviders = (await client.listProviders()).providers;
@@ -826,11 +837,12 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   async function deleteModel(providerId: string, modelId: string, profileId: string): Promise<boolean> {
     if (busy) return false;
     const target = models.find((model) => model.id === profileId);
-    if (!window.confirm(t("providers.models.deleteConfirm", { name: target?.name ?? modelId }))) return false;
+    const replacement = await confirmDeletion(target?.name ?? modelId, [profileId]);
+    if (replacement === false) return false;
     setBusy(true);
     try {
       const deleted = target;
-      await client.deleteModel(profileId);
+      await client.deleteModel(profileId, replacement);
       onModelsChange(models.filter((model) => model.id !== profileId));
       setListings((current) => {
         const listing = current[providerId]?.list;
@@ -865,6 +877,17 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 
   const existing = draft?.providerId ? providers.find((provider) => provider.id === draft.providerId) : undefined;
   return <div className="provider-settings">
+    {deletion ? <ModelDeletionDialog
+      name={deletion.name}
+      provider={deletion.provider}
+      replacingDefault={defaultModelId !== undefined && deletion.removedIds.includes(defaultModelId)}
+      models={models.filter(model => !deletion.removedIds.includes(model.id))}
+      onDecision={replacement => {
+        deletion.resolve(replacement);
+        pendingDeletion.current = undefined;
+        setDeletion(undefined);
+      }}
+    /> : null}
     <ModelCatalogStatus
       {...(catalog ? { catalog } : {})}
       client={client}

@@ -551,7 +551,7 @@ function buildWorkspaceProvenanceIndex(
 }
 
 export class SessionStoreHttpError extends Error {
-  constructor(message: string, readonly statusCode: 400 | 404 | 409 | 503) {
+  constructor(message: string, readonly statusCode: 400 | 404 | 409 | 503, readonly code?: string) {
     super(message);
     this.name = "SessionStoreHttpError";
   }
@@ -1007,7 +1007,6 @@ export class SessionStore {
     const migratedProviders = JSON.stringify(providers) !== JSON.stringify(savedProviders);
     const migratedModels = JSON.stringify(models) !== JSON.stringify(savedModels);
     const modelIds = new Set(models.map((model) => model.id));
-    const fallbackModelId = models[0]?.id;
     const defaultGlobalSettings = emptyCatalog(this.initialTimeoutSettings, this.initialQuotaSettings).globalSettings;
     const normalizedGlobalSettings = saved.globalSettings === undefined
       ? undefined
@@ -1183,7 +1182,6 @@ export class SessionStore {
     const epochIds = new Set(permissionEpochs.map((epoch) => epoch.id));
     let migratedEpoch = false;
     let migratedSessionSettings = false;
-    let migratedSessionAssignments = false;
     const savedSessions = Array.isArray(saved.sessions) ? saved.sessions : [];
     const sessions = savedSessions.map((session) => {
       let permissionEpochId = session.permissionEpochId;
@@ -1203,11 +1201,9 @@ export class SessionStore {
       if (!Array.isArray(session.enabledConnectorIds)
         || !Array.isArray(session.enabledSkillIds)
         || session.semanticReviewEnabled === undefined) migratedSessionSettings = true;
-      const modelId = session.modelId && modelIds.has(session.modelId) ? session.modelId : fallbackModelId;
-      const reviewModelId = session.reviewModelId && modelIds.has(session.reviewModelId)
-        ? session.reviewModelId
-        : modelId ?? fallbackModelId;
-      if (modelId !== session.modelId || reviewModelId !== session.reviewModelId) migratedSessionAssignments = true;
+      // Legacy catalogs stored the session choice in compatibility fields.
+      const modelId = session.modelId;
+      const reviewModelId = session.reviewModelId;
       const enabledConnectorIds = Array.isArray(session.enabledConnectorIds)
         ? session.enabledConnectorIds.filter((id): id is ConnectorId => this.connectorIds.has(id))
         : [];
@@ -1230,10 +1226,23 @@ export class SessionStore {
         ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds)
         : {
             enabledConnectorIds,
-            ...(modelId ? { modelId } : {}),
-            ...(reviewModelId ? { reviewModelId } : {}),
+            ...(modelId && modelIds.has(modelId) ? { modelId } : {}),
+            ...(reviewModelId && modelIds.has(reviewModelId) ? { reviewModelId } : {}),
             semanticReviewEnabled,
           };
+      // Persisted session overrides keep their explicit model references even
+      // when the profile is gone, so the choice still blocks inherited fallbacks.
+      if (isRecord(session.settingsOverrides)) {
+        for (const field of ["modelId", "reviewModelId"] as const) {
+          const raw = session.settingsOverrides[field];
+          if (typeof raw === "string" && !modelIds.has(raw)) {
+            settingsOverrides[field] = raw;
+          }
+        }
+      } else {
+        if (typeof modelId === "string") settingsOverrides.modelId = modelId;
+        if (typeof reviewModelId === "string") settingsOverrides.reviewModelId = reviewModelId;
+      }
       const savedApproval = session as Omit<Session, "approvalMode"> & {
         approvalMode?: Session["approvalMode"] | "never_ask";
       };
@@ -1477,7 +1486,6 @@ export class SessionStore {
       || migratedEnvironmentRevisions
       || migratedEpoch
       || migratedSessionSettings
-      || migratedSessionAssignments
       || migratedSessionOverrides
       || migratedSubagents
       || recoveredStoredSubagents
@@ -2305,6 +2313,15 @@ export class SessionStore {
         if (!hasOwn(overrides, field)) continue;
         const value = overrides[field];
         if (value === undefined) continue;
+        // Model references that no longer resolve to an installed profile are
+        // recorded at the layer that set them, with an empty effective value.
+        // This makes an explicit but invalid choice block inheritance instead of
+        // silently falling back to a lower layer.
+        if ((field === "modelId" || field === "reviewModelId") && typeof value === "string" && !this.getModel(value)) {
+          delete effective[field];
+          sources[field] = source;
+          continue;
+        }
         if (field === "plugins") effective.plugins = mergePluginSettings(effective.plugins, value as RuntimeSettingsOverrides["plugins"]);
         else if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
@@ -2341,11 +2358,14 @@ export class SessionStore {
     const { effective } = this.resolveRuntimeSettings(session.id);
     session.enabledConnectorIds = [...effective.enabledConnectorIds];
     session.enabledSkillIds = [...effective.enabledSkillIds];
-    session.modelId = effective.modelId;
-    session.reviewModelId = effective.reviewModelId;
     session.semanticReviewEnabled = effective.semanticReviewEnabled;
     session.thinkingEffort = effective.thinkingEffort;
     session.thinkingMode = effective.thinkingMode;
+    // Compatibility mirrors always reflect the resolved effective model,
+    // including when no model is selected. Runs snapshot the effective settings
+    // at queue time, so historical model references are preserved there.
+    session.modelId = effective.modelId;
+    session.reviewModelId = effective.reviewModelId;
   }
 
   private syncSessionCompatibilityForProject(projectId?: string): void {
@@ -2687,7 +2707,9 @@ export class SessionStore {
         level: values.level ?? reviewer.level,
       });
     } else throw new Error("Unsupported P1 capability");
-    const next = this.normalizeSettings({ ...current, ...patch });
+    const next = scope.kind === "session"
+      ? this.normalizeSessionOverrides({ ...current, ...patch }, current)
+      : this.normalizeSettings({ ...current, ...patch });
     if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
     else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
     session.updatedAt = new Date().toISOString();
@@ -3331,10 +3353,10 @@ export class SessionStore {
           proposal.state = "stale";
         } else {
           // Add to the latest effective set so inherited entries are preserved.
-          session.settingsOverrides = this.normalizeSettings({
+          session.settingsOverrides = this.normalizeSessionOverrides({
             ...session.settingsOverrides,
             enabledConnectorIds: [...effective, proposal.connectorId],
-          });
+          }, session.settingsOverrides);
           this.syncSessionCompatibility(session);
           proposal.state = "applied";
         }
@@ -3492,7 +3514,9 @@ export class SessionStore {
   }
 
   private replaceRuntimeOverridesSync(scope: ConfigurationScope, value: unknown): void {
-    const normalized = this.normalizeSettings(value);
+    const normalized = scope.kind === "session"
+      ? this.normalizeSessionOverrides(value, this.assertSessionWritable(scope.id).settingsOverrides)
+      : this.normalizeSettings(value);
     if (scope.kind === "global") {
       this.catalog.globalSettings = withoutSkillSelection(normalized);
       this.syncSessionCompatibilityForProject();
@@ -3603,6 +3627,21 @@ export class SessionStore {
     });
   }
 
+  /** Keep an existing unavailable choice while validating every new field value. */
+  private normalizeSessionOverrides(value: unknown, previous: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
+    if (!isRecord(value)) return this.normalizeSettings(value);
+    const input = { ...value };
+    const unavailable: RuntimeSettingsOverrides = {};
+    for (const field of ["modelId", "reviewModelId"] as const) {
+      const id = input[field];
+      if (typeof id === "string" && id === previous[field] && !this.getModel(id)) {
+        unavailable[field] = id;
+        delete input[field];
+      }
+    }
+    return { ...this.normalizeSettings(input), ...unavailable };
+  }
+
   async replaceSessionSettings(sessionId: string, value: unknown, assertCurrent?: () => void): Promise<RuntimeSettingsDetails> {
     return this.withSettingsMutation(async () => {
       assertCurrent?.();
@@ -3689,7 +3728,7 @@ export class SessionStore {
       return { modelId: profile.id };
     } else throw new Error("Unsupported configuration capability");
     session.updatedAt = new Date().toISOString();
-    session.settingsOverrides = this.normalizeSettings(session.settingsOverrides);
+    session.settingsOverrides = this.normalizeSessionOverrides(session.settingsOverrides, session.settingsOverrides);
     this.syncSessionCompatibility(session);
     return typeof values.modelId === "string" ? { modelId: values.modelId } : {};
   }
@@ -3776,6 +3815,7 @@ export class SessionStore {
   private defaultGlobalTaskModel(profile: ModelProfile): void {
     if (!this.catalog.globalSettings.modelId) {
       this.catalog.globalSettings.modelId = profile.id;
+      this.syncSessionCompatibilityForProject();
     }
   }
 
@@ -3801,27 +3841,67 @@ export class SessionStore {
       this.setModelApiToken(modelId, normalizeApiToken(input.apiToken));
       profile.hasApiToken = true;
     }
-    // Heals catalogs from before auto-defaulting existed: re-saving a usable
-    // model claims the still-unset global task model slot.
-    if (profile.hasApiToken) this.defaultGlobalTaskModel(profile);
     await this.saveCatalog();
     return profile;
   }
 
-  async deleteModel(modelId: string): Promise<void> {
-    const profile = this.getModel(modelId);
-    if (!profile) throw new Error("Model not found");
-    const referencesModel = (settings: RuntimeSettingsOverrides) =>
-      settings.modelId === modelId || settings.reviewModelId === modelId;
-    if (referencesModel(this.catalog.globalSettings)
-      || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides))
-      || this.catalog.sessions.some((session) =>
-        session.modelId === modelId || session.reviewModelId === modelId || referencesModel(session.settingsOverrides))) {
-      throw new Error("Model is referenced by runtime settings and cannot be deleted");
+  async deleteModel(modelId: string, replacementModelId?: string | null): Promise<void> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      if (!this.getModel(modelId)) throw new Error("Model not found");
+      this.removeModelResources([modelId], replacementModelId);
+    });
+  }
+
+  /** Catalog, defaults, compatibility mirrors and encrypted secrets commit together. */
+  private removeModelResources(modelIds: string[], replacementModelId?: string | null, providerId?: string): void {
+    this.validateReplacementModelId(modelIds, replacementModelId);
+    const replacesDefault = modelIds.includes(this.catalog.globalSettings.modelId ?? "");
+    const database = this.getConfigurationDatabase();
+    const previous = this.snapshotCatalogForRollback();
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of modelIds) {
+        this.clearRuntimeModelReferences(id);
+        this.setModelApiToken(id, undefined);
+      }
+      this.catalog.models = this.catalog.models.filter(model => !modelIds.includes(model.id));
+      if (providerId) {
+        this.setProviderApiToken(providerId, undefined);
+        this.catalog.providers = this.catalog.providers.filter(provider => provider.id !== providerId);
+      }
+      // A stale confirmation must never overwrite another window's new default.
+      if (replacesDefault && replacementModelId) this.catalog.globalSettings.modelId = replacementModelId;
+      this.syncSessionCompatibilityForProject();
+      database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
+        .run(JSON.stringify(this.persistedCatalog()));
+      this.flushSideTables(database);
+      database.exec("COMMIT");
+      this.clearPendingSideTables();
+    } catch (error) {
+      database.exec("ROLLBACK");
+      this.restoreCatalog(previous);
+      throw error;
     }
-    this.setModelApiToken(modelId, undefined);
-    this.catalog.models = this.catalog.models.filter((model) => model.id !== modelId);
-    await this.saveCatalog();
+  }
+
+  /** Validate that a replacement model id is a string that exists and is not one
+   *  of the models being deleted. `null` is an explicit "leave unset" sentinel. */
+  private validateReplacementModelId(deletedModelIds: string[], replacementModelId?: string | null): void {
+    if (replacementModelId === undefined || replacementModelId === null) return;
+    if (typeof replacementModelId !== "string") throw new SessionStoreHttpError("replacementModelId must be a string or null", 400);
+    if (deletedModelIds.includes(replacementModelId)) throw new SessionStoreHttpError("Replacement cannot be a deleted model", 400);
+    if (!this.getModel(replacementModelId)) throw new SessionStoreHttpError("Replacement model not found", 400);
+  }
+
+  /** Clear defaults while retaining explicit session overrides as unavailable choices. */
+  private clearRuntimeModelReferences(modelId: string): void {
+    if (this.catalog.globalSettings.modelId === modelId) delete this.catalog.globalSettings.modelId;
+    if (this.catalog.globalSettings.reviewModelId === modelId) delete this.catalog.globalSettings.reviewModelId;
+    for (const project of this.catalog.projects) {
+      if (project.settingsOverrides.modelId === modelId) delete project.settingsOverrides.modelId;
+      if (project.settingsOverrides.reviewModelId === modelId) delete project.settingsOverrides.reviewModelId;
+    }
   }
 
   listProviders(): ModelProvider[] {
@@ -3910,25 +3990,13 @@ export class SessionStore {
     return provider;
   }
 
-  async deleteProvider(providerId: string): Promise<void> {
-    const provider = this.getProvider(providerId);
-    if (!provider) throw new Error("Provider not found");
-    const children = this.catalog.models.filter((model) => model.providerId === providerId);
-    const referencesModel = (settings: RuntimeSettingsOverrides, id: string) =>
-      settings.modelId === id || settings.reviewModelId === id;
-    for (const child of children) {
-      if (referencesModel(this.catalog.globalSettings, child.id)
-        || this.catalog.projects.some((project) => referencesModel(project.settingsOverrides, child.id))
-        || this.catalog.sessions.some((session) =>
-          session.modelId === child.id || session.reviewModelId === child.id || referencesModel(session.settingsOverrides, child.id))) {
-        throw new Error("Provider models are referenced by runtime settings and cannot be deleted");
-      }
-    }
-    for (const child of children) this.setModelApiToken(child.id, undefined);
-    this.setProviderApiToken(providerId, undefined);
-    this.catalog.models = this.catalog.models.filter((model) => model.providerId !== providerId);
-    this.catalog.providers = this.catalog.providers.filter((entry) => entry.id !== providerId);
-    await this.saveCatalog();
+  async deleteProvider(providerId: string, replacementModelId?: string | null): Promise<void> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      if (!this.getProvider(providerId)) throw new Error("Provider not found");
+      const children = this.catalog.models.filter(model => model.providerId === providerId);
+      this.removeModelResources(children.map(model => model.id), replacementModelId, providerId);
+    });
   }
 
   /** Ensure a profile backs the given provider/model pair so the rest of the
@@ -4319,7 +4387,9 @@ export class SessionStore {
       { overrides: settingsOverrides, source: "session" },
     ]);
     const selectedModel = this.getModel(resolved.effective.modelId);
-    if (!selectedModel && !options.allowUnconfiguredModel) throw new Error("A task model is required");
+    if (!selectedModel && !options.allowUnconfiguredModel) {
+      throw new SessionStoreHttpError("A task model is required", 400, "SESSION_MODEL_UNAVAILABLE");
+    }
     if (selectedModel && !this.getModelApiToken(selectedModel.id)
       && !this.modelAllowsMissingToken(selectedModel) && !options.allowUnconfiguredModel) {
       throw new Error("The task model must have a saved API token");
@@ -6133,7 +6203,7 @@ export class SessionStore {
       const session = this.assertSessionWritable(sessionId);
       const { approvalMode, autoApplyLowRiskConfiguration, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
       const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
-      const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+      const nextSettings = this.normalizeSessionOverrides({ ...session.settingsOverrides, ...settingsChanges }, session.settingsOverrides);
       if (nextSettings.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       const nextModel = this.getModel(nextSettings.modelId);
       if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {

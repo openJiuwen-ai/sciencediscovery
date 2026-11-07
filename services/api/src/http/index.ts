@@ -18,6 +18,7 @@ import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { createResearchSnapshots } from "../research-snapshots.js";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
+import { prepareSkillSandbox } from "../skill-sandbox.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
@@ -26,13 +27,14 @@ import { researchPackagePlugin } from "@sciencediscovery/research-package/plugin
 import { createResearchPackageAsync, type ImportedResearchPackage } from "@sciencediscovery/research-package";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { sessionTrajectory } from "../trajectory.js";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
-import { listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
+import { importSkillsToJiuwenSwarm, listJiuwenSwarmSkills, setJiuwenSwarmLanguage, setJiuwenSwarmSkillEnabled } from "../agent-run/jiuwenswarm-skills.js";
 import { syncWebSettingsToJiuwenSwarm } from "../agent-run/jiuwenswarm-web-settings.js";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
 type ResearchPackageInspectionCacheEntry = { projectId: string; bytes: Buffer; imported: ImportedResearchPackage; expiresAt: number };
@@ -304,7 +306,7 @@ import { modelUsageAnalyticsToCsv } from "../model-usage.js";
 import { UsageExchangeRateProvider } from "../exchange-rates.js";
 import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
-import { readBytes, readJson, readMultipartSkill } from "./body.js";
+import { readBytes, readJson, readMultipartSkill, readOptionalJson } from "./body.js";
 import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
@@ -399,6 +401,16 @@ function usageAnalyticsFilters(url: URL) {
 function usageDisplayCurrency(url: URL): "CNY" | "USD" | undefined {
   const value = url.searchParams.get("displayCurrency");
   return value === "CNY" || value === "USD" ? value : undefined;
+}
+
+function extractReplacementModelId(body: unknown): string | null | undefined {
+  if (body === undefined) return undefined;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new ApiStatusError(400, "Deletion options must be an object");
+  if (!("replacementModelId" in body)) return undefined;
+  if (body.replacementModelId === null) return null;
+  if (typeof body.replacementModelId === "string") return body.replacementModelId;
+  if (body.replacementModelId === undefined) return undefined;
+  throw new ApiStatusError(400, "replacementModelId must be a string or null");
 }
 
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
@@ -1626,6 +1638,58 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { enabled: body.enabled, name });
         return;
       }
+      const jiuwenSwarmSkillByIdMatch = url.pathname.match(/^\/api\/jiuwenswarm\/skills-by-id\/([^/]+)$/);
+      if (jiuwenSwarmSkillByIdMatch && request.method === "PUT") {
+        if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
+        const body = await readJson<{ enabled?: unknown }>(request);
+        if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
+        const skillId = decodeURIComponent(jiuwenSwarmSkillByIdMatch[1]!);
+        let snapshot: RuntimeSkillSnapshot;
+        try {
+          snapshot = skillCatalog.resolve([skillId])[0]!;
+        } catch (error) {
+          throw new ApiStatusError(404, error instanceof Error ? error.message : String(error));
+        }
+        let existingName: string | undefined;
+        try {
+          for (const skill of await listJiuwenSwarmSkills(jiuwenSwarm)) {
+            if (skill.skillId === skillId) {
+              existingName = skill.name;
+              break;
+            }
+          }
+        } catch (error) {
+          throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
+        }
+        if (existingName) {
+          try {
+            await setJiuwenSwarmSkillEnabled(jiuwenSwarm, existingName, body.enabled);
+          } catch (error) {
+            throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
+          }
+          sendJson(response, 200, { enabled: body.enabled, name: existingName, skillId });
+          return;
+        }
+        if (!body.enabled) {
+          sendJson(response, 200, { enabled: false, name: null, skillId });
+          return;
+        }
+        const tempRoot = join(tmpdir(), randomUUID());
+        const packagesRoot = join(tempRoot, "packages");
+        try {
+          await prepareSkillSandbox(packagesRoot, join(tempRoot, "workspace"), [snapshot]);
+          const imported = await importSkillsToJiuwenSwarm(jiuwenSwarm, [{ hash: snapshot.hash, id: snapshot.id }], packagesRoot);
+          const name = imported.get(snapshot.id);
+          if (!name) throw new ApiStatusError(502, "JiuwenSwarm did not import the skill");
+          await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, true);
+          sendJson(response, 200, { enabled: true, name, skillId });
+        } catch (error) {
+          throw new ApiStatusError(502, error instanceof Error ? error.message : String(error));
+        } finally {
+          await rm(tempRoot, { force: true, recursive: true });
+        }
+        return;
+      }
       if (url.pathname === "/api/memory/settings" && request.method === "GET") {
         // 1C: merge the live sidecar health so the settings editor's badge
         // needs no independent polling. 3A: if a password is stored but the
@@ -2461,7 +2525,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (modelMatch && request.method === "DELETE") {
-        await store.deleteModel(modelMatch[1]!);
+        const body = await readOptionalJson<{ replacementModelId?: unknown }>(request);
+        const replacementModelId = extractReplacementModelId(body);
+        await store.deleteModel(modelMatch[1]!, replacementModelId);
         sendJson(response, 200, { deleted: modelMatch[1] });
         return;
       }
@@ -2528,7 +2594,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (providerMatch && request.method === "DELETE") {
-        await store.deleteProvider(providerMatch[1]!);
+        const body = await readOptionalJson<{ replacementModelId?: unknown }>(request);
+        const replacementModelId = extractReplacementModelId(body);
+        await store.deleteProvider(providerMatch[1]!, replacementModelId);
         providerModelListCache.delete(providerMatch[1]!);
         sendJson(response, 200, { deleted: providerMatch[1] });
         return;
@@ -4265,7 +4333,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
-      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message, error instanceof SessionEvidenceLockedError ? error.code : undefined);
+      else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message, error.code);
       else if (error instanceof IdeaTreePersistenceError || error instanceof IdeaTreeRuntimeError) {
         sendError(
           response,
