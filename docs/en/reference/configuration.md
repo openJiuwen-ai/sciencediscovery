@@ -48,7 +48,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API-to-memory-graph token |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | Memory-graph log level |
 | `SCIENCE_AGENT_MEMORY_GRAPH_BACKEND` | `local` | Storage backend the memory-graph service starts with (`local` or `neo4j`); the API overrides it from System Settings → Memory |
-| `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` | `~/.science-agent/memory-graph` | Where the local backend keeps `nodes.jsonl` and `edges.jsonl` |
+| `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` | `<data-dir>/memory-graph` under `scripts/start-stack.mjs` and the single-file launcher; `~/.science-agent/memory-graph` under `scripts/start-stack.sh` or a directly launched service | Where the local backend keeps `nodes.jsonl` and `edges.jsonl`; an explicit value wins verbatim, and an existing store is not moved automatically |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | Initial sandbox wall-clock timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240` (10 GiB) | Runner workspace quota (`0` is unlimited); also seeds system settings |
 | `SCIENCE_AGENT_MAX_OUTPUT_BYTES` | `1073741824` (1 GiB) | Retained stdout+stderr per execution; excess is truncated (`0` disables truncation) |

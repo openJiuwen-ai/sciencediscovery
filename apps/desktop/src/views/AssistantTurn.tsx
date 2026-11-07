@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 
 import { Markdown } from "../Markdown.js";
 import type { ApiClient } from "../api/client.js";
@@ -21,7 +21,13 @@ import { TEXT } from "../text.js";
 import type { AssistantTurn as Turn, PermissionEntry, RunStreamState } from "../run-stream/model.js";
 import { permissionMatchingKey, pendingPermissions } from "../run-stream/permission.js";
 import { subagentTask } from "../run-stream/subagent.js";
-import type { PermissionDecision, PermissionRequest, SessionRunStatus, Subagent } from "../api/types.js";
+import type {
+  ComposerReference,
+  PermissionDecision,
+  PermissionRequest,
+  SessionRunStatus,
+  Subagent,
+} from "../api/types.js";
 import { CheckpointAnsweredProvider } from "./CheckpointCard.js";
 import { collapseHint } from "./collapse-hint.js";
 import { PermissionCard } from "./PermissionCard.js";
@@ -92,6 +98,8 @@ export function AnswerBlock({
   answered,
   content,
   live,
+  onReferenceClick,
+  references,
   truncated,
 }: {
   onBranch?: () => void;
@@ -103,12 +111,16 @@ export function AnswerBlock({
   content: string;
   /** Text still arriving: a cursor follows it and the next frame will be longer. */
   live?: boolean;
+  /** Opens the memory card behind a `[alias]` chip in the answer. */
+  onReferenceClick?: (reference: ComposerReference) => void;
+  /** The aliases this answer cites. Without them the tokens stay plain text. */
+  references?: ComposerReference[];
   truncated?: boolean;
 }) {
   return (
     <div className="text">
       <CheckpointAnsweredProvider value={answered === true}>
-        <Markdown>{content}</Markdown>
+        <Markdown onReferenceClick={onReferenceClick} references={references}>{content}</Markdown>
       </CheckpointAnsweredProvider>
       {truncated ? (
         <div className="workspace-empty">{TEXT.conversation.truncatedBody}</div>
@@ -490,14 +502,22 @@ function foldLabel(run: RunStreamState): { icon: string; title: string; working:
  * The in-flight set of decisions lives here rather than in the run state: it is
  * about this window's clicks, not about what the run did, and it must not
  * survive a re-render of the run.
+ *
+ * Memoised: the shell re-renders for state that has nothing to do with the
+ * transcript (opening the artifact dialog is one), and re-rendering every
+ * answer then re-parses every Markdown body of the session — seconds of main
+ * thread for a long one. The callbacks this receives are stable for the same
+ * reason.
  */
-export function AssistantTurns({
+export const AssistantTurns = memo(function AssistantTurns({
   onBranch,
   answered,
   client,
   onDecide,
   onOpenSubagent,
   onOpenTool,
+  onReferenceClick,
+  references,
   run,
   sessionId,
 }: {
@@ -512,10 +532,20 @@ export function AssistantTurns({
   onOpenSubagent?: (id: string) => void;
   /** Open one tool's input or result in the right panel. */
   onOpenTool?: (detail: ToolDetail) => void;
+  /** Opens the memory card behind a `[alias]` chip in the answer. */
+  onReferenceClick?: (reference: ComposerReference) => void;
+  /** The aliases the persisted answer cites. The replayed run carries its own
+   *  (from `run.completed`); this is the stored message's copy, which is what
+   *  survives a record whose completion event was pruned. */
+  references?: ComposerReference[];
   run: RunStreamState;
   sessionId?: string;
 }) {
   const [deciding, setDeciding] = useState<ReadonlySet<string>>(() => new Set());
+  // The stored message is the copy that outlives a pruned event log, so it
+  // wins when present; a replayed run's own completion event carries the same
+  // list and covers a transcript whose message has not reloaded yet.
+  const citations = references ?? run.references;
   const answer = shownAnswer(run);
   const finalBody = run.finalContent?.trim() ? run.finalContent : undefined;
   // The completion payload only stands in when nothing was streamed: it is the
@@ -622,14 +652,25 @@ export function AssistantTurns({
               content={shown.content}
               onBranch={onBranch}
               live={live && !shown.settled}
+              onReferenceClick={onReferenceClick}
+              references={citations}
               truncated={shown.truncated}
             />
           )}
-          {showFinal ? <AnswerBlock actions answered={answered} content={finalBody} onBranch={onBranch} /> : null}
+          {showFinal ? (
+            <AnswerBlock
+              actions
+              answered={answered}
+              content={finalBody}
+              onBranch={onBranch}
+              onReferenceClick={onReferenceClick}
+              references={citations}
+            />
+          ) : null}
         </div>
       </div>
       <RunStatusLine run={run} />
       <PendingCards context={tools} requests={pending} />
     </>
   );
-}
+});

@@ -25,7 +25,14 @@ import { isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm } fr
 
 import { ApiClient } from "./api/client.js";
 import { getSubagent } from "./api/sessions.js";
-import type { Subagent, SubagentStep } from "./api/types.js";
+import type {
+  ComposerReference,
+  PermissionDecision,
+  PermissionRequest,
+  SessionArtifactOutput,
+  Subagent,
+  SubagentStep,
+} from "./api/types.js";
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import type { GuideStep } from "./app/guide.js";
 import { isEmptyTranscript, landingKey } from "./app/landing.js";
@@ -58,6 +65,7 @@ import {
 } from "./state/storage.js";
 import { applyDocumentLanguage, TEXT } from "./text.js";
 import { FeedbackDialog } from "./feedback/FeedbackDialog.js";
+import { ArtifactDialog } from "./views/ArtifactDialog.js";
 import { AuthScreen } from "./views/AuthScreen.js";
 import { CheckpointReplyProvider, type CheckpointReply } from "./views/CheckpointCard.js";
 import { Composer, type SeededCommand } from "./views/Composer.js";
@@ -68,6 +76,7 @@ import { EvolveDetail } from "./views/evolve/EvolveDetail.js";
 import { EvolveRuns } from "./views/evolve/EvolveRuns.js";
 import { Guide } from "./views/Guide.js";
 import { Landing } from "./views/Landing.js";
+import { MemoryCardDialog } from "./views/MemoryCardDialog.js";
 import { OfflineScreen } from "./views/OfflineScreen.js";
 import { Rail } from "./views/Rail.js";
 import { SessionBar } from "./views/SessionBar.js";
@@ -96,6 +105,25 @@ export function App({ initialToken }: Props) {
    *  reopening lands where the user left off. */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState<SettingsGroup>("general");
+  /** The citation whose memory card is open. It is a dialog over whichever
+   *  document cites it, not a surface: closing it leaves the reader exactly
+   *  where the chip was pressed. */
+  const [memoryReference, setMemoryReference] = useState<{
+    reference: ComposerReference;
+    sessionId?: string;
+  } | undefined>();
+  /** The artifact whose preview dialog is open. An artifact citation opens the
+   *  document itself in the middle of the window, as the old web UI did, so
+   *  the reader never leaves the report they were reading. */
+  const [artifactReference, setArtifactReference] = useState<{
+    reference: ComposerReference;
+    sessionId?: string;
+  } | undefined>();
+  /** The artifact a 上游文件 link in the open dialog put in the panel. While the
+   *  panel is still showing it, the dialog moves out of the panel's way instead
+   *  of covering it. It clears when the dialog closes: the link is a reading aid
+   *  for the document on screen, not a lasting mode of the panel. */
+  const [linkedArtifactId, setLinkedArtifactId] = useState<string | undefined>();
   /** The task sidebar folds away; the conversation's does too when the panel
    *  needs the room. */
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -490,6 +518,48 @@ export function App({ initialToken }: Props) {
   }, []);
 
   /**
+   * What a citation chip does.
+   *
+   * An Artifact chip is the artifact, not a record about it: pressing it opens
+   * the document in a dialog in the middle of the window, the way the old web
+   * UI did — a panel of path / media type / content hash was a detour between
+   * the reader and the figure they cited. An Evidence chip has no document to
+   * open, so it keeps its card.
+   *
+   * The reference names the Session that wrote the artifact when the report
+   * carries one; the transcript's own Session is the fallback, since a chip is
+   * always rendered inside the Session that cited it.
+   *
+   * Stable across renders on purpose: the transcript and the panel are
+   * memoised on their props, and a new function here would make every chip
+   * press re-render every answer it sits in — which is the bulk of the wait
+   * between the press and the dialog.
+   */
+  const openReference = useCallback((reference: ComposerReference, sessionId?: string) => {
+    if (reference.kind === "artifact") {
+      // A new document is a new reading: the panel link belonged to the one
+      // before it.
+      setLinkedArtifactId(undefined);
+      setArtifactReference({ reference, sessionId });
+      return;
+    }
+    setMemoryReference({ reference, sessionId });
+  }, []);
+
+  const closeArtifactDialog = useCallback(() => {
+    setArtifactReference(undefined);
+    setLinkedArtifactId(undefined);
+  }, []);
+
+  // Same reason as `openReference`: the transcript is memoised, and this is a
+  // prop it would otherwise see as new on every render.
+  const decidePermission = useCallback(
+    (request: PermissionRequest, decision: PermissionDecision) =>
+      actions.decidePermission(request.id, decision),
+    [actions],
+  );
+
+  /**
    * Upload, then show where the file went.
    *
    * The files land in the workspace tree, which lives on the panel's home tab
@@ -709,6 +779,9 @@ export function App({ initialToken }: Props) {
     setWorkspaceOpen(false);
     setOpenSubagentId(undefined);
     setOpenTool(undefined);
+    // A 上游文件 link is a relationship between two visible surfaces; one of
+    // them going away ends it.
+    setLinkedArtifactId(undefined);
     // The group belongs to the panel being open in the same way: a panel the
     // reader asked for again opens on 产物, not on the file tree they happened
     // to be browsing when they closed it.
@@ -750,6 +823,54 @@ export function App({ initialToken }: Props) {
   };
 
   const closeEvolveCreate = () => setEvolveCreate(undefined);
+
+  /**
+   * A 上游文件 link inside the open artifact dialog.
+   *
+   * The dialog stays on the artifact the reader was reading: pressing a
+   * dependency is a question about *this* document, and swapping the document
+   * under the cursor would throw away the context the question came from. The
+   * dependency opens beside it in the panel instead.
+   *
+   * The panel needs no room to itself — it is already a column of the window,
+   * and opening it is what the link asks for. `panelOffset` is what keeps the
+   * dialog from covering it; neither surface draws any extra chrome for the
+   * link.
+   */
+  const openDependencyInPanel = (output: SessionArtifactOutput) => {
+    setWorkspaceOpen(true);
+    setPanelGroup("artifacts");
+    // The panel shows one record; a child's steps or a tool block would sit
+    // in front of the document the link asked for.
+    setOpenSubagentId(undefined);
+    setOpenTool(undefined);
+    setLinkedArtifactId(output.artifact.id);
+    // An open tab keeps its place and only its version moves: `openArtifact`
+    // focuses a tab that is already open rather than re-reading it, which
+    // would leave an older version of the dependency on screen.
+    const openTab = state.tabs.tabs.find(
+      (tab) => tab.artifactId === output.artifact.id,
+    );
+    if (openTab === undefined) {
+      void actions.openArtifact(output);
+      return;
+    }
+    actions.selectPanelTab(openTab.id);
+    if (openTab.versionId !== output.version.id) {
+      void actions.selectArtifactVersion(openTab.id, output);
+    }
+  };
+
+  // The dialog only keeps its offset while the panel is still showing the
+  // dependency: pointing the panel at another document or another group ends
+  // the gesture, and the dialog goes back to the middle of the window.
+  const activeArtifactId = state.tabs.tabs.find(
+    (tab) => tab.id === state.tabs.activeTabId,
+  )?.artifactId;
+  const linkedToPanel = linkedArtifactId !== undefined
+    && workspaceOpen
+    && panelGroup === "artifacts"
+    && activeArtifactId === linkedArtifactId;
 
   /** The composer is one component in two places — under the transcript, and
    *  in the middle of the welcome page — so its props are assembled once. */
@@ -870,10 +991,11 @@ export function App({ initialToken }: Props) {
                 // nothing at all for a session that has no searches.
                 evolve={<EvolveRuns onOpen={showEvolveRun} runs={evolve.runs} />}
                 loading={state.loadingSession}
-                onDecidePermission={(request, decision) => actions.decidePermission(request.id, decision)}
+                onDecidePermission={decidePermission}
                 onOpenSubagent={openSubagentDetails}
                 onOpenTool={openToolDetails}
                 onBranch={isEvidenceSessionReadOnly(state.detail) || state.running ? undefined : messageId => setPackageRequest({ kind: "branch", sessionId: state.detail?.id, projectId: state.detail?.projectId, messageId })}
+                onReferenceClick={openReference}
                 pending={state.pendingMessage}
                 replays={state.replays}
                 run={state.run}
@@ -891,6 +1013,7 @@ export function App({ initialToken }: Props) {
           files={state.panelFiles}
           onCloseDetail={closePanelDetail}
           onCollapse={collapsePanel}
+          onReferenceClick={openReference}
           onSelectGroup={setPanelGroup}
           outputs={state.outputs}
           resize={resize}
@@ -926,6 +1049,35 @@ export function App({ initialToken }: Props) {
             openGuide();
           }}
           state={state}
+        />
+      ) : null}
+
+      {artifactReference ? (
+        <ArtifactDialog
+          client={client}
+          key={`artifact:${artifactReference.reference.id}:${artifactReference.reference.version ?? ""}`}
+          onClose={closeArtifactDialog}
+          onOpenArtifact={openDependencyInPanel}
+          onReferenceClick={openReference}
+          // Portaled dialogs sit outside the shell, so the panel's width is
+          // handed over as a number rather than read from `--panel-width`.
+          panelOffset={linkedToPanel ? resize.width : 0}
+          reference={artifactReference.reference}
+          sessionId={artifactReference.sessionId}
+        />
+      ) : null}
+
+      {memoryReference ? (
+        <MemoryCardDialog
+          client={client}
+          key={`${memoryReference.reference.kind}:${memoryReference.reference.id}:${memoryReference.reference.version ?? ""}`}
+          onClose={() => setMemoryReference(undefined)}
+          onOpenSettings={() => {
+            setMemoryReference(undefined);
+            openSettings("memory");
+          }}
+          reference={memoryReference.reference}
+          sessionId={memoryReference.sessionId}
         />
       ) : null}
 
