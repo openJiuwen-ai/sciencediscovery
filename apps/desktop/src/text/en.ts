@@ -1103,11 +1103,6 @@ export const EN: Text = {
     },
     autoPace: "Auto",
     autoPaceTitle: "Started without pausing at checkpoints",
-    /* This run's candidates did not run in a sandbox. Both the badge and its
-       tooltip have to say so, or an unconfined result reads like a contained
-       one. */
-    unisolated: "No sandbox",
-    unisolatedTitle: "Candidate code ran without a sandbox",
 
     /* The checkpoint card's own chrome. The title and body are the model's
        words and arrive in the conversation's language already. */

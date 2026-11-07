@@ -133,12 +133,15 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
   );
   // A card the conversation has moved past folds to its header; opening it
   // shows what the step said, never the buttons — that step already has an
-  // answer below it, and a second press would send it twice.
-  if (answered) {
+  // answer below it, and a second press would send it twice. A record folds
+  // the same way: it is written after the search started, nobody is asked to
+  // act on it, and its body is the longest thing the transcript holds. The
+  // newest one is still one click away under its own headline.
+  if (answered || record) {
     return (
       <details
         aria-label={label}
-        className={`evolve-checkpoint is-${shade} is-answered`}
+        className={`evolve-checkpoint is-${shade} ${answered ? "is-answered" : "is-record"}`}
         data-pace={checkpoint.pace}
         data-step={checkpoint.step}
       >
@@ -177,7 +180,7 @@ export function CheckpointCard({ checkpoint }: { checkpoint: EvolveCheckpoint })
         )}
         {body}
       </div>
-      {record || reply === undefined ? null : adjusting ? (
+      {reply === undefined ? null : adjusting ? (
         <form
           className="evolve-checkpoint-adjust-form"
           onSubmit={(event) => {
