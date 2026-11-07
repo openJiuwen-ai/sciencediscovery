@@ -22,6 +22,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import { DetailModal } from "./DetailModal.js";
+import { formatByteSize as formatBytes } from "./formatBytes.js";
 import { ChevronDownIcon, ChevronRightIcon } from "./icons.js";
 import { useLocale } from "./i18n/index.js";
 
@@ -34,18 +35,6 @@ interface WorkspaceFileProvenanceModalProps {
 
 function compactId(value: string): string {
   return value.length > 16 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let value = bytes / 1_024;
-  let unit = units[0]!;
-  for (let index = 1; index < units.length && value >= 1_024; index += 1) {
-    value /= 1_024;
-    unit = units[index]!;
-  }
-  return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
 }
 
 function DetailField({ children, label }: { children: ReactNode; label: string }) {

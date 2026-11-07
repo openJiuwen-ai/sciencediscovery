@@ -14,6 +14,8 @@
 
 import Papa from "papaparse";
 
+import { formatByteSize } from "../../formatBytes.js";
+
 import { translateActive } from "../../i18n/index.js";
 import type {
   ColumnKind,
@@ -386,8 +388,8 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
   );
 }
 
+/** The CSV inspector prints one decimal at every unit; the ladder itself is
+ *  shared with the provenance modal. */
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  return formatByteSize(bytes, 1);
 }
