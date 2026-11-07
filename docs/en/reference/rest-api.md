@@ -170,7 +170,7 @@ All routes below require bearer authentication. See [Configure the network proxy
 | `GET /api/mcp/proxy-policies` | none | `200`, `{"policies":{...}}` |
 | `PUT /api/mcp/proxy-policies` | `{"policies":{"server-id":"inherit|none|proxy:<id>"}}` | `200`, normalized map |
 
-`GET/PUT /api/proxy/settings` also supports optional `noProxy` (comma-separated bypass hosts). Environment summaries mask proxy credentials.
+`GET/PUT /api/proxy/settings` also supports optional `noProxy` (comma-separated bypass hosts); an empty value clears the stored list, so the process environment's `NO_PROXY` applies again. Environment summaries mask proxy credentials.
 
 `kind` is `custom_url`, `environment`, or `system`; `custom_url` requires `url`:
 

@@ -172,7 +172,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 | `GET /api/mcp/proxy-policies` | 无 | `200`，`{"policies":{...}}` |
 | `PUT /api/mcp/proxy-policies` | `{"policies":{"server-id":"inherit|none|proxy:<id>"}}` | `200`，规范化后的策略 map |
 
-`GET/PUT /api/proxy/settings` 还支持可选的 `noProxy`（逗号分隔的绕过代理主机）。环境变量摘要会隐藏代理凭据。
+`GET/PUT /api/proxy/settings` 还支持可选的 `noProxy`（逗号分隔的绕过代理主机）；传空值会清除已保存的列表，重新采用进程环境变量里的 `NO_PROXY`。环境变量摘要会隐藏代理凭据。
 
 `kind` 只能是 `custom_url`、`environment` 或 `system`；`custom_url` 创建时必须提供 `url`。示例：
 

@@ -1241,6 +1241,11 @@ test("proxy bypass settings survive reload and reject invalid input", async (con
   assert.equal(reloaded.resolveProxy().noProxy, "internal.test,[::1]");
   await assert.rejects(reloaded.updateProxySettings({ defaultPolicy, noProxy: "host\ninvalid" }));
   assert.equal(reloaded.getProxySettings().noProxy, "internal.test,[::1]");
+  // An emptied field means "nothing stored", so the process's own NO_PROXY applies
+  // again — an empty string would otherwise win over it and disable every bypass.
+  await reloaded.updateProxySettings({ defaultPolicy, noProxy: "   " });
+  assert.equal(reloaded.getProxySettings().noProxy, undefined);
+  assert.equal(reloaded.resolveProxy().noProxy, undefined);
 });
 
 test("SessionStore migrates legacy web proxy modes into the authenticated settings projection", async (context) => {

@@ -2897,7 +2897,11 @@ export class SessionStore {
     this.assertProxyPolicyKnown(defaultPolicy, "defaultPolicy");
     if (input.noProxy !== undefined) {
       if (typeof input.noProxy !== "string" || input.noProxy.length > 4000 || /[\r\n]/.test(input.noProxy)) throw new Error("Invalid proxy bypass list");
-      this.catalog.proxyNoProxy = input.noProxy.trim();
+      // An emptied field stores nothing rather than "", so the process's own
+      // NO_PROXY applies again instead of being overridden by an empty list.
+      const noProxy = input.noProxy.trim();
+      if (noProxy) this.catalog.proxyNoProxy = noProxy;
+      else delete this.catalog.proxyNoProxy;
     }
     this.catalog.proxyDefaultPolicy = defaultPolicy;
     await this.saveCatalog();
