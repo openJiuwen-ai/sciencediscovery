@@ -453,6 +453,22 @@ function expertTone(id: string): string {
   return EXPERT_TONES[hash % EXPERT_TONES.length] ?? "is-blue";
 }
 
+/**
+ * Put focus and the caret at the end of a draft that was just filled in — on
+ * the next frame, after React has painted the new text into the field — and
+ * return the cancel an effect hands back. Both a starter prompt and a design's
+ * command land in the input rather than sending immediately, so the reader is
+ * meant to keep typing after them.
+ */
+function focusAtEnd(node: HTMLTextAreaElement): () => void {
+  const frame = window.requestAnimationFrame(() => {
+    node.focus();
+    const end = node.value.length;
+    node.setSelectionRange(end, end);
+  });
+  return () => window.cancelAnimationFrame(frame);
+}
+
 
 /**
  * 专家's choices: the experts this app can bind to a session.
@@ -845,12 +861,7 @@ export function Composer({
     setText(seed.text);
     const node = area.current;
     if (!node) return;
-    const frame = window.requestAnimationFrame(() => {
-      node.focus();
-      const end = node.value.length;
-      node.setSelectionRange(end, end);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    return focusAtEnd(node);
   }, [seed]);
 
   // A design's command lands here as a token, with the dialog's goal after it
@@ -862,12 +873,7 @@ export function Composer({
     setText(seededCommand.text);
     const node = area.current;
     if (!node) return;
-    const frame = window.requestAnimationFrame(() => {
-      node.focus();
-      const end = node.value.length;
-      node.setSelectionRange(end, end);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    return focusAtEnd(node);
   }, [seededCommand]);
 
   useEffect(() => {
